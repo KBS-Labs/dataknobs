@@ -1,0 +1,55 @@
+#!/bin/bash
+#
+# Get another shell into the latest running docker container
+#
+# Args:
+#  --hint <text> -- [optional] text to grep to choose active container;
+#                   defaults to latest
+#  --cmd  <text> -- [optional, default='/bin/bash'] command to execute when
+#                   reentering
+#  --dryrun -- [optional] just echo docker command instead of running
+#  @args -- any extra args will be added to the end of the docker exec command
+#
+
+set -e
+
+hint=""
+dryrun=""
+cmd="/bin/bash"
+moreargs=""
+id=""
+
+# parse args
+while [[ $# > 0 ]]
+do
+    key="$1";
+
+    case "$key" in
+        --hint)
+            hint="$2";
+            shift;
+            ;;
+        --cmd)
+            cmd="$2";
+            shift;
+            ;;
+        --dryrun)
+            dryrun="y";
+            ;;
+        *)
+            moreargs="$moreargs $1";
+            ;;
+    esac;
+    shift;
+done;
+
+if test -z "$hint"; then
+    id=`docker ps -l -q`
+else
+    id=`docker ps | grep "$hint" | cut -d\  -f1`
+fi
+
+echo "docker exec -it $id \"${cmd}\"${moreargs}"
+if test -z "$dryrun"; then
+    docker exec -it $id "${cmd}"${moreargs}
+fi

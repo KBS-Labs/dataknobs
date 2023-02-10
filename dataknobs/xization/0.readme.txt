@@ -1,0 +1,66 @@
+Annotations
+- annotation abbreviation: ann
+  - Annotations for an input string are a way to represent and organize as a table the string's tokens into records (or collections or groups) of fields,
+    - where
+      - each record has an annotation "type", e.g., an entity type
+      - each record field has a name and value
+        - where the field name is the type of field
+        - and the field value is the token's text
+    - For example: annotations
+      - for a "date" record (type) for the text:
+        - "July 4th, 1776"
+      - having
+        - "date" fields of "day", "month", and "year"
+        - with values of "4th", "July", "1776", respectively
+      - is represented, in part, as the annotations:
+
+        text   ann_type   date_field
+        July     date       month
+        4th      date       day
+        1776     date       year
+
+      - which is equivalent to representing the "date" type of record as json:
+        - {"date": {"month": "July", "day": "4th", "year": "1776"}}
+        - with its "month", "day", and "year" fields
+          - and corresponding field values
+
+- Annotations are built by annotators
+  - annotator abbreviation: anr
+  - each having an ID and a version
+
+- Annotations are represented as a table
+  - each row is an annotation for a token
+  - with standard columns:
+    - anr_id, anr_ver
+      - Identifies the annotator
+      - Used for data provenance
+    - ann_type -- Identifies the type of annotation
+      - NOTE(s):
+        - different annotators can produce the same types of annotations
+          - this enables having targeted annotators for various forms or manifestations of a type of entity to be annotated
+      - ann_type column's values
+        - correspond to an annotation record type, "<ann_type>"
+          - where the annotation record's fields
+            - are specified as values in the "<ann_type>_field" column
+    - start_pos, end_pos
+      - Identifies the start and end position in the input string of the token
+    - text
+      - Holds the token text
+  - and non-conflicting annotator-specific columns that are "carried along"
+
+  - where ambiguities (at the token level) are represented as
+    - duplicated token annotation rows
+      - each reflecting an alternate interpretation
+
+Processes
+- An annotator produces annotations with standard columns:
+  - anr_id, anr_ver, ann_type, <ann_type>_field
+  - start_pos, end_pos, text
+
+- An annotator service organizes
+  - A single annotator's annotations into field groups and entity records
+  - Multiple annotators' annotations into multi-entity records
+  - producing annotations with derived columns
+    - <ann_type>_num -- To distinguish annotation record instances
+    - <ann_type>_recsnum -- To identify mutually consistent groups of an annotation's record instances
+    - ec_num -- To identify mutually consistent groups of multiple annotation types
