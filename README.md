@@ -41,9 +41,10 @@ The purpose of this project is:
 
 The following minimum configuration should exist for development:
 
-  * miniconda
-  * poetry
   * tox
+  * pyenv
+     * pyenv install 3.9
+  * poetry
 
 With optional:
 
