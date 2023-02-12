@@ -299,6 +299,7 @@ class Authority(ABC):
             auth_anns_builder: AuthorityAnnotationsBuilder = None,
             authdata: AuthorityData = None,
             field_groups: DerivedFieldGroups = None,
+            anns_validator: Callable[['Authority', Dict[str,Any]], bool] = None,
             parent_auth:'Authority' = None,
     ):
         '''
@@ -308,6 +309,9 @@ class Authority(ABC):
             for building annotation rows.
         :param authdata: The authority data
         :param field_groups: The derived field groups to use
+        :param anns_validator: fn(auth, anns_dict_list) that returns True if
+           the list of annotation row dicts are valid to be added as
+           annotations for a single match or "entity".
         :param parent_auth: This authority's parent authority (if any)
         '''
         self._name = name
@@ -320,6 +324,7 @@ class Authority(ABC):
             field_groups if field_groups is not None
             else DerivedFieldGroups()
         )
+        self.anns_validator = anns_validator
         self._parent = parent_auth
 
     @property
@@ -393,7 +398,7 @@ class Authority(ABC):
             annotations: dk_anns.Annotations,
     ) -> dk_anns.Annotations:
         '''
-        Method to do the work of finding and adding annotations.
+        Method to do the work of finding, validating, and adding annotations.
         :param doctext: The text to process.
         :param annotations: The annotations object to add annotations to
         :return: The given or a new Annotations instance
@@ -427,6 +432,102 @@ class Authority(ABC):
             start_pos, end_pos, entity_text, self.name, auth_value_id,
             auth_valconf=conf, **kwargs
         )
+
+
+class AnnotationsValidator(ABC):
+    '''
+    A base class with helper functions for performing validations on annotation
+    rows.
+    '''
+
+    def __call__(
+            self,
+            auth: Authority,
+            ann_row_dicts: List[Dict[str, Any]],
+    ) -> bool:
+        '''
+        Call function to enable instances of this type of class to be passed in
+        as a anns_validator function to an Authority.
+        :param auth: The authority proposing annotations
+        :param ann_row_dicts: The proposed annotations
+        :return: True if the annotations are valid; otherwise, False
+        '''
+        return self.validate_annotation_rows(
+            AnnotationsValidator.AuthAnnotations(auth, ann_row_dicts)
+        )
+
+    @abstractmethod
+    def validate_annotation_rows(
+            self,
+            auth_annotations: 'AnnotationsValidator.AuthAnnotations',
+    ) -> bool:
+        '''
+        Determine whether the proposed authority annotation rows are valid.
+        :param auth_annotations: The AuthAnnotations instance with the
+            proposed data.
+        :return: True if valid; False if not.
+        '''
+        raise NotImplementedError
+
+    class AuthAnnotations:
+        '''
+        A wrapper class for convenient access to the entity annotations.
+        '''
+        def __init__(self, auth: Authority, ann_row_dicts: List[Dict[str, Any]]):
+            self.auth = auth
+            self.ann_row_dicts = ann_row_dicts
+            self._row_accessor = None  # AnnotationsRowAccessor
+            self._anns = None  # Annotations
+            self._atts = None  # Dict[str, str]
+    
+        @property
+        def row_accessor(self) -> dk_anns.AnnotationsRowAccessor:
+            '''
+            Get the row accessor for this instance's annotations.
+            '''
+            if self._row_accessor is None:
+                self._row_accessor = dk_anns.AnnotationsRowAccessor(
+                    self.auth.metadata, derived_cols=self.auth.field_groups
+                )
+            return self._row_accessor
+    
+        @property
+        def anns(self) -> dk_anns.Annotations:
+            ''' Get this instance's annotation rows as an annotations object '''
+            if self._anns is None:
+                self._anns = dk_anns.Annotations(self.auth.metadata)
+                for row_dict in self.ann_row_dicts:
+                    self._anns.add_dict(row_dict)
+            return self._anns
+    
+        @property
+        def df(self) -> pd.DataFrame:
+            ''' Get the annotation's dataframe '''
+            return self.anns.df
+    
+        @property
+        def field_col(self) -> str:
+            ''' Get the entity field column name '''
+            return self.auth.field_groups.get_field_type_col(self.auth.name)
+    
+        @property
+        def text_col(self) -> str:
+            ''' Get the entity text column name '''
+            return self.auth.metadata.text_col
+    
+        @property
+        def attributes(self) -> Dict[str, str]:
+            ''' Get this instance's annotation entity attributes '''
+            if self._atts is None:
+                self._atts = {
+                    row[self.field_col]: row[self.text_col]
+                    for _, row in self.df.iterrows()
+                }
+            return self._atts
+    
+        def colval(self, col_name, row) -> Any:
+            ''' Get the column's value from the given row '''
+            return self.row_accessor.get_col_value(col_name, row)
 
 
 class AuthorityFactory(ABC):
@@ -464,6 +565,7 @@ class LexicalAuthority(Authority):
             auth_anns_builder: AuthorityAnnotationsBuilder = None,
             authdata: AuthorityData = None,
             field_groups: DerivedFieldGroups = None,
+            anns_validator: Callable[['Authority', Dict[str,Any]], bool] = None,
             parent_auth:'Authority' = None,
     ):
         '''
@@ -473,6 +575,9 @@ class LexicalAuthority(Authority):
             for building annotation rows.
         :param authdata: The authority data
         :param field_groups: The derived field groups to use
+        :param anns_validator: fn(auth, anns_dict_list) that returns True if
+           the list of annotation row dicts are valid to be added as
+           annotations for a single match or "entity".
         :param parent_auth: This authority's parent authority (if any)
         '''
         super().__init__(
@@ -480,6 +585,7 @@ class LexicalAuthority(Authority):
             auth_anns_builder=auth_anns_builder,
             authdata=authdata,
             field_groups=field_groups,
+            anns_validator=anns_validator,
             parent_auth=parent_auth,
         )
 
@@ -554,10 +660,10 @@ class RegexAuthority(Authority):
             name:str,
             regex:re.Pattern,
             canonical_fn: Callable[[str, str], Any] = None,
-            match_validator: Callable[[Dict[str,Any]], bool] = None,
             auth_anns_builder: AuthorityAnnotationsBuilder = None,
             authdata: AuthorityData = None,
             field_groups: DerivedFieldGroups = None,
+            anns_validator: Callable[[Authority, Dict[str,Any]], bool] = None,
             parent_auth:'Authority' = None,
     ):
         '''
@@ -570,17 +676,21 @@ class RegexAuthority(Authority):
             passed in if there are no group names. Note that the canonical form
             is computed before the match_validator is applied and its value
             will be found as the value to the <auth_id> key.
-        :param match_validator: A validation function for each regex match
+        :param auth_anns_builder: The authority annotations row builder to use
+            for building annotation rows.
+        :param authdata: The authority data
+        :param field_groups: The derived field groups to use
+        :param anns_validator: A validation function for each regex match
             formed as a list of annotation row dictionaries, one row dictionary
             for each matching regex group. If the validator returns False,
             then the annotation rows will be rejected. The entity_text key
             will hold matched text and the <auth_name>_field key will hold
             the group name or number (if there are groups with or without names)
             or the <auth_name> if there are no groups in the regular expression.
-        :param auth_anns_builder: The authority annotations row builder to use
-            for building annotation rows.
-        :param authdata: The authority data
-        :param field_groups: The derived field groups to use
+            Note that the validator function takes the regex authority instance
+            as its first parameter to provide access to the field_groups, etc.
+            The validation_fn signature is: fn(regexAuthority, ann_row_dicts)
+            and returns a boolean.
         :param parent_auth: This authority's parent authority (if any)
         :param group_name_colname: The name of the annotations column for
             the regex group names, or None to ignore group_names.
@@ -594,11 +704,11 @@ class RegexAuthority(Authority):
             auth_anns_builder=auth_anns_builder,
             authdata=authdata,
             field_groups=field_groups,
+            anns_validator=anns_validator,
             parent_auth=parent_auth,
         )
         self.regex = regex
         self.canonical_fn = canonical_fn
-        self.match_validator = match_validator
 
     def has_value(self, value: Any) -> re.Match:
         '''
@@ -658,8 +768,8 @@ class RegexAuthority(Authority):
                 ))
             if (
                     len(ann_dicts) > 0 and (
-                        self.match_validator is None or
-                        self.match_validator(ann_dicts)
+                        self.anns_validator is None or
+                        self.anns_validator(self, ann_dicts)
                     )
             ):
                 # Add non-empty, valid annotation dicts to the result
@@ -686,6 +796,7 @@ class AuthoritiesBundle(Authority):
             authdata: AuthorityData = None,
             field_groups: DerivedFieldGroups = None,
             parent_auth:'Authority' = None,
+            anns_validator: Callable[['Authority', Dict[str,Any]], bool] = None,
             auths: List[Authority] = None,
     ):
         '''
@@ -694,6 +805,9 @@ class AuthoritiesBundle(Authority):
             for building annotation rows.
         :param authdata: The authority data
         :param field_groups: The derived field groups to use
+        :param anns_validator: fn(auth, anns_dict_list) that returns True if
+           the list of annotation row dicts are valid to be added as
+           annotations for a single match or "entity".
         :param parent_auth: This authority's parent authority (if any)
         :param auths: The authorities to bundle together.
         '''
@@ -702,6 +816,7 @@ class AuthoritiesBundle(Authority):
             auth_anns_builder=auth_anns_builder,
             authdata=authdata,
             field_groups=field_groups,
+            anns_validator=anns_validator,
             parent_auth=parent_auth,
         )
         self.auths = auths.copy() if auths is not None else list()

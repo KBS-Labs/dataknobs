@@ -3,16 +3,17 @@ platform darwin -- Python 3.9.15, pytest-7.2.1, pluggy-1.0.0
 cachedir: .tox/tests/.pytest_cache
 rootdir: /Users/skoehler/dev/kbs-labs/dataknobs
 plugins: anyio-3.6.2, cov-3.0.0
-collected 49 items
+collected 52 items
 
-tests/structures/test_conditional_dict.py ....                           [  8%]
-tests/structures/test_document.py .                                      [ 10%]
-tests/structures/test_tree.py ...........                                [ 32%]
-tests/utils/test_elasticsearch_utils.py .......                          [ 46%]
-tests/utils/test_pandas_utils.py .......                                 [ 61%]
-tests/utils/test_requests_utils.py ...                                   [ 67%]
-tests/utils/test_resource_utils.py .                                     [ 69%]
-tests/xization/test_masking_tokenizer.py .....                           [ 79%]
+tests/structures/test_conditional_dict.py ....                           [  7%]
+tests/structures/test_document.py .                                      [  9%]
+tests/structures/test_tree.py ...........                                [ 30%]
+tests/utils/test_elasticsearch_utils.py .......                          [ 44%]
+tests/utils/test_pandas_utils.py .......                                 [ 57%]
+tests/utils/test_requests_utils.py ...                                   [ 63%]
+tests/utils/test_resource_utils.py .                                     [ 65%]
+tests/xization/test_authorities.py ...                                   [ 71%]
+tests/xization/test_masking_tokenizer.py .....                           [ 80%]
 tests/xization/test_normalize.py ..........                              [100%]
 
 =============================== warnings summary ===============================
@@ -53,12 +54,12 @@ dataknobs/utils/stanza_utils.py              194    194     0%   1-393
 dataknobs/utils/wordnet_utils.py              64     64     0%   1-309
 dataknobs/utils/xml_utils.py                  47     47     0%   1-100
 dataknobs/xization/__init__.py                 0      0   100%
-dataknobs/xization/annotations.py            289    289     0%   1-776
-dataknobs/xization/authorities.py            163    163     0%   1-713
+dataknobs/xization/annotations.py            289    141    51%   95, 131, 144, 161-162, 183-195, 202-212, 266, 272-275, 283-284, 305-306, 349, 371, 388-389, 393, 396, 400, 404, 408, 415, 426-431, 461-472, 479, 493, 500, 508, 515, 523, 526, 533, 541, 550, 555, 560, 565-567, 572, 576, 582-584, 591-593, 596-605, 619-637, 643, 653-658, 670-675, 688-695, 716-718, 721, 726, 733-738, 742, 745-749, 757-762, 770-775
+dataknobs/xization/authorities.py            215     59    73%   62-80, 93-103, 112, 114, 116, 125, 142-143, 151-152, 270-271, 278, 287-288, 348, 357, 406, 417, 470, 488-492, 530, 554, 583, 601, 613, 622, 650, 720, 814-822, 829, 837-840, 853-855
 dataknobs/xization/masking_tokenizer.py      311      6    98%   29, 70, 351, 419, 429, 770
 dataknobs/xization/normalize.py              151     47    69%   173, 233, 251, 255, 259, 265, 287, 312-316, 332-381, 431
 ------------------------------------------------------------------------
-TOTAL                                       2399   1156    52%
+TOTAL                                       2451    904    63%
 
-FAIL Required test coverage of 85% not reached. Total coverage: 51.81%
-======================== 49 passed, 2 warnings in 2.41s ========================
+FAIL Required test coverage of 85% not reached. Total coverage: 63.12%
+======================== 52 passed, 2 warnings in 2.51s ========================

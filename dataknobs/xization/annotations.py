@@ -188,7 +188,7 @@ class AnnotationsRowAccessor:
             else:
                 if self.derived_cols is not None:
                     value = self.derived_cols.get_col_value(
-                        self.metadata, col_type, row, missing
+                        self, col_type, row, missing
                     )
         else:
             value = row[col]
@@ -236,7 +236,7 @@ class Annotations:
         self._df = df
 
     @property
-    def as_list(self) -> List[Dict[str, Any]]:
+    def ann_row_dicts(self) -> List[Dict[str, Any]]:
         '''
         Get the annotations as a list of dictionaries.
         '''
@@ -257,13 +257,13 @@ class Annotations:
         '''
         Add the annotation dict.
         '''
-        self.as_list.append(annotation)
+        self.ann_row_dicts.append(annotation)
 
     def add_dicts(self, annotations: List[Dict[str, Any]]):
         '''
         Add the annotation dicts.
         '''
-        self.as_list.extend(annotations)
+        self.ann_row_dicts.extend(annotations)
 
     def add_df(self, an_df: pd.DataFrame):
         '''
