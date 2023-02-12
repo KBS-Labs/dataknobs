@@ -199,7 +199,7 @@ class AuthorityAnnotationsMetaData(dk_anns.AnnotationsMetaData):
             ann_type_col=ann_type_col,
             sort_fields=sort_fields,
             sort_fields_ascending=sort_fields_ascending,
-            auth_id_col=auth_id_col,
+            auth_id=auth_id_col,
             **kwargs,
         )
 
@@ -553,16 +553,12 @@ class RegexAuthority(Authority):
             self,
             name:str,
             regex:re.Pattern,
-            canonical_fn:Callable[[str, str], Any] = None,
+            canonical_fn: Callable[[str, str], Any] = None,
+            match_validator: Callable[[Dict[str,Any]], bool] = None,
             auth_anns_builder: AuthorityAnnotationsBuilder = None,
             authdata: AuthorityData = None,
             field_groups: DerivedFieldGroups = None,
             parent_auth:'Authority' = None,
-
-#            group_names: List[str] = None,
-#            auth_name_colname: str = 'auth_name',
-#            auth_value_id_colname: str = 'auth_value_id',
-#            group_name_colname: str = 'regex_group',  # MIGRATION: use DerivedAnnotationColumns
     ):
         '''
         Initialize with this authority's entity name.
@@ -571,7 +567,16 @@ class RegexAuthority(Authority):
         :param canonical_fn: A function, fn(match_text, group_name), to
             transform input matches to a canonical form as a value_id.
             Where group_name will be None and the full match text will be
-            passed in if there are no group names.
+            passed in if there are no group names. Note that the canonical form
+            is computed before the match_validator is applied and its value
+            will be found as the value to the <auth_id> key.
+        :param match_validator: A validation function for each regex match
+            formed as a list of annotation row dictionaries, one row dictionary
+            for each matching regex group. If the validator returns False,
+            then the annotation rows will be rejected. The entity_text key
+            will hold matched text and the <auth_name>_field key will hold
+            the group name or number (if there are groups with or without names)
+            or the <auth_name> if there are no groups in the regular expression.
         :param auth_anns_builder: The authority annotations row builder to use
             for building annotation rows.
         :param authdata: The authority data
@@ -593,15 +598,14 @@ class RegexAuthority(Authority):
         )
         self.regex = regex
         self.canonical_fn = canonical_fn
+        self.match_validator = match_validator
 
     def has_value(self, value: Any) -> re.Match:
         '''
         Determine whether the given value is in this authority.
         :param value: A possible authority value.
-        :return: True if the value is a valid entity value.
-
-        In the case of this regex authority, this will the match object
-        if the regex matches the value; otherwise None.
+        :return: None if the value is not a valid entity value; otherwise,
+            return the re.Match object.
         '''
         return self.regex.match(str(value))
 
@@ -617,26 +621,50 @@ class RegexAuthority(Authority):
         :return: The given or a new Annotations instance
         '''
         for match in re.finditer(self.regex, doctext.text):
+            ann_dicts = list()
             if match.lastindex is not None:
-                for group_name, group_text in self.regex.groupindex.items():
-                    kwargs = {
-                        self.field_groups.get_field_type_col(group_name): group_name
-                    }
-                    annotations.add_dict(self.build_annotation(
-                        start_pos=match.start(group_name),
-                        end_pos=match.end(group_name),
-                        entity_text=group_text,
-                        auth_value_id=self.get_canonical_form(group_text, group_name),
-                        **kwargs
-                    ))
-            else:
-                annotations.add_dict(self.build_annotation(
+                if len(self.regex.groupindex) > 0:  # we have named groups
+                    for group_name, group_num in self.regex.groupindex.items():
+                        group_text = match.group(group_num)
+                        kwargs = {
+                            self.field_groups.get_field_type_col(self.name): group_name
+                        }
+                        ann_dicts.append(self.build_annotation(
+                            start_pos=match.start(group_name),
+                            end_pos=match.end(group_name),
+                            entity_text=group_text,
+                            auth_value_id=self.get_canonical_form(group_text, group_name),
+                            **kwargs
+                        ))
+                else:  # we have only numbers for groups
+                    for group_num, group_text in enumerate(match.groups()):
+                        group_num += 1
+                        kwargs = {
+                            self.field_groups.get_field_type_col(self.name): group_num
+                        }
+                        ann_dicts.append(self.build_annotation(
+                            start_pos=match.start(group_num),
+                            end_pos=match.end(group_num),
+                            entity_text=group_text,
+                            auth_value_id=self.get_canonical_form(group_text, group_num),
+                            **kwargs
+                        ))
+            else:  # we have no groups
+                ann_dicts.append(self.build_annotation(
                     start_pos=match.start(),
                     end_pos=match.end(),
                     entity_text=match.group(),
-                    auth_value_id=self.get_canonical_form(match.group(), None),
-                    **kwargs
+                    auth_value_id=self.get_canonical_form(match.group(), self.name),
                 ))
+            if (
+                    len(ann_dicts) > 0 and (
+                        self.match_validator is None or
+                        self.match_validator(ann_dicts)
+                    )
+            ):
+                # Add non-empty, valid annotation dicts to the result
+                for ann_dict in ann_dicts:
+                    annotations.add_dict(ann_dict)
         return annotations
 
     def get_canonical_form(self, entity_text:str, entity_type:str) -> Any:

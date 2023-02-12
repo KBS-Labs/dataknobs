@@ -660,7 +660,7 @@ class AnnotationsGroup:
     def is_subset_of_any(
             self,
             groups: List['AnnotationsGroup']
-    ) -> AnnotationsGroup:
+    ) -> 'AnnotationsGroup':
         '''
         Determine whether this group is a subset of any of the given groups.
         :param groups: List of annotation groups
