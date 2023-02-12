@@ -1,6 +1,6 @@
 import json
 import pandas as pd
-import dataknobs.structures.document as document
+import dataknobs.structures.document as dk_doc
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List
 
@@ -12,7 +12,7 @@ KEY_TEXT_COL = 'text'
 KEY_ANN_TYPE_COL = 'ann_type'
 
 
-class AnnotationsMetaData(document.MetaData):
+class AnnotationsMetaData(dk_doc.MetaData):
     '''
     Container for annotations meta-data, identifying key column names.
 
@@ -183,7 +183,7 @@ class AnnotationsRowAccessor:
         value = missing
         col = self.metadata.get_col(col_type, None)
         if col is None or col not in row.index:
-            if col_type in self.metadata.index:
+            if col_type in self.metadata.data:
                 value = row[col_type]
             else:
                 if self.derived_cols is not None:
@@ -306,7 +306,7 @@ class Annotations:
         self._annotations_list = None
 
 
-class AnnotationsBuilder(ABC):
+class AnnotationsBuilder:
     '''
     A class for building annotations.
     '''
@@ -321,7 +321,7 @@ class AnnotationsBuilder(ABC):
         :param data_defaults: Dict[ann_colname, default_value] with default
             values for annotation columns
         '''
-        self.metadata = metadata
+        self.metadata = metadata if metadata is not None else AnnotationsMetaData()
         self.data_defaults = data_defaults
 
     def build_annotation_row(
@@ -338,13 +338,34 @@ class AnnotationsBuilder(ABC):
 
         For those kwargs whose names match metadata column names, override the
         data_defaults and add remaining data_default attributes.
+
+        :param result_row_dict: The result row dictionary being built
+        :param start_pos: The token start position
+        :param end_pos: The token end position
+        :param text: The token text
+        :param ann_type: The annotation type
+        :return: The result_row_dict
         '''
-        result = {
+        return self.do_build_row({
             self.metadata.start_pos_col: start_pos,
             self.metadata.end_pos_col: end_pos,
             self.metadata.text_col: text,
             self.metadata.ann_type_col: ann_type,
-        }
+        }, **kwargs)
+
+    def do_build_row(
+            self,
+            key_fields: Dict[str, Any],
+            **kwargs
+    ) -> Dict[str, Any]:
+        '''
+        Do the row building with the key fields, followed by data defaults,
+        followed by any extra kwargs.
+        :param key_fields: The dictionary of key fields
+        :param kwargs: Any extra fields to add
+        '''
+        result = dict()
+        result.update(key_fields)
         if self.data_defaults is not None:
             # Add data_defaults
             result.update(self.data_defaults)

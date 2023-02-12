@@ -1,9 +1,9 @@
 import numpy as np
 import pandas as pd
-import dataknobs.structures.document as doc
+import dataknobs.structures.document as dk_doc
 import dataknobs.utils.emoji_utils as emoji_utils
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Tuple, Union
+from typing import Any, Callable, List, Tuple, Union
 
 
 class CharacterFeatures(ABC):
@@ -11,9 +11,9 @@ class CharacterFeatures(ABC):
     Class representing features of text as a dataframe with each character
     as a row and columns representing character features.
     '''
-    def __init__(self, doctext: Union[doc.Text, str], roll_padding: int = 0):
+    def __init__(self, doctext: Union[dk_doc.Text, str], roll_padding: int = 0):
         '''
-        :param doctext: The text to tokenize (or doc.Text with its metadata)
+        :param doctext: The text to tokenize (or dk_doc.Text with its metadata)
         :param roll_padding: The number of pad characters added to each end of
             the text.
         '''
@@ -29,9 +29,9 @@ class CharacterFeatures(ABC):
         raise NotImplementedError
 
     @property
-    def doctext(self) -> doc.Text:
+    def doctext(self) -> dk_doc.Text:
         if isinstance(self._doctext, str):
-            self._doctext = doc.Text(self._doctext, None)
+            self._doctext = dk_doc.Text(self._doctext, None)
         return self._doctext
 
     @property
@@ -86,11 +86,27 @@ class CharacterFeatures(ABC):
             self._padded_text = padding + self.text + padding
         return self._padded_text
 
+    def get_tokens(
+            self,
+            normalize_fn: Callable[[str], str] = lambda x: x,
+    ) -> List['Token']:
+        '''
+        Get all token instances using the given normalize function.
+        :param normalize_fn: The normalization function (default=identity fn)
+        :return: A list of token instances
+        '''
+        token = self.build_first_token(normalize_fn)
+        tokens = list()
+        while token is not None:
+            tokens.append(token)
+            token = token.next_token
+        return tokens        
+
 
 class TextFeatures(CharacterFeatures):
     def __init__(
             self,
-            doctext: Union[doc.Text, str],
+            doctext: Union[dk_doc.Text, str],
             split_camelcase: bool = True,
             mark_alpha: bool = False,
             mark_digit: bool = False,
@@ -108,6 +124,14 @@ class TextFeatures(CharacterFeatures):
         :param mark_lower: True to mark lower features (auto-included for
             camel-case)
         :param emoji_data: An EmojiData instance to mark emoji BIO features
+
+        NOTEs:
+          * If emoji_data is non-null:
+             * Then emojis will be treated as text (instead of as non-text)
+             * If split_camelcase is True,
+                * then each emoji will be in its own token
+                * otherwise, each sequence of (adjacent) emojis will be treated
+                  as a single token.
         '''
         # NOTE: roll_padding is determined by "roll" feature needs. Currently 1.
         super().__init__(doctext, roll_padding=1)
@@ -207,6 +231,10 @@ class TextFeatures(CharacterFeatures):
                     (cdf['emoji'] == 'I') &
                     np.roll(cdf['emoji'] != 'I', -1)
                 )
+                cdf['tok_end'] |= (  # mark an 'B' followed by not 'I'
+                    (cdf['emoji'] == 'B') &
+                    np.roll(cdf['emoji'] != 'I', -1)
+                )
             else:
                 # Not splitting camelcase keeps consecutive emojis together
                 cdf['alnum'] |= (cdf['emoji'] != 'O')
@@ -221,7 +249,7 @@ class CharacterInputFeatures(CharacterFeatures):
             self,
             cdf: pd.DataFrame,
             token_mask: 'TokenMask',
-            doctext: Union[doc.Text, str],
+            doctext: Union[dk_doc.Text, str],
             roll_padding: int = 0,
     ):
         super().__init__(doctext, roll_padding=roll_padding)
@@ -335,10 +363,6 @@ class TokenLoc:
         Get the token's position within its text string, or -1 if unknown.
         '''
         return self._token_num if self._token_num is not None else -1
-
-    @token_num.setter
-    def token_num(self, value: int):
-        self._token_num = value
 
 
 class TokenMask(ABC):
@@ -608,7 +632,7 @@ class Token:
         return f'Token({self.token_text}){self.token_loc}'
 
     @property
-    def doctext(self) -> doc.Text:
+    def doctext(self) -> dk_doc.Text:
         '''
         Get the text object with metadata.
         '''
@@ -710,6 +734,13 @@ class Token:
                     self.token_loc.end_loc_excl,
                     next_loc.start_loc_incl
                 )
+            else:
+                # There isn't a next token. Get remainder of text after tok.
+                delims = self.token_mask.get_padded_text(
+                    self.token_loc.end_loc_excl,
+                    self.token_mask.max_ploc,
+                )
+                
             self._post_delims = delims
         return self._post_delims
 
@@ -744,32 +775,22 @@ class Token:
                 )
         return self._prev
 
+    @property
     def first_token(self) -> 'Token':
         '''
-        Get the first token for this token's text.
+        Get the first token for this token's input.
         '''
         first = self
         while first.prev_token is not None:
             first = first.prev_token
         return first
 
-    def find_token(self, start_pos: int, closest_okay: bool = False) -> 'Token':
+    @property
+    def last_token(self) -> 'Token':
         '''
-        Find the token in this token's text starting at the given position,
-        or None.
+        Get the last token for this token's input.
         '''
-        found = self.first_token if start_pos < self.start_pos else self
-        prev_found = None
-        prev_delta = None
-        delta = abs(found.start_pos - start_pos)
-        while found is not None:
-            if found.start_pos == start_pos:
-                break  # foundit!
-            elif found.start_pos > start_pos:
-                if closest_okay and prev_delta is not None and prev_delta < delta:
-                    found = prev_found
-                break
-            prev_found = found
-            prev_delta = delta
-            found = found.next_token
-        return found
+        last = self
+        while last.next_token is not None:
+            last = last.next_token
+        return last

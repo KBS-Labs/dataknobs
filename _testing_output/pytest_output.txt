@@ -3,15 +3,16 @@ platform darwin -- Python 3.9.15, pytest-7.2.1, pluggy-1.0.0
 cachedir: .tox/tests/.pytest_cache
 rootdir: /Users/skoehler/dev/kbs-labs/dataknobs
 plugins: anyio-3.6.2, cov-3.0.0
-collected 44 items
+collected 49 items
 
-tests/structures/test_conditional_dict.py ....                           [  9%]
-tests/structures/test_document.py .                                      [ 11%]
-tests/structures/test_tree.py ...........                                [ 36%]
-tests/utils/test_elasticsearch_utils.py .......                          [ 52%]
-tests/utils/test_pandas_utils.py .......                                 [ 68%]
-tests/utils/test_requests_utils.py ...                                   [ 75%]
-tests/utils/test_resource_utils.py .                                     [ 77%]
+tests/structures/test_conditional_dict.py ....                           [  8%]
+tests/structures/test_document.py .                                      [ 10%]
+tests/structures/test_tree.py ...........                                [ 32%]
+tests/utils/test_elasticsearch_utils.py .......                          [ 46%]
+tests/utils/test_pandas_utils.py .......                                 [ 61%]
+tests/utils/test_requests_utils.py ...                                   [ 67%]
+tests/utils/test_resource_utils.py .                                     [ 69%]
+tests/xization/test_masking_tokenizer.py .....                           [ 79%]
 tests/xization/test_normalize.py ..........                              [100%]
 
 =============================== warnings summary ===============================
@@ -37,23 +38,27 @@ Name                                       Stmts   Miss  Cover   Missing
 dataknobs/__init__.py                          0      0   100%
 dataknobs/structures/__init__.py               0      0   100%
 dataknobs/structures/conditional_dict.py      33      5    85%   48-49, 62-63, 66
-dataknobs/structures/document.py              41      0   100%
+dataknobs/structures/document.py              42      0   100%
 dataknobs/structures/tree.py                 221      8    96%   43, 109, 224-232, 246, 255, 308
 dataknobs/utils/__init__.py                    0      0   100%
 dataknobs/utils/elasticsearch_utils.py        93      0   100%
-dataknobs/utils/emoji_utils.py               136    136     0%   38-268
+dataknobs/utils/embedding_utils.py            86     86     0%   1-229
+dataknobs/utils/emoji_utils.py               136     18    87%   88, 123, 133, 161, 200, 205, 215-226
+dataknobs/utils/huggingface_utils.py          86     86     0%   1-229
 dataknobs/utils/pandas_utils.py              181      2    99%   104, 117
 dataknobs/utils/requests_utils.py            125      3    98%   126, 296, 318
 dataknobs/utils/resource_utils.py             42      3    93%   41, 56, 61
 dataknobs/utils/sql_utils.py                 135    135     0%   1-389
+dataknobs/utils/stanza_utils.py              194    194     0%   1-393
+dataknobs/utils/wordnet_utils.py              64     64     0%   1-309
 dataknobs/utils/xml_utils.py                  47     47     0%   1-100
 dataknobs/xization/__init__.py                 0      0   100%
-dataknobs/xization/annotations.py            286    286     0%   1-754
-dataknobs/xization/authorities.py            154    154     0%   1-638
-dataknobs/xization/masking_tokenizer.py      314    314     0%   1-775
+dataknobs/xization/annotations.py            289    289     0%   1-776
+dataknobs/xization/authorities.py            163    163     0%   1-713
+dataknobs/xization/masking_tokenizer.py      311      6    98%   29, 70, 351, 419, 429, 770
 dataknobs/xization/normalize.py              151     47    69%   173, 233, 251, 255, 259, 265, 287, 312-316, 332-381, 431
 ------------------------------------------------------------------------
-TOTAL                                       1959   1140    42%
+TOTAL                                       2399   1156    52%
 
-FAIL Required test coverage of 85% not reached. Total coverage: 41.81%
-======================== 44 passed, 2 warnings in 1.53s ========================
+FAIL Required test coverage of 85% not reached. Total coverage: 51.81%
+======================== 49 passed, 2 warnings in 2.41s ========================
