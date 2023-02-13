@@ -1,14 +1,10 @@
-************* Module /Users/skoehler/dev/kbs-labs/dataknobs/.pylintrc
-.pylintrc:1:0: F0011: error while parsing the configuration: File contains no section headers.
-file: '/Users/skoehler/dev/kbs-labs/dataknobs/.pylintrc', line: 5
-'extension-pkg-allow-list=\n' (config-parse-error)
 ************* Module dataknobs.utils.elasticsearch_utils
 dataknobs/utils/elasticsearch_utils.py:327:1: W0511: #TODO: wrap embedding store with es index <- corpus_utils (fixme)
 ************* Module dataknobs.xization.normalize
 dataknobs/xization/normalize.py:211:9: W0511: TODO: Use a better pluralizer (fixme)
 ************* Module dataknobs.xization.authorities
-dataknobs/xization/authorities.py:427:12: W0613: Unused argument 'group_names' (unused-argument)
+dataknobs/xization/authorities.py:209:4: W0221: Number of parameters was 6 in 'AnnotationsBuilder.build_annotation_row' and is now 7 in overriding 'AuthorityAnnotationsBuilder.build_annotation_row' method (arguments-differ)
 
 ------------------------------------------------------------------
-Your code has been rated at 9.98/10 (previous run: 9.98/10, +0.00)
+Your code has been rated at 9.99/10 (previous run: 9.94/10, +0.05)
 

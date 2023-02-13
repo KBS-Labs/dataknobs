@@ -1,6 +1,6 @@
 import json
 import pandas as pd
-import dataknobs.structures.document as document
+import dataknobs.structures.document as dk_doc
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List
 
@@ -12,7 +12,7 @@ KEY_TEXT_COL = 'text'
 KEY_ANN_TYPE_COL = 'ann_type'
 
 
-class AnnotationsMetaData(document.MetaData):
+class AnnotationsMetaData(dk_doc.MetaData):
     '''
     Container for annotations meta-data, identifying key column names.
 
@@ -114,7 +114,7 @@ class DerivedAnnotationColumns(ABC):
     @abstractmethod
     def get_col_value(
             self,
-            row_accessor: 'AnnotationsRowAccessor',
+            metadata: AnnotationsMetaData,
             col_type: str,
             row: pd.Series,
             missing: str = None,
@@ -122,26 +122,13 @@ class DerivedAnnotationColumns(ABC):
         '''
         Get the value of the column in the given row derived from col_type.
 
-        :param row_accessor: The AnnotationsRowAccessor
+        :param metadata: The AnnotationsMetaData
         :param col_type: The type of column value to derive
         :param row: A row from which to get the value.
         :param missing: The value to return for unknown or missing column
         :return: The row value or the missing value
         '''
         raise NotImplementedError
-
-    def get_field_type(
-            self,
-            row_accessor: 'AnnotationsRowAccessor',
-            row: pd.Series,
-    ) -> str:
-        '''
-        Get a label for the field type, or attribute, of the row.
-
-        :param row_accessor: The AnnotationsRowAccessor
-        :param row: A row whose field_type to get.
-        '''
-        return row_accessor.get_col_value(KEY_ANN_TYPE_COL, row, row.name)
 
 
 class AnnotationsRowAccessor:
@@ -183,7 +170,7 @@ class AnnotationsRowAccessor:
         value = missing
         col = self.metadata.get_col(col_type, None)
         if col is None or col not in row.index:
-            if col_type in self.metadata.index:
+            if col_type in self.metadata.data:
                 value = row[col_type]
             else:
                 if self.derived_cols is not None:
@@ -193,23 +180,6 @@ class AnnotationsRowAccessor:
         else:
             value = row[col]
         return value
-
-    def get_row_field_type(self, row: pd.Series) -> str:
-        '''
-        Get a label for the field type, or attribute, of the row.
-        :param row: A row whose field_type to get.
-        '''
-        field_type = None
-        if self.derived_cols is not None:
-            field_type = self.derived_cols.get_field_type(
-                self.metadata, row
-            )
-
-        if field_type is None:
-            field_type = self.get_col_value(
-                KEY_ANN_TYPE_COL, row, row.name
-            )
-        return field_type
 
 
 class Annotations:
@@ -236,7 +206,7 @@ class Annotations:
         self._df = df
 
     @property
-    def as_list(self) -> List[Dict[str, Any]]:
+    def ann_row_dicts(self) -> List[Dict[str, Any]]:
         '''
         Get the annotations as a list of dictionaries.
         '''
@@ -257,13 +227,13 @@ class Annotations:
         '''
         Add the annotation dict.
         '''
-        self.as_list.append(annotation)
+        self.ann_row_dicts.append(annotation)
 
     def add_dicts(self, annotations: List[Dict[str, Any]]):
         '''
         Add the annotation dicts.
         '''
-        self.as_list.extend(annotations)
+        self.ann_row_dicts.extend(annotations)
 
     def add_df(self, an_df: pd.DataFrame):
         '''
@@ -306,7 +276,7 @@ class Annotations:
         self._annotations_list = None
 
 
-class AnnotationsBuilder(ABC):
+class AnnotationsBuilder:
     '''
     A class for building annotations.
     '''
@@ -321,7 +291,7 @@ class AnnotationsBuilder(ABC):
         :param data_defaults: Dict[ann_colname, default_value] with default
             values for annotation columns
         '''
-        self.metadata = metadata
+        self.metadata = metadata if metadata is not None else AnnotationsMetaData()
         self.data_defaults = data_defaults
 
     def build_annotation_row(
@@ -338,13 +308,34 @@ class AnnotationsBuilder(ABC):
 
         For those kwargs whose names match metadata column names, override the
         data_defaults and add remaining data_default attributes.
+
+        :param result_row_dict: The result row dictionary being built
+        :param start_pos: The token start position
+        :param end_pos: The token end position
+        :param text: The token text
+        :param ann_type: The annotation type
+        :return: The result_row_dict
         '''
-        result = {
+        return self.do_build_row({
             self.metadata.start_pos_col: start_pos,
             self.metadata.end_pos_col: end_pos,
             self.metadata.text_col: text,
             self.metadata.ann_type_col: ann_type,
-        }
+        }, **kwargs)
+
+    def do_build_row(
+            self,
+            key_fields: Dict[str, Any],
+            **kwargs
+    ) -> Dict[str, Any]:
+        '''
+        Do the row building with the key fields, followed by data defaults,
+        followed by any extra kwargs.
+        :param key_fields: The dictionary of key fields
+        :param kwargs: Any extra fields to add
+        '''
+        result = dict()
+        result.update(key_fields)
         if self.data_defaults is not None:
             # Add data_defaults
             result.update(self.data_defaults)
@@ -420,6 +411,7 @@ class AnnotationsGroup:
     def __init__(
             self,
             row_accessor: AnnotationsRowAccessor,
+            field_col_type: str,
             accept_fn: Callable[['AnnotationsGroup', RowData], bool],
             group_type: str = None,
             group_num: int = None,
@@ -428,6 +420,8 @@ class AnnotationsGroup:
     ):
         '''
         :param row_accessor: The annotations row_accessor
+        :param field_col_type: The col_type for the group field_type for retrieval
+           using the annotations row accessor
         :param accept_fn: A fn(g, row_data) that returns True to accept the row
             data into this group g, or False to reject the row. If None, then
             all rows are always accepted.
@@ -439,6 +433,7 @@ class AnnotationsGroup:
         '''
         self.rows = list()   # List[RowData]
         self.row_accessor = row_accessor
+        self.field_col_type = field_col_type
         self.accept_fn = accept_fn
         self._group_type = group_type
         self._group_num = group_num
@@ -573,7 +568,7 @@ class AnnotationsGroup:
 
     def copy(self) -> 'AnnotationsGroup':
         result = AnnotationsGroup(
-            self.row_accessor, self.accept_fn,
+            self.row_accessor, self.field_col_type, self.accept_fn,
             group_type=self.group_type,
             group_num=self.group_num,
             valid=self.is_valid,
@@ -620,7 +615,7 @@ class AnnotationsGroup:
         Get this group (record) as a dictionary of field type to text values.
         '''
         return {
-            self.row_accessor.get_row_field_type(row.row): row.text
+            self.row_accessor.get_col_value(self.field_col_type): row.text
             for row in self.rows
         }
 
@@ -639,7 +634,7 @@ class AnnotationsGroup:
     def is_subset_of_any(
             self,
             groups: List['AnnotationsGroup']
-    ) -> AnnotationsGroup:
+    ) -> 'AnnotationsGroup':
         '''
         Determine whether this group is a subset of any of the given groups.
         :param groups: List of annotation groups

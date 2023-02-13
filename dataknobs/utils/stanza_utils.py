@@ -1,8 +1,8 @@
 import os
 import pandas as pd
 import stanza
+import dataknobs.structures.tree as dk_tree
 import dataknobs.utils.pandas_utils as pd_utils
-import dataknobs.utils.tree as dk_tree
 from stanza.server import CoreNLPClient
 
 

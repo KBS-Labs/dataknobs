@@ -1,11 +1,22 @@
 import pandas as pd
 import re
-import dataknobs.xization.annotations as annots
+import dataknobs.structures.document as dk_doc
+import dataknobs.xization.annotations as dk_anns
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Set
+from typing import Any, Callable, Dict, List, Set, Union
 
 
-class DerivedFieldGroups(annots.DerivedAnnotationColumns):
+# Key annotation column name constants
+KEY_AUTH_ID_COL = 'auth_id'
+
+
+class DerivedFieldGroups(dk_anns.DerivedAnnotationColumns):
+    '''
+    Defines derived column types:
+      * "field_type" -- The column holding they type of field of an annotation row
+      * "field_group" -- The column holding the group number(s) of the field
+      * "field_record" -- The column holding record number(s) of the field
+    '''
     
     def __init__(
             self,
@@ -34,7 +45,7 @@ class DerivedFieldGroups(annots.DerivedAnnotationColumns):
 
     def get_col_value(
             self,
-            row_accessor: annots.AnnotationsRowAccessor,
+            metadata: dk_anns.AnnotationsMetaData,
             col_type: str,
             row: pd.Series,
             missing: str = None,
@@ -48,54 +59,25 @@ class DerivedFieldGroups(annots.DerivedAnnotationColumns):
 
         And "field" is the row_accessor's metadata's "ann_type" col's value.
 
-        :param row_accessor: The AnnotationsRowAccessor
+        :param metadata: The AnnotationsMetaData
         :param col_type: The type of column value to derive
         :param row: A row from which to get the value.
         :param missing: The value to return for unknown or missing column
         :return: The row value or the missing value
         '''
         value = missing
-        field = row_accessor.get_col_value('ann_type', row, None)
-        if field is not None:
-            if col_type == 'field_type':
-                value = row_accessor.get_col_value(
-                    self.get_field_type_col(field),
-                    row, missing=missing
-                )
-            elif col_type == 'field_group':
-                value = row_accessor.get_col_value(
-                    self.get_field_group_col(field),
-                    row, missing=missing
-                )
-            elif col_type == 'field_record':
-                value = row_accessor.get_col_value(
-                    self.get_field_record_col(field),
-                    row, missing=missing
-                )
+        if metadata.ann_type_col in row.index:
+            field = row[metadata.ann_type_col]
+            if field is not None:
+                if col_type == 'field_type':
+                    col_name = self.get_field_type_col(field)
+                elif col_type == 'field_group':
+                    col_name = self.get_field_group_col(field)
+                elif col_type == 'field_record':
+                    col_name = self.get_field_record_col(field)
+                if col_name is not None and col_name in row.index:
+                    value = row[col_name]
         return value
-
-    def get_field_type(
-            self,
-            row_accessor: annots.AnnotationsRowAccessor,
-            row: pd.Series,
-    ) -> str:
-        '''
-        Get a label for the field type, or attribute, of the row.
-
-        :param row_accessor: The AnnotationsRowAccessor
-        :param row: A row whose field_type to get.
-        '''
-        result = row.name
-        group_type = row_accessor.get_col_value('ann_type', row, None)
-        field_type = row_accessor.get_col_value('field_type', row, None)
-        if group_type is not None:
-            if field_type is None:
-                result = group_type
-            else:
-                result = f'{group_type}.{field_type}'
-        elif field_type is not None:
-            result = field_type
-        return result
 
     def unpack_field(self, field_value: str) -> str:
         '''
@@ -147,134 +129,114 @@ class DerivedFieldGroups(annots.DerivedAnnotationColumns):
         return f'{field}{self.field_record_suffix}'
 
 
-class Authority(ABC):
+class AuthorityAnnotationsMetaData(dk_anns.AnnotationsMetaData):
     '''
-    A class for managing and defining tabular authoritative data for e.g.,
-    taxonomies, etc., and using them to annotate instances within text.
+    An extension of AnnotationsMetaData that adds an 'auth_id_col' to the
+    standard (key) annotation columns (attributes).
     '''
     def __init__(
             self,
-            name:str,
-            auth_name_colname: str = 'auth_name',
-            auth_value_id_colname: str = 'auth_value_id',
-            parent_auth:'Authority' = None,
+            start_pos_col: str = dk_anns.KEY_START_POS_COL,
+            end_pos_col: str = dk_anns.KEY_END_POS_COL,
+            text_col: str = dk_anns.KEY_TEXT_COL,
+            ann_type_col: str = dk_anns.KEY_ANN_TYPE_COL,
+            auth_id_col: str = KEY_AUTH_ID_COL,
+            sort_fields: List[str] = (dk_anns.KEY_START_POS_COL, dk_anns.KEY_END_POS_COL),
+            sort_fields_ascending: List[bool] = (True, False),
+            **kwargs
     ):
         '''
-        Initialize with this authority's metadata.
-        :param name: This authority's entity name
-        :param auth_name_colname: The name of the annotation column for this
-            authority's name. If None, then auth_name's will not automatically
-            be added to annotations.
-        :param auth_value_id_colname: The name of the annotation column for
-            this authority's value_id. If None, then auth_value_id's will not
-            automatically be added to annotations.
-        :param parent_auth: This authority's parent authority (if any)
-        '''
-        self._name = name
-        self.auth_name_colname = auth_name_colname  # MIGRATION: Add to data_defaults (ann_type=name)
-        self.auth_value_id_colname = auth_value_id_colname
-        self._parent = parent_auth
+        Initialize with key (and more) column names and info.
 
-    @property
-    def name(self) -> str:
-        '''
-        Get the name of this authority, which is usually the name or type
-        of entities defined herein.
-        '''
-        return self._name
+        Key column types:
+          * start_pos
+          * end_pos
+          * text
+          * ann_type
+          * auth_id
 
-    @property
-    def parent(self) -> 'Authority':
-        '''
-        Get this authority's parent, or None.
-        '''
-        return self._parent
+        NOTEs:
+          * Actual table columns can be named arbitrarily
+             * BUT: interactions through annotations classes and interfaces
+               relating to the "key" columns must use the key column constants
 
-    @abstractmethod
-    def has_value(self, value: Any) -> bool:
+        :param start_pos_col: Col name for the token starting position
+        :param end_pos_col: Col name for the token ending position
+        :param text_col: Col name for the token text
+        :param ann_type_col: Col name for the annotation types
+        :param auth_id_col: Col name for the authority value ID
+        :param sort_fields: The col types relevant for sorting annotation rows
+        :param sort_fields_ascending: To specify sort order of sort_fields
+        :param **kwargs: More column types mapped to column names
         '''
-        Determine whether the given value is in this authority.
-        :param value: A possible authority value.
-        :return: True if the value is a valid entity value.
-        '''
-        raise NotImplementedError
-
-    @abstractmethod
-    def annotate_text(
-            self,
-            input_text: str,
-            input_id: Any = None,
-            annotations: annots.Annotations = None,
-    ) -> annots.Annotations:
-        '''
-        Find and annotate this authority's entities in the input text
-        as dictionaries like:
-        [
-            {
-                'input_id': <id>,
-                'start_pos': <start_char_pos>,
-                'end_pos': <end_char_pos>,
-                'entity_text': <entity_text>,
-                'confidence': <confidence_if_available>,
-                '<auth_name_col>': <authority_name>,
-                '<auth_value_id>': <value_id_or_canonical_form>,
-            },
-        ]
-        :param input_text: The text to process.
-        :param input_id: The id of the input text
-        :param annotations: The annotations object to add annotations to
-        :return: The given or a new Annotations instance
-        '''
-        raise NotImplementedError
-
-    def compose(
-            self,
-            annotations: annots.Annotations,
-    ) -> annots.Annotations:
-        '''
-        Compose annotations into groups.
-        :param annotations: The annotations
-        :return: composed annotations
-        '''
-        return annotations
-
-    def build_annotation(  # MIGRATION: Moving to AnnotationsBuilder
-            self,
-            input_id: Any = None,  # MIGRATION: Add to kwargs
-            start_pos: int = None,
-            end_pos: int = None,
-            entity_text: str = None,
-            auth_value_id: Any = None,  # MIGRATION: Add to AnnotationsBuilder.build_annotation_row kwargs
-            conf: float = 1.0,  # MIGRATION: Add to data_defaults AND kwargs
+        super().__init__(
+            start_pos_col=start_pos_col,
+            end_pos_col=end_pos_col,
+            text_col=text_col,
+            ann_type_col=ann_type_col,
+            sort_fields=sort_fields,
+            sort_fields_ascending=sort_fields_ascending,
+            auth_id=auth_id_col,
             **kwargs,
+        )
+
+    @property
+    def auth_id_col(self) -> str:
+        ''' Get the column name for the auth_id '''
+        return self.data[KEY_AUTH_ID_COL]
+
+
+class AuthorityAnnotationsBuilder(dk_anns.AnnotationsBuilder):
+    '''
+    An extension of an AnnotationsBuilder that adds the 'auth_id' column.
+    '''
+
+    def __init__(
+            self,
+            metadata: AuthorityAnnotationsMetaData=None,
+            data_defaults: Dict[str, Any]=None,
+    ):
+        '''
+        :param metadata: The authority annotations metadata
+        :param data_defaults: Dict[ann_colname, default_value] with default
+            values for annotation columns
+        '''
+        super().__init__(
+            metadata if metadata is not None else AuthorityAnnotationsMetaData(),
+            data_defaults
+        )
+
+    def build_annotation_row(
+            self,
+            start_pos: int,
+            end_pos: int,
+            text: str,
+            ann_type: str,
+            auth_id: str,
+            **kwargs
     ) -> Dict[str, Any]:
         '''
-        Build annotations with the given components.
-        '''
-        result = {
-            'input_id': input_id,
-            'start_pos': start_pos,
-            'end_pos': end_pos,
-            'entity_text': entity_text,
-            'confidence': conf,
-        }
-        self.add_metadata_to_annotation(result, auth_value_id=auth_value_id)
-        if kwargs is not None:
-            result.update(kwargs)
-        return result
+        Build an annotation row with the mandatory key values and those from
+        the remaining keyword arguments.
 
-    def add_metadata_to_annotation(
-            self,
-            adict:Dict[str, Any],
-            auth_value_id: Any = None,
-    ):
-        if self.parent:
-            self.parent.add_metadata_to_annotation(adict)
-            # MIGRATION: Instead, make sure AnnotationsBuilder.data_defaults has correct (e.g., parent or self) auth_name_colname
-        if self.auth_name_colname and self.name:  # MIGRATION: Add to data_defaults
-            adict[self.auth_name_colname] = self.name
-        if self.auth_value_id_colname and auth_value_id:  # MIGRATION: Add to data_defaults
-            adict[self.auth_value_id_colname] = auth_value_id
+        For those kwargs whose names match metadata column names, override the
+        data_defaults and add remaining data_default attributes.
+
+        :param result_row_dict: The result row dictionary being built
+        :param start_pos: The token start position
+        :param end_pos: The token end position
+        :param text: The token text
+        :param ann_type: The annotation type
+        :param auth_id: The authority ID for the row
+        :return: The result_row_dict
+        '''
+        return self.do_build_row({
+            self.metadata.start_pos_col: start_pos,
+            self.metadata.end_pos_col: end_pos,
+            self.metadata.text_col: text,
+            self.metadata.ann_type_col: ann_type,
+            self.metadata.auth_id_col: auth_id,
+        }, **kwargs)
 
 
 class AuthorityData:
@@ -303,6 +265,265 @@ class AuthorityData:
         return self.df[col == value]
 
 
+class Authority(ABC):
+    '''
+    A class for managing and defining tabular authoritative data for e.g.,
+    taxonomies, etc., and using them to annotate instances within text.
+    '''
+    def __init__(
+            self,
+            name:str,
+            auth_anns_builder: AuthorityAnnotationsBuilder = None,
+            authdata: AuthorityData = None,
+            field_groups: DerivedFieldGroups = None,
+            anns_validator: Callable[['Authority', Dict[str,Any]], bool] = None,
+            parent_auth:'Authority' = None,
+    ):
+        '''
+        Initialize with this authority's metadata.
+        :param name: This authority's entity name
+        :param auth_anns_builder: The authority annotations row builder to use
+            for building annotation rows.
+        :param authdata: The authority data
+        :param field_groups: The derived field groups to use
+        :param anns_validator: fn(auth, anns_dict_list) that returns True if
+           the list of annotation row dicts are valid to be added as
+           annotations for a single match or "entity".
+        :param parent_auth: This authority's parent authority (if any)
+        '''
+        self._name = name
+        self.anns_builder = (
+            auth_anns_builder if auth_anns_builder is not None
+            else AuthorityAnnotationsBuilder()
+        )
+        self.authdata = authdata
+        self.field_groups = (
+            field_groups if field_groups is not None
+            else DerivedFieldGroups()
+        )
+        self.anns_validator = anns_validator
+        self._parent = parent_auth
+
+    @property
+    def metadata(self) -> AuthorityAnnotationsMetaData:
+        ''' Get the meta-data '''
+        return self.anns_builder.metadata
+
+    @property
+    def name(self) -> str:
+        '''
+        Get the name of this authority, which is usually the name or type
+        of entities defined herein.
+        '''
+        return self._name
+
+    @property
+    def parent(self) -> 'Authority':
+        '''
+        Get this authority's parent, or None.
+        '''
+        return self._parent
+
+    @abstractmethod
+    def has_value(self, value: Any) -> bool:
+        '''
+        Determine whether the given value is in this authority.
+        :param value: A possible authority value.
+        :return: True if the value is a valid entity value.
+        '''
+        raise NotImplementedError
+
+    def annotate_text(
+            self,
+            doctext: Union[dk_doc.Text, str],
+            annotations: dk_anns.Annotations = None,
+    ) -> dk_anns.Annotations:
+        '''
+        Find and annotate this authority's entities in the document text
+        as dictionaries like:
+        [
+            {
+                'input_id': <id>,
+                'start_pos': <start_char_pos>,
+                'end_pos': <end_char_pos>,
+                'entity_text': <entity_text>,
+                'ann_type': <authority_name>,
+                '<auth_id>': <auth_value_id_or_canonical_form>,
+                'confidence': <confidence_if_available>,
+            },
+        ]
+        :param doctext: The text to process.
+        :param annotations: The annotations object to add annotations to
+        :return: The given or a new Annotations instance
+        '''
+        if doctext is not None:
+            if isinstance(doctext, str) and len(doctext.strip()) > 0:
+                doctext = dk_doc.Text(
+                    doctext,
+                    AuthorityAnnotationsMetaData(),
+                )
+        if doctext is not None:
+            if annotations is None:
+                annotations = dk_anns.Annotations(self.metadata)
+            annotations = self.add_annotations(doctext, annotations)
+        return annotations
+
+    @abstractmethod
+    def add_annotations(
+            self,
+            doctext: dk_doc.Text,
+            annotations: dk_anns.Annotations,
+    ) -> dk_anns.Annotations:
+        '''
+        Method to do the work of finding, validating, and adding annotations.
+        :param doctext: The text to process.
+        :param annotations: The annotations object to add annotations to
+        :return: The given or a new Annotations instance
+        '''
+        raise NotImplementedError
+
+    def validate_ann_dicts(self, ann_dicts: List[Dict[str, Any]]) -> bool:
+        '''
+        The annotation row dictionaries are valid if:
+          * They are non-empty
+          * and
+             * either there is no annotations validator
+             * or they are valid according to the validator
+        :param ann_dicts: Annotation dictionaries
+        :return: True if valid
+        '''
+        return (
+                len(ann_dicts) > 0 and (
+                    self.anns_validator is None or
+                    self.anns_validator(self, ann_dicts)
+                )
+        )
+
+    def compose(
+            self,
+            annotations: dk_anns.Annotations,
+    ) -> dk_anns.Annotations:
+        '''
+        Compose annotations into groups.
+        :param annotations: The annotations
+        :return: composed annotations
+        '''
+        return annotations
+
+    def build_annotation(
+            self,
+            start_pos: int = None,
+            end_pos: int = None,
+            entity_text: str = None,
+            auth_value_id: Any = None,
+            conf: float = 1.0,
+            **kwargs,
+    ) -> Dict[str, Any]:
+        '''
+        Build annotations with the given components.
+        '''
+        return self.anns_builder.build_annotation_row(
+            start_pos, end_pos, entity_text, self.name, auth_value_id,
+            auth_valconf=conf, **kwargs
+        )
+
+
+class AnnotationsValidator(ABC):
+    '''
+    A base class with helper functions for performing validations on annotation
+    rows.
+    '''
+
+    def __call__(
+            self,
+            auth: Authority,
+            ann_row_dicts: List[Dict[str, Any]],
+    ) -> bool:
+        '''
+        Call function to enable instances of this type of class to be passed in
+        as a anns_validator function to an Authority.
+        :param auth: The authority proposing annotations
+        :param ann_row_dicts: The proposed annotations
+        :return: True if the annotations are valid; otherwise, False
+        '''
+        return self.validate_annotation_rows(
+            AnnotationsValidator.AuthAnnotations(auth, ann_row_dicts)
+        )
+
+    @abstractmethod
+    def validate_annotation_rows(
+            self,
+            auth_annotations: 'AnnotationsValidator.AuthAnnotations',
+    ) -> bool:
+        '''
+        Determine whether the proposed authority annotation rows are valid.
+        :param auth_annotations: The AuthAnnotations instance with the
+            proposed data.
+        :return: True if valid; False if not.
+        '''
+        raise NotImplementedError
+
+    class AuthAnnotations:
+        '''
+        A wrapper class for convenient access to the entity annotations.
+        '''
+        def __init__(self, auth: Authority, ann_row_dicts: List[Dict[str, Any]]):
+            self.auth = auth
+            self.ann_row_dicts = ann_row_dicts
+            self._row_accessor = None  # AnnotationsRowAccessor
+            self._anns = None  # Annotations
+            self._atts = None  # Dict[str, str]
+    
+        @property
+        def row_accessor(self) -> dk_anns.AnnotationsRowAccessor:
+            '''
+            Get the row accessor for this instance's annotations.
+            '''
+            if self._row_accessor is None:
+                self._row_accessor = dk_anns.AnnotationsRowAccessor(
+                    self.auth.metadata, derived_cols=self.auth.field_groups
+                )
+            return self._row_accessor
+    
+        @property
+        def anns(self) -> dk_anns.Annotations:
+            ''' Get this instance's annotation rows as an annotations object '''
+            if self._anns is None:
+                self._anns = dk_anns.Annotations(self.auth.metadata)
+                for row_dict in self.ann_row_dicts:
+                    self._anns.add_dict(row_dict)
+            return self._anns
+    
+        @property
+        def df(self) -> pd.DataFrame:
+            ''' Get the annotation's dataframe '''
+            return self.anns.df
+    
+        def get_field_type(self, row: pd.Series) -> str:
+            ''' Get the entity field type value '''
+            return self.row_accessor.get_col_value('field_type', row, None)
+    
+        def get_text(self, row: pd.Series) -> str:
+            ''' Get the entity text from the row '''
+            return self.row_accessor.get_col_value(
+                self.auth.metadata.text_col, row, None
+            )
+
+        @property
+        def attributes(self) -> Dict[str, str]:
+            ''' Get this instance's annotation entity attributes '''
+            if self._atts is None:
+                self._atts = {
+                    self.get_field_type(row): self.get_text(row)
+                    for _, row in self.df.iterrows()
+                }
+            return self._atts
+    
+        def colval(self, col_name, row) -> Any:
+            ''' Get the column's value from the given row '''
+            return self.row_accessor.get_col_value(col_name, row)
+
+
 class AuthorityFactory(ABC):
     '''
     A factory class for building an authority.
@@ -311,12 +532,15 @@ class AuthorityFactory(ABC):
     def build_authority(
             self,
             name: str,
+            auth_anns_builder: AuthorityAnnotationsBuilder,
             authdata: AuthorityData,
             parent_auth: Authority = None,
     ) -> Authority:
         '''
         Build an authority with the given name and data.
         :param name: The authority name
+        :param auth_anns_builder: The authority annotations row builder to use
+            for building annotation rows.
         :param authdata: The authority data
         :param parent_auth: The parent authority.
         :return: The authority
@@ -332,25 +556,30 @@ class LexicalAuthority(Authority):
     def __init__(
             self,
             name:str,
-            auth_name_colname: str = 'auth_name',
-            auth_value_id_colname: str = 'auth_value_id',
+            auth_anns_builder: AuthorityAnnotationsBuilder = None,
+            authdata: AuthorityData = None,
+            field_groups: DerivedFieldGroups = None,
+            anns_validator: Callable[['Authority', Dict[str,Any]], bool] = None,
             parent_auth:'Authority' = None,
     ):
         '''
         Initialize with this authority's metadata.
         :param name: This authority's entity name
-        :param auth_name_colname: The name of the annotation column for this
-            authority's name. If None, then auth_name's will not automatically
-            be added to annotations.
-        :param auth_value_id_colname: The name of the annotation column for
-            this authority's value_id. If None, then auth_value_id's will not
-            automatically be added to annotations.
+        :param auth_anns_builder: The authority annotations row builder to use
+            for building annotation rows.
+        :param authdata: The authority data
+        :param field_groups: The derived field groups to use
+        :param anns_validator: fn(auth, anns_dict_list) that returns True if
+           the list of annotation row dicts are valid to be added as
+           annotations for a single match or "entity".
         :param parent_auth: This authority's parent authority (if any)
         '''
         super().__init__(
             name,
-            auth_name_colname=auth_name_colname,
-            auth_value_id_colname=auth_value_id_colname,
+            auth_anns_builder=auth_anns_builder,
+            authdata=authdata,
+            field_groups=field_groups,
+            anns_validator=anns_validator,
             parent_auth=parent_auth,
         )
 
@@ -424,12 +653,12 @@ class RegexAuthority(Authority):
             self,
             name:str,
             regex:re.Pattern,
-            group_names: List[str] = None,
-            canonical_fn:Callable[[str, str], Any] = None,
-            auth_name_colname: str = 'auth_name',
-            auth_value_id_colname: str = 'auth_value_id',
+            canonical_fn: Callable[[str, str], Any] = None,
+            auth_anns_builder: AuthorityAnnotationsBuilder = None,
+            authdata: AuthorityData = None,
+            field_groups: DerivedFieldGroups = None,
+            anns_validator: Callable[[Authority, Dict[str,Any]], bool] = None,
             parent_auth:'Authority' = None,
-            group_name_colname: str = 'regex_group',  # MIGRATION: use DerivedAnnotationColumns
     ):
         '''
         Initialize with this authority's entity name.
@@ -438,13 +667,24 @@ class RegexAuthority(Authority):
         :param canonical_fn: A function, fn(match_text, group_name), to
             transform input matches to a canonical form as a value_id.
             Where group_name will be None and the full match text will be
-            passed in if there are no group names.
-        :param auth_name_colname: The name of the annotation column for this
-            authority's name. If None, then auth_name's will not automatically
-            be added to annotations.
-        :param auth_value_id_colname: The name of the annotation column for
-            this authority's value_id. If None, then auth_value_id's will not
-            automatically be added to annotations.
+            passed in if there are no group names. Note that the canonical form
+            is computed before the match_validator is applied and its value
+            will be found as the value to the <auth_id> key.
+        :param auth_anns_builder: The authority annotations row builder to use
+            for building annotation rows.
+        :param authdata: The authority data
+        :param field_groups: The derived field groups to use
+        :param anns_validator: A validation function for each regex match
+            formed as a list of annotation row dictionaries, one row dictionary
+            for each matching regex group. If the validator returns False,
+            then the annotation rows will be rejected. The entity_text key
+            will hold matched text and the <auth_name>_field key will hold
+            the group name or number (if there are groups with or without names)
+            or the <auth_name> if there are no groups in the regular expression.
+            Note that the validator function takes the regex authority instance
+            as its first parameter to provide access to the field_groups, etc.
+            The validation_fn signature is: fn(regexAuthority, ann_row_dicts)
+            and returns a boolean.
         :param parent_auth: This authority's parent authority (if any)
         :param group_name_colname: The name of the annotations column for
             the regex group names, or None to ignore group_names.
@@ -455,105 +695,80 @@ class RegexAuthority(Authority):
         '''
         super().__init__(
             name,
-            auth_name_colname=auth_name_colname,
-            auth_value_id_colname=auth_value_id_colname,
+            auth_anns_builder=auth_anns_builder,
+            authdata=authdata,
+            field_groups=field_groups,
+            anns_validator=anns_validator,
             parent_auth=parent_auth,
         )
         self.regex = regex
         self.canonical_fn = canonical_fn
-        self.group_name_colname = group_name_colname
 
     def has_value(self, value: Any) -> re.Match:
         '''
         Determine whether the given value is in this authority.
         :param value: A possible authority value.
-        :return: True if the value is a valid entity value.
-
-        In the case of this regex authority, this will the match object
-        if the regex matches the value; otherwise None.
+        :return: None if the value is not a valid entity value; otherwise,
+            return the re.Match object.
         '''
         return self.regex.match(str(value))
 
-    def annotate_text(
+    def add_annotations(
             self,
-            input_text: str,
-            input_id: Any = None,
-            annotations: annots.Annotations = None,
-    ) -> annots.Annotations:
+            doctext: dk_doc.Text,
+            annotations: dk_anns.Annotations,
+    ) -> dk_anns.Annotations:
         '''
-        Find and annotate this authority's entities in the input text
-        as dictionaries like:
-        [
-            {
-                'input_id': <id>,
-                'start_pos': <start_char_pos>,
-                'end_pos': <end_char_pos>,
-                'entity_text': <entity_text>,
-                'confidence': <confidence_if_available>,
-                '<auth_name_col>': <authority_name>,
-                '<auth_value_id>': <value_id_or_canonical_form>,
-            },
-        ]
-        :param input_text: The text to process.
-        :param input_id: The id of the input text
+        Method to do the work of finding and adding annotations.
+        :param doctext: The text to process.
         :param annotations: The annotations object to add annotations to
         :return: The given or a new Annotations instance
         '''
-        result = (
-            annotations if annotations is not None
-            else annots.Annotations(annots.AnnotationsMetaData())
-        )
-        for match in re.finditer(self.regex, input_text):
+        for match in re.finditer(self.regex, doctext.text):
+            ann_dicts = list()
             if match.lastindex is not None:
-                for group_name, group_text in self.regex.groupindex.items():
-                    result.add_dict(self.build_annotation(
-                        input_id=input_id,
-                        start_pos=match.start(group_name),
-                        end_pos=match.end(group_name),
-                        entity_text=group_text,
-                        auth_value_id=self.get_canonical_form(group_text, group_name),
-                        entity_type=group_name,
-                    ))
-            else:
-                result.add_dict(self.build_annotation(
-                    input_id=input_id,
+                if len(self.regex.groupindex) > 0:  # we have named groups
+                    for group_name, group_num in self.regex.groupindex.items():
+                        group_text = match.group(group_num)
+                        kwargs = {
+                            self.field_groups.get_field_type_col(self.name): group_name
+                        }
+                        ann_dicts.append(self.build_annotation(
+                            start_pos=match.start(group_name),
+                            end_pos=match.end(group_name),
+                            entity_text=group_text,
+                            auth_value_id=self.get_canonical_form(group_text, group_name),
+                            **kwargs
+                        ))
+                else:  # we have only numbers for groups
+                    for group_num, group_text in enumerate(match.groups()):
+                        group_num += 1
+                        kwargs = {
+                            self.field_groups.get_field_type_col(self.name): group_num
+                        }
+                        ann_dicts.append(self.build_annotation(
+                            start_pos=match.start(group_num),
+                            end_pos=match.end(group_num),
+                            entity_text=group_text,
+                            auth_value_id=self.get_canonical_form(group_text, group_num),
+                            **kwargs
+                        ))
+            else:  # we have no groups
+                ann_dicts.append(self.build_annotation(
                     start_pos=match.start(),
                     end_pos=match.end(),
                     entity_text=match.group(),
-                    auth_value_id=self.get_canonical_form(match.group(), None),
+                    auth_value_id=self.get_canonical_form(match.group(), self.name),
                 ))
-        return result
+            if self.validate_ann_dicts(ann_dicts):
+                # Add non-empty, valid annotation dicts to the result
+                annotations.add_dicts(ann_dicts)
+        return annotations
 
     def get_canonical_form(self, entity_text:str, entity_type:str) -> Any:
         if self.canonical_fn is not None:
             entity_text = self.canonical_fn(entity_text, entity_type)
         return entity_text
-
-    def build_annotation(
-            self,
-            input_id: Any = None,
-            start_pos: int = None,
-            end_pos: int = None,
-            entity_text: str = None,
-            auth_value_id: Any = None,
-            conf: float = 1.0,
-            entity_type: str = None,
-            **kwargs,
-    ):
-        '''
-        Override build annotations to add matched group names as an entity type
-        '''
-        result = super().build_annotation(
-            input_id=input_id,
-            start_pos=start_pos,
-            end_pos=end_pos,
-            entity_text=entity_text,
-            auth_value_id=auth_value_id,
-            conf=conf,
-            **kwargs,
-        )
-        if self.group_name_colname and entity_type:
-            result[self.group_name_colname] = entity_type
 
 
 class AuthoritiesBundle(Authority):
@@ -565,24 +780,32 @@ class AuthoritiesBundle(Authority):
     def __init__(
             self,
             name:str,
-            auth_name_colname: str = 'auth_name',
-            auth_value_id_colname: str = 'auth_value_id',
+            auth_anns_builder: AuthorityAnnotationsBuilder = None,
+            authdata: AuthorityData = None,
+            field_groups: DerivedFieldGroups = None,
             parent_auth:'Authority' = None,
+            anns_validator: Callable[['Authority', Dict[str,Any]], bool] = None,
             auths: List[Authority] = None,
     ):
         '''
         :param name: This authority's entity name
-        :param auth_name_colname: The name of the annotation column for this
-            authority's name. If None, then auth_name's will not automatically
-            be added to annotations.
-        :param auth_value_id_colname: The name of the annotation column for
-            this authority's value_id. If None, then auth_value_id's will not
-            automatically be added to annotations.
+        :param auth_anns_builder: The authority annotations row builder to use
+            for building annotation rows.
+        :param authdata: The authority data
+        :param field_groups: The derived field groups to use
+        :param anns_validator: fn(auth, anns_dict_list) that returns True if
+           the list of annotation row dicts are valid to be added as
+           annotations for a single match or "entity".
         :param parent_auth: This authority's parent authority (if any)
         :param auths: The authorities to bundle together.
         '''
         super().__init__(
-            name, name, auth_value_id_colname, parent_auth
+            name,
+            auth_anns_builder=auth_anns_builder,
+            authdata=authdata,
+            field_groups=field_groups,
+            anns_validator=anns_validator,
+            parent_auth=parent_auth,
         )
         self.auths = auths.copy() if auths is not None else list()
 
@@ -604,35 +827,17 @@ class AuthoritiesBundle(Authority):
                 return True
         return False
 
-    def annotate_text(
+    def add_annotations(
             self,
-            input_text: str,
-            input_id: Any = None,
-            annotations: annots.Annotations = None,
-    ) -> annots.Annotations:
+            doctext: dk_doc.Text,
+            annotations: dk_anns.Annotations,
+    ) -> dk_anns.Annotations:
         '''
-        Find and annotate this authority's entities in the input text
-        as dictionaries like:
-        [
-            {
-                'input_id': <id>,
-                'start_pos': <start_char_pos>,
-                'end_pos': <end_char_pos>,
-                'entity_text': <entity_text>,
-                'confidence': <confidence_if_available>,
-                '<auth_name_col>': <authority_name>,
-                '<auth_value_id>': <value_id_or_canonical_form>,
-            },
-        ]
-        :param input_text: The text to process.
-        :param input_id: The id of the input text
+        Method to do the work of finding and adding annotations.
+        :param doctext: The text to process.
         :param annotations: The annotations object to add annotations to
         :return: The given or a new Annotations instance
         '''
-        result = (
-            annotations if annotations is not None
-            else annots.Annotations(annots.AnnotationsMetaData())
-        )
         for auth in self.auths:
-            auth.annotate_text(input_text, input_id, result)
-        return result
+            auth.annotate_text(doctext, annotations)
+        return annotations

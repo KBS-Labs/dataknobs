@@ -5,6 +5,7 @@ from typing import Any, Dict
 # Key text metadata attributes
 TEXT_ID_ATTR = 'text_id'
 TEXT_LABEL_ATTR = 'text_label'
+TEXT_LABEL = 'text'
 
 
 class MetaData(ABC):
@@ -43,7 +44,7 @@ class TextMetaData(MetaData):
     def __init__(
             self,
             text_id: Any,
-            text_label: str = 'text',
+            text_label: str = TEXT_LABEL,
             **kwargs
     ):
         super().__init__(

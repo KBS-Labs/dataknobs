@@ -2,7 +2,7 @@ import numpy as np
 import os
 import pandas as pd
 from abc import ABC, abstractmethod
-from sentence_transformers import SentenceTransformer  #, util
+from sentence_transformers import SentenceTransformer
 from typing import List
 from dataknobs.utils.sql_utils import RecordFetcher
 
