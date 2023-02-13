@@ -11,6 +11,12 @@ KEY_AUTH_ID_COL = 'auth_id'
 
 
 class DerivedFieldGroups(dk_anns.DerivedAnnotationColumns):
+    '''
+    Defines derived column types:
+      * "field_type" -- The column holding they type of field of an annotation row
+      * "field_group" -- The column holding the group number(s) of the field
+      * "field_record" -- The column holding record number(s) of the field
+    '''
     
     def __init__(
             self,
@@ -39,7 +45,7 @@ class DerivedFieldGroups(dk_anns.DerivedAnnotationColumns):
 
     def get_col_value(
             self,
-            row_accessor: dk_anns.AnnotationsRowAccessor,
+            metadata: dk_anns.AnnotationsMetaData,
             col_type: str,
             row: pd.Series,
             missing: str = None,
@@ -53,54 +59,25 @@ class DerivedFieldGroups(dk_anns.DerivedAnnotationColumns):
 
         And "field" is the row_accessor's metadata's "ann_type" col's value.
 
-        :param row_accessor: The AnnotationsRowAccessor
+        :param metadata: The AnnotationsMetaData
         :param col_type: The type of column value to derive
         :param row: A row from which to get the value.
         :param missing: The value to return for unknown or missing column
         :return: The row value or the missing value
         '''
         value = missing
-        field = row_accessor.get_col_value('ann_type', row, None)
-        if field is not None:
-            if col_type == 'field_type':
-                value = row_accessor.get_col_value(
-                    self.get_field_type_col(field),
-                    row, missing=missing
-                )
-            elif col_type == 'field_group':
-                value = row_accessor.get_col_value(
-                    self.get_field_group_col(field),
-                    row, missing=missing
-                )
-            elif col_type == 'field_record':
-                value = row_accessor.get_col_value(
-                    self.get_field_record_col(field),
-                    row, missing=missing
-                )
+        if metadata.ann_type_col in row.index:
+            field = row[metadata.ann_type_col]
+            if field is not None:
+                if col_type == 'field_type':
+                    col_name = self.get_field_type_col(field)
+                elif col_type == 'field_group':
+                    col_name = self.get_field_group_col(field)
+                elif col_type == 'field_record':
+                    col_name = self.get_field_record_col(field)
+                if col_name is not None and col_name in row.index:
+                    value = row[col_name]
         return value
-
-    def get_field_type(
-            self,
-            row_accessor: dk_anns.AnnotationsRowAccessor,
-            row: pd.Series,
-    ) -> str:
-        '''
-        Get a label for the field type, or attribute, of the row.
-
-        :param row_accessor: The AnnotationsRowAccessor
-        :param row: A row whose field_type to get.
-        '''
-        result = row.name
-        group_type = row_accessor.get_col_value('ann_type', row, None)
-        field_type = row_accessor.get_col_value('field_type', row, None)
-        if group_type is not None:
-            if field_type is None:
-                result = group_type
-            else:
-                result = f'{group_type}.{field_type}'
-        elif field_type is not None:
-            result = field_type
-        return result
 
     def unpack_field(self, field_value: str) -> str:
         '''
@@ -505,22 +482,22 @@ class AnnotationsValidator(ABC):
             ''' Get the annotation's dataframe '''
             return self.anns.df
     
-        @property
-        def field_col(self) -> str:
-            ''' Get the entity field column name '''
-            return self.auth.field_groups.get_field_type_col(self.auth.name)
+        def get_field_type(self, row: pd.Series) -> str:
+            ''' Get the entity field type value '''
+            return self.row_accessor.get_col_value('field_type', row, None)
     
-        @property
-        def text_col(self) -> str:
-            ''' Get the entity text column name '''
-            return self.auth.metadata.text_col
-    
+        def get_text(self, row: pd.Series) -> str:
+            ''' Get the entity text from the row '''
+            return self.row_accessor.get_col_value(
+                self.auth.metadata.text_col, row, None
+            )
+
         @property
         def attributes(self) -> Dict[str, str]:
             ''' Get this instance's annotation entity attributes '''
             if self._atts is None:
                 self._atts = {
-                    row[self.field_col]: row[self.text_col]
+                    self.get_field_type(row): self.get_text(row)
                     for _, row in self.df.iterrows()
                 }
             return self._atts

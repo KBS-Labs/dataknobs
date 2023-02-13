@@ -3,8 +3,8 @@ dataknobs/utils/elasticsearch_utils.py:327:1: W0511: #TODO: wrap embedding store
 ************* Module dataknobs.xization.normalize
 dataknobs/xization/normalize.py:211:9: W0511: TODO: Use a better pluralizer (fixme)
 ************* Module dataknobs.xization.authorities
-dataknobs/xization/authorities.py:232:4: W0221: Number of parameters was 6 in 'AnnotationsBuilder.build_annotation_row' and is now 7 in overriding 'AuthorityAnnotationsBuilder.build_annotation_row' method (arguments-differ)
+dataknobs/xization/authorities.py:209:4: W0221: Number of parameters was 6 in 'AnnotationsBuilder.build_annotation_row' and is now 7 in overriding 'AuthorityAnnotationsBuilder.build_annotation_row' method (arguments-differ)
 
 ------------------------------------------------------------------
-Your code has been rated at 9.99/10 (previous run: 9.94/10, +0.04)
+Your code has been rated at 9.99/10 (previous run: 9.94/10, +0.05)
 

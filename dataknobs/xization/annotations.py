@@ -114,7 +114,7 @@ class DerivedAnnotationColumns(ABC):
     @abstractmethod
     def get_col_value(
             self,
-            row_accessor: 'AnnotationsRowAccessor',
+            metadata: AnnotationsMetaData,
             col_type: str,
             row: pd.Series,
             missing: str = None,
@@ -122,26 +122,13 @@ class DerivedAnnotationColumns(ABC):
         '''
         Get the value of the column in the given row derived from col_type.
 
-        :param row_accessor: The AnnotationsRowAccessor
+        :param metadata: The AnnotationsMetaData
         :param col_type: The type of column value to derive
         :param row: A row from which to get the value.
         :param missing: The value to return for unknown or missing column
         :return: The row value or the missing value
         '''
         raise NotImplementedError
-
-    def get_field_type(
-            self,
-            row_accessor: 'AnnotationsRowAccessor',
-            row: pd.Series,
-    ) -> str:
-        '''
-        Get a label for the field type, or attribute, of the row.
-
-        :param row_accessor: The AnnotationsRowAccessor
-        :param row: A row whose field_type to get.
-        '''
-        return row_accessor.get_col_value(KEY_ANN_TYPE_COL, row, row.name)
 
 
 class AnnotationsRowAccessor:
@@ -188,7 +175,7 @@ class AnnotationsRowAccessor:
             else:
                 if self.derived_cols is not None:
                     value = self.derived_cols.get_col_value(
-                        self, col_type, row, missing
+                        self.metadata, col_type, row, missing
                     )
         else:
             value = row[col]
@@ -441,6 +428,7 @@ class AnnotationsGroup:
     def __init__(
             self,
             row_accessor: AnnotationsRowAccessor,
+            field_col_type: str,
             accept_fn: Callable[['AnnotationsGroup', RowData], bool],
             group_type: str = None,
             group_num: int = None,
@@ -449,6 +437,8 @@ class AnnotationsGroup:
     ):
         '''
         :param row_accessor: The annotations row_accessor
+        :param field_col_type: The col_type for the group field_type for retrieval
+           using the annotations row accessor
         :param accept_fn: A fn(g, row_data) that returns True to accept the row
             data into this group g, or False to reject the row. If None, then
             all rows are always accepted.
@@ -460,6 +450,7 @@ class AnnotationsGroup:
         '''
         self.rows = list()   # List[RowData]
         self.row_accessor = row_accessor
+        self.field_col_type = field_col_type
         self.accept_fn = accept_fn
         self._group_type = group_type
         self._group_num = group_num
@@ -594,7 +585,7 @@ class AnnotationsGroup:
 
     def copy(self) -> 'AnnotationsGroup':
         result = AnnotationsGroup(
-            self.row_accessor, self.accept_fn,
+            self.row_accessor, self.field_col_type, self.accept_fn,
             group_type=self.group_type,
             group_num=self.group_num,
             valid=self.is_valid,
@@ -641,7 +632,7 @@ class AnnotationsGroup:
         Get this group (record) as a dictionary of field type to text values.
         '''
         return {
-            self.row_accessor.get_row_field_type(row.row): row.text
+            self.row_accessor.get_col_value(self.field_col_type): row.text
             for row in self.rows
         }
 
