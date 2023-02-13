@@ -382,6 +382,23 @@ class Authority(ABC):
         '''
         raise NotImplementedError
 
+    def validate_ann_dicts(self, ann_dicts: List[Dict[str, Any]]) -> bool:
+        '''
+        The annotation row dictionaries are valid if:
+          * They are non-empty
+          * and
+             * either there is no annotations validator
+             * or they are valid according to the validator
+        :param ann_dicts: Annotation dictionaries
+        :return: True if valid
+        '''
+        return (
+                len(ann_dicts) > 0 and (
+                    self.anns_validator is None or
+                    self.anns_validator(self, ann_dicts)
+                )
+        )
+
     def compose(
             self,
             annotations: dk_anns.Annotations,
@@ -743,15 +760,9 @@ class RegexAuthority(Authority):
                     entity_text=match.group(),
                     auth_value_id=self.get_canonical_form(match.group(), self.name),
                 ))
-            if (
-                    len(ann_dicts) > 0 and (
-                        self.anns_validator is None or
-                        self.anns_validator(self, ann_dicts)
-                    )
-            ):
+            if self.validate_ann_dicts(ann_dicts):
                 # Add non-empty, valid annotation dicts to the result
-                for ann_dict in ann_dicts:
-                    annotations.add_dict(ann_dict)
+                annotations.add_dicts(ann_dicts)
         return annotations
 
     def get_canonical_form(self, entity_text:str, entity_type:str) -> Any:

@@ -1,14 +1,15 @@
 import more_itertools
 import numpy as np
 import pandas as pd
-import dataknobs.lex.authorities as authorities
-import dataknobs.lex.masking_tokenizer as tok
-import dataknobs.util.emoji_utils as emoji_utils
+import dataknobs.xization.annotations as dk_anns
+import dataknobs.xization.authorities as dk_auth
+import dataknobs.structures.document as dk_doc
+import dataknobs.xization.masking_tokenizer as dk_tok
+import dataknobs.utils.emoji_utils as emoji_utils
 from abc import abstractmethod, abstractproperty
 from collections import defaultdict
 from itertools import product
 from typing import Any, Callable, Dict, List, Set
-from dataknobs.lex.input_corpus import Annotations
 
 
 class LexicalExpander():
@@ -88,12 +89,10 @@ class LexicalExpander():
 
     def build_first_token(
             self,
-            input_text: str,
-            input_id: int = None
-    ) -> tok.Token:
-        inputf = tok.TextInputFeatures(
-            input_text,
-            input_id=input_id,
+            doctext: Union[dk_doc.Text, str],
+    ) -> dk_tok.Token:
+        inputf = dk_tok.TextFeatures(
+            doctext,
             split_camelcase=self.split_input_camelcase,
             emoji_data=self.emoji_data
         )
@@ -104,10 +103,10 @@ class LexicalExpander():
 class TokenMatch:
     def __init__(
             self,
-            auth:authorities.LexicalAuthority,
+            auth:dk_auth.LexicalAuthority,
             val_idx: int,
             var: str,
-            token: tok.Token
+            token: dk_tok.Token
     ):
         self.auth = auth
         self.val_idx = val_idx
@@ -148,7 +147,6 @@ class TokenMatch:
 
     def build_annotation(self):
         return self.auth.build_annotation(
-            input_id=self.token.input_id,
             start_pos=self.tokens[0].start_pos,
             end_pos=self.tokens[-1].end_pos,
             entity_text=self.matched_text,
@@ -159,8 +157,8 @@ class TokenMatch:
 class TokenAligner:
     def __init__(
             self,
-            first_token: tok.Token,
-            authority: authorities.LexicalAuthority
+            first_token: dk_tok.Token,
+            authority: dk_auth.LexicalAuthority
     ):
         self.first_token = first_token
         self.auth = authority
@@ -192,41 +190,43 @@ class TokenAligner:
         return token_matches
 
 
-class DataframeAuthority(authorities.LexicalAuthority):
+class DataframeAuthority(dk_auth.LexicalAuthority):
     '''
     A pandas dataframe-based lexical authority.
     '''
     def __init__(
             self,
-            authdata: authorities.AuthorityData,
+            name: str,
             lexical_expander: LexicalExpander,
-            name: str = None,
-            auth_name_colname: str = 'auth_name',
-            auth_value_id_colname: str = 'auth_value_id',
-            parent_auth: authorities.Authority = None,
+            authdata: dk_auth.AuthorityData,
+            auth_anns_builder: dk_auth.AuthorityAnnotationsBuilder = None,
+            field_groups: DerivedFieldGroups = None,
+            anns_validator: Callable[['Authority', Dict[str,Any]], bool] = None,
+            parent_auth: dk_auth.Authority = None,
     ):
         '''
         Initialize with the name, values, and associated ids of the authority;
         and with the lexical expander for authoritative values.
         
-        :param authdata: The data for this authority
-        :param lexical_expander: The lexical expander for the values.
         :param name: The authority name, if different from df.columns[0]
-        :param auth_name_colname: The name of the annotation column for this
-            authority's name. If None, then auth_name's will not automatically
-            be added to annotations.
-        :param auth_value_id_colname: The name of the annotation column for
-            this authority's value_id. If None, then auth_value_id's will not
-            automatically be added to annotations.
+        :param lexical_expander: The lexical expander for the values.
+        :param authdata: The data for this authority
+        :param auth_anns_builder: The authority annotations row builder to use
+            for building annotation rows.
+        :param field_groups: The derived field groups to use
+        :param anns_validator: fn(auth, anns_dict_list) that returns True if
+           the list of annotation row dicts are valid to be added as
+           annotations for a single match or "entity".
         :param parent_auth: This authority's parent authority (if any)
         '''
         super().__init__(
             name if name else authdata.df.columns[0],
-            auth_name_colname=auth_name_colname,
-            auth_value_id_colname=auth_value_id_colname,
+            auth_anns_builder=auth_anns_builder,
+            authdata=authdata,
+            field_groups=field_groups,
+            anns_validator=anns_validator,
             parent_auth=parent_auth,
         )
-        self.authdata = authdata
         self.lexical_expander = lexical_expander
         self._variations = None
         self._prev_aligner = None
@@ -365,41 +365,28 @@ class DataframeAuthority(authorities.LexicalAuthority):
             df = df.explode(self.name)
         return df
 
-    def annotate_text(
+    def add_annotations(
             self,
-            input_text: str,
-            input_id: Any = None,
-            annotations: Annotations = None,
-    ) -> Annotations:
+            doctext: dk_doc.Text,
+            annotations: dk_anns.Annotations,
+    ) -> dk_anns.Annotations:
         '''
-        Find and annotate this authority's entities in the input text
-        as dictionaries like:
-        [
-            {
-                'input_id': <id>,
-                'start_pos': <start_char_pos>,
-                'end_pos': <end_char_pos>,
-                'entity_text': <entity_text>,
-                'confidence': <confidence_if_available>,
-                '<auth_name_col>': <authority_name>,
-                '<auth_value_id>': <value_id_or_canonical_form>,
-            },
-        ]
-        :param input_text: The text to process.
-        :param input_id: The id of the input text
+        Method to do the work of finding, validating, and adding annotations.
+        :param doctext: The text to process.
         :param annotations: The annotations object to add annotations to
         :return: The given or a new Annotations instance
         '''
-        result = annotations if annotations else Annotations()
         first_token = self.lexical_expander.build_first_token(
             input_text, input_id=input_id
         )
         token_aligner = TokenAligner(first_token, self)
         self._prev_aligner = token_aligner
-        return result.add_dicts(token_aligner.annotations)
+        if self.validate_ann_dicts(token_aligner.annotations):
+            annotaions.add_dicts(token_aligner.annotations)
+        return annotations
 
 
-class CorrelatedAuthorityData(authorities.AuthorityData):
+class CorrelatedAuthorityData(dk_auth.AuthorityData):
     '''
     Container for authoritative data containing correlated data for multiple
     "sub" authorities.
@@ -471,7 +458,7 @@ class MultiAuthorityData(CorrelatedAuthorityData):
         self._authority_data = dict()
 
     @abstractmethod
-    def build_authority_data(self, name: str) -> authorities.AuthorityData:
+    def build_authority_data(self, name: str) -> dk_auth.AuthorityData:
         '''
         Build an authority for the named sub-authority.
 
@@ -481,13 +468,13 @@ class MultiAuthorityData(CorrelatedAuthorityData):
         raise NotImplementedError
 
     @property
-    def authority_data(self, name: str) -> authorities.AuthorityData:
+    def authority_data(self, name: str) -> dk_auth.AuthorityData:
         '''
         Retrieve without building the named authority data, or None
         '''
         return self._authority_data.get(name, None)
 
-    def get_authority_data(self, name: str) -> authorities.AuthorityData:
+    def get_authority_data(self, name: str) -> dk_auth.AuthorityData:
         '''
         Get AuthorityData for the named "sub" authority, building if needed.
 
@@ -612,7 +599,7 @@ class SimpleMultiAuthorityData(MultiAuthorityData):
     def __init__(self, df: pd.DataFrame, name: str):
         super().__init__(df, name)
 
-    def build_authority_data(self, name: str) -> authorities.AuthorityData:
+    def build_authority_data(self, name: str) -> dk_auth.AuthorityData:
         '''
         Build an authority for the named column holding authority data.
 
@@ -624,10 +611,10 @@ class SimpleMultiAuthorityData(MultiAuthorityData):
         '''
         col = self.df[name]
         col_df = self.get_unique_vals_df(col, name)
-        return authorities.AuthorityData(col_df, name)
+        return dk_auth.AuthorityData(col_df, name)
     
 
-class MultiAuthorityFactory(authorities.AuthorityFactory):
+class MultiAuthorityFactory(dk_auth.AuthorityFactory):
     '''
     An factory for building a "sub" authority directly or indirectly
     from MultiAuthorityData.
@@ -657,22 +644,27 @@ class MultiAuthorityFactory(authorities.AuthorityFactory):
     def build_authority(
             self,
             name: str,
+            auth_anns_builder: AuthorityAnnotationsBuilder,
             multiauthdata: MultiAuthorityData,
-            parent_auth: authorities.Authority = None,
+            parent_auth: dk_auth.Authority = None,
     ) -> DataframeAuthority:
         '''
         Build a DataframeAuthority.
 
         :param name: The name of the authority to build
+        :param auth_anns_builder: The authority annotations row builder to use
+            for building annotation rows.
         :param multiauthdata: The multi-authority source data
         :param parent_auth: The parent authority
         '''
         authdata = multiauthdata.get_authority_data(name)
+        field_groups = None  #TODO: get from instance var set on construction?
+        anns_validator = None  #TODO: get from multiauthdata?
         return DataframeAuthority(
-            authdata,
+            name=name,
             self.get_lexical_expander(name),
-#            name=name,
-            auth_name_colname=self.auth_name,
-#            auth_value_id_colname=f'{self.auth_name}_value_id',
+            authdata,
+            field_groups=field_groups,
+            anns_validator=anns_validator,
             parent_auth=parent_auth,
         )

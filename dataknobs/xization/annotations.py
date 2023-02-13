@@ -181,23 +181,6 @@ class AnnotationsRowAccessor:
             value = row[col]
         return value
 
-    def get_row_field_type(self, row: pd.Series) -> str:
-        '''
-        Get a label for the field type, or attribute, of the row.
-        :param row: A row whose field_type to get.
-        '''
-        field_type = None
-        if self.derived_cols is not None:
-            field_type = self.derived_cols.get_field_type(
-                self.metadata, row
-            )
-
-        if field_type is None:
-            field_type = self.get_col_value(
-                KEY_ANN_TYPE_COL, row, row.name
-            )
-        return field_type
-
 
 class Annotations:
     '''
