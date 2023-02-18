@@ -20,6 +20,7 @@ lxml = "^4.9.2"
 beautifulsoup4 = "^4.11.1"
 stanza = "^1.4.2"
 sentence-transformers = "^2.2.2"
+json-stream = "^2.1.1"
 
 [tool.poetry.group.dev.dependencies]
 jupyter = "^1.0.0"
