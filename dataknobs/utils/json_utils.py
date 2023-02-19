@@ -4,11 +4,13 @@ import os
 import pandas as pd
 import re
 import requests
+import dataknobs.structures.tree as dk_tree
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Set, Tuple, Union
 
 
-IDX_RE = re.compile(r'^(.*)\[(.*)\]$')
+ELT_IDX_RE = re.compile(r'^(.*)\[(.*)\]$')
+FLATTEN_IDX_RE = re.compile(r'\[(\d+)\]')
 URL_RE = re.compile(r'^https?://.*$', flags=re.IGNORECASE)
 TIMEOUT = 10  # 10 seconds
 
@@ -64,7 +66,7 @@ def build_path_tuple(jq_path: str, any_list_idx: int = -1) -> Tuple:
     for part in jq_path.split('.'):
         if part == '':
             continue
-        m = IDX_RE.match(part)
+        m = ELT_IDX_RE.match(part)
         if m:
             path.append(m.group(1))
             idx = m.group(2)
@@ -76,10 +78,11 @@ def build_path_tuple(jq_path: str, any_list_idx: int = -1) -> Tuple:
 
 
 def squash_data(
+        builder_fn: Callable[str, Any],
         json_data: str,
         prune_at: List[Union[str, Tuple[str, int]]] = None,
         timeout: int = TIMEOUT,
-) -> Dict:
+):
     '''
     Squash the json_data, pruning branches with path the given names.
     Where "squashed" means the paths are compressed to a single level
@@ -93,14 +96,12 @@ def squash_data(
         * path_index:int or (None, path_index)
             -- or any path at path_index depth
 
+    :param builder_fn: fn(jq_path, item) for building a result
     :param json_data: The json_data to copy
     :param prune_at: The names and optional path indexes of path elements
         to ignore
     :param timeout: The requests timeout (in seconds)
-    :return: The squashed, pruned json Dict
     '''
-    result = dict()
-
     raw_depths = set()
     raw_elts = set()
     elt_depths = dict()
@@ -153,10 +154,88 @@ def squash_data(
                         return
         # Add squashed element
         jq_path = build_jq_path(path, keep_list_idxs=True)
-        result[jq_path] = item
+        builder_fn(jq_path, item)
 
     stream_json_data(json_data, visitor, timeout=timeout)
+
+
+def collect_squashed(
+        jdata: str,
+        prune_at: List[Union[str, Tuple[str, int]]] = None,
+        timeout: int = TIMEOUT,
+        result: Dict = None,
+) -> Dict:
+    '''
+    Collected squashed data in a dictionary
+    :param json_data: The json_data to copy
+    :param prune_at: The names and optional path indexes of path elements
+        to ignore
+    :param timeout: The requests timeout (in seconds)
+    :param result: (optional) The dictionary in which to collect items
+    '''
+    if result is None:
+        result = dict()
+    def collector_fn(jq_path, item):
+        result[jq_path] = item
+    squash_data(
+        collector_fn,
+        jdata,
+        prune_at=prune_at,
+        timeout=timeout,
+    )
     return result
+
+
+def indexing_format_fn(jq_path: str, item: Any) -> str:
+    '''
+    A formatting function for writing a csv with the columns:
+        item (value) \t field \t flat_jq \t idxs
+
+    Where
+        * value -- is the item value
+        * field -- is the last flat_jq path element
+        * flat_jq -- is the jq_path with all indexes flattened "[.*]" -> "[]"
+                     up to the last path element
+        * idxs -- is a comma-delimitted string with the indices
+    '''
+    idxs = ', '.join(FLATTEN_IDX_RE.findall(jq_path))
+    flat_jq = FLATTEN_IDX_RE.sub('[]', jq_path)
+    dotpos = flat_jq.rindex('.')
+    field = flat_jq[dotpos+1:]
+    flat_jq = flat_jq[:dotpos]
+    return f'{item}\t{field}\t{flat_jq}\t{idxs}'
+
+
+def write_squashed(
+        dest_file: str,
+        jdata: str,
+        prune_at: List[Union[str, Tuple[str, int]]] = None,
+        timeout: int = TIMEOUT,
+        format_fn: Callable[[str, Any], str] = lambda jq_path, item: f'{jq_path}\t{item}',
+):
+    '''
+    Write squashed data to the file.
+    :param json_data: The json_data to copy
+    :param prune_at: The names and optional path indexes of path elements
+        to ignore
+    :param timeout: The requests timeout (in seconds)
+    :param format_fn: A function for formatting each output line. Default is
+        tab-delimitted: jq_path <tab> item.
+    '''
+    needs_close = False
+    if isinstance(dest_file, str):
+        f = open(dest_file, 'w', encoding='utf-8')
+        needs_close = True
+    else:
+        f = dest_file
+    squash_data(
+        lambda jq_path, item: print(format_fn(jq_path, item), file=f),
+        jdata,
+        prune_at=prune_at,
+        timeout=timeout,
+    )
+    if needs_close:
+        f.close()
 
 
 def path_to_dict(path: Union[tuple, str], value: Any, result=None) -> dict:
@@ -356,6 +435,118 @@ class BlockCollector:
         return result
 
 
+class ValuePath:
+    '''
+    Structure to hold (compressed) information about the jq_path indices
+    leading to a unique value.
+
+    Essentially, this the tree of path indices leading to the value.
+    '''
+    def __init__(self, jq_path: str, value: Any):
+        '''
+        :param jq_path: The jq_path (key)
+        :param value: The path's value
+        '''
+        self.jq_path = jq_path
+        self.value = value
+        self._indices = dk_tree.Tree(0).as_string()  # root data will hold total path count
+
+    @property
+    def indices(self) -> dk_tree:
+        return dk_tree.build_tree_from_string(self._indices)
+
+    def add(self, path: tuple):
+        '''
+        Add the path (with the samem structure as jq_path) to the tree.
+        '''
+        root = self.indices
+        node = root
+        node.data = int(node.data) + 1  # keep track of total
+        if path is None:
+            self._indices = root.as_string()
+            return
+        for elt in path:
+            if isinstance(elt, int):
+                found = False
+                if node.has_children():
+                    # simplifying assumption: idxs are in consecutive order fm 0
+                    child = node.children[-1]
+                    if str(elt) == child.data:
+                        node = child
+                        found = True
+                if not found:
+                    node = node.add_child(elt)
+        self._indices = root.as_string()
+
+    @property
+    def path_count(self) -> int:
+        ''' Get the number of jq_paths to the value. '''
+        return int(self.indices.data)
+
+    def path_generator(self, result_type='jq_path'):
+        '''
+        Generate value paths.
+        :param result_type: 'jq_path', 'path', or 'idx'
+            'jq_path' to generate jq_path strings;
+            'path' to generate path tuples
+            'idx' to generate index tuples.
+        '''
+        path = build_path_tuple(self.jq_path, any_list_idx=-1)
+        for node in self.indices.collect_terminal_nodes():
+            node_path = node.get_path()
+            node_idx = 0
+            gen_path = list()
+            for elt in path:
+                if isinstance(elt, int):
+                    gen_path.append(int(node_path[node_idx].data))
+                    node_idx += 1
+                elif result_type != 'idx':
+                    gen_path.append(elt)
+            if result_type == 'jq_path':
+                yield build_jq_path(gen_path, keep_list_idxs=True)
+            else:
+                yield gen_path
+
+
+class ValuesIndex:
+    '''
+    An index of unique values by jpath and (optionally) an index of values to
+    their paths for each jpath.
+
+    The values to paths index is compressed such that each unique value mapped
+    to the tree of path indices leading to it, if path information is available.
+    '''
+    def __init__(self):
+        self.path_values = dict()  # Dict[jq_path, Dict[value, ValuePath]]
+
+    def add(self, value: Any, jq_path: str, path: tuple = None):
+        if jq_path in self.path_values:
+            value_paths = self.path_values[jq_path]
+        else:
+            value_paths = dict()
+            self.path_values[jq_path] = value_paths
+
+        if value in value_paths:
+            value_path = value_paths[value]
+        else:
+            value_path = ValuePath(jq_path, value)
+            value_paths[value] = value_path
+
+        value_path.add(path)
+
+    def has_jqpath(self, jq_path: str) -> bool:
+        ''' Determine whether there are any values for jq_path '''
+        return jq_path in self.path_values
+
+    def get_values(self, jq_path: str) -> Set[Any]:
+        ''' Get the set of values for jq_path '''
+        return set(self.path_values.get(jq_path, {}).keys())
+
+    def num_values(self, jq_path: str) -> int:
+        ''' Get the number of values for jq_path '''
+        return len(self.path_values.get(jq_path, {}))
+
+
 class JsonSchema:
     '''
     Container for a schema view of a json object of the form:
@@ -376,26 +567,34 @@ class JsonSchema:
     def __init__(
             self,
             schema: Dict[str, Any] = None,
-            values: Dict[str, Set[str]] = None,
+            values: ValuesIndex = None,
     ):
         self.schema = schema if schema is not None else dict()
-        self.values = defaultdict(set)  # Dict[jq_path, Set[values)]
-        if values is not None:
-            if isinstance(values, defaultdict):
-                self.values = values
-            else:
-                for k, s in values.items():
-                    self.values[k].update(s)
+        self.values = ValuesIndex() if values is None else values
         self._df = None
 
-    def add_path(self, jq_path: str, value_type: str, value: Any = None):
-        ''' Add an instance of the jq_path/value_type '''
+    def add_path(
+            self,
+            jq_path: str,
+            value_type: str,
+            value: Any = None,
+            path: tuple = None,
+    ):
+        '''
+        Add an instance of the jq_path/value_type
+        :param jq_path: The "key" path for grouping/squashing values
+        :param value_type: The type of value with this path
+        :param value: (optional) The value for tracking unique values (if not
+            None)
+        :param path: (optional) The path tuple for inverting paths to uniques
+            (if not None and if value is also not None)
+        '''
         if jq_path not in self.schema:
             self.schema[jq_path] = {value_type: 1}
         else:
             self.schema[jq_path][value_type] += 1
         if value is not None:
-            self.values[jq_path].add(value)
+            self.values.add(value, jq_path, path=path)
         self._df = None
         
     @property
@@ -417,10 +616,10 @@ class JsonSchema:
         '''
         data = list()
         has_value = False
-        for k1, v1 in self.schema.items():
-            for k2, v2 in v1.items():
-                if k1 in self.values:
-                    row = (k1, k2, v2, len(self.values[k1]))
+        for k1, v1 in self.schema.items():  # jq_path -> [value_type -> value_count]
+            for k2, v2 in v1.items():  # value_type -> value_count
+                if self.values.has_jqpath(k1):
+                    row = (k1, k2, v2, self.values.num_values(k1))
                     has_value = True
                 else:
                     row = (k1, k2, v2)
@@ -489,6 +688,7 @@ class JsonSchemaBuilder:
             json_data: str,
             value_typer: Callable[[Any], str] = None,
             keep_unique_values: bool = False,
+            invert_uniques: bool = False,
             keep_list_idxs: bool = False,
             timeout: int = TIMEOUT,
             empty_dict_type: str = '_EMPTY_DICT_',
@@ -504,6 +704,7 @@ class JsonSchemaBuilder:
         :param value_typer: A fn(atomic_value) that returns the type of the
             value to override the default typing of "int", "float", and "str"
         :param keep_unique_values: True to keep unique values for each path
+        :param invert_uniques: True to keep value paths for unique values
         :param keep_list_idxs: True to keep the list indexes in the dictionary
             paths. When False, all list indexes will be generalized to "[]".
         :param timeout: The requests timeout (in seconds)
@@ -518,6 +719,7 @@ class JsonSchemaBuilder:
         self.json_data = json_data
         self.value_typer = value_typer
         self.keep_uniques = keep_unique_values
+        self.invert_uniques = invert_uniques
         self.keep_list_idxs = keep_list_idxs
         self.timeout = timeout
         self.empty_dict_type = empty_dict_type
@@ -579,5 +781,6 @@ class JsonSchemaBuilder:
                 value_type = self.unk_value_type
         schema.add_path(
             jq_path, value_type,
-            value=(item if self.keep_uniques else None)
+            value=(item if self.keep_uniques else None),
+            path=(path if self.invert_uniques else None),
         )

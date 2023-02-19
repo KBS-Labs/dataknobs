@@ -11,11 +11,23 @@ def test_count_uniques(test_json_001):
     assert df['unique_count'].to_list() == [1, 1, 4, 4, 4, 4, 3, 2, 2]
 
 
+def test_invert_values(test_json_001):
+    jdata = test_json_001
+    builder = jutils.JsonSchemaBuilder(
+        jdata, keep_unique_values=True, invert_uniques=True
+    )
+    schema = builder.schema
+    df = schema.df
+    assert df['unique_count'].to_list() == [1, 1, 4, 4, 4, 4, 3, 2, 2]
+    assert schema.values.path_values['.c[].A[].i.k'][111]._indices == '(2 (0 0) (1 1))'
+    assert schema.values.path_values['.c[].A[].i.k'][112]._indices == '(1 (0 1))'
+
+
 def test_squash_and_explode_data1(test_json_001):
     jdata = test_json_001
-    squashed = jutils.squash_data(
+    squashed = jutils.collect_squashed(
         jdata,
-        ['i', "B"]
+        prune_at=['i', "B"],
     )
     assert max(squashed.values()) < 100
     exploded = jutils.explode(squashed)
@@ -25,9 +37,9 @@ def test_squash_and_explode_data1(test_json_001):
 
 def test_squash_and_explode_data2(test_json_001):
     jdata = test_json_001
-    squashed = jutils.squash_data(
+    squashed = jutils.collect_squashed(
         jdata,
-        ['i']
+        prune_at=['i'],
     )
     for val in squashed.values():
         assert val < 100 or val > 200
