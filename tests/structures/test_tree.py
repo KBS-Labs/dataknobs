@@ -173,6 +173,14 @@ def test_edges():
     ] == edges
 
 
-def test_build_tree():
+def test_build_tree1():
     x = dk_tree.build_tree_from_string('(root (a (b d e) (c f)))')
     assert x.as_string() == '(root (a (b d e) (c f)))'
+
+
+def test_build_tree2():
+    x = dk_tree.Tree(0)
+    assert (
+        dk_tree.build_tree_from_string(x.as_string()).as_string()
+        == x.as_string()
+    )

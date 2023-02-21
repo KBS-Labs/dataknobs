@@ -69,3 +69,11 @@ def resource_as_json(package: str, filename: str) -> Dict:
     :return: The resource contents.
     '''
     return json.loads(resource_as_text(package, filename))
+
+
+TEST_JSON_001 = 'test-001.json'
+
+
+@pytest.fixture
+def test_json_001() -> Dict:
+    return resource_as_text('utils', TEST_JSON_001)
