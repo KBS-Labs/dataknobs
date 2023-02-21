@@ -47,7 +47,7 @@ dataknobs/utils/elasticsearch_utils.py        93      0   100%
 dataknobs/utils/embedding_utils.py            86     86     0%   1-229
 dataknobs/utils/emoji_utils.py               136     18    87%   88, 123, 133, 161, 200, 205, 215-226
 dataknobs/utils/huggingface_utils.py          86     86     0%   1-229
-dataknobs/utils/json_utils.py                388     65    83%   32-33, 35-36, 115, 117-127, 143, 149-150, 152-154, 201-206, 225-238, 250, 271, 280, 285, 301, 475-476, 484, 494-508, 543, 656, 765, 767, 772-775, 777, 781
+dataknobs/utils/json_utils.py                396     70    82%   33-38, 40-41, 120, 122-132, 148, 154-155, 157-159, 206-211, 230-243, 255, 276, 285, 290, 306, 480-481, 489, 499-513, 535, 537, 553, 666, 775, 777, 782-785, 787, 791
 dataknobs/utils/pandas_utils.py              181      2    99%   104, 117
 dataknobs/utils/requests_utils.py            125      3    98%   126, 296, 318
 dataknobs/utils/resource_utils.py             42      3    93%   41, 56, 61
@@ -61,7 +61,7 @@ dataknobs/xization/authorities.py            206     40    81%   74-77, 89, 91, 
 dataknobs/xization/masking_tokenizer.py      311      6    98%   29, 70, 351, 419, 429, 770
 dataknobs/xization/normalize.py              151     47    69%   173, 233, 251, 255, 259, 265, 287, 312-316, 332-381, 431
 ------------------------------------------------------------------------
-TOTAL                                       2824    932    67%
+TOTAL                                       2832    937    67%
 
-FAIL Required test coverage of 85% not reached. Total coverage: 67.00%
-======================== 58 passed, 2 warnings in 2.58s ========================
+FAIL Required test coverage of 85% not reached. Total coverage: 66.91%
+======================== 58 passed, 2 warnings in 3.69s ========================
