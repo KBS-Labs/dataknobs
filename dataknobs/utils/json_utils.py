@@ -1,3 +1,4 @@
+import gzip
 import io
 import json_stream.requests
 import os
@@ -29,8 +30,12 @@ def stream_json_data(
     :param timeout: The requests timeout (in seconds)
     '''
     if os.path.exists(json_data):
-        with open(json_data, 'r', encoding='utf-8') as f:
-            json_stream.visit(f, visitor_fn)
+        if json_data.endswith('.gz'):
+            with gzip.open(json_data, 'rt', encoding='utf-8') as f:
+                json_stream.visit(f, visitor_fn)
+        else:
+            with open(json_data, 'r', encoding='utf-8') as f:
+                json_stream.visit(f, visitor_fn)
     elif json_data.startswith('http'):
         with requests.get(json_data, stream=True, timeout=timeout) as response:
             json_stream.requests.visit(response, visitor_fn)
@@ -526,6 +531,11 @@ class ValuesIndex:
             value_paths = dict()
             self.path_values[jq_path] = value_paths
 
+        if value == []:
+            value = '_EMPTY_LIST_'
+        elif value == {}:
+            value = '_EMPTY_DICT_'
+            
         if value in value_paths:
             value_path = value_paths[value]
         else:
