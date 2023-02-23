@@ -1,3 +1,4 @@
+import io
 import json
 import pytest
 import dataknobs.utils.json_utils as jutils
@@ -78,3 +79,19 @@ def test_block_collector(test_json_001):
                 jq_path, val, jdata, max_count=0,
             )
             assert expected[idx][j] == blocks
+
+
+def test_flat_record_generator(test_json_001):
+    jdata = test_json_001
+    str_io = io.StringIO()
+    jutils.write_squashed(
+        str_io, jdata, format_fn=jutils.indexing_format_fn
+    )
+    str_io.seek(0)
+    recs = list()
+    for rec in jutils.flat_record_generator(
+            str_io, jutils.indexing_format_splitter
+    ):
+        recs.append(rec)
+    assert len(recs) == 10
+    assert json.dumps(recs) == '[{"a": "1", "b": "2", "f": "3", "g": "4", "h": "5"}, {"a": "1", "b": "2", "j": "6", "k": "111"}, {"a": "1", "b": "2", "f": "8", "g": "9", "h": "10"}, {"a": "1", "b": "2", "j": "11", "k": "112"}, {"a": "1", "b": "2", "l": "13", "m": "222"}, {"a": "1", "b": "2", "f": "15", "g": "16", "h": "17"}, {"a": "1", "b": "2", "j": "18", "k": "113"}, {"a": "1", "b": "2", "f": "20", "g": "21", "h": "22"}, {"a": "1", "b": "2", "j": "23", "k": "111"}, {"a": "1", "b": "2", "l": "25", "m": "223"}]'

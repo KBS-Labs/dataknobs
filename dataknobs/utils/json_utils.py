@@ -211,6 +211,34 @@ def indexing_format_fn(jq_path: str, item: Any) -> str:
     return f'{item}\t{field}\t{flat_jq}\t{idxs}'
 
 
+def indexing_format_splitter(fileline: str) -> Tuple[str, str, str, str]:
+    '''
+    Reversal of the indexing_format_fn to extract:
+        (value, field, flat_jq, idxs)
+    Where
+        * value -- is the item value
+        * field -- is the last flat_jq path element
+        * flat_jq -- is the jq_path with all indexes flattened "[.*]" -> "[]"
+                     up to the last path element
+        * idxs -- is a comma-delimitted string with the indices
+    '''
+    line = fileline.strip()
+    value = None
+    field = None
+    flat_jq = None
+    idxs = None
+    if line:
+        parts = fileline.split('\t')
+        value = parts[0]
+        if len(parts) > 1:
+            field = parts[1] 
+            if len(parts) > 2:
+                flat_jq = parts[2] 
+                if len(parts) > 3:
+                    idxs = parts[3] 
+    return (value, field, flat_jq, idxs)
+
+
 def write_squashed(
         dest_file: str,
         jdata: str,
@@ -794,3 +822,136 @@ class JsonSchemaBuilder:
             value=(item if self.keep_uniques else None),
             path=(path if self.invert_uniques else None),
         )
+
+
+class FlatRecordBuilder:
+    '''
+    Build "flat" (simple, shallow) records from squashed rows.
+    '''
+    def __init__(self, full_path_attrs: bool = False, pivot_pfx: str = None):
+        '''
+        :param full_path_attrs: True to use the full path for record attributes
+        :param pivot_pfx: The prefix at which to "pivot" for grouping values
+        '''
+        self.full_path_attrs = full_path_attrs
+        self.pivot_pfx = pivot_pfx
+        self.cur_rec = dict()
+        self.cols = list()
+        self.fld2flatjq = dict()
+        self.cur_flatjq = None
+
+    def add_flatpath(
+            self,
+            value: Any,
+            field: str,
+            flat_jq: str = None,
+            idxs: str = None,
+    ) -> Dict:
+        '''
+        Add each flat path in order, incrementally constructing a record.
+        A full record has been collected and a new starts when a field repeats.
+        :return: The built record after a new record starts; otherwise None
+
+        NOTE: The final record after the input is exhausted is in self.cur_rec.
+        '''
+        if value is None or field is None:
+            return self.cur_rec if len(self.cur_rec) > 0 else None
+        fullrec = None
+        setval = False
+        islist = False
+        col = field
+        if field.endswith('[]'):
+            islist = True
+            col = field[:-2]  # strip off the "[]"
+        if self.pivot_pfx is not None and flat_jq is not None:
+            if flat_jq.startswith(self.pivot_pfx):
+                col = f"{flat_jq[1+len(self.pivot_pfx):]}.{col}"
+                flat_jq = self.pivot_pfx
+        if self.full_path_attrs:
+            col = f"{flat_jq if flat_jq is not None else ''}.{col}"
+
+        if (
+                flat_jq and self.cur_flatjq and
+                not flat_jq.startswith(self.cur_flatjq)
+        ):
+            # Find where flat_jq ends in self.cur_flatjq
+            fullrec = self.cur_rec
+            currec = dict()
+            colidx = 0
+            for idx, c in enumerate(self.cols):
+                if flat_jq.startswith(self.fld2flatjq[c]):
+                    currec[c] = self.cur_rec[c]
+                else:
+                    colidx = idx
+                    break
+            self.cur_rec = currec
+            self.cols = self.cols[:colidx]
+
+        if islist:
+            idxs = [
+                int(x.strip()) for x in idxs.split(',')
+            ] if idxs else [0]
+            field_idx = idxs[-1]
+            if col not in self.cur_rec:
+                # 1st time list value start
+                self.cur_rec[col] = [value]
+                self.cols.append(col)
+                self.fld2flatjq[col] = flat_jq
+                self.cur_flatjq = flat_jq
+                setval = True
+            elif field_idx != 0:
+                # continuation of list
+                self.cur_rec[col].append(value)
+                setval = True
+            #else field_idx == 0 ==> another start ... pop cur_rec
+
+        if not setval and col in self.cols:
+            # Field repeat ==> pop cur_rec, reset to field pos in cols
+
+            if fullrec is None:
+                fullrec = self.cur_rec
+            currec = dict()
+            self.cols = self.cols[:self.cols.index(col)]
+            for c in self.cols:
+                currec[c] = self.cur_rec[c]
+            self.cur_rec = currec
+
+        if not setval:
+            # Set value, track columns
+            if islist:
+                self.cur_rec[col] = [value]
+            else:
+                self.cur_rec[col] = value
+            self.cols.append(col)
+            self.fld2flatjq[col] = flat_jq
+            self.cur_flatjq = flat_jq
+
+        return fullrec
+
+
+def flat_record_generator(
+        file_obj,
+        split_line_fn: Callable[[str], Tuple[str, str, str, str]],
+        builder: FlatRecordBuilder = None,
+        pivot_pfx: str = None,
+):
+    '''
+    Generate flat records (dictionaries) from the file_obj's lines.
+    :param file_obj: The file object
+    :param split_line_fn: The function for splitting each line into
+        (value, field, flat_jq, idxs)
+    :param builder: The builder to use if not the default
+    :param pivot_pfx: The prefix at which to "pivot" for grouping values
+    :
+    '''
+    if builder is None:
+        builder = FlatRecordBuilder(pivot_pfx=pivot_pfx)
+    for line in file_obj:
+        (value, field, flat_jq, idxs) = split_line_fn(line)
+        rec = builder.add_flatpath(value, field, flat_jq=flat_jq, idxs=idxs)
+        if rec is not None:
+            yield rec
+    # Generate the final record being built
+    if len(builder.cur_rec) > 0:
+        yield builder.cur_rec
+        
