@@ -631,7 +631,10 @@ class JsonSchema:
         if jq_path not in self.schema:
             self.schema[jq_path] = {value_type: 1}
         else:
-            self.schema[jq_path][value_type] += 1
+            if value_type not in self.schema[jq_path]:
+                self.schema[jq_path] = {value_type: 1}
+            else:
+                self.schema[jq_path][value_type] += 1
         if value is not None:
             self.values.add(value, jq_path, path=path)
         self._df = None
@@ -894,6 +897,11 @@ class FlatRecordBuilder:
                 not flat_jq.startswith(self.cur_flatjq)
         ):
             # Find where flat_jq ends in self.cur_flatjq
+
+            #TODO: ... need to find intersection
+            # Find where flat_jq and self.cur_flatjq diverge
+            # ...only if the diverge point doesn't get beyond the prefix, do we pop rec
+
             fullrec = self.cur_rec
             currec = dict()
             colidx = 0
