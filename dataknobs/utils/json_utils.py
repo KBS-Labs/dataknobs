@@ -1,5 +1,6 @@
 import gzip
 import io
+import json
 import json_stream.requests
 import os
 import pandas as pd
@@ -828,13 +829,20 @@ class FlatRecordBuilder:
     '''
     Build "flat" (simple, shallow) records from squashed rows.
     '''
-    def __init__(self, full_path_attrs: bool = False, pivot_pfx: str = None):
+    def __init__(
+            self,
+            full_path_attrs: bool = False,
+            pivot_pfx: str = None,
+            ignore_pfxs: Set[str] = None,
+    ):
         '''
         :param full_path_attrs: True to use the full path for record attributes
         :param pivot_pfx: The prefix at which to "pivot" for grouping values
+        :param ignore_pfxs: The path prefixes to ignore
         '''
         self.full_path_attrs = full_path_attrs
         self.pivot_pfx = pivot_pfx
+        self.ignore_pfxs = ignore_pfxs
         self.cur_rec = dict()
         self.cols = list()
         self.fld2flatjq = dict()
@@ -850,12 +858,23 @@ class FlatRecordBuilder:
         '''
         Add each flat path in order, incrementally constructing a record.
         A full record has been collected and a new starts when a field repeats.
+        :param value: The value portion of a flat path
+        :param field: The field portion of the flat path
+        :param flat_jq: The remaining portion of the flat path
+        :param idxs: The flat path indexes
         :return: The built record after a new record starts; otherwise None
 
         NOTE: The final record after the input is exhausted is in self.cur_rec.
         '''
+
+        # Check for immediate exit conditions
         if value is None or field is None:
             return self.cur_rec if len(self.cur_rec) > 0 else None
+        if flat_jq is not None and self.ignore_pfxs is not None:
+            for pfx in self.ignore_pfxs:
+                if flat_jq.startswith(pfx):
+                    return None
+
         fullrec = None
         setval = False
         islist = False
@@ -929,20 +948,118 @@ class FlatRecordBuilder:
         return fullrec
 
 
+class RecordMetaInfo:
+    '''
+    Structure to hold meta-info for a set of records.
+    '''
+    def __init__(
+            self,
+            filepath: str,
+            pivot_pfx: str = None,
+            ignore_pfxs: Set[str] = None,
+            rec_builder: FlatRecordBuilder = None,
+            full_path_attrs: bool = False,
+            file_obj = None,
+    ):
+        '''
+        :param filepath: The path to the records file
+        :param pivot_pfx: The prefix at which to "pivot" for grouping values
+        :param ignore_pfxs: The path prefixes to ignore for these records
+        :param rec_builder: (Optional) The record builder to use
+        :param full_path_attrs: True to use the full path for record attributes
+        :param file_obj: The output file object to use instead of opening
+            filepath for write
+        '''
+        self.filepath = filepath
+        self.pivot_pfx = pivot_pfx
+        self.ignore_pfxs = ignore_pfxs
+        self._recbuilder = rec_builder
+        self.full_path_attrs = full_path_attrs
+        self._file = file_obj
+        self._opened = False
+
+    @property
+    def rec_builder(self) -> FlatRecordBuilder:
+        if self._recbuilder is None:
+            self._recbuilder = FlatRecordBuilder(
+                full_path_attrs = self.full_path_attrs,
+                pivot_pfx = self.pivot_pfx,
+                ignore_pfxs = self.ignore_pfxs
+            )
+        return self._recbuilder
+
+    @property
+    def file(self):
+        ''' Get the (output) file handle to the filepath. '''
+        if self._file == None:
+            # open filepath for writing
+            self._file = open(self.filepath, 'w', encoding='utf-8')
+            self._opened = True
+        return self._file
+
+    def close(self):
+        ''' Close the file (if opened here) '''
+        if self._file is not None and self._opened:
+            self._file.close()
+            self._opened = False
+
+
+class FlatRecordsBuilder:
+    '''
+    Generate flat records from squashed lines, where each type
+    of record is streamed to its own file.
+    '''
+    def __init__(
+            self,
+            split_line_fn: Callable[[str], Tuple[str, str, str, str]],
+            metainfos: List[RecordMetaInfo],
+    ):
+        self.split_line_fn = split_line_fn
+        self.metainfos = metainfos
+
+    def process_flatfile(self, flatfile):
+        '''
+        Process lines from the flatfile.
+        :param flatfile: Either a filename (str whose path exists) or a fileobj
+        '''
+        opened = False
+        fileobj = flatfile
+        if isinstance(flatfile, str) and os.path.exists(flatfile):
+            opened = True
+            if flatfile.endswith('.gz'):
+                fileobj = gzip.open(flatfile, 'rt', encoding='utf-8')
+            else:
+                fileobj = open(flatfile, 'r', encoding='utf-8')
+        for line in fileobj:
+            (value, field, flat_jq, idxs) = self.split_line_fn(line)
+            for minfo in self.metainfos:
+                rec = minfo.rec_builder.add_flatpath(
+                    value, field, flat_jq=flat_jq, idxs=idxs
+                )
+                if rec is not None:
+                    print(json.dumps(rec), file=minfo.file)
+        for minfo in self.metainfos:
+            last_rec = minfo.rec_builder.cur_rec
+            if len(last_rec) > 0:
+                print(json.dumps(last_rec), file=minfo.file)
+            minfo.close()
+
+
 def flat_record_generator(
         file_obj,
         split_line_fn: Callable[[str], Tuple[str, str, str, str]],
         builder: FlatRecordBuilder = None,
         pivot_pfx: str = None,
+        ignore_pfxs: Set[str] = None,
 ):
     '''
     Generate flat records (dictionaries) from the file_obj's lines.
-    :param file_obj: The file object
+    :param file_obj: The file object supplying the flat lines
     :param split_line_fn: The function for splitting each line into
         (value, field, flat_jq, idxs)
     :param builder: The builder to use if not the default
     :param pivot_pfx: The prefix at which to "pivot" for grouping values
-    :
+    :param ignore_pfxs: The prefixes to ignore
     '''
     if builder is None:
         builder = FlatRecordBuilder(pivot_pfx=pivot_pfx)
