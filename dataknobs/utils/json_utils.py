@@ -828,6 +828,33 @@ class JsonSchemaBuilder:
         )
 
 
+def clean_jq_style_records(jq_rec: Dict) -> Dict:
+    '''
+    Clean the record's attributes from jq-style to db-style, by keeping
+    (and lowercasing) only the last jq path component and dropping square
+    brackets.
+    Clean the record's values by converting lists of values to a comma-
+    plus-space-delimitted string of values.
+    :param jq_rec: The record to clean.
+    :return: The cleaned record
+    '''
+    def clean_attr(key: str) -> str:
+        key = key.split('.')[-1].lower()
+        if key.endswith('[]'):
+            key = key[:-2]
+        return key
+
+    def clean_value(value: Any) -> Any:
+        if isinstance(value, list):
+            value = ', '.join([str(v) for v in value])
+        return value
+
+    return {
+        clean_attr(key): clean_value(value)
+        for key, value in jq_rec.items()
+    }
+
+
 class FlatRecordBuilder:
     '''
     Build "flat" (simple, shallow) records from squashed rows.
@@ -837,19 +864,29 @@ class FlatRecordBuilder:
             full_path_attrs: bool = False,
             pivot_pfx: str = None,
             ignore_pfxs: Set[str] = None,
+            jq_clean: Callable[[Dict], Dict] = None,
     ):
         '''
         :param full_path_attrs: True to use the full path for record attributes
         :param pivot_pfx: The prefix at which to "pivot" for grouping values
         :param ignore_pfxs: The path prefixes to ignore
+        :param jq_clean: Function to clean the final record's attributes
         '''
         self.full_path_attrs = full_path_attrs
+        self.jq_clean = jq_clean
         self.pivot_pfx = pivot_pfx
         self.ignore_pfxs = ignore_pfxs
         self.cur_rec = dict()
         self.cols = list()
         self.fld2flatjq = dict()
         self.cur_flatjq = None
+
+    def get_clean_rec(self) -> Dict:
+        ''' Get the final record '''
+        currec = self.cur_rec
+        if self.jq_clean is not None:
+            currec = self.jq_clean(currec)
+        return currec
 
     def add_flatpath(
             self,
@@ -894,15 +931,15 @@ class FlatRecordBuilder:
 
         if (
                 flat_jq and self.cur_flatjq and
-                not flat_jq.startswith(self.cur_flatjq)
+                not flat_jq.startswith(self.cur_flatjq) and (
+                    pivot_pfx is None or (
+                        flat_jq.startswith(pivot_pfx) and
+                        flat_jq != pivot_pfx
+                    )
+                )
         ):
-            # Find where flat_jq ends in self.cur_flatjq
-
-            #TODO: ... need to find intersection
             # Find where flat_jq and self.cur_flatjq diverge
-            # ...only if the diverge point doesn't get beyond the prefix, do we pop rec
-
-            fullrec = self.cur_rec
+            fullrec = self.get_clean_rec()
             currec = dict()
             colidx = 0
             for idx, c in enumerate(self.cols):
@@ -936,7 +973,7 @@ class FlatRecordBuilder:
             # Field repeat ==> pop cur_rec, reset to field pos in cols
 
             if fullrec is None:
-                fullrec = self.cur_rec
+                fullrec = self.get_clean_rec()
             currec = dict()
             self.cols = self.cols[:self.cols.index(col)]
             for c in self.cols:
@@ -1047,7 +1084,7 @@ class FlatRecordsBuilder:
                 if rec is not None:
                     print(json.dumps(rec), file=minfo.file)
         for minfo in self.metainfos:
-            last_rec = minfo.rec_builder.cur_rec
+            last_rec = minfo.rec_builder.get_clean_rec()
             if len(last_rec) > 0:
                 print(json.dumps(last_rec), file=minfo.file)
             minfo.close()
@@ -1078,5 +1115,4 @@ def flat_record_generator(
             yield rec
     # Generate the final record being built
     if len(builder.cur_rec) > 0:
-        yield builder.cur_rec
-        
+        yield builder.get_clean_rec()
