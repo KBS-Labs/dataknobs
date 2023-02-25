@@ -8,5 +8,5 @@ dataknobs/xization/normalize.py:211:9: W0511: TODO: Use a better pluralizer (fix
 dataknobs/xization/authorities.py:209:4: W0221: Number of parameters was 6 in 'AnnotationsBuilder.build_annotation_row' and is now 7 in overriding 'AuthorityAnnotationsBuilder.build_annotation_row' method (arguments-differ)
 
 ------------------------------------------------------------------
-Your code has been rated at 9.97/10 (previous run: 9.97/10, +0.00)
+Your code has been rated at 9.97/10 (previous run: 9.97/10, +0.01)
 

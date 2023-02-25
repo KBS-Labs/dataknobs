@@ -81,7 +81,7 @@ def test_block_collector(test_json_001):
             assert expected[idx][j] == blocks
 
 
-def test_flat_record_generator(test_json_001):
+def test_flat_record_generator1(test_json_001):
     jdata = test_json_001
     str_io = io.StringIO()
     jutils.write_squashed(
@@ -95,3 +95,33 @@ def test_flat_record_generator(test_json_001):
         recs.append(rec)
     assert len(recs) == 10
     assert json.dumps(recs) == '[{"a": "1", "b": "2", "f": "3", "g": "4", "h": "5"}, {"a": "1", "b": "2", "j": "6", "k": "111"}, {"a": "1", "b": "2", "f": "8", "g": "9", "h": "10"}, {"a": "1", "b": "2", "j": "11", "k": "112"}, {"a": "1", "b": "2", "l": "13", "m": "222"}, {"a": "1", "b": "2", "f": "15", "g": "16", "h": "17"}, {"a": "1", "b": "2", "j": "18", "k": "113"}, {"a": "1", "b": "2", "f": "20", "g": "21", "h": "22"}, {"a": "1", "b": "2", "j": "23", "k": "111"}, {"a": "1", "b": "2", "l": "25", "m": "223"}]'
+
+
+def test_flat_records_builder(test_json_002):
+    jdata = test_json_002
+    flat_io = io.StringIO()
+    jutils.write_squashed(
+        flat_io, jdata, format_fn=jutils.indexing_format_fn
+    )
+    flat_io.seek(0)
+
+    recs_io = io.StringIO()
+    rmi = jutils.RecordMetaInfo(
+        None, pivot_pfx = '.A', ignore_pfxs = None,
+        jq_clean = None, full_path_attrs = True,
+        file_obj = recs_io
+    )
+    frb = jutils.FlatRecordsBuilder(
+        jutils.indexing_format_splitter,
+        [rmi],
+    )
+
+    frb.process_flatfile(flat_io)
+
+    recs_io.seek(0)
+    recs = list()
+    for line in recs_io:
+        recs.append(json.loads(line))
+    assert len(recs) == 2
+    assert len(recs[0]) == len(recs[1])
+    assert recs[0].keys() == recs[1].keys()

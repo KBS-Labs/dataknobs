@@ -932,9 +932,9 @@ class FlatRecordBuilder:
         if (
                 flat_jq and self.cur_flatjq and
                 not flat_jq.startswith(self.cur_flatjq) and (
-                    pivot_pfx is None or (
-                        flat_jq.startswith(pivot_pfx) and
-                        flat_jq != pivot_pfx
+                    self.pivot_pfx is None or (
+                        flat_jq.startswith(self.pivot_pfx) and
+                        flat_jq != self.pivot_pfx
                     )
                 )
         ):
@@ -1002,6 +1002,7 @@ class RecordMetaInfo:
             filepath: str,
             pivot_pfx: str = None,
             ignore_pfxs: Set[str] = None,
+            jq_clean: Callable[[Dict], Dict] = None,
             rec_builder: FlatRecordBuilder = None,
             full_path_attrs: bool = False,
             file_obj = None,
@@ -1010,6 +1011,7 @@ class RecordMetaInfo:
         :param filepath: The path to the records file
         :param pivot_pfx: The prefix at which to "pivot" for grouping values
         :param ignore_pfxs: The path prefixes to ignore for these records
+        :param jq_clean: Function to clean the final record's attributes
         :param rec_builder: (Optional) The record builder to use
         :param full_path_attrs: True to use the full path for record attributes
         :param file_obj: The output file object to use instead of opening
@@ -1018,6 +1020,7 @@ class RecordMetaInfo:
         self.filepath = filepath
         self.pivot_pfx = pivot_pfx
         self.ignore_pfxs = ignore_pfxs
+        self.jq_clean = jq_clean
         self._recbuilder = rec_builder
         self.full_path_attrs = full_path_attrs
         self._file = file_obj
@@ -1029,7 +1032,8 @@ class RecordMetaInfo:
             self._recbuilder = FlatRecordBuilder(
                 full_path_attrs = self.full_path_attrs,
                 pivot_pfx = self.pivot_pfx,
-                ignore_pfxs = self.ignore_pfxs
+                ignore_pfxs = self.ignore_pfxs,
+                jq_clean = self.jq_clean,
             )
         return self._recbuilder
 
@@ -1083,6 +1087,8 @@ class FlatRecordsBuilder:
                 )
                 if rec is not None:
                     print(json.dumps(rec), file=minfo.file)
+        if opened:
+            fileobj.close()
         for minfo in self.metainfos:
             last_rec = minfo.rec_builder.get_clean_rec()
             if len(last_rec) > 0:
@@ -1096,6 +1102,7 @@ def flat_record_generator(
         builder: FlatRecordBuilder = None,
         pivot_pfx: str = None,
         ignore_pfxs: Set[str] = None,
+        jq_clean: Callable[[Dict], Dict] = None,
 ):
     '''
     Generate flat records (dictionaries) from the file_obj's lines.
@@ -1105,9 +1112,13 @@ def flat_record_generator(
     :param builder: The builder to use if not the default
     :param pivot_pfx: The prefix at which to "pivot" for grouping values
     :param ignore_pfxs: The prefixes to ignore
+    :param jq_clean: Function to clean the final record's attributes
     '''
     if builder is None:
-        builder = FlatRecordBuilder(pivot_pfx=pivot_pfx)
+        builder = FlatRecordBuilder(
+            pivot_pfx=pivot_pfx, ignore_pfxs=ignore_pfxs,
+            jq_clean=jq_clean,
+        )
     for line in file_obj:
         (value, field, flat_jq, idxs) = split_line_fn(line)
         rec = builder.add_flatpath(value, field, flat_jq=flat_jq, idxs=idxs)
