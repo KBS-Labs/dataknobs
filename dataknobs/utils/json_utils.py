@@ -828,7 +828,7 @@ class JsonSchemaBuilder:
         )
 
 
-def clean_jq_style_records(jq_rec: Dict) -> Dict:
+def clean_jq_style_records(jq_rec: Dict, lower: bool=False) -> Dict:
     '''
     Clean the record's attributes from jq-style to db-style, by keeping
     (and lowercasing) only the last jq path component and dropping square
@@ -836,10 +836,13 @@ def clean_jq_style_records(jq_rec: Dict) -> Dict:
     Clean the record's values by converting lists of values to a comma-
     plus-space-delimitted string of values.
     :param jq_rec: The record to clean.
+    :param lower: True to lowercase the attributes
     :return: The cleaned record
     '''
     def clean_attr(key: str) -> str:
-        key = key.split('.')[-1].lower()
+        key = key.split('.')[-1]
+        if lower:
+            key = key.lower()
         if key.endswith('[]'):
             key = key[:-2]
         return key
@@ -865,25 +868,38 @@ class FlatRecordBuilder:
             pivot_pfx: str = None,
             ignore_pfxs: Set[str] = None,
             jq_clean: Callable[[Dict], Dict] = None,
+            add_idx_attrs: bool = False,
     ):
         '''
         :param full_path_attrs: True to use the full path for record attributes
         :param pivot_pfx: The prefix at which to "pivot" for grouping values
-        :param ignore_pfxs: The path prefixes to ignore
+        :param ignore_pfxs: The path prefixes to ignore -- None to not ignore any,
+            an empty set (or string) to ignore everything other than pivot_pfx,
+            or the set of path prefixes to ignore. Note that the records built
+            from selectively ignoring paths include paths from broader scopes,
+            while those build ignoring all other paths do not.
         :param jq_clean: Function to clean the final record's attributes
+        :param add_idx_attrs: True to add attributes to recs for array indeces
         '''
         self.full_path_attrs = full_path_attrs
         self.jq_clean = jq_clean
+        self.add_idx_attrs = add_idx_attrs
         self.pivot_pfx = pivot_pfx
         self.ignore_pfxs = ignore_pfxs
         self.cur_rec = dict()
         self.cols = list()
         self.fld2flatjq = dict()
         self.cur_flatjq = None
+        self.cur_idxs = defaultdict(set)  # Dict[attr, Set[idx]]
 
     def get_clean_rec(self) -> Dict:
         ''' Get the final record '''
         currec = self.cur_rec
+        if self.add_idx_attrs:
+            currec = currec.copy()
+            # add idx attrs
+            for k, v in self.cur_idxs.items():
+                currec[k] = ', '.join([str(x) for x in v])
         if self.jq_clean is not None:
             currec = self.jq_clean(currec)
         return currec
@@ -909,8 +925,16 @@ class FlatRecordBuilder:
 
         # Check for immediate exit conditions
         if value is None or field is None:
-            return self.cur_rec if len(self.cur_rec) > 0 else None
+            return self.get_clean_rec() if len(self.cur_rec) > 0 else None
         if flat_jq is not None and self.ignore_pfxs is not None:
+            if (
+                    len(self.ignore_pfxs) == 0 and
+                    self.pivot_pfx is not None and
+                    not flat_jq.startswith(self.pivot_pfx)
+            ):
+                # Ignore all non-pivot paths
+                return None
+            # Ignore specific paths
             for pfx in self.ignore_pfxs:
                 if flat_jq.startswith(pfx):
                     return None
@@ -922,12 +946,18 @@ class FlatRecordBuilder:
         if field.endswith('[]'):
             islist = True
             col = field[:-2]  # strip off the "[]"
+        ffjq = flat_jq  # full flat_jq
         if self.pivot_pfx is not None and flat_jq is not None:
             if flat_jq.startswith(self.pivot_pfx):
                 col = f"{flat_jq[1+len(self.pivot_pfx):]}.{col}"
                 flat_jq = self.pivot_pfx
         if self.full_path_attrs:
             col = f"{flat_jq if flat_jq is not None else ''}.{col}"
+        if self.add_idx_attrs or islist:
+            idxs = [
+                int(x.strip()) for x in idxs.split(',') if x.strip()
+            ] if idxs else [0]
+
 
         if (
                 flat_jq and self.cur_flatjq and
@@ -941,21 +971,26 @@ class FlatRecordBuilder:
             # Find where flat_jq and self.cur_flatjq diverge
             fullrec = self.get_clean_rec()
             currec = dict()
+            curidxs = dict()
             colidx = 0
             for idx, c in enumerate(self.cols):
-                if flat_jq.startswith(self.fld2flatjq[c]):
+                fld_flatjq = self.fld2flatjq[c]
+                if flat_jq.startswith(fld_flatjq):
                     currec[c] = self.cur_rec[c]
+                    if self.add_idx_attrs:
+                        for k,v in self.cur_idxs.items():
+                            if k in fld_flatjq:
+                                curidxs[k] = v
                 else:
                     colidx = idx
                     break
             self.cur_rec = currec
+            self.cur_idxs = curidxs
             self.cols = self.cols[:colidx]
 
-        if islist:
-            idxs = [
-                int(x.strip()) for x in idxs.split(',')
-            ] if idxs else [0]
+        if islist:  # terminal path node is a list
             field_idx = idxs[-1]
+            idxs = idxs[:-1]
             if col not in self.cur_rec:
                 # 1st time list value start
                 self.cur_rec[col] = [value]
@@ -969,6 +1004,10 @@ class FlatRecordBuilder:
                 setval = True
             #else field_idx == 0 ==> another start ... pop cur_rec
 
+            if setval and self.add_idx_attrs and ffjq and len(idxs) > 0:
+                self._add_idxs(ffjq, idxs)
+                
+
         if not setval and col in self.cols:
             # Field repeat ==> pop cur_rec, reset to field pos in cols
 
@@ -979,18 +1018,33 @@ class FlatRecordBuilder:
             for c in self.cols:
                 currec[c] = self.cur_rec[c]
             self.cur_rec = currec
+            self.cur_idxs = defaultdict(set)
 
         if not setval:
-            # Set value, track columns
+            # Set value, track columns, add/track index attrs
             if islist:
                 self.cur_rec[col] = [value]
             else:
                 self.cur_rec[col] = value
+            if (
+                    self.add_idx_attrs and
+                    ffjq and '[]' in ffjq and
+                    len(idxs) > 0
+            ):
+                self._add_idxs(ffjq, idxs)
             self.cols.append(col)
             self.fld2flatjq[col] = flat_jq
             self.cur_flatjq = flat_jq
 
         return fullrec
+
+    def _add_idxs(self, flat_jq, idxs):
+        ''' add idxs to self.cur_idxs '''
+        i = 0
+        for part in flat_jq.split('.'):
+            if part.endswith('[]'):
+                self.cur_idxs[part[:-2]].add(idxs[i])
+                i += 1
 
 
 class RecordMetaInfo:
@@ -1003,6 +1057,7 @@ class RecordMetaInfo:
             pivot_pfx: str = None,
             ignore_pfxs: Set[str] = None,
             jq_clean: Callable[[Dict], Dict] = None,
+            add_idx_attrs: bool = False,
             rec_builder: FlatRecordBuilder = None,
             full_path_attrs: bool = False,
             file_obj = None,
@@ -1010,8 +1065,13 @@ class RecordMetaInfo:
         '''
         :param filepath: The path to the records file
         :param pivot_pfx: The prefix at which to "pivot" for grouping values
-        :param ignore_pfxs: The path prefixes to ignore for these records
+        :param ignore_pfxs: The path prefixes to ignore -- None to not ignore any,
+            an empty set (or string) to ignore everything other than pivot_pfx,
+            or the set of path prefixes to ignore. Note that the records built
+            from selectively ignoring paths include paths from broader scopes,
+            while those build ignoring all other paths do not.
         :param jq_clean: Function to clean the final record's attributes
+        :param add_idx_attrs: True to add attributes to recs for array indeces
         :param rec_builder: (Optional) The record builder to use
         :param full_path_attrs: True to use the full path for record attributes
         :param file_obj: The output file object to use instead of opening
@@ -1021,6 +1081,7 @@ class RecordMetaInfo:
         self.pivot_pfx = pivot_pfx
         self.ignore_pfxs = ignore_pfxs
         self.jq_clean = jq_clean
+        self.add_idx_attrs = add_idx_attrs
         self._recbuilder = rec_builder
         self.full_path_attrs = full_path_attrs
         self._file = file_obj
@@ -1034,6 +1095,7 @@ class RecordMetaInfo:
                 pivot_pfx = self.pivot_pfx,
                 ignore_pfxs = self.ignore_pfxs,
                 jq_clean = self.jq_clean,
+                add_idx_attrs = self.add_idx_attrs,
             )
         return self._recbuilder
 
@@ -1103,6 +1165,7 @@ def flat_record_generator(
         pivot_pfx: str = None,
         ignore_pfxs: Set[str] = None,
         jq_clean: Callable[[Dict], Dict] = None,
+        add_idx_attrs: bool = False,
 ):
     '''
     Generate flat records (dictionaries) from the file_obj's lines.
@@ -1111,13 +1174,18 @@ def flat_record_generator(
         (value, field, flat_jq, idxs)
     :param builder: The builder to use if not the default
     :param pivot_pfx: The prefix at which to "pivot" for grouping values
-    :param ignore_pfxs: The prefixes to ignore
+    :param ignore_pfxs: The path prefixes to ignore -- None to not ignore any,
+        an empty set (or string) to ignore everything other than pivot_pfx,
+        or the set of path prefixes to ignore. Note that the records built
+        from selectively ignoring paths include paths from broader scopes,
+        while those build ignoring all other paths do not.
     :param jq_clean: Function to clean the final record's attributes
+    :param add_idx_attrs: True to add attributes to recs for array indeces
     '''
     if builder is None:
         builder = FlatRecordBuilder(
             pivot_pfx=pivot_pfx, ignore_pfxs=ignore_pfxs,
-            jq_clean=jq_clean,
+            jq_clean=jq_clean, add_idx_attrs=add_idx_attrs,
         )
     for line in file_obj:
         (value, field, flat_jq, idxs) = split_line_fn(line)

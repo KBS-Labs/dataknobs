@@ -1,3 +1,6 @@
+************* Module dataknobs.utils.skoehler@sbk-mbp.lan
+dataknobs/utils/.#json_utils.py:1:0: F0010: error while code parsing: Unable to load file dataknobs/utils/.#json_utils.py:
+[Errno 2] No such file or directory: 'dataknobs/utils/.#json_utils.py' (parse-error)
 ************* Module dataknobs.xization.lexicon
 dataknobs/xization/lexicon.py:670:9: E0001: Parsing failed: 'positional argument follows keyword argument (<unknown>, line 670)' (syntax-error)
 ************* Module dataknobs.utils.elasticsearch_utils
