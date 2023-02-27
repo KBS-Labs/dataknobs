@@ -879,7 +879,8 @@ class FlatRecordBuilder:
             from selectively ignoring paths include paths from broader scopes,
             while those build ignoring all other paths do not.
         :param jq_clean: Function to clean the final record's attributes
-        :param add_idx_attrs: True to add attributes to recs for array indeces
+        :param add_idx_attrs: True to add "link__" attributes to recs for array
+            indeces
         '''
         self.full_path_attrs = full_path_attrs
         self.jq_clean = jq_clean
@@ -899,7 +900,7 @@ class FlatRecordBuilder:
             currec = currec.copy()
             # add idx attrs
             for k, v in self.cur_idxs.items():
-                currec[k] = ', '.join([str(x) for x in v])
+                currec[f'link__{k}'] = ', '.join([str(x) for x in v])
         if self.jq_clean is not None:
             currec = self.jq_clean(currec)
         return currec
