@@ -632,7 +632,7 @@ class JsonSchema:
             self.schema[jq_path] = {value_type: 1}
         else:
             if value_type not in self.schema[jq_path]:
-                self.schema[jq_path] = {value_type: 1}
+                self.schema[jq_path][value_type] = 1
             else:
                 self.schema[jq_path][value_type] += 1
         if value is not None:
