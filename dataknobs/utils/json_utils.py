@@ -13,7 +13,7 @@ from typing import Any, Callable, Dict, List, Set, Tuple, Union
 
 ELT_IDX_RE = re.compile(r'^(.*)\[(.*)\]$')
 FLATTEN_IDX_RE = re.compile(r'\[(\d+)\]')
-URL_RE = re.compile(r'^https?://.*$', flags=re.IGNORECASE)
+URL_RE = re.compile(r'^\s*https?://.*$', flags=re.IGNORECASE)
 TIMEOUT = 10  # 10 seconds
 
 
@@ -31,7 +31,7 @@ def stream_json_data(
     :param timeout: The requests timeout (in seconds)
     '''
     if os.path.exists(json_data):
-        if json_data.endswith('.gz'):
+        if json_data.endswith('.gz') or '.gz?' in json_data:
             with gzip.open(json_data, 'rt', encoding='utf-8') as f:
                 json_stream.visit(f, visitor_fn)
         else:
@@ -607,9 +607,11 @@ class JsonSchema:
             self,
             schema: Dict[str, Any] = None,
             values: ValuesIndex = None,
+            values_limit: int = 0,  # max number of unique values to keep
     ):
         self.schema = schema if schema is not None else dict()
         self.values = ValuesIndex() if values is None else values
+        self._values_limit = values_limit
         self._df = None
 
     def add_path(
@@ -636,7 +638,11 @@ class JsonSchema:
             else:
                 self.schema[jq_path][value_type] += 1
         if value is not None:
-            self.values.add(value, jq_path, path=path)
+            if (
+                    self._values_limit and
+                    self.values.num_values(jq_path) >= self._values_limit
+            ):
+                self.values.add(value, jq_path, path=path)
         self._df = None
         
     @property
@@ -745,7 +751,8 @@ class JsonSchemaBuilder:
         :param json_data: The json data (url, file_path, or str)
         :param value_typer: A fn(atomic_value) that returns the type of the
             value to override the default typing of "int", "float", and "str"
-        :param keep_unique_values: True to keep unique values for each path
+        :param keep_unique_values: True to keep unique values for each path or
+            an integer for a maximum number of unique values to keep
         :param invert_uniques: True to keep value paths for unique values
         :param keep_list_idxs: True to keep the list indexes in the dictionary
             paths. When False, all list indexes will be generalized to "[]".
@@ -761,6 +768,11 @@ class JsonSchemaBuilder:
         self.json_data = json_data
         self.value_typer = value_typer
         self.keep_uniques = keep_unique_values
+        self.values_limit = (
+            0
+            if not isinstance(keep_unique_values, int)
+            else int(keep_unique_values)
+        )
         self.invert_uniques = invert_uniques
         self.keep_list_idxs = keep_list_idxs
         self.timeout = timeout
@@ -784,7 +796,7 @@ class JsonSchemaBuilder:
         '''
         Stream the json data and build the schema.
         '''
-        schema = JsonSchema()
+        schema = JsonSchema(values_limit = self.values_limit)
 
         def visitor(item, path):
             self._visit_item(schema, item, path)
