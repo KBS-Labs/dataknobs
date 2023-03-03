@@ -640,7 +640,7 @@ class JsonSchema:
         if value is not None:
             if (
                     self._values_limit and
-                    self.values.num_values(jq_path) >= self._values_limit
+                    self.values.num_values(jq_path) <= self._values_limit
             ):
                 self.values.add(value, jq_path, path=path)
         self._df = None
