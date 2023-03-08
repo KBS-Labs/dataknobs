@@ -1208,3 +1208,391 @@ def flat_record_generator(
     # Generate the final record being built
     if len(builder.cur_rec) > 0:
         yield builder.get_clean_rec()
+
+
+class LineFormatter(ABC):
+    '''
+    Class for formatting a record (dictionary) as a json string.
+    '''
+    def __init__(
+            self,
+            field_formatting_fn: Callable[[str], str] = None,
+            value_formatting_fn: Callable[[str, Any], str] = None,
+    ):
+        '''
+        :param field_formatting_fn: A fn(cjq_path) that returns a revised,
+            formatted field name. Default is to return the cjq_path itself.
+        :param value_formatting_fn: A fn(cjq_path, item_value) that returns
+            a (potentially) revised formatted value for the path (key). Default
+            is to return the value itself.
+        '''
+        self.field_fn = field_formatting_fn or (lambda f: f)
+        self.value_fn = value_formatting_fn or (lambda _f, v: v)
+
+    def __call__(self, record: Dict[str, Any]) -> str:
+        return self.format_record(record)
+
+    def _revise_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        '''
+        Apply the field and value formatting functions to the record.
+        '''
+        return {
+            self.field_fn(k): self.value_fn(k, v)
+            for k, v in record.items()
+        }
+
+    def flush(self, fileobj):
+        '''
+        Hook for flushing any data to a file after having processed all records.
+        (default is a no-op.)
+        '''
+        pass
+
+    @abstractmethod
+    def format_record(self, record: Dict[str, Any]) -> str:
+        '''
+        Format the record as a string.
+        '''
+        raise NotImplementedError
+
+
+class JsonLineFormatter(LineFormatter):
+    '''
+    Class for formatting a record (dictionary) as a json string.
+    '''
+    def __init__(
+            self,
+            field_formatting_fn: Callable[[str], str] = None,
+            value_formatting_fn: Callable[[str, Any], str] = None,
+    ):
+        '''
+        :param field_formatting_fn: A fn(cjq_path) that returns a revised,
+            formatted field name. For example, formatting the field name
+            for use as a DB column name would entail removing non-word chars
+            from the string (which is the default.)
+        :param value_formatting_fn: A fn(cjq_path, item_value) that returns
+            a (potentially) revised formatted value for the path (key). Default
+            is to return the value itself.
+        '''
+        super().__init__(
+            field_formatting_fn=(
+                field_formatting_fn or (lambda f: re.sub(r'\W+', '_', f))
+            ),
+            value_formatting_fn=value_formatting_fn,
+        )
+
+    def format_record(self, record: Dict[str, Any]) -> str:
+        '''
+        Format the record as a string.
+        '''
+        return json.dumps(self._revise_record(record))
+
+
+class TsvLineFormatter(LineFormatter):
+    '''
+    Class for formatting a record (dictionary) as a TSV file line.
+    '''
+    def __init__(
+            self,
+            field_formatting_fn: Callable[[str], str] = None,
+            value_formatting_fn: Callable[[str, Any], str] = None,
+    ):
+        '''
+        :param field_formatting_fn: A fn(cjq_path) that returns a revised,
+            formatted field name. Default is to return the cjq_path itself.
+        :param value_formatting_fn: A fn(cjq_path, item_value) that returns
+            a (potentially) revised formatted value for the path (key). Default
+            is to return the value itself.
+        '''
+        super().__init__(
+            field_formatting_fn=field_formatting_fn,
+            value_formatting_fn=value_formatting_fn,
+        )
+        self._header = None  # List[str]
+
+    @property
+    def header(self) -> List[str]:
+        '''
+        Get the TSV header (field/attribute/column names).
+
+        NOTE: The header values for the TSV can be retrieved from this object
+              only *AFTER* all records have been processed because all fields
+              will not necessarily be present until all record processed.
+        '''
+        return self._header
+
+    def flush(self, fileobj):
+        '''
+        Hook for flushing any data to a file after having processed all records.
+        In this case, write the header line as the last row of the TSV file.
+        '''
+        if (
+                self._header is not None and
+                len(self._header) > 0 and
+                fileobj is not None
+        ):
+            print('\t'.join(self._header), file=fileobj)
+
+    def format_record(self, record: Dict[str, Any]) -> str:
+        '''
+        Format the record as a string.
+        '''
+        revrec = self._revise_record(record)
+        if self._header is None or len(revrec) > len(self._header):
+            self._header = list(revrec.keys())
+        return '\t'.join([str(v) for v in revrec.values()])
+        
+
+class RecordCache:
+    '''
+    Structure to keep track of record fields at distinct levels.
+    '''
+    def __init__(
+            self,
+            idx_level: int,
+            idx_value: int,
+            record_formatting_fn: Callable[[Dict[str, Any]], str],
+            split_terminal_arrays: bool = False,
+    ):
+        '''
+        Starting at index level -1 (pre-indices),
+        build records as index level N,
+        holding non-array items at level N
+        and, for each array element, the list of RecordCache instances
+        for records at level N+1
+
+        :param idx_level: The idx level (index into the idxs array) for this
+            cache
+        :param idx_value: The index of the element to capture/cache
+        :param record_formatting_fn: A fn(rec_dict) that returns the record
+            as a line of text for writing. Examples: write the record as a json
+            line or as a tab-delimited file line.
+        :param split_terminal_arrays: When True, items in terminal arrays yield
+            new rows; otherwise, they are glommed into a list value
+
+        NOTE: Currently hardwired to "pop" top-level elements, or one deeper
+              than the root.
+        '''
+        self.idx_level = idx_level
+        self.idx_value = idx_value
+        self.format_fn=record_formatting_fn
+        self.split_terminal_arrays = split_terminal_arrays
+        self.rcs = dict()  # Dict[elt, List[RecordCache]] for array elts at idx_level+1
+        self._record = dict()  # non-array items at idx_level
+
+    def add_item(
+            self,
+            cjq_path: str,
+            idxs: List[Tuple[str, str]],
+            item: Any,
+            fileobj,
+    ) -> bool:
+        '''
+        Add an item.
+        :param cjq_path: The "common" jq_path (no indexes)
+        :param idxs: The list of extracted (path_elt, index) tuples.
+        :param item: The path's value
+        :param fileobj: The file object to write flushed records to
+        :return: True if flushed
+        '''
+        flushed = False
+        completed_old = False
+        islist = False
+        num_idxs = len(idxs)
+        if not self.split_terminal_arrays and cjq_path.endswith('[]'):
+            islist = True
+            num_idxs -= 1
+
+        if num_idxs > self.idx_level + 1:
+            # Add deeper item
+            idx_elt, idx_value = idxs[self.idx_level+1]
+            rc = None
+            make_new_rc = False
+            if idx_elt in self.rcs:
+                rc = self.rcs[idx_elt][-1]
+                if rc.idx_value < idx_value:
+                    # adding a repeat value to or starting anew in *any* deep
+                    # item triggers popping *all* deep items
+                    make_new_rc = True
+                    completed_old = True
+
+            if (completed_old and self.idx_level < 0):
+                # build and pop records (NOTE: idx_level < 0 pops top-level recs)
+                for rec in self._records_generator():
+                    print(self.format_fn(rec), file=fileobj)
+                self.rcs.clear()
+                flushed = True
+
+            if idx_elt not in self.rcs:
+                self.rcs[idx_elt] = list()
+                make_new_rc = True
+
+            if make_new_rc:
+                rc = RecordCache(
+                    self.idx_level+1,
+                    idx_value,
+                    self.format_fn,
+                    split_terminal_arrays=self.split_terminal_arrays
+                )
+                self.rcs[idx_elt].append(rc)
+            rc.add_item(cjq_path, idxs, item, fileobj)
+        else:
+            # Add local item
+            if islist:
+                if cjq_path not in self._record:
+                    self._record[cjq_path] = [item]
+                else:
+                    self._record[cjq_path].append(item)
+            else:
+                self._record[cjq_path] = item
+        return flushed
+
+    def _records_generator(self):
+        '''
+        Generate the current records.
+        '''
+        if len(self.rcs) == 0:
+            if len(self._record) > 0:
+                yield self._record.copy()
+        else:
+            for rc_list in self.rcs.values():
+                rec = self._record.copy()
+                for rc in rc_list:
+                    for srec in rc._records_generator():
+                        rec.update(srec)
+                if len(rec) > 0:
+                    yield rec
+
+    def flush(self, fileobj):
+        '''
+        Flush any remaining records to the fileobj.
+        :param fileobj: The file object to flush the final record(s) to.
+        '''
+        if len(self._record) > 0 or len(self.rcs) > 0:
+            for rec in self._records_generator():
+                print(self.format_fn(rec), file=fileobj)
+            self._record.clear()
+            self.rcs.clear()
+
+
+class RecordBuilder:
+    '''
+    Structure to capture, build, and flush records.
+    '''
+    def __init__(
+            self,
+            name: str,
+            recfile: str,
+            record_formatting_fn: Callable[[Dict[str, Any]], str],
+            split_terminal_arrays: bool = False,
+    ):
+        '''
+        :param name: A name for the record set
+        :param recfile: The output path (str) or obj to send records
+        :param record_formatting_fn: A fn(rec_dict) that returns the record
+            as a line of text for writing. Examples: write the record as a json
+            line or as a tab-delimited file line.
+        :param split_terminal_arrays: When True, items in terminal arrays yield
+            new rows; otherwise, they are glommed into a list
+        '''
+        self.name = name
+        self.recfile = recfile
+        self.format_fn = record_formatting_fn
+        self.rc = RecordCache(
+            -1,
+            0,
+            self.format_fn,
+            split_terminal_arrays=split_terminal_arrays
+        )
+        self._file = None
+        self._opened = False
+
+    @property
+    def file(self):
+        ''' Get the (output) file handle to the recfile. '''
+        if self._file == None:
+            if isinstance(self.recfile, str):
+                # open recfile for writing
+                self._file = open(self.recfile, 'w', encoding='utf-8')
+                self._opened = True
+            else:
+                self._file = self.recfile
+        return self._file
+
+    def close(self):
+        ''' Close the file (if opened here) '''
+        if self._file is not None and self._opened:
+            self._file.close()
+            self._opened = False
+
+    def add_item(
+            self,
+            cjq_path: str,
+            idxs: List[Tuple[str, str]],
+            item: Any
+    ) -> bool:
+        '''
+        Add an item.
+        :param cjq_path: The "common" jq_path (no indexes).
+        :param idxs: The list of extracted (path_elt, index) tuples.
+        :param item: The path's value
+        :return: True if flushed
+        '''
+        return self.rc.add_item(cjq_path, idxs, item, self.file)
+
+    def cleanup(self):
+        self.rc.flush(self.file)
+        if 'flush' in dir(self.format_fn):
+            # Hack to write the header row to the end of a TSV file
+            self.format_fn.flush(self.file)
+        self.close()
+
+
+class RecordsBuilder:
+    '''
+    Class for building single records from 2nd-tier (just under the root)
+    blocks while streaming a json file.
+    '''
+    def __init__(
+            self,
+            record_builder: RecordBuilder,
+            timeout: int = TIMEOUT,
+    ):
+        '''
+        :param record_builder: The RecordBuilder to use
+        :param timeout: The requests timeout (in seconds)
+        '''
+        self.builder = record_builder
+        self.timeout = timeout
+
+    def build_records(self, jdata: str):
+        '''
+        :param jdata: The source json_data from which to build records.
+        '''
+        squash_data(
+            self._builder_fn, jdata, timeout=self.timeout,
+        )
+        # Cleanup
+        self.builder.cleanup()
+
+    def _builder_fn(self, jq_path: str, item: Any):
+        '''
+        Build the records from each streamed jq_path and its item.
+        :param jq_path: The jq_path (with indexes)
+        :param item: The item value for the path
+        '''
+        # format for RecordInfo.add params and call each
+        cjq_path_elts = list()
+        idxs = list()
+        for path_elt in jq_path.split('.'):
+            if path_elt.endswith(']'):
+                left_bracket = path_elt.rindex('[')
+                elt = path_elt[:left_bracket]
+                idx = int(path_elt[left_bracket+1:len(path_elt)-1])
+                idxs.append((f'{elt}', idx))
+                cjq_path_elts.append(f'{elt}[]')
+            else:
+                cjq_path_elts.append(path_elt)
+
+        cjq_path = '.'.join(cjq_path_elts)
+        self.builder.add_item(cjq_path, idxs, item)
