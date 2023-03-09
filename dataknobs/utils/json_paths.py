@@ -259,16 +259,21 @@ class JsonDataOrganizer:
         self.base_path = os.path.splitext(self.jdata_path)[0]
         self.paths_sfx = paths_sfx
         self.cpaths_sfx = cpaths_sfx
-        self.paths_path = (
-            paths_path or self.base_path + self.paths_sfx
-        )
-        self.cpaths_path = (
-            cpaths_path or self.base_path + self.cpaths_sfx
-        )
+        self.paths_path = self._build_path(paths_path, self.paths_sfx)
+        self.cpaths_path = self._build_path(cpaths_path, self.cpaths_sfx)
         self.path_formatter = path_formatter or PathFormatter()
         self.cpath_formatter = cpath_formatter or CPathFormatter()
         if not self.lazy_build:
             self._build_path_files()
+
+    def _build_path(self, override: str, sfx: str) -> str:
+        '''
+        Build a self.base_path + sfx path, adding '.gz' if it exists.
+        '''
+        path = override or self.base_path + sfx
+        if os.path.exists(path + '.gz'):
+            path = path + '.gz'
+        return path
 
     def write_paths(self):
         '''
