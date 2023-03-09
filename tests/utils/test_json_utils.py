@@ -12,6 +12,14 @@ def test_count_uniques(test_json_001):
     assert df['unique_count'].to_list() == [1, 1, 4, 4, 4, 4, 3, 2, 2]
 
 
+def test_count_limited_uniques(test_json_001):
+    jdata = test_json_001
+    builder = jutils.JsonSchemaBuilder(jdata, keep_unique_values=1)
+    schema = builder.schema
+    df = schema.df
+    assert df['unique_count'].to_list() == [1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+
 def test_invert_values(test_json_001):
     jdata = test_json_001
     builder = jutils.JsonSchemaBuilder(
@@ -270,9 +278,9 @@ def test_count_uniques1(test_json_003):
         }
     )
 
-    x1 = json.dumps(recs1, indent=2)
-    x2 = json.dumps(recs2, indent=2)
-    x3 = json.dumps(recs3, indent=3)
+    #x1 = json.dumps(recs1, indent=2)
+    #x2 = json.dumps(recs2, indent=2)
+    #x3 = json.dumps(recs3, indent=3)
     #import pdb; pdb.set_trace()
     #stop_here1 = True
 
@@ -375,10 +383,29 @@ def test_count_uniques2(test_json_003):
         }
     )
 
-    x1 = json.dumps(recs1, indent=2)
-    x2 = json.dumps(recs2, indent=2)
-    x3 = json.dumps(recs3, indent=3)
+    #x1 = json.dumps(recs1, indent=2)
+    #x2 = json.dumps(recs2, indent=2)
+    #x3 = json.dumps(recs3, indent=3)
     #import pdb; pdb.set_trace()
     #stop_here2 = True
 
     
+def test_record_builder_jsonl(test_json_003):
+    jdata = test_json_003
+    recs_io = io.StringIO()
+
+    rb = jutils.RecordBuilder(
+        'test', recs_io, jutils.JsonLineFormatter(), split_terminal_arrays=False
+    )
+    rsbuilder = jutils.RecordsBuilder(rb)
+    rsbuilder.build_records(jdata)
+
+    recs_io.seek(0)
+    recs = list()
+    for line in recs_io:
+        recs.append(json.loads(line))
+    #assert len(recs) == ...
+
+    #x = json.dumps(recs, indent=2)
+    #import pdb; pdb.set_trace()
+    #stophere = True

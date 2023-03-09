@@ -7,6 +7,7 @@ import pandas as pd
 import re
 import requests
 import dataknobs.structures.tree as dk_tree
+from abc import ABC, abstractmethod
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Set, Tuple, Union
 
@@ -639,8 +640,8 @@ class JsonSchema:
                 self.schema[jq_path][value_type] += 1
         if value is not None:
             if (
-                    self._values_limit and
-                    self.values.num_values(jq_path) <= self._values_limit
+                    self._values_limit == 0 or
+                    self.values.num_values(jq_path) < self._values_limit
             ):
                 self.values.add(value, jq_path, path=path)
         self._df = None
@@ -770,7 +771,7 @@ class JsonSchemaBuilder:
         self.keep_uniques = keep_unique_values
         self.values_limit = (
             0
-            if not isinstance(keep_unique_values, int)
+            if isinstance(keep_unique_values, bool)
             else int(keep_unique_values)
         )
         self.invert_uniques = invert_uniques
@@ -1241,6 +1242,7 @@ class LineFormatter(ABC):
             for k, v in record.items()
         }
 
+    @classmethod
     def flush(self, fileobj):
         '''
         Hook for flushing any data to a file after having processed all records.
@@ -1375,7 +1377,7 @@ class RecordCache:
         '''
         self.idx_level = idx_level
         self.idx_value = idx_value
-        self.format_fn=record_formatting_fn
+        self.format_fn = record_formatting_fn
         self.split_terminal_arrays = split_terminal_arrays
         self.rcs = dict()  # Dict[elt, List[RecordCache]] for array elts at idx_level+1
         self._record = dict()  # non-array items at idx_level
@@ -1458,10 +1460,11 @@ class RecordCache:
             for rc_list in self.rcs.values():
                 rec = self._record.copy()
                 for rc in rc_list:
+                    recc = rec.copy()
                     for srec in rc._records_generator():
-                        rec.update(srec)
-                if len(rec) > 0:
-                    yield rec
+                        recc.update(srec)
+                        if len(recc) > 0:
+                            yield recc
 
     def flush(self, fileobj):
         '''
