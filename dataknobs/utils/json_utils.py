@@ -1242,7 +1242,6 @@ class LineFormatter(ABC):
             for k, v in record.items()
         }
 
-    @classmethod
     def flush(self, fileobj):
         '''
         Hook for flushing any data to a file after having processed all records.

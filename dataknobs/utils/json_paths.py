@@ -349,7 +349,8 @@ class JsonDataOrganizer:
         self.write_cpaths()  # ensure cpaths exists
         if not os.path.exists(self.cpaths_path):
             return
-        with open(self.cpaths_path, 'r', encoding='utf-8') as f:
+        open_fn = gzip.open if self.cpaths_path.endswith('.gz') else open
+        with open_fn(self.cpaths_path, 'r', encoding='utf-8') as f:
             for line in f:
                 cpath_parts = self.cpath_formatter.get_cpath_parts(line)
                 if match_fn(cpath_parts):
@@ -367,7 +368,8 @@ class JsonDataOrganizer:
         self.write_paths()  # ensure paths exists
         if not os.path.exists(self.paths_path):
             return
-        with open(self.paths_path, 'r', encoding='utf-8') as f:
+        open_fn = gzip.open if self.paths_path.endswith('.gz') else open
+        with open_fn(self.paths_path, 'r', encoding='utf-8') as f:
             for line in f:
                 jq_path, item = self.path_formatter.split_line(line)
                 if match_fn is None or match_fn(jq_path, item):
