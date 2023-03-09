@@ -36,7 +36,7 @@ class Formatter(ABC):
         '''
         Split a formatted line into its parts.
         '''
-        return line.split(self.delim)
+        return [v.strip() for v in line.split(self.delim)]
 
     @abstractmethod
     def reverse_line(self, line: str) -> Tuple[str, str]:
@@ -238,6 +238,7 @@ class JsonDataOrganizer:
             cpaths_path: str = None,
             lazy_build: bool = False,
             overwrite: bool = False,
+            lockdown: bool = False,
     ):
         '''
         :param jdata_path: The path to the json data
@@ -249,9 +250,11 @@ class JsonDataOrganizer:
         :param cpaths_path: Override for cpaths file location
         :param lazy_build: If True, only build files when needed
         :param overwrite: If True force re-build of files
+        :param lockdown: If True, don't create any files
         '''
         self.lazy_build = lazy_build
         self.overwrite = overwrite
+        self.lockdown = lockdown
         self.jdata_path = jdata_path
         self.base_path = os.path.splitext(self.jdata_path)[0]
         self.paths_sfx = paths_sfx
@@ -275,6 +278,8 @@ class JsonDataOrganizer:
 
         If the file exists (and not overwrite) assume it is correct.
         '''
+        if self.lockdown:
+            return
         if self.overwrite or not os.path.exists(self.paths_path):
             self.overwrite = False
             with open(self.paths_path, 'w', encoding='utf-8') as outfile:
@@ -287,6 +292,8 @@ class JsonDataOrganizer:
 
         If the file exists (and not overwrite) assume it is correct.
         '''
+        if self.lockdown:
+            return
         if self.overwrite or not os.path.exists(self.cpaths_path):
             self.overwrite = False
             with open(self.cpaths_path, 'w', encoding='utf-8') as outfile:
@@ -298,6 +305,8 @@ class JsonDataOrganizer:
         '''
         Ensure both path and cpath files are built, rebuilding if overwrite.
         '''
+        if self.lockdown:
+            return
         files = list()
         if self.overwrite or not os.path.exists(self.paths_path):
             files.append(
@@ -333,6 +342,8 @@ class JsonDataOrganizer:
             yield
         '''
         self.write_cpaths()  # ensure cpaths exists
+        if not os.path.exists(self.cpaths_path):
+            return
         with open(self.cpaths_path, 'r', encoding='utf-8') as f:
             for line in f:
                 cpath_parts = self.cpath_formatter.get_cpath_parts(line)
@@ -349,6 +360,8 @@ class JsonDataOrganizer:
             yield
         '''
         self.write_paths()  # ensure paths exists
+        if not os.path.exists(self.paths_path):
+            return
         with open(self.paths_path, 'r', encoding='utf-8') as f:
             for line in f:
                 jq_path, item = self.path_formatter.split_line(line)
@@ -416,6 +429,45 @@ class JsonDataOrganizer:
                         rows = list()
                         break
                     # else -- not yet in or beyond the block. keep going.
+
+    def records_generator(
+            self,
+            accept_rec_fn: Callable[[str, str], bool] = None,
+    ):  # yields List[Tuple[str, Any]]
+        '''
+        Generate (accepted) "path" records, where records are comprised of a
+        sequence of (jq_path, item) tuples.
+        
+        :param accept_rec_fn: A fn(jq_path, item) returning True for records
+            to accept. If None, all records are accepted.
+        '''
+        self._build_path_files()  # make sure both path files exist
+
+        rows = list()
+        record_generator = self.path_line_generator(None)
+        cur_pfx = None
+
+        # increment up through acceptable records
+        for jq_path, item in self.path_line_generator(accept_rec_fn):
+            first_arraypos = jq_path.find('].')
+            jq_path_pfx = (
+                jq_path
+                if first_arraypos < 0
+                else jq_path[:first_arraypos+1]
+            )
+            if cur_pfx is None or cur_pfx == jq_path_pfx:
+                # Is in block
+                rows.append((jq_path, item))
+            else:
+                # Starting a new block
+                if len(rows) > 0:
+                    yield rows
+                rows = [(jq_path, item)]
+            cur_pfx = jq_path_pfx
+
+        # yield the final set of rows
+        if len(rows) > 0:
+            yield rows
 
     def _get_jq_path_pfx(self, cpps: List[CPathParts]) -> str:
         '''
