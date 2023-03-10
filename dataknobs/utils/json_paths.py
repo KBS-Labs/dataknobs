@@ -1,3 +1,4 @@
+import gzip
 import os
 import dataknobs.utils.json_utils as jutils
 from abc import ABC, abstractmethod
