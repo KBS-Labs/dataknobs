@@ -373,8 +373,12 @@ class JsonDataOrganizer:
         self.write_paths()  # ensure paths exists
         if not os.path.exists(self.paths_path):
             return
-        open_fn = gzip.open if self.paths_path.endswith('.gz') else open
-        with open_fn(self.paths_path, 'r', encoding='utf-8') as f:
+        open_fn, mode = (
+            (gzip.open, 'rt')
+            if self.paths_path.endswith('.gz')
+            else (open, 'r')
+        )
+        with open_fn(self.paths_path, mode, encoding='utf-8') as f:
             for line in f:
                 jq_path, item = self.path_formatter.split_line(line)
                 if match_fn is None or match_fn(jq_path, item):
