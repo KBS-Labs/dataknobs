@@ -33,7 +33,7 @@ def stream_json_data(
     :param timeout: The requests timeout (in seconds)
     '''
     if os.path.exists(json_data):
-        if file_utils.get_norm_ext(json_data) == '.gz':
+        if json_data.endswith('.gz') or '.gz?' in json_data:
             with gzip.open(json_data, 'rt', encoding='utf-8') as f:
                 json_stream.visit(f, visitor_fn)
         else:
