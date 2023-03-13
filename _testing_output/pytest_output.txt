@@ -3,15 +3,15 @@ platform darwin -- Python 3.9.15, pytest-7.2.1, pluggy-1.0.0
 cachedir: .tox/tests/.pytest_cache
 rootdir: /Users/skoehler/dev/kbs-labs/dataknobs
 plugins: anyio-3.6.2, cov-3.0.0
-collected 62 items
+collected 60 items
 
 tests/structures/test_conditional_dict.py ....                           [  6%]
 tests/structures/test_document.py .                                      [  8%]
-tests/structures/test_tree.py ............                               [ 27%]
-tests/utils/test_elasticsearch_utils.py .......                          [ 38%]
-tests/utils/test_json_utils.py .........                                 [ 53%]
-tests/utils/test_pandas_utils.py .......                                 [ 64%]
-tests/utils/test_requests_utils.py ...                                   [ 69%]
+tests/structures/test_tree.py ............                               [ 28%]
+tests/utils/test_elasticsearch_utils.py .......                          [ 40%]
+tests/utils/test_json_utils.py .......                                   [ 51%]
+tests/utils/test_pandas_utils.py .......                                 [ 63%]
+tests/utils/test_requests_utils.py ...                                   [ 68%]
 tests/utils/test_resource_utils.py .                                     [ 70%]
 tests/xization/test_authorities.py ...                                   [ 75%]
 tests/xization/test_masking_tokenizer.py .....                           [ 83%]
@@ -46,9 +46,11 @@ dataknobs/utils/__init__.py                    0      0   100%
 dataknobs/utils/elasticsearch_utils.py        93      0   100%
 dataknobs/utils/embedding_utils.py            86     86     0%   1-229
 dataknobs/utils/emoji_utils.py               136     18    87%   88, 123, 133, 161, 200, 205, 215-226
+dataknobs/utils/file_utils.py                 30     25    17%   13-21, 29, 44-58
 dataknobs/utils/huggingface_utils.py          86     86     0%   1-229
-dataknobs/utils/json_utils.py                592     75    87%   34-39, 41-42, 121, 123-133, 149, 155-156, 158-160, 261-262, 272, 284, 305, 314, 319, 335, 509-510, 518, 528-542, 564, 566, 582, 635, 698, 807, 809, 814-817, 819, 823, 845, 847, 928, 981-983, 1111-1112, 1118-1119, 1143-1147, 1157
+dataknobs/utils/json_utils.py                586    166    72%   36-41, 43-44, 107-112, 150, 152-162, 178, 184-185, 187-189, 236-241, 255-269, 288-301, 313, 334, 343, 348, 364, 421-422, 430, 440-454, 476, 478, 494, 549, 585, 607-618, 711, 713, 715, 718-721, 723, 727, 751-752, 759, 767-769, 804, 831, 840, 851-852, 857-861, 901, 909-913, 916-926, 932-938, 945-962, 992, 1034, 1081, 1093-1096, 1106-1109, 1116-1121
 dataknobs/utils/pandas_utils.py              181      2    99%   104, 117
+dataknobs/utils/path_group.py                144    144     0%   1-266
 dataknobs/utils/requests_utils.py            125      3    98%   126, 296, 318
 dataknobs/utils/resource_utils.py             42      3    93%   41, 56, 61
 dataknobs/utils/sql_utils.py                 135    135     0%   1-389
@@ -61,7 +63,7 @@ dataknobs/xization/authorities.py            206     40    81%   74-77, 89, 91, 
 dataknobs/xization/masking_tokenizer.py      311      6    98%   29, 70, 351, 419, 429, 770
 dataknobs/xization/normalize.py              151     47    69%   173, 233, 251, 255, 259, 265, 287, 312-316, 332-381, 431
 ------------------------------------------------------------------------
-TOTAL                                       3028    942    69%
+TOTAL                                       3196   1202    62%
 
-FAIL Required test coverage of 85% not reached. Total coverage: 68.89%
-======================== 62 passed, 2 warnings in 2.63s ========================
+FAIL Required test coverage of 85% not reached. Total coverage: 62.39%
+======================== 60 passed, 2 warnings in 3.55s ========================

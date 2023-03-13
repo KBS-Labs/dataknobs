@@ -1,8 +1,8 @@
 import os
-from typing import Any, Callable, Dict, List, Set, Tuple, Union
+from typing import Set
 
 
-def split_fpath(fpath: str):
+def split_wget_fpath(fpath: str):
     '''
     Split the filepath into parts in cases where files may be named from e.g.,
     wget and may have query strings in the name.
@@ -26,7 +26,7 @@ def get_norm_ext(fpath: str):
     Get the normalized (lowercase) extension of the file, accounting for files
     named from e.g., wget having query strings in the name.
     '''
-    return split_fpath(fpath)[2].lower()
+    return split_wget_fpath(fpath)[2].lower()
 
 
 def filepath_generator(

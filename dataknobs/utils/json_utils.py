@@ -7,6 +7,7 @@ import pandas as pd
 import re
 import requests
 import dataknobs.structures.tree as dk_tree
+import dataknobs.utils.file_utils as file_utils
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Set, Tuple, Union
@@ -32,7 +33,7 @@ def stream_json_data(
     :param timeout: The requests timeout (in seconds)
     '''
     if os.path.exists(json_data):
-        if json_data.endswith('.gz') or '.gz?' in json_data:
+        if file_utils.get_norm_ext(json_data) == '.gz':
             with gzip.open(json_data, 'rt', encoding='utf-8') as f:
                 json_stream.visit(f, visitor_fn)
         else:
@@ -48,8 +49,8 @@ def stream_json_data(
 
 def build_jq_path(path: Tuple[Any], keep_list_idxs=True) -> str:
     '''
-    Build a jq path string from the path tuple.
-    :param path: A tuple with path components.
+    Build a jq path string from the json_stream path tuple.
+    :param path: A tuple with json_stream path components.
     :param keep_list_idxs: True to keep the exact path index values;
         False to emit a generic "[]" for the list.
     '''
@@ -64,10 +65,10 @@ def build_jq_path(path: Tuple[Any], keep_list_idxs=True) -> str:
 
 def build_path_tuple(jq_path: str, any_list_idx: int = -1) -> Tuple:
     '''
-    Build a tuple path from a jq_path (reverse of build_jq_path).
+    Build a json_stream tuple path from a jq_path (reverse of build_jq_path).
     :param jq_path: The jq_path whose values to extract.
     :param any_list_idx: The index value to give for a generic list
-    :return: The tuple form of the path
+    :return: The json_stream tuple form of the path
     '''
     path = list()
     for part in jq_path.split('.'):
@@ -84,6 +85,33 @@ def build_path_tuple(jq_path: str, any_list_idx: int = -1) -> Tuple:
     return tuple(path)
 
 
+def stream_jq_paths(
+        json_data: str,
+        output_stream,
+        line_builder_fn: Callable[[str, Any], str] = (
+            lambda jq_path,item: f'{jq_path}\t{item}'
+        ),
+        keep_list_idxs: bool = True,
+        timeout: int = TIMEOUT,
+):
+    '''
+    Write built lines from (jq_path, item) tuples from the json_data.
+    :param json_data: The json_data to copy
+    :param output_stream: The output stream to write lines to
+    :param line_builder_fn: The function for turning record tuples into a line
+        string.
+    :param keep_list_idxs: True to keep the exact path index values;
+        False to emit a generic "[]" for the list.
+    :param timeout: The requests timeout (in seconds)
+    '''
+    def visitor(item, path):
+        jq_path = build_jq_path(path, keep_list_idxs=keep_list_idxs)
+        line = line_builder_fn(jq_path, item)
+        print(line, file=output_stream)
+
+    stream_json_data(json_data, visitor, timeout=timeout)
+
+
 def squash_data(
         builder_fn: Callable[str, Any],
         json_data: str,
@@ -91,7 +119,7 @@ def squash_data(
         timeout: int = TIMEOUT,
 ):
     '''
-    Squash the json_data, pruning branches with path the given names.
+    Squash the json_data, optionally pruning branches by id'd path elements.
     Where "squashed" means the paths are compressed to a single level
     with complex jq keys.
 
@@ -353,123 +381,6 @@ def explode(squashed: Dict) -> Dict:
     return result
 
 
-class BlockCollector:
-    '''
-    A class for collecting json blocks surrounding a matching path and/or value
-    '''
-
-    def __init__(
-            self,
-            jq_path: str,
-            item_value: Any = None,
-            block_path_idx: int = None,
-            timeout: int = TIMEOUT,
-    ):
-        '''
-        :param jq_path: The path at which to find the item.
-        :param item_value: The item value to find to identify the block
-        :param block_path_idx: The index in the path tuple to be the "top" of
-            block extracted.
-        :param timeout: The requests timeout (in seconds)
-        '''
-        self.jq_path = jq_path
-        self.timeout = timeout
-        self.keep_list_idxs = False if '[]' in self.jq_path else False
-        self.path = build_path_tuple(self.jq_path)
-        self.list_idxs = [
-            idx for idx in range(len(self.path))
-            if isinstance(self.path[idx], int)
-        ]
-        self.item_value = item_value
-        self._path_idx = (
-            block_path_idx if block_path_idx is not None
-            else max(self.list_idxs) if len(self.list_idxs) > 0
-            else -1
-        )
-        self.path = build_path_tuple(jq_path)
-        self._jqpp = None
-        self._jqpi = None
-        self._jqpf = None
-        if self._path_idx >= 0:
-            self._jqpp = build_jq_path(self.path[:self._path_idx], keep_list_idxs=False)
-            self._jqpi = build_jq_path(self.path[:self._path_idx+1], keep_list_idxs=False)
-            self._jqpf = build_jq_path(self.path, keep_list_idxs=False)
-
-        self._keeper = False
-        self._cur_path = None
-        self._cur_path_idx = -1
-        self._cur_block = None
-
-    def _reset(self):
-        self._keeper = False
-        self._cur_path = None
-        self._cur_path_idx = -1
-        self._cur_block = None
-
-    def _update(self, path: str, item: Any) -> bool:
-        result = None
-
-        pidx = self._path_idx
-        idx = pidx + 1
-        if self._cur_path is not None:
-            # Check if moved out of block
-            p1 = None
-            if len(path) >= idx:
-                p1 = build_jq_path(path[:idx], keep_list_idxs=False)
-            if (
-                    len(path) < idx or
-                    p1 != self._jqpi or
-                    (self._cur_path_idx >= 0 and self._cur_path_idx != path[pidx])
-            ):
-                # block is done
-                if self._keeper:
-                    result = self._cur_block
-                self._cur_block = None
-                self._cur_path = None
-                self._keeper = False
-            #else still in block
-
-        elif len(path) > pidx:
-            # Check if moved into block
-            p1 = None
-            if pidx >= 0:
-                p1 = build_jq_path(path[:pidx], keep_list_idxs=False)
-            if (
-                    pidx < 0 or
-                    p1 == self._jqpp
-            ):
-                self._cur_path = path
-                self._cur_path_idx = path[pidx] if pidx >= 0 else 0
-                self._cur_block = dict()
-
-        if self._cur_path is not None:
-            # In a capture block ... add block value
-            jq_path = build_jq_path(path, keep_list_idxs=True)
-            self._cur_block[jq_path] = item
-            p1 = build_jq_path(path, keep_list_idxs=False)
-            if (
-                    p1 == self._jqpf and (
-                        self.item_value is None or item == self.item_value
-                    )
-            ):
-                self._keeper = True
-
-        return result
-
-    def collect_blocks(self, json_data: str, max_count: int = 0):
-        self._reset()
-        result = list()
-        def visitor(item, path):
-            if max_count == 0 or len(result) < max_count:
-                block = self._update(path, item)
-                if block is not None:
-                    result.append(block)
-        stream_json_data(json_data, visitor, timeout=self.timeout)
-        if self._keeper:  # pop the last item
-            result.append(self._cur_block)
-        return result
-
-
 class ValuePath:
     '''
     Structure to hold (compressed) information about the jq_path indices
@@ -706,26 +617,6 @@ class JsonSchema:
         stream_json_data(json_data, visitor, timeout=timeout)
         return sresult if unique else lresult
 
-    def collect_value_blocks(
-            self,
-            jq_path: str,
-            item_value: Any,
-            json_data: str,
-            max_count: int = 0,
-    ) -> List[Dict]:
-        '''
-        Collect blocks from json_data where the item_value is found at the
-        jq_path.
-        :param jq_path: The path at which to find the item.
-        :param item_value: The item value to find to identify the block
-        :param json_data: The json_data from which to collect blocks
-        :param max_count: The maximum number of blocks to collect (0 for no
-            limit)
-        :return: The json block data.
-        '''
-        collector = BlockCollector(jq_path, item_value=item_value)
-        return collector.collect_blocks(json_data, max_count=max_count)
-
 
 class JsonSchemaBuilder:
     '''
@@ -841,760 +732,496 @@ class JsonSchemaBuilder:
         )
 
 
-def clean_jq_style_records(jq_rec: Dict, lower: bool=False) -> Dict:
+class Path:
     '''
-    Clean the record's attributes from jq-style to db-style, by keeping
-    (and lowercasing) only the last jq path component and dropping square
-    brackets.
-    Clean the record's values by converting lists of values to a comma-
-    plus-space-delimitted string of values.
-    :param jq_rec: The record to clean.
-    :param lower: True to lowercase the attributes
-    :return: The cleaned record
+    Container for a path.
     '''
-    def clean_attr(key: str) -> str:
-        key = key.split('.')[-1]
-        if lower:
-            key = key.lower()
-        if key.endswith('[]'):
-            key = key[:-2]
-        return key
-
-    def clean_value(value: Any) -> Any:
-        if isinstance(value, list):
-            value = ', '.join([str(v) for v in value])
-        return value
-
-    return {
-        clean_attr(key): clean_value(value)
-        for key, value in jq_rec.items()
-    }
-
-
-class FlatRecordBuilder:
-    '''
-    Build "flat" (simple, shallow) records from squashed rows.
-    '''
-    def __init__(
-            self,
-            full_path_attrs: bool = False,
-            pivot_pfx: str = None,
-            ignore_pfxs: Set[str] = None,
-            jq_clean: Callable[[Dict], Dict] = None,
-            add_idx_attrs: bool = False,
-    ):
+    def __init__(self, jq_path: str, item: Any, line_num: int = -1):
         '''
-        :param full_path_attrs: True to use the full path for record attributes
-        :param pivot_pfx: The prefix at which to "pivot" for grouping values
-        :param ignore_pfxs: The path prefixes to ignore -- None to not ignore any,
-            an empty set (or string) to ignore everything other than pivot_pfx,
-            or the set of path prefixes to ignore. Note that the records built
-            from selectively ignoring paths include paths from broader scopes,
-            while those build ignoring all other paths do not.
-        :param jq_clean: Function to clean the final record's attributes
-        :param add_idx_attrs: True to add "link__" attributes to recs for array
-            indeces
+        :param jq_path: A fully-qualified indexed path.
+        :param item: The path's item (value)
         '''
-        self.full_path_attrs = full_path_attrs
-        self.jq_clean = jq_clean
-        self.add_idx_attrs = add_idx_attrs
-        self.pivot_pfx = pivot_pfx
-        self.ignore_pfxs = ignore_pfxs
-        self.cur_rec = dict()
-        self.cols = list()
-        self.fld2flatjq = dict()
-        self.cur_flatjq = None
-        self.cur_idxs = defaultdict(set)  # Dict[attr, Set[idx]]
+        self.jq_path = jq_path
+        self.item = item
+        self.line_num = line_num
+        self._path_elts = None  # jq_path.split('.')
+        self._len = None  # Number of path elements
 
-    def get_clean_rec(self) -> Dict:
-        ''' Get the final record '''
-        currec = self.cur_rec
-        if self.add_idx_attrs:
-            currec = currec.copy()
-            # add idx attrs
-            for k, v in self.cur_idxs.items():
-                currec[f'link__{k}'] = ', '.join([str(x) for x in v])
-        if self.jq_clean is not None:
-            currec = self.jq_clean(currec)
-        return currec
+    def __repr__(self) -> str:
+        lnstr = f'{self.line_num}: ' if self.line_num >= 0 else ''
+        return f'{lnstr}{self.jq_path}: {self.item}'
 
-    def add_flatpath(
-            self,
-            value: Any,
-            field: str,
-            flat_jq: str = None,
-            idxs: str = None,
-    ) -> Dict:
-        '''
-        Add each flat path in order, incrementally constructing a record.
-        A full record has been collected and a new starts when a field repeats.
-        :param value: The value portion of a flat path
-        :param field: The field portion of the flat path
-        :param flat_jq: The remaining portion of the flat path
-        :param idxs: The flat path indexes
-        :return: The built record after a new record starts; otherwise None
+    def __key(self):
+        return (self.jq_path, self.item) if self.line_num < 0 else self.line_num
 
-        NOTE: The final record after the input is exhausted is in self.cur_rec.
-        '''
+    def __lt__(self, other: 'Path') -> bool:
+        if self.line_num < 0 or other.line_num < 0:
+            return self.jq_path < other.jq_path
+        else:
+            return self.line_num < other.line_num
 
-        # Check for immediate exit conditions
-        if value is None or field is None:
-            return self.get_clean_rec() if len(self.cur_rec) > 0 else None
-        if flat_jq is not None and self.ignore_pfxs is not None:
-            if (
-                    len(self.ignore_pfxs) == 0 and
-                    self.pivot_pfx is not None and
-                    not flat_jq.startswith(self.pivot_pfx)
-            ):
-                # Ignore all non-pivot paths
-                return None
-            # Ignore specific paths
-            for pfx in self.ignore_pfxs:
-                if flat_jq.startswith(pfx):
-                    return None
+    def __hash__(self) -> int:
+        return hash(self.__key())
 
-        fullrec = None
-        setval = False
-        islist = False
-        col = field
-        if field.endswith('[]'):
-            islist = True
-            col = field[:-2]  # strip off the "[]"
-        ffjq = flat_jq  # full flat_jq
-        if self.pivot_pfx is not None and flat_jq is not None:
-            if flat_jq.startswith(self.pivot_pfx):
-                col = f"{flat_jq[1+len(self.pivot_pfx):]}.{col}"
-                flat_jq = self.pivot_pfx
-        if self.full_path_attrs:
-            col = f"{flat_jq if flat_jq is not None else ''}.{col}"
-        if self.add_idx_attrs or islist:
-            idxs = [
-                int(x.strip()) for x in idxs.split(',') if x.strip()
-            ] if idxs else [0]
-
-
-        if (
-                flat_jq and self.cur_flatjq and
-                not flat_jq.startswith(self.cur_flatjq) and (
-                    self.pivot_pfx is None or (
-                        flat_jq.startswith(self.pivot_pfx) and
-                        flat_jq != self.pivot_pfx
-                    )
-                )
-        ):
-            # Find where flat_jq and self.cur_flatjq diverge
-            fullrec = self.get_clean_rec()
-            currec = dict()
-            curidxs = dict()
-            colidx = 0
-            for idx, c in enumerate(self.cols):
-                fld_flatjq = self.fld2flatjq[c]
-                if flat_jq.startswith(fld_flatjq):
-                    currec[c] = self.cur_rec[c]
-                    if self.add_idx_attrs:
-                        for k,v in self.cur_idxs.items():
-                            if k in fld_flatjq:
-                                curidxs[k] = v
-                else:
-                    colidx = idx
-                    break
-            self.cur_rec = currec
-            self.cur_idxs = curidxs
-            self.cols = self.cols[:colidx]
-
-        if islist:  # terminal path node is a list
-            field_idx = idxs[-1]
-            idxs = idxs[:-1]
-            if col not in self.cur_rec:
-                # 1st time list value start
-                self.cur_rec[col] = [value]
-                self.cols.append(col)
-                self.fld2flatjq[col] = flat_jq
-                self.cur_flatjq = flat_jq
-                setval = True
-            elif field_idx != 0:
-                # continuation of list
-                self.cur_rec[col].append(value)
-                setval = True
-            #else field_idx == 0 ==> another start ... pop cur_rec
-
-            if setval and self.add_idx_attrs and ffjq and len(idxs) > 0:
-                self._add_idxs(ffjq, idxs)
-                
-
-        if not setval and col in self.cols:
-            # Field repeat ==> pop cur_rec, reset to field pos in cols
-
-            if fullrec is None:
-                fullrec = self.get_clean_rec()
-            currec = dict()
-            self.cols = self.cols[:self.cols.index(col)]
-            for c in self.cols:
-                currec[c] = self.cur_rec[c]
-            self.cur_rec = currec
-            self.cur_idxs = defaultdict(set)
-
-        if not setval:
-            # Set value, track columns, add/track index attrs
-            if islist:
-                self.cur_rec[col] = [value]
-            else:
-                self.cur_rec[col] = value
-            if (
-                    self.add_idx_attrs and
-                    ffjq and '[]' in ffjq and
-                    len(idxs) > 0
-            ):
-                self._add_idxs(ffjq, idxs)
-            self.cols.append(col)
-            self.fld2flatjq[col] = flat_jq
-            self.cur_flatjq = flat_jq
-
-        return fullrec
-
-    def _add_idxs(self, flat_jq, idxs):
-        ''' add idxs to self.cur_idxs '''
-        i = 0
-        for part in flat_jq.split('.'):
-            if part.endswith('[]'):
-                self.cur_idxs[part[:-2]].add(idxs[i])
-                i += 1
-
-
-class RecordMetaInfo:
-    '''
-    Structure to hold meta-info for a set of records.
-    '''
-    def __init__(
-            self,
-            filepath: str,
-            pivot_pfx: str = None,
-            ignore_pfxs: Set[str] = None,
-            jq_clean: Callable[[Dict], Dict] = None,
-            add_idx_attrs: bool = False,
-            rec_builder: FlatRecordBuilder = None,
-            full_path_attrs: bool = False,
-            file_obj = None,
-    ):
-        '''
-        :param filepath: The path to the records file
-        :param pivot_pfx: The prefix at which to "pivot" for grouping values
-        :param ignore_pfxs: The path prefixes to ignore -- None to not ignore any,
-            an empty set (or string) to ignore everything other than pivot_pfx,
-            or the set of path prefixes to ignore. Note that the records built
-            from selectively ignoring paths include paths from broader scopes,
-            while those build ignoring all other paths do not.
-        :param jq_clean: Function to clean the final record's attributes
-        :param add_idx_attrs: True to add attributes to recs for array indeces
-        :param rec_builder: (Optional) The record builder to use
-        :param full_path_attrs: True to use the full path for record attributes
-        :param file_obj: The output file object to use instead of opening
-            filepath for write
-        '''
-        self.filepath = filepath
-        self.pivot_pfx = pivot_pfx
-        self.ignore_pfxs = ignore_pfxs
-        self.jq_clean = jq_clean
-        self.add_idx_attrs = add_idx_attrs
-        self._recbuilder = rec_builder
-        self.full_path_attrs = full_path_attrs
-        self._file = file_obj
-        self._opened = False
+    def __eq__(self, other):
+        if isinstance(other, Path):
+            return self.__key() == other.__key()
+        return NotImplemented
 
     @property
-    def rec_builder(self) -> FlatRecordBuilder:
-        if self._recbuilder is None:
-            self._recbuilder = FlatRecordBuilder(
-                full_path_attrs = self.full_path_attrs,
-                pivot_pfx = self.pivot_pfx,
-                ignore_pfxs = self.ignore_pfxs,
-                jq_clean = self.jq_clean,
-                add_idx_attrs = self.add_idx_attrs,
-            )
-        return self._recbuilder
+    def path_elts(self) -> List[str]:
+        ''' Get this path's (index-qualified) elements '''
+        if self._path_elts is None:
+            self._path_elts = self.jq_path.split('.')
+        return self._path_elts
 
     @property
-    def file(self):
-        ''' Get the (output) file handle to the filepath. '''
-        if self._file == None:
-            # open filepath for writing
-            self._file = open(self.filepath, 'w', encoding='utf-8')
-            self._opened = True
-        return self._file
-
-    def close(self):
-        ''' Close the file (if opened here) '''
-        if self._file is not None and self._opened:
-            self._file.close()
-            self._opened = False
+    def size(self) -> int:
+        ''' Get the number of path_elements in this path. '''
+        return len(self.path_elts)
 
 
-class FlatRecordsBuilder:
+class GroupAcceptStrategy(ABC):
     '''
-    Generate flat records from squashed lines, where each type
-    of record is streamed to its own file.
+    Add a Path to a Group if it belongs.
     '''
-    def __init__(
-            self,
-            split_line_fn: Callable[[str], Tuple[str, str, str, str]],
-            metainfos: List[RecordMetaInfo],
-    ):
-        self.split_line_fn = split_line_fn
-        self.metainfos = metainfos
-
-    def process_flatfile(self, flatfile):
-        '''
-        Process lines from the flatfile.
-        :param flatfile: Either a filename (str whose path exists) or a fileobj
-        '''
-        opened = False
-        fileobj = flatfile
-        if isinstance(flatfile, str) and os.path.exists(flatfile):
-            opened = True
-            if flatfile.endswith('.gz'):
-                fileobj = gzip.open(flatfile, 'rt', encoding='utf-8')
-            else:
-                fileobj = open(flatfile, 'r', encoding='utf-8')
-        for line in fileobj:
-            (value, field, flat_jq, idxs) = self.split_line_fn(line)
-            for minfo in self.metainfos:
-                rec = minfo.rec_builder.add_flatpath(
-                    value, field, flat_jq=flat_jq, idxs=idxs
-                )
-                if rec is not None:
-                    print(json.dumps(rec), file=minfo.file)
-        if opened:
-            fileobj.close()
-        for minfo in self.metainfos:
-            last_rec = minfo.rec_builder.get_clean_rec()
-            if len(last_rec) > 0:
-                print(json.dumps(last_rec), file=minfo.file)
-            minfo.close()
-
-
-def flat_record_generator(
-        file_obj,
-        split_line_fn: Callable[[str], Tuple[str, str, str, str]],
-        builder: FlatRecordBuilder = None,
-        pivot_pfx: str = None,
-        ignore_pfxs: Set[str] = None,
-        jq_clean: Callable[[Dict], Dict] = None,
-        add_idx_attrs: bool = False,
-):
-    '''
-    Generate flat records (dictionaries) from the file_obj's lines.
-    :param file_obj: The file object supplying the flat lines
-    :param split_line_fn: The function for splitting each line into
-        (value, field, flat_jq, idxs)
-    :param builder: The builder to use if not the default
-    :param pivot_pfx: The prefix at which to "pivot" for grouping values
-    :param ignore_pfxs: The path prefixes to ignore -- None to not ignore any,
-        an empty set (or string) to ignore everything other than pivot_pfx,
-        or the set of path prefixes to ignore. Note that the records built
-        from selectively ignoring paths include paths from broader scopes,
-        while those build ignoring all other paths do not.
-    :param jq_clean: Function to clean the final record's attributes
-    :param add_idx_attrs: True to add attributes to recs for array indeces
-    '''
-    if builder is None:
-        builder = FlatRecordBuilder(
-            pivot_pfx=pivot_pfx, ignore_pfxs=ignore_pfxs,
-            jq_clean=jq_clean, add_idx_attrs=add_idx_attrs,
-        )
-    for line in file_obj:
-        (value, field, flat_jq, idxs) = split_line_fn(line)
-        rec = builder.add_flatpath(value, field, flat_jq=flat_jq, idxs=idxs)
-        if rec is not None:
-            yield rec
-    # Generate the final record being built
-    if len(builder.cur_rec) > 0:
-        yield builder.get_clean_rec()
-
-
-class LineFormatter(ABC):
-    '''
-    Class for formatting a record (dictionary) as a json string.
-    '''
-    def __init__(
-            self,
-            field_formatting_fn: Callable[[str], str] = None,
-            value_formatting_fn: Callable[[str, Any], str] = None,
-    ):
-        '''
-        :param field_formatting_fn: A fn(cjq_path) that returns a revised,
-            formatted field name. Default is to return the cjq_path itself.
-        :param value_formatting_fn: A fn(cjq_path, item_value) that returns
-            a (potentially) revised formatted value for the path (key). Default
-            is to return the value itself.
-        '''
-        self.field_fn = field_formatting_fn or (lambda f: f)
-        self.value_fn = value_formatting_fn or (lambda _f, v: v)
-
-    def __call__(self, record: Dict[str, Any]) -> str:
-        return self.format_record(record)
-
-    def _revise_record(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        '''
-        Apply the field and value formatting functions to the record.
-        '''
-        return {
-            self.field_fn(k): self.value_fn(k, v)
-            for k, v in record.items()
-        }
-
-    def flush(self, fileobj):
-        '''
-        Hook for flushing any data to a file after having processed all records.
-        (default is a no-op.)
-        '''
-        pass
-
     @abstractmethod
-    def format_record(self, record: Dict[str, Any]) -> str:
+    def accept_path(
+            self,
+            path: Path,
+            group: 'PathGroup',
+            distribute: bool = False
+    ) -> str:
         '''
-        Format the record as a string.
+        Determine whether the Path belongs in the group.
+        :param path: The path to potentially add
+        :param group: The group to which to add the path
+        :param distribute: True if the path is proposed as a distributed path
+            instead of as a main path.
+        :return: 'main', 'distributed', or None if the path belongs as a main
+            path, a distributed path, or not at all in the group
         '''
         raise NotImplementedError
 
 
-class JsonLineFormatter(LineFormatter):
+class PathGroup:
     '''
-    Class for formatting a record (dictionary) as a json string.
-    '''
-    def __init__(
-            self,
-            field_formatting_fn: Callable[[str], str] = None,
-            value_formatting_fn: Callable[[str, Any], str] = None,
-    ):
-        '''
-        :param field_formatting_fn: A fn(cjq_path) that returns a revised,
-            formatted field name. For example, formatting the field name
-            for use as a DB column name would entail removing non-word chars
-            from the string (which is the default.)
-        :param value_formatting_fn: A fn(cjq_path, item_value) that returns
-            a (potentially) revised formatted value for the path (key). Default
-            is to return the value itself.
-        '''
-        super().__init__(
-            field_formatting_fn=(
-                field_formatting_fn or (lambda f: re.sub(r'\W+', '_', f))
-            ),
-            value_formatting_fn=value_formatting_fn,
-        )
-
-    def format_record(self, record: Dict[str, Any]) -> str:
-        '''
-        Format the record as a string.
-        '''
-        return json.dumps(self._revise_record(record))
-
-
-class TsvLineFormatter(LineFormatter):
-    '''
-    Class for formatting a record (dictionary) as a TSV file line.
+    Container for a group of related paths.
     '''
     def __init__(
             self,
-            field_formatting_fn: Callable[[str], str] = None,
-            value_formatting_fn: Callable[[str, Any], str] = None,
+            accept_strategy: GroupAcceptStrategy,
+            first_path: Path = None
     ):
-        '''
-        :param field_formatting_fn: A fn(cjq_path) that returns a revised,
-            formatted field name. Default is to return the cjq_path itself.
-        :param value_formatting_fn: A fn(cjq_path, item_value) that returns
-            a (potentially) revised formatted value for the path (key). Default
-            is to return the value itself.
-        '''
-        super().__init__(
-            field_formatting_fn=field_formatting_fn,
-            value_formatting_fn=value_formatting_fn,
-        )
-        self._header = None  # List[str]
+        self._all_paths = None
+        self.main_paths = None  # Set[Path]
+        self.distributed_paths = None  # Set[Path]
+        self.accept_strategy = accept_strategy
+        if first_path is not None:
+            self.accept(first_path, distribute=False)
 
     @property
-    def header(self) -> List[str]:
+    def num_main_paths(self) -> int:
+        ''' Get the number of main paths in this group '''
+        return len(self.main_paths) if self.main_paths is not None else 0
+
+    @property
+    def num_distributed_paths(self) -> int:
+        ''' Get the number of distributed paths in this group '''
+        return (
+            len(self.distributed_paths)
+            if self.distributed_paths is not None
+            else 0
+        )
+
+    @property
+    def size(self) -> int:
+        ''' Get the total number of paths in this group. '''
+        return self.num_main_paths + self.num_distributed_paths
+
+    @property
+    def paths(self) -> List[Path]:
+        ''' Get all paths (both main and distributed) '''
+        if self._all_paths is None:
+            if self.main_paths is not None:
+                self._all_paths = self.main_paths.copy()
+                if self.distributed_paths is not None:
+                    self._all_paths.update(self.distributed_paths)
+                self._all_paths = sorted(self._all_paths)
+            elif self.distributed_paths is not None:
+                self._all_paths = sorted(self.distributed_paths)
+        return self._all_paths
+
+    def as_dict(self) -> Dict[str, str]:
+        ''' Reconstruct the object from the paths '''
+        d = dict()
+        if self.paths is not None:
+            for path in self.paths:
+                jutils.path_to_dict(path.jq_path, path.item, result=d)
+        return d
+
+    def accept(self, path: Path, distribute: bool = False) -> bool:
         '''
-        Get the TSV header (field/attribute/column names).
-
-        NOTE: The header values for the TSV can be retrieved from this object
-              only *AFTER* all records have been processed because all fields
-              will not necessarily be present until all record processed.
+        Add the path if it belongs in this group.
+        :param path: The path to (potentially) add.
+        :param distribute: True to propose the path as a distributed path
+        :return: True if the path was accepted and added.
         '''
-        return self._header
-
-    def flush(self, fileobj):
-        '''
-        Hook for flushing any data to a file after having processed all records.
-        In this case, write the header line as the last row of the TSV file.
-        '''
-        if (
-                self._header is not None and
-                len(self._header) > 0 and
-                fileobj is not None
-        ):
-            print('\t'.join(self._header), file=fileobj)
-
-    def format_record(self, record: Dict[str, Any]) -> str:
-        '''
-        Format the record as a string.
-        '''
-        revrec = self._revise_record(record)
-        if self._header is None or len(revrec) > len(self._header):
-            self._header = list(revrec.keys())
-        return '\t'.join([str(v) for v in revrec.values()])
-        
-
-class RecordCache:
-    '''
-    Structure to keep track of record fields at distinct levels.
-    '''
-    def __init__(
-            self,
-            idx_level: int,
-            idx_value: int,
-            record_formatting_fn: Callable[[Dict[str, Any]], str],
-            split_terminal_arrays: bool = False,
-    ):
-        '''
-        Starting at index level -1 (pre-indices),
-        build records as index level N,
-        holding non-array items at level N
-        and, for each array element, the list of RecordCache instances
-        for records at level N+1
-
-        :param idx_level: The idx level (index into the idxs array) for this
-            cache
-        :param idx_value: The index of the element to capture/cache
-        :param record_formatting_fn: A fn(rec_dict) that returns the record
-            as a line of text for writing. Examples: write the record as a json
-            line or as a tab-delimited file line.
-        :param split_terminal_arrays: When True, items in terminal arrays yield
-            new rows; otherwise, they are glommed into a list value
-
-        NOTE: Currently hardwired to "pop" top-level elements, or one deeper
-              than the root.
-        '''
-        self.idx_level = idx_level
-        self.idx_value = idx_value
-        self.format_fn = record_formatting_fn
-        self.split_terminal_arrays = split_terminal_arrays
-        self.rcs = dict()  # Dict[elt, List[RecordCache]] for array elts at idx_level+1
-        self._record = dict()  # non-array items at idx_level
-
-    def add_item(
-            self,
-            cjq_path: str,
-            idxs: List[Tuple[str, str]],
-            item: Any,
-            fileobj,
-    ) -> bool:
-        '''
-        Add an item.
-        :param cjq_path: The "common" jq_path (no indexes)
-        :param idxs: The list of extracted (path_elt, index) tuples.
-        :param item: The path's value
-        :param fileobj: The file object to write flushed records to
-        :return: True if flushed
-        '''
-        flushed = False
-        completed_old = False
-        islist = False
-        num_idxs = len(idxs)
-        if not self.split_terminal_arrays and cjq_path.endswith('[]'):
-            islist = True
-            num_idxs -= 1
-
-        if num_idxs > self.idx_level + 1:
-            # Add deeper item
-            idx_elt, idx_value = idxs[self.idx_level+1]
-            rc = None
-            make_new_rc = False
-            if idx_elt in self.rcs:
-                rc = self.rcs[idx_elt][-1]
-                if rc.idx_value < idx_value:
-                    # adding a repeat value to or starting anew in *any* deep
-                    # item triggers popping *all* deep items
-                    make_new_rc = True
-                    completed_old = True
-
-            if (completed_old and self.idx_level < 0):
-                # build and pop records (NOTE: idx_level < 0 pops top-level recs)
-                for rec in self._records_generator():
-                    print(self.format_fn(rec), file=fileobj)
-                self.rcs.clear()
-                flushed = True
-
-            if idx_elt not in self.rcs:
-                self.rcs[idx_elt] = list()
-                make_new_rc = True
-
-            if make_new_rc:
-                rc = RecordCache(
-                    self.idx_level+1,
-                    idx_value,
-                    self.format_fn,
-                    split_terminal_arrays=self.split_terminal_arrays
-                )
-                self.rcs[idx_elt].append(rc)
-            rc.add_item(cjq_path, idxs, item, fileobj)
-        else:
-            # Add local item
-            if islist:
-                if cjq_path not in self._record:
-                    self._record[cjq_path] = [item]
+        added = False
+        add_type = self.accept_strategy.accept_path(path, self, distribute=False)
+        if add_type is not None:
+            if add_type == 'main':
+                if self.main_paths is None:
+                    self.main_paths = {path}
                 else:
-                    self._record[cjq_path].append(item)
-            else:
-                self._record[cjq_path] = item
-        return flushed
+                    self.main_paths.add(path)
+            else:  # 'distributed'
+                if self.distributed_paths is None:
+                    self.distributed_paths = {path}
+                else:
+                    self.distributed_paths.add(path)
+            added = True
+            self._all_paths = None
+        return added
 
-    def _records_generator(self):
+    def incorporate_paths(self, group: 'PathGroup'):
         '''
-        Generate the current records.
+        Incorporate (distribute) the group's appliccable paths into this group.
         '''
-        if len(self.rcs) == 0:
-            if len(self._record) > 0:
-                yield self._record.copy()
-        else:
-            for rc_list in self.rcs.values():
-                rec = self._record.copy()
-                for rc in rc_list:
-                    recc = rec.copy()
-                    for srec in rc._records_generator():
-                        recc.update(srec)
-                        if len(recc) > 0:
-                            yield recc
-
-    def flush(self, fileobj):
-        '''
-        Flush any remaining records to the fileobj.
-        :param fileobj: The file object to flush the final record(s) to.
-        '''
-        if len(self._record) > 0 or len(self.rcs) > 0:
-            for rec in self._records_generator():
-                print(self.format_fn(rec), file=fileobj)
-            self._record.clear()
-            self.rcs.clear()
+        for path in group.paths:
+            self.accept(path, distribute=True)
 
 
-class RecordBuilder:
+class SeededGroupAcceptStrategy(GroupAcceptStrategy):
     '''
-    Structure to capture, build, and flush records.
+    Strategy for accepting paths into a group of paths built around a "seed"
+    path.
+    '''
+    def __init__(self):
+        self._longest_path = None
+
+    def accept_path(
+            self,
+            path: Path,
+            group: PathGroup,
+            distribute: bool = False
+    ):
+        if not distribute:
+            self._update_longest_path(path, group)
+        if group.num_main_paths == 0 or self._path_aligns(path, group):
+            return 'distributed' if distribute else 'main'
+        return None
+
+    def _update_longest_path(self, path: Path, group: PathGroup):
+        if self._longest_path is None:
+            if group.num_main_paths > 0:
+                self._longest_path = group.main_paths[0]
+                for path in group.main_paths[1:]:
+                    if path.size > self._longest_path.size:
+                        self._longest_path = path
+            else:
+                self._longest_path = path
+        else:
+            if path.size > self._longest_path.size:
+                self._longest_path = path
+
+    def _path_aligns(self, path: Path, group: PathGroup) -> bool:
+        '''
+        Determine whether the path aligns with the group's paths.
+        '''
+        if path.size > self._longest_path.size:
+            lpath = path
+            opath = self._longest_path
+        else:
+            lpath = self._longest_path
+            opath = path
+        return self._paths_align(lpath, opath)
+
+    @staticmethod
+    def _paths_align(longer_path: Path, other_path: Path) -> bool:
+        '''
+        Determine whether the other path aligns with the longer path.
+        '''
+        aligns = True
+        for idx in range(1, min(other_path.size, longer_path.size - 1)):
+            # start at 1 because path_elt[0] is always ''
+            # end at longer_path.size - 1 if paths are equal to keep terminal
+            #     arrays in the same record
+            lelt = longer_path.path_elts[idx]
+            oelt = other_path.path_elts[idx]
+            if lelt != oelt:
+                # Doesn't align if matches up to [] (because idx differs)
+                if (lelt[-1] == ']' and oelt[-1] == ']'):
+                    # At an array level
+                    if (
+                            idx == 1 or  # always force a change at top level
+                            lelt[:lelt.find('[')] == oelt[:oelt.find('[')]
+                    ):
+                        aligns = False
+                        break
+        return aligns
+
+
+class ArrayElementAcceptStrategy(GroupAcceptStrategy):
+    '''
+    Container for a consistent group of paths built around each array.
+    '''
+    def __init__(self, max_array_level: int = -1):
+        '''
+        :param max_array_level: -1 to ignore, 0 to force new record at the
+            first (top) array level, 1 at the 2nd, etc.
+        '''
+        self.max_array_level = max_array_level
+        self.ref_path = None
+
+    def accept_path(
+            self,
+            path: Path,
+            group: PathGroup,
+            distribute: bool = False
+    ):
+        if distribute or not '[' in path.jq_path:
+            return 'distributed'
+
+        if group.num_main_paths == 0:
+            # Accept first path with an array
+            self.ref_path = path
+            return 'main'
+        else:
+            if self.ref_path is None:
+                self.ref_path = list(group.main_paths)[0]
+            # All elements up through max_array_level must fully match
+            cur_array_level = -1
+            for idx in range(1, min(self.ref_path.size, path.size)):
+                ref_elt = self.ref_path.path_elts[idx]
+                path_elt = path.path_elts[idx]
+                if ref_elt != path_elt:
+                    return None
+                elif ref_elt[-1] == ']':
+                    cur_array_level += 1
+                    if cur_array_level >= self.max_array_level:
+                        break
+        return 'main'
+
+
+class PathSorter:
+    '''
+    Container for sorting paths belonging together into groups.
     '''
     def __init__(
             self,
-            name: str,
-            recfile: str,
-            record_formatting_fn: Callable[[Dict[str, Any]], str],
-            split_terminal_arrays: bool = False,
+            accept_strategy: GroupAcceptStrategy,
+            group_size: int = 0,
+            max_groups: int = 0,
     ):
         '''
-        :param name: A name for the record set
-        :param recfile: The output path (str) or obj to send records
-        :param record_formatting_fn: A fn(rec_dict) that returns the record
-            as a line of text for writing. Examples: write the record as a json
-            line or as a tab-delimited file line.
-        :param split_terminal_arrays: When True, items in terminal arrays yield
-            new rows; otherwise, they are glommed into a list
+        :param accept_strategy: The group accept strategy to use
+        :param group_size: A size constraint/expectation for groups such that
+           any group not reaching this size (if > 0) is silently "dropped".
+        :param max_groups: The maximum number of groups to keep in memory where
+            all groups are kept if <= 0
         '''
-        self.name = name
-        self.recfile = recfile
-        self.format_fn = record_formatting_fn
-        self.rc = RecordCache(
-            -1,
-            0,
-            self.format_fn,
-            split_terminal_arrays=split_terminal_arrays
-        )
-        self._file = None
-        self._opened = False
+        self.accept_strategy = accept_strategy
+        self.group_size = group_size
+        #NOTE: Must keep at least 3 groups if keeping any for propagating
+        #      distributed paths.
+        self.max_groups = max_groups if max_groups <= 0 else max(3, max_groups)
+        self.groups = None  # List[PathGroup]
 
     @property
-    def file(self):
-        ''' Get the (output) file handle to the recfile. '''
-        if self._file == None:
-            if isinstance(self.recfile, str):
-                # open recfile for writing
-                self._file = open(self.recfile, 'w', encoding='utf-8')
-                self._opened = True
-            else:
-                self._file = self.recfile
-        return self._file
+    def num_groups(self) -> int:
+        ''' Get the number of groups '''
+        return len(self.groups) if self.groups is not None else 0
 
-    def close(self):
-        ''' Close the file (if opened here) '''
-        if self._file is not None and self._opened:
-            self._file.close()
-            self._opened = False
-
-    def add_item(
-            self,
-            cjq_path: str,
-            idxs: List[Tuple[str, str]],
-            item: Any
-    ) -> bool:
+    def add_path(self, path: Path) -> PathGroup:
         '''
-        Add an item.
-        :param cjq_path: The "common" jq_path (no indexes).
-        :param idxs: The list of extracted (path_elt, index) tuples.
-        :param item: The path's value
-        :return: True if flushed
+        Add the path to an existing group, or create a new group.
+        :param path: The path to add
+        :return: each closed PathGroup, otherwise None.
         '''
-        return self.rc.add_item(cjq_path, idxs, item, self.file)
+        result = None
+        if self.groups is None or len(self.groups) == 0:
+            self.groups = [
+                PathGroup(
+                    accept_strategy = self.accept_strategy,
+                    first_path=path,
+                )
+            ]
+        else:
+            # Assume always "incremental", such that new paths will belong in
+            # the latest group
+            latest_group = self.groups[-1]
+            if not latest_group.accept(path):
+                # Time to add a new group
+                self.close_group()
+                result = latest_group
 
-    def cleanup(self):
-        self.rc.flush(self.file)
-        if 'flush' in dir(self.format_fn):
-            # Hack to write the header row to the end of a TSV file
-            self.format_fn.flush(self.file)
-        self.close()
+                # Start a new group
+                self.groups.append(
+                    PathGroup(
+                        accept_strategy = self.accept_strategy,
+                        first_path=path,
+                    )
+                )
+
+                # Enforce max_group limit by removing groups from the front
+                if self.max_groups > 0 and len(self.groups) >= self.max_groups:
+                    while len(self.groups) >= self.max_groups:
+                        self.groups.pop(0)
+        return result
+
+    def close_group(self, idx: int = -1, check_size: bool = True) -> PathGroup:
+        '''
+        Close the (last) group by
+          * Adding distributable lines from the prior group
+          * Checking size constraints and dropping if warranted
+        :return: The closed PathGroup
+        '''
+        if self.groups is None or len(self.groups) == 0:
+            return None
+
+        if idx == -1:
+            idx = len(self.groups) - 1
+        latest_group = self.groups[idx]
+
+        # Add distributable lines from the prior group
+        if idx > 0:
+            latest_group.incorporate_paths(self.groups[idx-1])
+
+        # Check size constraints
+        if check_size and self.group_size > 0 and len(self.groups) > 0:
+            if latest_group.size < self.group_size:
+                # Last group not "filled" ... need to drop
+                print('POP!')
+                self.groups.pop()
+
+        return latest_group
+
+    def accept_path(self, path: Path):
+        '''
+        Add the path only if accepted by an existing group.
+        :param path: The path to add
+        :return: True if accepted
+        '''
+        for group in self.groups:
+            if group.accept(path):
+                return True
+        return False
+
+    def all_groups_have_size(self, group_size: int) -> bool:
+        '''
+        :param group_size: The group size to test for.
+        :return: True if all groups have the group_size
+        '''
+        if self.groups is not None:
+            for group in self.groups:
+                if group.size != group_size:
+                    return False
+            return True
+        return False
 
 
-class RecordsBuilder:
+class RecordPathBuilder:
     '''
-    Class for building single records from 2nd-tier (just under the root)
-    blocks while streaming a json file.
+    Class for building record paths from json_data.
     '''
     def __init__(
             self,
-            record_builder: RecordBuilder,
+            json_data: str,
+            output_stream,
+            line_builder_fn: Callable[[int, int, str, Any], str],
             timeout: int = TIMEOUT,
     ):
         '''
-        :param record_builder: The RecordBuilder to use
-        :param timeout: The requests timeout (in seconds)
+        :param json_data: The json data (url, file_path, or str)
+        :param output_stream: The output stream to write lines to
+        :param line_builder_fn: The function for turning record tuples into a line
+            string.
+        :param timeout: The requests timeout (if json_data is a url)
         '''
-        self.builder = record_builder
+        self.jdata = json_data
+        self.output_stream = output_stream
+        self.builder_fn = line_builder_fn
         self.timeout = timeout
+        self.rec_id = 0
+        self.inum = 0
+        self.sorter = None
 
-    def build_records(self, jdata: str):
-        '''
-        :param jdata: The source json_data from which to build records.
-        '''
-        squash_data(
-            self._builder_fn, jdata, timeout=self.timeout,
+    def write_group(self, group: PathGroup):
+        for path in group.paths:
+            line = self.builder_fn(
+                self.rec_id, path.line_num, path.jq_path, path.item
+            )
+            print(line, file=self.output_stream)
+
+    def visitor(self, item, path):
+        jq_path = build_jq_path(path, keep_list_idxs=True)
+        group = self.sorter.add_path(Path(jq_path, item, line_num=self.inum))
+        if group is not None:
+            self.write_group(group)
+            self.rec_id += 1
+        self.inum += 1
+
+    def stream_record_paths(self):
+        self.rec_id = 0
+        self.inum = 0
+        self.sorter = PathSorter(
+            ArrayElementAcceptStrategy(max_array_level=0),
+            max_groups=2,
         )
-        # Cleanup
-        self.builder.cleanup()
 
-    def _builder_fn(self, jq_path: str, item: Any):
-        '''
-        Build the records from each streamed jq_path and its item.
-        :param jq_path: The jq_path (with indexes)
-        :param item: The item value for the path
-        '''
-        # format for RecordInfo.add params and call each
-        cjq_path_elts = list()
-        idxs = list()
-        for path_elt in jq_path.split('.'):
-            if path_elt.endswith(']'):
-                left_bracket = path_elt.rindex('[')
-                elt = path_elt[:left_bracket]
-                idx = int(path_elt[left_bracket+1:len(path_elt)-1])
-                idxs.append((f'{elt}', idx))
-                cjq_path_elts.append(f'{elt}[]')
-            else:
-                cjq_path_elts.append(path_elt)
+        stream_json_data(self.jdata, self.visitor, timeout=self.timeout)
 
-        cjq_path = '.'.join(cjq_path_elts)
-        self.builder.add_item(cjq_path, idxs, item)
+        last_group = self.sorter.close_group(check_size=False)
+        if last_group is not None:
+            self.write_group(last_group)
+        
+
+def stream_record_paths(
+        json_data: str,
+        output_stream,
+        line_builder_fn: Callable[[int, int, str, Any], str],
+        timeout: int = TIMEOUT,
+):
+    '''
+    Write built lines from (rec_id, item_num, jq_path, item) tuples of the
+    top-level json "records" to the output stream where:
+        * rec_id is a 0-based integer identifying unique records
+        * line_num is a 0-based integer identifying the original item number
+        * jq_path is the fully-qualified (indexed) path (a record attribute)
+        * item is the item value at the path.
+    :param json_data: The json data (url, file_path, or str)
+    :param output_stream: The output stream to write lines to
+    :param line_builder_fn: The function for turning record tuples into a line
+        string.
+    :param timeout: The requests timeout (if json_data is a url)
+    '''
+    rpb = RecordPathBuilder(
+        json_data, output_stream, line_builder_fn, timeout=timeout
+    )
+    rpb.stream_record_paths()
+
+
+def get_records_df(
+        json_data: str,
+        timeout: int = TIMEOUT
+) -> pd.DataFrame:
+    '''
+    Convenience function to collect the (top-level) record lines from a json
+    stream as a DataFrame with columns:
+        record_id, line_num, jq_path, item
+
+    WARNING: Don't use this method with very large streams.
+    :param json_data: The source json data
+    :param timeout: The requests timeout (if json_data is a url)
+    :return: The record lines as a dataframe
+    '''
+    s = io.StringIO()
+    stream_record_paths(
+        json_data,
+        s,
+        lambda rid, lid, jqp, val: f'{rid}\t{lid}\t{jqp}\t{val}'
+    )
+    s.seek(0)
+    df = pd.read_csv(s, sep='\t', names=['rec_id', 'line_num', 'jq_path', 'item'])
+    return df
