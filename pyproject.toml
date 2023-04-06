@@ -17,8 +17,6 @@ nltk = "^3.7"
 more-itertools = "^9.0.0"
 lxml = "^4.9.2"
 beautifulsoup4 = "^4.11.1"
-stanza = "^1.4.2"
-sentence-transformers = "^2.2.2"
 json-stream = "^2.1.1"
 scikit-learn = "^1.2.1"
 
