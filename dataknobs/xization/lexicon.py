@@ -6,10 +6,9 @@ import dataknobs.xization.authorities as dk_auth
 import dataknobs.structures.document as dk_doc
 import dataknobs.xization.masking_tokenizer as dk_tok
 import dataknobs.utils.emoji_utils as emoji_utils
-from abc import abstractmethod, abstractproperty
+from abc import abstractmethod
 from collections import defaultdict
-from itertools import product
-from typing import Any, Callable, Dict, List, Set
+from typing import Any, Callable, Dict, List, Set, Union
 
 
 class LexicalExpander():
@@ -97,7 +96,6 @@ class LexicalExpander():
             emoji_data=self.emoji_data
         )
         return inputf.build_first_token(normalize_fn=self.normalize_fn)
-        return token
 
 
 class TokenMatch:
@@ -377,12 +375,12 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
         :return: The given or a new Annotations instance
         '''
         first_token = self.lexical_expander.build_first_token(
-            input_text, input_id=input_id
+            doctext.text, input_id=doctext.text_id
         )
         token_aligner = TokenAligner(first_token, self)
         self._prev_aligner = token_aligner
         if self.validate_ann_dicts(token_aligner.annotations):
-            annotaions.add_dicts(token_aligner.annotations)
+            annotations.add_dicts(token_aligner.annotations)
         return annotations
 
 
@@ -395,12 +393,11 @@ class CorrelatedAuthorityData(dk_auth.AuthorityData):
         super().__init__(df, name)
         self._authority_data = dict()
 
-    @abstractproperty
     def sub_authority_names(self) -> List[str]:
         '''
         Get the "sub" authority names.
         '''
-        raise NotImplementedError
+        return None
 
     @abstractmethod
     def auth_values_mask(self, name: str, value_id: int) -> pd.Series:
@@ -596,8 +593,6 @@ class SimpleMultiAuthorityData(MultiAuthorityData):
     Data class for pulling a single column from the multi-authority data
     as a "sub" authority.
     '''
-    def __init__(self, df: pd.DataFrame, name: str):
-        super().__init__(df, name)
 
     def build_authority_data(self, name: str) -> dk_auth.AuthorityData:
         '''
@@ -644,7 +639,7 @@ class MultiAuthorityFactory(dk_auth.AuthorityFactory):
     def build_authority(
             self,
             name: str,
-            auth_anns_builder: AuthorityAnnotationsBuilder,
+            auth_anns_builder: dk_auth.AuthorityAnnotationsBuilder,
             multiauthdata: MultiAuthorityData,
             parent_auth: dk_auth.Authority = None,
     ) -> DataframeAuthority:
@@ -661,7 +656,7 @@ class MultiAuthorityFactory(dk_auth.AuthorityFactory):
         field_groups = None  #TODO: get from instance var set on construction?
         anns_validator = None  #TODO: get from multiauthdata?
         return DataframeAuthority(
-            name=name,
+            name,
             self.get_lexical_expander(name),
             authdata,
             field_groups=field_groups,

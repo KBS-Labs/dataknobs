@@ -321,12 +321,3 @@ class ElasticsearchIndex:
             df = build_hits_dataframe(resp.result)
             resp.add_extra('hits_df', df)
         return resp
-
-
-
-##TODO: wrap embedding store with es index <- corpus_utils
-
-## Bulk load:
-#es_request('post', '_bulk', wn_batch_data)  #<-- fails
-#  
-#!curl -s -H "Content-Type: application/x-ndjson" -XPOST {ES_URL}:9200/_bulk --data-binary "@/data/db/es/src/wordnet/es_bulk.all.jsonl"  #<-- succeeds

@@ -1,13 +1,11 @@
 import gzip
 import io
-import json
 import json_stream.requests
 import os
 import pandas as pd
 import re
 import requests
 import dataknobs.structures.tree as dk_tree
-import dataknobs.utils.file_utils as file_utils
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Set, Tuple, Union
@@ -857,7 +855,7 @@ class PathGroup:
         d = dict()
         if self.paths is not None:
             for path in self.paths:
-                jutils.path_to_dict(path.jq_path, path.item, result=d)
+                path_to_dict(path.jq_path, path.item, result=d)
         return d
 
     def accept(self, path: Path, distribute: bool = False) -> bool:
@@ -868,7 +866,9 @@ class PathGroup:
         :return: True if the path was accepted and added.
         '''
         added = False
-        add_type = self.accept_strategy.accept_path(path, self, distribute=False)
+        add_type = self.accept_strategy.accept_path(
+            path, self, distribute=distribute
+        )
         if add_type is not None:
             if add_type == 'main':
                 if self.main_paths is None:
@@ -890,76 +890,6 @@ class PathGroup:
         '''
         for path in group.paths:
             self.accept(path, distribute=True)
-
-
-class SeededGroupAcceptStrategy(GroupAcceptStrategy):
-    '''
-    Strategy for accepting paths into a group of paths built around a "seed"
-    path.
-    '''
-    def __init__(self):
-        self._longest_path = None
-
-    def accept_path(
-            self,
-            path: Path,
-            group: PathGroup,
-            distribute: bool = False
-    ):
-        if not distribute:
-            self._update_longest_path(path, group)
-        if group.num_main_paths == 0 or self._path_aligns(path, group):
-            return 'distributed' if distribute else 'main'
-        return None
-
-    def _update_longest_path(self, path: Path, group: PathGroup):
-        if self._longest_path is None:
-            if group.num_main_paths > 0:
-                self._longest_path = group.main_paths[0]
-                for path in group.main_paths[1:]:
-                    if path.size > self._longest_path.size:
-                        self._longest_path = path
-            else:
-                self._longest_path = path
-        else:
-            if path.size > self._longest_path.size:
-                self._longest_path = path
-
-    def _path_aligns(self, path: Path, group: PathGroup) -> bool:
-        '''
-        Determine whether the path aligns with the group's paths.
-        '''
-        if path.size > self._longest_path.size:
-            lpath = path
-            opath = self._longest_path
-        else:
-            lpath = self._longest_path
-            opath = path
-        return self._paths_align(lpath, opath)
-
-    @staticmethod
-    def _paths_align(longer_path: Path, other_path: Path) -> bool:
-        '''
-        Determine whether the other path aligns with the longer path.
-        '''
-        aligns = True
-        for idx in range(1, min(other_path.size, longer_path.size - 1)):
-            # start at 1 because path_elt[0] is always ''
-            # end at longer_path.size - 1 if paths are equal to keep terminal
-            #     arrays in the same record
-            lelt = longer_path.path_elts[idx]
-            oelt = other_path.path_elts[idx]
-            if lelt != oelt:
-                # Doesn't align if matches up to [] (because idx differs)
-                if (lelt[-1] == ']' and oelt[-1] == ']'):
-                    # At an array level
-                    if (
-                            idx == 1 or  # always force a change at top level
-                            lelt[:lelt.find('[')] == oelt[:oelt.find('[')]
-                    ):
-                        aligns = False
-                        break
-        return aligns
 
 
 class ArrayElementAcceptStrategy(GroupAcceptStrategy):
@@ -1220,7 +1150,8 @@ def get_records_df(
     stream_record_paths(
         json_data,
         s,
-        lambda rid, lid, jqp, val: f'{rid}\t{lid}\t{jqp}\t{val}'
+        lambda rid, lid, jqp, val: f'{rid}\t{lid}\t{jqp}\t{val}',
+        timeout=timeout,
     )
     s.seek(0)
     df = pd.read_csv(s, sep='\t', names=['rec_id', 'line_num', 'jq_path', 'item'])

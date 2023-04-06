@@ -3,18 +3,19 @@ platform darwin -- Python 3.9.15, pytest-7.2.1, pluggy-1.0.0
 cachedir: .tox/tests/.pytest_cache
 rootdir: /Users/skoehler/dev/kbs-labs/dataknobs
 plugins: anyio-3.6.2, cov-3.0.0
-collected 60 items
+collected 69 items
 
-tests/structures/test_conditional_dict.py ....                           [  6%]
-tests/structures/test_document.py .                                      [  8%]
-tests/structures/test_tree.py ............                               [ 28%]
-tests/utils/test_elasticsearch_utils.py .......                          [ 40%]
-tests/utils/test_json_utils.py .......                                   [ 51%]
-tests/utils/test_pandas_utils.py .......                                 [ 63%]
-tests/utils/test_requests_utils.py ...                                   [ 68%]
-tests/utils/test_resource_utils.py .                                     [ 70%]
-tests/xization/test_authorities.py ...                                   [ 75%]
-tests/xization/test_masking_tokenizer.py .....                           [ 83%]
+tests/structures/test_conditional_dict.py ....                           [  5%]
+tests/structures/test_document.py .                                      [  7%]
+tests/structures/test_tree.py ............                               [ 24%]
+tests/utils/test_elasticsearch_utils.py .......                          [ 34%]
+tests/utils/test_json_utils.py .....                                     [ 42%]
+tests/utils/test_pandas_utils.py .......                                 [ 52%]
+tests/utils/test_requests_utils.py ...                                   [ 56%]
+tests/utils/test_resource_utils.py .                                     [ 57%]
+tests/utils/test_stats_utils.py ...........                              [ 73%]
+tests/xization/test_authorities.py ...                                   [ 78%]
+tests/xization/test_masking_tokenizer.py .....                           [ 85%]
 tests/xization/test_normalize.py ..........                              [100%]
 
 =============================== warnings summary ===============================
@@ -44,26 +45,23 @@ dataknobs/structures/document.py              42      0   100%
 dataknobs/structures/tree.py                 223      8    96%   43, 109, 224-232, 246, 255, 308
 dataknobs/utils/__init__.py                    0      0   100%
 dataknobs/utils/elasticsearch_utils.py        93      0   100%
-dataknobs/utils/embedding_utils.py            86     86     0%   1-229
 dataknobs/utils/emoji_utils.py               136     18    87%   88, 123, 133, 161, 200, 205, 215-226
-dataknobs/utils/file_utils.py                 30     25    17%   13-21, 29, 44-58
-dataknobs/utils/huggingface_utils.py          86     86     0%   1-229
-dataknobs/utils/json_utils.py                586    166    72%   36-41, 43-44, 107-112, 150, 152-162, 178, 184-185, 187-189, 236-241, 255-269, 288-301, 313, 334, 343, 348, 364, 421-422, 430, 440-454, 476, 478, 494, 549, 585, 607-618, 711, 713, 715, 718-721, 723, 727, 751-752, 759, 767-769, 804, 831, 840, 851-852, 857-861, 901, 909-913, 916-926, 932-938, 945-962, 992, 1034, 1081, 1093-1096, 1106-1109, 1116-1121
+dataknobs/utils/file_utils.py                 18     18     0%   1-31
+dataknobs/utils/json_utils.py                546    250    54%   34-39, 41-42, 105-110, 148, 150-160, 176, 182-183, 185-187, 234-239, 253-267, 286-299, 311, 332, 341, 346, 362, 419-420, 428, 438-452, 474, 476, 492, 547, 583, 605-616, 709, 711, 713, 716-719, 721, 725, 742-746, 749-750, 753, 756-759, 762, 765-767, 772-774, 779, 802, 814-819, 824, 829, 838, 843-851, 855-859, 868-885, 891-892, 904-905, 913-934, 954-959, 964, 972-1001, 1010-1028, 1036-1039, 1046-1051, 1072-1078, 1081-1085, 1088-1093, 1096-1107, 1129-1132, 1149-1158
 dataknobs/utils/pandas_utils.py              181      2    99%   104, 117
-dataknobs/utils/path_group.py                144    144     0%   1-266
 dataknobs/utils/requests_utils.py            125      3    98%   126, 296, 318
 dataknobs/utils/resource_utils.py             42      3    93%   41, 56, 61
 dataknobs/utils/sql_utils.py                 135    135     0%   1-389
-dataknobs/utils/stanza_utils.py              194    194     0%   1-393
-dataknobs/utils/wordnet_utils.py              64     64     0%   1-309
+dataknobs/utils/stats_utils.py               490     81    83%   114-125, 153, 223-231, 235, 239, 243, 247, 251, 255, 259-261, 265-267, 270, 273-280, 283, 286-295, 345, 386, 389-398, 421-422, 434, 437-439, 531, 564, 576, 584, 592, 614, 677, 685, 688, 707, 722-723, 743
 dataknobs/utils/xml_utils.py                  47     47     0%   1-100
 dataknobs/xization/__init__.py                 0      0   100%
 dataknobs/xization/annotations.py            281    123    56%   131, 174, 242-245, 253-254, 275-276, 319, 341, 358-359, 363, 366, 370, 374, 378, 385, 396-401, 434-446, 453, 467, 474, 482, 489, 497, 500, 507, 515, 524, 529, 534, 539-541, 546, 550, 556-558, 565-567, 570-579, 593-611, 617, 627-632, 644-649, 662-669, 690-692, 695, 700, 707-712, 716, 719-723, 731-736, 744-749
 dataknobs/xization/authorities.py            206     40    81%   74-77, 89, 91, 93, 102, 119-120, 128-129, 247-248, 255, 264-265, 325, 334, 383, 411, 464, 524, 548, 577, 595, 607, 616, 644, 714, 802-810, 817, 825-828, 841-843
+dataknobs/xization/lexicon.py                230    230     0%   1-658
 dataknobs/xization/masking_tokenizer.py      311      6    98%   29, 70, 351, 419, 429, 770
 dataknobs/xization/normalize.py              151     47    69%   173, 233, 251, 255, 259, 265, 287, 312-316, 332-381, 431
 ------------------------------------------------------------------------
-TOTAL                                       3196   1202    62%
+TOTAL                                       3290   1016    69%
 
-FAIL Required test coverage of 85% not reached. Total coverage: 62.39%
-======================== 60 passed, 2 warnings in 3.55s ========================
+FAIL Required test coverage of 85% not reached. Total coverage: 69.12%
+======================== 69 passed, 2 warnings in 3.44s ========================
