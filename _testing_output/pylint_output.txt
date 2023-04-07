@@ -1,12 +1,18 @@
-************* Module dataknobs.xization.lexicon
-dataknobs/xization/lexicon.py:670:9: E0001: Parsing failed: 'positional argument follows keyword argument (<unknown>, line 670)' (syntax-error)
-************* Module dataknobs.utils.elasticsearch_utils
-dataknobs/utils/elasticsearch_utils.py:327:1: W0511: #TODO: wrap embedding store with es index <- corpus_utils (fixme)
+************* Module dataknobs.utils.stats_utils
+dataknobs/utils/stats_utils.py:109:40: W0622: Redefining built-in 'min' (redefined-builtin)
+dataknobs/utils/stats_utils.py:109:47: W0622: Redefining built-in 'max' (redefined-builtin)
+************* Module dataknobs.utils.json_utils
+dataknobs/utils/json_utils.py:766:35: W0212: Access to a protected member __key of a client class (protected-access)
 ************* Module dataknobs.xization.normalize
 dataknobs/xization/normalize.py:211:9: W0511: TODO: Use a better pluralizer (fixme)
+************* Module dataknobs.xization.lexicon
+dataknobs/xization/lexicon.py:656:30: W0511: TODO: get from instance var set on construction? (fixme)
+dataknobs/xization/lexicon.py:657:32: W0511: TODO: get from multiauthdata? (fixme)
+dataknobs/xization/lexicon.py:629:35: W0613: Unused argument 'name' (unused-argument)
+dataknobs/xization/lexicon.py:639:4: W0237: Parameter 'authdata' has been renamed to 'multiauthdata' in overriding 'MultiAuthorityFactory.build_authority' method (arguments-renamed)
 ************* Module dataknobs.xization.authorities
 dataknobs/xization/authorities.py:209:4: W0221: Number of parameters was 6 in 'AnnotationsBuilder.build_annotation_row' and is now 7 in overriding 'AuthorityAnnotationsBuilder.build_annotation_row' method (arguments-differ)
 
 ------------------------------------------------------------------
-Your code has been rated at 9.97/10 (previous run: 9.97/10, +0.00)
+Your code has been rated at 9.97/10 (previous run: 9.95/10, +0.02)
 

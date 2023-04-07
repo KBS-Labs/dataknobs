@@ -13,8 +13,6 @@ Provides connectors for other popular text and data processing packages like:
   * wordnet
   * postgres
   * elasticsearch
-  * core-nlp and stanza
-  * huggingface
 
 ## General project information
 
@@ -64,16 +62,6 @@ By convention, a data directory can be leveraged for development that is mounted
   * Just unit tests: "tox -e tests"
   * Just lint: "tox -e lint"
 
-#### Using virtual environments
-
-  * Development:
-    * Manual: source ".project_vars", poetry install, poetry shell
-    * Automated: execute "bin/start_dev.sh"  (requires "/bin/bash" on your machine)
-
-  * Notebook:
-    * execute "bin/start_notebook.sh"
-      * copy/paste url into browser
-
 #### Using docker
 
   * Development:
@@ -85,4 +73,14 @@ By convention, a data directory can be leveraged for development that is mounted
 
   * Notebook:
     * execute "tox -e nb"
+      * copy/paste url into browser
+
+#### Using virtual environments
+
+  * Development:
+    * Manual: source ".project_vars", poetry install, poetry shell
+    * Automated: execute "bin/start_dev.sh"  (requires "/bin/bash" on your machine)
+
+  * Notebook:
+    * execute "bin/start_notebook.sh"
       * copy/paste url into browser

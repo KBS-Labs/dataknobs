@@ -72,8 +72,20 @@ def resource_as_json(package: str, filename: str) -> Dict:
 
 
 TEST_JSON_001 = 'test-001.json'
+TEST_JSON_002 = 'test-002.json'
+TEST_JSON_003 = 'test-003.json'
 
 
 @pytest.fixture
 def test_json_001() -> Dict:
     return resource_as_text('utils', TEST_JSON_001)
+
+
+@pytest.fixture
+def test_json_002() -> Dict:
+    return resource_as_text('utils', TEST_JSON_002)
+
+
+@pytest.fixture
+def test_json_003() -> Dict:
+    return resource_as_text('utils', TEST_JSON_003)

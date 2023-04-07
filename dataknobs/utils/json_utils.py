@@ -6,13 +6,14 @@ import pandas as pd
 import re
 import requests
 import dataknobs.structures.tree as dk_tree
+from abc import ABC, abstractmethod
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Set, Tuple, Union
 
 
 ELT_IDX_RE = re.compile(r'^(.*)\[(.*)\]$')
 FLATTEN_IDX_RE = re.compile(r'\[(\d+)\]')
-URL_RE = re.compile(r'^https?://.*$', flags=re.IGNORECASE)
+URL_RE = re.compile(r'^\s*https?://.*$', flags=re.IGNORECASE)
 TIMEOUT = 10  # 10 seconds
 
 
@@ -30,7 +31,7 @@ def stream_json_data(
     :param timeout: The requests timeout (in seconds)
     '''
     if os.path.exists(json_data):
-        if json_data.endswith('.gz'):
+        if json_data.endswith('.gz') or '.gz?' in json_data:
             with gzip.open(json_data, 'rt', encoding='utf-8') as f:
                 json_stream.visit(f, visitor_fn)
         else:
@@ -46,8 +47,8 @@ def stream_json_data(
 
 def build_jq_path(path: Tuple[Any], keep_list_idxs=True) -> str:
     '''
-    Build a jq path string from the path tuple.
-    :param path: A tuple with path components.
+    Build a jq path string from the json_stream path tuple.
+    :param path: A tuple with json_stream path components.
     :param keep_list_idxs: True to keep the exact path index values;
         False to emit a generic "[]" for the list.
     '''
@@ -62,10 +63,10 @@ def build_jq_path(path: Tuple[Any], keep_list_idxs=True) -> str:
 
 def build_path_tuple(jq_path: str, any_list_idx: int = -1) -> Tuple:
     '''
-    Build a tuple path from a jq_path (reverse of build_jq_path).
+    Build a json_stream tuple path from a jq_path (reverse of build_jq_path).
     :param jq_path: The jq_path whose values to extract.
     :param any_list_idx: The index value to give for a generic list
-    :return: The tuple form of the path
+    :return: The json_stream tuple form of the path
     '''
     path = list()
     for part in jq_path.split('.'):
@@ -82,6 +83,33 @@ def build_path_tuple(jq_path: str, any_list_idx: int = -1) -> Tuple:
     return tuple(path)
 
 
+def stream_jq_paths(
+        json_data: str,
+        output_stream,
+        line_builder_fn: Callable[[str, Any], str] = (
+            lambda jq_path,item: f'{jq_path}\t{item}'
+        ),
+        keep_list_idxs: bool = True,
+        timeout: int = TIMEOUT,
+):
+    '''
+    Write built lines from (jq_path, item) tuples from the json_data.
+    :param json_data: The json_data to copy
+    :param output_stream: The output stream to write lines to
+    :param line_builder_fn: The function for turning record tuples into a line
+        string.
+    :param keep_list_idxs: True to keep the exact path index values;
+        False to emit a generic "[]" for the list.
+    :param timeout: The requests timeout (in seconds)
+    '''
+    def visitor(item, path):
+        jq_path = build_jq_path(path, keep_list_idxs=keep_list_idxs)
+        line = line_builder_fn(jq_path, item)
+        print(line, file=output_stream)
+
+    stream_json_data(json_data, visitor, timeout=timeout)
+
+
 def squash_data(
         builder_fn: Callable[str, Any],
         json_data: str,
@@ -89,7 +117,7 @@ def squash_data(
         timeout: int = TIMEOUT,
 ):
     '''
-    Squash the json_data, pruning branches with path the given names.
+    Squash the json_data, optionally pruning branches by id'd path elements.
     Where "squashed" means the paths are compressed to a single level
     with complex jq keys.
 
@@ -211,6 +239,34 @@ def indexing_format_fn(jq_path: str, item: Any) -> str:
     return f'{item}\t{field}\t{flat_jq}\t{idxs}'
 
 
+def indexing_format_splitter(fileline: str) -> Tuple[str, str, str, str]:
+    '''
+    Reversal of the indexing_format_fn to extract:
+        (value, field, flat_jq, idxs)
+    Where
+        * value -- is the item value
+        * field -- is the last flat_jq path element
+        * flat_jq -- is the jq_path with all indexes flattened "[.*]" -> "[]"
+                     up to the last path element
+        * idxs -- is a comma-delimitted string with the indices
+    '''
+    line = fileline.strip()
+    value = None
+    field = None
+    flat_jq = None
+    idxs = None
+    if line:
+        parts = fileline.split('\t')
+        value = parts[0]
+        if len(parts) > 1:
+            field = parts[1] 
+            if len(parts) > 2:
+                flat_jq = parts[2] 
+                if len(parts) > 3:
+                    idxs = parts[3] 
+    return (value, field, flat_jq, idxs)
+
+
 def write_squashed(
         dest_file: str,
         jdata: str,
@@ -321,123 +377,6 @@ def explode(squashed: Dict) -> Dict:
     for jq_path, value in squashed.items():
         path_to_dict(jq_path, value, result)
     return result
-
-
-class BlockCollector:
-    '''
-    A class for collecting json blocks surrounding a matching path and/or value
-    '''
-
-    def __init__(
-            self,
-            jq_path: str,
-            item_value: Any = None,
-            block_path_idx: int = None,
-            timeout: int = TIMEOUT,
-    ):
-        '''
-        :param jq_path: The path at which to find the item.
-        :param item_value: The item value to find to identify the block
-        :param block_path_idx: The index in the path tuple to be the "top" of
-            block extracted.
-        :param timeout: The requests timeout (in seconds)
-        '''
-        self.jq_path = jq_path
-        self.timeout = timeout
-        self.keep_list_idxs = False if '[]' in self.jq_path else False
-        self.path = build_path_tuple(self.jq_path)
-        self.list_idxs = [
-            idx for idx in range(len(self.path))
-            if isinstance(self.path[idx], int)
-        ]
-        self.item_value = item_value
-        self._path_idx = (
-            block_path_idx if block_path_idx is not None
-            else max(self.list_idxs) if len(self.list_idxs) > 0
-            else -1
-        )
-        self.path = build_path_tuple(jq_path)
-        self._jqpp = None
-        self._jqpi = None
-        self._jqpf = None
-        if self._path_idx >= 0:
-            self._jqpp = build_jq_path(self.path[:self._path_idx], keep_list_idxs=False)
-            self._jqpi = build_jq_path(self.path[:self._path_idx+1], keep_list_idxs=False)
-            self._jqpf = build_jq_path(self.path, keep_list_idxs=False)
-
-        self._keeper = False
-        self._cur_path = None
-        self._cur_path_idx = -1
-        self._cur_block = None
-
-    def _reset(self):
-        self._keeper = False
-        self._cur_path = None
-        self._cur_path_idx = -1
-        self._cur_block = None
-
-    def _update(self, path: str, item: Any) -> bool:
-        result = None
-
-        pidx = self._path_idx
-        idx = pidx + 1
-        if self._cur_path is not None:
-            # Check if moved out of block
-            p1 = None
-            if len(path) >= idx:
-                p1 = build_jq_path(path[:idx], keep_list_idxs=False)
-            if (
-                    len(path) < idx or
-                    p1 != self._jqpi or
-                    (self._cur_path_idx >= 0 and self._cur_path_idx != path[pidx])
-            ):
-                # block is done
-                if self._keeper:
-                    result = self._cur_block
-                self._cur_block = None
-                self._cur_path = None
-                self._keeper = False
-            #else still in block
-
-        elif len(path) > pidx:
-            # Check if moved into block
-            p1 = None
-            if pidx >= 0:
-                p1 = build_jq_path(path[:pidx], keep_list_idxs=False)
-            if (
-                    pidx < 0 or
-                    p1 == self._jqpp
-            ):
-                self._cur_path = path
-                self._cur_path_idx = path[pidx] if pidx >= 0 else 0
-                self._cur_block = dict()
-
-        if self._cur_path is not None:
-            # In a capture block ... add block value
-            jq_path = build_jq_path(path, keep_list_idxs=True)
-            self._cur_block[jq_path] = item
-            p1 = build_jq_path(path, keep_list_idxs=False)
-            if (
-                    p1 == self._jqpf and (
-                        self.item_value is None or item == self.item_value
-                    )
-            ):
-                self._keeper = True
-
-        return result
-
-    def collect_blocks(self, json_data: str, max_count: int = 0):
-        self._reset()
-        result = list()
-        def visitor(item, path):
-            if max_count == 0 or len(result) < max_count:
-                block = self._update(path, item)
-                if block is not None:
-                    result.append(block)
-        stream_json_data(json_data, visitor, timeout=self.timeout)
-        if self._keeper:  # pop the last item
-            result.append(self._cur_block)
-        return result
 
 
 class ValuePath:
@@ -578,9 +517,11 @@ class JsonSchema:
             self,
             schema: Dict[str, Any] = None,
             values: ValuesIndex = None,
+            values_limit: int = 0,  # max number of unique values to keep
     ):
         self.schema = schema if schema is not None else dict()
         self.values = ValuesIndex() if values is None else values
+        self._values_limit = values_limit
         self._df = None
 
     def add_path(
@@ -602,9 +543,16 @@ class JsonSchema:
         if jq_path not in self.schema:
             self.schema[jq_path] = {value_type: 1}
         else:
-            self.schema[jq_path][value_type] += 1
+            if value_type not in self.schema[jq_path]:
+                self.schema[jq_path][value_type] = 1
+            else:
+                self.schema[jq_path][value_type] += 1
         if value is not None:
-            self.values.add(value, jq_path, path=path)
+            if (
+                    self._values_limit == 0 or
+                    self.values.num_values(jq_path) < self._values_limit
+            ):
+                self.values.add(value, jq_path, path=path)
         self._df = None
         
     @property
@@ -667,26 +615,6 @@ class JsonSchema:
         stream_json_data(json_data, visitor, timeout=timeout)
         return sresult if unique else lresult
 
-    def collect_value_blocks(
-            self,
-            jq_path: str,
-            item_value: Any,
-            json_data: str,
-            max_count: int = 0,
-    ) -> List[Dict]:
-        '''
-        Collect blocks from json_data where the item_value is found at the
-        jq_path.
-        :param jq_path: The path at which to find the item.
-        :param item_value: The item value to find to identify the block
-        :param json_data: The json_data from which to collect blocks
-        :param max_count: The maximum number of blocks to collect (0 for no
-            limit)
-        :return: The json block data.
-        '''
-        collector = BlockCollector(jq_path, item_value=item_value)
-        return collector.collect_blocks(json_data, max_count=max_count)
-
 
 class JsonSchemaBuilder:
     '''
@@ -713,7 +641,8 @@ class JsonSchemaBuilder:
         :param json_data: The json data (url, file_path, or str)
         :param value_typer: A fn(atomic_value) that returns the type of the
             value to override the default typing of "int", "float", and "str"
-        :param keep_unique_values: True to keep unique values for each path
+        :param keep_unique_values: True to keep unique values for each path or
+            an integer for a maximum number of unique values to keep
         :param invert_uniques: True to keep value paths for unique values
         :param keep_list_idxs: True to keep the list indexes in the dictionary
             paths. When False, all list indexes will be generalized to "[]".
@@ -729,6 +658,11 @@ class JsonSchemaBuilder:
         self.json_data = json_data
         self.value_typer = value_typer
         self.keep_uniques = keep_unique_values
+        self.values_limit = (
+            0
+            if isinstance(keep_unique_values, bool)
+            else int(keep_unique_values)
+        )
         self.invert_uniques = invert_uniques
         self.keep_list_idxs = keep_list_idxs
         self.timeout = timeout
@@ -752,7 +686,7 @@ class JsonSchemaBuilder:
         '''
         Stream the json data and build the schema.
         '''
-        schema = JsonSchema()
+        schema = JsonSchema(values_limit = self.values_limit)
 
         def visitor(item, path):
             self._visit_item(schema, item, path)
@@ -794,3 +728,431 @@ class JsonSchemaBuilder:
             value=(item if self.keep_uniques else None),
             path=(path if self.invert_uniques else None),
         )
+
+
+class Path:
+    '''
+    Container for a path.
+    '''
+    def __init__(self, jq_path: str, item: Any, line_num: int = -1):
+        '''
+        :param jq_path: A fully-qualified indexed path.
+        :param item: The path's item (value)
+        '''
+        self.jq_path = jq_path
+        self.item = item
+        self.line_num = line_num
+        self._path_elts = None  # jq_path.split('.')
+        self._len = None  # Number of path elements
+
+    def __repr__(self) -> str:
+        lnstr = f'{self.line_num}: ' if self.line_num >= 0 else ''
+        return f'{lnstr}{self.jq_path}: {self.item}'
+
+    def __key(self):
+        return (self.jq_path, self.item) if self.line_num < 0 else self.line_num
+
+    def __lt__(self, other: 'Path') -> bool:
+        if self.line_num < 0 or other.line_num < 0:
+            return self.jq_path < other.jq_path
+        else:
+            return self.line_num < other.line_num
+
+    def __hash__(self) -> int:
+        return hash(self.__key())
+
+    def __eq__(self, other):
+        if isinstance(other, Path):
+            return self.__key() == other.__key()
+        return NotImplemented
+
+    @property
+    def path_elts(self) -> List[str]:
+        ''' Get this path's (index-qualified) elements '''
+        if self._path_elts is None:
+            self._path_elts = self.jq_path.split('.')
+        return self._path_elts
+
+    @property
+    def size(self) -> int:
+        ''' Get the number of path_elements in this path. '''
+        return len(self.path_elts)
+
+
+class GroupAcceptStrategy(ABC):
+    '''
+    Add a Path to a Group if it belongs.
+    '''
+    @abstractmethod
+    def accept_path(
+            self,
+            path: Path,
+            group: 'PathGroup',
+            distribute: bool = False
+    ) -> str:
+        '''
+        Determine whether the Path belongs in the group.
+        :param path: The path to potentially add
+        :param group: The group to which to add the path
+        :param distribute: True if the path is proposed as a distributed path
+            instead of as a main path.
+        :return: 'main', 'distributed', or None if the path belongs as a main
+            path, a distributed path, or not at all in the group
+        '''
+        raise NotImplementedError
+
+
+class PathGroup:
+    '''
+    Container for a group of related paths.
+    '''
+    def __init__(
+            self,
+            accept_strategy: GroupAcceptStrategy,
+            first_path: Path = None
+    ):
+        self._all_paths = None
+        self.main_paths = None  # Set[Path]
+        self.distributed_paths = None  # Set[Path]
+        self.accept_strategy = accept_strategy
+        if first_path is not None:
+            self.accept(first_path, distribute=False)
+
+    @property
+    def num_main_paths(self) -> int:
+        ''' Get the number of main paths in this group '''
+        return len(self.main_paths) if self.main_paths is not None else 0
+
+    @property
+    def num_distributed_paths(self) -> int:
+        ''' Get the number of distributed paths in this group '''
+        return (
+            len(self.distributed_paths)
+            if self.distributed_paths is not None
+            else 0
+        )
+
+    @property
+    def size(self) -> int:
+        ''' Get the total number of paths in this group. '''
+        return self.num_main_paths + self.num_distributed_paths
+
+    @property
+    def paths(self) -> List[Path]:
+        ''' Get all paths (both main and distributed) '''
+        if self._all_paths is None:
+            if self.main_paths is not None:
+                self._all_paths = self.main_paths.copy()
+                if self.distributed_paths is not None:
+                    self._all_paths.update(self.distributed_paths)
+                self._all_paths = sorted(self._all_paths)
+            elif self.distributed_paths is not None:
+                self._all_paths = sorted(self.distributed_paths)
+        return self._all_paths
+
+    def as_dict(self) -> Dict[str, str]:
+        ''' Reconstruct the object from the paths '''
+        d = dict()
+        if self.paths is not None:
+            for path in self.paths:
+                path_to_dict(path.jq_path, path.item, result=d)
+        return d
+
+    def accept(self, path: Path, distribute: bool = False) -> bool:
+        '''
+        Add the path if it belongs in this group.
+        :param path: The path to (potentially) add.
+        :param distribute: True to propose the path as a distributed path
+        :return: True if the path was accepted and added.
+        '''
+        added = False
+        add_type = self.accept_strategy.accept_path(
+            path, self, distribute=distribute
+        )
+        if add_type is not None:
+            if add_type == 'main':
+                if self.main_paths is None:
+                    self.main_paths = {path}
+                else:
+                    self.main_paths.add(path)
+            else:  # 'distributed'
+                if self.distributed_paths is None:
+                    self.distributed_paths = {path}
+                else:
+                    self.distributed_paths.add(path)
+            added = True
+            self._all_paths = None
+        return added
+
+    def incorporate_paths(self, group: 'PathGroup'):
+        '''
+        Incorporate (distribute) the group's appliccable paths into this group.
+        '''
+        for path in group.paths:
+            self.accept(path, distribute=True)
+
+
+class ArrayElementAcceptStrategy(GroupAcceptStrategy):
+    '''
+    Container for a consistent group of paths built around each array.
+    '''
+    def __init__(self, max_array_level: int = -1):
+        '''
+        :param max_array_level: -1 to ignore, 0 to force new record at the
+            first (top) array level, 1 at the 2nd, etc.
+        '''
+        self.max_array_level = max_array_level
+        self.ref_path = None
+
+    def accept_path(
+            self,
+            path: Path,
+            group: PathGroup,
+            distribute: bool = False
+    ):
+        if distribute or not '[' in path.jq_path:
+            return 'distributed'
+
+        if group.num_main_paths == 0:
+            # Accept first path with an array
+            self.ref_path = path
+            return 'main'
+        else:
+            if self.ref_path is None:
+                self.ref_path = list(group.main_paths)[0]
+            # All elements up through max_array_level must fully match
+            cur_array_level = -1
+            for idx in range(1, min(self.ref_path.size, path.size)):
+                ref_elt = self.ref_path.path_elts[idx]
+                path_elt = path.path_elts[idx]
+                if ref_elt != path_elt:
+                    return None
+                elif ref_elt[-1] == ']':
+                    cur_array_level += 1
+                    if cur_array_level >= self.max_array_level:
+                        break
+        return 'main'
+
+
+class PathSorter:
+    '''
+    Container for sorting paths belonging together into groups.
+    '''
+    def __init__(
+            self,
+            accept_strategy: GroupAcceptStrategy,
+            group_size: int = 0,
+            max_groups: int = 0,
+    ):
+        '''
+        :param accept_strategy: The group accept strategy to use
+        :param group_size: A size constraint/expectation for groups such that
+           any group not reaching this size (if > 0) is silently "dropped".
+        :param max_groups: The maximum number of groups to keep in memory where
+            all groups are kept if <= 0
+        '''
+        self.accept_strategy = accept_strategy
+        self.group_size = group_size
+        #NOTE: Must keep at least 3 groups if keeping any for propagating
+        #      distributed paths.
+        self.max_groups = max_groups if max_groups <= 0 else max(3, max_groups)
+        self.groups = None  # List[PathGroup]
+
+    @property
+    def num_groups(self) -> int:
+        ''' Get the number of groups '''
+        return len(self.groups) if self.groups is not None else 0
+
+    def add_path(self, path: Path) -> PathGroup:
+        '''
+        Add the path to an existing group, or create a new group.
+        :param path: The path to add
+        :return: each closed PathGroup, otherwise None.
+        '''
+        result = None
+        if self.groups is None or len(self.groups) == 0:
+            self.groups = [
+                PathGroup(
+                    accept_strategy = self.accept_strategy,
+                    first_path=path,
+                )
+            ]
+        else:
+            # Assume always "incremental", such that new paths will belong in
+            # the latest group
+            latest_group = self.groups[-1]
+            if not latest_group.accept(path):
+                # Time to add a new group
+                self.close_group()
+                result = latest_group
+
+                # Start a new group
+                self.groups.append(
+                    PathGroup(
+                        accept_strategy = self.accept_strategy,
+                        first_path=path,
+                    )
+                )
+
+                # Enforce max_group limit by removing groups from the front
+                if self.max_groups > 0 and len(self.groups) >= self.max_groups:
+                    while len(self.groups) >= self.max_groups:
+                        self.groups.pop(0)
+        return result
+
+    def close_group(self, idx: int = -1, check_size: bool = True) -> PathGroup:
+        '''
+        Close the (last) group by
+          * Adding distributable lines from the prior group
+          * Checking size constraints and dropping if warranted
+        :return: The closed PathGroup
+        '''
+        if self.groups is None or len(self.groups) == 0:
+            return None
+
+        if idx == -1:
+            idx = len(self.groups) - 1
+        latest_group = self.groups[idx]
+
+        # Add distributable lines from the prior group
+        if idx > 0:
+            latest_group.incorporate_paths(self.groups[idx-1])
+
+        # Check size constraints
+        if check_size and self.group_size > 0 and len(self.groups) > 0:
+            if latest_group.size < self.group_size:
+                # Last group not "filled" ... need to drop
+                print('POP!')
+                self.groups.pop()
+
+        return latest_group
+
+    def accept_path(self, path: Path):
+        '''
+        Add the path only if accepted by an existing group.
+        :param path: The path to add
+        :return: True if accepted
+        '''
+        for group in self.groups:
+            if group.accept(path):
+                return True
+        return False
+
+    def all_groups_have_size(self, group_size: int) -> bool:
+        '''
+        :param group_size: The group size to test for.
+        :return: True if all groups have the group_size
+        '''
+        if self.groups is not None:
+            for group in self.groups:
+                if group.size != group_size:
+                    return False
+            return True
+        return False
+
+
+class RecordPathBuilder:
+    '''
+    Class for building record paths from json_data.
+    '''
+    def __init__(
+            self,
+            json_data: str,
+            output_stream,
+            line_builder_fn: Callable[[int, int, str, Any], str],
+            timeout: int = TIMEOUT,
+    ):
+        '''
+        :param json_data: The json data (url, file_path, or str)
+        :param output_stream: The output stream to write lines to
+        :param line_builder_fn: The function for turning record tuples into a line
+            string.
+        :param timeout: The requests timeout (if json_data is a url)
+        '''
+        self.jdata = json_data
+        self.output_stream = output_stream
+        self.builder_fn = line_builder_fn
+        self.timeout = timeout
+        self.rec_id = 0
+        self.inum = 0
+        self.sorter = None
+
+    def write_group(self, group: PathGroup):
+        for path in group.paths:
+            line = self.builder_fn(
+                self.rec_id, path.line_num, path.jq_path, path.item
+            )
+            print(line, file=self.output_stream)
+
+    def visitor(self, item, path):
+        jq_path = build_jq_path(path, keep_list_idxs=True)
+        group = self.sorter.add_path(Path(jq_path, item, line_num=self.inum))
+        if group is not None:
+            self.write_group(group)
+            self.rec_id += 1
+        self.inum += 1
+
+    def stream_record_paths(self):
+        self.rec_id = 0
+        self.inum = 0
+        self.sorter = PathSorter(
+            ArrayElementAcceptStrategy(max_array_level=0),
+            max_groups=2,
+        )
+
+        stream_json_data(self.jdata, self.visitor, timeout=self.timeout)
+
+        last_group = self.sorter.close_group(check_size=False)
+        if last_group is not None:
+            self.write_group(last_group)
+        
+
+def stream_record_paths(
+        json_data: str,
+        output_stream,
+        line_builder_fn: Callable[[int, int, str, Any], str],
+        timeout: int = TIMEOUT,
+):
+    '''
+    Write built lines from (rec_id, item_num, jq_path, item) tuples of the
+    top-level json "records" to the output stream where:
+        * rec_id is a 0-based integer identifying unique records
+        * line_num is a 0-based integer identifying the original item number
+        * jq_path is the fully-qualified (indexed) path (a record attribute)
+        * item is the item value at the path.
+    :param json_data: The json data (url, file_path, or str)
+    :param output_stream: The output stream to write lines to
+    :param line_builder_fn: The function for turning record tuples into a line
+        string.
+    :param timeout: The requests timeout (if json_data is a url)
+    '''
+    rpb = RecordPathBuilder(
+        json_data, output_stream, line_builder_fn, timeout=timeout
+    )
+    rpb.stream_record_paths()
+
+
+def get_records_df(
+        json_data: str,
+        timeout: int = TIMEOUT
+) -> pd.DataFrame:
+    '''
+    Convenience function to collect the (top-level) record lines from a json
+    stream as a DataFrame with columns:
+        record_id, line_num, jq_path, item
+
+    WARNING: Don't use this method with very large streams.
+    :param json_data: The source json data
+    :param timeout: The requests timeout (if json_data is a url)
+    :return: The record lines as a dataframe
+    '''
+    s = io.StringIO()
+    stream_record_paths(
+        json_data,
+        s,
+        lambda rid, lid, jqp, val: f'{rid}\t{lid}\t{jqp}\t{val}',
+        timeout=timeout,
+    )
+    s.seek(0)
+    df = pd.read_csv(s, sep='\t', names=['rec_id', 'line_num', 'jq_path', 'item'])
+    return df
