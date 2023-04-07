@@ -1,3 +1,4 @@
+import gzip
 import os
 from typing import Set
 

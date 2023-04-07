@@ -198,7 +198,7 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
             lexical_expander: LexicalExpander,
             authdata: dk_auth.AuthorityData,
             auth_anns_builder: dk_auth.AuthorityAnnotationsBuilder = None,
-            field_groups: DerivedFieldGroups = None,
+            field_groups: dk_auth.DerivedFieldGroups = None,
             anns_validator: Callable[['Authority', Dict[str,Any]], bool] = None,
             parent_auth: dk_auth.Authority = None,
     ):
