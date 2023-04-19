@@ -519,6 +519,12 @@ class JsonSchema:
             values: ValuesIndex = None,
             values_limit: int = 0,  # max number of unique values to keep
     ):
+        '''
+        :param schema: Reconstruct instance with a known schema
+        :param values: Prime with existing values
+        :param values_limit: Stop counting unique values after reaching this
+            limit, or don't stop counting if 0.
+        '''
         self.schema = schema if schema is not None else dict()
         self.values = ValuesIndex() if values is None else values
         self._values_limit = values_limit
@@ -636,6 +642,7 @@ class JsonSchemaBuilder:
             float_value_type: str = 'float',
             str_value_type: str = 'str',
             url_value_type: str = 'URL',
+            on_add: Callable[[str], bool] = None,
     ):
         '''
         :param json_data: The json data (url, file_path, or str)
@@ -654,6 +661,9 @@ class JsonSchemaBuilder:
         :param float_value_type: The type of a float
         :param str_value_type: The type of a string
         :param url_value_type: The value type of a URL if not None
+        :param on_add: A fn(jq_path) called just before adding each jq_path
+            that returns True to add the path and False to skip adding it.
+            When None, all paths are added.
         '''
         self.json_data = json_data
         self.value_typer = value_typer
@@ -673,26 +683,30 @@ class JsonSchemaBuilder:
         self.float_value_type = float_value_type
         self.str_value_type = str_value_type
         self.url_value_type = url_value_type
-        self._schema = None
+        self._on_add = on_add
+        self._schema = JsonSchema(values_limit = self.values_limit)
+        self._built_schema = False
 
     @property
     def schema(self) -> JsonSchema:
         ''' Get the schema for the json data '''
-        if self._schema is None:
-            self._schema = self._build_schema()
+        if not self._built_schema:
+            self._built_schema = self._build_schema()
+        return self._schema
+
+    @property
+    def partial_schema(self) -> JsonSchema:
+        ''' Get the current, possibly incomplete, schema '''
         return self._schema
 
     def _build_schema(self) -> JsonSchema:
         '''
         Stream the json data and build the schema.
         '''
-        schema = JsonSchema(values_limit = self.values_limit)
-
         def visitor(item, path):
-            self._visit_item(schema, item, path)
-
+            self._visit_item(self._schema, item, path)
         stream_json_data(self.json_data, visitor, timeout=self.timeout)
-        return schema
+        return True
 
     def _visit_item(self, schema: JsonSchema, item: Any, path: Tuple):
         '''
@@ -723,11 +737,15 @@ class JsonSchemaBuilder:
                 value_type = self.int_value_type
             else:
                 value_type = self.unk_value_type
-        schema.add_path(
-            jq_path, value_type,
-            value=(item if self.keep_uniques else None),
-            path=(path if self.invert_uniques else None),
-        )
+        do_add = True
+        if self._on_add is not None:
+            do_add = self._on_add(jq_path)
+        if do_add:
+            schema.add_path(
+                jq_path, value_type,
+                value=(item if self.keep_uniques else None),
+                path=(path if self.invert_uniques else None),
+            )
 
 
 class Path:
