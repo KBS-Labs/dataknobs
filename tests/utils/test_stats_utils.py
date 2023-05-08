@@ -19,11 +19,11 @@ def test_empty():
     }
 
 
-def test_stats_accumulator_basics():
-    s = dk_stats.StatsAccumulator("basics")
+def test_stats_accumulator_basics1():
+    s = dk_stats.StatsAccumulator("basics1")
     s.add(1, 2, 3)
 
-    assert "basics" == s.label
+    assert "basics1" == s.label
     assert 3 == s.n
     assert 1 == s.min
     assert 3 == s.max
@@ -40,6 +40,18 @@ def test_stats_accumulator_basics():
         "n": 0,
         "std": 0
     }
+
+
+def test_stats_accumulator_basics2():
+    s = dk_stats.StatsAccumulator("basics2", values=[215.0, 215.0, 215.0])
+
+    assert "basics2" == s.label
+    assert 3 == s.n
+    assert 215.0 == s.min
+    assert 215.0 == s.max
+    assert 215.0 == s.mean
+    assert 0.0 == s.std
+    assert 0.0 == s.var
 
 
 def test_combine():
@@ -61,7 +73,7 @@ def test_copy_constructor():
     assert s1.as_dict() == s_copy.as_dict()
 
 
-def test_initialize_from_dict():
+def test_initialize_from_dict1():
     s1 = dk_stats.StatsAccumulator("1")
     s1.add(1, 2, 3)
     as_dict = s1.as_dict()
@@ -69,6 +81,27 @@ def test_initialize_from_dict():
     s_other = dk_stats.StatsAccumulator()
     s_other.initialize(**as_dict)
     
+    assert "1" == s_other.label
+    assert 3 == s_other.n
+    assert 1 == s_other.min
+    assert 3 == s_other.max
+    assert 2.0 == s_other.mean
+    assert 1.0 == s_other.std
+    assert 1.0 == s_other.var
+
+    s_other = dk_stats.StatsAccumulator(as_dict=as_dict)
+    assert "1" == s_other.label
+    assert 3 == s_other.n
+    assert 1 == s_other.min
+    assert 3 == s_other.max
+    assert 2.0 == s_other.mean
+    assert 1.0 == s_other.std
+    assert 1.0 == s_other.var
+
+    as_dict = s1.as_dict(with_sums=True)
+    assert as_dict['sum'] == 6
+    assert as_dict['sos'] == 14
+    s_other = dk_stats.StatsAccumulator(as_dict=as_dict)
     assert "1" == s_other.label
     assert 3 == s_other.n
     assert 1 == s_other.min

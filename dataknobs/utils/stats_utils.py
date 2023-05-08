@@ -18,10 +18,12 @@ class StatsAccumulator:
     summary statistics.
     '''
 
-    def __init__(self, label='', other=None):
+    def __init__(self, label='', other=None, as_dict=None, values=None):
         '''
         :param label: A label or name for this instance.
         :param other: An other instance for copying into this
+        :param as_dict: An "as_dict" form of stats to start with
+        :param values: A list of initial values or a single value to add
         '''
         self.label = label
         self._n = 0
@@ -31,7 +33,7 @@ class StatsAccumulator:
         self._sos = 0.0
         self._modlock = Lock()
 
-        if not other == None:
+        if other is not None:
             if not label == '':
                 self._label = other._label
             self._n = other._n
@@ -39,6 +41,14 @@ class StatsAccumulator:
             self._max = other._max
             self._sum = other._sum
             self._sos = other._sos
+        if as_dict is not None:
+            self.initialize(label=label, as_dict=as_dict)
+
+        if values is not None:
+            if isinstance(values, list):
+                self.add(*values)
+            else:
+                self.add(values)
 
     @property
     def label(self):
@@ -88,10 +98,13 @@ class StatsAccumulator:
     @property
     def var(self):
         ''' Get the variance of the values '''
-        return (
-            0 if self._n < 2
-            else (1.0 / (self._n - 1.0)) * (self._sos - (1.0 / self._n) * self._sum * self._sum)
-        )
+        var = 0
+        if self._n > 1:
+            var = abs(
+                (1.0 / (self._n - 1.0)) *
+                (self._sos - (1.0 / self._n) * self._sum * self._sum)
+            )
+        return var
 
     def clear(self, label=''):
         ''' Clear all values (reset) '''
@@ -116,13 +129,14 @@ class StatsAccumulator:
             if 'n' in as_dict:
                 n = as_dict['n']
             if 'min' in as_dict:
-                _min = as_dict['min']
+                min = as_dict['min']
             if 'max' in as_dict:
-                _max = as_dict['max']
+                max = as_dict['max']
             if 'mean' in as_dict:
                 mean = as_dict['mean']
             if 'std' in as_dict:
                 std = as_dict['std']
+                
 
         self._modlock.acquire()
         try:
@@ -130,16 +144,22 @@ class StatsAccumulator:
             self._n = n
             self._min = min
             self._max = max
-            self._sum = mean * n
-            self._sos = 0 if n == 0 else std * std * (n - 1.0) + self._sum * self._sum / n
+            if as_dict is not None and 'sum' in as_dict:
+                self._sum = as_dict['sum']
+            else:
+                self._sum = mean * n
+            if as_dict is not None and 'sos' in as_dict:
+                self._sos = as_dict['sos']
+            else:
+                self._sos = 0 if n == 0 else std * std * (n - 1.0) + self._sum * self._sum / n
         finally:
             self._modlock.release()
 
-    def as_dict(self):
+    def as_dict(self, with_sums=False):
         '''
         Get a dictionary containing a summary of this instance's information.
         '''
-        return {
+        d = {
             'label': self.label,
             'n': self.n,
             'min': self.min,
@@ -147,6 +167,12 @@ class StatsAccumulator:
             'mean': self.mean,
             'std': self.std
         }
+        if with_sums:
+            d.update({
+                'sum': self._sum,
+                'sos': self._sos
+            })
+        return d
 
     def __str__(self):
         ''' Get the info as a json string '''
@@ -160,6 +186,7 @@ class StatsAccumulator:
                 self._do_add(value)
         finally:
             self._modlock.release()
+        return self
 
     def _do_add(self, value):
         ''' Do the work of adding a value '''
