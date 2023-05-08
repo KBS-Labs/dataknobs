@@ -1,6 +1,6 @@
 ************* Module dataknobs.utils.stats_utils
-dataknobs/utils/stats_utils.py:109:40: W0622: Redefining built-in 'min' (redefined-builtin)
-dataknobs/utils/stats_utils.py:109:47: W0622: Redefining built-in 'max' (redefined-builtin)
+dataknobs/utils/stats_utils.py:122:40: W0622: Redefining built-in 'min' (redefined-builtin)
+dataknobs/utils/stats_utils.py:122:47: W0622: Redefining built-in 'max' (redefined-builtin)
 ************* Module dataknobs.utils.json_utils
 dataknobs/utils/json_utils.py:784:35: W0212: Access to a protected member __key of a client class (protected-access)
 ************* Module dataknobs.xization.normalize
