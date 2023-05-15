@@ -33,6 +33,11 @@ def test_basics():
         assert len(rs1.records) == 2
         assert len(rs1.df) == 2
 
+        rs1.clear()
+        assert len(rs1.records) == 0
+        assert len(rs1.df) == 0
+        rs1.restore()
+
         rs1.add_rec(RECS[2])
         assert len(rs1.records) == 3
         assert len(rs1.df) == 3
@@ -52,3 +57,34 @@ def test_basics():
         )
         assert np.all(rs3.df == rs1.df)
         assert rs3.records == rs1.records
+
+
+def test_no_backing_file():
+    RECS = [
+        {'a': 1, 'b': 2, 'c': 3},
+        {'a': 4, 'b': 5, 'c': 6},
+        {'a': 7, 'b': 8, 'c': 9},
+    ]
+    rs1 = record_store.RecordStore(None)
+    rs1.add_rec(RECS[0])
+    assert len(rs1.records) == 1
+    assert len(rs1.df) == 1
+    rs1.add_rec(RECS[1])
+    assert len(rs1.records) == 2
+    assert len(rs1.df) == 2
+    rs1.save()
+    assert len(rs1.records) == 2
+    assert len(rs1.df) == 2
+    adf = rs1.df
+    rs1.restore()
+    assert len(rs1.records) == 0
+    assert len(rs1.df) == 0
+    rs1.restore(adf)
+    assert len(rs1.records) == 2
+    assert len(rs1.df) == 2
+    rs1.clear()
+    assert len(rs1.records) == 0
+    assert len(rs1.df) == 0
+    rs1.restore(adf)
+    assert len(rs1.records) == 2
+    assert len(rs1.df) == 2

@@ -3,17 +3,17 @@ platform darwin -- Python 3.9.15, pytest-7.2.1, pluggy-1.0.0
 cachedir: .tox/tests/.pytest_cache
 rootdir: /Users/skoehler/dev/kbs-labs/dataknobs
 plugins: anyio-3.6.2, cov-3.0.0
-collected 72 items
+collected 73 items
 
 tests/structures/test_conditional_dict.py ....                           [  5%]
 tests/structures/test_document.py .                                      [  6%]
-tests/structures/test_record_store.py .                                  [  8%]
-tests/structures/test_tree.py ............                               [ 25%]
-tests/utils/test_elasticsearch_utils.py .......                          [ 34%]
+tests/structures/test_record_store.py ..                                 [  9%]
+tests/structures/test_tree.py ............                               [ 26%]
+tests/utils/test_elasticsearch_utils.py .......                          [ 35%]
 tests/utils/test_file_utils.py .                                         [ 36%]
 tests/utils/test_json_utils.py .....                                     [ 43%]
-tests/utils/test_pandas_utils.py .......                                 [ 52%]
-tests/utils/test_requests_utils.py ...                                   [ 56%]
+tests/utils/test_pandas_utils.py .......                                 [ 53%]
+tests/utils/test_requests_utils.py ...                                   [ 57%]
 tests/utils/test_resource_utils.py .                                     [ 58%]
 tests/utils/test_stats_utils.py ............                             [ 75%]
 tests/xization/test_authorities.py ...                                   [ 79%]
@@ -44,7 +44,7 @@ dataknobs/__init__.py                          0      0   100%
 dataknobs/structures/__init__.py               0      0   100%
 dataknobs/structures/conditional_dict.py      33      5    85%   48-49, 62-63, 66
 dataknobs/structures/document.py              42      0   100%
-dataknobs/structures/record_store.py          35      0   100%
+dataknobs/structures/record_store.py          41      0   100%
 dataknobs/structures/tree.py                 223      8    96%   43, 109, 224-232, 246, 255, 308
 dataknobs/utils/__init__.py                    0      0   100%
 dataknobs/utils/elasticsearch_utils.py        93      0   100%
@@ -55,7 +55,7 @@ dataknobs/utils/pandas_utils.py              181      2    99%   104, 117
 dataknobs/utils/requests_utils.py            125      3    98%   126, 296, 318
 dataknobs/utils/resource_utils.py             42      3    93%   41, 56, 61
 dataknobs/utils/sql_utils.py                 135    135     0%   1-389
-dataknobs/utils/stats_utils.py               507     70    86%   51, 179, 250-258, 262, 266, 270, 274, 278, 282, 286-288, 292-294, 297, 300-307, 310, 313-322, 372, 413, 416-425, 448-449, 461, 464-466, 558, 591, 603, 611, 619, 641, 704, 712, 715, 734, 749-750, 770
+dataknobs/utils/stats_utils.py               507     67    87%   51, 179, 250-258, 262, 266, 270, 274, 278, 282, 286-288, 292-294, 297, 300-307, 310, 313-322, 372, 413, 416-425, 448-449, 461, 558, 591, 603, 611, 619, 641, 704, 712, 715, 734, 749-750, 770
 dataknobs/utils/subprocess_utils.py           18     18     0%   1-45
 dataknobs/utils/xml_utils.py                  47     47     0%   1-100
 dataknobs/xization/__init__.py                 0      0   100%
@@ -65,7 +65,7 @@ dataknobs/xization/lexicon.py                230    230     0%   1-658
 dataknobs/xization/masking_tokenizer.py      311      6    98%   29, 70, 351, 419, 429, 770
 dataknobs/xization/normalize.py              151     47    69%   173, 233, 251, 255, 259, 265, 287, 312-316, 332-381, 431
 ------------------------------------------------------------------------
-TOTAL                                       3393   1007    70%
+TOTAL                                       3399   1004    70%
 
-FAIL Required test coverage of 85% not reached. Total coverage: 70.32%
-======================== 72 passed, 2 warnings in 4.37s ========================
+FAIL Required test coverage of 85% not reached. Total coverage: 70.46%
+======================== 73 passed, 2 warnings in 3.58s ========================
