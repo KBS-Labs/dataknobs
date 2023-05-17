@@ -150,6 +150,7 @@ def get_subnet_ip(name, subnet=None, verbose=True):
 
 
 import pandas as pd
+from ipywidgets import interact
 
 
 DEFAULT_MAX_COLWIDTH = pd.get_option('display.max_colwidth')
@@ -195,45 +196,51 @@ def display_df(df, max_rows=0, max_cols=0):
             'display.max_rows', max_rows,
             'display.min_rows', max_rows,
         ])
-        
-    if len(context) == 0:
-        display(df)
-    else:
-        with pd.option_context(*context):
-            display(df)
+
+    @interact(
+        column=['All'] + list(df.columns)
+    )
+    def show_df(column):
+        if column == 'All':
+            cdf = df
+        else:
+            cdf = pd.DataFrame(df[column].value_counts())
+        if len(context) == 0:
+            display(cdf)
+        else:
+            with pd.option_context(*context):
+                display(cdf)
 
 
 # ### Demonstrate and test "display_df"
 # 
 # * By changing the next cell to "Code"
+from ipywidgets import interact, interact_manual
 
-# # from ipywidgets import interact, interact_manual
-# 
-# # Concoct a large dataframe
-# df = pd.DataFrame(
-#     [
-#         [f'{chr(c)}-{n}' for n in range(50)]
-#         for c in list(
-#             range(ord('a'), ord('z')+1)
-#         ) + list(
-#             range(ord('A'), ord('Z')+1)
-#         ) + list(
-#             range(ord('0'), ord('9')+1)
-#         )
-#     ],
-#     columns=[f'char-{n}' for n in range(50)]
-# )
-# 
-# limits = [('global limit', 0), ('unlimited', None), ('5', 5)]
-# 
-# # Interactively display with different parameters
-# @interact_manual(
-#     max_rows=limits,
-#     max_cols=limits,
-# )
-# def test_display_df(max_rows, max_cols):
-#     display_df(df, max_rows, max_cols)
+# Concoct a large dataframe
+df = pd.DataFrame(
+    [
+        [f'{chr(c)}-{n}' for n in range(50)]
+        for c in list(
+            range(ord('a'), ord('z')+1)
+        ) + list(
+            range(ord('A'), ord('Z')+1)
+        ) + list(
+            range(ord('0'), ord('9')+1)
+        )
+    ],
+    columns=[f'char-{n}' for n in range(50)]
+)
 
+limits = [('global limit', 0), ('unlimited', None), ('5', 5)]
+
+# Interactively display with different parameters
+@interact_manual(
+    max_rows=limits,
+    max_cols=limits,
+)
+def test_display_df(max_rows, max_cols):
+    display_df(df, max_rows, max_cols)
 # In[ ]:
 
 
