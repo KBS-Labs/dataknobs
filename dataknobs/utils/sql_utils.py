@@ -135,17 +135,26 @@ class PostgresDB():
         return self.tables_df['table_name'].tolist()
 
     @lru_cache(maxsize=2)
-    def query(self, query: str) -> pd.DataFrame:
+    def query(
+            self,
+            query: str,
+            params: Dict[str, Any] = None,
+    ) -> pd.DataFrame:
         '''
         Submit a query, returning the results as a dataframe.
 
         :param query: The sql query to execute
+        :param params: Parameters to safely inject into the query string, where
+            each parameter "param" has the form "%(param)s" in the query string
         :return: A dataframe with the results
         '''
         df = None
         with self.get_conn() as conn:
             with conn.cursor() as curs:
-                curs.execute(query)
+                if params is None:
+                    curs.execute(query)
+                else:
+                    curs.execute(query, params)
                 df = pd.DataFrame(
                     curs.fetchall(),
                     columns=[
