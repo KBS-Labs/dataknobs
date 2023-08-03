@@ -51,3 +51,21 @@ def test_basics():
     assert sorted(filenames) == [
         'dir1', 'file1.txt', 'file2.txt.gz',
     ]
+
+
+def test_is_gzip_file(test_utils_dir):
+    not_gzip_count = 0
+    gzip_count = 0
+    for fpath in dk_futils.filepath_generator(
+            test_utils_dir,
+            descend=False,
+            files_only=True,
+    ):
+        is_gzip = dk_futils.is_gzip_file(fpath)
+        assert is_gzip == fpath.endswith('.gz')
+        if is_gzip:
+            gzip_count += 1
+        else:
+            not_gzip_count += 1
+    assert gzip_count > 0
+    assert not_gzip_count > 0

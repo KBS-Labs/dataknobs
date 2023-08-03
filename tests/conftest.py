@@ -77,8 +77,18 @@ TEST_JSON_003 = 'test-003.json'
 
 
 @pytest.fixture
+def test_utils_dir() -> str:
+    return resources_path('utils')
+
+
+@pytest.fixture
 def test_json_001() -> Dict:
     return resource_as_text('utils', TEST_JSON_001)
+
+
+@pytest.fixture
+def test_json_001gz() -> Dict:
+    return resource_as_text('utils', TEST_JSON_001GZ)
 
 
 @pytest.fixture
@@ -87,5 +97,15 @@ def test_json_002() -> Dict:
 
 
 @pytest.fixture
+def test_json_002gz() -> Dict:
+    return resource_as_text('utils', TEST_JSON_002GZ)
+
+
+@pytest.fixture
 def test_json_003() -> Dict:
     return resource_as_text('utils', TEST_JSON_003)
+
+
+@pytest.fixture
+def test_json_003gz() -> Dict:
+    return resource_as_text('utils', TEST_JSON_003GZ)
