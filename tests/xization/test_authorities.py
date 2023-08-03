@@ -12,7 +12,7 @@ def test_regex_authority_no_groups():
     rauth = dk_auth.RegexAuthority(
         'date', r, lambda x,y: f'{y}:{x}'
     )
-    anns = rauth.annotate_text('abc 07/04/1776 xyz')
+    anns = rauth.annotate_input('abc 07/04/1776 xyz')
     assert len(anns.df) == 1
     assert anns.df['text'].to_list() == ['07/04/1776']
 
@@ -22,7 +22,7 @@ def test_regex_authority_no_name_groups():
     rauth = dk_auth.RegexAuthority(
         'date', r, lambda x,y: f'{y}:{x}'
     )
-    anns = rauth.annotate_text('abc 07/04/1776 xyz')
+    anns = rauth.annotate_input('abc 07/04/1776 xyz')
     assert len(anns.df) == 3
     assert anns.df['text'].to_list() == ['07', '04', '1776']
     assert anns.df['date_field'].to_list() == [1, 2, 3]
@@ -48,10 +48,10 @@ def test_regex_authority_named_groups():
         'date', r, lambda x,y: f'{y}:{x}',
         anns_validator = DateValidator(),
     )
-    anns = rauth.annotate_text('abc 07/04/1776 xyz')
+    anns = rauth.annotate_input('abc 07/04/1776 xyz')
     assert len(anns.df) == 3
     assert anns.df['text'].to_list() == ['07', '04', '1776']
     assert anns.df['date_field'].to_list() == ['day', 'month', 'year']
 
-    anns = rauth.annotate_text('abc 13/32/1776 xyz')
+    anns = rauth.annotate_input('abc 13/32/1776 xyz')
     assert anns.df is None

@@ -290,7 +290,7 @@ class Authority(dk_annots.Annotator):
            annotations for a single match or "entity".
         :param parent_auth: This authority's parent authority (if any)
         '''
-        self._name = name
+        super().__init__(name)
         self.anns_builder = (
             auth_anns_builder if auth_anns_builder is not None
             else AuthorityAnnotationsBuilder()
@@ -307,14 +307,6 @@ class Authority(dk_annots.Annotator):
     def metadata(self) -> AuthorityAnnotationsMetaData:
         ''' Get the meta-data '''
         return self.anns_builder.metadata
-
-    @property
-    def name(self) -> str:
-        '''
-        Get the name of this authority, which is usually the name or type
-        of entities defined herein.
-        '''
-        return self._name
 
     @property
     def parent(self) -> 'Authority':
@@ -334,7 +326,8 @@ class Authority(dk_annots.Annotator):
 
     def annotate_input(
             self,
-            text_obj: Union[AnnotatedText, str],
+            text_obj: Union[dk_annots.AnnotatedText, str],
+            **kwargs,
     ) -> dk_annots.Annotations:
         '''
         Find and annotate this authority's entities in the document text

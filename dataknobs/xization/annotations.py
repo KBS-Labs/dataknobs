@@ -1,8 +1,9 @@
 import json
+import numpy as np
 import pandas as pd
 import dataknobs.structures.document as dk_doc
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Set
 
 
 # Key annotations column name constants for use across annotation interfaces
@@ -707,7 +708,7 @@ class PositionalAnnotationsGroup(AnnotationsGroup):
         :param overlap: If False, then only accept rows that don't overlap; else
             only accept rows that do ovelap
         '''
-        super().__init__(None, None, rectype=rectype, gnum=gnum)
+        super().__init__(None, None, None, group_type=rectype, group_num=gnum)
         self.overlap = overlap
         self.start_pos = -1
         self.end_pos = -1
@@ -782,7 +783,7 @@ class OverlapGroupIterator:
         group = None
         if self.has_next:
             group = PositionalAnnotationsGroup(True)
-            while self.has_next and group.accept_row(self._queued_row_data):
+            while self.has_next and group.belongs(self._queued_row_data):
                 self._queue_next()
             self.cur_group = group
         return group
@@ -799,7 +800,7 @@ class OverlapGroupIterator:
     def _queue_next(self):
         try:
             _loc, row = next(self._cur_iter)
-            self._queued_row_data = RowData(row)
+            self._queued_row_data = RowData(None, row)  #TODO: add metadata
         except StopIteration:
             self._queued_row_data = None
 
@@ -924,7 +925,7 @@ class AnnotatedText(dk_doc.Text):
             (NOTE: ineffectual if an annots instance is provided.)
         '''
         super().__init__(
-            text_obj.text if text_obj is not None else text,
+            text_obj.text if text_obj is not None else text_str,
             text_obj.metadata if text_obj is not None else metadata
         )
         self._annots = annots
@@ -1142,14 +1143,6 @@ class BasicAnnotator(Annotator):
     '''
     Class for extracting basic (possibly multi -level or -part) entities.
     '''
-    def __init__(
-            self,
-            name: str,
-    ):
-        '''
-        :param name: The name (or tag) for retrieving this parser's annotations
-        '''
-        super().__init__(name)
 
     def annotate_input(
             self,
@@ -1185,15 +1178,6 @@ class SyntacticParser(BasicAnnotator):
     '''
     Class for creating syntactic annotations for an input.
     '''
-
-    def __init__(
-            self,
-            name: str,
-    ):
-        '''
-        :param name: The name (or tag) for retrieving this parser's annotations
-        '''
-        super().__init__(name)
 
     def annotate_input(
             self,
@@ -1233,7 +1217,8 @@ class EntityAnnotator(BasicAnnotator):
         super().__init__(name)
         self.mask_char = mask_char
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def annotation_cols(self) -> Set[str]:
         '''
         Report the (final group or record) annotation columns that are filled
@@ -1302,7 +1287,7 @@ class EntityAnnotator(BasicAnnotator):
         :param largest_only: True to only mark largest records.
         :return: The annotations added to the text object
         '''
-        annot2mask = None if annot_mask_cols is None else {
+        annot2mask = None if annot_mask_cols is None else { #TODO: Use this?!
             col: self.mask_char
             for col in annot_mask_cols
         }
@@ -1328,7 +1313,8 @@ class EntityAnnotator(BasicAnnotator):
         text_obj.annotations.add_df(annots.df)
         return annots
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def highlight_fieldstyles(self) -> Dict[str, Dict[str, Dict[str, str]]]:
         '''
         Get highlight field styles for this annotator's annotations of the form:
@@ -1388,7 +1374,7 @@ class HtmlHighlighter:
             # NOTE: the following line relies on an_df already being sorted
             df = an_df[an_df[field].isin(styles)]
             cur_pos = 0
-            for loc, row in df.iterrows():
+            for _loc, row in df.iterrows():
                 enttype = row[field]
                 style = styles[enttype]
                 style_str = ' '.join([
@@ -1397,12 +1383,12 @@ class HtmlHighlighter:
                 ])
                 start_pos = row[anns.metadata.start_pos_col]
                 if start_pos > cur_pos:
-                    result.append(self.text[cur_pos:start_pos])
+                    result.append(text_obj.text[cur_pos:start_pos])
                 end_pos = row[anns.metadata.end_pos_col]
                 result.append(
                     f'<mark class="{self.tooltip_class}" style="{style_str}">'
                 )
-                result.append(self.text[start_pos:end_pos])
+                result.append(text_obj.text[start_pos:end_pos])
                 result.append(
                     f'<span class="{self.tooltiptext_class}">{enttype}</span>'
                 )
@@ -1417,7 +1403,8 @@ class AnnotatorKernel(ABC):
     Class for encapsulating core annotation logic for multiple annotators
     '''
 
-    @abstractproperty
+    @property
+    @abstractmethod
     def annotators(self) -> List[EntityAnnotator]:
         ''' Get the entity annotators '''
         raise NotImplementedError
@@ -1452,6 +1439,7 @@ class CompoundAnnotator(Annotator):
             self,
             text_obj: AnnotatedText,
             reset: bool = True,
+            **kwargs,
     ) -> Annotations:
         '''
         Annotate the text.
