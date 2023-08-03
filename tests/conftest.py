@@ -77,6 +77,11 @@ TEST_JSON_003 = 'test-003.json'
 
 
 @pytest.fixture
+def test_utils_dir() -> str:
+    return resources_path('utils')
+
+
+@pytest.fixture
 def test_json_001() -> Dict:
     return resource_as_text('utils', TEST_JSON_001)
 

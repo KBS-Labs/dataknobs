@@ -1,7 +1,6 @@
 import pandas as pd
 import re
-import dataknobs.structures.document as dk_doc
-import dataknobs.xization.annotations as dk_anns
+import dataknobs.xization.annotations as dk_annots
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List, Set, Union
 
@@ -10,7 +9,7 @@ from typing import Any, Callable, Dict, List, Set, Union
 KEY_AUTH_ID_COL = 'auth_id'
 
 
-class DerivedFieldGroups(dk_anns.DerivedAnnotationColumns):
+class DerivedFieldGroups(dk_annots.DerivedAnnotationColumns):
     '''
     Defines derived column types:
       * "field_type" -- The column holding they type of field of an annotation row
@@ -45,7 +44,7 @@ class DerivedFieldGroups(dk_anns.DerivedAnnotationColumns):
 
     def get_col_value(
             self,
-            metadata: dk_anns.AnnotationsMetaData,
+            metadata: dk_annots.AnnotationsMetaData,
             col_type: str,
             row: pd.Series,
             missing: str = None,
@@ -129,19 +128,19 @@ class DerivedFieldGroups(dk_anns.DerivedAnnotationColumns):
         return f'{field}{self.field_record_suffix}'
 
 
-class AuthorityAnnotationsMetaData(dk_anns.AnnotationsMetaData):
+class AuthorityAnnotationsMetaData(dk_annots.AnnotationsMetaData):
     '''
     An extension of AnnotationsMetaData that adds an 'auth_id_col' to the
     standard (key) annotation columns (attributes).
     '''
     def __init__(
             self,
-            start_pos_col: str = dk_anns.KEY_START_POS_COL,
-            end_pos_col: str = dk_anns.KEY_END_POS_COL,
-            text_col: str = dk_anns.KEY_TEXT_COL,
-            ann_type_col: str = dk_anns.KEY_ANN_TYPE_COL,
+            start_pos_col: str = dk_annots.KEY_START_POS_COL,
+            end_pos_col: str = dk_annots.KEY_END_POS_COL,
+            text_col: str = dk_annots.KEY_TEXT_COL,
+            ann_type_col: str = dk_annots.KEY_ANN_TYPE_COL,
             auth_id_col: str = KEY_AUTH_ID_COL,
-            sort_fields: List[str] = (dk_anns.KEY_START_POS_COL, dk_anns.KEY_END_POS_COL),
+            sort_fields: List[str] = (dk_annots.KEY_START_POS_COL, dk_annots.KEY_END_POS_COL),
             sort_fields_ascending: List[bool] = (True, False),
             **kwargs
     ):
@@ -186,7 +185,7 @@ class AuthorityAnnotationsMetaData(dk_anns.AnnotationsMetaData):
         return self.data[KEY_AUTH_ID_COL]
 
 
-class AuthorityAnnotationsBuilder(dk_anns.AnnotationsBuilder):
+class AuthorityAnnotationsBuilder(dk_annots.AnnotationsBuilder):
     '''
     An extension of an AnnotationsBuilder that adds the 'auth_id' column.
     '''
@@ -265,7 +264,7 @@ class AuthorityData:
         return self.df[col == value]
 
 
-class Authority(ABC):
+class Authority(dk_annots.Annotator):
     '''
     A class for managing and defining tabular authoritative data for e.g.,
     taxonomies, etc., and using them to annotate instances within text.
@@ -291,7 +290,7 @@ class Authority(ABC):
            annotations for a single match or "entity".
         :param parent_auth: This authority's parent authority (if any)
         '''
-        self._name = name
+        super().__init__(name)
         self.anns_builder = (
             auth_anns_builder if auth_anns_builder is not None
             else AuthorityAnnotationsBuilder()
@@ -310,14 +309,6 @@ class Authority(ABC):
         return self.anns_builder.metadata
 
     @property
-    def name(self) -> str:
-        '''
-        Get the name of this authority, which is usually the name or type
-        of entities defined herein.
-        '''
-        return self._name
-
-    @property
     def parent(self) -> 'Authority':
         '''
         Get this authority's parent, or None.
@@ -333,11 +324,11 @@ class Authority(ABC):
         '''
         raise NotImplementedError
 
-    def annotate_text(
+    def annotate_input(
             self,
-            doctext: Union[dk_doc.Text, str],
-            annotations: dk_anns.Annotations = None,
-    ) -> dk_anns.Annotations:
+            text_obj: Union[dk_annots.AnnotatedText, str],
+            **kwargs,
+    ) -> dk_annots.Annotations:
         '''
         Find and annotate this authority's entities in the document text
         as dictionaries like:
@@ -352,33 +343,28 @@ class Authority(ABC):
                 'confidence': <confidence_if_available>,
             },
         ]
-        :param doctext: The text to process.
-        :param annotations: The annotations object to add annotations to
-        :return: The given or a new Annotations instance
+        :param text_obj: The text object or string to process.
+        :return: An Annotations instance
         '''
-        if doctext is not None:
-            if isinstance(doctext, str) and len(doctext.strip()) > 0:
-                doctext = dk_doc.Text(
-                    doctext,
-                    AuthorityAnnotationsMetaData(),
+        if text_obj is not None:
+            if isinstance(text_obj, str) and len(text_obj.strip()) > 0:
+                text_obj = dk_annots.AnnotatedText(
+                    text_obj,
+                    annots_metadata = self.metadata,
                 )
-        if doctext is not None:
-            if annotations is None:
-                annotations = dk_anns.Annotations(self.metadata)
-            annotations = self.add_annotations(doctext, annotations)
+        if text_obj is not None:
+            annotations = self.add_annotations(text_obj)
         return annotations
 
     @abstractmethod
     def add_annotations(
             self,
-            doctext: dk_doc.Text,
-            annotations: dk_anns.Annotations,
-    ) -> dk_anns.Annotations:
+            text_obj: dk_annots.AnnotatedText,
+    ) -> dk_annots.Annotations:
         '''
         Method to do the work of finding, validating, and adding annotations.
-        :param doctext: The text to process.
-        :param annotations: The annotations object to add annotations to
-        :return: The given or a new Annotations instance
+        :param text_obj: The annotated text object to process and add annotations.
+        :return: The added Annotations
         '''
         raise NotImplementedError
 
@@ -401,8 +387,8 @@ class Authority(ABC):
 
     def compose(
             self,
-            annotations: dk_anns.Annotations,
-    ) -> dk_anns.Annotations:
+            annotations: dk_annots.Annotations,
+    ) -> dk_annots.Annotations:
         '''
         Compose annotations into groups.
         :param annotations: The annotations
@@ -475,21 +461,21 @@ class AnnotationsValidator(ABC):
             self._atts = None  # Dict[str, str]
     
         @property
-        def row_accessor(self) -> dk_anns.AnnotationsRowAccessor:
+        def row_accessor(self) -> dk_annots.AnnotationsRowAccessor:
             '''
             Get the row accessor for this instance's annotations.
             '''
             if self._row_accessor is None:
-                self._row_accessor = dk_anns.AnnotationsRowAccessor(
+                self._row_accessor = dk_annots.AnnotationsRowAccessor(
                     self.auth.metadata, derived_cols=self.auth.field_groups
                 )
             return self._row_accessor
     
         @property
-        def anns(self) -> dk_anns.Annotations:
+        def anns(self) -> dk_annots.Annotations:
             ''' Get this instance's annotation rows as an annotations object '''
             if self._anns is None:
-                self._anns = dk_anns.Annotations(self.auth.metadata)
+                self._anns = dk_annots.Annotations(self.auth.metadata)
                 for row_dict in self.ann_row_dicts:
                     self._anns.add_dict(row_dict)
             return self._anns
@@ -715,16 +701,14 @@ class RegexAuthority(Authority):
 
     def add_annotations(
             self,
-            doctext: dk_doc.Text,
-            annotations: dk_anns.Annotations,
-    ) -> dk_anns.Annotations:
+            text_obj: dk_annots.AnnotatedText,
+    ) -> dk_annots.Annotations:
         '''
-        Method to do the work of finding and adding annotations.
-        :param doctext: The text to process.
-        :param annotations: The annotations object to add annotations to
-        :return: The given or a new Annotations instance
+        Method to do the work of finding, validating, and adding annotations.
+        :param text_obj: The annotated text object to process and add annotations.
+        :return: The added Annotations
         '''
-        for match in re.finditer(self.regex, doctext.text):
+        for match in re.finditer(self.regex, text_obj.text):
             ann_dicts = list()
             if match.lastindex is not None:
                 if len(self.regex.groupindex) > 0:  # we have named groups
@@ -762,8 +746,8 @@ class RegexAuthority(Authority):
                 ))
             if self.validate_ann_dicts(ann_dicts):
                 # Add non-empty, valid annotation dicts to the result
-                annotations.add_dicts(ann_dicts)
-        return annotations
+                text_obj.annotations.add_dicts(ann_dicts)
+        return text_obj.annotations
 
     def get_canonical_form(self, entity_text:str, entity_type:str) -> Any:
         if self.canonical_fn is not None:
@@ -829,15 +813,13 @@ class AuthoritiesBundle(Authority):
 
     def add_annotations(
             self,
-            doctext: dk_doc.Text,
-            annotations: dk_anns.Annotations,
-    ) -> dk_anns.Annotations:
+            text_obj: dk_annots.AnnotatedText,
+    ) -> dk_annots.Annotations:
         '''
-        Method to do the work of finding and adding annotations.
-        :param doctext: The text to process.
-        :param annotations: The annotations object to add annotations to
-        :return: The given or a new Annotations instance
+        Method to do the work of finding, validating, and adding annotations.
+        :param text_obj: The annotated text object to process and add annotations.
+        :return: The added Annotations
         '''
         for auth in self.auths:
-            auth.annotate_text(doctext, annotations)
-        return annotations
+            auth.annotate_input(text_obj)
+        return text_obj.annotations

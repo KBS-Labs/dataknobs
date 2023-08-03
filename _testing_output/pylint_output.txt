@@ -2,17 +2,24 @@
 dataknobs/utils/stats_utils.py:122:40: W0622: Redefining built-in 'min' (redefined-builtin)
 dataknobs/utils/stats_utils.py:122:47: W0622: Redefining built-in 'max' (redefined-builtin)
 ************* Module dataknobs.utils.json_utils
-dataknobs/utils/json_utils.py:784:35: W0212: Access to a protected member __key of a client class (protected-access)
+dataknobs/utils/json_utils.py:785:35: W0212: Access to a protected member __key of a client class (protected-access)
 ************* Module dataknobs.xization.normalize
 dataknobs/xization/normalize.py:211:9: W0511: TODO: Use a better pluralizer (fixme)
 ************* Module dataknobs.xization.lexicon
 dataknobs/xization/lexicon.py:656:30: W0511: TODO: get from instance var set on construction? (fixme)
 dataknobs/xization/lexicon.py:657:32: W0511: TODO: get from multiauthdata? (fixme)
+dataknobs/xization/lexicon.py:366:4: W0221: Number of parameters was 2 in 'Authority.add_annotations' and is now 3 in overriding 'DataframeAuthority.add_annotations' method (arguments-differ)
 dataknobs/xization/lexicon.py:629:35: W0613: Unused argument 'name' (unused-argument)
 dataknobs/xization/lexicon.py:639:4: W0237: Parameter 'authdata' has been renamed to 'multiauthdata' in overriding 'MultiAuthorityFactory.build_authority' method (arguments-renamed)
 ************* Module dataknobs.xization.authorities
-dataknobs/xization/authorities.py:209:4: W0221: Number of parameters was 6 in 'AnnotationsBuilder.build_annotation_row' and is now 7 in overriding 'AuthorityAnnotationsBuilder.build_annotation_row' method (arguments-differ)
+dataknobs/xization/authorities.py:208:4: W0221: Number of parameters was 6 in 'AnnotationsBuilder.build_annotation_row' and is now 7 in overriding 'AuthorityAnnotationsBuilder.build_annotation_row' method (arguments-differ)
+************* Module dataknobs.xization.annotations
+dataknobs/xization/annotations.py:757:5: W0511: TODO: Add comparison and merge functions (fixme)
+dataknobs/xization/annotations.py:803:57: W0511: TODO: add metadata (fixme)
+dataknobs/xization/annotations.py:1176:1: W0511: TODO: remove this if unused -- stanza_annotator isa Authority -vs- stanza_annotator isa SyntacticParser (fixme)
+dataknobs/xization/annotations.py:1290:61: W0511: TODO: Use this?! (fixme)
+dataknobs/xization/annotations.py:1290:8: W0612: Unused variable 'annot2mask' (unused-variable)
 
 ------------------------------------------------------------------
-Your code has been rated at 9.97/10 (previous run: 9.97/10, +0.00)
+Your code has been rated at 9.96/10 (previous run: 9.95/10, +0.01)
 

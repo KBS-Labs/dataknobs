@@ -75,3 +75,17 @@ def write_lines(outfile, lines, rootdir=None):
     with open_fn(outfile, mode=mode, encoding='utf-8') as f:
         for line in sorted(lines):
             print(line, file=f)
+
+
+def is_gzip_file(filepath: str) -> bool:
+    '''
+    Determine whether the file at filepath is gzipped.
+    :param filepath: The path to the file
+    :return: True if the file is gzipped
+    '''
+    is_gzip = False
+    if os.path.exists(filepath):
+        with open(filepath, 'rb') as f:
+            b = f.read(3)
+            is_gzip = (b == b'\x1f\x8b\x08')
+    return is_gzip
