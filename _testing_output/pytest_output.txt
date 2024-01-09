@@ -1,8 +1,8 @@
 ============================= test session starts ==============================
-platform darwin -- Python 3.9.15, pytest-7.4.3, pluggy-1.3.0
+platform darwin -- Python 3.9.15, pytest-7.4.4, pluggy-1.3.0
 cachedir: .tox/tests/.pytest_cache
 rootdir: /Users/skoehler/dev/kbs-labs/dataknobs
-plugins: anyio-4.0.0, cov-3.0.0
+plugins: anyio-4.2.0, cov-3.0.0
 collected 74 items
 
 tests/structures/test_conditional_dict.py ....                           [  5%]
@@ -82,4 +82,4 @@ dataknobs/xization/normalize.py              151     47    69%   173, 233, 251, 
 TOTAL                                       3659   1180    68%
 
 FAIL Required test coverage of 85% not reached. Total coverage: 67.75%
-======================= 74 passed, 7 warnings in 29.60s ========================
+======================= 74 passed, 7 warnings in 28.42s ========================
