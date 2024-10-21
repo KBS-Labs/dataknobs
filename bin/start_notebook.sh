@@ -4,11 +4,12 @@
 #
 
 test -e .project_vars && . .project_vars
+test -e .env && . .env
 
 set -e
 
 poetry install
 
-poetry run jupyter nbextension enable --py --sys-prefix widgetsnbextension
+#poetry run jupyter nbextension enable --py --sys-prefix widgetsnbextension
 
 poetry run jupyter notebook --no-browser --ip 0.0.0.0 --port ${NOTEBOOK_PORT} --allow-root

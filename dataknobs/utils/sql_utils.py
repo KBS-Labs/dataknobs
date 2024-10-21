@@ -3,6 +3,7 @@ import os
 import pandas as pd
 import psycopg2
 from abc import ABC, abstractmethod
+from dataknobs.utils.sys_utils import load_project_vars
 from dotenv import load_dotenv
 from functools import lru_cache
 from typing import Any, Dict, List
@@ -44,14 +45,39 @@ class RecordFetcher(ABC):
 
 
 class DotenvPostgresConnector:
-    def __init__(self, host=None, db=None, user=None, pwd=None):
+    def __init__(self, host=None, db=None, user=None, pwd=None, pvname: str = ".project_vars"):
+        config = load_project_vars(pvname=pvname)
         if host is None or db is None or user is None or pwd is None:
             load_dotenv()
         
-        self.host = os.getenv('POSTGRES_HOST', 'localhost') if host is None else host
-        self.database = os.getenv('POSTGRES_DB', 'postgres') if db is None else db
-        self.user = os.getenv('POSTGRES_USER', 'postgres') if user is None else user
-        self.password = os.getenv('POSTGRES_PASSWORD', None) if pwd is None else pwd
+        self.host = os.getenv(
+            'POSTGRES_HOST',
+            config.get(
+                'POSTGRES_HOST',
+                'localhost'
+            )
+        ) if host is None else host
+        self.database = os.getenv(
+            'POSTGRES_DB',
+            config.get(
+                'POSTGRES_DB',
+                'postgres'
+            )
+        )if db is None else db
+        self.user = os.getenv(
+            'POSTGRES_USER',
+            config.get(
+                'POSTGRES_USER',
+                'postgres'
+            )
+        )if user is None else user
+        self.password = os.getenv(
+            'POSTGRES_PASSWORD',
+            config.get(
+                'POSTGRES_PASSWORD',
+                None
+            )
+        ) if pwd is None else pwd
 
     def get_conn(self):
         '''

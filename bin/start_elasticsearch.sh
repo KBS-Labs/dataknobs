@@ -19,7 +19,8 @@
 
 DEBUG="$1"
 
-tag=8.4.2
+tag=8.15.2
+#tag=8.4.2
 #tag=8.5.1
 
 DOCKER_CMD="docker"
@@ -27,7 +28,7 @@ if test -n "$(uname -a | grep -i linux)"; then
     DOCKER_CMD="sudo docker"
 fi
 
-test -z "$($DOCKER_CMD network list | grep devnet)" && $DOCKER_CMD network create devnet
+test -z "$($DOCKER_CMD network list | grep devnet)" && $DOCKER_CMD network create --attachable devnet
 
 $DOCKER_CMD container prune -f
 

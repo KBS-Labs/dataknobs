@@ -20,7 +20,7 @@
 #
 # --entrypoint : The entrypoint within the container [default="/bin/bash"]
 # --project_dir : The project directory [default $PWD]
-# --dockerfile : The dockerfile to build and run [default "${project_dir}/dockerdev/Dockerfile"]
+# --dockerfile : The dockerfile to build and run [default "${project_dir}/docker/Dockerfile.dev|prod"]
 # --project_name : The project name (identifies main project package directory and used for tagging the docker container) [default $(basename $project_dir) with dashes changed to underscores]
 # -p : Port mapping to add (host:container)
 # -v : Volume mapping to add (host:container)
@@ -32,6 +32,7 @@
 # --time_format: The timestamp format to use for the container name [default "+%Y-%m-%d_%H.%M.%S"]
 # --timestamp: A timestamp to use, overriding "now"
 # --rebuild:  Option present to force a rebuild of the image
+# --prod: Option to build/run the production image instead of development
 # --quiet: Option present to suppress verbosity
 # --daemon: Run container non-interactively
 # --dryrun:  Option present for dry run (no build or run)
@@ -43,6 +44,7 @@ entrypoint="/bin/bash"
 project_dir="${PWD}"
 dockerfile=""
 project_name=""
+name_override=""
 gpus="all"
 network_name=devnet
 user="$USER"
@@ -50,6 +52,8 @@ datadir="${DATADIR:=$HOME/data}"
 time_format="+%Y-%m-%d_%H.%M.%S"
 timestamp=""
 rebuild=""
+build_args=""
+env="dev"
 verbose="y"
 daemon=""
 dryrun=""
@@ -83,6 +87,10 @@ do
             project_name="$2";
             shift;
             ;;
+        --name_override)
+            name_override="$2";
+            shift;
+            ;;
         -[pve])
             DOCKER_ARGS="${DOCKER_ARGS} $1 $2";
             shift;
@@ -114,6 +122,13 @@ do
         --rebuild)
             rebuild="y";
             ;;
+        --build-arg)
+            build_args="${build_args} $1 $2";
+            shift;
+            ;;
+        --prod)
+            env="prod";
+            ;;
         --quiet)
             verbose="";
             ;;
@@ -140,7 +155,7 @@ fi
 test -n "${network_name}" && DOCKER_ARGS="${DOCKER_ARGS} --net ${network_name}"
 
 # Set dockerfile
-test -z "${dockerfile}" && dockerfile="${project_dir}/dockerdev/Dockerfile"
+test -z "${dockerfile}" && dockerfile="${project_dir}/docker/Dockerfile.${env}"
 test -n "${verbose}" && echo "dockerfile=$dockerfile"
 
 # Set project name
@@ -164,8 +179,10 @@ test -n "${verbose}" && echo "datadir=$datadir"
 
 # Add automatic volumes and environment variables
 if test -n "${project_dir}"; then
-    DOCKER_ARGS="${DOCKER_ARGS}  \
+    if [ ${env} != 'prod' ]; then
+        DOCKER_ARGS="${DOCKER_ARGS}  \
         -v ${project_dir}:/workdir"
+    fi
     DOCKER_ARGS="${DOCKER_ARGS}  \
         -e DATADIR=/data"
 fi
@@ -187,35 +204,36 @@ if test -n ${rebuild} || test -z "$($DOCKER_CMD images | grep ${project_name})";
     echo "Building ${project_name}..."
     if test -n "${verbose}"; then
         echo "$DOCKER_CMD build --compress \
-            -t ${project_name}.dev \
+            -t ${project_name}.${env} \
             -f ${dockerfile} .";
     fi
 
     if test -z "${dryrun}"; then
         $DOCKER_CMD build --compress \
-            -t ${project_name}.dev \
+            -t ${project_name}.${env} \
             -f "${dockerfile}" .;
     fi
     echo "...done building ${project_name}"
 fi
 
 # Create docker network if needed
-test -z "$($DOCKER_CMD network list | grep ${network_name})" && $DOCKER_CMD network create ${network_name}
+test -z "$($DOCKER_CMD network list | grep ${network_name})" && $DOCKER_CMD network create --attachable ${network_name}
 test -n "${verbose}" && echo "network_name=$network_name"
 
 # Add name arg
+test -z ${name_override} && name_override=${project_name}
 DOCKER_ARGS="${DOCKER_ARGS}  \
-     --name ${project_name}.dev-${user}-${timestamp}"
+     --name ${name_override}.${env}-${user}-${timestamp}"
 
 # Add entrypoint arg
 if test -n "${entrypoint}"; then
     DOCKER_ARGS="${DOCKER_ARGS}  \
-         --entrypoint ${entrypoint}"
+         --entrypoint \"${entrypoint}\""
 fi
 
 # Add image name to args
 DOCKER_ARGS="${DOCKER_ARGS}  \
-     ${project_name}.dev:latest"
+     ${project_name}.${env}:latest"
 
 test -n "${verbose}" && echo "DOCKER_ARGS=$DOCKER_ARGS"
 

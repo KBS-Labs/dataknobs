@@ -1,6 +1,7 @@
 import json
 import requests
 import socket
+import sys
 from typing import Any, Callable, Dict, Tuple
 
 
@@ -207,7 +208,7 @@ class ServerResponse:
 
     @property
     def succeeded(self):
-        return self.resp.status_code == 200 if self.resp is not None else False
+        return self.resp.status_code in {200, 201} if self.resp is not None else False
 
     @property
     def status(self):
@@ -267,7 +268,7 @@ class RequestHelper:
         :param response_handler: Response handler to override instance value
         :param headers: Headers to override instance value
         :param timeout: The request timeout override (in seconds) if not 0
-        :param verbose: True to print server response info
+        :param verbose: True (or an output stream) to print server response info
         :return: A ServerResponse instance with the results
         '''
         rtype = rtype.lower()
@@ -314,8 +315,13 @@ class RequestHelper:
     
         rv = ServerResponse(resp, result)
     
-        if verbose:
-            print(rv)
+        if verbose is not None:
+            if isinstance(verbose, bool) and verbose:
+                verbose = sys.stderr
+            else:
+                verbose = None
+            if verbose is not None:
+                print(rv, file=verbose)
     
         return rv
 

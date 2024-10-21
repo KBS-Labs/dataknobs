@@ -19,6 +19,8 @@ lxml = "^4.9.2"
 beautifulsoup4 = "^4.11.1"
 json-stream = "^2.1.1"
 scikit-learn = "^1.2.1"
+python3-nmap = "^1.9.1"
+flask = "^3.0.3"
 
 [tool.poetry.group.dev.dependencies]
 jupyter = "^1.0.0"
