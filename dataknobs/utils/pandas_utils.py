@@ -258,6 +258,7 @@ class GroupManager:
             else:
                 return f'[{group_num}]'
 
+        df[self.gcol] = df[self.gcol].astype(object)
         df.loc[idx_values, self.gcol] = cur_values.apply(add_group)
         self._reset_edf()
 

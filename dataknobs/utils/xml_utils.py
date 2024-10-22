@@ -1,11 +1,10 @@
 import bs4
-import itertools
 import mmap
 import pandas as pd
 import re
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
-from typing import Callable, List, TextIO, Union
+from typing import Callable, List, TextIO, Tuple, Union
 
 
 class XmlStream(ABC):
@@ -18,9 +17,52 @@ class XmlStream(ABC):
         '''
         :param source: An XML filename or file object
         '''
-        self.iter = ET.iterparse(source, events=['start', 'end'])
-        # context is the current "stack" of elements from the root
-        self.context = list()
+        self._xml_iter = None
+        self.source = source
+        self._context = list()
+
+    @property
+    def context(self) -> List[ET.Element]:
+        '''
+        Get the current "stack" of elements from the root.
+        '''
+        return self._context.copy()
+
+    @property
+    def context_length(self) -> int:
+        '''
+        Get the length of the current context.
+        '''
+        return len(self._context)
+
+    def next_xml_iter(self) -> Tuple[str, ET.Element]:
+        '''
+        Get the next (event, elem) from the underlying xml iterator or raise
+        a StopIteration exception if exhausted.
+        '''
+        if self._xml_iter is None:
+            self.__iter__()
+        try:
+            event, elem = next(self._xml_iter)
+            return event, elem
+        except StopIteration:
+            raise StopIteration
+
+    @abstractmethod
+    def loop_through_elements(self) -> List[ET.Element]:
+        '''
+        Loop through elements of self.xml_iter, adding elements to the context,
+        until the next desired element has been collected.
+        '''
+        raise NotImplementedError
+
+    def __iter__(self):
+        self._xml_iter = ET.iterparse(self.source, events=['start', 'end'])
+        self._context = list()
+        return self
+
+    def __next__(self):
+        return self.loop_through_elements()
 
     def __enter__(self):
         return self
@@ -28,21 +70,21 @@ class XmlStream(ABC):
     def __exit__(self, *args, **kwargs):
         self.iter.close()
 
-    def _add_to_context(self, elem: ET.Element):
+    def add_to_context(self, elem: ET.Element):
         ''' Add the element to the context '''
-        self.context.append(elem)
+        self._context.append(elem)
 
-    def _find_context_idx(self, elem: ET.Element):
+    def find_context_idx(self, elem: ET.Element):
         '''
         Find the latest index of the element in the context (or -1).
         '''
-        idx = len(self.context) - 1
+        idx = len(self._context) - 1
         while idx >= 0:
-            if self.context[idx] == elem:
+            if self._context[idx] == elem:
                 break
         return idx
 
-    def _pop_closed_from_context(
+    def pop_closed_from_context(
             self,
             closed_elem: ET.Element,
             idx: int = None
@@ -53,15 +95,25 @@ class XmlStream(ABC):
         :param idx: The element's index within the context (if known)
         '''
         if idx is None:
-            idx = self._find_context_idx(closed_elem)
+            idx = self.find_context_idx(closed_elem)
         if idx >= 0:
-            self.context = self.context[:idx]
+            self._context = self._context[:idx]
 
-    def take(self, n: int) -> List[ET.Element]:
+    def take(self, n: int) -> List[List[ET.Element]]:
         '''
         Take the next N items from this iterator.
         '''
-        return itertools.islice(self, n)
+        # items = list()
+        idx = 0
+        while idx < n:
+            try:
+                elts = next(self)
+            except StopIteration:
+                return
+            yield elts
+            # items.append(elts)
+            idx += 1
+        # return items
 
     @staticmethod
     def to_string(elt_path: List[ET.Element], with_text_or_atts: Union[bool, str, List[str]] = True) -> str:
@@ -121,27 +173,32 @@ class XmlLeafStream(XmlStream):
         self.count = 0  # The number of terminal nodes seen
         self.elts = None  # The latest yielded sequence
 
-    def __iter__(self) -> List[ET.Element]:
+    def loop_through_elements(self) -> Tuple[str, ET.Element]:
         '''
-        Generate the next sequence of ET.Element instances from the root
-        (at index 0) to the terminal element.
+        Loop through elements of self.xml_iter, adding elements to the context,
+        until the next terminal element has been collected.
         '''
-        for event, elem in self.iter:
+        gotit = None
+        while True:
+            event, elem = self.next_xml_iter()
             if event == 'start':
                 self._last_elt = elem
-                self._add_to_context(elem)
+                self.add_to_context(elem)
             elif event == 'end':
-                last_idx = len(self.context) - 1
-                idx = self._find_context_idx(elem)
+                last_idx = self.context_length - 1
+                idx = self.find_context_idx(elem)
                 if idx == last_idx and elem == self._last_elt:
                     # Is terminal if its the last elt that was added that ended
-                    self.elts = self.context.copy()
+                    self.elts = self.context
                     self.count += 1
-                    yield self.elts
+                    gotit = self.elts
                 # Pop off the closed element(s)
-                self._pop_closed_from_context(elem, idx=idx)
+                self.pop_closed_from_context(elem, idx=idx)
                 # Reset to record the next added element
                 self._last_elt = None
+                if gotit:
+                    break
+        return gotit or None
 
 
 class XmlElementGrabber(XmlStream):
@@ -173,22 +230,26 @@ class XmlElementGrabber(XmlStream):
         if isinstance(self.match, str):
             if ':' in self.match:
                 matches = (elem.tag == self.match)
-            else:
+            elif ':' in elem.tag:
                 # match ns0:<match> or {...:...}<match> (NOTE: 0x7d == '}')
                 matches = re.match(r'^.*[:\x7d]{match}$'.format(match=self.match), elem.tag)
+            else:
+                matches = (self.match == elem.tag)
         else:
             matches = self.match(elem)
         return matches
 
-    def __iter__(self) -> List[ET.Element]:
+    def loop_through_elements(self) -> List[ET.Element]:
         '''
-        Generate the next match ET.Element, returning in context from the root
+        Find the next match ET.Element, returning in context from the root
         node to the element.
         '''
+        gotit = None
         grabbing = None
-        for event, elem in self.iter:
+        while True:
+            event, elem = self.next_xml_iter()
             if event == 'start':
-                self.context.append(elem)
+                self.add_to_context(elem)
                 if grabbing is None and self._is_match(elem):
                     grabbing = elem
             elif event == 'end':
@@ -196,9 +257,12 @@ class XmlElementGrabber(XmlStream):
                     # Finished collecting match element
                     grabbing = None
                     self.count += 1
-                    yield self.context.copy()
+                    gotit = self.context
                 # Pop the closed element from the context
-                self._pop_closed_from_context(elem)
+                self.pop_closed_from_context(elem)
+                if gotit:
+                    break
+        return gotit or None
 
 
 class XMLTagStream:
