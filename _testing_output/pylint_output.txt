@@ -2,8 +2,7 @@
 dataknobs/utils/stats_utils.py:122:40: W0622: Redefining built-in 'min' (redefined-builtin)
 dataknobs/utils/stats_utils.py:122:47: W0622: Redefining built-in 'max' (redefined-builtin)
 ************* Module dataknobs.utils.xml_utils
-dataknobs/utils/xml_utils.py:49:12: W0707: Consider explicitly re-raising using 'except StopIteration as exc' and 'raise StopIteration from exc' (raise-missing-from)
-dataknobs/utils/xml_utils.py:71:8: E1101: Instance of 'XmlStream' has no 'iter' member (no-member)
+dataknobs/utils/xml_utils.py:71:8: E1101: Instance of 'IterParseIterator' has no 'close' member (no-member)
 ************* Module dataknobs.utils.json_utils
 dataknobs/utils/json_utils.py:785:35: W0212: Access to a protected member __key of a client class (protected-access)
 ************* Module dataknobs.xization.normalize

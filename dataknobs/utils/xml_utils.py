@@ -45,8 +45,8 @@ class XmlStream(ABC):
         try:
             event, elem = next(self._xml_iter)
             return event, elem
-        except StopIteration:
-            raise StopIteration
+        except StopIteration as exc:
+            raise StopIteration from exc
 
     @abstractmethod
     def loop_through_elements(self) -> List[ET.Element]:
@@ -68,7 +68,7 @@ class XmlStream(ABC):
         return self
 
     def __exit__(self, *args, **kwargs):
-        self.iter.close()
+        self._xml_iter.close()
 
     def add_to_context(self, elem: ET.Element):
         ''' Add the element to the context '''
