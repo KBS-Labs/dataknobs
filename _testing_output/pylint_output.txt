@@ -30,5 +30,5 @@ dataknobs/xization/annotations.py:1290:61: W0511: TODO: Use this?! (fixme)
 dataknobs/xization/annotations.py:1290:8: W0612: Unused variable 'annot2mask' (unused-variable)
 
 ------------------------------------------------------------------
-Your code has been rated at 9.92/10 (previous run: 9.94/10, -0.02)
+Your code has been rated at 9.92/10 (previous run: 9.92/10, +0.00)
 
