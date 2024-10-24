@@ -3,7 +3,7 @@ import json
 import pandas as pd
 import dataknobs.utils.requests_utils as requests_utils
 import dataknobs.utils.pandas_utils as pd_utils
-from typing import Dict, List, Union
+from typing import Dict, List
 
 
 def build_field_query_dict(fields, text, operator=None):
@@ -378,20 +378,22 @@ class ElasticsearchIndex:
             if successful.
         '''
         df = None
+        payload = json.dumps({
+            "query": query,
+            "fetch_size": fetch_size,
+            "columnar": columnar,
+        })
         resp = self._request(
             'post',
-            f'_sql?format=json',
-            json.dumps({
-                "query": query,
-                "fetch_size": fetch_size,
-                "columnar": columnar,
-            }),
+            '_sql?format=json',
+            payload=payload,
             verbose=verbose,
         )
+        rcols = resp.result.get("columns", None)
         while resp.succeeded:
             cols = [
                 x["name"]
-                for x in resp.result["columns"]
+                for x in rcols
             ]
             rdf = None
             if "values" in resp.result:  # columnar==True
@@ -404,12 +406,13 @@ class ElasticsearchIndex:
                     df = pd.concat([df, rdf])
                 else:
                     df = rdf
-            if "cursor" in resp:
+            rjson = resp.result
+            if "cursor" in rjson:
                 resp = self._request(
                     'post',
-                    f'_sql?format=json',
+                    '_sql?format=json',
                     json.dumps({
-                        "cursor": resp["cursor"],
+                        "cursor": rjson["cursor"],
                         "columnar": columnar,
                     }),
                     verbose=verbose,
