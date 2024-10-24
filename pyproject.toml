@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "dataknobs"
-version = "0.0.10"
+version = "0.0.11"
 description = "Useful implementations of data structures and design patterns for AI knowledge bases."
 authors = ["Spence Koehler <KoehlerSB747@gmail.com>"]
 readme = "README.md"
