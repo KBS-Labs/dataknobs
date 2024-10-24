@@ -13,13 +13,15 @@ class XmlStream(ABC):
 
     NOTE: Extending classes need to implement __iter__
     '''
-    def __init__(self, source: Union[str, TextIO]):
+    def __init__(self, source: Union[str, TextIO], auto_clear_elts: bool = True):
         '''
         :param source: An XML filename or file object
         '''
         self._xml_iter = None
         self.source = source
+        self.auto_clear_elts = auto_clear_elts
         self._context = list()
+        self._closed_elt = None
 
     @property
     def context(self) -> List[ET.Element]:
@@ -56,9 +58,15 @@ class XmlStream(ABC):
         '''
         raise NotImplementedError
 
+    def close(self):
+        self.__exit__()
+
     def __iter__(self):
         self._xml_iter = ET.iterparse(self.source, events=['start', 'end'])
         self._context = list()
+        if self._closed_elt is not None:
+            self._closed_elt.clear()
+            self._closed_elt = None
         return self
 
     def __next__(self):
@@ -68,7 +76,9 @@ class XmlStream(ABC):
         return self
 
     def __exit__(self, *args, **kwargs):
-        self._xml_iter.close()
+        if self._closed_elt is not None:
+            self._closed_elt.clear()
+            self._closed_elt = None
 
     def add_to_context(self, elem: ET.Element):
         ''' Add the element to the context '''
@@ -98,6 +108,10 @@ class XmlStream(ABC):
             idx = self.find_context_idx(closed_elem)
         if idx >= 0:
             self._context = self._context[:idx]
+        if self.auto_clear_elts:
+            if self._closed_elt is not None:
+                self._closed_elt.clear()  # Clear memory
+            self._closed_elt = closed_elem
 
     def take(self, n: int) -> List[List[ET.Element]]:
         '''
@@ -164,11 +178,11 @@ class XmlLeafStream(XmlStream):
                 break
     '''
 
-    def __init__(self, source: Union[str, TextIO]):
+    def __init__(self, source: Union[str, TextIO], auto_clear_elts: bool = True):
         '''
         :param source: An XML filename or file object
         '''
-        super().__init__(source)
+        super().__init__(source, auto_clear_elts=auto_clear_elts)
         self._last_elt = None  # The last new element
         self.count = 0  # The number of terminal nodes seen
         self.elts = None  # The latest yielded sequence
@@ -214,14 +228,15 @@ class XmlElementGrabber(XmlStream):
     def __init__(
             self,
             source: Union[str, TextIO],
-            match: Union[str, Callable[[ET.Element], bool]]
+            match: Union[str, Callable[[ET.Element], bool]],
+            auto_clear_elts: bool = True,
     ):
         '''
         :param source: An XML filename or file object
         :param match: A tag name to match or a function returning True when a
            an element is encountered.
         '''
-        super().__init__(source)
+        super().__init__(source, auto_clear_elts=auto_clear_elts)
         self.match = match
         self.count = 0  # The number of match nodes seen
 
