@@ -1,10 +1,11 @@
 # BASE: image that other versions are built upon; only include things common to all versions
-FROM continuumio/miniconda3
+FROM python:3
+#FROM continuumio/miniconda3
 
 # Install necessary system packages and clean-up
 RUN chmod 1777 /tmp \
   && apt-get update && apt-get install -y --allow-unauthenticated --no-install-recommends  \
-      curl build-essential graphviz \
+      curl build-essential graphviz nmap \
   && apt-get clean  \
   && rm -rf /var/tmp /tmp /var/lib/apt/lists/* \
   && mkdir -p /var/tmp /tmp
@@ -18,3 +19,13 @@ RUN pip3 install tox
 RUN mkdir -p /data
 
 WORKDIR /workdir
+
+COPY . .
+
+RUN poetry config virtualenvs.create false  \
+    && poetry install --no-interaction  \
+    && rm -rf /root/.cache.pypoetry
+
+RUN pip install uwsgi
+
+CMD "./run_api.sh"

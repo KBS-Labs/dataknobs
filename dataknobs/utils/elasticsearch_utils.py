@@ -58,16 +58,44 @@ def build_phrase_query_dict(field, phrase, slop=0):
     }
 
 
-def build_hits_dataframe(query_result):
+def build_hits_dataframe(query_result) -> pd.DataFrame:
     '''
-    Build a dataframe from an elasticsearch query result.
+    Build a dataframe from an elasticsearch query result's hits.
     '''
-    hits = query_result['hits']['hits']
-    dicts = [
-        [hit['_source']]
-        for hit in hits
-    ]
-    return pd_utils.dicts2df(dicts, item_id=None)
+    df = None
+    if 'hits' in query_result:
+        qr_hits = query_result['hits']
+        if 'hits' in qr_hits:
+            hits = qr_hits['hits']
+            dicts = [
+                [hit['_source']]
+                for hit in hits
+            ]
+            df = pd_utils.dicts2df(dicts, item_id=None)
+    return df
+
+
+def build_aggs_dataframe(query_result) -> pd.DataFrame:
+    '''
+    Build a dataframe from an elasticsearch query result's aggregations.
+    '''
+    #TODO: implement this
+    return None
+
+
+def decode_results(query_result) -> Dict[str, pd.DataFrame]:
+    '''
+    Decode elasticsearch query results as "hits_df" and/or "aggs_df"
+    dataframes.
+    '''
+    result = dict()
+    hits_df = build_hits_dataframe(query_result)
+    if hits_df is not None:
+        result["hits_df"] = hits_df
+    aggs_df = build_aggs_dataframe(query_result)
+    if aggs_df is not None:
+        result["aggs_df"] = aggs_df
+    return result
 
 
 def add_batch_data(
@@ -181,7 +209,7 @@ class ElasticsearchIndex:
                 elasticsearch_ip, elasticsearch_port,
                 mock_requests=mock_requests,
             )
-        self.tables = table_settings
+        self.tables = table_settings or list()
         self._init_tables()
 
     def _init_tables(self):
@@ -208,6 +236,7 @@ class ElasticsearchIndex:
             files=None,
             response_handler=None,
             headers=None,
+            timeout=0,
             verbose=False,
     ):
         return self.request_helper.request(
@@ -217,6 +246,7 @@ class ElasticsearchIndex:
             files=files,
             response_handler=response_handler,
             headers=headers,
+            timeout=timeout,
             verbose=verbose,
         )
 
@@ -228,13 +258,13 @@ class ElasticsearchIndex:
 
     def get_cluster_health(self, verbose=False):
         '''
-        :return: an requests_utils.ServerResponse instance
+        :return: a requests_utils.ServerResponse instance
         '''
         return self._request('get', '_cluster/health', verbose=verbose)
 
     def inspect_indices(self, verbose=False):
         '''
-        :return: an requests_utils.ServerResponse instance
+        :return: a requests_utils.ServerResponse instance
         '''
         return self._request(
             'get',
@@ -255,7 +285,7 @@ class ElasticsearchIndex:
 
     def delete_table(self, table_name, verbose=False):
         '''
-        :return: an requests_utils.ServerResponse instance
+        :return: a requests_utils.ServerResponse instance
         '''
         return self._request('delete', table_name, verbose=verbose)
 
@@ -266,7 +296,7 @@ class ElasticsearchIndex:
     #
     #    :param batchfilepath: The path to the batch file
     #    :param verbose: True to print the request response.
-    #    :return: an requests_utils.ServerResponse instance
+    #    :return: a requests_utils.ServerResponse instance
     #    '''
     #    return self._request('post-files', '_bulk', files={
     #        'batchfile': (
@@ -284,7 +314,7 @@ class ElasticsearchIndex:
             verbose=False,
     ):
         '''
-        :return: an requests_utils.ServerResponse instance
+        :return: a requests_utils.ServerResponse instance
         '''
         return self._request(
             'post',
@@ -299,25 +329,96 @@ class ElasticsearchIndex:
     def search(
             self,
             query: Dict[str, Dict],
-            table=None,
-            verbose=False,
-    ):
+            table: str = None,
+            verbose: bool = False,
+    ) -> requests_utils.ServerResponse:
         '''
-        Submit the elasticsearch search query.
+        Submit the elasticsearch search DSL query.
 
         :param query: The elasticsearch search query of the form, e.g.,:
             {"query": {"match": {<field>: {"query": <text>, "operator": "AND"}}}}
         :param table: The name of the table (defaults to first table's name)
         :param verbose: True to print the request response.
-        :return: an requests_utils.ServerResponse instance, resp, with resp.extra['hits_df']
-            holding a dataframe representing the results if successful.
+        :return: a requests_utils.ServerResponse instance, resp, with
+            resp.extra['hits_df'] and/or resp.extra['aggs_df']
+            holding dataframe(s) representing the results if successful.
         '''
         if table is None:
-            table = self.tables[0].name
+            if len(self.tables) > 0:
+                table = self.tables[0].name
+            else:
+                return None
         resp = self._request(
             'post', f'{table}/_search', json.dumps(query), verbose=verbose
         )
         if resp.succeeded:
-            df = build_hits_dataframe(resp.result)
-            resp.add_extra('hits_df', df)
+            d = decode_results(resp.result)
+            for k, df in d.items():
+                resp.add_extra(k, df)
+        return resp
+
+    def sql(
+            self,
+            query: str,
+            fetch_size: int = 10000,
+            columnar: bool = True,
+            verbose: bool = False,
+    ) -> requests_utils.ServerResponse:
+        
+        '''
+        Submit the elasticsearch sql query.
+
+        :param query: The elasticsearch search sql query
+        :param fetch_size: The max number of records to fetch at a time
+        :param columnar: True for a more compact response (best when the number
+            of columns returned by the query is small)
+        :param verbose: True to print the request response.
+        :return: a requests_utils.ServerResponse instance, resp, with
+            resp.extra['df'] holding dataframe(s) representing the results
+            if successful.
+        '''
+        df = None
+        payload = json.dumps({
+            "query": query,
+            "fetch_size": fetch_size,
+            "columnar": columnar,
+        })
+        resp = self._request(
+            'post',
+            '_sql?format=json',
+            payload=payload,
+            verbose=verbose,
+        )
+        rcols = resp.result.get("columns", None)
+        while resp.succeeded:
+            cols = [
+                x["name"]
+                for x in rcols
+            ]
+            rdf = None
+            if "values" in resp.result:  # columnar==True
+                rdf = pd.DataFrame(resp.result["values"]).T
+                rdf.columns = cols
+            elif "rows" in resp.result:  # columnar==False
+                rdf = pd.DataFrame(resp.result["rows"], columns=cols)
+            if rdf is not None:
+                if df is not None:
+                    df = pd.concat([df, rdf])
+                else:
+                    df = rdf
+            rjson = resp.result
+            if "cursor" in rjson:
+                resp = self._request(
+                    'post',
+                    '_sql?format=json',
+                    json.dumps({
+                        "cursor": rjson["cursor"],
+                        "columnar": columnar,
+                    }),
+                    verbose=verbose,
+                )
+            else:
+                break
+        if df is not None:
+            resp.add_extra("df", df)
         return resp

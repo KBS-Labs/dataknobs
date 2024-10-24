@@ -1,8 +1,10 @@
 ************* Module dataknobs.utils.stats_utils
 dataknobs/utils/stats_utils.py:122:40: W0622: Redefining built-in 'min' (redefined-builtin)
 dataknobs/utils/stats_utils.py:122:47: W0622: Redefining built-in 'max' (redefined-builtin)
-************* Module dataknobs.utils.xml_utils
-dataknobs/utils/xml_utils.py:71:8: E1101: Instance of 'IterParseIterator' has no 'close' member (no-member)
+************* Module dataknobs.utils.elasticsearch_utils
+dataknobs/utils/elasticsearch_utils.py:82:5: W0511: TODO: implement this (fixme)
+dataknobs/utils/elasticsearch_utils.py:78:25: W0613: Unused argument 'query_result' (unused-argument)
+dataknobs/utils/elasticsearch_utils.py:95:4: E1128: Assigning result of a function call, where the function returns None (assignment-from-none)
 ************* Module dataknobs.utils.json_utils
 dataknobs/utils/json_utils.py:785:35: W0212: Access to a protected member __key of a client class (protected-access)
 ************* Module dataknobs.xization.normalize
@@ -23,5 +25,5 @@ dataknobs/xization/annotations.py:1290:61: W0511: TODO: Use this?! (fixme)
 dataknobs/xization/annotations.py:1290:8: W0612: Unused variable 'annot2mask' (unused-variable)
 
 ------------------------------------------------------------------
-Your code has been rated at 9.94/10 (previous run: 9.94/10, +0.00)
+Your code has been rated at 9.94/10 (previous run: 9.93/10, +0.01)
 

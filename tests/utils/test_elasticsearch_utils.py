@@ -118,6 +118,76 @@ SAMPLE_ES_SEARCH = {
 }
 
 
+# Columnar with cursor -- first request
+SAMPLE_ES_SQL_1A = {
+    'api_query': "select pos, count(pos) as count from data group by pos order by count desc",
+    'query': {
+        "query": "select pos, count(pos) as count from data group by pos order by count desc",
+        "fetch_size": 3,
+        "columnar": True
+    },
+    'result': {
+        'columns': [
+            {'name': 'pos', 'type': 'text'},
+            {'name': 'count', 'type': 'long'}
+        ],
+        'values': [
+            ['n', 'v', 's'],
+            [82115, 13767, 10693]
+        ],
+        'cursor': 's5CTBERGTABijGJgzGFnYmdiYExkYgADWXUQrwjK41NlYgYAAAD//wMA'
+    }
+}
+
+
+# Columnar with cursor -- cursor request
+SAMPLE_ES_SQL_1B = {
+    'query': {
+        "cursor": 's5CTBERGTABijGJgzGFnYmdiYExkYgADWXUQrwjK41NlYgYAAAD//wMA',
+        "columnar": True
+    },
+    'result': {
+        'values': [['a', 'r'], [7463, 3621]]
+    }
+}
+
+
+# Non-columnar with cursor -- first request
+SAMPLE_ES_SQL_2A = {
+    'api_query': "select pos, count(pos) as count from data group by pos order by count desc",
+    'query': {
+        "query": "select pos, count(pos) as count from data group by pos order by count desc",
+        "fetch_size": 3,
+        "columnar": False
+    },
+    'result': {
+        'columns': [
+            {'name': 'pos', 'type': 'text'},
+            {'name': 'count', 'type': 'long'}
+        ],
+        'rows': [
+            ['n', 82115], ['v', 13767], ['s', 10693]
+        ],
+        'cursor':
+        's5CTBERGTABijGJgzGFnYmdiYExkYgADWXUQrwjK41NlYgYAAAD//wMA'
+    }
+}
+
+
+# Non-columnar with cursor -- cursor request
+SAMPLE_ES_SQL_2B = {
+    'query': {
+        "cursor": 's5CTBERGTABijGJgzGFnYmdiYExkYgADWXUQrwjK41NlYgYAAAD//wMA',
+        "columnar": False
+    },
+    'result': {
+        'rows': [
+            ['a', 7463], ['r', 3621]
+        ]
+    }
+}
+
+
 SAMPLE_ES_ANALYZE = {
     'payload': {'analyzer': 'standard', 'text': 'just testing'},
     'result': {
@@ -205,6 +275,32 @@ def build_mock_requests():
         headers=requests_utils.HEADERS,
     )
 
+    # For ElasticSearchIndex.sql()
+    mock_requests.add(
+        requests_utils.MockResponse(200, SAMPLE_ES_SQL_1A['result']),
+        'post', 'http://localhost:9200/_sql?format=json',
+        data=json.dumps(SAMPLE_ES_SQL_1A['query']),
+        headers=requests_utils.HEADERS,
+    )
+    mock_requests.add(
+        requests_utils.MockResponse(200, SAMPLE_ES_SQL_1B['result']),
+        'post', 'http://localhost:9200/_sql?format=json',
+        data=json.dumps(SAMPLE_ES_SQL_1B['query']),
+        headers=requests_utils.HEADERS,
+    )
+    mock_requests.add(
+        requests_utils.MockResponse(200, SAMPLE_ES_SQL_2A['result']),
+        'post', 'http://localhost:9200/_sql?format=json',
+        data=json.dumps(SAMPLE_ES_SQL_2A['query']),
+        headers=requests_utils.HEADERS,
+    )
+    mock_requests.add(
+        requests_utils.MockResponse(200, SAMPLE_ES_SQL_2B['result']),
+        'post', 'http://localhost:9200/_sql?format=json',
+        data=json.dumps(SAMPLE_ES_SQL_2B['query']),
+        headers=requests_utils.HEADERS,
+    )
+
     return mock_requests
 
     
@@ -244,3 +340,15 @@ def test_elasticsearch_index():
     assert resp.has_extra()
     assert 'hits_df' in resp.extra
     assert resp.extra['hits_df'].shape == (2, 11)
+
+    resp = eidx.sql(SAMPLE_ES_SQL_1A['api_query'], fetch_size=3)
+    assert resp.status == 200
+    assert resp.has_extra()
+    assert 'df' in resp.extra
+    assert resp.extra['df'].shape == (5, 2)
+
+    resp = eidx.sql(SAMPLE_ES_SQL_2A['api_query'], fetch_size=3, columnar=False)
+    assert resp.status == 200
+    assert resp.has_extra()
+    assert 'df' in resp.extra
+    assert resp.extra['df'].shape == (5, 2)

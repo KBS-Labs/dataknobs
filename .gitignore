@@ -34,3 +34,4 @@ ignored
 VERSION
 activate
 .tox
+.docker

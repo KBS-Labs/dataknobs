@@ -4,6 +4,7 @@
 #
 
 test -e .project_vars && . .project_vars
+test -e .env && . .env
 
 set -e
 
