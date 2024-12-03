@@ -1,6 +1,6 @@
 # BASE: image that other versions are built upon; only include things common to all versions
-FROM python:3
-#FROM continuumio/miniconda3
+#FROM python:3
+FROM continuumio/miniconda3
 
 # Install necessary system packages and clean-up
 RUN chmod 1777 /tmp \
