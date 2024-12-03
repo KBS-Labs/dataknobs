@@ -228,7 +228,7 @@ DOCKER_ARGS="${DOCKER_ARGS}  \
 # Add entrypoint arg
 if test -n "${entrypoint}"; then
     DOCKER_ARGS="${DOCKER_ARGS}  \
-         --entrypoint \"${entrypoint}\""
+         --entrypoint ${entrypoint}"
 fi
 
 # Add image name to args
