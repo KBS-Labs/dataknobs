@@ -1,14 +1,18 @@
 # BASE: image that other versions are built upon; only include things common to all versions
-#FROM python:3
-FROM continuumio/miniconda3
+FROM python:3
 
 # Install necessary system packages and clean-up
 RUN chmod 1777 /tmp \
   && apt-get update && apt-get install -y --allow-unauthenticated --no-install-recommends  \
-      curl build-essential graphviz nmap \
-  && apt-get clean  \
+      curl build-essential python3-dev \
+      gfortran cmake libopenblas-dev \
+      graphviz nmap \
+  && apt-get clean \
   && rm -rf /var/tmp /tmp /var/lib/apt/lists/* \
   && mkdir -p /var/tmp /tmp
+
+# Install jupyter (python3)
+RUN pip install jupyterlab
 
 # Install poetry and tox
 RUN curl -sSL https://install.python-poetry.org | python3 -

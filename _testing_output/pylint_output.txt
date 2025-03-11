@@ -16,7 +16,9 @@ dataknobs/xization/lexicon.py:366:4: W0221: Number of parameters was 2 in 'Autho
 dataknobs/xization/lexicon.py:629:35: W0613: Unused argument 'name' (unused-argument)
 dataknobs/xization/lexicon.py:639:4: W0237: Parameter 'authdata' has been renamed to 'multiauthdata' in overriding 'MultiAuthorityFactory.build_authority' method (arguments-renamed)
 ************* Module dataknobs.xization.authorities
+dataknobs/xization/authorities.py:77:19: E0606: Possibly using variable 'col_name' before assignment (possibly-used-before-assignment)
 dataknobs/xization/authorities.py:208:4: W0221: Number of parameters was 6 in 'AnnotationsBuilder.build_annotation_row' and is now 7 in overriding 'AuthorityAnnotationsBuilder.build_annotation_row' method (arguments-differ)
+dataknobs/xization/authorities.py:357:15: E0606: Possibly using variable 'annotations' before assignment (possibly-used-before-assignment)
 ************* Module dataknobs.xization.annotations
 dataknobs/xization/annotations.py:757:5: W0511: TODO: Add comparison and merge functions (fixme)
 dataknobs/xization/annotations.py:803:57: W0511: TODO: add metadata (fixme)
@@ -25,5 +27,5 @@ dataknobs/xization/annotations.py:1290:61: W0511: TODO: Use this?! (fixme)
 dataknobs/xization/annotations.py:1290:8: W0612: Unused variable 'annot2mask' (unused-variable)
 
 ------------------------------------------------------------------
-Your code has been rated at 9.94/10 (previous run: 9.93/10, +0.01)
+Your code has been rated at 9.92/10 (previous run: 9.92/10, +0.00)
 
