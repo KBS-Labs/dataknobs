@@ -95,7 +95,7 @@ def test_sort_by_str_length():
 
 def test_group_manager_explode_empties():
     df = pd.DataFrame(['a', 'b', 'c', 'a', 'c'], columns=['A'])
-    eser = pd.Series(np.NaN, index=df.index, name='A_num')
+    eser = pd.Series(np.nan, index=df.index, name='A_num')
 
     def check_ser():
         g = pd_utils.GroupManager(df, 'A_num')
@@ -103,7 +103,7 @@ def test_group_manager_explode_empties():
         pd.testing.assert_series_equal(eser, g.expanded_ser)
 
     check_ser()  # Num col is missing. No groups yet
-    df['A_num'] = np.NaN
+    df['A_num'] = np.nan
     check_ser()  # Num col is al NaNs. No groups yet
     df['A_num'] = ''
     check_ser()  # Num col is all empty strings. No groups yet
@@ -165,7 +165,7 @@ def test_group_manager_mark_and_unmark():
     assert g.ungrouped_locs == [4]
     cdf = pd.DataFrame({
         'A': ['a', 'b', 'c', 'a', 'c'],
-        'A_num': ['[0]', '[0, 2]', '[0, 2]', '[2]', np.NaN]
+        'A_num': ['[0]', '[0, 2]', '[0, 2]', '[2]', np.nan]
     })
     eser = pd.Series(
         [0, 0, 2, 0, 2, 2],
@@ -187,7 +187,7 @@ def test_group_manager_mark_and_unmark():
     assert g.ungrouped_locs == [3, 4]
     cdf = pd.DataFrame({
         'A': ['a', 'b', 'c', 'a', 'c'],
-        'A_num': ['[0]', '[0]', '[0, 2]', np.NaN, np.NaN]
+        'A_num': ['[0]', '[0]', '[0, 2]', np.nan, np.nan]
     })
     eser = pd.Series(
         [0, 0, 0, 2],

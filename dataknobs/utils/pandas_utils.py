@@ -140,7 +140,7 @@ class GroupManager:
                         self._es = gser
                 if self._es is None:
                     self._es = pd.Series(
-                        np.NaN,
+                        np.nan,
                         index=self._cdf.index,
                         name=self.gcol,
                     )
@@ -247,7 +247,7 @@ class GroupManager:
         if group_num is None:
             group_num = self.max_group_num + 1
         if self.gcol not in df:
-            df[self.gcol] = np.NaN
+            df[self.gcol] = np.nan
         cur_values = df.loc[idx_values, self.gcol]
 
         def add_group(v):
@@ -300,7 +300,7 @@ class GroupManager:
                 if pd.notna(v) and v != '':
                     groups = set(json.loads(v))
                     groups.discard(group_num)
-                    rv = json.dumps(list(groups)) if len(groups) > 0 else np.NaN
+                    rv = json.dumps(list(groups)) if len(groups) > 0 else np.nan
                 return rv
 
             gser.where(mask, gser.apply(del_group), inplace=True)
@@ -352,7 +352,7 @@ class GroupManager:
         '''
         df = self.collapsed_df
         if self.gcol in df.columns:
-            df[self.gcol] = np.NaN
+            df[self.gcol] = np.nan
             self._reset_edf()
 
     def reset_group_numbers(self, start_num: int = 0):
