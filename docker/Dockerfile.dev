@@ -6,7 +6,7 @@ RUN chmod 1777 /tmp \
   && apt-get update && apt-get install -y --allow-unauthenticated --no-install-recommends  \
       curl build-essential python3-dev \
       gfortran cmake libopenblas-dev \
-      graphviz nmap \
+      graphviz nmap emacs-nox \
   && apt-get clean \
   && rm -rf /var/tmp /tmp /var/lib/apt/lists/* \
   && mkdir -p /var/tmp /tmp
