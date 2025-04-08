@@ -6,7 +6,7 @@ dataknobs/utils/elasticsearch_utils.py:82:5: W0511: TODO: implement this (fixme)
 dataknobs/utils/elasticsearch_utils.py:78:25: W0613: Unused argument 'query_result' (unused-argument)
 dataknobs/utils/elasticsearch_utils.py:95:4: E1128: Assigning result of a function call, where the function returns None (assignment-from-none)
 ************* Module dataknobs.utils.json_utils
-dataknobs/utils/json_utils.py:785:35: W0212: Access to a protected member __key of a client class (protected-access)
+dataknobs/utils/json_utils.py:862:35: W0212: Access to a protected member __key of a client class (protected-access)
 ************* Module dataknobs.xization.normalize
 dataknobs/xization/normalize.py:211:9: W0511: TODO: Use a better pluralizer (fixme)
 ************* Module dataknobs.xization.lexicon
@@ -26,6 +26,6 @@ dataknobs/xization/annotations.py:1176:1: W0511: TODO: remove this if unused -- 
 dataknobs/xization/annotations.py:1290:61: W0511: TODO: Use this?! (fixme)
 dataknobs/xization/annotations.py:1290:8: W0612: Unused variable 'annot2mask' (unused-variable)
 
------------------------------------
-Your code has been rated at 9.92/10
+------------------------------------------------------------------
+Your code has been rated at 9.92/10 (previous run: 9.92/10, +0.00)
 
