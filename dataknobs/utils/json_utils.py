@@ -9,13 +9,90 @@ import dataknobs.structures.tree as dk_tree
 import dataknobs.utils.file_utils as dk_futils
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from typing import Any, Callable, Dict, List, Set, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
 
 ELT_IDX_RE = re.compile(r'^(.*)\[(.*)\]$')
 FLATTEN_IDX_RE = re.compile(r'\[(\d+)\]')
 URL_RE = re.compile(r'^\s*https?://.*$', flags=re.IGNORECASE)
 TIMEOUT = 10  # 10 seconds
+
+
+def get_value(
+        json_obj: Dict[str, Any],
+        key_path: str,
+        default: Optional[Any] = None
+) -> Union[Any, List[Any]]:
+    """
+    Get a value from a JSON object using a key path in indexed dot notation.
+    
+    Args:
+        json_obj: The JSON object to search in
+        key_path: Dot-delimited string with optional [index] notation
+        default: Value to return if path not found (default: None)
+    
+    Returns:
+        Single value or list of values depending on key_path
+    """
+    # Split key path into individual segments
+    pattern = r'([^.\[]+)(?:\[([^\]]+)\])?'
+    segments = [(match.group(1), match.group(2)) 
+                for match in re.finditer(pattern, key_path) 
+                if match.group(1)]
+    
+    def traverse(obj: Any, seg_idx: int = 0) -> Union[Any, List[Any]]:
+        # Base case: reached end of segments
+        if seg_idx >= len(segments):
+            return obj
+            
+        key, index = segments[seg_idx]
+        
+        # Handle case where object is None or doesn't have the key
+        if not isinstance(obj, (dict, list)) or (isinstance(obj, dict) and key not in obj):
+            return [] if any(s[1] in ('*', '?') for s in segments[seg_idx:]) else default
+            
+        # Get the next level value
+        if isinstance(obj, dict):
+            next_obj = obj.get(key)
+        else:  # list
+            return [] if any(s[1] in ('*', '?') for s in segments[seg_idx:]) else default
+            
+        # Handle different index cases
+        if index is None:
+            return traverse(next_obj, seg_idx + 1)
+            
+        elif index == '*':
+            if not isinstance(next_obj, list):
+                return []
+            results = [traverse(item, seg_idx + 1) for item in next_obj]
+            # Flatten single-item lists if no more wildcards ahead
+            if not any(s[1] in ('*', '?') for s in segments[seg_idx + 1:]):
+                return [r for r in results if r != default]
+            return results
+            
+        elif index == '?':
+            if not isinstance(next_obj, list):
+                return default
+            for item in next_obj:
+                result = traverse(item, seg_idx + 1)
+                if result != default:
+                    return result
+            return default
+            
+        else:  # numeric index
+            try:
+                idx = int(index)
+                if not isinstance(next_obj, list) or idx >= len(next_obj):
+                    return default
+                return traverse(next_obj[idx], seg_idx + 1)
+            except ValueError:
+                return default
+                
+    result = traverse(json_obj)
+    # Return default value if result is None and no wildcards were used
+    if result is None and not any(seg[1] in ('*', '?') for seg in segments):
+        return default
+    return result
 
 
 def stream_json_data(

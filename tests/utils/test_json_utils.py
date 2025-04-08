@@ -4,6 +4,38 @@ import pytest
 import dataknobs.utils.json_utils as jutils
 
 
+def test_get_value():
+    sample_json = {
+        "a": {
+            "b": [
+                {"c": 1},
+                {"c": 2},
+                {"c": 3}
+            ],
+            "d": {
+                "e": [10, 20, 30]
+            }
+        }
+    }
+    
+    assert jutils.get_value(sample_json, "a.b[2].c") == 3
+    assert jutils.get_value(sample_json, "a.b[*].c") == [1, 2, 3]
+    assert jutils.get_value(sample_json, "a.d.e[1]") == 20
+    assert jutils.get_value(sample_json, "a.x.y", "N/A") == "N/A"
+    assert jutils.get_value(sample_json, "a.b[?].c") == 1
+    assert jutils.get_value(sample_json, "a.x[*].y") == []
+
+
+def test_get_value2(test_json_001):
+    json_obj = json.loads(test_json_001)
+    assert jutils.get_value(json_obj, 'c[0].A[1].e[0].g') == 9
+    assert jutils.get_value(json_obj, 'c[0].A[*].e[0].g') == [4, 9]
+    assert jutils.get_value(json_obj, 'c[0].A[?].e[0].g') == 4
+    assert jutils.get_value(json_obj, 'c[*].A[1].e[0].g') == [9, 21]
+    assert jutils.get_value(json_obj, 'c[*].A[*].e[0].g') == [[4, 9], [16, 21]]
+    assert jutils.get_value(json_obj, 'c[*].A[?].e[0].g') == [4, 16]
+
+
 def test_count_uniques(test_json_001):
     jdata = test_json_001
     builder = jutils.JsonSchemaBuilder(jdata, keep_unique_values=True)
