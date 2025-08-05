@@ -7,12 +7,13 @@ RUN chmod 1777 /tmp \
       curl build-essential python3-dev \
       gfortran cmake libopenblas-dev \
       graphviz nmap emacs-nox \
+      nodejs npm \
   && apt-get clean \
   && rm -rf /var/tmp /tmp /var/lib/apt/lists/* \
   && mkdir -p /var/tmp /tmp
 
 # Install jupyter (python3)
-RUN pip install jupyterlab
+RUN pip install jupyterlab ipywidgets jupyterlab_widgets
 
 # Install poetry and tox
 RUN curl -sSL https://install.python-poetry.org | python3 -
