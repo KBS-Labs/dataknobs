@@ -3,6 +3,7 @@ Implementation of a simple tree data structure.
 '''
 
 from __future__ import annotations
+import graphviz
 from collections import deque
 from pyparsing import OneOrMore, nestedExpr
 from typing import Any, Callable, List, Tuple, Union
@@ -462,6 +463,37 @@ class Tree:
         while node is not None and node.has_children():
             node = node.children[-1]
         return node
+
+    def build_dot(
+            self,
+            node_name_fn: Callable[[Tree], str] = None,
+            **kwargs
+    ) -> graphviz.graphs.Digraph:
+        '''
+        Build a graphviz dot file for this tree, passing kwargs to
+        graphviz.Digraph.
+
+        :param node_name_fn: A function to build a graph node name string
+            from a node. Default is str(node.data).
+
+        Example Usage:
+            dot = build_dot(name='Name', format='png', node_attr={'shape': 'none'})
+            print(dot.source)  # e.g. to a .dot file
+            ipath = dot.render('/tmp/test/testimg', format='png')  # to create an image file
+            Image(filename=ipath)  # to display the image in jupyter
+        '''
+        if node_name_fn is None:
+            node_name_fn = lambda n: str(n.data)
+        dot = graphviz.Digraph(**kwargs)
+        ids = dict()  # ids[node] -> id
+        for idx, node in enumerate(self.root.find_nodes(lambda _n: True, traversal='bfs')):
+            ids[node] = idx
+            dot.node(f"N_{idx:03}", node_name_fn(node))
+        for node1,  node2 in self.get_edges(as_data=False):
+            idx1 = ids[node1]
+            idx2 = ids[node2]
+            dot.edge(f"N_{idx1:03}", f"N_{idx2:03}")
+        return dot
 
 
 def build_tree_from_string(from_string: str) -> Tree:
