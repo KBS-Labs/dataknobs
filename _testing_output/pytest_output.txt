@@ -1,32 +1,34 @@
-[1m========================================== test session starts ===========================================[0m
-platform linux -- Python 3.13.2, pytest-8.3.5, pluggy-1.5.0
+[1m=================================== test session starts ===================================[0m
+platform linux -- Python 3.13.5, pytest-8.4.1, pluggy-1.6.0
 cachedir: .tox/tests/.pytest_cache
 rootdir: /workdir
 configfile: pyproject.toml
-plugins: cov-6.0.0, anyio-4.9.0
+plugins: anyio-4.10.0, cov-6.2.1
 collected 94 items
 
-tests/structures/test_conditional_dict.py [32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m                                                     [  4%][0m
-tests/structures/test_document.py [32m.[0m[32m                                                                [  5%][0m
-tests/structures/test_record_store.py [32m.[0m[32m.[0m[32m                                                           [  7%][0m
-tests/structures/test_tree.py [32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m                                                         [ 20%][0m
-tests/utils/test_elasticsearch_utils.py [32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m                                                    [ 27%][0m
-tests/utils/test_file_utils.py [32m.[0m[32m.[0m[32m                                                                  [ 29%][0m
-tests/utils/test_json_extractor.py [32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m                                                      [ 40%][0m
-tests/utils/test_json_utils.py [32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m                                                             [ 47%][0m
-tests/utils/test_llm_utils.py [32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m                                                               [ 54%][0m
-tests/utils/test_pandas_utils.py [32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m                                                           [ 61%][0m
-tests/utils/test_requests_utils.py [32m.[0m[32m.[0m[32m.[0m[32m                                                             [ 64%][0m
-tests/utils/test_resource_utils.py [32m.[0m[32m                                                               [ 65%][0m
-tests/utils/test_stats_utils.py [32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m                                                       [ 78%][0m
-tests/utils/test_xml_utils.py [32m.[0m[32m.[0m[32m                                                                   [ 80%][0m
-tests/xization/test_authorities.py [32m.[0m[32m.[0m[32m.[0m[32m                                                             [ 84%][0m
-tests/xization/test_masking_tokenizer.py [32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m                                                     [ 89%][0m
+tests/structures/test_conditional_dict.py [32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m                                      [  4%][0m
+tests/structures/test_document.py [32m.[0m[32m                                                 [  5%][0m
+tests/structures/test_record_store.py [32m.[0m[32m.[0m[32m                                            [  7%][0m
+tests/structures/test_tree.py [32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m                                          [ 20%][0m
+tests/utils/test_elasticsearch_utils.py [32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m                                     [ 27%][0m
+tests/utils/test_file_utils.py [32m.[0m[32m.[0m[32m                                                   [ 29%][0m
+tests/utils/test_json_extractor.py [32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m                                       [ 40%][0m
+tests/utils/test_json_utils.py [32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m                                              [ 47%][0m
+tests/utils/test_llm_utils.py [32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m                                                [ 54%][0m
+tests/utils/test_pandas_utils.py [32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m                                            [ 61%][0m
+tests/utils/test_requests_utils.py [32m.[0m[32m.[0m[32m.[0m[32m                                              [ 64%][0m
+tests/utils/test_resource_utils.py [32m.[0m[32m                                                [ 65%][0m
+tests/utils/test_stats_utils.py [32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m                                        [ 78%][0m
+tests/utils/test_xml_utils.py [32m.[0m[32m.[0m[32m                                                    [ 80%][0m
+tests/xization/test_authorities.py [32m.[0m[32m.[0m[32m.[0m[32m                                              [ 84%][0m
+tests/xization/test_masking_tokenizer.py [32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m                                      [ 89%][0m
 tests/xization/test_normalize.py [32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[32m.[0m[31m[1m
 ERROR: Coverage failure: total of 69 is less than fail-under=85
-[0m[32m                                                                                                   [100%][0m
+[0m[32m                                                                                    [100%][0m
 
----------- coverage: platform linux, python 3.13.2-final-0 -----------
+===================================== tests coverage ======================================
+_____________________ coverage: platform linux, python 3.13.5-final-0 _____________________
+
 Name                                       Stmts   Miss  Cover   Missing
 ------------------------------------------------------------------------
 dataknobs/__init__.py                          4      2    50%   6-7
@@ -35,7 +37,7 @@ dataknobs/structures/__init__.py               0      0   100%
 dataknobs/structures/conditional_dict.py      33      5    85%   48-49, 62-63, 66
 dataknobs/structures/document.py              42      0   100%
 dataknobs/structures/record_store.py          41      0   100%
-dataknobs/structures/tree.py                 223      8    96%   43, 109, 224-232, 246, 255, 308
+dataknobs/structures/tree.py                 237     20    92%   44, 110, 225-233, 247, 256, 309, 485-496
 dataknobs/utils/__init__.py                    0      0   100%
 dataknobs/utils/elasticsearch_utils.py       136      2    99%   97, 350
 dataknobs/utils/emoji_utils.py               136     18    87%   88, 123, 133, 161, 200, 205, 215-226
@@ -47,7 +49,7 @@ dataknobs/utils/pandas_utils.py              182      2    99%   104, 117
 dataknobs/utils/requests_utils.py            130      4    97%   127, 297, 320, 324
 dataknobs/utils/resource_utils.py             42      3    93%   41, 56, 61
 dataknobs/utils/sql_utils.py                 139    139     0%   1-424
-dataknobs/utils/stats_utils.py               507     67    87%   51, 179, 250-258, 262, 266, 270, 274, 278, 282, 286-288, 292-294, 297, 300-307, 310, 313-322, 372, 413, 416-425, 448-449, 461, 558, 591, 603, 611, 619, 641, 704, 712, 715, 734, 749-750, 770
+dataknobs/utils/stats_utils.py               507     70    86%   51, 179, 250-258, 262, 266, 270, 274, 278, 282, 286-288, 292-294, 297, 300-307, 310, 313-322, 372, 413, 416-425, 448-449, 461, 464-466, 558, 591, 603, 611, 619, 641, 704, 712, 715, 734, 749-750, 770
 dataknobs/utils/subprocess_utils.py           19     19     0%   1-45
 dataknobs/utils/sys_utils.py                  62     62     0%   1-120
 dataknobs/utils/xml_utils.py                 198     51    74%   59, 62, 68-69, 76, 79-81, 150-153, 247, 250, 254, 289-297, 300, 303-304, 307-310, 313, 325-329, 343-377
@@ -58,8 +60,6 @@ dataknobs/xization/lexicon.py                230    230     0%   1-658
 dataknobs/xization/masking_tokenizer.py      311      6    98%   29, 70, 351, 419, 429, 770
 dataknobs/xization/normalize.py              150     46    69%   173, 233, 251, 255, 259, 287, 312-316, 332-381, 431
 ------------------------------------------------------------------------
-TOTAL                                       4307   1315    69%
-
-[31m[1mFAIL Required test coverage of 85% not reached. Total coverage: 69.47%
-[0m
-[32m=========================================== [32m[1m94 passed[0m[32m in 3.17s[0m[32m ===========================================[0m
+TOTAL                                       4321   1330    69%
+[31m[1mFAIL Required test coverage of 85% not reached. Total coverage: 69.22%
+[0m[32m=================================== [32m[1m94 passed[0m[32m in 2.99s[0m[32m ====================================[0m

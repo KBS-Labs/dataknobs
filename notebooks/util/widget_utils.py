@@ -5,7 +5,8 @@ import ipywidgets as widgets
 import functools
 import math
 import pandas as pd
-from IPython.display import display, clear_output
+from IPython.display import HTML, display, clear_output
+from traitlets import Unicode, observe
 from typing import Callable, Dict, List
 
 
@@ -380,3 +381,172 @@ class FieldValuesDropdowns:
             self._init_fields()
         self.fields_dropdown.options = [self.none_field] + fields
         self.fields_dropdown.value = self.none_field
+
+
+class ElasticTextArea(widgets.VBox):
+    """
+    A custom widget that behaves like widgets.Textarea but with:
+    - Description shown above the input area
+    - Width of 99% of available space
+    - Auto-expanding height based on content
+    - Optional submit button
+
+    # Basic usage
+    elastic_text_area = ElasticTextArea()
+    display(elastic_text_area)
+    
+    # Get the current value
+    print(elastic_text_area.value)
+    
+    # Set a new value
+    elastic_text_area.value = "New text here!"
+    
+    # With custom description and placeholder
+    custom_area = ElasticTextArea(
+        description="Your feedback:",
+        placeholder="Please enter your comments...",
+        value="Initial text"
+    )
+    display(custom_area)
+    
+    # With a custom submit callback
+    def handle_submit(b):
+        print(f"Submitted text: {elastic_text_area.value}")
+    
+    elastic_text_area.on_submit(handle_submit)
+    
+    # Without a submit button
+    no_button_area = ElasticTextArea(
+        with_submit_button=False,
+        description="Notes:",
+        value="Just a simple expanding textarea"
+    )
+    display(no_button_area)
+    """
+    
+    # Traitlets to mimic the Textarea API
+    value = Unicode('').tag(sync=True)
+    description = Unicode('Enter your text here:').tag(sync=True)
+    placeholder = Unicode('Type something...').tag(sync=True)
+    
+    def __init__(self, 
+                 value='', 
+                 description='Enter your text here:', 
+                 placeholder='Type something...',
+                 with_submit_button=True,
+                 on_submit=None,
+                 width="99%",
+                 **kwargs):
+        """
+        Initialize the ElasticTextArea widget.
+        
+        Parameters:
+        -----------
+        value : str
+            Initial value of the textarea
+        description : str
+            Description text to display above the textarea
+        placeholder : str
+            Placeholder text for the textarea
+        with_submit_button : bool
+            Whether to include a submit button
+        on_submit : callable
+            Callback function for the submit button (if included)
+        """
+        # Create the description HTML widget
+        self.description_widget = widgets.HTML(
+            value=f"<b>{description}</b>",
+            layout=widgets.Layout(width=width)
+        )
+        
+        # Create the textarea widget with custom layout
+        self.textarea = widgets.Textarea(
+            value=value,
+            placeholder=placeholder,
+            layout=widgets.Layout(
+                width=width,
+                height='auto',
+                min_height='80px',
+                flex_flow='column',
+                display='flex'
+            )
+        )
+        
+        # Link the textarea's value to this widget's value trait
+        widgets.link((self, 'value'), (self.textarea, 'value'))
+        
+        # Create the submit button if requested
+        children = [self.description_widget, self.textarea]
+        
+        if with_submit_button:
+            self.submit_button = widgets.Button(
+                description='Submit',
+                button_style='primary',
+                tooltip='Click to submit',
+                layout=widgets.Layout(width='100px')
+            )
+            
+            # Set up the submit callback
+            if on_submit is None:
+                # Default empty callback
+                on_submit = lambda b: None
+                
+            self.submit_button.on_click(on_submit)
+            
+            # Button container with right alignment
+            self.button_container = widgets.Box(
+                [self.submit_button],
+                layout=widgets.Layout(
+                    display='flex',
+                    flex_flow='row',
+                    justify_content='flex-end',
+                    width=width
+                )
+            )
+            
+            children.append(self.button_container)
+        
+        # Initialize the parent VBox with our children
+        super().__init__(children=children, **kwargs)
+        
+        # Observe changes to the textarea to adjust height
+        self.textarea.observe(self._adjust_height, names='value')
+        
+        # Initialize description and placeholder
+        self.description = description
+        self.placeholder = placeholder
+    
+    def _adjust_height(self, change):
+        """Adjust the height of the textarea based on content."""
+        # Count the number of lines
+        num_lines = change['new'].count('\n') + 1
+        
+        # Calculate new height (approx 20px per line plus padding)
+        new_height = max(80, (num_lines * 20) + 10)
+        
+        # Update the textarea height
+        self.textarea.layout.height = f'{new_height}px'
+    
+    @observe('description')
+    def _update_description(self, change):
+        """Update the description when the trait changes."""
+        self.description_widget.value = f"<b>{change['new']}</b>"
+    
+    @observe('placeholder')
+    def _update_placeholder(self, change):
+        """Update the placeholder when the trait changes."""
+        self.textarea.placeholder = change['new']
+
+    def on_submit(self, callback):
+        """
+        Set a callback for the submit button.
+        
+        Parameters:
+        -----------
+        callback : callable
+            Function to call when the submit button is clicked
+        """
+        if hasattr(self, 'submit_button'):
+            self.submit_button.on_click(callback)
+        else:
+            raise AttributeError("This ElasticTextArea was created without a submit button.")
