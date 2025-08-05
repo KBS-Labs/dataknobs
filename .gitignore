@@ -35,3 +35,7 @@ VERSION
 activate
 .tox
 .docker
+
+# uv
+.venv/
+uv.lock

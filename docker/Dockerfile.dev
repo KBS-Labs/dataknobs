@@ -15,9 +15,9 @@ RUN chmod 1777 /tmp \
 # Install jupyter (python3)
 RUN pip install jupyterlab ipywidgets jupyterlab_widgets
 
-# Install poetry and tox
-RUN curl -sSL https://install.python-poetry.org | python3 -
-RUN ln -s /root/.local/bin/poetry /usr/local/bin/poetry
+# Install uv and tox
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.cargo/bin:${PATH}"
 RUN pip3 install tox
 
 # used as a volume (connects to the host machine's disk at runtime)

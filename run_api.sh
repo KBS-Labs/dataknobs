@@ -13,8 +13,8 @@ ENV=${ENV:=dev};
 
 if [ "${ENV}" != "prod" ]; then
     echo "Starting DEV flask server on $(cat /etc/hosts | grep $(hostname))"
-    poetry run python -m dataknobs.flask_api
+    uv run python -m dataknobs.flask_api
 else
     echo "Starting PROD flask server on $(cat /etc/hosts | grep $(hostname))"
-    uwsgi --http 127.0.0.1:${FLASK_PORT} --master -p 1 -w dataknobs.flask_api:app
+    uv run uwsgi --http 127.0.0.1:${FLASK_PORT} --master -p 1 -w dataknobs.flask_api:app
 fi;
