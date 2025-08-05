@@ -1,0 +1,27 @@
+[project]
+name = "dataknobs"
+version = "0.0.15"
+description = "Useful implementations of data structures and design patterns for AI knowledge bases. (Legacy package - please use modular packages instead)"
+readme = "README.md"
+authors = [
+    { name = "Spence Koehler", email = "KoehlerSB747@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "dataknobs-common==1.0.0",
+    "dataknobs-structures==1.0.0",
+    "dataknobs-utils==1.0.0",
+    "dataknobs-xization==1.0.0",
+    "flask>=3.1.1",
+    "python3-nmap>=1.9.1",
+]
+
+[tool.uv.sources]
+dataknobs-common = { workspace = true }
+dataknobs-structures = { workspace = true }
+dataknobs-utils = { workspace = true }
+dataknobs-xization = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

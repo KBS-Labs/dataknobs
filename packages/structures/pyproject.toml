@@ -1,0 +1,20 @@
+[project]
+name = "dataknobs-structures"
+version = "1.0.0"
+description = "Data structures for AI knowledge bases"
+readme = "README.md"
+authors = [
+    { name = "Spence Koehler", email = "KoehlerSB747@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "dataknobs-common>=1.0.0",
+    "graphviz>=0.20.3",
+]
+
+[tool.uv.sources]
+dataknobs-common = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

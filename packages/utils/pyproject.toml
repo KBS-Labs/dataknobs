@@ -1,0 +1,26 @@
+[project]
+name = "dataknobs-utils"
+version = "1.0.0"
+description = "Utility functions for dataknobs packages"
+readme = "README.md"
+authors = [
+    { name = "Spence Koehler", email = "KoehlerSB747@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "dataknobs-common>=1.0.0",
+    "pandas>=2.2.3",
+    "requests>=2.32.4",
+    "psycopg2-binary>=2.9.10",
+    "lxml>=5.3.1",
+    "beautifulsoup4>=4.13.3",
+    "json-stream>=2.3.3",
+    "scikit-learn>=1.6.1",
+]
+
+[tool.uv.sources]
+dataknobs-common = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

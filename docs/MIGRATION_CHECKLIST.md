@@ -1,6 +1,6 @@
-# MyProject Migration Checklist
+# Dataknobs Migration Checklist
 
-This checklist guides the migration of MyProject from a single Poetry-managed package to a monorepo with modular packages using `uv`. Check off tasks as they are completed to track progress.
+This checklist guides the migration of Dataknobs from a single Poetry-managed package to a monorepo with modular packages using `uv`. Check off tasks as they are completed to track progress.
 
 ## Planning
 - [ ] Identify logical components (e.g., `tool-a`, `tool-b`) in the current `myproject` package.
