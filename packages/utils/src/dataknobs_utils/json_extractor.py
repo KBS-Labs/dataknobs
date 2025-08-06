@@ -10,10 +10,10 @@ class JSONExtractor:
     and providing access to extracted objects and non-JSON text.
     """
 
-    def __init__(self):
-        self.complete_jsons = []  # List of complete, well-formed JSON objects
-        self.fixed_jsons = []  # List of JSON objects that were malformed but fixed
-        self.non_json_text = ""  # Text that doesn't contain JSON objects
+    def __init__(self) -> None:
+        self.complete_jsons: List[Dict[str, Any]] = []  # List of complete, well-formed JSON objects
+        self.fixed_jsons: List[Dict[str, Any]] = []  # List of JSON objects that were malformed but fixed
+        self.non_json_text: str = ""  # Text that doesn't contain JSON objects
 
     def get_values(self, key_path: str) -> List[Any]:
         """Get the specific json values using dot notation from the all json
