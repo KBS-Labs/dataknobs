@@ -27,6 +27,9 @@ members = [
     "packages/legacy",
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/dataknobs_workspace"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

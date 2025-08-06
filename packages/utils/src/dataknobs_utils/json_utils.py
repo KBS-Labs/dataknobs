@@ -5,8 +5,8 @@ import os
 import pandas as pd
 import re
 import requests
-import dataknobs.structures.tree as dk_tree
-import dataknobs.utils.file_utils as dk_futils
+import dataknobs_structures.tree as dk_tree
+import dataknobs_utils.file_utils as dk_futils
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union

@@ -1,7 +1,7 @@
 import json
 import numpy as np
 import pandas as pd
-import dataknobs.structures.document as dk_doc
+import dataknobs_structures.document as dk_doc
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List, Set
 

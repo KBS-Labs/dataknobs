@@ -3,59 +3,71 @@
 This checklist guides the migration of Dataknobs from a single Poetry-managed package to a monorepo with modular packages using `uv`. Check off tasks as they are completed to track progress.
 
 ## Planning
-- [ ] Identify logical components (e.g., `tool-a`, `tool-b`) in the current `myproject` package.
-- [ ] Determine if shared code requires a `myproject-common` package.
-- [ ] Define versioning strategy (e.g., start new packages at `1.0.0`).
+- [x] Identify logical components (structures, utils, xization) in the current `dataknobs` package.
+- [x] Determine if shared code requires a `dataknobs-common` package.
+- [x] Define versioning strategy (start new packages at `1.0.0`).
 - [ ] Plan deprecation timeline for the `legacy` package (e.g., 6–12 months).
 
 ## Monorepo Setup
-- [ ] Create monorepo directory structure:
-  - `packages/legacy/`, `packages/tool-a/`, `packages/tool-b/`, `packages/common/` (if needed).
+- [x] Create monorepo directory structure:
+  - `packages/legacy/`, `packages/structures/`, `packages/utils/`, `packages/xization/`, `packages/common/`.
   - `docs/`, `.github/workflows/`, `README.md`, `LICENSE`.
-- [ ] Initialize new packages with `uv init` in each `packages/*/` directory.
+- [x] Initialize new packages with `uv init` in each `packages/*/` directory.
 - [ ] Create optional `uv.toml` for monorepo-wide settings.
 
 ## Migrate to `uv`
-- [ ] Install `uv` (`pip install uv`).
-- [ ] Convert Poetry’s `pyproject.toml` to `uv`-compatible format for each package:
-  - `legacy` package (`myproject`).
-  - `tool-a` package (`myproject-tool-a`).
-  - `tool-b` package (`myproject-tool-b`).
-  - `common` package (`myproject-common`, if needed).
-- [ ] Migrate dependencies using `uv add <dependency>`.
-- [ ] Generate `uv.lock` files with `uv lock` in each package directory.
+- [x] Install `uv` (already installed via Homebrew).
+- [x] Convert Poetry's `pyproject.toml` to `uv`-compatible format for each package:
+  - `legacy` package (`dataknobs`).
+  - `structures` package (`dataknobs-structures`).
+  - `utils` package (`dataknobs-utils`).
+  - `xization` package (`dataknobs-xization`).
+  - `common` package (`dataknobs-common`).
+- [x] Migrate dependencies via direct pyproject.toml editing.
+- [x] Generate `uv.lock` file with `uv lock` at workspace level.
 
 ## Code Refactoring
-- [ ] Move code to new packages (`tool-a`, `tool-b`, `common`).
-- [ ] Update imports to reflect new structure (e.g., `from myproject_tool_a import func`).
-- [ ] Configure `legacy` package to re-export APIs from new packages.
-- [ ] Extract shared code to `myproject-common` (if applicable).
-- [ ] Update `legacy` package’s `pyproject.toml` to depend on new packages (e.g., `myproject-tool-a==1.0.0`).
+- [x] Move code to new packages (`structures`, `utils`, `xization`, `common`).
+- [ ] Update imports to reflect new structure (e.g., `from dataknobs_structures import func`).
+- [x] Configure `legacy` package to re-export APIs from new packages.
+- [ ] Extract shared code to `dataknobs-common` (if applicable).
+- [x] Update `legacy` package's `pyproject.toml` to depend on new packages (e.g., `dataknobs-structures==1.0.0`).
 
 ## Testing
-- [ ] Write unit tests for each package in `packages/*/tests/`.
-- [ ] Write integration tests to verify interoperability between `tool-a`, `tool-b`, and `legacy`.
-- [ ] Run tests locally with `uv run pytest`.
-- [ ] Test local installation (`uv build`, `pip install dist/myproject-*.whl`).
+- [x] Move existing unit tests to each package in `packages/*/tests/`.
+- [x] Update test imports to use new package names.
+- [x] Fix test resource paths for monorepo structure.
+- [ ] Write integration tests to verify interoperability between packages.
+- [x] Run tests locally with `uv run pytest` (all 94 tests passing).
+- [ ] Test local installation (`uv build`, `pip install dist/dataknobs-*.whl`).
 
 ## CI/CD
-- [ ] Create GitHub Actions workflow (`ci.yml`) for testing across Python 3.8–3.12.
-- [ ] Create release workflow (`release.yml`) for publishing to PyPI using `uv publish`.
+- [x] Create GitHub Actions workflow (`ci.yml`) for testing across Python 3.10–3.13.
+- [x] Create release workflow (`release.yml`) for publishing to PyPI using `uv publish`.
+- [x] Create dependency update workflow for automated updates.
 - [ ] Test CI pipelines on a feature branch.
 
+## Docker & Infrastructure
+- [x] Update Dockerfiles to use `uv` instead of Poetry.
+- [x] Create docker-compose.yml for easy development setup.
+- [x] Update tox.ini to use `uv` commands.
+- [x] Create .dockerignore file.
+- [x] Add docker/README.md with usage instructions.
+
 ## Documentation
-- [ ] Update `README.md` with new structure and installation instructions.
-- [ ] Add migration guide to `docs/` (e.g., “Upgrading to the Monorepo”).
-- [ ] Add deprecation notice to `legacy` package’s `README.md` and docstrings.
+- [x] Update root `README.md` with new structure and installation instructions.
+- [x] Add migration guide to `docs/` (MIGRATION_GUIDE.md).
+- [x] Add deprecation notice to `legacy` package's `__init__.py`.
+- [x] Add deprecation notice to `legacy` package's `README.md`.
 - [ ] Set up `mkdocs` for unified documentation in `docs/`.
-- [ ] Add PyPI, CI, and coverage badges to each package’s `README.md`.
+- [x] Add README.md to all packages (structures, utils, xization, common, legacy).
 
 ## Release
 - [ ] Publish pre-release versions to TestPyPI (`uv publish --index https://test.pypi.org/legacy/`).
 - [ ] Solicit feedback from active users on pre-releases.
-- [ ] Tag releases (e.g., `git tag tool-a/v1.0.0`) for each package.
-- [ ] Publish new packages (`myproject-tool-a`, `myproject-tool-b`, `myproject-common`) to PyPI.
-- [ ] Publish updated `legacy` package (`myproject`) to PyPI.
+- [ ] Tag releases (e.g., `git tag structures/v1.0.0`) for each package.
+- [ ] Publish new packages (`dataknobs-structures`, `dataknobs-utils`, `dataknobs-xization`, `dataknobs-common`) to PyPI.
+- [ ] Publish updated `legacy` package (`dataknobs`) to PyPI.
 - [ ] Create release notes detailing the migration and deprecation plan.
 
 ## Communication
@@ -65,7 +77,7 @@ This checklist guides the migration of Dataknobs from a single Poetry-managed pa
 - [ ] Monitor GitHub issues for user feedback.
 
 ## Post-Migration
-- [ ] Verify all packages install and work correctly (`pip install myproject`, `pip install myproject-tool-a`).
+- [ ] Verify all packages install and work correctly (`pip install dataknobs`, `pip install dataknobs-structures`).
 - [ ] Respond to user issues or questions promptly.
 - [ ] Plan follow-up releases for bug fixes or improvements.
 - [ ] Schedule deprecation of `legacy` package (e.g., v2.0.0).

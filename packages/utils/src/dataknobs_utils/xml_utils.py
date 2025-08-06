@@ -170,7 +170,7 @@ class XmlLeafStream(XmlStream):
     Usage example to show the first 10 xpaths to leaf nodes, including node text
     taken from actual text or attributes:
 
-    >>> import dataknobs.utils.xml_utils as xml_utils
+    >>> import dataknobs_utils.xml_utils as xml_utils
     >>> s = xml_utils.XmlLeafStream(xml_fpath)
     >>> for idx, elts in enumerate(s):
             print(f'{idx} ', s.to_string(elts, ["value", "extension", "code", "ID"]))
@@ -220,7 +220,7 @@ class XmlElementGrabber(XmlStream):
     Class to grab each highest matching DOM element from streamed XML.
 
     Usage example to get the first 10 xpaths to element nodes with the tag "foo"
-    >>> import dataknobs.utils.xml_utils as xml_utils
+    >>> import dataknobs_utils.xml_utils as xml_utils
     >>> g = xml_utils.XmlElementGrabber(xml_fpath, "foo")
     >>> first_10_foos = g.take(10)
     '''

@@ -10,6 +10,8 @@ requires-python = ">=3.10"
 dependencies = [
     "dataknobs-common>=1.0.0",
     "graphviz>=0.20.3",
+    "pyparsing>=3.0.0",
+    "pandas>=2.2.3",
 ]
 
 [tool.uv.sources]

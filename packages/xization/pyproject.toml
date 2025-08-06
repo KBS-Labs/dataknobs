@@ -9,11 +9,15 @@ authors = [
 requires-python = ">=3.10"
 dependencies = [
     "dataknobs-common>=1.0.0",
+    "dataknobs-structures>=1.0.0",
+    "dataknobs-utils>=1.0.0",
     "nltk>=3.9.1",
 ]
 
 [tool.uv.sources]
 dataknobs-common = { workspace = true }
+dataknobs-structures = { workspace = true }
+dataknobs-utils = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.10"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -718,12 +718,16 @@ source = { editable = "packages/structures" }
 dependencies = [
     { name = "dataknobs-common" },
     { name = "graphviz" },
+    { name = "pandas" },
+    { name = "pyparsing" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "dataknobs-common", editable = "packages/common" },
     { name = "graphviz", specifier = ">=0.20.3" },
+    { name = "pandas", specifier = ">=2.2.3" },
+    { name = "pyparsing", specifier = ">=3.0.0" },
 ]
 
 [[package]]
@@ -733,6 +737,7 @@ source = { editable = "packages/utils" }
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "dataknobs-common" },
+    { name = "dataknobs-structures" },
     { name = "json-stream" },
     { name = "lxml" },
     { name = "pandas" },
@@ -745,6 +750,7 @@ dependencies = [
 requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.13.3" },
     { name = "dataknobs-common", editable = "packages/common" },
+    { name = "dataknobs-structures", editable = "packages/structures" },
     { name = "json-stream", specifier = ">=2.3.3" },
     { name = "lxml", specifier = ">=5.3.1" },
     { name = "pandas", specifier = ">=2.2.3" },
@@ -792,12 +798,16 @@ version = "1.0.0"
 source = { editable = "packages/xization" }
 dependencies = [
     { name = "dataknobs-common" },
+    { name = "dataknobs-structures" },
+    { name = "dataknobs-utils" },
     { name = "nltk" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "dataknobs-common", editable = "packages/common" },
+    { name = "dataknobs-structures", editable = "packages/structures" },
+    { name = "dataknobs-utils", editable = "packages/utils" },
     { name = "nltk", specifier = ">=3.9.1" },
 ]
 
