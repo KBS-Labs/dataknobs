@@ -112,19 +112,26 @@ fi
 
 # 2. Run ruff linting
 echo -e "\n${BLUE}2. Running ruff linting...${NC}"
-RUFF_CMD="ruff check"
-if [[ "$FIX" == true ]]; then
-    RUFF_CMD="$RUFF_CMD --fix --unsafe-fixes=false"
-fi
 
 for package in "${PACKAGES[@]}"; do
     echo -e "${YELLOW}  Checking $package...${NC}"
     
-    if ! $RUFF_CMD "packages/$package/src" --config "$ROOT_DIR/pyproject.toml" 2>&1 | grep -E "(error|Error)"; then
-        echo -e "${GREEN}    ✓ Ruff checks passed${NC}"
+    if [[ "$FIX" == true ]]; then
+        # Run ruff with auto-fix (matching fix.sh behavior)
+        if ruff check "packages/$package/src" --fix --unsafe-fixes=false --config "$ROOT_DIR/pyproject.toml"; then
+            echo -e "${GREEN}    ✓ Ruff checks passed${NC}"
+        else
+            echo -e "${YELLOW}    ⚠ Some issues remain that need manual fixing${NC}"
+            FAILED=true
+        fi
     else
-        echo -e "${RED}    ✗ Ruff found issues${NC}"
-        FAILED=true
+        # Run ruff without fixing
+        if ruff check "packages/$package/src" --no-fix --config "$ROOT_DIR/pyproject.toml"; then
+            echo -e "${GREEN}    ✓ Ruff checks passed${NC}"
+        else
+            echo -e "${RED}    ✗ Ruff found issues${NC}"
+            FAILED=true
+        fi
     fi
 done
 
