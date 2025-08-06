@@ -1,6 +1,6 @@
 # dataknobs (Legacy Package)
 
-† **DEPRECATED**: This package is maintained for backward compatibility only. Please use the modular packages instead.
+‚ö†Ô∏è **DEPRECATED**: This package is maintained for backward compatibility only. Please use the modular packages instead.
 
 ## Migration Notice
 
@@ -47,9 +47,9 @@ from dataknobs_utils.json_utils import get_value
 
 ### Package Mapping
 
-- `dataknobs.structures.*` í `dataknobs_structures.*`
-- `dataknobs.utils.*` í `dataknobs_utils.*`
-- `dataknobs.xization.*` í `dataknobs_xization.*`
+- `dataknobs.structures.*` ‚Üí `dataknobs_structures.*`
+- `dataknobs.utils.*` ‚Üí `dataknobs_utils.*`
+- `dataknobs.xization.*` ‚Üí `dataknobs_xization.*`
 
 ## Deprecation Timeline
 
