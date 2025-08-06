@@ -11,7 +11,7 @@ from flask import request
 app = create_app()
 
 
-@app.route('/echoArgs')
+@app.route("/echoArgs")
 def echo_args():
     indent = request.args.get("indent", type=int, default=2)
     verbose = request.args.get("verbose", type=bool, default=True)
@@ -19,16 +19,16 @@ def echo_args():
     if verbose:
         print(json.dumps(rv, indent=indent))
     return rv
-        
 
-@app.route('/printenv')
+
+@app.route("/printenv")
 def printenv():
     rv = {x: y for x, y in os.environ.items()}
     print(json.dumps(rv, indent=2))
     return rv
 
 
-@app.route('/listdir')
+@app.route("/listdir")
 def listdir():
     name = request.args.get("name", default=None)
     rv = os.listdir(name)
@@ -36,13 +36,11 @@ def listdir():
     return rv
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--port', help="The server's port")
+    parser.add_argument("--port", help="The server's port")
     parser.add_argument(
-        '--pvname',
-        help='The name of the project variables file',
-        default=".project_vars"
+        "--pvname", help="The name of the project variables file", default=".project_vars"
     )
     args = parser.parse_args()
     port = args.port
@@ -58,5 +56,5 @@ if __name__ == '__main__':
             port = pvars.get("FLASK_PORT", os.getenv("FLASK_PORT", "5000"))
         else:
             port = os.getenv("FLASK_PORT", "5000")
-    
+
     app.run(port=port)

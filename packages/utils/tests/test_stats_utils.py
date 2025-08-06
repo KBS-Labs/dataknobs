@@ -1,57 +1,42 @@
 import math
-import os
 import random
-import sys
 import time
-import dataknobs_utils.stats_utils as dk_stats
 from datetime import datetime
+
+import dataknobs_utils.stats_utils as dk_stats
 
 
 def test_empty():
     s = dk_stats.StatsAccumulator("empty")
-    assert s.as_dict() == {
-        "label": "empty",
-        "max": 0.0,
-        "mean": 0,
-        "min": 0.0,
-        "n": 0,
-        "std": 0
-    }
+    assert s.as_dict() == {"label": "empty", "max": 0.0, "mean": 0, "min": 0.0, "n": 0, "std": 0}
 
 
 def test_stats_accumulator_basics1():
     s = dk_stats.StatsAccumulator("basics1")
     s.add(1, 2, 3)
 
-    assert "basics1" == s.label
-    assert 3 == s.n
-    assert 1 == s.min
-    assert 3 == s.max
-    assert 2.0 == s.mean
-    assert 1.0 == s.std
-    assert 1.0 == s.var
+    assert s.label == "basics1"
+    assert s.n == 3
+    assert s.min == 1
+    assert s.max == 3
+    assert s.mean == 2.0
+    assert s.std == 1.0
+    assert s.var == 1.0
 
-    s.clear('empty')
-    assert s.as_dict() == {
-        "label": "empty",
-        "max": 0.0,
-        "mean": 0,
-        "min": 0.0,
-        "n": 0,
-        "std": 0
-    }
+    s.clear("empty")
+    assert s.as_dict() == {"label": "empty", "max": 0.0, "mean": 0, "min": 0.0, "n": 0, "std": 0}
 
 
 def test_stats_accumulator_basics2():
     s = dk_stats.StatsAccumulator("basics2", values=[215.0, 215.0, 215.0])
 
-    assert "basics2" == s.label
-    assert 3 == s.n
-    assert 215.0 == s.min
-    assert 215.0 == s.max
-    assert 215.0 == s.mean
-    assert 0.0 == s.std
-    assert 0.0 == s.var
+    assert s.label == "basics2"
+    assert s.n == 3
+    assert s.min == 215.0
+    assert s.max == 215.0
+    assert s.mean == 215.0
+    assert s.std == 0.0
+    assert s.var == 0.0
 
 
 def test_combine():
@@ -80,48 +65,48 @@ def test_initialize_from_dict1():
 
     s_other = dk_stats.StatsAccumulator()
     s_other.initialize(**as_dict)
-    
-    assert "1" == s_other.label
-    assert 3 == s_other.n
-    assert 1 == s_other.min
-    assert 3 == s_other.max
-    assert 2.0 == s_other.mean
-    assert 1.0 == s_other.std
-    assert 1.0 == s_other.var
+
+    assert s_other.label == "1"
+    assert s_other.n == 3
+    assert s_other.min == 1
+    assert s_other.max == 3
+    assert s_other.mean == 2.0
+    assert s_other.std == 1.0
+    assert s_other.var == 1.0
 
     s_other = dk_stats.StatsAccumulator(as_dict=as_dict)
-    assert "1" == s_other.label
-    assert 3 == s_other.n
-    assert 1 == s_other.min
-    assert 3 == s_other.max
-    assert 2.0 == s_other.mean
-    assert 1.0 == s_other.std
-    assert 1.0 == s_other.var
+    assert s_other.label == "1"
+    assert s_other.n == 3
+    assert s_other.min == 1
+    assert s_other.max == 3
+    assert s_other.mean == 2.0
+    assert s_other.std == 1.0
+    assert s_other.var == 1.0
 
     as_dict = s1.as_dict(with_sums=True)
-    assert as_dict['sum'] == 6
-    assert as_dict['sos'] == 14
+    assert as_dict["sum"] == 6
+    assert as_dict["sos"] == 14
     s_other = dk_stats.StatsAccumulator(as_dict=as_dict)
-    assert "1" == s_other.label
-    assert 3 == s_other.n
-    assert 1 == s_other.min
-    assert 3 == s_other.max
-    assert 2.0 == s_other.mean
-    assert 1.0 == s_other.std
-    assert 1.0 == s_other.var
+    assert s_other.label == "1"
+    assert s_other.n == 3
+    assert s_other.min == 1
+    assert s_other.max == 3
+    assert s_other.mean == 2.0
+    assert s_other.std == 1.0
+    assert s_other.var == 1.0
 
 
 def test_floating_point():
     s = dk_stats.StatsAccumulator("basics")
     s.add(1.0, 2.0, 3.0)
 
-    assert "basics" == s.label
-    assert 3.0 == s.n
-    assert 1.0 == s.min
-    assert 3.0 == s.max
-    assert 2.0 == s.mean
-    assert 1.0 == s.std
-    assert 1.0 == s.var
+    assert s.label == "basics"
+    assert s.n == 3.0
+    assert s.min == 1.0
+    assert s.max == 3.0
+    assert s.mean == 2.0
+    assert s.std == 1.0
+    assert s.var == 1.0
 
 
 def test_simple1():
@@ -156,7 +141,7 @@ def test_simple1():
     emptyStats = rolling_stats.window_stats
 
     # do checks
-    assert 2 == rolling_stats.num_segments
+    assert rolling_stats.num_segments == 2
 
     # window0_stats should match stats1
     assert stats1.n == window0_stats.n
@@ -165,14 +150,14 @@ def test_simple1():
     # window1_stats should match seg2value
     if seg2value < 0:
         # window1_stats should be empty
-        assert 0 == window1_stats.n
+        assert window1_stats.n == 0
     else:
         # window1_stats should have 1 value: seg2value
-        assert 1 == window1_stats.n
+        assert window1_stats.n == 1
         assert math.isclose(seg2value, window1_stats.mean, rel_tol=0.005)
 
     # emptyStats should be empty
-    assert 0 == emptyStats.n
+    assert emptyStats.n == 0
 
     # cumulativeStats should match stats1
     cumulative_stats = rolling_stats.cumulative_stats
@@ -201,12 +186,12 @@ def test_monitor_basics_with_processing():
     assert monitor.access_cumulative_stats != monitor.get_stats(access=True, window=True)
 
     cumulative_processing_stats = monitor.get_stats()
-    assert 5 == cumulative_processing_stats.n
+    assert cumulative_processing_stats.n == 5
 
     # exercise building summary info dictionary, value doesn't matter
     time.sleep(0.051)  # ensure window stats is different from cumulative
     as_dict = monitor.as_dict()
-    
+
 
 def test_monitor_basics_with_access_only():
     monitor = dk_stats.Monitor("test_access")
@@ -221,7 +206,7 @@ def test_monitor_basics_with_access_only():
     assert monitor.access_window_stats is not None
 
     cumulative_access_stats = monitor.get_stats(True, False)
-    assert 4 == cumulative_access_stats.n
+    assert cumulative_access_stats.n == 4
 
     # exercise building summary info dictionary, value doesn't matter
     time.sleep(0.051)  # ensure window stats is different from cumulative
@@ -235,35 +220,37 @@ def simulate_monitor_process(monitor_manager, monitor_label):
     endtime = datetime.now()
     monitor.mark(starttime, endtime)
 
+
 def simulate_monitor_event(monitor_manager, event_type, event_description):
     monitor = monitor_manager.get_or_create_monitor_by_key_type(event_type, event_description)
     starttime = datetime.now()
     monitor.mark(starttime)
 
+
 def test_monitor_manager_basics():
     monitor_manager = dk_stats.MonitorManager(default_window_width=100, default_segment_width=50)
 
-    simulate_monitor_event(monitor_manager, 'error', 'Intermittent error 1')
-    simulate_monitor_event(monitor_manager, 'error', 'Recurring error')
-    simulate_monitor_event(monitor_manager, 'error', 'Intermittent error 2')
-    simulate_monitor_event(monitor_manager, 'error', 'Recurring error')
-    simulate_monitor_process(monitor_manager, 'simulated_process_1')
-    simulate_monitor_event(monitor_manager, 'error', 'Recurring error')
-    simulate_monitor_event(monitor_manager, 'error', 'Intermittent error 3')
-    simulate_monitor_event(monitor_manager, 'error', 'Recurring error')
+    simulate_monitor_event(monitor_manager, "error", "Intermittent error 1")
+    simulate_monitor_event(monitor_manager, "error", "Recurring error")
+    simulate_monitor_event(monitor_manager, "error", "Intermittent error 2")
+    simulate_monitor_event(monitor_manager, "error", "Recurring error")
+    simulate_monitor_process(monitor_manager, "simulated_process_1")
+    simulate_monitor_event(monitor_manager, "error", "Recurring error")
+    simulate_monitor_event(monitor_manager, "error", "Intermittent error 3")
+    simulate_monitor_event(monitor_manager, "error", "Recurring error")
 
-    simulate_monitor_process(monitor_manager, 'simulated_process_2')
+    simulate_monitor_process(monitor_manager, "simulated_process_2")
 
-    simulate_monitor_event(monitor_manager, 'error', 'Recurring error')
-    simulate_monitor_process(monitor_manager, 'simulated_process_1')
-    simulate_monitor_event(monitor_manager, 'error', 'Recurring error')
-    simulate_monitor_process(monitor_manager, 'simulated_process_1')
-    simulate_monitor_event(monitor_manager, 'error', 'Recurring error')
-    
+    simulate_monitor_event(monitor_manager, "error", "Recurring error")
+    simulate_monitor_process(monitor_manager, "simulated_process_1")
+    simulate_monitor_event(monitor_manager, "error", "Recurring error")
+    simulate_monitor_process(monitor_manager, "simulated_process_1")
+    simulate_monitor_event(monitor_manager, "error", "Recurring error")
+
     # exercise building summary info dictionary, value doesn't matter
     time.sleep(0.051)  # ensure window stats is different from cumulative
     as_dict = monitor_manager.as_dict()
-    
+
 
 def test_key_manager():
     key_manager = dk_stats.KeyManager()
@@ -276,17 +263,17 @@ def test_key_manager():
 
     error2 = key_manager.get_key("error", "Third error description")
 
-    assert "info-0" == info0
-    assert "info-0" == key_manager.get_key("info", "First info description")
+    assert info0 == "info-0"
+    assert key_manager.get_key("info", "First info description") == "info-0"
 
-    assert "warn-0" == warn0
-    assert "warn-0" == key_manager.get_key("warn", "First warn description")
-    assert "warn-1" == warn1
-    assert "warn-1" == key_manager.get_key("warn", "Second warn description")
+    assert warn0 == "warn-0"
+    assert key_manager.get_key("warn", "First warn description") == "warn-0"
+    assert warn1 == "warn-1"
+    assert key_manager.get_key("warn", "Second warn description") == "warn-1"
 
-    assert "error-0" == error0
-    assert "error-0" == key_manager.get_key("error", "First error description")
-    assert "error-1" == error1
-    assert "error-1" == key_manager.get_key("error", "Second error description")
-    assert "error-2" == error2
-    assert "error-2" == key_manager.get_key("error", "Third error description")
+    assert error0 == "error-0"
+    assert key_manager.get_key("error", "First error description") == "error-0"
+    assert error1 == "error-1"
+    assert key_manager.get_key("error", "Second error description") == "error-1"
+    assert error2 == "error-2"
+    assert key_manager.get_key("error", "Third error description") == "error-2"

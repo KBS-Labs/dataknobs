@@ -9,7 +9,7 @@ __version__ = "1.0.0"
 
 __all__ = [
     "Tree",
-    "build_tree_from_string", 
+    "build_tree_from_string",
     "Text",
     "TextMetaData",
     "RecordStore",

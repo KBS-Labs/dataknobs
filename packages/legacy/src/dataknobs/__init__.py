@@ -4,7 +4,7 @@ Dataknobs - Legacy compatibility package.
 This package maintains backward compatibility for existing users.
 Please consider using the modular packages instead:
 - dataknobs-common
-- dataknobs-structures  
+- dataknobs-structures
 - dataknobs-utils
 - dataknobs-xization
 """
@@ -16,7 +16,7 @@ warnings.warn(
     "Please use the modular packages (dataknobs-common, dataknobs-structures, "
     "dataknobs-utils, dataknobs-xization) instead.",
     DeprecationWarning,
-    stacklevel=2
+    stacklevel=2,
 )
 
 __version__ = "0.0.15"

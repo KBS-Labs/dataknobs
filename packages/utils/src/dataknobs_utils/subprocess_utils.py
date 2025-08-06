@@ -2,12 +2,8 @@ import subprocess
 from typing import Callable, List
 
 
-def run_command(
-        handle_line_fn: Callable[[str], bool],
-        command: str,
-        args: List[str] = None
-) -> int:
-    '''
+def run_command(handle_line_fn: Callable[[str], bool], command: str, args: List[str] = None) -> int:
+    """
     Run a system command and do something with each line. Stop early by
     returning False from the handle_line_fn.
 
@@ -24,18 +20,16 @@ def run_command(
     :param command: A string with the command and its args or just the command
     :param args: The args for the command (if not None)
     :return: The command's return code
-    '''
+    """
     the_args = command
     shell = True
     if args is not None:
         the_args = [command] + args
         shell = False
-    process = subprocess.Popen(
-        the_args, stdout=subprocess.PIPE, shell=shell, encoding='utf8'
-    )
+    process = subprocess.Popen(the_args, stdout=subprocess.PIPE, shell=shell, encoding="utf8")
     while True:
         output = process.stdout.readline()
-        if output == '' and process.poll() is not None:
+        if output == "" and process.poll() is not None:
             break
         if output:
             if not handle_line_fn(output.strip()):

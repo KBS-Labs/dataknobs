@@ -1,12 +1,13 @@
-'''
+"""
 Implementation of a conditional associative array (dict) using the strategy
 pattern.
-'''
+"""
+
 from typing import Any, Callable, Dict
 
 
 class cdict(dict):
-    '''
+    """
     A dictionary that conditionally accepts attributes and/or values.
 
     This implementation uses the strategy pattern such that a function is
@@ -14,21 +15,17 @@ class cdict(dict):
     attribute and/or value is not accepted during an add operation, the
     set operation will fail and the key/value will be added to the "rejected"
     property.
-    '''
-    
-    def __init__(
-            self,
-            accept_fn:Callable[[Dict, Any, Any], bool],
-            *args, **kwargs
-    ):
-        '''
+    """
+
+    def __init__(self, accept_fn: Callable[[Dict, Any, Any], bool], *args, **kwargs):
+        """
         :param accept_fn: A fn(d, key, value) that returns True to accept
             the key/value into this dict d, or False to reject.
-        '''
+        """
         super().__init__()
         self._rejected = dict()
         self.accept_fn = accept_fn
-        #super().__init__(*args, **kwargs)
+        # super().__init__(*args, **kwargs)
         self.update(*args, **kwargs)
 
     @property
@@ -55,7 +52,7 @@ class cdict(dict):
 
     def update(self, E=None, **F):
         if E is not None:
-            if 'keys' in dir(E):
+            if "keys" in dir(E):
                 for k in E:
                     self.__setitem__(k, E[k])
             else:

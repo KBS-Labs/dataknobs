@@ -14,7 +14,7 @@ __all__ = [
     "CharacterFeatures",
     "masking_tokenizer",
     "normalize",
-    "annotations", 
+    "annotations",
     "authorities",
     "lexicon",
 ]
