@@ -97,17 +97,25 @@ lint() {
     for package in "${PACKAGES[@]}"; do
         echo -e "\n${YELLOW}Checking dataknobs-$package...${NC}"
         
-        # Run ruff
-        echo -e "${BLUE}Running ruff...${NC}"
-        if ruff check "packages/$package/src"; then
+        # Run ruff check
+        echo -e "${BLUE}Running ruff check...${NC}"
+        if ruff check "packages/$package/src" --config "$ROOT_DIR/pyproject.toml"; then
             echo -e "${GREEN}✓ Ruff check passed${NC}"
         else
             echo -e "${RED}✗ Ruff check failed${NC}"
         fi
         
-        # Run mypy
+        # Run ruff format check
+        echo -e "${BLUE}Running ruff format check...${NC}"
+        if ruff format --check "packages/$package/src" --config "$ROOT_DIR/pyproject.toml"; then
+            echo -e "${GREEN}✓ Ruff format check passed${NC}"
+        else
+            echo -e "${RED}✗ Ruff format check failed${NC}"
+        fi
+        
+        # Run mypy with workspace configuration
         echo -e "${BLUE}Running mypy...${NC}"
-        if mypy "packages/$package/src"; then
+        if mypy "packages/$package/src" --config-file "$ROOT_DIR/pyproject.toml"; then
             echo -e "${GREEN}✓ Type check passed${NC}"
         else
             echo -e "${RED}✗ Type check failed${NC}"

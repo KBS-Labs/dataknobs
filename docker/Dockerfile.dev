@@ -20,6 +20,26 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.cargo/bin:${PATH}"
 RUN pip3 install tox
 
+# Install ruff
+RUN curl -LsSf https://astral.sh/ruff/install.sh | sh
+
+# Install development tools with mypy and type stubs
+RUN pip install --no-cache-dir \
+    mypy>=1.8.0 \
+    pytest>=7.4.0 \
+    pytest-cov>=4.1.0 \
+    pytest-mock>=3.12.0 \
+    # Type stubs for common dependencies
+    types-requests \
+    types-beautifulsoup4 \
+    types-psycopg2 \
+    pandas-stubs \
+    # Additional type checking tools
+    pyright
+
+# Create mypy cache directory
+RUN mkdir -p /.mypy_cache && chmod 777 /.mypy_cache
+
 # used as a volume (connects to the host machine's disk at runtime)
 RUN mkdir -p /data
 

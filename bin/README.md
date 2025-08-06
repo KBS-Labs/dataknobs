@@ -73,6 +73,20 @@ Run tests for dataknobs packages:
 ./bin/test-packages.sh -c
 ```
 
+### `fix.sh`
+Auto-fix code issues using ruff:
+
+```bash
+# Fix all packages (linting and formatting)
+./bin/fix.sh
+
+# Fix specific package
+./bin/fix.sh utils
+
+# Format only (skip linting fixes)
+./bin/fix.sh -f
+```
+
 ## Quick Start
 
 For a fresh development setup:
