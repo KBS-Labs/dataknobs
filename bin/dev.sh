@@ -27,6 +27,7 @@ usage() {
     echo "  install       Install packages in dev mode"
     echo "  test          Run all tests"
     echo "  lint          Run linting and type checking"
+    echo "  validate      Validate code quality and catch errors"
     echo "  clean         Clean build artifacts and caches"
     echo "  release       Prepare packages for release"
     echo ""
@@ -152,20 +153,29 @@ clean() {
     echo -e "${GREEN}✓ Cleaned build artifacts${NC}"
 }
 
+# Validate code
+validate() {
+    echo -e "${YELLOW}Validating code...${NC}"
+    "$ROOT_DIR/bin/validate.sh" "$@"
+}
+
 # Prepare for release
 release() {
     echo -e "${YELLOW}Preparing for release...${NC}"
     
-    # Run tests first
+    # Run validation first
+    echo -e "${YELLOW}Running validation...${NC}"
+    if ! "$ROOT_DIR/bin/validate.sh"; then
+        echo -e "${RED}Validation failed! Fix before releasing.${NC}"
+        exit 1
+    fi
+    
+    # Run tests
     echo -e "${YELLOW}Running tests...${NC}"
     if ! "$ROOT_DIR/bin/test-packages.sh"; then
         echo -e "${RED}Tests failed! Fix before releasing.${NC}"
         exit 1
     fi
-    
-    # Run linting
-    echo -e "${YELLOW}Running linting...${NC}"
-    lint
     
     # Build packages
     echo -e "${YELLOW}Building packages...${NC}"
@@ -204,6 +214,10 @@ case $1 in
     lint)
         shift
         lint "$@"
+        ;;
+    validate)
+        shift
+        validate "$@"
         ;;
     clean)
         shift

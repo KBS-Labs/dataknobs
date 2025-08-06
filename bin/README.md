@@ -87,6 +87,29 @@ Auto-fix code issues using ruff:
 ./bin/fix.sh -f
 ```
 
+### `validate.sh`
+Validate code quality and catch common errors:
+
+```bash
+# Validate all packages
+./bin/validate.sh
+
+# Validate specific package
+./bin/validate.sh utils
+
+# Quick validation (skip slow checks)
+./bin/validate.sh -q
+
+# Validate and attempt auto-fix
+./bin/validate.sh -f
+```
+
+This script checks:
+- Python syntax errors
+- Type annotation issues
+- Import problems
+- Common code quality issues
+
 ## Quick Start
 
 For a fresh development setup:
