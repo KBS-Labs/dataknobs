@@ -9,8 +9,7 @@ def filepath_generator(
     seen: Set[str] = None,
     files_only: bool = True,
 ):  # yields -> str
-    """
-    Generate all filepaths under the root path.
+    """Generate all filepaths under the root path.
 
     :param rootpath: The root path under which to find files.
     :param descend: True to descend into subdirectories
@@ -39,8 +38,7 @@ def filepath_generator(
 
 
 def fileline_generator(filename: str, rootdir: str = None):
-    """
-    Generate lines from the file.
+    """Generate lines from the file.
     :param filename: The name of the file.
     :param rootdir: (optional) The directory of the file.
     :yield: Each stripped file line
@@ -59,8 +57,7 @@ def fileline_generator(filename: str, rootdir: str = None):
 
 
 def write_lines(outfile, lines, rootdir=None):
-    """
-    Write the lines to the file.
+    """Write the lines to the file.
     :param outfile: The name of the file.
     :param rootdir: (optional) The directory of the file.
     """
@@ -78,8 +75,7 @@ def write_lines(outfile, lines, rootdir=None):
 
 
 def is_gzip_file(filepath: str) -> bool:
-    """
-    Determine whether the file at filepath is gzipped.
+    """Determine whether the file at filepath is gzipped.
     :param filepath: The path to the file
     :return: True if the file is gzipped
     """

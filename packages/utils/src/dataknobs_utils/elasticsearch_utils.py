@@ -1,15 +1,15 @@
 import json
+from typing import Dict, List
 
 # import os
 import pandas as pd
-import dataknobs_utils.requests_utils as requests_utils
+
 import dataknobs_utils.pandas_utils as pd_utils
-from typing import Dict, List
+from dataknobs_utils import requests_utils
 
 
 def build_field_query_dict(fields, text, operator=None):
-    """
-    Build an elasticsearch field query to find the text in the field(s).
+    """Build an elasticsearch field query to find the text in the field(s).
     :param fields: The field (str) or fields (list[str]) to query.
     :param text: The text to find.
     :param operator: The operator to use (default if None), e.g., "AND", "OR"
@@ -41,8 +41,7 @@ def build_field_query_dict(fields, text, operator=None):
 
 
 def build_phrase_query_dict(field, phrase, slop=0):
-    """
-    Build an elasticsearch phrase query to find the phrase in the field.
+    """Build an elasticsearch phrase query to find the phrase in the field.
     :param field: The field to query
     :param phrase: The phrase to find
     :param slop: The slop factor to use
@@ -60,9 +59,7 @@ def build_phrase_query_dict(field, phrase, slop=0):
 
 
 def build_hits_dataframe(query_result) -> pd.DataFrame:
-    """
-    Build a dataframe from an elasticsearch query result's hits.
-    """
+    """Build a dataframe from an elasticsearch query result's hits."""
     df = None
     if "hits" in query_result:
         qr_hits = query_result["hits"]
@@ -74,16 +71,13 @@ def build_hits_dataframe(query_result) -> pd.DataFrame:
 
 
 def build_aggs_dataframe(query_result) -> pd.DataFrame:
-    """
-    Build a dataframe from an elasticsearch query result's aggregations.
-    """
+    """Build a dataframe from an elasticsearch query result's aggregations."""
     # TODO: implement this
     return None
 
 
 def decode_results(query_result) -> Dict[str, pd.DataFrame]:
-    """
-    Decode elasticsearch query results as "hits_df" and/or "aggs_df"
+    """Decode elasticsearch query results as "hits_df" and/or "aggs_df"
     dataframes.
     """
     result = dict()
@@ -103,8 +97,7 @@ def add_batch_data(
     source_id_fieldname="id",
     cur_id=1,
 ):
-    """
-    Add source records from the generator to the batchfile for elasticsearch
+    """Add source records from the generator to the batchfile for elasticsearch
     bulk load into the named index with record IDs starting at the given value,
     optionally adding the record ID to the source record if indicated.
 
@@ -134,21 +127,19 @@ def add_batch_data(
 
 
 def batchfile_record_generator(batchfile_path):
-    """
-    Given the path to an elasticsearch batchfile yield each elasticsearch
+    """Given the path to an elasticsearch batchfile yield each elasticsearch
     record (dict).
     :param batchfile_path: The path to the elasticdsearch batch file
     :yield: Each elasticsearch record dictionary
     """
-    with open(batchfile_path, "r", encoding="utf-8") as f:
+    with open(batchfile_path, encoding="utf-8") as f:
         for line in f:
             if not line.startswith('{"index":'):
                 yield json.loads(line)
 
 
 def collect_batchfile_values(batchfile_path, fieldname, default_value=""):
-    """
-    Given the path to an elasticsearch batchfile and a source record fieldname,
+    """Given the path to an elasticsearch batchfile and a source record fieldname,
     collect all of the values for the named field.
 
     :param batchfile_path: The path to the elasticsearch batchfile
@@ -163,9 +154,7 @@ def collect_batchfile_values(batchfile_path, fieldname, default_value=""):
 
 
 def collect_batchfile_records(batchfile_path):
-    """
-    Collect the batchfile records as a pandas DataFrame.
-    """
+    """Collect the batchfile records as a pandas DataFrame."""
     records = []
     for record in batchfile_record_generator(batchfile_path):
         records.append(record)
@@ -173,9 +162,7 @@ def collect_batchfile_records(batchfile_path):
 
 
 class TableSettings:
-    """
-    Container for elasticsearch table settings.
-    """
+    """Container for elasticsearch table settings."""
 
     def __init__(
         self,
@@ -189,9 +176,7 @@ class TableSettings:
 
 
 class ElasticsearchIndex:
-    """
-    Wrapper for interacting with an elasticsearch index.
-    """
+    """Wrapper for interacting with an elasticsearch index."""
 
     def __init__(
         self,
@@ -212,9 +197,7 @@ class ElasticsearchIndex:
         self._init_tables()
 
     def _init_tables(self):
-        """
-        Ensure the tables have been created and initialized.
-        """
+        """Ensure the tables have been created and initialized."""
         for table in self.tables:
             resp = self._request("get", f"{table.name}/_mapping")
             if not resp.succeeded:
@@ -251,21 +234,15 @@ class ElasticsearchIndex:
         )
 
     def is_up(self):
-        """
-        :return: True if the elasticsearch server is up.
-        """
+        """:return: True if the elasticsearch server is up."""
         return self._request("get", "_cluster/health").succeeded
 
     def get_cluster_health(self, verbose=False):
-        """
-        :return: a requests_utils.ServerResponse instance
-        """
+        """:return: a requests_utils.ServerResponse instance"""
         return self._request("get", "_cluster/health", verbose=verbose)
 
     def inspect_indices(self, verbose=False):
-        """
-        :return: a requests_utils.ServerResponse instance
-        """
+        """:return: a requests_utils.ServerResponse instance"""
         return self._request(
             "get",
             "_cat/indices?v&pretty",
@@ -274,9 +251,7 @@ class ElasticsearchIndex:
         )
 
     def purge(self, verbose=False):
-        """
-        Purge all data in tables managed by this wrapper.
-        """
+        """Purge all data in tables managed by this wrapper."""
         resp = None
         for table in self.tables:
             resp = self.delete_table(table.name, verbose=verbose)
@@ -284,9 +259,7 @@ class ElasticsearchIndex:
         return resp
 
     def delete_table(self, table_name, verbose=False):
-        """
-        :return: a requests_utils.ServerResponse instance
-        """
+        """:return: a requests_utils.ServerResponse instance"""
         return self._request("delete", table_name, verbose=verbose)
 
     ## NOT WORKING
@@ -313,9 +286,7 @@ class ElasticsearchIndex:
         analyzer: str,
         verbose=False,
     ):
-        """
-        :return: a requests_utils.ServerResponse instance
-        """
+        """:return: a requests_utils.ServerResponse instance"""
         return self._request(
             "post",
             "_analyze",
@@ -334,8 +305,7 @@ class ElasticsearchIndex:
         table: str = None,
         verbose: bool = False,
     ) -> requests_utils.ServerResponse:
-        """
-        Submit the elasticsearch search DSL query.
+        """Submit the elasticsearch search DSL query.
 
         :param query: The elasticsearch search query of the form, e.g.,:
             {"query": {"match": {<field>: {"query": <text>, "operator": "AND"}}}}
@@ -364,8 +334,7 @@ class ElasticsearchIndex:
         columnar: bool = True,
         verbose: bool = False,
     ) -> requests_utils.ServerResponse:
-        """
-        Submit the elasticsearch sql query.
+        """Submit the elasticsearch sql query.
 
         :param query: The elasticsearch search sql query
         :param fetch_size: The max number of records to fetch at a time

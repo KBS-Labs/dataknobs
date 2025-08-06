@@ -1,9 +1,6 @@
-"""
-Utilities for working with unicode emojis.
-
+"""Utilities for working with unicode emojis.
 
 References:
-
 * https://home.unicode.org/emoji/about-emoji/
    * https://unicode.org/emoji/techindex.html
       * https://www.unicode.org/Public/emoji/15.0/
@@ -42,7 +39,6 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, Set
 
-
 LATEST_EMOJI_DATA = "resources/emoji-test.15.0.txt"
 
 
@@ -70,9 +66,7 @@ class Emoji:
 
 
 def build_emoji_dataclass(emoji_test_line: str) -> Emoji:
-    """
-    Build an Emoji dataclass from the emoji-test file line.
-    """
+    """Build an Emoji dataclass from the emoji-test file line."""
     result = None
     m = ETESTLINE_RE.match(emoji_test_line)
     if m:
@@ -90,9 +84,7 @@ def get_emoji_seq(emoji_str: str, as_hex: bool = False) -> List[int]:
 
 
 class EmojiData:
-    """
-    Class for interpreting the unicode emoji_test.txt file.
-    """
+    """Class for interpreting the unicode emoji_test.txt file."""
 
     def __init__(self, emoji_test_path: str):
         self.emojis = dict()  # emojichars -> EmojiData
@@ -103,17 +95,14 @@ class EmojiData:
 
     @property
     def echars(self) -> List[int]:
-        """
-        Code points that alone are an emoji code point.
-        """
+        """Code points that alone are an emoji code point."""
         if self._echars is None:
             self._compute_echars()
         return self._echars
 
     @property
     def ldepechars(self) -> Dict[int, Set[int]]:
-        """
-        Code points are not an emoji alone, but precede emoji code points,
+        """Code points are not an emoji alone, but precede emoji code points,
         where ldepechars[cp] is the set of all emoji code points that follow cp.
         """
         if self._ldepechars is None:
@@ -122,8 +111,7 @@ class EmojiData:
 
     @property
     def rdepechars(self) -> Dict[int, Set[int]]:
-        """
-        Code points are not an emoji alone, but follow emoji code points,
+        """Code points are not an emoji alone, but follow emoji code points,
         where rdepechars[cp] is the set of all emoji code points that precede cp.
         """
         if self._rdepechars is None:
@@ -146,16 +134,14 @@ class EmojiData:
         self._rdepechars = rdepechars
 
     def emojis_with_cp(self, cp: int) -> List[Emoji]:
-        """
-        Find emojis containing the given code point.
+        """Find emojis containing the given code point.
         :param cp: The code point
         :return: The list of emoji dataclasses
         """
         return [e for emoji, e in self.emojis.items() if cp in get_emoji_seq(emoji)]
 
     def emoji_bio(self, emoji_text: str) -> str:
-        """
-        Given a string of text, create a "BIO" string to identify Begin,
+        """Given a string of text, create a "BIO" string to identify Begin,
         Internal, and Outer emoji characters in the text.
         :param text: The input text
         :return: a BIO string
@@ -180,25 +166,23 @@ class EmojiData:
                     result.append("B")
                 else:
                     result.append("O")
-            else:
-                if not isrechar and not issp:
-                    if isechar or islechar:
-                        if prevc != ZERO_WIDTH_JOINER:
-                            start_pos = idx
-                            result.append("B")
-                        else:
-                            result.append("I")
+            elif not isrechar and not issp:
+                if isechar or islechar:
+                    if prevc != ZERO_WIDTH_JOINER:
+                        start_pos = idx
+                        result.append("B")
                     else:
-                        start_pos = -1
-                        result.append("O")
+                        result.append("I")
                 else:
-                    result.append("I")
+                    start_pos = -1
+                    result.append("O")
+            else:
+                result.append("I")
             prevc = c
         return "".join(result)
 
     def get_emojis(self, text: str) -> List["EmojiData"]:
-        """
-        Get emoji data for all emojis in the given text.
+        """Get emoji data for all emojis in the given text.
         :param text: Arbitrary text
         :return: The (possibly empty) list of emojis found
         """
@@ -218,7 +202,7 @@ class EmojiData:
     def _load_emoji_test(self, emoji_test_path: str):
         curgroup = ""
         cursubgroup = ""
-        with open(emoji_test_path, "r", encoding="utf-8") as f:
+        with open(emoji_test_path, encoding="utf-8") as f:
             for line in f:
                 if line.startswith("# group:"):
                     curgroup = line[9:].strip()
@@ -248,9 +232,7 @@ class EmojiData:
 
 
 def load_emoji_data() -> EmojiData:
-    """
-    Load latest emoji-test.txt or reference EMOJI_TEST_DATA env var.
-    """
+    """Load latest emoji-test.txt or reference EMOJI_TEST_DATA env var."""
     result = None
     datapath = os.environ.get("EMOJI_TEST_DATA", LATEST_EMOJI_DATA)
     if os.path.exists(datapath):

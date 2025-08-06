@@ -1,9 +1,10 @@
 import json
-import requests
 import socket
 import sys
-from typing import Any, Callable, Dict, Tuple
+from collections.abc import Callable
+from typing import Any, Dict, Tuple
 
+import requests
 
 DEFAULT_TIMEOUT = 5
 HEADERS = {"Content-Type": "application/json"}
@@ -11,8 +12,7 @@ DBG_HEADERS = {"Content-Type": "application/json", "error_trace": "true"}
 
 
 def get_current_ip() -> str:
-    """
-    Get the running machine's IPv4 address.
+    """Get the running machine's IPv4 address.
     :return: The IP address
     """
     return socket.gethostbyname(socket.gethostname())
@@ -42,8 +42,7 @@ def get_request(
     ] = default_api_response_handler,
     requests=requests,  # pylint: disable-msg=W0621
 ) -> Tuple[int, Dict[str, Any]]:
-    """
-    Submit the api get request and collect the response as a Dict.
+    """Submit the api get request and collect the response as a Dict.
     :param api_request: The api request
     :param params: The request parameters
     :param headers: The request headers (defaults to HEADERS)
@@ -70,8 +69,7 @@ def post_request(
     ] = default_api_response_handler,
     requests=requests,  # pylint: disable-msg=W0621
 ) -> Tuple[int, Dict[str, Any]]:
-    """
-    Submit the api post request and collect the response as a Dict.
+    """Submit the api post request and collect the response as a Dict.
     :param api_request: The api request
     :param params: The request parameters
     :param headers: The request headers (defaults to HEADERS)
@@ -103,8 +101,7 @@ def post_files_request(
     ] = default_api_response_handler,
     requests=requests,  # pylint: disable-msg=W0621
 ) -> Tuple[int, Dict[str, Any]]:
-    """
-    Post data from one or more files.
+    """Post data from one or more files.
     :param api_request: The api request
     :param files: A dict of {<file_id>: <file_data>}} entries for each file,
         where files can be of the form of the following examples:
@@ -139,8 +136,7 @@ def put_request(
     ] = default_api_response_handler,
     requests=requests,  # pylint: disable-msg=W0621
 ) -> Tuple[int, Dict[str, Any]]:
-    """
-    Submit the api put request and collect the response as a Dict.
+    """Submit the api put request and collect the response as a Dict.
     :param api_request: The api request
     :param params: The request parameters
     :param headers: The request headers (defaults to HEADERS)
@@ -172,8 +168,7 @@ def delete_request(
     ] = default_api_response_handler,
     requests=requests,  # pylint: disable-msg=W0621
 ) -> Tuple[int, Dict[str, Any]]:
-    """
-    Submit the api delete request and collect the response as a Dict.
+    """Submit the api delete request and collect the response as a Dict.
     :param api_request: The api request
     :param params: The request parameters
     :param headers: The request headers (defaults to HEADERS)
@@ -190,9 +185,7 @@ def delete_request(
 
 
 class ServerResponse:
-    """
-    Class to encapsulate request response data from the elasticsearch server.
-    """
+    """Class to encapsulate request response data from the elasticsearch server."""
 
     def __init__(self, resp, result):
         self.resp = resp
@@ -229,9 +222,7 @@ class ServerResponse:
 
 
 class RequestHelper:
-    """
-    Class to simplify sending api request commands to a server.
-    """
+    """Class to simplify sending api request commands to a server."""
 
     def __init__(
         self,
@@ -264,8 +255,7 @@ class RequestHelper:
         timeout=0,
         verbose=True,
     ):
-        """
-        :param rtype: The request type, or command. One of:
+        """:param rtype: The request type, or command. One of:
             ['get', 'post', 'post-files', 'put', 'delete']
         :param path: The api path portion of the request
         :param payload: The request payload
@@ -350,9 +340,7 @@ class RequestHelper:
 
 
 class MockResponse:
-    """
-    A mock response object
-    """
+    """A mock response object"""
 
     def __init__(self, status_code, result):
         self.status_code = status_code

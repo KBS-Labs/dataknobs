@@ -1,8 +1,9 @@
 import itertools
 import json
+from typing import Dict, List, Set, Tuple, Union
+
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Set, Tuple, Union
 
 
 def dicts2df(
@@ -10,8 +11,7 @@ def dicts2df(
     rename: Dict[str, str] = None,
     item_id: str = "item_id",
 ):
-    """
-    Create a dataframe from a list of or list of lists of dictionaries.
+    """Create a dataframe from a list of or list of lists of dictionaries.
     :param dicts: A list of dictionaries
     :param rename: Dictionary of {from: to} column name mappings
     :param item_id: Name of column to add with list indices
@@ -32,8 +32,7 @@ def sort_by_strlen(
     text_col: str,
     ascending: bool = False,
 ) -> pd.DataFrame:
-    """
-    Sort the dataframe according to the length of the strings in a text column
+    """Sort the dataframe according to the length of the strings in a text column
     :param df: The dataframe to sort
     :param text_col: The text column to sort by
     :return: The sorted dataframe
@@ -42,8 +41,7 @@ def sort_by_strlen(
 
 
 def get_loc_range(bool_ser: pd.Series) -> Tuple[int, int]:
-    """
-    Get the first (start index) and last True locations in the boolean series.
+    """Get the first (start index) and last True locations in the boolean series.
     :param bool_ser: A boolean series
     :return: (first_loc, last_loc) for the first and last "True" locations
     """
@@ -54,8 +52,7 @@ def get_loc_range(bool_ser: pd.Series) -> Tuple[int, int]:
 
 
 def explode_json_series(json_ser: pd.Series) -> pd.Series:
-    """
-    Given a series with each value a json list of items, explode the series
+    """Given a series with each value a json list of items, explode the series
     items.
     :param json_ser: The series with json values
     :return: The exploded series
@@ -64,8 +61,7 @@ def explode_json_series(json_ser: pd.Series) -> pd.Series:
 
 
 class GroupManager:
-    """
-    Class to manage groups of rows in a dataframe identified by a json list of
+    """Class to manage groups of rows in a dataframe identified by a json list of
     numbers in a group number column such that all rows sharing the same group
     number constitute a group.
     """
@@ -75,8 +71,7 @@ class GroupManager:
         df: pd.DataFrame,
         group_num_col: str,
     ):
-        """
-        Initialize with the dataframe and group number column name.
+        """Initialize with the dataframe and group number column name.
         :param df: The dataframe with rows in sorted order
         :param group_num_col: The name of the group number column
         """
@@ -98,24 +93,21 @@ class GroupManager:
 
     @property
     def df(self) -> pd.DataFrame:
-        """
-        Get the collapsed dataframe such that the group number column holds the
+        """Get the collapsed dataframe such that the group number column holds the
         list of group numbers as a json string in unique rows.
         """
         return self._cdf
 
     @property
     def collapsed_df(self) -> pd.DataFrame:
-        """
-        Get the collapsed dataframe such that the group number column holds the
+        """Get the collapsed dataframe such that the group number column holds the
         list of group numbers as a json string in unique rows.
         """
         return self._cdf
 
     @property
     def expanded_ser(self) -> pd.Series:
-        """
-        Get the expanded series such that the group number column holds an
+        """Get the expanded series such that the group number column holds an
         integer and the index values are repeated for members of multiple
         groups.
         """
@@ -136,9 +128,7 @@ class GroupManager:
 
     @property
     def all_group_locs(self) -> Dict[int, List[int]]:
-        """
-        Get all group row locs, indexed by group_num.
-        """
+        """Get all group row locs, indexed by group_num."""
         if self._glocs is None:
             edf = pd.DataFrame(self.expanded_ser)
             edf["__tmp_idx__"] = edf.index
@@ -153,15 +143,11 @@ class GroupManager:
         return self._glocs
 
     def get_group_locs(self, group_num: int) -> List[int]:
-        """
-        Get the row locs for the given group, or None.
-        """
+        """Get the row locs for the given group, or None."""
         return self.all_group_locs.get(group_num, None)
 
     def get_intra_ungrouped_locs(self, group_num: int) -> List[int]:
-        """
-        Get the locs for rows within the given group rows, but not in the group
-        """
+        """Get the locs for rows within the given group rows, but not in the group"""
         result = None
         colname = f"{self.gcol}_{group_num}"
         if colname in self.mask_df:
@@ -175,40 +161,30 @@ class GroupManager:
 
     @property
     def grouped_locs(self) -> List[int]:
-        """
-        Get all row locs that are in at least one group
-        """
+        """Get all row locs that are in at least one group"""
         return self.mask_df.index[self.mask_df.sum(axis=1) > 0].tolist()
 
     @property
     def ungrouped_locs(self) -> List[int]:
-        """
-        Get all row locs that aren't in any group
-        """
+        """Get all row locs that aren't in any group"""
         return self.mask_df.index[self.mask_df.sum(axis=1) == 0].tolist()
 
     @property
     def all_group_nums(self) -> List[int]:
-        """
-        Get the existing group numbers, or an empty list.
-        """
+        """Get the existing group numbers, or an empty list."""
         result = self.expanded_ser.unique()
         result = [x for x in result if not np.isnan(x)]
         return result
 
     @property
     def max_group_num(self) -> int:
-        """
-        Get the maximum group number present, or -1 if there are none.
-        """
+        """Get the maximum group number present, or -1 if there are none."""
         result = self.expanded_ser.max()
         return -1 if np.isnan(result) else result
 
     @property
     def mask_df(self) -> pd.DataFrame:
-        """
-        Get a dataframe of group masks identifying rows in each group.
-        """
+        """Get a dataframe of group masks identifying rows in each group."""
         if self._mdf is None:
             cdf = self.collapsed_df
             if self.gcol in cdf:
@@ -226,8 +202,7 @@ class GroupManager:
         return self._mdf
 
     def mark_group(self, idx_values: pd.Series, group_num: int = None):
-        """
-        Mark the rows identified by their index values as a group, either with
+        """Mark the rows identified by their index values as a group, either with
         the next higher available group number or with the given group number.
 
         If the group_num already exists, then rows without the group_num will
@@ -260,8 +235,7 @@ class GroupManager:
         idx_value_lists: List[pd.Series],
         group_nums: List[int] = None,
     ):
-        """
-        Convenience method to mark multiple groups at once.
+        """Convenience method to mark multiple groups at once.
         :param idx_value_lists: A list of idx_values identifying groups
         :param group_nums: A list of group numbers corresponding to each
             idx_values list. If None, then auto-increment group_nums for
@@ -273,8 +247,7 @@ class GroupManager:
             )
 
     def unmark_group(self, group_num: int, idx_values: pd.Series = None):
-        """
-        Remove group_num from the specified rows, or entirely.
+        """Remove group_num from the specified rows, or entirely.
         :param group_num: The group_num to remove
         :param idx_values: The row locs from which to remove the group_num.
             If None, then group_num will be removed from all rows in which
@@ -299,16 +272,14 @@ class GroupManager:
             self._reset_edf()
 
     def remove_groups(self, group_nums: List[int]):
-        """
-        Convenience method to unmark (remove) the listed groups.
+        """Convenience method to unmark (remove) the listed groups.
         :param group_num: The group numbers to remove
         """
         for gnum in group_nums:
             self.unmark_group(gnum)
 
     def find_subsets(self, proper: bool = True) -> Set[int]:
-        """
-        Find the groups that are subsets of other groups.
+        """Find the groups that are subsets of other groups.
         :param proper: If True, include proper (complete) subsets.
         :return: The set of group numbers that are subsets of other groups
         """
@@ -332,24 +303,20 @@ class GroupManager:
         return rv
 
     def remove_subsets(self, proper: bool = True):
-        """
-        Convenience method to remove all groups that are subsets of others.
+        """Convenience method to remove all groups that are subsets of others.
         :param proper: If True, include proper (complete) subsets.
         """
         self.remove_groups(self.find_subsets(proper=proper))
 
     def clear_all_groups(self):
-        """
-        Remove (unmark) all groups.
-        """
+        """Remove (unmark) all groups."""
         df = self.collapsed_df
         if self.gcol in df.columns:
             df[self.gcol] = np.nan
             self._reset_edf()
 
     def reset_group_numbers(self, start_num: int = 0):
-        """
-        Reset group numbers to increase consecutively from a start.
+        """Reset group numbers to increase consecutively from a start.
         :param start_num: The group number to start from.
         """
         glocs = self.all_group_locs
@@ -358,9 +325,7 @@ class GroupManager:
             self.mark_group(locs, group_num=start_num + idx)
 
     def _reset_edf(self):
-        """
-        Reset the enhanced_df for recomputing.
-        """
+        """Reset the enhanced_df for recomputing."""
         self._es = None
         self._glocs = None
         self._mdf = None
@@ -370,8 +335,7 @@ class GroupManager:
         group_num: int,
         subgroup_num_col: str,
     ):
-        """
-        Given that this group manager's groups are comprised of groups from
+        """Given that this group manager's groups are comprised of groups from
         another group manager, reconstruct that group manager's groups
         identified by the given group_num from this manager.
 

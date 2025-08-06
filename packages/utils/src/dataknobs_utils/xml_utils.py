@@ -1,23 +1,22 @@
-import bs4
 import mmap
-import pandas as pd
 import re
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
-from typing import Callable, List, TextIO, Tuple, Union
+from collections.abc import Callable
+from typing import List, TextIO, Tuple, Union
+
+import bs4
+import pandas as pd
 
 
 class XmlStream(ABC):
-    """
-    Abstract base class for streaming XML content.
+    """Abstract base class for streaming XML content.
 
     NOTE: Extending classes need to implement __iter__
     """
 
     def __init__(self, source: Union[str, TextIO], auto_clear_elts: bool = True):
-        """
-        :param source: An XML filename or file object
-        """
+        """:param source: An XML filename or file object"""
         self._xml_iter = None
         self.source = source
         self.auto_clear_elts = auto_clear_elts
@@ -26,21 +25,16 @@ class XmlStream(ABC):
 
     @property
     def context(self) -> List[ET.Element]:
-        """
-        Get the current "stack" of elements from the root.
-        """
+        """Get the current "stack" of elements from the root."""
         return self._context.copy()
 
     @property
     def context_length(self) -> int:
-        """
-        Get the length of the current context.
-        """
+        """Get the length of the current context."""
         return len(self._context)
 
     def next_xml_iter(self) -> Tuple[str, ET.Element]:
-        """
-        Get the next (event, elem) from the underlying xml iterator or raise
+        """Get the next (event, elem) from the underlying xml iterator or raise
         a StopIteration exception if exhausted.
         """
         if self._xml_iter is None:
@@ -53,8 +47,7 @@ class XmlStream(ABC):
 
     @abstractmethod
     def loop_through_elements(self) -> List[ET.Element]:
-        """
-        Loop through elements of self.xml_iter, adding elements to the context,
+        """Loop through elements of self.xml_iter, adding elements to the context,
         until the next desired element has been collected.
         """
         raise NotImplementedError
@@ -86,9 +79,7 @@ class XmlStream(ABC):
         self._context.append(elem)
 
     def find_context_idx(self, elem: ET.Element):
-        """
-        Find the latest index of the element in the context (or -1).
-        """
+        """Find the latest index of the element in the context (or -1)."""
         idx = len(self._context) - 1
         while idx >= 0:
             if self._context[idx] == elem:
@@ -96,8 +87,7 @@ class XmlStream(ABC):
         return idx
 
     def pop_closed_from_context(self, closed_elem: ET.Element, idx: int = None):
-        """
-        Pop the closed element from the context
+        """Pop the closed element from the context
         :param closed_elem: The closed element
         :param idx: The element's index within the context (if known)
         """
@@ -111,9 +101,7 @@ class XmlStream(ABC):
             self._closed_elt = closed_elem
 
     def take(self, n: int) -> List[List[ET.Element]]:
-        """
-        Take the next N items from this iterator.
-        """
+        """Take the next N items from this iterator."""
         # items = list()
         idx = 0
         while idx < n:
@@ -130,8 +118,7 @@ class XmlStream(ABC):
     def to_string(
         elt_path: List[ET.Element], with_text_or_atts: Union[bool, str, List[str]] = True
     ) -> str:
-        """
-        Show the element path  as a dot-delimited string of tags, optionally
+        """Show the element path  as a dot-delimited string of tags, optionally
         adding the leaf node's text or value from an attribute.
 
         :param elt_path: The list of elements from root to leaf
@@ -162,8 +149,7 @@ class XmlStream(ABC):
 
 
 class XmlLeafStream(XmlStream):
-    """
-    Class to get each XML leaf node with its parents to the root from an xml
+    """Class to get each XML leaf node with its parents to the root from an xml
     stream.
 
     Usage example to show the first 10 xpaths to leaf nodes, including node text
@@ -178,17 +164,14 @@ class XmlLeafStream(XmlStream):
     """
 
     def __init__(self, source: Union[str, TextIO], auto_clear_elts: bool = True):
-        """
-        :param source: An XML filename or file object
-        """
+        """:param source: An XML filename or file object"""
         super().__init__(source, auto_clear_elts=auto_clear_elts)
         self._last_elt = None  # The last new element
         self.count = 0  # The number of terminal nodes seen
         self.elts = None  # The latest yielded sequence
 
     def loop_through_elements(self) -> Tuple[str, ET.Element]:
-        """
-        Loop through elements of self.xml_iter, adding elements to the context,
+        """Loop through elements of self.xml_iter, adding elements to the context,
         until the next terminal element has been collected.
         """
         gotit = None
@@ -215,8 +198,7 @@ class XmlLeafStream(XmlStream):
 
 
 class XmlElementGrabber(XmlStream):
-    """
-    Class to grab each highest matching DOM element from streamed XML.
+    """Class to grab each highest matching DOM element from streamed XML.
 
     Usage example to get the first 10 xpaths to element nodes with the tag "foo"
     >>> import dataknobs_utils.xml_utils as xml_utils
@@ -230,8 +212,7 @@ class XmlElementGrabber(XmlStream):
         match: Union[str, Callable[[ET.Element], bool]],
         auto_clear_elts: bool = True,
     ):
-        """
-        :param source: An XML filename or file object
+        """:param source: An XML filename or file object
         :param match: A tag name to match or a function returning True when a
            an element is encountered.
         """
@@ -246,7 +227,7 @@ class XmlElementGrabber(XmlStream):
                 matches = elem.tag == self.match
             elif ":" in elem.tag:
                 # match ns0:<match> or {...:...}<match> (NOTE: 0x7d == '}')
-                matches = re.match(r"^.*[:\x7d]{match}$".format(match=self.match), elem.tag)
+                matches = re.match(rf"^.*[:\x7d]{self.match}$", elem.tag)
             else:
                 matches = self.match == elem.tag
         else:
@@ -254,8 +235,7 @@ class XmlElementGrabber(XmlStream):
         return matches
 
     def loop_through_elements(self) -> List[ET.Element]:
-        """
-        Find the next match ET.Element, returning in context from the root
+        """Find the next match ET.Element, returning in context from the root
         node to the element.
         """
         gotit = None
@@ -280,8 +260,7 @@ class XmlElementGrabber(XmlStream):
 
 
 class XMLTagStream:
-    """
-    Class for chunking a large XML file into separate bs4 "soup" objects based
+    """Class for chunking a large XML file into separate bs4 "soup" objects based
     on a tag.
     """
 
@@ -312,8 +291,7 @@ class XMLTagStream:
 
 
 def soup_generator(xmlfilepath, tag_name, with_attrs=False, encoding="utf-8"):
-    """
-    A generator for bs4 soup objects for each tag_name in the xml file.
+    """A generator for bs4 soup objects for each tag_name in the xml file.
     :param xmlfilepath: The path to the xml file
     :param tag_name: The tag name to extract
     :param with_attrs: True to find the tag with attributes
@@ -334,8 +312,7 @@ def html_table_scraper(
     soup_table: bs4.element.Tag,
     add_header_as_row: bool = False,
 ) -> pd.DataFrame:
-    """
-    Scrape html table information into a dataframe.
+    """Scrape html table information into a dataframe.
     :param soup_table: The soup table element
     :param add_header_as_row: If True, the header row will also be added as
         a table row.

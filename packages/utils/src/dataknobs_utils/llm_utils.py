@@ -1,7 +1,9 @@
 import json
-from dataknobs_structures.tree import Tree
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Union
+from typing import Any, Dict, List, Union
+
+from dataknobs_structures.tree import Tree
 
 
 def get_value_by_key(
@@ -9,8 +11,7 @@ def get_value_by_key(
     pathkey: str,
     default_value: Any = None,
 ) -> Any:
-    """
-    Get the "deep" value from the dictionary according to the dot-delimited
+    """Get the "deep" value from the dictionary according to the dot-delimited
     path key.
     :param d: The (possibly nested) dictionary.
     :param pathkey: The path key
@@ -35,8 +36,7 @@ def get_value_by_key(
 
 
 class PromptMessage:
-    """
-    Wrapper for a prompt message of the form:
+    """Wrapper for a prompt message of the form:
       {"role": <role>, "content": <content>}
     Where <role> is e.g., "system", "user", "assistant" and content is the
     prompt or LLM-generated text.
@@ -50,8 +50,7 @@ class PromptMessage:
     """
 
     def __init__(self, role: str, content: str, metadata: Dict[str, Any] = None):
-        """
-        Initialize with the given role and content.
+        """Initialize with the given role and content.
         :param role: The role (e.g., "system", "user", or "assistant")
         :param content: The associated prompt or LLM-generated text
         :param metadata: The metadata for this message
@@ -73,15 +72,13 @@ class PromptMessage:
         return self.to_json(with_metadata=False)
 
     def to_json(self, with_metadata: bool = True) -> str:
-        """
-        Get this node's message as a json str. Note that an error will be
+        """Get this node's message as a json str. Note that an error will be
         thrown if the metadata is not json serializable.
         """
         return json.dumps(self.get_message(with_metadata=with_metadata))
 
     def get_message(self, with_metadata: Union[bool, str] = False) -> Dict[str, str]:
-        """
-        Get the role and content for this node as a dict of the form:
+        """Get the role and content for this node as a dict of the form:
           {"role": <role>, "content": <content>}
         :param with_metadata: If true, and there is metadata, then include the
             metadata in the returned dictionary. If a string, then also use
@@ -105,8 +102,7 @@ class PromptMessage:
 
     @staticmethod
     def build_instance(message_dict: Dict[str, Any]) -> "PromptMessage":
-        """
-        (Re)build a PromptMessage instance from its dictionary form.
+        """(Re)build a PromptMessage instance from its dictionary form.
         :param message_dict: A message dictionary of the form {
           "role": <str>, "content": <str>, "metadata": <dict>
         }
@@ -114,13 +110,12 @@ class PromptMessage:
         return PromptMessage(
             message_dict.get("role", "unknown"),
             message_dict.get("content", ""),
-            metadata=message_dict.get("metadata", None),
+            metadata=message_dict.get("metadata"),
         )
 
 
 class PromptTree:
-    """
-    Data structure to preserve a tree of prompt messages.
+    """Data structure to preserve a tree of prompt messages.
 
     Where each instance represents a node in a tree where the root node holds
     the information for the initial prompt, and each descendant holds
@@ -145,8 +140,7 @@ class PromptTree:
         metadata: Dict[str, Any] = None,
         parent: "PromptTree" = None,
     ):
-        """
-        Construct either with the given message or create a message
+        """Construct either with the given message or create a message
         from the supplied role and content. If a role and/or content are
         supplied with a message, then a new message will be created with
         the role and/or content overridden by the parameters; otherwise
@@ -184,31 +178,25 @@ class PromptTree:
             self.node = Tree(self)
 
     def __repr__(self) -> str:
-        """
-        Get this PromptTree (node) as a string of the form:
-            <node_depth>.<sibling_id>:<role>(content_length)
+        """Get this PromptTree (node) as a string of the form:
+        <node_depth>.<sibling_id>:<role>(content_length)
         """
         return f"{self.node_id}:{self.message.role}({len(self.message.content)})"
 
     def _inc_tree_id(self) -> int:
-        """
-        Store a global (to all nodes in this tree) ID as a value in a single
+        """Store a global (to all nodes in this tree) ID as a value in a single
         element list. This shared value across all PromptTree instances will
         always hold the total number of nodes in the full tree.
         """
 
     @property
     def node_count(self) -> int:
-        """
-        Get the total number of nodes in this prompt tree.
-        """
+        """Get the total number of nodes in this prompt tree."""
         return self._tree_id.id_count
 
     @property
     def node_id(self) -> int:
-        """
-        Get this node's ID.
-        """
+        """Get this node's ID."""
         return self._node_id
 
     def add_message(
@@ -218,8 +206,7 @@ class PromptTree:
         content: str = None,
         metadata: Dict[str, Any] = None,
     ) -> "PromptTree":
-        """
-        Add the message as a child of this node, returning the new tree node.
+        """Add the message as a child of this node, returning the new tree node.
         :param message: The "child" prompt message
         :param role: The role (override)
         :param content: The content (override)
@@ -236,8 +223,7 @@ class PromptTree:
 
     @property
     def metadata(self) -> Dict[str, Any]:
-        """
-        Get this node's metadata, inheriting from an ancestor if needed.
+        """Get this node's metadata, inheriting from an ancestor if needed.
         :return: This node's metadata
         """
         metadata = self.message.metadata
@@ -248,8 +234,7 @@ class PromptTree:
         return metadata
 
     def get_metadata_value(self, pathkey: str, default_value: Any = None) -> Any:
-        """
-        Get the (inherited if necessary) metadata value by path key.
+        """Get the (inherited if necessary) metadata value by path key.
         :param pathkey: A dot-delimited path to the data to fetch.
         :param default_value: The value to return when the path key doesn't exist
         :return: The (possibly inherited) metadata value.
@@ -268,8 +253,7 @@ class PromptTree:
         ptree_fn: Callable[["PromptTree"], None],
         level_offset: int = -1,
     ):
-        """
-        Apply a function to each of the PromptTree nodes from the identified
+        """Apply a function to each of the PromptTree nodes from the identified
         level through this node.
         :param ptree_fn: The fn(ptree_node) to apply to each node in order
             from this, the deepest, node up to the identified node.
@@ -294,8 +278,7 @@ class PromptTree:
     def get_messages(
         self, level_offset: int = -1, with_metadata: bool = False
     ) -> List[Dict[str, Any]]:
-        """
-        Get the prompt messages suitable for passing as context into an LLM.
+        """Get the prompt messages suitable for passing as context into an LLM.
         :param level_offset: The level offset specifying the nodes
             relative to this from which to collect messages.
             Where, level_offset identifies the start node as:
@@ -319,8 +302,7 @@ class PromptTree:
         return messages
 
     def get_duration(self, level_offset: int = 0) -> int:
-        """
-        Get the total number of seconds from metadata["execution_data"]'s
+        """Get the total number of seconds from metadata["execution_data"]'s
         "endtime" - "starttime" for the specified prompt levels.
         :param level_offset: The level offset specifying the nodes
             relative to this for which to get the duration.
@@ -344,8 +326,7 @@ class PromptTree:
         return duration
 
     def get_self_duration(self) -> int:
-        """
-        Get the duration in seconds for this node from
+        """Get the duration in seconds for this node from
         metadata["execution_data"]'s endtime - starttime, assuming
         endtime and starttime are time strings in iso format
         (e.g., s = d.isoformat() for d=starttime or endtime)
@@ -365,8 +346,7 @@ class PromptTree:
         return duration
 
     def get_level_node(self, level_offset: int) -> "PromptTree":
-        """
-        Get the prompt tree node at the specified level offset relative to
+        """Get the prompt tree node at the specified level offset relative to
         this node.
         :param level_offset: The level offset specifying the nodes
             relative to this for which to get the duration.
@@ -399,8 +379,7 @@ class PromptTree:
             return node.data
 
     def find_node_by_id(self, node_id: int) -> "PromptTree":
-        """
-        Find the PromptTree Node with the given node ID.
+        """Find the PromptTree Node with the given node ID.
 
         :param node_id: The node ID to find
         :return: The node or None
@@ -414,8 +393,7 @@ class PromptTree:
         self,
         match_fn: Callable[[Tree], bool] = None,
     ) -> List["PromptTree"]:
-        """
-        Find prompt tree nodes that match the given criteria.
+        """Find prompt tree nodes that match the given criteria.
 
         :param match_fn: fn(<tree>) where tree.data is a PromptTree instance
             and the function returns True to select the instance
@@ -425,8 +403,7 @@ class PromptTree:
         return [node.data for node in found]
 
     def serialize_tree(self, full: bool = False, with_metadata: bool = True) -> Union[Dict, List]:
-        """
-        Serialize this tree's messages as nested lists representing the tree
+        """Serialize this tree's messages as nested lists representing the tree
         structure.
 
         If the tree to be serialized is a single node, then the result will be
@@ -450,8 +427,7 @@ class PromptTree:
         node: Tree,
         with_metadata: bool,
     ) -> Union[Dict, List]:
-        """
-        Do the recursive serialization of the tree nodes.
+        """Do the recursive serialization of the tree nodes.
         :param node: The current node to serialize
         :param with_metadata: True to include metadata in the serialization
         """
@@ -471,8 +447,7 @@ class PromptTree:
 
     @staticmethod
     def build_instance(data: Union[Dict, List], parent: "PromptTree" = None) -> "PromptTree":
-        """
-        (Re)build a PromptTree from its serialized data, e.g., output
+        """(Re)build a PromptTree from its serialized data, e.g., output
         from prompt_tree.serialize_tree()
 
         :param data: The list of data
@@ -506,15 +481,12 @@ class PromptTree:
 
         @property
         def id_count(self) -> int:
-            """
-            Get the number of assigned IDs
-            """
+            """Get the number of assigned IDs"""
             return self._next_id
 
 
 class MessageCollector:
-    """
-    An example of a class to be used by PromptTree.apply to collect all
+    """An example of a class to be used by PromptTree.apply to collect all
     messages in a branch with or without metadata to illustrate how to use the
     PromptTree.apply method. The results from using this should be identical
     to those from using the PromptTree.get_messages method.
@@ -532,14 +504,10 @@ class MessageCollector:
     """
 
     def __init__(self, with_metadata: bool = True):
-        """
-        :param with_metadata: True to include metadata with the message dicts.
-        """
+        """:param with_metadata: True to include metadata with the message dicts."""
         self.with_metadata = with_metadata
         self.messages = []
 
     def __call__(self, ptree: PromptTree):
-        """
-        :param ptree: The prompt tree (node) on which to apply this function.
-        """
+        """:param ptree: The prompt tree (node) on which to apply this function."""
         self.messages.insert(0, ptree.message.get_message(with_metadata=self.with_metadata))

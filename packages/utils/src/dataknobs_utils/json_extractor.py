@@ -1,12 +1,12 @@
 import json
 import re
+from typing import Any, Dict, List, Tuple
+
 from dataknobs_utils.json_utils import get_value
-from typing import Dict, List, Tuple, Any, Optional
 
 
 class JSONExtractor:
-    """
-    A class that extracts JSON objects from text strings, handling malformed JSON
+    """A class that extracts JSON objects from text strings, handling malformed JSON
     and providing access to extracted objects and non-JSON text.
     """
 
@@ -16,8 +16,7 @@ class JSONExtractor:
         self.non_json_text = ""  # Text that doesn't contain JSON objects
 
     def get_values(self, key_path: str) -> List[Any]:
-        """
-        Get the specific json values using dot notation from the all json
+        """Get the specific json values using dot notation from the all json
         objects that have the key_path.
 
         Args:
@@ -33,9 +32,8 @@ class JSONExtractor:
                 values.append(value)
         return values
 
-    def get_value(self, key_path: str, default: Optional[Any] = None) -> Any:
-        """
-        Get a specific json value using dot notation from the first json
+    def get_value(self, key_path: str, default: Any | None = None) -> Any:
+        """Get a specific json value using dot notation from the first json
         object that has the key_path.
 
         Args:
@@ -54,8 +52,7 @@ class JSONExtractor:
         return value
 
     def extract_jsons(self, text: str) -> List[Dict[str, Any]]:
-        """
-        Extract JSON objects from the given text string.
+        """Extract JSON objects from the given text string.
 
         Args:
             text: The text string to extract JSON objects from
@@ -106,8 +103,7 @@ class JSONExtractor:
         return extracted_jsons
 
     def _find_json_objects(self, text: str) -> List[Tuple[str, bool]]:
-        """
-        Find potential JSON objects in the text.
+        """Find potential JSON objects in the text.
 
         Args:
             text: The text to search for JSON objects
@@ -142,9 +138,8 @@ class JSONExtractor:
 
         return result
 
-    def _fix_json(self, json_text: str) -> Optional[str]:
-        """
-        Attempt to fix malformed JSON by closing any unclosed brackets, quotes, etc.
+    def _fix_json(self, json_text: str) -> str | None:
+        """Attempt to fix malformed JSON by closing any unclosed brackets, quotes, etc.
 
         Args:
             json_text: The malformed JSON text to fix

@@ -1,17 +1,17 @@
-import nmap3
 import os
 import re
 import socket
-from dotenv import dotenv_values
 from pathlib import Path
 from typing import Dict, Union
+
+import nmap3
+from dotenv import dotenv_values
 
 
 def load_project_vars(
     pvname: str = ".project_vars", include_dot_env: bool = True
 ) -> Dict[str, str]:
-    """
-    Load "closest" project variables.
+    """Load "closest" project variables.
 
     :param pvname: The name of the project variables file.
     :param include_dot_env: True to also find and load the closest ".env" file
@@ -40,8 +40,7 @@ def load_project_vars(
 
 
 class MySubnet:
-    """
-    Class to collect and store information about the subnet of the current
+    """Class to collect and store information about the subnet of the current
     running process.
     """
 
@@ -51,9 +50,7 @@ class MySubnet:
         self._subnet_ips = None
 
     def rescan(self):
-        """
-        Rescan subnet hosts.
-        """
+        """Rescan subnet hosts."""
         self._subnet_ips = None
 
     @property
@@ -72,8 +69,7 @@ class MySubnet:
 
     @property
     def all_ips(self) -> Dict[str, str]:
-        """
-        Get a dictionary mapping hostname to ip_address of all hosts that
+        """Get a dictionary mapping hostname to ip_address of all hosts that
         are "up" on the currently running process's subnet.
 
         NOTE: These are cached on first call but will be recomputed after
@@ -102,16 +98,14 @@ class MySubnet:
         return self._subnet_ips
 
     def get_ips(self, name_re: Union[str, re.Pattern]) -> Dict[str, str]:
-        """
-        Get the IP addresses of the hosts whose names match the regex.
+        """Get the IP addresses of the hosts whose names match the regex.
         :param name_re: The name or regex pattern to match
         :return: The dictionary mapping matched names to their IP addresses
         """
         return {name: ip for name, ip in self.all_ips.items() if re.match(name_re, name)}
 
     def get_ip(self, name_re: Union[str, re.Pattern]) -> str:
-        """
-        Get the "first" IP address of the hosts whose names match the regex.
+        """Get the "first" IP address of the hosts whose names match the regex.
         :param name_re: The name or regex pattern to match
         :return: The "first" matching IP address or None
         """

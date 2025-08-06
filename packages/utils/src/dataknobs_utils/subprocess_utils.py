@@ -1,14 +1,13 @@
 import subprocess
-from typing import Callable, List
+from collections.abc import Callable
+from typing import List
 
 
 def run_command(handle_line_fn: Callable[[str], bool], command: str, args: List[str] = None) -> int:
-    """
-    Run a system command and do something with each line. Stop early by
+    """Run a system command and do something with each line. Stop early by
     returning False from the handle_line_fn.
 
     Examples:
-
     # Print all files in the directory.
     >>> subprocess_utils.run_command(lambda x: (print(x), True)[1], 'ls -1')
 
