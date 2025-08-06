@@ -15,17 +15,21 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 # Default values
-PACKAGE=""
+TARGETS=()
 FORMAT_ONLY=false
 
 # Usage function
 usage() {
-    echo "Usage: $0 [OPTIONS] [PACKAGE]"
+    echo "Usage: $0 [OPTIONS] [TARGETS...]"
     echo ""
     echo "Auto-fix code issues using ruff"
     echo ""
     echo "Arguments:"
-    echo "  PACKAGE               Specific package to fix (e.g., 'common', 'utils')"
+    echo "  TARGETS               Packages, directories, or files to fix"
+    echo "                        Can be:"
+    echo "                        - Package name (e.g., 'common', 'utils')"
+    echo "                        - Directory path (e.g., 'packages/utils/src')"
+    echo "                        - File path (e.g., 'packages/utils/src/dataknobs_utils/file_utils.py')"
     echo "                        If not specified, fixes all packages"
     echo ""
     echo "Options:"
@@ -33,9 +37,11 @@ usage() {
     echo "  -h, --help            Show this help message"
     echo ""
     echo "Examples:"
-    echo "  $0                    # Fix all packages"
-    echo "  $0 structures         # Fix only structures package"
-    echo "  $0 -f                 # Format all packages"
+    echo "  $0                                        # Fix all packages"
+    echo "  $0 structures                             # Fix only structures package"
+    echo "  $0 packages/utils/src                     # Fix specific directory"
+    echo "  $0 packages/utils/src/dataknobs_utils/*.py  # Fix specific files"
+    echo "  $0 -f                                     # Format all packages"
     exit 0
 }
 
@@ -50,12 +56,8 @@ while [[ $# -gt 0 ]]; do
             usage
             ;;
         *)
-            if [[ -z "$PACKAGE" ]]; then
-                PACKAGE="$1"
-            else
-                echo "Unknown option: $1"
-                usage
-            fi
+            # Add to targets list
+            TARGETS+=("$1")
             shift
             ;;
     esac
@@ -70,30 +72,66 @@ ALL_PACKAGES=(
     "legacy"
 )
 
-# Determine which packages to fix
-if [[ -n "$PACKAGE" ]]; then
-    if [[ ! -d "packages/$PACKAGE" ]]; then
-        echo -e "${RED}Error: Package '$PACKAGE' not found${NC}"
-        exit 1
-    fi
-    PACKAGES=("$PACKAGE")
+# Determine what to fix
+FIX_TARGETS=()
+
+if [[ ${#TARGETS[@]} -eq 0 ]]; then
+    # No targets specified, fix all packages
+    for package in "${ALL_PACKAGES[@]}"; do
+        if [[ -d "packages/$package/src" ]]; then
+            FIX_TARGETS+=("packages/$package/src")
+        fi
+        if [[ -d "packages/$package/tests" ]]; then
+            FIX_TARGETS+=("packages/$package/tests")
+        fi
+    done
 else
-    PACKAGES=("${ALL_PACKAGES[@]}")
+    # Process specified targets
+    for target in "${TARGETS[@]}"; do
+        if [[ -d "packages/$target" ]]; then
+            # It's a package name
+            if [[ -d "packages/$target/src" ]]; then
+                FIX_TARGETS+=("packages/$target/src")
+            fi
+            if [[ -d "packages/$target/tests" ]]; then
+                FIX_TARGETS+=("packages/$target/tests")
+            fi
+        elif [[ -d "$target" ]]; then
+            # It's a directory
+            FIX_TARGETS+=("$target")
+        elif [[ -f "$target" ]]; then
+            # It's a file
+            FIX_TARGETS+=("$target")
+        else
+            # Try glob expansion
+            shopt -s nullglob
+            files=($target)
+            shopt -u nullglob
+            if [[ ${#files[@]} -gt 0 ]]; then
+                FIX_TARGETS+=("${files[@]}")
+            else
+                echo -e "${YELLOW}Warning: Target '$target' not found${NC}"
+            fi
+        fi
+    done
 fi
 
-echo -e "${YELLOW}Fixing code issues in dataknobs packages...${NC}"
+if [[ ${#FIX_TARGETS[@]} -eq 0 ]]; then
+    echo -e "${RED}No valid targets found to fix${NC}"
+    exit 1
+fi
 
-# Fix each package
-for package in "${PACKAGES[@]}"; do
-    echo -e "\n${YELLOW}Fixing dataknobs-$package...${NC}"
-    
-    PACKAGE_DIR="packages/$package"
+echo -e "${YELLOW}Fixing code issues...${NC}"
+
+# Fix each target
+for target in "${FIX_TARGETS[@]}"; do
+    echo -e "\n${YELLOW}Fixing $target...${NC}"
     
     if [[ "$FORMAT_ONLY" != true ]]; then
         # Run ruff check with auto-fix
         echo -e "${BLUE}Running ruff auto-fix...${NC}"
         # Use --no-unsafe-fixes to prevent breaking changes
-        if ruff check "$PACKAGE_DIR/src" --fix --no-unsafe-fixes --config "$ROOT_DIR/pyproject.toml"; then
+        if ruff check "$target" --fix --no-unsafe-fixes --config "$ROOT_DIR/pyproject.toml"; then
             echo -e "${GREEN}✓ Ruff auto-fix completed${NC}"
         else
             echo -e "${YELLOW}⚠ Some issues remain that need manual fixing${NC}"
@@ -102,20 +140,11 @@ for package in "${PACKAGES[@]}"; do
     
     # Run ruff format
     echo -e "${BLUE}Running ruff format...${NC}"
-    if ruff format "$PACKAGE_DIR/src" --config "$ROOT_DIR/pyproject.toml"; then
+    if ruff format "$target" --config "$ROOT_DIR/pyproject.toml"; then
         echo -e "${GREEN}✓ Code formatted${NC}"
     else
         echo -e "${RED}✗ Format failed${NC}"
         exit 1
-    fi
-    
-    # Also format tests if they exist
-    if [[ -d "$PACKAGE_DIR/tests" ]]; then
-        echo -e "${BLUE}Formatting tests...${NC}"
-        if [[ "$FORMAT_ONLY" != true ]]; then
-            ruff check "$PACKAGE_DIR/tests" --fix --config "$ROOT_DIR/pyproject.toml" || true
-        fi
-        ruff format "$PACKAGE_DIR/tests" --config "$ROOT_DIR/pyproject.toml"
     fi
 done
 

@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List
+from typing import Any, Dict, Generator, List, Optional, TextIO, Union
 
 # import os
 import pandas as pd
@@ -8,13 +8,17 @@ import dataknobs_utils.pandas_utils as pd_utils
 from dataknobs_utils import requests_utils
 
 
-def build_field_query_dict(fields, text, operator=None):
+def build_field_query_dict(
+    fields: Union[str, List[str]], 
+    text: str, 
+    operator: Optional[str] = None
+) -> Dict[str, Any]:
     """Build an elasticsearch field query to find the text in the field(s).
     :param fields: The field (str) or fields (list[str]) to query.
     :param text: The text to find.
     :param operator: The operator to use (default if None), e.g., "AND", "OR"
     """
-    rv = None
+    rv: Dict[str, Any]
     if isinstance(fields, str) or len(fields) == 1:  # single match
         if not isinstance(fields, str):
             fields = fields[0]
@@ -40,7 +44,11 @@ def build_field_query_dict(fields, text, operator=None):
     return rv
 
 
-def build_phrase_query_dict(field, phrase, slop=0):
+def build_phrase_query_dict(
+    field: str, 
+    phrase: str, 
+    slop: int = 0
+) -> Dict[str, Any]:
     """Build an elasticsearch phrase query to find the phrase in the field.
     :param field: The field to query
     :param phrase: The phrase to find
@@ -58,7 +66,7 @@ def build_phrase_query_dict(field, phrase, slop=0):
     }
 
 
-def build_hits_dataframe(query_result) -> pd.DataFrame:
+def build_hits_dataframe(query_result: Dict[str, Any]) -> Optional[pd.DataFrame]:
     """Build a dataframe from an elasticsearch query result's hits."""
     df = None
     if "hits" in query_result:
@@ -70,13 +78,13 @@ def build_hits_dataframe(query_result) -> pd.DataFrame:
     return df
 
 
-def build_aggs_dataframe(query_result) -> pd.DataFrame:
+def build_aggs_dataframe(query_result: Dict[str, Any]) -> Optional[pd.DataFrame]:
     """Build a dataframe from an elasticsearch query result's aggregations."""
     # TODO: implement this
     return None
 
 
-def decode_results(query_result) -> Dict[str, pd.DataFrame]:
+def decode_results(query_result: Dict[str, Any]) -> Dict[str, pd.DataFrame]:
     """Decode elasticsearch query results as "hits_df" and/or "aggs_df"
     dataframes.
     """
@@ -91,12 +99,12 @@ def decode_results(query_result) -> Dict[str, pd.DataFrame]:
 
 
 def add_batch_data(
-    batchfile,
-    record_generator,
-    idx_name,
-    source_id_fieldname="id",
-    cur_id=1,
-):
+    batchfile: TextIO,
+    record_generator: Any,
+    idx_name: str,
+    source_id_fieldname: str = "id",
+    cur_id: int = 1,
+) -> int:
     """Add source records from the generator to the batchfile for elasticsearch
     bulk load into the named index with record IDs starting at the given value,
     optionally adding the record ID to the source record if indicated.
@@ -126,7 +134,7 @@ def add_batch_data(
     return cur_id
 
 
-def batchfile_record_generator(batchfile_path):
+def batchfile_record_generator(batchfile_path: str) -> Generator[Any, None, None]:
     """Given the path to an elasticsearch batchfile yield each elasticsearch
     record (dict).
     :param batchfile_path: The path to the elasticdsearch batch file
@@ -138,7 +146,11 @@ def batchfile_record_generator(batchfile_path):
                 yield json.loads(line)
 
 
-def collect_batchfile_values(batchfile_path, fieldname, default_value=""):
+def collect_batchfile_values(
+    batchfile_path: str, 
+    fieldname: str, 
+    default_value: Any = ""
+) -> List[Any]:
     """Given the path to an elasticsearch batchfile and a source record fieldname,
     collect all of the values for the named field.
 
@@ -153,7 +165,7 @@ def collect_batchfile_values(batchfile_path, fieldname, default_value=""):
     return values
 
 
-def collect_batchfile_records(batchfile_path):
+def collect_batchfile_records(batchfile_path: str) -> pd.DataFrame:
     """Collect the batchfile records as a pandas DataFrame."""
     records = []
     for record in batchfile_record_generator(batchfile_path):
@@ -166,10 +178,10 @@ class TableSettings:
 
     def __init__(
         self,
-        table_name,
-        data_settings,
-        data_mapping,
-    ):
+        table_name: str,
+        data_settings: Dict[str, Any],
+        data_mapping: Dict[str, Any],
+    ) -> None:
         self.name = table_name
         self.settings = data_settings
         self.mapping = data_mapping
@@ -180,23 +192,25 @@ class ElasticsearchIndex:
 
     def __init__(
         self,
-        request_helper,
+        request_helper: Optional[Any],
         table_settings: List[TableSettings],
-        elasticsearch_ip=None,
-        elasticsearch_port=9200,
-        mock_requests=None,
-    ):
-        self.request_helper = request_helper
+        elasticsearch_ip: Optional[str] = None,
+        elasticsearch_port: int = 9200,
+        mock_requests: Optional[Any] = None,
+    ) -> None:
+        self.request_helper: Any  # Always set, never None
         if request_helper is None:
             self.request_helper = requests_utils.RequestHelper(
                 elasticsearch_ip,
                 elasticsearch_port,
                 mock_requests=mock_requests,
             )
+        else:
+            self.request_helper = request_helper
         self.tables = table_settings or list()
         self._init_tables()
 
-    def _init_tables(self):
+    def _init_tables(self) -> None:
         """Ensure the tables have been created and initialized."""
         for table in self.tables:
             resp = self._request("get", f"{table.name}/_mapping")
@@ -211,16 +225,16 @@ class ElasticsearchIndex:
 
     def _request(
         self,
-        rtype,
-        path,
-        payload=None,
-        params=None,
-        files=None,
-        response_handler=None,
-        headers=None,
-        timeout=0,
-        verbose=False,
-    ):
+        rtype: str,
+        path: str,
+        payload: Optional[str] = None,
+        params: Optional[Dict[str, Any]] = None,
+        files: Optional[Dict[str, Any]] = None,
+        response_handler: Optional[Any] = None,
+        headers: Optional[Dict[str, str]] = None,
+        timeout: int = 0,
+        verbose: bool = False,
+    ) -> Any:
         return self.request_helper.request(
             rtype,
             path,
@@ -233,15 +247,16 @@ class ElasticsearchIndex:
             verbose=verbose,
         )
 
-    def is_up(self):
+    def is_up(self) -> bool:
         """:return: True if the elasticsearch server is up."""
-        return self._request("get", "_cluster/health").succeeded
+        resp = self._request("get", "_cluster/health")
+        return bool(resp.succeeded if resp else False)
 
-    def get_cluster_health(self, verbose=False):
+    def get_cluster_health(self, verbose: bool = False) -> Any:
         """:return: a requests_utils.ServerResponse instance"""
         return self._request("get", "_cluster/health", verbose=verbose)
 
-    def inspect_indices(self, verbose=False):
+    def inspect_indices(self, verbose: bool = False) -> Any:
         """:return: a requests_utils.ServerResponse instance"""
         return self._request(
             "get",
@@ -250,7 +265,7 @@ class ElasticsearchIndex:
             response_handler=requests_utils.plain_api_response_handler,
         )
 
-    def purge(self, verbose=False):
+    def purge(self, verbose: bool = False) -> Any:
         """Purge all data in tables managed by this wrapper."""
         resp = None
         for table in self.tables:
@@ -258,7 +273,7 @@ class ElasticsearchIndex:
         self._init_tables()
         return resp
 
-    def delete_table(self, table_name, verbose=False):
+    def delete_table(self, table_name: str, verbose: bool = False) -> Any:
         """:return: a requests_utils.ServerResponse instance"""
         return self._request("delete", table_name, verbose=verbose)
 
@@ -282,10 +297,10 @@ class ElasticsearchIndex:
 
     def analyze(
         self,
-        text,
+        text: str,
         analyzer: str,
-        verbose=False,
-    ):
+        verbose: bool = False,
+    ) -> Any:
         """:return: a requests_utils.ServerResponse instance"""
         return self._request(
             "post",
@@ -301,10 +316,10 @@ class ElasticsearchIndex:
 
     def search(
         self,
-        query: Dict[str, Dict],
-        table: str = None,
+        query: Dict[str, Any],
+        table: Optional[str] = None,
         verbose: bool = False,
-    ) -> requests_utils.ServerResponse:
+    ) -> Optional[Any]:
         """Submit the elasticsearch search DSL query.
 
         :param query: The elasticsearch search query of the form, e.g.,:
@@ -333,7 +348,7 @@ class ElasticsearchIndex:
         fetch_size: int = 10000,
         columnar: bool = True,
         verbose: bool = False,
-    ) -> requests_utils.ServerResponse:
+    ) -> Any:
         """Submit the elasticsearch sql query.
 
         :param query: The elasticsearch search sql query

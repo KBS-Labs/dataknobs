@@ -19,14 +19,14 @@ cd "$ROOT_DIR"
 usage() {
     echo -e "${CYAN}dataknobs development helper${NC}"
     echo ""
-    echo "Usage: $0 COMMAND [OPTIONS]"
+    echo "Usage: $0 COMMAND [OPTIONS] [TARGETS...]"
     echo ""
     echo "Commands:"
     echo "  setup         Set up development environment"
     echo "  build         Build all packages"
     echo "  install       Install packages in dev mode"
-    echo "  test          Run all tests"
-    echo "  lint          Run linting and type checking"
+    echo "  test          Run tests (packages, directories, or files)"
+    echo "  lint          Run linting and type checking (packages, directories, or files)"
     echo "  validate      Validate code quality and catch errors"
     echo "  clean         Clean build artifacts and caches"
     echo "  release       Prepare packages for release"
@@ -34,10 +34,19 @@ usage() {
     echo "Options:"
     echo "  -h, --help    Show this help message"
     echo ""
+    echo "Targets (for test, lint, validate):"
+    echo "  - Package names: 'common', 'utils', 'structures', 'xization'"
+    echo "  - Directory paths: 'packages/utils/src'"
+    echo "  - File paths: 'packages/utils/src/dataknobs_utils/file_utils.py'"
+    echo ""
     echo "Examples:"
-    echo "  $0 setup      # Set up fresh development environment"
-    echo "  $0 test       # Run all tests"
-    echo "  $0 build      # Build all packages"
+    echo "  $0 setup                          # Set up fresh development environment"
+    echo "  $0 test                           # Run all tests"
+    echo "  $0 test utils                     # Test utils package"
+    echo "  $0 test packages/utils/tests      # Test specific directory"
+    echo "  $0 lint packages/utils/src        # Lint specific directory"
+    echo "  $0 lint myfile.py                 # Lint specific file"
+    echo "  $0 build                          # Build all packages"
     exit 0
 }
 
@@ -81,13 +90,37 @@ install() {
 # Run tests
 test() {
     echo -e "${YELLOW}Running tests...${NC}"
-    "$ROOT_DIR/bin/test-packages.sh" "$@"
+    
+    # Check if arguments are packages, directories, or files
+    if [[ $# -eq 0 ]]; then
+        # No arguments, test all packages
+        "$ROOT_DIR/bin/test-packages.sh"
+    else
+        # Check first argument to determine type
+        arg="$1"
+        if [[ -d "packages/$arg" ]]; then
+            # It's a package name
+            "$ROOT_DIR/bin/test-packages.sh" "$@"
+        elif [[ -d "$arg" ]]; then
+            # It's a directory path
+            echo -e "${BLUE}Testing directory: $arg${NC}"
+            pytest "$arg" -v
+        elif [[ -f "$arg" ]]; then
+            # It's a file path
+            echo -e "${BLUE}Testing file: $arg${NC}"
+            pytest "$arg" -v
+        else
+            # Try as package name anyway
+            "$ROOT_DIR/bin/test-packages.sh" "$@"
+        fi
+    fi
 }
 
 # Run linting and type checking
 lint() {
     echo -e "${YELLOW}Running linting and type checking...${NC}"
     
+    # Default packages
     PACKAGES=(
         "common"
         "structures" 
@@ -95,12 +128,44 @@ lint() {
         "utils"
     )
     
-    for package in "${PACKAGES[@]}"; do
-        echo -e "\n${YELLOW}Checking dataknobs-$package...${NC}"
+    # Determine what to lint
+    if [[ $# -eq 0 ]]; then
+        # No arguments, lint all packages
+        TARGETS=()
+        for package in "${PACKAGES[@]}"; do
+            TARGETS+=("packages/$package/src")
+        done
+    else
+        # Process arguments
+        TARGETS=()
+        for arg in "$@"; do
+            if [[ -d "packages/$arg/src" ]]; then
+                # It's a package name
+                TARGETS+=("packages/$arg/src")
+            elif [[ -d "$arg" ]]; then
+                # It's a directory
+                TARGETS+=("$arg")
+            elif [[ -f "$arg" ]]; then
+                # It's a file
+                TARGETS+=("$arg")
+            else
+                echo -e "${RED}Warning: '$arg' not found as package, directory, or file${NC}"
+            fi
+        done
+        
+        if [[ ${#TARGETS[@]} -eq 0 ]]; then
+            echo -e "${RED}No valid targets found${NC}"
+            return 1
+        fi
+    fi
+    
+    # Run linting on each target
+    for target in "${TARGETS[@]}"; do
+        echo -e "\n${YELLOW}Checking $target...${NC}"
         
         # Run ruff check (no auto-fix during linting)
         echo -e "${BLUE}Running ruff check...${NC}"
-        if ruff check "packages/$package/src" --no-fix --config "$ROOT_DIR/pyproject.toml"; then
+        if ruff check "$target" --no-fix --config "$ROOT_DIR/pyproject.toml"; then
             echo -e "${GREEN}✓ Ruff check passed${NC}"
         else
             echo -e "${RED}✗ Ruff check failed${NC}"
@@ -108,7 +173,7 @@ lint() {
         
         # Run ruff format check
         echo -e "${BLUE}Running ruff format check...${NC}"
-        if ruff format --check "packages/$package/src" --config "$ROOT_DIR/pyproject.toml"; then
+        if ruff format --check "$target" --config "$ROOT_DIR/pyproject.toml"; then
             echo -e "${GREEN}✓ Ruff format check passed${NC}"
         else
             echo -e "${RED}✗ Ruff format check failed${NC}"
@@ -116,10 +181,21 @@ lint() {
         
         # Run mypy with workspace configuration
         echo -e "${BLUE}Running mypy...${NC}"
-        if mypy "packages/$package/src" --config-file "$ROOT_DIR/pyproject.toml"; then
-            echo -e "${GREEN}✓ Type check passed${NC}"
+        # For individual files, skip following imports to avoid checking the whole codebase
+        if [[ -f "$target" ]]; then
+            # Single file - don't follow imports
+            if mypy "$target" --config-file "$ROOT_DIR/pyproject.toml" --follow-imports=skip; then
+                echo -e "${GREEN}✓ Type check passed${NC}"
+            else
+                echo -e "${RED}✗ Type check failed${NC}"
+            fi
         else
-            echo -e "${RED}✗ Type check failed${NC}"
+            # Directory or package - normal behavior
+            if mypy "$target" --config-file "$ROOT_DIR/pyproject.toml"; then
+                echo -e "${GREEN}✓ Type check passed${NC}"
+            else
+                echo -e "${RED}✗ Type check failed${NC}"
+            fi
         fi
     done
 }

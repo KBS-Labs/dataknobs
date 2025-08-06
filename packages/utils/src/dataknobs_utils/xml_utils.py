@@ -2,8 +2,8 @@ import mmap
 import re
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
-from collections.abc import Callable
-from typing import List, TextIO, Tuple, Union
+from collections.abc import Callable, Generator
+from typing import Any, List, TextIO, Tuple, Union
 
 import bs4
 import pandas as pd
@@ -17,11 +17,11 @@ class XmlStream(ABC):
 
     def __init__(self, source: Union[str, TextIO], auto_clear_elts: bool = True):
         """:param source: An XML filename or file object"""
-        self._xml_iter = None
+        self._xml_iter: Any | None = None
         self.source = source
         self.auto_clear_elts = auto_clear_elts
-        self._context = list()
-        self._closed_elt = None
+        self._context: List[ET.Element] = []
+        self._closed_elt: ET.Element | None = None
 
     @property
     def context(self) -> List[ET.Element]:
@@ -39,11 +39,13 @@ class XmlStream(ABC):
         """
         if self._xml_iter is None:
             self.__iter__()
-        try:
-            event, elem = next(self._xml_iter)
-            return event, elem
-        except StopIteration as exc:
-            raise StopIteration from exc
+        if self._xml_iter is not None:
+            try:
+                event, elem = next(self._xml_iter)
+                return event, elem
+            except StopIteration as exc:
+                raise StopIteration from exc
+        raise StopIteration
 
     @abstractmethod
     def loop_through_elements(self) -> List[ET.Element]:
@@ -52,41 +54,42 @@ class XmlStream(ABC):
         """
         raise NotImplementedError
 
-    def close(self):
+    def close(self) -> None:
         self.__exit__()
 
-    def __iter__(self):
+    def __iter__(self) -> "XmlStream":
         self._xml_iter = ET.iterparse(self.source, events=["start", "end"])
-        self._context = list()
+        self._context = []
         if self._closed_elt is not None:
             self._closed_elt.clear()
             self._closed_elt = None
         return self
 
-    def __next__(self):
+    def __next__(self) -> List[ET.Element]:
         return self.loop_through_elements()
 
-    def __enter__(self):
+    def __enter__(self) -> "XmlStream":
         return self
 
-    def __exit__(self, *args, **kwargs):
+    def __exit__(self, *args: object, **kwargs: Any) -> None:
         if self._closed_elt is not None:
             self._closed_elt.clear()
             self._closed_elt = None
 
-    def add_to_context(self, elem: ET.Element):
+    def add_to_context(self, elem: ET.Element) -> None:
         """Add the element to the context"""
         self._context.append(elem)
 
-    def find_context_idx(self, elem: ET.Element):
+    def find_context_idx(self, elem: ET.Element) -> int:
         """Find the latest index of the element in the context (or -1)."""
         idx = len(self._context) - 1
         while idx >= 0:
             if self._context[idx] == elem:
                 break
+            idx -= 1
         return idx
 
-    def pop_closed_from_context(self, closed_elem: ET.Element, idx: int = None):
+    def pop_closed_from_context(self, closed_elem: ET.Element, idx: int | None = None) -> None:
         """Pop the closed element from the context
         :param closed_elem: The closed element
         :param idx: The element's index within the context (if known)
@@ -100,9 +103,8 @@ class XmlStream(ABC):
                 self._closed_elt.clear()  # Clear memory
             self._closed_elt = closed_elem
 
-    def take(self, n: int) -> List[List[ET.Element]]:
+    def take(self, n: int) -> Generator[List[ET.Element], None, None]:
         """Take the next N items from this iterator."""
-        # items = list()
         idx = 0
         while idx < n:
             try:
@@ -110,9 +112,7 @@ class XmlStream(ABC):
             except StopIteration:
                 return
             yield elts
-            # items.append(elts)
             idx += 1
-        # return items
 
     @staticmethod
     def to_string(
@@ -166,15 +166,15 @@ class XmlLeafStream(XmlStream):
     def __init__(self, source: Union[str, TextIO], auto_clear_elts: bool = True):
         """:param source: An XML filename or file object"""
         super().__init__(source, auto_clear_elts=auto_clear_elts)
-        self._last_elt = None  # The last new element
+        self._last_elt: ET.Element | None = None  # The last new element
         self.count = 0  # The number of terminal nodes seen
-        self.elts = None  # The latest yielded sequence
+        self.elts: List[ET.Element] | None = None  # The latest yielded sequence
 
-    def loop_through_elements(self) -> Tuple[str, ET.Element]:
+    def loop_through_elements(self) -> List[ET.Element]:
         """Loop through elements of self.xml_iter, adding elements to the context,
         until the next terminal element has been collected.
         """
-        gotit = None
+        gotit: List[ET.Element] | None = None
         while True:
             event, elem = self.next_xml_iter()
             if event == "start":
@@ -194,7 +194,7 @@ class XmlLeafStream(XmlStream):
                 self._last_elt = None
                 if gotit:
                     break
-        return gotit or None
+        return gotit or []
 
 
 class XmlElementGrabber(XmlStream):
@@ -220,14 +220,14 @@ class XmlElementGrabber(XmlStream):
         self.match = match
         self.count = 0  # The number of match nodes seen
 
-    def _is_match(self, elem: ET.Element):
+    def _is_match(self, elem: ET.Element) -> bool:
         matches = False
         if isinstance(self.match, str):
             if ":" in self.match:
                 matches = elem.tag == self.match
             elif ":" in elem.tag:
                 # match ns0:<match> or {...:...}<match> (NOTE: 0x7d == '}')
-                matches = re.match(rf"^.*[:\x7d]{self.match}$", elem.tag)
+                matches = re.match(rf"^.*[:\x7d]{self.match}$", elem.tag) is not None
             else:
                 matches = self.match == elem.tag
         else:
@@ -238,8 +238,8 @@ class XmlElementGrabber(XmlStream):
         """Find the next match ET.Element, returning in context from the root
         node to the element.
         """
-        gotit = None
-        grabbing = None
+        gotit: List[ET.Element] | None = None
+        grabbing: ET.Element | None = None
         while True:
             event, elem = self.next_xml_iter()
             if event == "start":
@@ -256,7 +256,7 @@ class XmlElementGrabber(XmlStream):
                 self.pop_closed_from_context(elem)
                 if gotit:
                     break
-        return gotit or None
+        return gotit or []
 
 
 class XMLTagStream:
@@ -264,7 +264,9 @@ class XMLTagStream:
     on a tag.
     """
 
-    def __init__(self, path, tag_name, with_attrs=False, encoding="utf-8"):
+    def __init__(
+        self, path: str, tag_name: str, with_attrs: bool = False, encoding: str = "utf-8"
+    ) -> None:
         self.file = open(path, encoding="utf-8")
         self.stream = mmap.mmap(self.file.fileno(), 0, access=mmap.ACCESS_READ)
         self.tag_name = tag_name
@@ -273,24 +275,26 @@ class XMLTagStream:
         self.start_tag = f"<{tag_name}{tag_end}".encode(encoding)
         self.end_tag = f"</{tag_name}>".encode(encoding)
 
-    def __enter__(self):
+    def __enter__(self) -> "XMLTagStream":
         return self
 
-    def __exit__(self, *args, **kwargs):
+    def __exit__(self, *args: object, **kwargs: Any) -> None:
         self.stream.close()
         self.file.close()
 
-    def __iter__(self):
+    def __iter__(self) -> Generator[bs4.BeautifulSoup, None, None]:
         end = 0
         while (begin := self.stream.find(self.start_tag, end)) != -1:
             end = self.stream.find(self.end_tag, begin)
             yield self.parse(self.stream[begin : end + len(self.end_tag)])
 
-    def parse(self, chunk):
+    def parse(self, chunk: bytes) -> bs4.BeautifulSoup:
         return bs4.BeautifulSoup(chunk.decode(self.encoding), features="lxml-xml")
 
 
-def soup_generator(xmlfilepath, tag_name, with_attrs=False, encoding="utf-8"):
+def soup_generator(
+    xmlfilepath: str, tag_name: str, with_attrs: bool = False, encoding: str = "utf-8"
+) -> Generator[bs4.BeautifulSoup, None, None]:
     """A generator for bs4 soup objects for each tag_name in the xml file.
     :param xmlfilepath: The path to the xml file
     :param tag_name: The tag name to extract
@@ -318,17 +322,17 @@ def html_table_scraper(
         a table row.
     :return: A dataframe with the scraped table data
     """
-    columns = None
-    rows = list()
+    columns: List[str] | None = None
+    rows: List[List[str]] = []
 
-    def html_text(elt):
+    def html_text(elt: bs4.element.Tag) -> str:
         return elt.text.replace("\xa0", " ").strip()
 
-    def td_text(td):
+    def td_text(td: bs4.element.Tag) -> str:
         return "\n".join(
             [  # add a \n between text of td elements
                 x
-                for x in [html_text(c) for c in td.children]
+                for x in [html_text(c) for c in td.children if isinstance(c, bs4.element.Tag)]
                 if x  # drop empty elements under a td
             ]
         )
@@ -346,4 +350,4 @@ def html_table_scraper(
         if len(row) > 0:
             rows.append(row)
 
-    return pd.DataFrame(rows, columns=columns if len(columns) > 0 else None)
+    return pd.DataFrame(rows, columns=columns if columns and len(columns) > 0 else None)

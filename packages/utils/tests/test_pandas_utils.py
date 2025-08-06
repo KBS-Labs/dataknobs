@@ -154,7 +154,7 @@ def test_group_manager_mark_and_unmark():
     assert g.get_group_locs(1) == [0, 1, 4]
     assert g.get_intra_ungrouped_locs(1) == [2, 3]
     g.unmark_group(1)
-    assert g.get_group_locs(1) is None
+    assert g.get_group_locs(1) == []
     assert g.get_intra_ungrouped_locs(1) == []
     assert g.all_group_nums == [0, 2]
     assert g.all_group_locs == {0: [0, 1, 2], 2: [1, 2, 3]}

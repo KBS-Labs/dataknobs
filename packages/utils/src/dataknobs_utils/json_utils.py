@@ -5,13 +5,13 @@ import re
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from collections.abc import Callable
-from typing import Any, Dict, List, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, TextIO, Tuple, Union
 
 import json_stream.requests
 import pandas as pd
 import requests
 
-import dataknobs_structures.tree as dk_tree
+from dataknobs_structures.tree import Tree, build_tree_from_string
 import dataknobs_utils.file_utils as dk_futils
 
 ELT_IDX_RE = re.compile(r"^(.*)\[(.*)\]$")
@@ -98,9 +98,9 @@ def get_value(
 
 def stream_json_data(
     json_data: str,
-    visitor_fn: Callable[[Any, str], None],
+    visitor_fn: Callable[[Any, Tuple[Any, ...]], None],
     timeout: int = TIMEOUT,
-):
+) -> None:
     """Stream the json data, calling the visitor_fn at each value.
     :param json_data: The json data (url, file_path, or str)
     :param visitor_fn: The visitor_fn(item, path) to call, where
@@ -119,11 +119,11 @@ def stream_json_data(
         with requests.get(json_data, stream=True, timeout=timeout) as response:
             json_stream.requests.visit(response, visitor_fn)
     elif isinstance(json_data, str):
-        f = io.StringIO(json_data)
-        json_stream.visit(f, visitor_fn)
+        string_io = io.StringIO(json_data)
+        json_stream.visit(string_io, visitor_fn)
 
 
-def build_jq_path(path: Tuple[Any], keep_list_idxs=True) -> str:
+def build_jq_path(path: Tuple[Any, ...], keep_list_idxs: bool = True) -> str:
     """Build a jq path string from the json_stream path tuple.
     :param path: A tuple with json_stream path components.
     :param keep_list_idxs: True to keep the exact path index values;
@@ -138,7 +138,7 @@ def build_jq_path(path: Tuple[Any], keep_list_idxs=True) -> str:
     return jq_path
 
 
-def build_path_tuple(jq_path: str, any_list_idx: int = -1) -> Tuple:
+def build_path_tuple(jq_path: str, any_list_idx: int = -1) -> Tuple[Any, ...]:
     """Build a json_stream tuple path from a jq_path (reverse of build_jq_path).
     :param jq_path: The jq_path whose values to extract.
     :param any_list_idx: The index value to give for a generic list
@@ -161,11 +161,11 @@ def build_path_tuple(jq_path: str, any_list_idx: int = -1) -> Tuple:
 
 def stream_jq_paths(
     json_data: str,
-    output_stream,
+    output_stream: TextIO,
     line_builder_fn: Callable[[str, Any], str] = (lambda jq_path, item: f"{jq_path}\t{item}"),
     keep_list_idxs: bool = True,
     timeout: int = TIMEOUT,
-):
+) -> None:
     """Write built lines from (jq_path, item) tuples from the json_data.
     :param json_data: The json_data to copy
     :param output_stream: The output stream to write lines to
@@ -176,7 +176,7 @@ def stream_jq_paths(
     :param timeout: The requests timeout (in seconds)
     """
 
-    def visitor(item, path):
+    def visitor(item: Any, path: Tuple[Any, ...]) -> None:
         jq_path = build_jq_path(path, keep_list_idxs=keep_list_idxs)
         line = line_builder_fn(jq_path, item)
         print(line, file=output_stream)
@@ -187,9 +187,9 @@ def stream_jq_paths(
 def squash_data(
     builder_fn: Callable[[str, Any], None],
     json_data: str,
-    prune_at: List[Union[str, Tuple[str, int]]] = None,
+    prune_at: Optional[List[Union[str, Tuple[str, int]]]] = None,
     timeout: int = TIMEOUT,
-):
+) -> None:
     """Squash the json_data, optionally pruning branches by id'd path elements.
     Where "squashed" means the paths are compressed to a single level
     with complex jq keys.
@@ -213,7 +213,7 @@ def squash_data(
     elt_depths = dict()
     depth_elts = defaultdict(set)
 
-    def decode_item(item):
+    def decode_item(item: Any) -> None:
         if item is not None:
             if isinstance(item, str):
                 raw_elts.add(item)
@@ -241,7 +241,7 @@ def squash_data(
     has_depth_elts = len(depth_elts) > 0
     do_prune = has_raw_depths or has_raw_elts or has_elts or has_depth_elts
 
-    def visitor(item, path):
+    def visitor(item: Any, path: Tuple[Any, ...]) -> None:
         if do_prune:
             cur_depth = len(path)
             if has_raw_depths and cur_depth in raw_depths:
@@ -266,10 +266,10 @@ def squash_data(
 
 def collect_squashed(
     jdata: str,
-    prune_at: List[Union[str, Tuple[str, int]]] = None,
+    prune_at: Optional[List[Union[str, Tuple[str, int]]]] = None,
     timeout: int = TIMEOUT,
-    result: Dict = None,
-) -> Dict:
+    result: Optional[Dict[Any, Any]] = None,
+) -> Dict[Any, Any]:
     """Collected squashed data in a dictionary
     :param json_data: The json_data to copy
     :param prune_at: The names and optional path indexes of path elements
@@ -280,7 +280,7 @@ def collect_squashed(
     if result is None:
         result = dict()
 
-    def collector_fn(jq_path, item):
+    def collector_fn(jq_path: str, item: Any) -> None:
         result[jq_path] = item
 
     squash_data(
@@ -311,7 +311,7 @@ def indexing_format_fn(jq_path: str, item: Any) -> str:
     return f"{item}\t{field}\t{flat_jq}\t{idxs}"
 
 
-def indexing_format_splitter(fileline: str) -> Tuple[str, str, str, str]:
+def indexing_format_splitter(fileline: str) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
     """Reversal of the indexing_format_fn to extract:
         (value, field, flat_jq, idxs)
     Where
@@ -339,12 +339,12 @@ def indexing_format_splitter(fileline: str) -> Tuple[str, str, str, str]:
 
 
 def write_squashed(
-    dest_file: str,
+    dest_file: Union[str, TextIO],
     jdata: str,
-    prune_at: List[Union[str, Tuple[str, int]]] = None,
+    prune_at: Optional[List[Union[str, Tuple[str, int]]]] = None,
     timeout: int = TIMEOUT,
     format_fn: Callable[[str, Any], str] = lambda jq_path, item: f"{jq_path}\t{item}",
-):
+) -> None:
     """Write squashed data to the file.
     :param json_data: The json_data to copy
     :param prune_at: The names and optional path indexes of path elements
@@ -354,6 +354,7 @@ def write_squashed(
         tab-delimitted: jq_path <tab> item.
     """
     needs_close = False
+    f: TextIO
     if isinstance(dest_file, str):
         f = open(dest_file, "w", encoding="utf-8")
         needs_close = True
@@ -369,7 +370,7 @@ def write_squashed(
         f.close()
 
 
-def path_to_dict(path: Union[tuple, str], value: Any, result=None) -> dict:
+def path_to_dict(path: Union[Tuple[Any, ...], str], value: Any, result: Optional[Dict[Any, Any]] = None) -> Dict[Any, Any]:
     """Convert the jq_path (if a string) or path (if a tuple) to a dict.
     :param path: The path to convert
     :param value: The path's value
@@ -381,7 +382,7 @@ def path_to_dict(path: Union[tuple, str], value: Any, result=None) -> dict:
     if isinstance(path, str):
         path = build_path_tuple(path, any_list_idx=-1)
 
-    def do_it(cur_dict, path, path_idx, pathlen, value):
+    def do_it(cur_dict: Dict[Any, Any], path: Tuple[Any, ...], path_idx: int, pathlen: int, value: Any) -> None:
         if path_idx >= pathlen:
             return
         path_elt = path[path_idx]
@@ -414,7 +415,7 @@ def path_to_dict(path: Union[tuple, str], value: Any, result=None) -> dict:
                     cur_list.append(value)
         elif list_idx is None:
             if path_idx < pathlen:
-                elt_dict = dict()
+                elt_dict: Dict[Any, Any] = dict()
                 cur_dict[path_elt] = elt_dict
                 cur_dict = elt_dict
             else:
@@ -435,9 +436,9 @@ def path_to_dict(path: Union[tuple, str], value: Any, result=None) -> dict:
     return result
 
 
-def explode(squashed: Dict) -> Dict:
+def explode(squashed: Dict[Any, Any]) -> Dict[Any, Any]:
     """Explode a "squashed" json with jq paths as keys."""
-    result = dict()
+    result: Dict[Any, Any] = dict()
     for jq_path, value in squashed.items():
         path_to_dict(jq_path, value, result)
     return result
@@ -456,13 +457,13 @@ class ValuePath:
         """
         self.jq_path = jq_path
         self.value = value
-        self._indices = dk_tree.Tree(0).as_string()  # root data will hold total path count
+        self._indices = Tree(0).as_string()  # root data will hold total path count
 
     @property
-    def indices(self) -> dk_tree:
-        return dk_tree.build_tree_from_string(self._indices)
+    def indices(self) -> Tree:
+        return build_tree_from_string(self._indices)
 
-    def add(self, path: tuple):
+    def add(self, path: Optional[Tuple[Any, ...]]) -> None:
         """Add the path (with the samem structure as jq_path) to the tree."""
         root = self.indices
         node = root
@@ -488,7 +489,7 @@ class ValuePath:
         """Get the number of jq_paths to the value."""
         return int(self.indices.data)
 
-    def path_generator(self, result_type="jq_path"):
+    def path_generator(self, result_type: str = "jq_path") -> Any:
         """Generate value paths.
         :param result_type: 'jq_path', 'path', or 'idx'
             'jq_path' to generate jq_path strings;
@@ -507,7 +508,7 @@ class ValuePath:
                 elif result_type != "idx":
                     gen_path.append(elt)
             if result_type == "jq_path":
-                yield build_jq_path(gen_path, keep_list_idxs=True)
+                yield build_jq_path(tuple(gen_path), keep_list_idxs=True)
             else:
                 yield gen_path
 
@@ -520,10 +521,10 @@ class ValuesIndex:
     to the tree of path indices leading to it, if path information is available.
     """
 
-    def __init__(self):
-        self.path_values = dict()  # Dict[jq_path, Dict[value, ValuePath]]
+    def __init__(self) -> None:
+        self.path_values: Dict[str, Dict[Any, ValuePath]] = dict()  # Dict[jq_path, Dict[value, ValuePath]]
 
-    def add(self, value: Any, jq_path: str, path: tuple = None):
+    def add(self, value: Any, jq_path: str, path: Optional[Tuple[Any, ...]] = None) -> None:
         if jq_path in self.path_values:
             value_paths = self.path_values[jq_path]
         else:
@@ -574,8 +575,8 @@ class JsonSchema:
 
     def __init__(
         self,
-        schema: Dict[str, Any] = None,
-        values: ValuesIndex = None,
+        schema: Optional[Dict[str, Any]] = None,
+        values: Optional[ValuesIndex] = None,
         values_limit: int = 0,  # max number of unique values to keep
     ):
         """:param schema: Reconstruct instance with a known schema
@@ -586,15 +587,15 @@ class JsonSchema:
         self.schema = schema if schema is not None else dict()
         self.values = ValuesIndex() if values is None else values
         self._values_limit = values_limit
-        self._df = None
+        self._df: Optional[pd.DataFrame] = None
 
     def add_path(
         self,
         jq_path: str,
         value_type: str,
         value: Any = None,
-        path: tuple = None,
-    ):
+        path: Optional[Tuple[Any, ...]] = None,
+    ) -> None:
         """Add an instance of the jq_path/value_type
         :param jq_path: The "key" path for grouping/squashing values
         :param value_type: The type of value with this path
@@ -637,7 +638,7 @@ class JsonSchema:
                     row = (k1, k2, v2, self.values.num_values(k1))
                     has_value = True
                 else:
-                    row = (k1, k2, v2)
+                    row = (k1, k2, v2)  # type: ignore[assignment]
                 data.append(row)
         columns = ["jq_path", "value_type", "value_count"]
         if has_value:
@@ -662,7 +663,7 @@ class JsonSchema:
         sresult = set()
         lresult = list()
 
-        def visitor(item, path):
+        def visitor(item: Any, path: Tuple[Any, ...]) -> None:
             cur_jq_path = build_jq_path(path, keep_list_idxs=keep_list_idxs)
             if jq_path == cur_jq_path:
                 if unique:
@@ -680,7 +681,7 @@ class JsonSchemaBuilder:
     def __init__(
         self,
         json_data: str,
-        value_typer: Callable[[Any], str] = None,
+        value_typer: Optional[Callable[[Any], str]] = None,
         keep_unique_values: bool = False,
         invert_uniques: bool = False,
         keep_list_idxs: bool = False,
@@ -692,7 +693,7 @@ class JsonSchemaBuilder:
         float_value_type: str = "float",
         str_value_type: str = "str",
         url_value_type: str = "URL",
-        on_add: Callable[[str], bool] = None,
+        on_add: Optional[Callable[[str], bool]] = None,
     ):
         """:param json_data: The json data (url, file_path, or str)
         :param value_typer: A fn(atomic_value) that returns the type of the
@@ -744,16 +745,16 @@ class JsonSchemaBuilder:
         """Get the current, possibly incomplete, schema"""
         return self._schema
 
-    def _build_schema(self) -> JsonSchema:
+    def _build_schema(self) -> bool:
         """Stream the json data and build the schema."""
 
-        def visitor(item, path):
+        def visitor(item: Any, path: Tuple[Any, ...]) -> None:
             self._visit_item(self._schema, item, path)
 
         stream_json_data(self.json_data, visitor, timeout=self.timeout)
         return True
 
-    def _visit_item(self, schema: JsonSchema, item: Any, path: Tuple):
+    def _visit_item(self, schema: JsonSchema, item: Any, path: Tuple[Any, ...]) -> None:
         """The visitor function for processing items and paths while streaming
         the json data.
         :param schema: The schema being built
@@ -803,14 +804,14 @@ class Path:
         self.jq_path = jq_path
         self.item = item
         self.line_num = line_num
-        self._path_elts = None  # jq_path.split('.')
-        self._len = None  # Number of path elements
+        self._path_elts: Optional[List[str]] = None  # jq_path.split('.')
+        self._len: Optional[int] = None  # Number of path elements
 
     def __repr__(self) -> str:
         lnstr = f"{self.line_num}: " if self.line_num >= 0 else ""
         return f"{lnstr}{self.jq_path}: {self.item}"
 
-    def __key(self):
+    def __key(self) -> Union[Tuple[str, Any], int]:
         return (self.jq_path, self.item) if self.line_num < 0 else self.line_num
 
     def __lt__(self, other: "Path") -> bool:
@@ -822,7 +823,7 @@ class Path:
     def __hash__(self) -> int:
         return hash(self.__key())
 
-    def __eq__(self, other):
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, Path):
             return self.__key() == other.__key()
         return NotImplemented
@@ -844,7 +845,7 @@ class GroupAcceptStrategy(ABC):
     """Add a Path to a Group if it belongs."""
 
     @abstractmethod
-    def accept_path(self, path: Path, group: "PathGroup", distribute: bool = False) -> str:
+    def accept_path(self, path: Path, group: "PathGroup", distribute: bool = False) -> Optional[str]:
         """Determine whether the Path belongs in the group.
         :param path: The path to potentially add
         :param group: The group to which to add the path
@@ -859,10 +860,10 @@ class GroupAcceptStrategy(ABC):
 class PathGroup:
     """Container for a group of related paths."""
 
-    def __init__(self, accept_strategy: GroupAcceptStrategy, first_path: Path = None):
-        self._all_paths = None
-        self.main_paths = None  # Set[Path]
-        self.distributed_paths = None  # Set[Path]
+    def __init__(self, accept_strategy: GroupAcceptStrategy, first_path: Optional[Path] = None):
+        self._all_paths: Optional[List[Path]] = None
+        self.main_paths: Optional[Set[Path]] = None
+        self.distributed_paths: Optional[Set[Path]] = None
         self.accept_strategy = accept_strategy
         if first_path is not None:
             self.accept(first_path, distribute=False)
@@ -887,17 +888,19 @@ class PathGroup:
         """Get all paths (both main and distributed)"""
         if self._all_paths is None:
             if self.main_paths is not None:
-                self._all_paths = self.main_paths.copy()
+                all_paths_set = self.main_paths.copy()
                 if self.distributed_paths is not None:
-                    self._all_paths.update(self.distributed_paths)
-                self._all_paths = sorted(self._all_paths)
+                    all_paths_set.update(self.distributed_paths)
+                self._all_paths = sorted(all_paths_set)
             elif self.distributed_paths is not None:
                 self._all_paths = sorted(self.distributed_paths)
+            else:
+                self._all_paths = []
         return self._all_paths
 
-    def as_dict(self) -> Dict[str, str]:
+    def as_dict(self) -> Dict[str, Any]:
         """Reconstruct the object from the paths"""
-        d = dict()
+        d: Dict[str, Any] = dict()
         if self.paths is not None:
             for path in self.paths:
                 path_to_dict(path.jq_path, path.item, result=d)
@@ -925,7 +928,7 @@ class PathGroup:
             self._all_paths = None
         return added
 
-    def incorporate_paths(self, group: "PathGroup"):
+    def incorporate_paths(self, group: "PathGroup") -> None:
         """Incorporate (distribute) the group's appliccable paths into this group."""
         for path in group.paths:
             self.accept(path, distribute=True)
@@ -939,9 +942,9 @@ class ArrayElementAcceptStrategy(GroupAcceptStrategy):
         first (top) array level, 1 at the 2nd, etc.
         """
         self.max_array_level = max_array_level
-        self.ref_path = None
+        self.ref_path: Optional[Path] = None
 
-    def accept_path(self, path: Path, group: PathGroup, distribute: bool = False):
+    def accept_path(self, path: Path, group: PathGroup, distribute: bool = False) -> Optional[str]:
         if distribute or "[" not in path.jq_path:
             return "distributed"
 
@@ -951,18 +954,20 @@ class ArrayElementAcceptStrategy(GroupAcceptStrategy):
             return "main"
         else:
             if self.ref_path is None:
-                self.ref_path = list(group.main_paths)[0]
+                if group.main_paths is not None:
+                    self.ref_path = list(group.main_paths)[0]
             # All elements up through max_array_level must fully match
             cur_array_level = -1
-            for idx in range(1, min(self.ref_path.size, path.size)):
-                ref_elt = self.ref_path.path_elts[idx]
-                path_elt = path.path_elts[idx]
-                if ref_elt != path_elt:
-                    return None
-                elif ref_elt[-1] == "]":
-                    cur_array_level += 1
-                    if cur_array_level >= self.max_array_level:
-                        break
+            if self.ref_path is not None:
+                for idx in range(1, min(self.ref_path.size, path.size)):
+                    ref_elt = self.ref_path.path_elts[idx]
+                    path_elt = path.path_elts[idx]
+                    if ref_elt != path_elt:
+                        return None
+                    elif ref_elt[-1] == "]":
+                        cur_array_level += 1
+                        if cur_array_level >= self.max_array_level:
+                            break
         return "main"
 
 
@@ -986,14 +991,14 @@ class PathSorter:
         # NOTE: Must keep at least 3 groups if keeping any for propagating
         #      distributed paths.
         self.max_groups = max_groups if max_groups <= 0 else max(3, max_groups)
-        self.groups = None  # List[PathGroup]
+        self.groups: Optional[List[PathGroup]] = None
 
     @property
     def num_groups(self) -> int:
         """Get the number of groups"""
         return len(self.groups) if self.groups is not None else 0
 
-    def add_path(self, path: Path) -> PathGroup:
+    def add_path(self, path: Path) -> Optional[PathGroup]:
         """Add the path to an existing group, or create a new group.
         :param path: The path to add
         :return: each closed PathGroup, otherwise None.
@@ -1029,7 +1034,7 @@ class PathSorter:
                         self.groups.pop(0)
         return result
 
-    def close_group(self, idx: int = -1, check_size: bool = True) -> PathGroup:
+    def close_group(self, idx: int = -1, check_size: bool = True) -> Optional[PathGroup]:
         """Close the (last) group by
           * Adding distributable lines from the prior group
           * Checking size constraints and dropping if warranted
@@ -1055,14 +1060,15 @@ class PathSorter:
 
         return latest_group
 
-    def accept_path(self, path: Path):
+    def accept_path(self, path: Path) -> bool:
         """Add the path only if accepted by an existing group.
         :param path: The path to add
         :return: True if accepted
         """
-        for group in self.groups:
-            if group.accept(path):
-                return True
+        if self.groups is not None:
+            for group in self.groups:
+                if group.accept(path):
+                    return True
         return False
 
     def all_groups_have_size(self, group_size: int) -> bool:
@@ -1083,7 +1089,7 @@ class RecordPathBuilder:
     def __init__(
         self,
         json_data: str,
-        output_stream,
+        output_stream: TextIO,
         line_builder_fn: Callable[[int, int, str, Any], str],
         timeout: int = TIMEOUT,
     ):
@@ -1099,22 +1105,25 @@ class RecordPathBuilder:
         self.timeout = timeout
         self.rec_id = 0
         self.inum = 0
-        self.sorter = None
+        self.sorter: Optional[PathSorter] = None
 
-    def write_group(self, group: PathGroup):
+    def write_group(self, group: PathGroup) -> None:
         for path in group.paths:
             line = self.builder_fn(self.rec_id, path.line_num, path.jq_path, path.item)
             print(line, file=self.output_stream)
 
-    def visitor(self, item, path):
+    def visitor(self, item: Any, path: Tuple[Any, ...]) -> None:
         jq_path = build_jq_path(path, keep_list_idxs=True)
-        group = self.sorter.add_path(Path(jq_path, item, line_num=self.inum))
+        if self.sorter is not None:
+            group = self.sorter.add_path(Path(jq_path, item, line_num=self.inum))
+        else:
+            group = None
         if group is not None:
             self.write_group(group)
             self.rec_id += 1
         self.inum += 1
 
-    def stream_record_paths(self):
+    def stream_record_paths(self) -> None:
         self.rec_id = 0
         self.inum = 0
         self.sorter = PathSorter(
@@ -1131,10 +1140,10 @@ class RecordPathBuilder:
 
 def stream_record_paths(
     json_data: str,
-    output_stream,
+    output_stream: TextIO,
     line_builder_fn: Callable[[int, int, str, Any], str],
     timeout: int = TIMEOUT,
-):
+) -> None:
     """Write built lines from (rec_id, item_num, jq_path, item) tuples of the
     top-level json "records" to the output stream where:
         * rec_id is a 0-based integer identifying unique records
