@@ -98,9 +98,9 @@ lint() {
     for package in "${PACKAGES[@]}"; do
         echo -e "\n${YELLOW}Checking dataknobs-$package...${NC}"
         
-        # Run ruff check
+        # Run ruff check (no auto-fix during linting)
         echo -e "${BLUE}Running ruff check...${NC}"
-        if ruff check "packages/$package/src" --config "$ROOT_DIR/pyproject.toml"; then
+        if ruff check "packages/$package/src" --no-fix --config "$ROOT_DIR/pyproject.toml"; then
             echo -e "${GREEN}✓ Ruff check passed${NC}"
         else
             echo -e "${RED}✗ Ruff check failed${NC}"
