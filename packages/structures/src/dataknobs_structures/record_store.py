@@ -1,12 +1,12 @@
 import json
 import os
-import pandas as pd
 from typing import Any, Dict, List
+
+import pandas as pd
 
 
 class RecordStore:
-    """
-    Wrapper around a sequence of records represented in memory as a list of
+    """Wrapper around a sequence of records represented in memory as a list of
     dictionaries and/or as a dataframe and as a tsv file on disk.
     """
 
@@ -16,8 +16,7 @@ class RecordStore:
         df: pd.DataFrame = None,
         sep: str = "\t",
     ):
-        """
-        :param tsv_fpath: The path to the tsv file on disk. If None or
+        """:param tsv_fpath: The path to the tsv file on disk. If None or
             empty, then data will not be persisted.
         :param df: An initial dataframe
         :param sep: The file separator to use (if not a tab)
@@ -30,9 +29,7 @@ class RecordStore:
         self._init_data(df)
 
     def _init_data(self, df: pd.DataFrame = None):
-        """
-        Initialize store data from the tsv file.
-        """
+        """Initialize store data from the tsv file."""
         if self.tsv_fpath is not None and os.path.exists(self.tsv_fpath):
             self._df = pd.read_csv(self.tsv_fpath, sep=self.sep)
         else:
@@ -63,9 +60,7 @@ class RecordStore:
         return self._recs
 
     def clear(self):
-        """
-        Clear the contents, starting from empty, but don't auto-"save".
-        """
+        """Clear the contents, starting from empty, but don't auto-"save"."""
         self._recs.clear()
         self._df = None
 
@@ -80,8 +75,7 @@ class RecordStore:
             self.df.to_csv(self.tsv_fpath, sep=self.sep, index=False)
 
     def restore(self, df: pd.DataFrame = None):
-        """
-        Restore records from the version on disk, discarding any changes.
+        """Restore records from the version on disk, discarding any changes.
         NOTE: If there is no backing file (e.g., tsv_fpath is None), then
         restore will discard all data and restart with the given df (if not
         None,) the init df or start anew.

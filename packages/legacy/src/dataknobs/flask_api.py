@@ -1,12 +1,13 @@
 #!/usr/bin/env python
 
 import argparse
-import dataknobs.utils.sys_utils as sys_utils
 import json
 import os
-from dataknobs import create_app
+
 from flask import request
 
+from dataknobs import create_app
+from dataknobs.utils import sys_utils
 
 app = create_app()
 

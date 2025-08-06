@@ -3,7 +3,6 @@ import re
 from itertools import product
 from typing import List, Set
 
-
 # squash whitespace: to collapse consecutive whitespace to a single space by
 #    x.sub(' ', text)
 SQUASH_WS_RE = re.compile(r"\s+")
@@ -60,24 +59,18 @@ AMPERSAND_RE = re.compile(r"\s*\&\s*")
 
 
 def expand_camelcase_fn(text: str) -> str:
-    """
-    Expand both "lU" and "UUl" camelcasing to "l U" and "U Ul"
-    """
+    """Expand both "lU" and "UUl" camelcasing to "l U" and "U Ul" """
     text = CAMELCASE_LU_RE.sub(r"\1 \2", text)
     return CAMELCASE_UL_RE.sub(r"\1 \2", text)
 
 
 def drop_non_embedded_symbols_fn(text: str, repl: str = "") -> str:
-    """
-    Drop symbols not embedded within word characters
-    """
+    """Drop symbols not embedded within word characters"""
     return NON_EMBEDDED_WORD_SYMS_RE.sub(repl, text)
 
 
 def drop_embedded_symbols_fn(text: str, repl: str = "") -> str:
-    """
-    Drop symbols embedded within word characters
-    """
+    """Drop symbols embedded within word characters"""
     return EMBEDDED_SYMS_RE.sub(repl, text)
 
 
@@ -89,8 +82,7 @@ def get_hyphen_slash_expansions_fn(
     min_split_token_len: int = 2,
     hyphen_slash_re=HYPHEN_SLASH_RE,
 ) -> Set[str]:
-    """
-    Given text with words that may or may not appear as hyphenated or with a
+    """Given text with words that may or may not appear as hyphenated or with a
     slash, return the set potential variations:
         - the text as-is (add_self)
         - with a hyphen between all words (if '-' in subs)
@@ -108,7 +100,7 @@ def get_hyphen_slash_expansions_fn(
         to meet the min token length, don't add any of the splits.
     :param hyphen_slash_re: The regex to identify hyphen/slash to expand.
 
-    NOTEs:
+    Notes:
       * To add a variation with a slash, add '/' to subs.
       * To not add any variations with symbols, leave them out of subs
         * and don't add self.
@@ -127,16 +119,12 @@ def get_hyphen_slash_expansions_fn(
 
 
 def drop_parentheticals_fn(text: str) -> str:
-    """
-    Drop parenthetical expressions from the text.
-    """
+    """Drop parenthetical expressions from the text."""
     return PARENTHETICAL_RE.sub("", text)
 
 
 def expand_ampersand_fn(text: str) -> str:
-    """
-    Replace '&' with ' and '.
-    """
+    """Replace '&' with ' and '."""
     return AMPERSAND_RE.sub(" and ", text)
 
 
@@ -159,9 +147,7 @@ def get_lexical_variations(
     expand_ampersands: bool = True,
     add_eng_plurals: bool = True,
 ) -> Set[str]:
-    """
-    Get all variations for the text (including the text itself).
-    """
+    """Get all variations for the text (including the text itself)."""
     variations = {text} if include_self else set()
     if expand_camelcase:
         variations.add(expand_camelcase_fn(text))
@@ -293,8 +279,7 @@ def zero_pad_variations(
     min_zpad_len: int,
     max_zpad_len: int,
 ) -> Set[str]:
-    """
-    Get (only) zero-padded variations of the given value from min (inclusive)
+    """Get (only) zero-padded variations of the given value from min (inclusive)
     to max (exclusive) zero-pad lengths.
 
     Examples:
@@ -319,8 +304,7 @@ def month_day_variations_fn(
     month_or_day: int,
     do_int_to_en: bool = False,
 ) -> Set[str]:
-    """
-    Get the variations for a month or day number, including the number
+    """Get the variations for a month or day number, including the number
     itself as a string, a 2-digit zero-padded form of the number, and
     (optionally) english word for the number.
 
@@ -342,8 +326,7 @@ def year_variations_fn(
     do_int_to_en_below_100: bool = False,
     numeric_only: bool = False,
 ) -> Set[str]:
-    """
-    * "1999"
+    """* "1999"
     * Convert a year to english text:
       * Long text: one thousand, nine hundred and ninety nine
       * Short text: nineteen [hundred and] ninety nine
@@ -398,9 +381,7 @@ def year_variations_fn(
 
 
 def replace_smart_quotes_fn(text: str) -> str:
-    """
-    Replace "smart" quotes with their ascii version.
-    """
+    """Replace "smart" quotes with their ascii version."""
     return (
         text.replace(
             "\u201c",
@@ -432,15 +413,14 @@ def basic_normalization_fn(
     squash_whitespace: bool = False,
     do_all: bool = False,
 ) -> str:
-    """
-    Basic normalization functions include:
-        * lowercasing [default]
-        * expanding camelcase [default]
-        * replacing "smart" quotes and apostrophes with ascii verisons [default]
-        * dropping non_embedded symbols [optional]
-        * replacing embedded symbols with a space [takes precedence over dropping unless do_all]
-        * or dropping embedded symbols [optional]
-        * collapsing multiple spaces and stripping spaces from ends [optional]
+    """Basic normalization functions include:
+    * lowercasing [default]
+    * expanding camelcase [default]
+    * replacing "smart" quotes and apostrophes with ascii verisons [default]
+    * dropping non_embedded symbols [optional]
+    * replacing embedded symbols with a space [takes precedence over dropping unless do_all]
+    * or dropping embedded symbols [optional]
+    * collapsing multiple spaces and stripping spaces from ends [optional]
     """
     # NOTE: do this before changing case
     if expand_camelcase or do_all:

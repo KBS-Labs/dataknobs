@@ -1,10 +1,12 @@
 import json
+from abc import ABC, abstractmethod
+from collections.abc import Callable
+from typing import Any, Dict, List, Set
+
 import numpy as np
 import pandas as pd
-import dataknobs_structures.document as dk_doc
-from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Set
 
+import dataknobs_structures.document as dk_doc
 
 # Key annotations column name constants for use across annotation interfaces
 KEY_START_POS_COL = "start_pos"
@@ -14,8 +16,7 @@ KEY_ANN_TYPE_COL = "ann_type"
 
 
 class AnnotationsMetaData(dk_doc.MetaData):
-    """
-    Container for annotations meta-data, identifying key column names.
+    """Container for annotations meta-data, identifying key column names.
 
     NOTE: this object contains only information about annotation column names
     and not annotation table values.
@@ -31,8 +32,7 @@ class AnnotationsMetaData(dk_doc.MetaData):
         sort_fields_ascending: List[bool] = (True, False),
         **kwargs,
     ):
-        """
-        Initialize with key (and more) column names and info.
+        """Initialize with key (and more) column names and info.
 
         Key column types:
           * start_pos
@@ -40,7 +40,7 @@ class AnnotationsMetaData(dk_doc.MetaData):
           * text
           * ann_type
 
-        NOTEs:
+        Notes:
           * Actual table columns can be named arbitrarily
              * BUT: interactions through annotations classes and interfaces
                relating to the "key" columns must use the key column constants
@@ -86,8 +86,7 @@ class AnnotationsMetaData(dk_doc.MetaData):
         return self.data[KEY_ANN_TYPE_COL]
 
     def get_col(self, col_type: str, missing: str = None) -> str:
-        """
-        Get the name of the column having the given type (including key column
+        """Get the name of the column having the given type (including key column
         types but not derived,) or get the missing value.
 
         :param col_type: The type of column name to get
@@ -97,8 +96,7 @@ class AnnotationsMetaData(dk_doc.MetaData):
         return self.get_value(col_type, missing)
 
     def sort_df(self, an_df: pd.DataFrame):
-        """
-        Sort an annotations dataframe according to this metadata.
+        """Sort an annotations dataframe according to this metadata.
         :param an_df: An annotations dataframe
         :return: The sorted annotations dataframe.
         """
@@ -108,9 +106,7 @@ class AnnotationsMetaData(dk_doc.MetaData):
 
 
 class DerivedAnnotationColumns(ABC):
-    """
-    Interface for injecting derived columns into AnnotationsMetaData.
-    """
+    """Interface for injecting derived columns into AnnotationsMetaData."""
 
     @abstractmethod
     def get_col_value(
@@ -120,8 +116,7 @@ class DerivedAnnotationColumns(ABC):
         row: pd.Series,
         missing: str = None,
     ) -> str:
-        """
-        Get the value of the column in the given row derived from col_type.
+        """Get the value of the column in the given row derived from col_type.
 
         :param metadata: The AnnotationsMetaData
         :param col_type: The type of column value to derive
@@ -133,15 +128,12 @@ class DerivedAnnotationColumns(ABC):
 
 
 class AnnotationsRowAccessor:
-    """
-    A class that accesses row data according to the metadata and derived cols.
-    """
+    """A class that accesses row data according to the metadata and derived cols."""
 
     def __init__(
         self, metadata: AnnotationsMetaData, derived_cols: DerivedAnnotationColumns = None
     ):
-        """
-        :param metadata: The metadata for annotation columns
+        """:param metadata: The metadata for annotation columns
         :param derived_cols: A DerivedAnnotationColumns instance for injecting
             derived columns.
         """
@@ -154,8 +146,7 @@ class AnnotationsRowAccessor:
         row: pd.Series,
         missing: str = None,
     ) -> str:
-        """
-        Get the value of the column in the given row with the given type.
+        """Get the value of the column in the given row with the given type.
 
         This gets the value from the first existing column in the row from:
           * The metadata.get_col(col_type) column
@@ -172,17 +163,15 @@ class AnnotationsRowAccessor:
         if col is None or col not in row.index:
             if col_type in self.metadata.data:
                 value = row[col_type]
-            else:
-                if self.derived_cols is not None:
-                    value = self.derived_cols.get_col_value(self.metadata, col_type, row, missing)
+            elif self.derived_cols is not None:
+                value = self.derived_cols.get_col_value(self.metadata, col_type, row, missing)
         else:
             value = row[col]
         return value
 
 
 class Annotations:
-    """
-    DAO for collecting and managing a table of annotations, where each row
+    """DAO for collecting and managing a table of annotations, where each row
     carries annotation information for an input token.
 
     The data in this class is maintained either as a list of dicts, each dict
@@ -196,8 +185,7 @@ class Annotations:
         metadata: AnnotationsMetaData,
         df: pd.DataFrame = None,
     ):
-        """
-        Construct as empty or initialize with the dataframe form.
+        """Construct as empty or initialize with the dataframe form.
         :param df: A dataframe with annotation records.
         """
         self.metadata = metadata
@@ -206,18 +194,14 @@ class Annotations:
 
     @property
     def ann_row_dicts(self) -> List[Dict[str, Any]]:
-        """
-        Get the annotations as a list of dictionaries.
-        """
+        """Get the annotations as a list of dictionaries."""
         if self._annotations_list is None:
             self._annotations_list = self._build_list()
         return self._annotations_list
 
     @property
     def df(self) -> pd.DataFrame:
-        """
-        Get the annotations as a pandas dataframe.
-        """
+        """Get the annotations as a pandas dataframe."""
         if self._df is None:
             self._df = self._build_df()
         return self._df
@@ -235,28 +219,20 @@ class Annotations:
         )
 
     def add_dict(self, annotation: Dict[str, Any]):
-        """
-        Add the annotation dict.
-        """
+        """Add the annotation dict."""
         self.ann_row_dicts.append(annotation)
 
     def add_dicts(self, annotations: List[Dict[str, Any]]):
-        """
-        Add the annotation dicts.
-        """
+        """Add the annotation dicts."""
         self.ann_row_dicts.extend(annotations)
 
     def add_df(self, an_df: pd.DataFrame):
-        """
-        Add (concatentate) the annotation dataframe to the current annotations.
-        """
+        """Add (concatentate) the annotation dataframe to the current annotations."""
         df = self.metadata.sort_df(pd.concat([self.df, an_df]))
         self.set_df(df)
 
     def _build_list(self) -> List[Dict[str, Any]]:
-        """
-        Build the annotations list from the dataframe.
-        """
+        """Build the annotations list from the dataframe."""
         alist = None
         if self._df is not None:
             alist = self._df.to_dict(orient="records")
@@ -264,9 +240,7 @@ class Annotations:
         return alist if alist is not None else list()
 
     def _build_df(self) -> pd.DataFrame:
-        """
-        Get the annotations as a df.
-        """
+        """Get the annotations as a df."""
         df = None
         if self._annotations_list is not None:
             if len(self._annotations_list) > 0:
@@ -275,8 +249,7 @@ class Annotations:
         return df
 
     def set_df(self, df: pd.DataFrame):
-        """
-        Set (or reset) this annotation's dataframe.
+        """Set (or reset) this annotation's dataframe.
         :param df: The new annotations dataframe.
         """
         self._df = df
@@ -284,17 +257,14 @@ class Annotations:
 
 
 class AnnotationsBuilder:
-    """
-    A class for building annotations.
-    """
+    """A class for building annotations."""
 
     def __init__(
         self,
         metadata: AnnotationsMetaData,
         data_defaults: Dict[str, Any],
     ):
-        """
-        :param metadata: The annotations metadata
+        """:param metadata: The annotations metadata
         :param data_defaults: Dict[ann_colname, default_value] with default
             values for annotation columns
         """
@@ -304,8 +274,7 @@ class AnnotationsBuilder:
     def build_annotation_row(
         self, start_pos: int, end_pos: int, text: str, ann_type: str, **kwargs
     ) -> Dict[str, Any]:
-        """
-        Build an annotation row with the mandatory key values and those from
+        """Build an annotation row with the mandatory key values and those from
         the remaining keyword arguments.
 
         For those kwargs whose names match metadata column names, override the
@@ -329,8 +298,7 @@ class AnnotationsBuilder:
         )
 
     def do_build_row(self, key_fields: Dict[str, Any], **kwargs) -> Dict[str, Any]:
-        """
-        Do the row building with the key fields, followed by data defaults,
+        """Do the row building with the key fields, followed by data defaults,
         followed by any extra kwargs.
         :param key_fields: The dictionary of key fields
         :param kwargs: Any extra fields to add
@@ -347,9 +315,7 @@ class AnnotationsBuilder:
 
 
 class RowData:
-    """
-    A wrapper for an annotation row (pd.Series) to facilitate e.g., grouping.
-    """
+    """A wrapper for an annotation row (pd.Series) to facilitate e.g., grouping."""
 
     def __init__(
         self,
@@ -379,15 +345,13 @@ class RowData:
         return self.row[self.metadata.text_col]
 
     def is_subset(self, other_row: "RowData") -> bool:
-        """
-        Determine whether this row's span is a subset of the other.
+        """Determine whether this row's span is a subset of the other.
         :param other_row: The other row
         """
         return self.start_pos >= other_row.start_pos and self.end_pos <= other_row.end_pos
 
     def is_subset_of_any(self, other_rows: List["RowData"]) -> bool:
-        """
-        Determine whether this row is a subset of any of the others
+        """Determine whether this row is a subset of any of the others
         according to text span coverage.
         :param other_rows: The rows to test for this to be a subset of any
         """
@@ -400,8 +364,7 @@ class RowData:
 
 
 class AnnotationsGroup:
-    """
-    Container for annotation rows that belong together as a (consistent) group.
+    """Container for annotation rows that belong together as a (consistent) group.
 
     NOTE: An instance will only accept rows on condition of consistency per its
     acceptance function.
@@ -417,8 +380,7 @@ class AnnotationsGroup:
         valid: bool = True,
         autolock: bool = False,
     ):
-        """
-        :param row_accessor: The annotations row_accessor
+        """:param row_accessor: The annotations row_accessor
         :param field_col_type: The col_type for the group field_type for retrieval
            using the annotations row accessor
         :param accept_fn: A fn(g, row_data) that returns True to accept the row
@@ -446,15 +408,12 @@ class AnnotationsGroup:
 
     @property
     def is_locked(self) -> bool:
-        """
-        Get whether this group is locked from adding more rows.
-        """
+        """Get whether this group is locked from adding more rows."""
         return self._locked
 
     @is_locked.setter
     def is_locked(self, value: bool):
-        """
-        Set this group as locked (value=True) or unlocked (value=False) to
+        """Set this group as locked (value=True) or unlocked (value=False) to
         allow or disallow more rows from being added regardless of the accept
         function.
 
@@ -467,30 +426,24 @@ class AnnotationsGroup:
 
     @property
     def is_valid(self) -> bool:
-        """
-        Get whether this group is currently marked as valid.
-        """
+        """Get whether this group is currently marked as valid."""
         return self._valid
 
     @is_valid.setter
     def is_valid(self, value: bool):
-        """
-        Mark this group as valid (value=True) or invalid (value=False).
+        """Mark this group as valid (value=True) or invalid (value=False).
         :param value: True for valid or False for invalid.
         """
         self._valid = value
 
     @property
     def autolock(self) -> bool:
-        """
-        Get whether this group is currently set to autolock.
-        """
+        """Get whether this group is currently set to autolock."""
         return self._autolock
 
     @autolock.setter
     def autolock(self, value: bool):
-        """
-        Set this group to autolock (True) or not (False).
+        """Set this group to autolock (True) or not (False).
         :param value: True for False to autolock or not.
         """
         self._autolock = value
@@ -500,15 +453,12 @@ class AnnotationsGroup:
 
     @property
     def size(self) -> int:
-        """
-        Get the number of rows in this group.
-        """
+        """Get the number of rows in this group."""
         return len(self.rows)
 
     @property
     def group_type(self) -> str:
-        """
-        Get this group's type, which is either an "override" value that has
+        """Get this group's type, which is either an "override" value that has
         been set, or the "ann_type" value of the first row added.
         """
         return self._group_type if self._group_type is not None else self.ann_type
@@ -552,9 +502,7 @@ class AnnotationsGroup:
 
     @property
     def key(self) -> str:
-        """
-        A hash key for this group.
-        """
+        """A hash key for this group."""
         if self._key is None:
             self._key = "_".join([str(x) for x in sorted(self.locs)])
         return self._key
@@ -574,8 +522,7 @@ class AnnotationsGroup:
         result._ann_type = self._ann_type  # pylint: disable=protected-access
 
     def add(self, rowdata: RowData) -> bool:
-        """
-        Add the row if the group is not locked and the row belongs in this
+        """Add the row if the group is not locked and the row belongs in this
         group, or return False.
 
         If autolock is True and a row fails to be added (after the first
@@ -608,14 +555,11 @@ class AnnotationsGroup:
         return result
 
     def to_dict(self) -> Dict[str, str]:
-        """
-        Get this group (record) as a dictionary of field type to text values.
-        """
+        """Get this group (record) as a dictionary of field type to text values."""
         return {self.row_accessor.get_col_value(self.field_col_type): row.text for row in self.rows}
 
     def is_subset(self, other: "AnnotationsGroup") -> bool:
-        """
-        Determine whether the this group's text is contained within the others.
+        """Determine whether the this group's text is contained within the others.
         :param other: The other group
         """
         result = True
@@ -626,8 +570,7 @@ class AnnotationsGroup:
         return result
 
     def is_subset_of_any(self, groups: List["AnnotationsGroup"]) -> "AnnotationsGroup":
-        """
-        Determine whether this group is a subset of any of the given groups.
+        """Determine whether this group is a subset of any of the given groups.
         :param groups: List of annotation groups
         :return: The first AnnotationsGroup that this group is a subset of, or
             None
@@ -643,8 +586,7 @@ class AnnotationsGroup:
         self,
         row_idx: int,
     ) -> RowData:
-        """
-        Remove the row from this group and optionally update the annotations
+        """Remove the row from this group and optionally update the annotations
         accordingly.
 
         :param row_idx: The positional index of the row to remove
@@ -661,28 +603,22 @@ class AnnotationsGroup:
 
 
 class MergeStrategy(ABC):
-    """
-    A merge strategy to be injected based on entity types being merged.
-    """
+    """A merge strategy to be injected based on entity types being merged."""
 
     @abstractmethod
     def merge(self, group: AnnotationsGroup) -> List[Dict[str, Any]]:
-        """
-        Process the annotations in the given annotations group, returning the
+        """Process the annotations in the given annotations group, returning the
         group's merged annotation dictionaries.
         """
         raise NotImplementedError
 
 
 class PositionalAnnotationsGroup(AnnotationsGroup):
-    """
-    Container for annotations that either overlap with each other or don't.
-    """
+    """Container for annotations that either overlap with each other or don't."""
 
     def __init__(self, overlap: bool, rectype: str = None, gnum: int = -1):
-        """
-        :param overlap: If False, then only accept rows that don't overlap; else
-            only accept rows that do ovelap
+        """:param overlap: If False, then only accept rows that don't overlap; else
+        only accept rows that do ovelap
         """
         super().__init__(None, None, None, group_type=rectype, group_num=gnum)
         self.overlap = overlap
@@ -698,8 +634,7 @@ class PositionalAnnotationsGroup(AnnotationsGroup):
         return jstr.join(r.entity_text for r in self.rows)
 
     def belongs(self, rowdata: RowData) -> bool:
-        """
-        Determine if the row belongs in this instance based on its overlap
+        """Determine if the row belongs in this instance based on its overlap
         or not.
         :param rowdata: The rowdata to test
         :return: True if the rowdata belongs in this instance
@@ -734,8 +669,7 @@ class PositionalAnnotationsGroup(AnnotationsGroup):
 
 
 class OverlapGroupIterator:
-    """
-    Given:
+    """Given:
       * annotation rows (dataframe)
         * in order sorted by
           * start_pos (increasing for input order), and
@@ -746,9 +680,7 @@ class OverlapGroupIterator:
     """
 
     def __init__(self, an_df: pd.DataFrame):
-        """
-        :param an_df: An annotations.as_df DataFrame, sliced and sorted.
-        """
+        """:param an_df: An annotations.as_df DataFrame, sliced and sorted."""
         self.an_df = an_df
         self._cur_iter = None
         self._queued_row_data = None
@@ -785,9 +717,7 @@ def merge(
     annotations: Annotations,
     merge_strategy: MergeStrategy,
 ) -> Annotations:
-    """
-    Merge the overlapping groups according to the given strategy.
-    """
+    """Merge the overlapping groups according to the given strategy."""
     og_iter = OverlapGroupIterator(annotations.as_df)
     result = Annotations(annotations.metadata)
     while og_iter.has_next:
@@ -797,9 +727,7 @@ def merge(
 
 
 class AnnotationsGroupList:
-    """
-    Container for a list of annotation groups.
-    """
+    """Container for a list of annotation groups."""
 
     def __init__(
         self,
@@ -808,8 +736,7 @@ class AnnotationsGroupList:
         == 0
         or not g.is_subset_of_any(l.groups),
     ):
-        """
-        :param groups: The initial groups for this list
+        """:param groups: The initial groups for this list
         :param accept_fn: A fn(l, g) that returns True to accept the group, g,
             into this list, l, or False to reject the group. If None, then all
             groups are always accepted. The default function will reject any
@@ -829,9 +756,7 @@ class AnnotationsGroupList:
 
     @property
     def coverage(self) -> int:
-        """
-        Get the total number of (token) rows covered by the groups
-        """
+        """Get the total number of (token) rows covered by the groups"""
         if self._coverage is None:
             locs = set()
             for group in self.groups:
@@ -849,8 +774,7 @@ class AnnotationsGroupList:
         return result
 
     def add(self, group: AnnotationsGroup) -> bool:
-        """
-        Add the group if it belongs in this group list or return False.
+        """Add the group if it belongs in this group list or return False.
         :param group: The group to add
         :return: True if the group belongs and was added; otherwise, False
         """
@@ -862,8 +786,7 @@ class AnnotationsGroupList:
         return result
 
     def is_subset(self, other: "AnnotationsGroupList") -> bool:
-        """
-        Determine whether the this group's text spans are contained within all
+        """Determine whether the this group's text spans are contained within all
         of the other's.
         :param other: The other group list
         """
@@ -876,9 +799,7 @@ class AnnotationsGroupList:
 
 
 class AnnotatedText(dk_doc.Text):
-    """
-    A Text object that manages its own annotations.
-    """
+    """A Text object that manages its own annotations."""
 
     def __init__(
         self,
@@ -889,8 +810,7 @@ class AnnotatedText(dk_doc.Text):
         text_obj: dk_doc.Text = None,
         annots_metadata: AnnotationsMetaData = None,
     ):
-        """
-        :param text_str: The text string
+        """:param text_str: The text string
         :param metadata: The text's metadata
         :param annots: The annotations
         :param bookmarks: The annotation bookmarks
@@ -909,18 +829,14 @@ class AnnotatedText(dk_doc.Text):
 
     @property
     def annotations(self) -> Annotations:
-        """
-        Get the this object's annotations
-        """
+        """Get the this object's annotations"""
         if self._annots is None:
             self._annots = Annotations(self._annots_metadata or AnnotationsMetaData())
         return self._annots
 
     @property
     def bookmarks(self) -> Dict[str, pd.DataFrame]:
-        """
-        Get this object's bookmarks
-        """
+        """Get this object's bookmarks"""
         if self._bookmarks is None:
             self._bookmarks = dict()
         return self._bookmarks
@@ -931,8 +847,7 @@ class AnnotatedText(dk_doc.Text):
         annot_df: pd.DataFrame = None,
         text: str = None,
     ) -> str:
-        """
-        Get the text object's string, masking if indicated.
+        """Get the text object's string, masking if indicated.
 
         :param annot2mask: Mapping from annotation column (e.g., _num or
             _recsnum) to the replacement character(s) in the input text
@@ -955,8 +870,7 @@ class AnnotatedText(dk_doc.Text):
         pad_len: int = 0,
         text: str = None,
     ) -> pd.Series:
-        """
-        Get the input text as a (padded) pandas series.
+        """Get the input text as a (padded) pandas series.
         :param pad_len: The number of spaces to pad both front ant back
         :param text: Override text
         :return: The (padded) pandas series of input characters.
@@ -972,8 +886,7 @@ class AnnotatedText(dk_doc.Text):
         annot_df: pd.DataFrame = None,
         text: str = None,
     ) -> pd.Series:
-        """
-        Get a True/False series for the input such that start to end positions
+        """Get a True/False series for the input such that start to end positions
         for rows where the the annotation column is non-null and non-empty are
         True.
         :param annot_col: The annotation column identifying chars to mask
@@ -998,8 +911,7 @@ class AnnotatedText(dk_doc.Text):
         annot_col: str,
         pad_len: int = 0,
     ) -> pd.Series:
-        """
-        Get a True/False series for the input such that start to end positions
+        """Get a True/False series for the input such that start to end positions
         for rows where the the annotation column is non-null and non-empty are
         True.
 
@@ -1045,8 +957,7 @@ class AnnotatedText(dk_doc.Text):
         repl_mask: str,
         annot_df: pd.DataFrame,
     ) -> str:
-        """
-        Substitute the "mask" char for "text" chars at "col"-annotated positions
+        """Substitute the "mask" char for "text" chars at "col"-annotated positions
         :param text_s: The text series to revise
         :param col: The annotation col identifying positions to mask
         :param repl_mask: The mask character to inject at annotated positions
@@ -1058,8 +969,7 @@ class AnnotatedText(dk_doc.Text):
         return text_s
 
     def add_annotations(self, annotations: Annotations):
-        """
-        Add the annotations to this instance.
+        """Add the annotations to this instance.
 
         :param annotations: The annotations to add.
         """
@@ -1075,17 +985,13 @@ class AnnotatedText(dk_doc.Text):
 
 
 class Annotator(ABC):
-    """
-    Class for annotating text
-    """
+    """Class for annotating text"""
 
     def __init__(
         self,
         name: str,
     ):
-        """
-        :param name: The name of this annotator
-        """
+        """:param name: The name of this annotator"""
         self.name = name
 
     @abstractmethod
@@ -1094,8 +1000,7 @@ class Annotator(ABC):
         text_obj: AnnotatedText,
         **kwargs,
     ) -> Annotations:
-        """
-        Annotate this instance's text, additively updating its annotations.
+        """Annotate this instance's text, additively updating its annotations.
 
         :param text_obj: The text object to annotate
         :return: The annotations added
@@ -1104,17 +1009,14 @@ class Annotator(ABC):
 
 
 class BasicAnnotator(Annotator):
-    """
-    Class for extracting basic (possibly multi -level or -part) entities.
-    """
+    """Class for extracting basic (possibly multi -level or -part) entities."""
 
     def annotate_input(
         self,
         text_obj: AnnotatedText,
         **kwargs,
     ) -> Annotations:
-        """
-        Annotate the text obj, additively updating the annotations
+        """Annotate the text obj, additively updating the annotations
 
         :param text: The text to annotate
         :return: The annotations added to the text
@@ -1129,8 +1031,7 @@ class BasicAnnotator(Annotator):
 
     @abstractmethod
     def annotate_text(self, text_str: str) -> Annotations:
-        """
-        Build annotations for the text string.
+        """Build annotations for the text string.
         :param text_str: The text string to annotate
         :return: Annotations for the text
         """
@@ -1139,17 +1040,14 @@ class BasicAnnotator(Annotator):
 
 # TODO: remove this if unused -- stanza_annotator isa Authority -vs- stanza_annotator isa SyntacticParser
 class SyntacticParser(BasicAnnotator):
-    """
-    Class for creating syntactic annotations for an input.
-    """
+    """Class for creating syntactic annotations for an input."""
 
     def annotate_input(
         self,
         text_obj: AnnotatedText,
         **kwargs,
     ) -> Annotations:
-        """
-        Annotate the text, additively updating the annotations
+        """Annotate the text, additively updating the annotations
 
         :param text: The text to annotate
         :return: The annotations added to the text
@@ -1164,17 +1062,14 @@ class SyntacticParser(BasicAnnotator):
 
 
 class EntityAnnotator(BasicAnnotator):
-    """
-    Class for extracting single (possibly multi-level or -part) entities.
-    """
+    """Class for extracting single (possibly multi-level or -part) entities."""
 
     def __init__(
         self,
         name: str,
         mask_char: str = " ",
     ):
-        """
-        :param name: The name of this annotator
+        """:param name: The name of this annotator
         :param mask_char: The character to use to mask out previously annotated
             spans of this annotator's text.
         """
@@ -1184,16 +1079,14 @@ class EntityAnnotator(BasicAnnotator):
     @property
     @abstractmethod
     def annotation_cols(self) -> Set[str]:
-        """
-        Report the (final group or record) annotation columns that are filled
+        """Report the (final group or record) annotation columns that are filled
         by this annotator when its entities are annotated.
         """
         raise NotImplementedError
 
     @abstractmethod
     def mark_records(self, annotations: Annotations, largest_only: bool = True):
-        """
-        Collect and mark annotation records.
+        """Collect and mark annotation records.
 
         :param annotations: The annotations
         :param largest_only: True to only mark (keep) the largest records.
@@ -1205,8 +1098,7 @@ class EntityAnnotator(BasicAnnotator):
         self,
         annotations: Annotations,
     ):
-        """
-        Validate annotated records.
+        """Validate annotated records.
 
         :param annotations: The annotations
         """
@@ -1214,8 +1106,7 @@ class EntityAnnotator(BasicAnnotator):
 
     @abstractmethod
     def compose_groups(self, annotations: Annotations) -> Annotations:
-        """
-        Compose annotation rows into groups.
+        """Compose annotation rows into groups.
         :param annotations: The annotations
         :return: The composed annotations
         """
@@ -1229,8 +1120,7 @@ class EntityAnnotator(BasicAnnotator):
         largest_only: bool = True,
         **kwargs,
     ) -> Annotations:
-        """
-        Annotate the text object (optionally) after masking out previously
+        """Annotate the text object (optionally) after masking out previously
         annotated spans, additively updating the annotations in the text
         object.
 
@@ -1276,8 +1166,7 @@ class EntityAnnotator(BasicAnnotator):
     @property
     @abstractmethod
     def highlight_fieldstyles(self) -> Dict[str, Dict[str, Dict[str, str]]]:
-        """
-        Get highlight field styles for this annotator's annotations of the form:
+        """Get highlight field styles for this annotator's annotations of the form:
         {
             <field_col>: {
                 <field_value>: {
@@ -1291,9 +1180,7 @@ class EntityAnnotator(BasicAnnotator):
 
 
 class HtmlHighlighter:
-    """
-    Helper class to add HTML markup for highlighting spans of text.
-    """
+    """Helper class to add HTML markup for highlighting spans of text."""
 
     def __init__(
         self,
@@ -1301,8 +1188,7 @@ class HtmlHighlighter:
         tooltip_class="tooltip",
         tooltiptext_class="tooltiptext",
     ):
-        """
-        :param field2style: The annotation column to highlight with its
+        """:param field2style: The annotation column to highlight with its
             associated style, for example:
                 {
                     'car_model_field': {
@@ -1323,8 +1209,7 @@ class HtmlHighlighter:
         self,
         text_obj: AnnotatedText,
     ) -> str:
-        """
-        Return an html string with the given fields (annotation columns)
+        """Return an html string with the given fields (annotation columns)
         highlighted with the associated styles.
         :param text_obj: The annotated text to markup
         """
@@ -1353,9 +1238,7 @@ class HtmlHighlighter:
 
 
 class AnnotatorKernel(ABC):
-    """
-    Class for encapsulating core annotation logic for multiple annotators
-    """
+    """Class for encapsulating core annotation logic for multiple annotators"""
 
     @property
     @abstractmethod
@@ -1370,17 +1253,14 @@ class AnnotatorKernel(ABC):
 
 
 class CompoundAnnotator(Annotator):
-    """
-    Class to apply a series of annotators through an AnnotatorKernel
-    """
+    """Class to apply a series of annotators through an AnnotatorKernel"""
 
     def __init__(
         self,
         kernel: AnnotatorKernel,
         name: str = "entity",
     ):
-        """
-        Initialize with the annotators and this extractor's name.
+        """Initialize with the annotators and this extractor's name.
 
         :param kernel: The annotations kernel to use
         :param name: The name of this information extractor to be the
@@ -1395,8 +1275,7 @@ class CompoundAnnotator(Annotator):
         reset: bool = True,
         **kwargs,
     ) -> Annotations:
-        """
-        Annotate the text.
+        """Annotate the text.
 
         :param text_obj: The AnnotatedText object to annotate.
         :param reset: When True, reset and rebuild any existing annotations
@@ -1412,8 +1291,7 @@ class CompoundAnnotator(Annotator):
         text_obj: AnnotatedText,
         annotator_names: List[str] = None,
     ) -> str:
-        """
-        Get html-hilighted text for the identified input's annotations
+        """Get html-hilighted text for the identified input's annotations
         from the given annotators (or all).
 
         :param text_obj: The input text to highlight

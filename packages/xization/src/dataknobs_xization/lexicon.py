@@ -1,19 +1,21 @@
+from abc import abstractmethod
+from collections import defaultdict
+from collections.abc import Callable
+from typing import Any, Dict, List, Set, Union
+
 import more_itertools
 import numpy as np
 import pandas as pd
+
+import dataknobs_structures.document as dk_doc
 import dataknobs_xization.annotations as dk_anns
 import dataknobs_xization.authorities as dk_auth
-import dataknobs_structures.document as dk_doc
 import dataknobs_xization.masking_tokenizer as dk_tok
-import dataknobs_utils.emoji_utils as emoji_utils
-from abc import abstractmethod
-from collections import defaultdict
-from typing import Any, Callable, Dict, List, Set, Union
+from dataknobs_utils import emoji_utils
 
 
 class LexicalExpander:
-    """
-    A class to expand and/or normalize original lexical input terms, to
+    """A class to expand and/or normalize original lexical input terms, to
     keep back-references from generated data to corresponding original input,
     and to build consistent tokens for lexical matching.
     """
@@ -25,8 +27,7 @@ class LexicalExpander:
         split_input_camelcase: bool = True,
         detect_emojis: bool = False,
     ):
-        """
-        Initialize with the given functions.
+        """Initialize with the given functions.
         :param variations_fn: A function, f(t), to expand a raw input term to
           all of its variations (including itself if desired). If None, the
           default is to expand each term to itself.
@@ -44,8 +45,7 @@ class LexicalExpander:
         self.v2t = defaultdict(set)
 
     def __call__(self, term: Any, normalize=True) -> Set[str]:
-        """
-        Get all variations of the original term.
+        """Get all variations of the original term.
 
         :param term: The term whose variations to compute.
         :param normalize: True to normalize the resulting variations.
@@ -60,16 +60,14 @@ class LexicalExpander:
         return variations
 
     def normalize(self, input_term: str) -> str:
-        """
-        Normalize the given input term or variation.
+        """Normalize the given input term or variation.
         :param input_term: An input term to normalize
         :return: The normalized string of the input_term.
         """
         return self.normalize_fn(input_term)
 
     def get_terms(self, variation: str) -> Set[Any]:
-        """
-        Get the term ids for which the given variation was generated
+        """Get the term ids for which the given variation was generated
         :param variation: A variation whose reference term(s) to retrieve
         :return: The set term ids for the variation or the missing_value.
         """
@@ -119,9 +117,7 @@ class TokenMatch:
 
     @property
     def matched_text(self):
-        """
-        Get the matched original text.
-        """
+        """Get the matched original text."""
         return self.token.input_text[self.tokens[0].start_pos : self.tokens[-1].end_pos]
 
     def build_annotation(self):
@@ -164,9 +160,7 @@ class TokenAligner:
 
 
 class DataframeAuthority(dk_auth.LexicalAuthority):
-    """
-    A pandas dataframe-based lexical authority.
-    """
+    """A pandas dataframe-based lexical authority."""
 
     def __init__(
         self,
@@ -178,8 +172,7 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
         anns_validator: Callable[["Authority", Dict[str, Any]], bool] = None,
         parent_auth: dk_auth.Authority = None,
     ):
-        """
-        Initialize with the name, values, and associated ids of the authority;
+        """Initialize with the name, values, and associated ids of the authority;
         and with the lexical expander for authoritative values.
 
         :param name: The authority name, if different from df.columns[0]
@@ -207,15 +200,12 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
 
     @property
     def prev_aligner(self) -> TokenAligner:
-        """
-        Get the token aligner created in the latest call to annotate_text.
-        """
+        """Get the token aligner created in the latest call to annotate_text."""
         return self._prev_aligner
 
     @property
     def variations(self) -> pd.Series:
-        """
-        Get all lexical variations in a series whose index has associated
+        """Get all lexical variations in a series whose index has associated
         value IDs.
         :return: A pandas series with index-identified variations
         """
@@ -226,8 +216,7 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
         return self._variations
 
     def get_id_by_variation(self, variation: str) -> Set[str]:
-        """
-        Get the IDs of the value(s) associated with the given variation.
+        """Get the IDs of the value(s) associated with the given variation.
         :param variation: Variation text
         :return: The possibly empty set of associated value IDS.
         """
@@ -237,8 +226,7 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
         return ids
 
     def get_variations(self, value: Any, normalize: bool = True) -> Set[Any]:
-        """
-        Convenience method to compute variations for the value.
+        """Convenience method to compute variations for the value.
         :param value: The authority value, or term, whose variationsn to compute
         :param normalize: True to normalize the variations
         :return: The set of variations for theh value.
@@ -246,16 +234,14 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
         return self.lexical_expander(value, normalize=normalize)
 
     def has_value(self, value: Any) -> bool:
-        """
-        Determine whether the given value is in this authority.
+        """Determine whether the given value is in this authority.
         :value: A possible authority value
         :return: True if the value is a valid entity value.
         """
         return np.any(self.authdata.df[self.name] == value)
 
     def get_value_ids(self, value: Any) -> Set[Any]:
-        """
-        Get all IDs associated with the given value. Note that typically
+        """Get all IDs associated with the given value. Note that typically
         there is a single ID for any value, but this allows for inherent
         ambiguities in the authority.
         :param value: An authority value
@@ -264,8 +250,7 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
         return set(self.authdata.lookup_values(value).index.tolist())
 
     def get_values_by_id(self, value_id: Any) -> Set[Any]:
-        """
-        Get all values for the associated value ID. Note that typically
+        """Get all values for the associated value ID. Note that typically
         there is a single value for an ID, but this allows for inherent
         ambiguities in the authority.
 
@@ -281,8 +266,7 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
         ends_with: bool = False,
         scope: str = "fullmatch",
     ) -> pd.Series:
-        """
-        Find all matches to the given variation.
+        """Find all matches to the given variation.
         :param variation: The text to find; treated as a regular expression
             unless either starts_with or ends_with is True.
         :param starts_with: When True, find all terms that start with the
@@ -320,8 +304,7 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
         ids_colname: str = None,
         lookup_values: bool = False,
     ) -> pd.DataFrame:
-        """
-        Create a DataFrame including associated ids for each variation.
+        """Create a DataFrame including associated ids for each variation.
         :param variations: The variations to include in the dataframe
         :param variaions_colname: The name of the variations column
         :param id_colname: The column name for value ids.
@@ -346,8 +329,7 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
         doctext: dk_doc.Text,
         annotations: dk_anns.Annotations,
     ) -> dk_anns.Annotations:
-        """
-        Method to do the work of finding, validating, and adding annotations.
+        """Method to do the work of finding, validating, and adding annotations.
         :param doctext: The text to process.
         :param annotations: The annotations object to add annotations to
         :return: The given or a new Annotations instance
@@ -363,8 +345,7 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
 
 
 class CorrelatedAuthorityData(dk_auth.AuthorityData):
-    """
-    Container for authoritative data containing correlated data for multiple
+    """Container for authoritative data containing correlated data for multiple
     "sub" authorities.
     """
 
@@ -373,15 +354,12 @@ class CorrelatedAuthorityData(dk_auth.AuthorityData):
         self._authority_data = dict()
 
     def sub_authority_names(self) -> List[str]:
-        """
-        Get the "sub" authority names.
-        """
+        """Get the "sub" authority names."""
         return None
 
     @abstractmethod
     def auth_values_mask(self, name: str, value_id: int) -> pd.Series:
-        """
-        Identify full-authority data corresponding to this sub-value.
+        """Identify full-authority data corresponding to this sub-value.
         :param name: The sub-authority name.
         :param value_id: The sub-authority value_id
         :return: A series representing relevant full-authority data.
@@ -394,8 +372,7 @@ class CorrelatedAuthorityData(dk_auth.AuthorityData):
         record_value_ids: Dict[str, int],
         filter_mask: pd.Series = None,
     ) -> pd.Series:
-        """
-        Get a series identifying records in the full authority matching
+        """Get a series identifying records in the full authority matching
         the given records of the form {<sub-name>: <sub-value-id>}.
         :param record_value_ids: The dict of field names to value_ids
         :param filter_mask: A pre-filter limiting records to consider and/or
@@ -406,8 +383,7 @@ class CorrelatedAuthorityData(dk_auth.AuthorityData):
 
     @abstractmethod
     def get_auth_records(self, records_mask: pd.Series) -> pd.DataFrame:
-        """
-        Get the authority records identified by the mask.
+        """Get the authority records identified by the mask.
         :param records_mask: A series identifying records in the full data
         :return: The records for which the mask is True.
         """
@@ -415,8 +391,7 @@ class CorrelatedAuthorityData(dk_auth.AuthorityData):
 
     @abstractmethod
     def combine_masks(self, mask1: pd.Series, mask2: pd.Series) -> pd.Series:
-        """
-        Combine the masks if possible, returning the valid combination or None.
+        """Combine the masks if possible, returning the valid combination or None.
         :param mask1: An auth_records_mask consistent with this data
         :param mask2: Another data auth_records_mask
         :return: The combined consistent records_mask or None
@@ -425,8 +400,7 @@ class CorrelatedAuthorityData(dk_auth.AuthorityData):
 
 
 class MultiAuthorityData(CorrelatedAuthorityData):
-    """
-    Container for authoritative data containing correlated data for multiple
+    """Container for authoritative data containing correlated data for multiple
     "sub" authorities composed of explicit data for each component.
     """
 
@@ -436,8 +410,7 @@ class MultiAuthorityData(CorrelatedAuthorityData):
 
     @abstractmethod
     def build_authority_data(self, name: str) -> dk_auth.AuthorityData:
-        """
-        Build an authority for the named sub-authority.
+        """Build an authority for the named sub-authority.
 
         :param name: The "sub" authority name
         :return: The "sub" authority data.
@@ -446,14 +419,11 @@ class MultiAuthorityData(CorrelatedAuthorityData):
 
     @property
     def authority_data(self, name: str) -> dk_auth.AuthorityData:
-        """
-        Retrieve without building the named authority data, or None
-        """
+        """Retrieve without building the named authority data, or None"""
         return self._authority_data.get(name, None)
 
     def get_authority_data(self, name: str) -> dk_auth.AuthorityData:
-        """
-        Get AuthorityData for the named "sub" authority, building if needed.
+        """Get AuthorityData for the named "sub" authority, building if needed.
 
         :param name: The "sub" authority name
         :return: The "sub" authority data.
@@ -464,8 +434,7 @@ class MultiAuthorityData(CorrelatedAuthorityData):
 
     @staticmethod
     def get_unique_vals_df(col: pd.Series, name: str) -> pd.DataFrame:
-        """
-        Get a dataframe with the unique values from the column and the given
+        """Get a dataframe with the unique values from the column and the given
         column name.
         """
         data = np.sort(pd.unique(col.dropna()))
@@ -478,8 +447,7 @@ class MultiAuthorityData(CorrelatedAuthorityData):
         return col_df
 
     def lookup_subauth_values(self, name: str, value: int, is_id: bool = False) -> pd.DataFrame:
-        """
-        Lookup "sub" authority data for the named "sub" authority value.
+        """Lookup "sub" authority data for the named "sub" authority value.
         :param name: The sub-authority name
         :param value: The value for the sub-authority to lookup
         :param is_id: True if value is an ID
@@ -496,8 +464,7 @@ class MultiAuthorityData(CorrelatedAuthorityData):
         name: str,
         value: str,
     ) -> pd.DataFrame:
-        """
-        Lookup original authority data for the named "sub" authority value.
+        """Lookup original authority data for the named "sub" authority value.
         :param name: The sub-authority name
         :param value: The sub-authority value(s) (or dataframe row(s))
         :return: The original authority dataframe rows.
@@ -505,8 +472,7 @@ class MultiAuthorityData(CorrelatedAuthorityData):
         return self.df[self.df[name] == value]
 
     def auth_values_mask(self, name: str, value_id: int) -> pd.Series:
-        """
-        Identify the rows in the full authority corresponding to this sub-value.
+        """Identify the rows in the full authority corresponding to this sub-value.
         :param name: The sub-authority name.
         :param value_id: The sub-authority value_id
         :return: A boolean series where the field exists.
@@ -519,8 +485,7 @@ class MultiAuthorityData(CorrelatedAuthorityData):
         record_value_ids: Dict[str, int],
         filter_mask: pd.Series = None,
     ) -> pd.Series:
-        """
-        Get a boolean series identifying records in the full authority matching
+        """Get a boolean series identifying records in the full authority matching
         the given records of the form {<sub-name>: <sub-value-id>}.
         :param record_value_ids: The dict of field names to value_ids
         :param filter_mask: A pre-filter limiting records to consider and/or
@@ -537,16 +502,14 @@ class MultiAuthorityData(CorrelatedAuthorityData):
         return has_fields
 
     def get_auth_records(self, records_mask: pd.Series) -> pd.DataFrame:
-        """
-        Get the authority records identified by the mask.
+        """Get the authority records identified by the mask.
         :param records_mask: A boolean series identifying records in the full df
         :return: The records/rows for which the mask is True.
         """
         return self.df[records_mask]
 
     def combine_masks(self, mask1: pd.Series, mask2: pd.Series) -> pd.Series:
-        """
-        Combine the masks if possible, returning the valid combination or None.
+        """Combine the masks if possible, returning the valid combination or None.
         :param mask1: An auth_records_mask consistent with this data
         :param mask2: Another data auth_records_mask
         :return: The combined consistent records_mask or None
@@ -562,14 +525,12 @@ class MultiAuthorityData(CorrelatedAuthorityData):
 
 
 class SimpleMultiAuthorityData(MultiAuthorityData):
-    """
-    Data class for pulling a single column from the multi-authority data
+    """Data class for pulling a single column from the multi-authority data
     as a "sub" authority.
     """
 
     def build_authority_data(self, name: str) -> dk_auth.AuthorityData:
-        """
-        Build an authority for the named column holding authority data.
+        """Build an authority for the named column holding authority data.
 
         Note that only unique values are kept and the full dataframe's index
         will not be preserved.
@@ -583,8 +544,7 @@ class SimpleMultiAuthorityData(MultiAuthorityData):
 
 
 class MultiAuthorityFactory(dk_auth.AuthorityFactory):
-    """
-    An factory for building a "sub" authority directly or indirectly
+    """An factory for building a "sub" authority directly or indirectly
     from MultiAuthorityData.
     """
 
@@ -593,16 +553,14 @@ class MultiAuthorityFactory(dk_auth.AuthorityFactory):
         auth_name: str,
         lexical_expander: LexicalExpander = None,
     ):
-        """
-        :param auth_name: The name of the dataframe authority to build
+        """:param auth_name: The name of the dataframe authority to build
         :param lexical_expander: The lexical expander to use (default=identity)
         """
         self.auth_name = auth_name
         self._lexical_expander = lexical_expander
 
     def get_lexical_expander(self, name: str) -> LexicalExpander:
-        """
-        Get the lexical expander for the named (column) data.
+        """Get the lexical expander for the named (column) data.
         :param name: The name of the column to expand
         :return: The appropriate lexical_expander
         """
@@ -617,8 +575,7 @@ class MultiAuthorityFactory(dk_auth.AuthorityFactory):
         multiauthdata: MultiAuthorityData,
         parent_auth: dk_auth.Authority = None,
     ) -> DataframeAuthority:
-        """
-        Build a DataframeAuthority.
+        """Build a DataframeAuthority.
 
         :param name: The name of the authority to build
         :param auth_anns_builder: The authority annotations row builder to use

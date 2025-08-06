@@ -1,14 +1,13 @@
-"""
-Implementation of a conditional associative array (dict) using the strategy
+"""Implementation of a conditional associative array (dict) using the strategy
 pattern.
 """
 
-from typing import Any, Callable, Dict
+from collections.abc import Callable
+from typing import Any, Dict
 
 
 class cdict(dict):
-    """
-    A dictionary that conditionally accepts attributes and/or values.
+    """A dictionary that conditionally accepts attributes and/or values.
 
     This implementation uses the strategy pattern such that a function is
     provided on initialization for validating items that are set. If an
@@ -18,9 +17,8 @@ class cdict(dict):
     """
 
     def __init__(self, accept_fn: Callable[[Dict, Any, Any], bool], *args, **kwargs):
-        """
-        :param accept_fn: A fn(d, key, value) that returns True to accept
-            the key/value into this dict d, or False to reject.
+        """:param accept_fn: A fn(d, key, value) that returns True to accept
+        the key/value into this dict d, or False to reject.
         """
         super().__init__()
         self._rejected = dict()

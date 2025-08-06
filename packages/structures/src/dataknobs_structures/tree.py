@@ -1,17 +1,17 @@
-"""
-Implementation of a simple tree data structure.
-"""
+"""Implementation of a simple tree data structure."""
 
 from __future__ import annotations
-import graphviz
+
 from collections import deque
+from collections.abc import Callable
+from typing import Any, List, Tuple, Union
+
+import graphviz
 from pyparsing import OneOrMore, nestedExpr
-from typing import Any, Callable, List, Tuple, Union
 
 
 class Tree:
-    """
-    Implementation of a simple tree data structure.
+    """Implementation of a simple tree data structure.
 
     Where the tree is represented as a node containing:
       * (arbitrary) data
@@ -29,8 +29,7 @@ class Tree:
         parent: Union[Tree, Any] = None,
         child_pos: int = None,
     ):
-        """
-        Initialize a tree (node), optionally adding it to the given parent
+        """Initialize a tree (node), optionally adding it to the given parent
         at an optional child position.
 
         :param data: The data to be contained within the node.
@@ -45,51 +44,37 @@ class Tree:
             parent.add_child(self, child_pos)
 
     def __repr__(self) -> str:
-        """
-        :return: The string representation of this tree.
-        """
+        """:return: The string representation of this tree."""
         return self.as_string(delim="  ", multiline=True)
 
     @property
     def data(self) -> Any:
-        """
-        :return: This node's data.
-        """
+        """:return: This node's data."""
         return self._data
 
     @data.setter
     def data(self, data: Any):
-        """
-        :return: Set this node's data.
-        """
+        """:return: Set this node's data."""
         self._data = data
 
     @property
     def children(self) -> List[Tree]:
-        """
-        :return: This node's children -- list of child nodes.
-        """
+        """:return: This node's children -- list of child nodes."""
         return self._children
 
     @property
     def parent(self) -> Tree:
-        """
-        :return: This node's parent.
-        """
+        """:return: This node's parent."""
         return self._parent
 
     @parent.setter
     def parent(self, parent: Tree):
-        """
-        :return: Set this node's parent.
-        """
+        """:return: Set this node's parent."""
         self._parent = parent
 
     @property
     def root(self) -> Tree:
-        """
-        :return: The root of this node's tree.
-        """
+        """:return: The root of this node's tree."""
         root = self
         while root.parent is not None:
             root = root.parent
@@ -97,23 +82,17 @@ class Tree:
 
     @property
     def sibnum(self) -> int:
-        """
-        :return: This node's sibling number (0-based) among its parent's children
-        """
+        """:return: This node's sibling number (0-based) among its parent's children"""
         return self._parent.children.index(self) if self._parent is not None else 0
 
     @property
     def num_siblings(self) -> int:
-        """
-        :return: Get the number of siblings (including self) of this node
-        """
+        """:return: Get the number of siblings (including self) of this node"""
         return self._parent.num_children if self._parent is not None else 1
 
     @property
     def next_sibling(self) -> Tree:
-        """
-        :return: This node's next sibling (or None)
-        """
+        """:return: This node's next sibling (or None)"""
         result = None
         if self._parent:
             sibs = self._parent.children
@@ -124,9 +103,7 @@ class Tree:
 
     @property
     def prev_sibling(self) -> Tree:
-        """
-        :return: This node's previous sibling (or None)
-        """
+        """:return: This node's previous sibling (or None)"""
         result = None
         if self._parent:
             sibs = self._parent.children
@@ -136,21 +113,16 @@ class Tree:
         return result
 
     def has_children(self) -> bool:
-        """
-        :return: Whether this node has children.
-        """
+        """:return: Whether this node has children."""
         return self._children is not None and len(self._children) > 0
 
     @property
     def num_children(self) -> int:
-        """
-        :return: The number of children under this node.
-        """
+        """:return: The number of children under this node."""
         return len(self._children) if self._children is not None else 0
 
     def has_parent(self) -> bool:
-        """
-        :return: Whether this not has a parent.
+        """:return: Whether this not has a parent.
 
         Note that the "root" of a tree has no parent.
         """
@@ -158,8 +130,7 @@ class Tree:
 
     @property
     def depth(self) -> int:
-        """
-        :return: The depth of this node in its tree.
+        """:return: The depth of this node in its tree.
 
         Where the depth is measured as the number of "hops" from the root,
         whose depth is 0, to children until this node is reached.
@@ -172,8 +143,7 @@ class Tree:
         return result
 
     def add_child(self, node_or_data: Union[Tree, Any], child_pos: int = None) -> Tree:
-        """
-        Add a child node to this node, pruning the child from any other tree.
+        """Add a child node to this node, pruning the child from any other tree.
 
         :param node_or_data: The node (or data for a new node) to add
         :param child_pos: The (optional) position at which to insert the node.
@@ -198,8 +168,7 @@ class Tree:
         parent_node_or_data: Union[Tree, Any],
         child_node_or_data: Union[Tree, Any],
     ) -> Tuple[Tree, Tree]:
-        """
-        Add the child to the parent, using an existing (matching) child or parent.
+        """Add the child to the parent, using an existing (matching) child or parent.
         If the parent and child already exist, but not as parent and child, the
         child node will be moved to be a child of the parent.
 
@@ -249,8 +218,7 @@ class Tree:
         return (parent, child)
 
     def prune(self) -> Tree:
-        """
-        Prune this node from its tree.
+        """Prune this node from its tree.
         :return: this node's (former) parent.
         """
         result = self._parent
@@ -268,8 +236,7 @@ class Tree:
         only_first: bool = False,
         highest_only: bool = False,
     ) -> List[Tree]:
-        """
-        Find nodes where accept_node_fn(tree) is True,
+        """Find nodes where accept_node_fn(tree) is True,
         using a traversal of:
           'dfs' -- depth first search
           'bfs' -- breadth first search
@@ -306,8 +273,7 @@ class Tree:
     def collect_terminal_nodes(
         self, accept_node_fn: Callable[[Tree], bool] = None, _found: List[Tree] = None
     ):
-        """
-        Collect this tree's terminal nodes.
+        """Collect this tree's terminal nodes.
 
         :param accept_node_fn: Optional function to select which terminal nodes
             to include in the result
@@ -330,8 +296,7 @@ class Tree:
         include_self: bool = True,
         as_data: bool = True,
     ) -> List[Tuple[Union[Tree, Any], Union[Tree, Any]]]:
-        """
-        Get the edges of this tree, either as Tree nodes or data.
+        """Get the edges of this tree, either as Tree nodes or data.
 
         :param traversal: Either 'dfs' or 'bfs' for depth- or breadth-first
         :param include_self: True to include this node, False to start with
@@ -355,9 +320,7 @@ class Tree:
         return result
 
     def get_path(self) -> List[Tree]:
-        """
-        Get the nodes from the root to this node (inclusive).
-        """
+        """Get the nodes from the root to this node (inclusive)."""
         path = deque()
         node = self
         while node is not None:
@@ -366,8 +329,7 @@ class Tree:
         return list(path)
 
     def is_ancestor(self, other: Tree, self_is_ancestor: bool = False) -> bool:
-        """
-        Determine whether this node is an ancestor to the other.
+        """Determine whether this node is an ancestor to the other.
         :param other: The potential descendant of this node
         :param self_is_ancestor: True if this node could be considered to
             be its own ancestor
@@ -383,8 +345,7 @@ class Tree:
         return result
 
     def find_deepest_common_ancestor(self, other: Tree) -> Tree:
-        """
-        Find the deepest common ancestor to self and other.
+        """Find the deepest common ancestor to self and other.
         :param other: The other node whose shared ancestor with self to find
         :return: The deepest common ancestor to self and other, or None
         """
@@ -407,8 +368,7 @@ class Tree:
         return result
 
     def as_string(self, delim: str = " ", multiline: bool = False) -> str:
-        """
-        Get a string representing this tree.
+        """Get a string representing this tree.
         :param delim: The (indentation) delimiter to use between node data
         :param multiline: True to include newlines in the result
         :param: A string representation of this tree and its descendants
@@ -426,9 +386,8 @@ class Tree:
         return result
 
     def get_deepest_left(self) -> Tree:
-        """
-        :return: The terminal descendent following the left-most branches
-            of this node.
+        """:return: The terminal descendent following the left-most branches
+        of this node.
         """
         node = self
         while node is not None and node.has_children():
@@ -436,9 +395,8 @@ class Tree:
         return node
 
     def get_deepest_right(self) -> Tree:
-        """
-        :return: The terminal descendent following the right-most branches
-            of this node.
+        """:return: The terminal descendent following the right-most branches
+        of this node.
         """
         node = self
         while node is not None and node.has_children():
@@ -448,8 +406,7 @@ class Tree:
     def build_dot(
         self, node_name_fn: Callable[[Tree], str] = None, **kwargs
     ) -> graphviz.graphs.Digraph:
-        """
-        Build a graphviz dot file for this tree, passing kwargs to
+        """Build a graphviz dot file for this tree, passing kwargs to
         graphviz.Digraph.
 
         :param node_name_fn: A function to build a graph node name string
@@ -476,8 +433,7 @@ class Tree:
 
 
 def build_tree_from_string(from_string: str) -> Tree:
-    """
-    Build a tree object from the given tree string, e.g., output from
+    """Build a tree object from the given tree string, e.g., output from
     the "Tree.as_string" method.
     :param from_string: The tree string
     :return: The built Tree
@@ -489,8 +445,7 @@ def build_tree_from_string(from_string: str) -> Tree:
 
 
 def build_tree_from_list(data: Union[Any, List]) -> Tree:
-    """
-    Auxiliary to build_tree for recursively building nodes from a list of
+    """Auxiliary to build_tree for recursively building nodes from a list of
     lists.
     :param data: The tree data as a list of lists.
     :return: The root tree node

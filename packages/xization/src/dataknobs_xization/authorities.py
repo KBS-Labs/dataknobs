@@ -1,20 +1,21 @@
-import pandas as pd
 import re
-import dataknobs_xization.annotations as dk_annots
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Set, Union
+from collections.abc import Callable
+from typing import Any, Dict, List, Set, Union
 
+import pandas as pd
+
+import dataknobs_xization.annotations as dk_annots
 
 # Key annotation column name constants
 KEY_AUTH_ID_COL = "auth_id"
 
 
 class DerivedFieldGroups(dk_annots.DerivedAnnotationColumns):
-    """
-    Defines derived column types:
-      * "field_type" -- The column holding they type of field of an annotation row
-      * "field_group" -- The column holding the group number(s) of the field
-      * "field_record" -- The column holding record number(s) of the field
+    """Defines derived column types:
+    * "field_type" -- The column holding they type of field of an annotation row
+    * "field_group" -- The column holding the group number(s) of the field
+    * "field_record" -- The column holding record number(s) of the field
     """
 
     def __init__(
@@ -23,8 +24,7 @@ class DerivedFieldGroups(dk_annots.DerivedAnnotationColumns):
         field_group_suffix: str = "_num",
         field_record_suffix: str = "_recsnum",
     ):
-        """
-        Add derived column types/names: Given an annnotation row,
+        """Add derived column types/names: Given an annnotation row,
           * field_type(row) == f'{row[ann_type_col]}_field'
           * field_group(row) == f'{row[ann_type_col]}_num'
           * field_record(row) == f'{row[ann_type_col])_recsnum'
@@ -49,8 +49,7 @@ class DerivedFieldGroups(dk_annots.DerivedAnnotationColumns):
         row: pd.Series,
         missing: str = None,
     ) -> str:
-        """
-        Get the value of the column in the given row derived from col_type,
+        """Get the value of the column in the given row derived from col_type,
         where col_type is one of:
           * "field_type" == f"{field}_field"
           * "field_group" == f"{field}_num"
@@ -79,8 +78,7 @@ class DerivedFieldGroups(dk_annots.DerivedAnnotationColumns):
         return value
 
     def unpack_field(self, field_value: str) -> str:
-        """
-        Given a field in any of its derivatives (like field type, field group
+        """Given a field in any of its derivatives (like field type, field group
         or field record,) unpack and return the basic field value itself.
         """
         field = field_value
@@ -93,16 +91,14 @@ class DerivedFieldGroups(dk_annots.DerivedAnnotationColumns):
         return field
 
     def get_field_name(self, field_value: str) -> str:
-        """
-        Given a field name or field col name, e.g., an annotation type col's
+        """Given a field name or field col name, e.g., an annotation type col's
         value (the field name); or a field type, group, or record column name,
         get the field name.
         """
         return self.unpack_field(field_value)
 
     def get_field_type_col(self, field_value: str) -> str:
-        """
-        Given a field name or field col name, e.g., an annotation type col's
+        """Given a field name or field col name, e.g., an annotation type col's
         value; or a field type, group, or record column name, get the field
         name.
         """
@@ -110,8 +106,7 @@ class DerivedFieldGroups(dk_annots.DerivedAnnotationColumns):
         return f"{field}{self.field_type_suffix}"
 
     def get_field_group_col(self, field_value: str) -> str:
-        """
-        Given a field name or field col name, e.g., an annotation type col's
+        """Given a field name or field col name, e.g., an annotation type col's
         value; or a field type, group, or record, get the name of the derived
         field group column.
         """
@@ -119,8 +114,7 @@ class DerivedFieldGroups(dk_annots.DerivedAnnotationColumns):
         return f"{field}{self.field_group_suffix}"
 
     def get_field_record_col(self, field_value: str) -> str:
-        """
-        Given a field name or field col name, e.g., an annotation type col's
+        """Given a field name or field col name, e.g., an annotation type col's
         value; or a field type, group, or record, get the name of the derived
         field record column.
         """
@@ -129,8 +123,7 @@ class DerivedFieldGroups(dk_annots.DerivedAnnotationColumns):
 
 
 class AuthorityAnnotationsMetaData(dk_annots.AnnotationsMetaData):
-    """
-    An extension of AnnotationsMetaData that adds an 'auth_id_col' to the
+    """An extension of AnnotationsMetaData that adds an 'auth_id_col' to the
     standard (key) annotation columns (attributes).
     """
 
@@ -145,8 +138,7 @@ class AuthorityAnnotationsMetaData(dk_annots.AnnotationsMetaData):
         sort_fields_ascending: List[bool] = (True, False),
         **kwargs,
     ):
-        """
-        Initialize with key (and more) column names and info.
+        """Initialize with key (and more) column names and info.
 
         Key column types:
           * start_pos
@@ -155,7 +147,7 @@ class AuthorityAnnotationsMetaData(dk_annots.AnnotationsMetaData):
           * ann_type
           * auth_id
 
-        NOTEs:
+        Notes:
           * Actual table columns can be named arbitrarily
              * BUT: interactions through annotations classes and interfaces
                relating to the "key" columns must use the key column constants
@@ -187,17 +179,14 @@ class AuthorityAnnotationsMetaData(dk_annots.AnnotationsMetaData):
 
 
 class AuthorityAnnotationsBuilder(dk_annots.AnnotationsBuilder):
-    """
-    An extension of an AnnotationsBuilder that adds the 'auth_id' column.
-    """
+    """An extension of an AnnotationsBuilder that adds the 'auth_id' column."""
 
     def __init__(
         self,
         metadata: AuthorityAnnotationsMetaData = None,
         data_defaults: Dict[str, Any] = None,
     ):
-        """
-        :param metadata: The authority annotations metadata
+        """:param metadata: The authority annotations metadata
         :param data_defaults: Dict[ann_colname, default_value] with default
             values for annotation columns
         """
@@ -208,8 +197,7 @@ class AuthorityAnnotationsBuilder(dk_annots.AnnotationsBuilder):
     def build_annotation_row(
         self, start_pos: int, end_pos: int, text: str, ann_type: str, auth_id: str, **kwargs
     ) -> Dict[str, Any]:
-        """
-        Build an annotation row with the mandatory key values and those from
+        """Build an annotation row with the mandatory key values and those from
         the remaining keyword arguments.
 
         For those kwargs whose names match metadata column names, override the
@@ -236,9 +224,7 @@ class AuthorityAnnotationsBuilder(dk_annots.AnnotationsBuilder):
 
 
 class AuthorityData:
-    """
-    A wrapper for authority data.
-    """
+    """A wrapper for authority data."""
 
     def __init__(self, df: pd.DataFrame, name: str):
         self._df = df
@@ -246,14 +232,11 @@ class AuthorityData:
 
     @property
     def df(self) -> pd.DataFrame:
-        """
-        Get the authority data in a dataframe
-        """
+        """Get the authority data in a dataframe"""
         return self._df
 
     def lookup_values(self, value: Any, is_id=False) -> pd.DataFrame:
-        """
-        Lookup authority value(s) for the given value or value id.
+        """Lookup authority value(s) for the given value or value id.
         :param value: A value or value_id for this authority
         :param is_id: True if value is an ID
         :return: The applicable authority dataframe rows.
@@ -263,8 +246,7 @@ class AuthorityData:
 
 
 class Authority(dk_annots.Annotator):
-    """
-    A class for managing and defining tabular authoritative data for e.g.,
+    """A class for managing and defining tabular authoritative data for e.g.,
     taxonomies, etc., and using them to annotate instances within text.
     """
 
@@ -277,8 +259,7 @@ class Authority(dk_annots.Annotator):
         anns_validator: Callable[["Authority", Dict[str, Any]], bool] = None,
         parent_auth: "Authority" = None,
     ):
-        """
-        Initialize with this authority's metadata.
+        """Initialize with this authority's metadata.
         :param name: This authority's entity name
         :param auth_anns_builder: The authority annotations row builder to use
             for building annotation rows.
@@ -305,15 +286,12 @@ class Authority(dk_annots.Annotator):
 
     @property
     def parent(self) -> "Authority":
-        """
-        Get this authority's parent, or None.
-        """
+        """Get this authority's parent, or None."""
         return self._parent
 
     @abstractmethod
     def has_value(self, value: Any) -> bool:
-        """
-        Determine whether the given value is in this authority.
+        """Determine whether the given value is in this authority.
         :param value: A possible authority value.
         :return: True if the value is a valid entity value.
         """
@@ -324,8 +302,7 @@ class Authority(dk_annots.Annotator):
         text_obj: Union[dk_annots.AnnotatedText, str],
         **kwargs,
     ) -> dk_annots.Annotations:
-        """
-        Find and annotate this authority's entities in the document text
+        """Find and annotate this authority's entities in the document text
         as dictionaries like:
         [
             {
@@ -356,16 +333,14 @@ class Authority(dk_annots.Annotator):
         self,
         text_obj: dk_annots.AnnotatedText,
     ) -> dk_annots.Annotations:
-        """
-        Method to do the work of finding, validating, and adding annotations.
+        """Method to do the work of finding, validating, and adding annotations.
         :param text_obj: The annotated text object to process and add annotations.
         :return: The added Annotations
         """
         raise NotImplementedError
 
     def validate_ann_dicts(self, ann_dicts: List[Dict[str, Any]]) -> bool:
-        """
-        The annotation row dictionaries are valid if:
+        """The annotation row dictionaries are valid if:
           * They are non-empty
           * and
              * either there is no annotations validator
@@ -381,8 +356,7 @@ class Authority(dk_annots.Annotator):
         self,
         annotations: dk_annots.Annotations,
     ) -> dk_annots.Annotations:
-        """
-        Compose annotations into groups.
+        """Compose annotations into groups.
         :param annotations: The annotations
         :return: composed annotations
         """
@@ -397,17 +371,14 @@ class Authority(dk_annots.Annotator):
         conf: float = 1.0,
         **kwargs,
     ) -> Dict[str, Any]:
-        """
-        Build annotations with the given components.
-        """
+        """Build annotations with the given components."""
         return self.anns_builder.build_annotation_row(
             start_pos, end_pos, entity_text, self.name, auth_value_id, auth_valconf=conf, **kwargs
         )
 
 
 class AnnotationsValidator(ABC):
-    """
-    A base class with helper functions for performing validations on annotation
+    """A base class with helper functions for performing validations on annotation
     rows.
     """
 
@@ -416,8 +387,7 @@ class AnnotationsValidator(ABC):
         auth: Authority,
         ann_row_dicts: List[Dict[str, Any]],
     ) -> bool:
-        """
-        Call function to enable instances of this type of class to be passed in
+        """Call function to enable instances of this type of class to be passed in
         as a anns_validator function to an Authority.
         :param auth: The authority proposing annotations
         :param ann_row_dicts: The proposed annotations
@@ -432,8 +402,7 @@ class AnnotationsValidator(ABC):
         self,
         auth_annotations: "AnnotationsValidator.AuthAnnotations",
     ) -> bool:
-        """
-        Determine whether the proposed authority annotation rows are valid.
+        """Determine whether the proposed authority annotation rows are valid.
         :param auth_annotations: The AuthAnnotations instance with the
             proposed data.
         :return: True if valid; False if not.
@@ -441,9 +410,7 @@ class AnnotationsValidator(ABC):
         raise NotImplementedError
 
     class AuthAnnotations:
-        """
-        A wrapper class for convenient access to the entity annotations.
-        """
+        """A wrapper class for convenient access to the entity annotations."""
 
         def __init__(self, auth: Authority, ann_row_dicts: List[Dict[str, Any]]):
             self.auth = auth
@@ -454,9 +421,7 @@ class AnnotationsValidator(ABC):
 
         @property
         def row_accessor(self) -> dk_annots.AnnotationsRowAccessor:
-            """
-            Get the row accessor for this instance's annotations.
-            """
+            """Get the row accessor for this instance's annotations."""
             if self._row_accessor is None:
                 self._row_accessor = dk_annots.AnnotationsRowAccessor(
                     self.auth.metadata, derived_cols=self.auth.field_groups
@@ -500,9 +465,7 @@ class AnnotationsValidator(ABC):
 
 
 class AuthorityFactory(ABC):
-    """
-    A factory class for building an authority.
-    """
+    """A factory class for building an authority."""
 
     @abstractmethod
     def build_authority(
@@ -512,8 +475,7 @@ class AuthorityFactory(ABC):
         authdata: AuthorityData,
         parent_auth: Authority = None,
     ) -> Authority:
-        """
-        Build an authority with the given name and data.
+        """Build an authority with the given name and data.
         :param name: The authority name
         :param auth_anns_builder: The authority annotations row builder to use
             for building annotation rows.
@@ -525,8 +487,7 @@ class AuthorityFactory(ABC):
 
 
 class LexicalAuthority(Authority):
-    """
-    A class for managing named entities by ID with associated values and
+    """A class for managing named entities by ID with associated values and
     variations.
     """
 
@@ -539,8 +500,7 @@ class LexicalAuthority(Authority):
         anns_validator: Callable[["Authority", Dict[str, Any]], bool] = None,
         parent_auth: "Authority" = None,
     ):
-        """
-        Initialize with this authority's metadata.
+        """Initialize with this authority's metadata.
         :param name: This authority's entity name
         :param auth_anns_builder: The authority annotations row builder to use
             for building annotation rows.
@@ -562,8 +522,7 @@ class LexicalAuthority(Authority):
 
     @abstractmethod
     def get_value_ids(self, value: Any) -> Set[Any]:
-        """
-        Get all IDs associated with the given value. Note that typically
+        """Get all IDs associated with the given value. Note that typically
         there is a single ID for any value, but this allows for inherent
         ambiguities in the authority.
         :param value: An authority value
@@ -573,8 +532,7 @@ class LexicalAuthority(Authority):
 
     @abstractmethod
     def get_values_by_id(self, value_id: Any) -> Set[Any]:
-        """
-        Get all values for the associated value ID. Note that typically
+        """Get all values for the associated value ID. Note that typically
         there is a single value for an ID, but this allows for inherent
         ambiguities in the authority.
 
@@ -585,8 +543,7 @@ class LexicalAuthority(Authority):
 
     @abstractmethod
     def get_id_by_variation(self, variation: str) -> Set[str]:
-        """
-        Get the IDs of the value(s) associated with the given variation.
+        """Get the IDs of the value(s) associated with the given variation.
         :param variation: Variation text
         :return: The possibly empty set of associated value IDS.
         """
@@ -600,8 +557,7 @@ class LexicalAuthority(Authority):
         ends_with: bool = False,
         scope: str = "fullmatch",
     ) -> pd.Series:
-        """
-        Find all matches to the given variation.
+        """Find all matches to the given variation.
         :param variation: The text to find; treated as a regular expression
             unless either starts_with or ends_with is True.
         :param starts_with: When True, find all terms that start with the
@@ -622,8 +578,7 @@ class LexicalAuthority(Authority):
 
 
 class RegexAuthority(Authority):
-    """
-    A class for managing named entities by ID with associated values and
+    """A class for managing named entities by ID with associated values and
     variations.
     """
 
@@ -638,8 +593,7 @@ class RegexAuthority(Authority):
         anns_validator: Callable[[Authority, Dict[str, Any]], bool] = None,
         parent_auth: "Authority" = None,
     ):
-        """
-        Initialize with this authority's entity name.
+        """Initialize with this authority's entity name.
         :param name: The authority name
         :param regex: The regular expression to apply
         :param canonical_fn: A function, fn(match_text, group_name), to
@@ -683,8 +637,7 @@ class RegexAuthority(Authority):
         self.canonical_fn = canonical_fn
 
     def has_value(self, value: Any) -> re.Match:
-        """
-        Determine whether the given value is in this authority.
+        """Determine whether the given value is in this authority.
         :param value: A possible authority value.
         :return: None if the value is not a valid entity value; otherwise,
             return the re.Match object.
@@ -695,8 +648,7 @@ class RegexAuthority(Authority):
         self,
         text_obj: dk_annots.AnnotatedText,
     ) -> dk_annots.Annotations:
-        """
-        Method to do the work of finding, validating, and adding annotations.
+        """Method to do the work of finding, validating, and adding annotations.
         :param text_obj: The annotated text object to process and add annotations.
         :return: The added Annotations
         """
@@ -750,8 +702,7 @@ class RegexAuthority(Authority):
 
 
 class AuthoritiesBundle(Authority):
-    """
-    An authority for expressing values through multiple bundled "authorities"
+    """An authority for expressing values through multiple bundled "authorities"
     like dictionary-based and/or multiple regular expression patterns.
     """
 
@@ -765,8 +716,7 @@ class AuthoritiesBundle(Authority):
         anns_validator: Callable[["Authority", Dict[str, Any]], bool] = None,
         auths: List[Authority] = None,
     ):
-        """
-        :param name: This authority's entity name
+        """:param name: This authority's entity name
         :param auth_anns_builder: The authority annotations row builder to use
             for building annotation rows.
         :param authdata: The authority data
@@ -788,15 +738,13 @@ class AuthoritiesBundle(Authority):
         self.auths = auths.copy() if auths is not None else list()
 
     def add(self, auth: Authority):
-        """
-        Add the authority to this bundle
+        """Add the authority to this bundle
         :param auth: The authority to add.
         """
         self.auths.append(auth)
 
     def has_value(self, value: Any) -> bool:
-        """
-        Determine whether the given value is in this authority.
+        """Determine whether the given value is in this authority.
         :param value: A possible authority value.
         :return: True if the value is a valid entity value.
         """
@@ -809,8 +757,7 @@ class AuthoritiesBundle(Authority):
         self,
         text_obj: dk_annots.AnnotatedText,
     ) -> dk_annots.Annotations:
-        """
-        Method to do the work of finding, validating, and adding annotations.
+        """Method to do the work of finding, validating, and adding annotations.
         :param text_obj: The annotated text object to process and add annotations.
         :return: The added Annotations
         """
