@@ -118,7 +118,7 @@ for package in "${PACKAGES[@]}"; do
     
     if [[ "$FIX" == true ]]; then
         # Run ruff with auto-fix (matching fix.sh behavior)
-        if ruff check "packages/$package/src" --fix --unsafe-fixes=false --config "$ROOT_DIR/pyproject.toml"; then
+        if ruff check "packages/$package/src" --fix --no-unsafe-fixes --config "$ROOT_DIR/pyproject.toml"; then
             echo -e "${GREEN}    ✓ Ruff checks passed${NC}"
         else
             echo -e "${YELLOW}    ⚠ Some issues remain that need manual fixing${NC}"

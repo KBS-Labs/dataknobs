@@ -97,7 +97,7 @@ def get_value(
 
 def stream_json_data(
     json_data: str,
-    visitor_fn: Callable[Any, str],
+    visitor_fn: Callable[[Any, str], None],
     timeout: int = TIMEOUT,
 ):
     """
@@ -188,7 +188,7 @@ def stream_jq_paths(
 
 
 def squash_data(
-    builder_fn: Callable[str, Any],
+    builder_fn: Callable[[str, Any], None],
     json_data: str,
     prune_at: List[Union[str, Tuple[str, int]]] = None,
     timeout: int = TIMEOUT,

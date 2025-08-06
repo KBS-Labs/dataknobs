@@ -38,7 +38,7 @@ def get_request(
     headers: Dict[str, Any] = None,
     timeout: int = DEFAULT_TIMEOUT,
     api_response_handler: Callable[
-        requests.models.Response, Tuple[int, Dict[str, Any]]
+        [requests.models.Response], Tuple[int, Dict[str, Any]]
     ] = default_api_response_handler,
     requests=requests,  # pylint: disable-msg=W0621
 ) -> Tuple[int, Dict[str, Any]]:
@@ -66,7 +66,7 @@ def post_request(
     headers: Dict[str, Any] = None,
     timeout: int = DEFAULT_TIMEOUT,
     api_response_handler: Callable[
-        requests.models.Response, Tuple[int, Dict[str, Any]]
+        [requests.models.Response], Tuple[int, Dict[str, Any]]
     ] = default_api_response_handler,
     requests=requests,  # pylint: disable-msg=W0621
 ) -> Tuple[int, Dict[str, Any]]:
@@ -99,7 +99,7 @@ def post_files_request(
     headers: Dict[str, Any] = None,
     timeout: int = DEFAULT_TIMEOUT,
     api_response_handler: Callable[
-        requests.models.Response, Tuple[int, Dict[str, Any]]
+        [requests.models.Response], Tuple[int, Dict[str, Any]]
     ] = default_api_response_handler,
     requests=requests,  # pylint: disable-msg=W0621
 ) -> Tuple[int, Dict[str, Any]]:
@@ -135,7 +135,7 @@ def put_request(
     headers: Dict[str, Any] = None,
     timeout: int = DEFAULT_TIMEOUT,
     api_response_handler: Callable[
-        requests.models.Response, Tuple[int, Dict[str, Any]]
+        [requests.models.Response], Tuple[int, Dict[str, Any]]
     ] = default_api_response_handler,
     requests=requests,  # pylint: disable-msg=W0621
 ) -> Tuple[int, Dict[str, Any]]:
@@ -168,7 +168,7 @@ def delete_request(
     headers: Dict[str, Any] = None,
     timeout: int = DEFAULT_TIMEOUT,
     api_response_handler: Callable[
-        requests.models.Response, Tuple[int, Dict[str, Any]]
+        [requests.models.Response], Tuple[int, Dict[str, Any]]
     ] = default_api_response_handler,
     requests=requests,  # pylint: disable-msg=W0621
 ) -> Tuple[int, Dict[str, Any]]:
