@@ -1,5 +1,5 @@
 from abc import ABC
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 # Key text metadata attributes
 TEXT_ID_ATTR = "text_id"
@@ -10,7 +10,7 @@ TEXT_LABEL = "text"
 class MetaData(ABC):
     """Container for managing and providing access to meta-data."""
 
-    def __init__(self, key_data: Dict[str, Any], **kwargs):
+    def __init__(self, key_data: Dict[str, Any], **kwargs) -> None:
         """Initialize with the mandatory or "key" data and any additional optional
         values.
         """
@@ -22,7 +22,7 @@ class MetaData(ABC):
     def data(self) -> Dict[str, Any]:
         return self._data
 
-    def get_value(self, attribute: str, missing: str = None) -> Any:
+    def get_value(self, attribute: str, missing: Optional[str] = None) -> Any:
         """Get the value for the given attribute, or the "missing" value.
         :param attribute: The meta-data attribute whose value to get
         :param missing: The missing value
@@ -34,7 +34,7 @@ class MetaData(ABC):
 class TextMetaData(MetaData):
     """Container for text meta-data"""
 
-    def __init__(self, text_id: Any, text_label: str = TEXT_LABEL, **kwargs):
+    def __init__(self, text_id: Any, text_label: str = TEXT_LABEL, **kwargs) -> None:
         super().__init__(
             {
                 TEXT_ID_ATTR: text_id,
@@ -76,7 +76,7 @@ class Text:
         return self.metadata.text_label
 
     @property
-    def metadata(self) -> str:
+    def metadata(self) -> TextMetaData:
         if self._metadata is None:
             self._metadata = TextMetaData(text_id=0)
         return self._metadata

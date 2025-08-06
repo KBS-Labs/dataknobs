@@ -37,7 +37,7 @@ import os
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Optional, Union
 
 LATEST_EMOJI_DATA = "resources/emoji-test.15.0.txt"
 
@@ -61,11 +61,11 @@ class Emoji:
     status: str  # component  (fully-  minimally-  un) + qualified
     since_version: str  # "Ex.x"
     short_name: str  # (english) short name
-    group: str = None  # test file "group" name
-    subgroup: str = None  # test file "subgroup" name
+    group: Optional[str] = None  # test file "group" name
+    subgroup: Optional[str] = None  # test file "subgroup" name
 
 
-def build_emoji_dataclass(emoji_test_line: str) -> Emoji:
+def build_emoji_dataclass(emoji_test_line: str) -> Optional[Emoji]:
     """Build an Emoji dataclass from the emoji-test file line."""
     result = None
     m = ETESTLINE_RE.match(emoji_test_line)
@@ -79,7 +79,7 @@ def build_emoji_dataclass(emoji_test_line: str) -> Emoji:
     return result
 
 
-def get_emoji_seq(emoji_str: str, as_hex: bool = False) -> List[int]:
+def get_emoji_seq(emoji_str: str, as_hex: bool = False) -> List[Union[int, str]]:
     return [hex(ord(x)) for x in emoji_str] if as_hex else [ord(x) for x in emoji_str]
 
 
@@ -87,10 +87,10 @@ class EmojiData:
     """Class for interpreting the unicode emoji_test.txt file."""
 
     def __init__(self, emoji_test_path: str):
-        self.emojis = dict()  # emojichars -> EmojiData
-        self._echars = None
-        self._ldepechars = None
-        self._rdepechars = None
+        self.emojis: Dict[str, Emoji] = dict()  # emojichars -> EmojiData
+        self._echars: Optional[List[int]] = None
+        self._ldepechars: Optional[Dict[int, Set[int]]] = None
+        self._rdepechars: Optional[Dict[int, Set[int]]] = None
         self._load_emoji_test(emoji_test_path)
 
     @property
@@ -98,7 +98,7 @@ class EmojiData:
         """Code points that alone are an emoji code point."""
         if self._echars is None:
             self._compute_echars()
-        return self._echars
+        return self._echars if self._echars is not None else []
 
     @property
     def ldepechars(self) -> Dict[int, Set[int]]:
@@ -107,7 +107,7 @@ class EmojiData:
         """
         if self._ldepechars is None:
             self._compute_echars()
-        return self._ldepechars
+        return self._ldepechars if self._ldepechars is not None else {}
 
     @property
     def rdepechars(self) -> Dict[int, Set[int]]:
@@ -116,9 +116,9 @@ class EmojiData:
         """
         if self._rdepechars is None:
             self._compute_echars()
-        return self._rdepechars
+        return self._rdepechars if self._rdepechars is not None else {}
 
-    def _compute_echars(self):
+    def _compute_echars(self) -> None:
         loneechars = [emoji[0] for emoji in self.emojis if len(emoji) == 1]
         ldepechars = defaultdict(set)
         rdepechars = defaultdict(set)
@@ -149,14 +149,15 @@ class EmojiData:
         result = list()
         start_pos = -1
         textlen = len(emoji_text)
-        prevc = None
+        prevc: Optional[str] = None
         for idx, c in enumerate(emoji_text):
-            isechar = c in self.echars
-            isrechar = c in self.rdepechars and prevc in self.rdepechars[c]
+            c_ord = ord(c)
+            isechar = c_ord in self.echars
+            isrechar = c_ord in self.rdepechars and prevc is not None and ord(prevc) in self.rdepechars[c_ord]
             islechar = (
                 idx + 1 < textlen
-                and c in self.ldepechars
-                and emoji_text[idx + 1] in self.ldepechars[c]
+                and c_ord in self.ldepechars
+                and ord(emoji_text[idx + 1]) in self.ldepechars[c_ord]
             )
             issp = c in SPECIAL_CHARS
 
@@ -199,7 +200,7 @@ class EmojiData:
             start_pos = end_pos
         return result
 
-    def _load_emoji_test(self, emoji_test_path: str):
+    def _load_emoji_test(self, emoji_test_path: str) -> None:
         curgroup = ""
         cursubgroup = ""
         with open(emoji_test_path, encoding="utf-8") as f:
@@ -210,7 +211,7 @@ class EmojiData:
                     cursubgroup = line[12:].strip()
                 elif line.startswith("# Status Counts"):
                     # Verify actual counts
-                    c = Counter()
+                    c: Counter = Counter()
                     for e in self.emojis.values():
                         c[e.status] += 1
                     # with expectations
@@ -231,7 +232,7 @@ class EmojiData:
                             self.emojis[e.emoji] = e
 
 
-def load_emoji_data() -> EmojiData:
+def load_emoji_data() -> Optional[EmojiData]:
     """Load latest emoji-test.txt or reference EMOJI_TEST_DATA env var."""
     result = None
     datapath = os.environ.get("EMOJI_TEST_DATA", LATEST_EMOJI_DATA)

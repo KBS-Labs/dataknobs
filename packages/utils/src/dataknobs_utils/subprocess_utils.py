@@ -1,9 +1,9 @@
 import subprocess
 from collections.abc import Callable
-from typing import List
+from typing import List, Optional, Union
 
 
-def run_command(handle_line_fn: Callable[[str], bool], command: str, args: List[str] = None) -> int:
+def run_command(handle_line_fn: Callable[[str], bool], command: str, args: Optional[List[str]] = None) -> int:
     """Run a system command and do something with each line. Stop early by
     returning False from the handle_line_fn.
 
@@ -20,19 +20,22 @@ def run_command(handle_line_fn: Callable[[str], bool], command: str, args: List[
     :param args: The args for the command (if not None)
     :return: The command's return code
     """
-    the_args = command
+    the_args: Union[str, List[str]] = command
     shell = True
     if args is not None:
         the_args = [command] + args
         shell = False
     process = subprocess.Popen(the_args, stdout=subprocess.PIPE, shell=shell, encoding="utf8")
     while True:
-        output = process.stdout.readline()
-        if output == "" and process.poll() is not None:
-            break
-        if output:
-            if not handle_line_fn(output.strip()):
-                process.kill()
+        if process.stdout is not None:
+            output = process.stdout.readline()
+            if output == "" and process.poll() is not None:
                 break
+            if output:
+                if not handle_line_fn(output.strip()):
+                    process.kill()
+                    break
+        else:
+            break
     rc = process.poll()
-    return rc
+    return rc if rc is not None else 0

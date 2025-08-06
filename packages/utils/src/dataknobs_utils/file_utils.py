@@ -1,14 +1,14 @@
 import gzip
 import os
-from typing import Set
+from typing import Set, Optional, Generator, List, Any, IO, Union
 
 
 def filepath_generator(
     rootpath: str,
     descend: bool = True,
-    seen: Set[str] = None,
+    seen: Optional[Set[str]] = None,
     files_only: bool = True,
-):  # yields -> str
+) -> Generator[str, None, None]:
     """Generate all filepaths under the root path.
 
     :param rootpath: The root path under which to find files.
@@ -37,26 +37,25 @@ def filepath_generator(
                     yield next_root
 
 
-def fileline_generator(filename: str, rootdir: str = None):
+def fileline_generator(filename: str, rootdir: Optional[str] = None) -> Generator[str, None, None]:
     """Generate lines from the file.
     :param filename: The name of the file.
     :param rootdir: (optional) The directory of the file.
     :yield: Each stripped file line
     """
-    if filename.endswith(".gz"):
-        open_fn = gzip.open
-        mode = "rt"
-    else:
-        open_fn = open
-        mode = "r"
     if rootdir is not None:
         filename = os.path.join(rootdir, filename)
-    with open_fn(filename, mode=mode, encoding="utf-8") as f:
-        for line in f:
-            yield line.strip()
+    if filename.endswith(".gz"):
+        with gzip.open(filename, mode="rt", encoding="utf-8") as f:
+            for line in f:
+                yield line.strip()
+    else:
+        with open(filename, mode="r", encoding="utf-8") as f:
+            for line in f:
+                yield line.strip()
 
 
-def write_lines(outfile, lines, rootdir=None):
+def write_lines(outfile: str, lines: List[str], rootdir: Optional[str] = None) -> None:
     """Write the lines to the file.
     :param outfile: The name of the file.
     :param rootdir: (optional) The directory of the file.
@@ -64,14 +63,13 @@ def write_lines(outfile, lines, rootdir=None):
     if rootdir is not None:
         outfile = os.path.join(rootdir, outfile)
     if outfile.endswith(".gz"):
-        open_fn = gzip.open
-        mode = "wt"
+        with gzip.open(outfile, mode="wt", encoding="utf-8") as f:
+            for line in sorted(lines):
+                print(line, file=f)
     else:
-        open_fn = open
-        mode = "w"
-    with open_fn(outfile, mode=mode, encoding="utf-8") as f:
-        for line in sorted(lines):
-            print(line, file=f)
+        with open(outfile, mode="w", encoding="utf-8") as f:
+            for line in sorted(lines):
+                print(line, file=f)
 
 
 def is_gzip_file(filepath: str) -> bool:

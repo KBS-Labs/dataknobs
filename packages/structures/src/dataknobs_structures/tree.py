@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import Callable
-from typing import Any, List, Tuple, Union
+from typing import Any, List, Tuple, Union, Optional, Deque
 
 import graphviz
 from pyparsing import OneOrMore, nestedExpr
@@ -27,7 +27,7 @@ class Tree:
         self,
         data: Any,
         parent: Union[Tree, Any] = None,
-        child_pos: int = None,
+        child_pos: Optional[int] = None,
     ):
         """Initialize a tree (node), optionally adding it to the given parent
         at an optional child position.
@@ -36,8 +36,8 @@ class Tree:
         :param parent: The parent node to this node.
         """
         self._data = data
-        self._children = None
-        self._parent = None
+        self._children: Optional[List[Tree]] = None
+        self._parent: Optional[Tree] = None
         if parent is not None:
             if not isinstance(parent, Tree):
                 parent = Tree(parent)
@@ -53,22 +53,22 @@ class Tree:
         return self._data
 
     @data.setter
-    def data(self, data: Any):
+    def data(self, data: Any) -> None:
         """:return: Set this node's data."""
         self._data = data
 
     @property
-    def children(self) -> List[Tree]:
+    def children(self) -> Optional[List[Tree]]:
         """:return: This node's children -- list of child nodes."""
         return self._children
 
     @property
-    def parent(self) -> Tree:
+    def parent(self) -> Optional[Tree]:
         """:return: This node's parent."""
         return self._parent
 
     @parent.setter
-    def parent(self, parent: Tree):
+    def parent(self, parent: Optional[Tree]) -> None:
         """:return: Set this node's parent."""
         self._parent = parent
 
@@ -83,7 +83,7 @@ class Tree:
     @property
     def sibnum(self) -> int:
         """:return: This node's sibling number (0-based) among its parent's children"""
-        return self._parent.children.index(self) if self._parent is not None else 0
+        return self._parent.children.index(self) if self._parent is not None and self._parent.children is not None else 0
 
     @property
     def num_siblings(self) -> int:
@@ -91,10 +91,10 @@ class Tree:
         return self._parent.num_children if self._parent is not None else 1
 
     @property
-    def next_sibling(self) -> Tree:
+    def next_sibling(self) -> Optional[Tree]:
         """:return: This node's next sibling (or None)"""
         result = None
-        if self._parent:
+        if self._parent and self._parent.children:
             sibs = self._parent.children
             nextsib = sibs.index(self) + 1
             if nextsib < len(sibs):
@@ -102,10 +102,10 @@ class Tree:
         return result
 
     @property
-    def prev_sibling(self) -> Tree:
+    def prev_sibling(self) -> Optional[Tree]:
         """:return: This node's previous sibling (or None)"""
         result = None
-        if self._parent:
+        if self._parent and self._parent.children:
             sibs = self._parent.children
             prevsib = sibs.index(self) - 1
             if prevsib >= 0:
@@ -142,7 +142,7 @@ class Tree:
             result += 1
         return result
 
-    def add_child(self, node_or_data: Union[Tree, Any], child_pos: int = None) -> Tree:
+    def add_child(self, node_or_data: Union[Tree, Any], child_pos: Optional[int] = None) -> Tree:
         """Add a child node to this node, pruning the child from any other tree.
 
         :param node_or_data: The node (or data for a new node) to add
@@ -204,7 +204,7 @@ class Tree:
                 parent = self.add_child(parent_node_or_data)
 
         if isinstance(child_node_or_data, Tree):
-            child = parent.add_chlld(child_node_or_data)
+            child = parent.add_child(child_node_or_data)
         else:
             # can we find the data in this tree ...
             found = self.find_nodes(
@@ -217,7 +217,7 @@ class Tree:
 
         return (parent, child)
 
-    def prune(self) -> Tree:
+    def prune(self) -> Optional[Tree]:
         """Prune this node from its tree.
         :return: this node's (former) parent.
         """
@@ -250,7 +250,8 @@ class Tree:
         :param highest_only: True to not collect any nodes under a selected node
         :return: The list of matching/accepted nodes
         """
-        queue, found = deque(), []
+        queue: Deque[Tree] = deque()
+        found: List[Tree] = []
         if include_self:
             queue.append(self)
         elif self.children:
@@ -271,8 +272,8 @@ class Tree:
         return found
 
     def collect_terminal_nodes(
-        self, accept_node_fn: Callable[[Tree], bool] = None, _found: List[Tree] = None
-    ):
+        self, accept_node_fn: Optional[Callable[[Tree], bool]] = None, _found: Optional[List[Tree]] = None
+    ) -> List[Tree]:
         """Collect this tree's terminal nodes.
 
         :param accept_node_fn: Optional function to select which terminal nodes
@@ -304,7 +305,8 @@ class Tree:
         :param as_data: If True, then collect node data instead of Tree nodes
         :return: A list of (parent, child) tuples of edge nodes or data
         """
-        queue, result = deque(), []
+        queue: Deque[Tree] = deque()
+        result: List[Tuple[Union[Tree, Any], Union[Tree, Any]]] = []
         if self.children:
             queue.extend(self.children)
         while bool(queue):  # true while length(queue) > 0
@@ -321,7 +323,7 @@ class Tree:
 
     def get_path(self) -> List[Tree]:
         """Get the nodes from the root to this node (inclusive)."""
-        path = deque()
+        path: Deque[Tree] = deque()
         node = self
         while node is not None:
             path.appendleft(node)
@@ -344,7 +346,7 @@ class Tree:
             parent = parent.parent
         return result
 
-    def find_deepest_common_ancestor(self, other: Tree) -> Tree:
+    def find_deepest_common_ancestor(self, other: Optional[Tree]) -> Optional[Tree]:
         """Find the deepest common ancestor to self and other.
         :param other: The other node whose shared ancestor with self to find
         :return: The deepest common ancestor to self and other, or None
@@ -353,7 +355,7 @@ class Tree:
             return None
         if self == other:
             return self
-        result = None
+        result: Optional[Tree] = None
         mypath, otherpath = self.get_path(), other.get_path()
         mypathlen, otherpathlen = len(mypath), len(otherpath)
         mypathidx, otherpathidx = 0, 0
@@ -404,7 +406,7 @@ class Tree:
         return node
 
     def build_dot(
-        self, node_name_fn: Callable[[Tree], str] = None, **kwargs
+        self, node_name_fn: Optional[Callable[[Tree], str]] = None, **kwargs: Any
     ) -> graphviz.graphs.Digraph:
         """Build a graphviz dot file for this tree, passing kwargs to
         graphviz.Digraph.

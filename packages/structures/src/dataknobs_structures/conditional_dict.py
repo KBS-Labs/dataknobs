@@ -3,7 +3,7 @@ pattern.
 """
 
 from collections.abc import Callable
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Union, Iterable, Tuple
 
 
 class cdict(dict):
@@ -16,12 +16,12 @@ class cdict(dict):
     property.
     """
 
-    def __init__(self, accept_fn: Callable[[Dict, Any, Any], bool], *args, **kwargs):
+    def __init__(self, accept_fn: Callable[[Dict, Any, Any], bool], *args, **kwargs) -> None:
         """:param accept_fn: A fn(d, key, value) that returns True to accept
         the key/value into this dict d, or False to reject.
         """
         super().__init__()
-        self._rejected = dict()
+        self._rejected: Dict[Any, Any] = dict()
         self.accept_fn = accept_fn
         # super().__init__(*args, **kwargs)
         self.update(*args, **kwargs)
@@ -30,13 +30,13 @@ class cdict(dict):
     def rejected(self) -> Dict:
         return self._rejected
 
-    def __setitem__(self, key, value) -> bool:
+    def __setitem__(self, key: Any, value: Any) -> None:
         if self.accept_fn(self, key, value):
             super().__setitem__(key, value)
         else:
             self._rejected[key] = value
 
-    def setdefault(self, key, default=None):
+    def setdefault(self, key: Any, default: Any = None) -> Any:
         rv = None
         if key not in self:
             if self.accept_fn(self, key, default):
@@ -48,7 +48,7 @@ class cdict(dict):
             rv = self[key]
         return rv
 
-    def update(self, E=None, **F):
+    def update(self, E: Optional[Union[Dict[Any, Any], Iterable[Tuple[Any, Any]]]] = None, **F: Any) -> None:
         if E is not None:
             if "keys" in dir(E):
                 for k in E:

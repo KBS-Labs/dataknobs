@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -12,8 +12,8 @@ class RecordStore:
 
     def __init__(
         self,
-        tsv_fpath: str,
-        df: pd.DataFrame = None,
+        tsv_fpath: Optional[str],
+        df: Optional[pd.DataFrame] = None,
         sep: str = "\t",
     ):
         """:param tsv_fpath: The path to the tsv file on disk. If None or
@@ -24,11 +24,11 @@ class RecordStore:
         self.tsv_fpath = tsv_fpath
         self.init_df = df
         self.sep = sep
-        self._df = None
-        self._recs = None  # List[Dict[str, Any]]
+        self._df: Optional[pd.DataFrame] = None
+        self._recs: List[Dict[str, Any]] = []  # Initialize as empty list, not None
         self._init_data(df)
 
-    def _init_data(self, df: pd.DataFrame = None):
+    def _init_data(self, df: Optional[pd.DataFrame] = None) -> None:
         """Initialize store data from the tsv file."""
         if self.tsv_fpath is not None and os.path.exists(self.tsv_fpath):
             self._df = pd.read_csv(self.tsv_fpath, sep=self.sep)
@@ -44,37 +44,37 @@ class RecordStore:
                 for rec in self._df.to_json(orient="records", lines=True).strip().split("\n")
             ]
         else:
-            recs = list()
+            recs = []
         return recs
 
     @property
-    def df(self) -> pd.DataFrame:
+    def df(self) -> Optional[pd.DataFrame]:
         """Get the records as a dataframe"""
-        if self._df is None:
+        if self._df is None and self._recs is not None:
             self._df = pd.DataFrame(self._recs)
         return self._df
 
     @property
     def records(self) -> List[Dict[str, Any]]:
         """Get the records as a list of dictionaries"""
-        return self._recs
+        return self._recs or []
 
-    def clear(self):
+    def clear(self) -> None:
         """Clear the contents, starting from empty, but don't auto-"save"."""
         self._recs.clear()
         self._df = None
 
-    def add_rec(self, rec: Dict[str, Any]):
+    def add_rec(self, rec: Dict[str, Any]) -> None:
         """Add the record"""
         self._recs.append(rec)
         self._df = None
 
-    def save(self):
+    def save(self) -> None:
         """Save the records to disk as a tsv"""
-        if self.tsv_fpath is not None:
+        if self.tsv_fpath is not None and self.df is not None:
             self.df.to_csv(self.tsv_fpath, sep=self.sep, index=False)
 
-    def restore(self, df: pd.DataFrame = None):
+    def restore(self, df: Optional[pd.DataFrame] = None) -> None:
         """Restore records from the version on disk, discarding any changes.
         NOTE: If there is no backing file (e.g., tsv_fpath is None), then
         restore will discard all data and restart with the given df (if not
