@@ -114,7 +114,7 @@ fi
 echo -e "\n${BLUE}2. Running ruff linting...${NC}"
 RUFF_CMD="ruff check"
 if [[ "$FIX" == true ]]; then
-    RUFF_CMD="$RUFF_CMD --fix"
+    RUFF_CMD="$RUFF_CMD --fix --unsafe-fixes=false"
 fi
 
 for package in "${PACKAGES[@]}"; do
