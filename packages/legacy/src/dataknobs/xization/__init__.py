@@ -1,7 +1,26 @@
 """Re-export xization from dataknobs-xization package."""
 
-from dataknobs_xization.annotations import *
-from dataknobs_xization.authorities import *
-from dataknobs_xization.lexicon import *
-from dataknobs_xization.masking_tokenizer import *
-from dataknobs_xization.normalize import *
+# Import the submodules explicitly to make them available
+from dataknobs_xization import (
+    annotations,
+    authorities,
+    lexicon,
+    masking_tokenizer,
+    normalize,
+)
+
+# Also import commonly used classes and functions for backward compatibility
+from dataknobs_xization.masking_tokenizer import CharacterFeatures, TextFeatures
+from dataknobs_xization.normalize import basic_normalization_fn
+
+# Make submodules available as attributes
+__all__ = [
+    'annotations',
+    'authorities',
+    'lexicon',
+    'masking_tokenizer',
+    'normalize',
+    'CharacterFeatures',
+    'TextFeatures',
+    'basic_normalization_fn',
+]

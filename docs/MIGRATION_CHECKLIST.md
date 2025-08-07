@@ -37,15 +37,15 @@ This checklist guides the migration of Dataknobs from a single Poetry-managed pa
 - [x] Move existing unit tests to each package in `packages/*/tests/`.
 - [x] Update test imports to use new package names.
 - [x] Fix test resource paths for monorepo structure.
-- [ ] Write integration tests to verify interoperability between packages.
-- [x] Run tests locally with `uv run pytest` (all 94 tests passing).
-- [ ] Test local installation (`uv build`, `pip install dist/dataknobs-*.whl`).
+- [x] Write integration tests to verify interoperability between packages.
+- [x] Run tests locally with `uv run pytest` (all tests passing).
+- [x] Test local installation (`uv build`, `pip install dist/dataknobs-*.whl`).
 
 ## CI/CD
 - [x] Create GitHub Actions workflow (`ci.yml`) for testing across Python 3.10–3.13.
 - [x] Create release workflow (`release.yml`) for publishing to PyPI using `uv publish`.
 - [x] Create dependency update workflow for automated updates.
-- [ ] Test CI pipelines on a feature branch.
+- [x] Test CI pipelines on a feature branch.
 
 ## Docker & Infrastructure
 - [x] Update Dockerfiles to use `uv` instead of Poetry.

@@ -51,4 +51,4 @@ echo -e "\n${GREEN}All packages built successfully!${NC}"
 
 # List all built packages
 echo -e "\n${YELLOW}Built packages:${NC}"
-find packages/*/dist -name "*.whl" -o -name "*.tar.gz" | sort
+find dist -name "*.whl" -o -name "*.tar.gz" | sort

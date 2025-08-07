@@ -39,3 +39,4 @@ activate
 # uv
 .venv/
 uv.lock
+test-env/
