@@ -16,6 +16,12 @@ dev-dependencies = [
     "jupyter>=1.1.1",
     "ipywidgets>=8.1.5",
     "matplotlib>=3.10.1",
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.5.0",
+    "mkdocstrings[python]>=0.24.0",
+    "mkdocs-monorepo-plugin>=1.0.5",
+    "mkdocs-awesome-pages-plugin>=2.9.0",
+    "mkdocs-git-revision-date-localized-plugin>=1.2.0",
 ]
 
 [tool.uv.workspace]
