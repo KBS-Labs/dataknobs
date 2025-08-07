@@ -286,7 +286,7 @@ docs() {
     
     echo -e "${GREEN}Starting documentation server at http://localhost:8000${NC}"
     echo -e "${CYAN}Press Ctrl+C to stop${NC}"
-    mkdocs serve --dev-addr localhost:8000
+    mkdocs serve --dev-addr 0.0.0.0:8000
 }
 
 # Build documentation
