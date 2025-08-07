@@ -37,7 +37,7 @@ class MetaData:
 class TextMetaData(MetaData):
     """Container for text meta-data."""
 
-    def __init__(self, text_id: Any, text_label: str = TEXT_LABEL, **kwargs) -> None:
+    def __init__(self, text_id: Any, text_label: str = TEXT_LABEL, **kwargs: Any) -> None:
         super().__init__(
             {
                 TEXT_ID_ATTR: text_id,
@@ -80,6 +80,4 @@ class Text:
 
     @property
     def metadata(self) -> TextMetaData:
-        if self._metadata is None:
-            self._metadata = TextMetaData(text_id=0)
         return self._metadata

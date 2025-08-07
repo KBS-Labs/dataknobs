@@ -190,7 +190,7 @@ class ServerResponse:
     def __init__(self, resp: Optional[requests.models.Response], result: Any) -> None:
         self.resp = resp
         self.result = result
-        self._extra = None
+        self._extra: Optional[Dict[str, Any]] = None
 
     def __repr__(self) -> str:
         rv = ""
@@ -290,7 +290,7 @@ class RequestHelper:
         elif rtype == "post":
             resp, result = post_request(
                 url,
-                payload,
+                payload if payload is not None else {},
                 params=params,
                 headers=headers,
                 timeout=timeout,
@@ -300,7 +300,7 @@ class RequestHelper:
         elif rtype == "post-files":
             resp, result = post_files_request(
                 url,
-                files=files,
+                files=files if files is not None else {},
                 headers=headers,
                 timeout=timeout,
                 api_response_handler=response_handler,
@@ -309,7 +309,7 @@ class RequestHelper:
         elif rtype == "put":
             resp, result = put_request(
                 url,
-                payload,
+                payload if payload is not None else {},
                 params=params,
                 headers=headers,
                 timeout=timeout,
@@ -351,12 +351,12 @@ class MockResponse:
 
     def to_server_response(self) -> ServerResponse:
         """Convenience method for creating a ServerResponse"""
-        return ServerResponse(self, self.result)
+        return ServerResponse(self, self.result)  # type: ignore[arg-type]
 
 
 class MockRequests:
     def __init__(self) -> None:
-        self.responses = dict()
+        self.responses: Dict[str, MockResponse] = dict()
         self.r404 = MockResponse(404, '"Not found"')
 
     def add(

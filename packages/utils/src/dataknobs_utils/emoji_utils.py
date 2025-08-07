@@ -119,16 +119,17 @@ class EmojiData:
         return self._rdepechars if self._rdepechars is not None else {}
 
     def _compute_echars(self) -> None:
-        loneechars = [emoji[0] for emoji in self.emojis if len(emoji) == 1]
-        ldepechars = defaultdict(set)
-        rdepechars = defaultdict(set)
+        loneechars = [ord(emoji[0]) for emoji in self.emojis if len(emoji) == 1]
+        ldepechars: Dict[int, Set[int]] = defaultdict(set)
+        rdepechars: Dict[int, Set[int]] = defaultdict(set)
         for seq in self.emojis:
             for idx, echar in enumerate(seq):
-                if echar not in loneechars and echar not in SPECIAL_CHARS:
+                echar_ord = ord(echar)
+                if echar not in [chr(c) for c in loneechars] and echar not in SPECIAL_CHARS:
                     if idx + 1 < len(seq):
-                        ldepechars[echar].add(seq[idx + 1])
+                        ldepechars[echar_ord].add(ord(seq[idx + 1]))
                     else:
-                        rdepechars[echar].add(seq[idx - 1])
+                        rdepechars[echar_ord].add(ord(seq[idx - 1]))
         self._echars = loneechars
         self._ldepechars = ldepechars
         self._rdepechars = rdepechars
@@ -182,7 +183,7 @@ class EmojiData:
             prevc = c
         return "".join(result)
 
-    def get_emojis(self, text: str) -> List["EmojiData"]:
+    def get_emojis(self, text: str) -> List[Emoji]:
         """Get emoji data for all emojis in the given text.
         :param text: Arbitrary text
         :return: The (possibly empty) list of emojis found
@@ -225,11 +226,11 @@ class EmojiData:
                 elif not line.startswith("#"):
                     line = line.strip()
                     if line:
-                        e = build_emoji_dataclass(line)
-                        if e:
-                            e.group = curgroup
-                            e.subgroup = cursubgroup
-                            self.emojis[e.emoji] = e
+                        emoji_data: Optional[Emoji] = build_emoji_dataclass(line)
+                        if emoji_data is not None:
+                            emoji_data.group = curgroup
+                            emoji_data.subgroup = cursubgroup
+                            self.emojis[emoji_data.emoji] = emoji_data
 
 
 def load_emoji_data() -> Optional[EmojiData]:

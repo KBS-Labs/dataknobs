@@ -474,7 +474,7 @@ class ValuePath:
         for elt in path:
             if isinstance(elt, int):
                 found = False
-                if node.has_children():
+                if node.has_children() and node.children is not None:
                     # simplifying assumption: idxs are in consecutive order fm 0
                     child = node.children[-1]
                     if str(elt) == child.data:

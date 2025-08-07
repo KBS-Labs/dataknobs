@@ -48,14 +48,18 @@ class cdict(dict):
             rv = self[key]
         return rv
 
-    def update(self, E: Optional[Union[Dict[Any, Any], Iterable[Tuple[Any, Any]]]] = None, **F: Any) -> None:
-        if E is not None:
-            if "keys" in dir(E):
-                for k in E:
-                    self.__setitem__(k, E[k])
+    def update(self, *args: Any, **kwargs: Any) -> None:
+        # Handle positional argument if present
+        if args:
+            other = args[0]
+            if hasattr(other, "keys"):
+                # It's a mapping-like object
+                for key in other.keys():
+                    self.__setitem__(key, other[key])
             else:
-                for k, v in E:
-                    self.__setitem__(k, v)
-        if F is not None:
-            for k in F:
-                self.__setitem__(k, F[k])
+                # It's an iterable of key-value pairs
+                for key, value in other:
+                    self.__setitem__(key, value)
+        # Handle keyword arguments
+        for key in kwargs:
+            self.__setitem__(key, kwargs[key])

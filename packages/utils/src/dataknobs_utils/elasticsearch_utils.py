@@ -200,8 +200,9 @@ class ElasticsearchIndex:
     ) -> None:
         self.request_helper: Any  # Always set, never None
         if request_helper is None:
+            # Use localhost as default if no IP is provided
             self.request_helper = requests_utils.RequestHelper(
-                elasticsearch_ip,
+                elasticsearch_ip or "localhost",
                 elasticsearch_port,
                 mock_requests=mock_requests,
             )

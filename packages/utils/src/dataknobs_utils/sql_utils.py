@@ -194,11 +194,18 @@ class PostgresDB:
 
         def psql_schema_line(df: pd.DataFrame, col: str) -> str:
             line = None
-            if np.issubdtype(df[col].dtype, np.integer):
-                line = f"{col} integer"
-            elif np.issubdtype(df[col].dtype, np.float64):
-                line = f"{col} real"
+            dtype = df[col].dtype
+            # Check if it's a numpy dtype (not an ExtensionDtype)
+            if hasattr(dtype, 'type'):
+                if np.issubdtype(dtype, np.integer):
+                    line = f"{col} integer"
+                elif np.issubdtype(dtype, np.float64):
+                    line = f"{col} real"
+                else:
+                    maxlen = max(df[col].str.len())
+                    line = f"{col} varchar({maxlen})"
             else:
+                # Handle ExtensionDtype or other types as varchar
                 maxlen = max(df[col].str.len())
                 line = f"{col} varchar({maxlen})"
             return line

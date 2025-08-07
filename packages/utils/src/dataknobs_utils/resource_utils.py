@@ -49,6 +49,8 @@ def download_nltk_resources(resources: Optional[Dict[str, str]], resources_dir: 
     if resources is not None:
         if resources_dir is None:
             resources_dir = get_nltk_resources_dir()
+        if resources_dir is None:
+            return  # Can't download without a resources directory
         for resource, relpath in resources.items():
             respath = os.path.join(resources_dir, relpath)
             if not os.path.exists(respath):

@@ -7,7 +7,7 @@ from dataknobs_structures.tree import Tree
 
 
 def get_value_by_key(
-    d: Dict[str, Any],
+    d: Optional[Dict[str, Any]],
     pathkey: str,
     default_value: Any = None,
 ) -> Any:
@@ -22,17 +22,15 @@ def get_value_by_key(
        Given d = {"foo": {"bar": "baz"}} and pathkey="foo.bar", the value="baz"
     """
     path = pathkey.split(".")
-    if d is not None:
-        failed = False
-        for key in path:
-            if d is None or not isinstance(d, dict):
-                failed = True
-                break
-            if key not in d:
-                failed = True
-                break
-            d = d[key]
-    return d if not failed else default_value
+    if d is None:
+        return default_value
+    
+    for key in path:
+        if not isinstance(d, dict) or key not in d:
+            return default_value
+        d = d[key]
+    
+    return d
 
 
 class PromptMessage:
@@ -86,18 +84,18 @@ class PromptMessage:
             dictionary.
         :return: The message dictionary
         """
-        retval: Optional[Dict[str, Any]] = None
         if self._dict is None:
             self._dict = {
                 "role": self.role,
                 "content": self.content,
             }
+        retval: Dict[str, Any]
         if with_metadata and self.metadata is not None:
-            retval = self._dict.copy()
+            retval = dict(self._dict)  # Convert to Dict[str, Any]
             attr = with_metadata if isinstance(with_metadata, str) else "metadata"
             retval[attr] = self.metadata
         else:
-            retval = self._dict
+            retval = dict(self._dict)
         return retval
 
     @staticmethod
@@ -156,12 +154,12 @@ class PromptTree:
         self._tree_id: PromptTree.IdTracker = self.IdTracker() if parent is None else parent._tree_id
         self._node_id = self._tree_id.next_id()
         self.node: Optional[Tree] = None
-        the_message = message
+        the_message: Optional[PromptMessage] = message
         # If there's an override AND a message
         if (
             role is not None or content is not None or metadata is not None
         ) and message is not None:
-            the_message: Optional[PromptMessage] = None
+            the_message = None
             if role is None:
                 # Keep the original message's role, else use the override
                 role = message.role
@@ -172,7 +170,7 @@ class PromptTree:
                 # Keep the original message's metadata, else use the override
                 metadata = message.metadata
         self.message = the_message or PromptMessage(role or "user", content or "", metadata=metadata)
-        if parent is not None:
+        if parent is not None and parent.node is not None:
             self.node = parent.node.add_child(self)
         else:
             self.node = Tree(self)
@@ -220,7 +218,7 @@ class PromptTree:
     @property
     def depth(self) -> int:
         """Get the depth of this node in its tree"""
-        return self.node.depth
+        return self.node.depth if self.node is not None else 0
 
     @property
     def metadata(self) -> Dict[str, Any]:
@@ -229,10 +227,11 @@ class PromptTree:
         """
         metadata = self.message.metadata
         node = self.node
-        while metadata is None and node.parent is not None:
+        while metadata is None and node is not None and node.parent is not None:
             node = node.parent
-            metadata = node.data.metadata
-        return metadata
+            if hasattr(node.data, 'metadata'):
+                metadata = node.data.metadata
+        return metadata if metadata is not None else {}
 
     def get_metadata_value(self, pathkey: str, default_value: Any = None) -> Any:
         """Get the (inherited if necessary) metadata value by path key.
@@ -267,7 +266,8 @@ class PromptTree:
             Default is to get the duration from this node through the root
         """
         node = self.node  # start from this node
-        end_node = self.get_level_node(level_offset).node  # need .node!
+        level_node = self.get_level_node(level_offset)
+        end_node = level_node.node if level_node is not None else None
         while True:
             if node is None:
                 break
@@ -291,7 +291,8 @@ class PromptTree:
         :return: The list of message dictionaries.
         """
         node = self.node
-        end_node = self.get_level_node(level_offset).node  # need .node!
+        level_node = self.get_level_node(level_offset)
+        end_node = level_node.node if level_node is not None else None
         messages: List[Dict[str, Any]] = list()
         while True:
             if node is None:
@@ -315,7 +316,8 @@ class PromptTree:
         :return: The total number of seconds
         """
         node = self.node
-        end_node = self.get_level_node(level_offset).node  # need .node!
+        level_node = self.get_level_node(level_offset)
+        end_node = level_node.node if level_node is not None else None
         duration = 0
         while True:
             if node is None:
@@ -346,7 +348,7 @@ class PromptTree:
                     ).total_seconds())
         return duration
 
-    def get_level_node(self, level_offset: int) -> "PromptTree":
+    def get_level_node(self, level_offset: int) -> Optional["PromptTree"]:
         """Get the prompt tree node at the specified level offset relative to
         this node.
         :param level_offset: The level offset specifying the nodes
@@ -363,21 +365,25 @@ class PromptTree:
         elif level_offset > 0:
             # The parent node, stopping at the root
             node = self.node
+            if node is None:
+                return None
             for _ in range(level_offset):
                 if node.parent is None:
-                    return node.data
+                    return node.data if hasattr(node, 'data') else None
                 else:
                     node = node.parent
-            return node.data
-        elif level_offset < 0:
+            return node.data if node is not None and hasattr(node, 'data') else None
+        else:  # level_offset < 0
             # Offset from root, stopping at this node
             node = self.node
+            if node is None:
+                return None
             nodes: List[Tree] = []
             while node is not None:
                 nodes.insert(0, node)
                 node = node.parent
-            node = nodes[min(abs(level_offset + 1), len(nodes) - 1)]
-            return node.data
+            selected_node = nodes[min(abs(level_offset + 1), len(nodes) - 1)]
+            return selected_node.data if hasattr(selected_node, 'data') else None
 
     def find_node_by_id(self, node_id: int) -> Optional["PromptTree"]:
         """Find the PromptTree Node with the given node ID.
@@ -385,8 +391,10 @@ class PromptTree:
         :param node_id: The node ID to find
         :return: The node or None
         """
+        if self.node is None:
+            return None
         found = self.node.root.find_nodes(
-            lambda node: node.data.node_id == node_id, only_first=True
+            lambda node: hasattr(node.data, 'node_id') and node.data.node_id == node_id, only_first=True
         )
         return found[0].data if len(found) > 0 else None
 
@@ -400,7 +408,9 @@ class PromptTree:
             and the function returns True to select the instance
         :return: The (possibly empty) list of all matches.
         """
-        found = self.node.root.find_nodes(match_fn)
+        if self.node is None:
+            return []
+        found = self.node.root.find_nodes(match_fn if match_fn is not None else lambda _: False)
         return [node.data for node in found]
 
     def serialize_tree(self, full: bool = False, with_metadata: bool = True) -> Union[Dict[Any, Any], List[Any]]:
@@ -419,6 +429,8 @@ class PromptTree:
 
         Note that the full prompt tree can be reconstructed from this output.
         """
+        if self.node is None:
+            return {}
         return self._do_serialize(
             self.node.root if full else self.node, with_metadata=with_metadata
         )
@@ -432,7 +444,7 @@ class PromptTree:
         :param node: The current node to serialize
         :param with_metadata: True to include metadata in the serialization
         """
-        retval = node.data.message.get_message(with_metadata=with_metadata)
+        retval: Union[Dict[Any, Any], List[Any]] = node.data.message.get_message(with_metadata=with_metadata)
         if node.has_children():
             retval = [
                 retval,
@@ -441,13 +453,13 @@ class PromptTree:
                         child,
                         with_metadata=with_metadata,
                     )
-                    for child in node.children
+                    for child in (node.children if node.children is not None else [])
                 ],
             ]
         return retval
 
     @staticmethod
-    def build_instance(data: Union[Dict[str, Any], List[Any]], parent: Optional["PromptTree"] = None) -> "PromptTree":
+    def build_instance(data: Union[Dict[str, Any], List[Any]], parent: Optional["PromptTree"] = None) -> Optional["PromptTree"]:
         """(Re)build a PromptTree from its serialized data, e.g., output
         from prompt_tree.serialize_tree()
 
@@ -463,9 +475,11 @@ class PromptTree:
             cur_parent = PromptTree.build_instance(data[0], parent=pt)
             for item in data[1]:
                 pt = PromptTree.build_instance(item, parent=cur_parent)
-        else:
+        elif isinstance(data, dict):
             # data is a single (terminal) node
             pt = PromptTree(message=PromptMessage.build_instance(data), parent=parent)
+        else:
+            pt = None
         return pt
 
     class IdTracker:

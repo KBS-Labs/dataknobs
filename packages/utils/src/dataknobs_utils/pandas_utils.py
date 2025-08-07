@@ -367,10 +367,11 @@ class GroupManager:
         :return: A new GroupManager with only the relevant subgroups marked.
         """
         group_locs = self.get_group_locs(group_num)
-        subgroup_ser = self.collapsed_df.loc[group_locs, subgroup_num_col]
+        # Get the subgroup column data as a Series
+        subgroup_ser = pd.Series(self.collapsed_df.loc[group_locs, subgroup_num_col])
 
         # only subgroup_locs that are not shared should remain
-        es = explode_json_series(pd.Series(subgroup_ser) if isinstance(subgroup_ser, pd.DataFrame) else subgroup_ser)
+        es = explode_json_series(subgroup_ser)
         vc = es.index.value_counts()
         all_nums = set(es.unique())
         keeper_nums = set(es[vc[vc == 1].index])

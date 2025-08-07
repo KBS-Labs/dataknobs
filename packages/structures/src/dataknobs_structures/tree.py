@@ -324,7 +324,7 @@ class Tree:
     def get_path(self) -> List[Tree]:
         """Get the nodes from the root to this node (inclusive)."""
         path: Deque[Tree] = deque()
-        node = self
+        node: Optional[Tree] = self
         while node is not None:
             path.appendleft(node)
             node = node.parent
@@ -392,7 +392,7 @@ class Tree:
         of this node.
         """
         node = self
-        while node is not None and node.has_children():
+        while node.has_children() and node.children is not None:
             node = node.children[0]
         return node
 
@@ -401,7 +401,7 @@ class Tree:
         of this node.
         """
         node = self
-        while node is not None and node.has_children():
+        while node.has_children() and node.children is not None:
             node = node.children[-1]
         return node
 

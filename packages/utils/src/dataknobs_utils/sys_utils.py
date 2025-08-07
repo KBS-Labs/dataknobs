@@ -45,9 +45,9 @@ class MySubnet:
     """
 
     def __init__(self) -> None:
-        self._my_hostname = None
-        self._my_ip = None
-        self._subnet_ips = None
+        self._my_hostname: Optional[str] = None
+        self._my_ip: Optional[str] = None
+        self._subnet_ips: Optional[Dict[str, str]] = None
 
     def rescan(self) -> None:
         """Rescan subnet hosts."""
@@ -77,10 +77,12 @@ class MySubnet:
         """
         if self._subnet_ips is None:
 
-            def is_up(scan_data: Any) -> Optional[bool]:
+            def is_up(scan_data: Any) -> bool:
                 if isinstance(scan_data, dict):
-                    return scan_data.get("state", {}).get("state", "down") == "up"
-                return None
+                    state_info = scan_data.get("state", {})
+                    state_value = state_info.get("state", "down") if isinstance(state_info, dict) else "down"
+                    return bool(state_value == "up")
+                return False
 
             def get_hostname(scan_data: Any) -> Optional[str]:
                 if isinstance(scan_data, dict):
@@ -90,12 +92,14 @@ class MySubnet:
 
             nmap = nmap3.NmapHostDiscovery()
             subnet = ".".join(self.my_ip.split(".")[:3]) + ".*"
-            self._subnet_ips = {
-                get_hostname(scan_data): the_ip
-                for the_ip, scan_data in nmap.nmap_no_portscan(subnet).items()
-                if is_up(scan_data) and get_hostname(scan_data) is not None
-            }
-        return self._subnet_ips
+            subnet_ips: Dict[str, str] = {}
+            for the_ip, scan_data in nmap.nmap_no_portscan(subnet).items():
+                if is_up(scan_data):
+                    hostname = get_hostname(scan_data)
+                    if hostname is not None:
+                        subnet_ips[hostname] = the_ip
+            self._subnet_ips = subnet_ips
+        return self._subnet_ips if self._subnet_ips is not None else {}
 
     def get_ips(self, name_re: Union[str, re.Pattern]) -> Dict[str, str]:
         """Get the IP addresses of the hosts whose names match the regex.

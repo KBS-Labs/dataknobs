@@ -24,7 +24,7 @@ class StatsAccumulator:
         :param as_dict: An "as_dict" form of stats to start with
         :param values: A list of initial values or a single value to add
         """
-        self.label = label
+        self._label: str = label
         self._n = 0
         self._min = 0.0
         self._max = 0.0
@@ -237,8 +237,8 @@ class LinearRegression:
         self._xx_sum = 0.0
         self._yy_sum = 0.0
 
-        self._m = None
-        self._b = None
+        self._m: Optional[float] = None
+        self._b: Optional[float] = None
 
     @property
     def n(self) -> int:
@@ -268,13 +268,13 @@ class LinearRegression:
     def m(self) -> float:
         if self._m is None:
             self._compute_regression()
-        return self._m
+        return self._m if self._m is not None else 0.0
 
     @property
     def b(self) -> float:
         if self._b is None:
             self._compute_regression()
-        return self._b
+        return self._b if self._b is not None else 0.0
 
     def get_y(self, x: float) -> float:
         return self.m * x + self.b
@@ -375,7 +375,7 @@ class RollingStats:
 
     def as_dict(self) -> Dict[str, Any]:
         """Get a dictionary containing a summary of this instance's information."""
-        result = {"now": str(datetime.now())}
+        result: Dict[str, Any] = {"now": str(datetime.now())}
 
         cumulative_info: Dict[str, Any] = {"since": str(self.start_time)}
         self._add_stats_info(self.cumulative_stats, cumulative_info)
@@ -505,7 +505,7 @@ class Monitor:
         self._modlock = Lock()
         self._alive_since = datetime.now()
         self._description = description
-        self._last_start_time = None
+        self._last_start_time: Optional[datetime] = None
         self._access_times = access_times
         self._processing_times = processing_times
 
@@ -582,7 +582,7 @@ class Monitor:
 
     def as_dict(self) -> Dict[str, Any]:
         """Get a dictionary containing a summary of this instance's information."""
-        result = {}
+        result: Dict[str, Any] = {}
 
         result["alive_since"] = str(self.alive_since)
         if self.description is not None:
@@ -644,7 +644,7 @@ class MonitorManager:
     """Class to manage a set of monitors by label, providing rollup views across."""
 
     def __init__(self, default_window_width: int = 300000, default_segment_width: int = 5000) -> None:
-        self._monitors = {}
+        self._monitors: Dict[str, Monitor] = {}
         self._key_manager = KeyManager()
 
         # Defaults for when creating a Monitor from within this MonitorManager
@@ -688,7 +688,9 @@ class MonitorManager:
 
     def get_or_create_monitor_by_key_type(self, keytype: str, description: str) -> Monitor:
         key = self._key_manager.get_key(keytype, description)
-        return self.get_monitor(key, create_if_missing=True, description=description)
+        result = self.get_monitor(key, create_if_missing=True, description=description)
+        assert result is not None  # Always created when create_if_missing=True
+        return result
 
     def set_monitor(self, label: str, monitor: Monitor) -> None:
         self._monitors[label] = monitor
@@ -751,7 +753,7 @@ class KeyManager:
     """Class to turn descriptions of key types into keys of the form type-N."""
 
     def __init__(self) -> None:
-        self._keytype2descriptions = {}
+        self._keytype2descriptions: Dict[str, List[str]] = {}
 
     def get_key(self, keytype: str, description: str) -> str:
         if keytype in self._keytype2descriptions:
