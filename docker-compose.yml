@@ -11,6 +11,7 @@ services:
     ports:
       - "5000:5000"
       - "8888:8888"  # Jupyter
+      - "8000:8000"  # Documentation
     environment:
       - ENV=dev
       - FLASK_PORT=5000

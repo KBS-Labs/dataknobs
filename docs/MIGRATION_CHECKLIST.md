@@ -59,7 +59,7 @@ This checklist guides the migration of Dataknobs from a single Poetry-managed pa
 - [x] Add migration guide to `docs/` (MIGRATION_GUIDE.md).
 - [x] Add deprecation notice to `legacy` package's `__init__.py`.
 - [x] Add deprecation notice to `legacy` package's `README.md`.
-- [ ] Set up `mkdocs` for unified documentation in `docs/`.
+- [x] Set up `mkdocs` for unified documentation in `docs/`.
 - [x] Add README.md to all packages (structures, utils, xization, common, legacy).
 
 ## Release

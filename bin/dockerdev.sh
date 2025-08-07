@@ -8,5 +8,6 @@ test -e "${PROJ_DIR}/.project_vars" && . "${PROJ_DIR}/.project_vars"
 test -e "${PROJ_DIR}/.env" && . "${PROJ_DIR}/.env"
 
 NOTEBOOK_PORT=${NOTEBOOK_PORT:=8888}
+DOCUMENTATION_PORT=${DOCUMENTATION_PORT:=8000}
 
-$BIN_DIR/start_docker_process.sh -p $NOTEBOOK_PORT:$NOTEBOOK_PORT
+$BIN_DIR/start_docker_process.sh -p $NOTEBOOK_PORT:$NOTEBOOK_PORT -p $DOCUMENTATION_PORT:$DOCUMENTATION_PORT

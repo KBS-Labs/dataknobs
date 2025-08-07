@@ -30,6 +30,8 @@ usage() {
     echo "  validate      Validate code quality and catch errors"
     echo "  clean         Clean build artifacts and caches"
     echo "  release       Prepare packages for release"
+    echo "  docs          Serve documentation locally"
+    echo "  docs-build    Build documentation for deployment"
     echo ""
     echo "Options:"
     echo "  -h, --help    Show this help message"
@@ -265,6 +267,66 @@ release() {
     echo -e "  4. Publish to PyPI with: uv publish"
 }
 
+# Serve documentation locally
+docs() {
+    echo -e "${YELLOW}Starting documentation server...${NC}"
+    
+    # Check if MkDocs is installed
+    if ! command -v mkdocs &> /dev/null; then
+        echo -e "${YELLOW}Installing MkDocs dependencies...${NC}"
+        uv pip install mkdocs mkdocs-material "mkdocstrings[python]" \
+            mkdocs-monorepo-plugin mkdocs-awesome-pages-plugin \
+            mkdocs-git-revision-date-localized-plugin
+    fi
+    
+    # Check if packages are installed (needed for API docs)
+    echo -e "${YELLOW}Ensuring packages are installed for API documentation...${NC}"
+    uv pip install -e packages/common -e packages/structures \
+        -e packages/utils -e packages/xization -e packages/legacy
+    
+    echo -e "${GREEN}Starting documentation server at http://localhost:8000${NC}"
+    echo -e "${CYAN}Press Ctrl+C to stop${NC}"
+    mkdocs serve --dev-addr localhost:8000
+}
+
+# Build documentation
+docs_build() {
+    echo -e "${YELLOW}Building documentation...${NC}"
+    
+    # Check if MkDocs is installed
+    if ! command -v mkdocs &> /dev/null; then
+        echo -e "${YELLOW}Installing MkDocs dependencies...${NC}"
+        uv pip install mkdocs mkdocs-material "mkdocstrings[python]" \
+            mkdocs-monorepo-plugin mkdocs-awesome-pages-plugin \
+            mkdocs-git-revision-date-localized-plugin
+    fi
+    
+    # Check if packages are installed (needed for API docs)
+    echo -e "${YELLOW}Ensuring packages are installed for API documentation...${NC}"
+    uv pip install -e packages/common -e packages/structures \
+        -e packages/utils -e packages/xization -e packages/legacy
+    
+    # Clean previous build
+    echo -e "${YELLOW}Cleaning previous build...${NC}"
+    rm -rf site/
+    
+    # Build documentation
+    echo -e "${YELLOW}Building documentation...${NC}"
+    if mkdocs build --strict; then
+        echo -e "${GREEN}✓ Documentation built successfully!${NC}"
+        echo -e "${CYAN}Output directory: ./site${NC}"
+        echo ""
+        echo -e "To preview locally, run:"
+        echo -e "  python -m http.server -d site 8000"
+        echo ""
+        echo -e "To deploy to GitHub Pages, run:"
+        echo -e "  mkdocs gh-deploy"
+    else
+        echo -e "${RED}✗ Documentation build failed!${NC}"
+        exit 1
+    fi
+}
+
 # Main command handling
 if [[ $# -eq 0 ]]; then
     usage
@@ -302,6 +364,14 @@ case $1 in
     release)
         shift
         release "$@"
+        ;;
+    docs)
+        shift
+        docs "$@"
+        ;;
+    docs-build)
+        shift
+        docs_build "$@"
         ;;
     -h|--help)
         usage
