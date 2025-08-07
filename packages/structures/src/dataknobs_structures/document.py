@@ -61,10 +61,10 @@ class Text:
     def __init__(
         self,
         text: str,
-        metadata: TextMetaData,
+        metadata: TextMetaData | None,
     ) -> None:
         self._text = text
-        self._metadata = metadata
+        self._metadata = metadata if metadata is not None else TextMetaData(0, TEXT_LABEL)
 
     @property
     def text(self) -> str:
