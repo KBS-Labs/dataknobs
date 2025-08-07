@@ -2,8 +2,8 @@ import json
 import os
 import pandas as pd
 import tempfile
-import dataknobs.utils.requests_utils as requests_utils
-import dataknobs.utils.elasticsearch_utils as es_utils
+import dataknobs_utils.requests_utils as requests_utils
+import dataknobs_utils.elasticsearch_utils as es_utils
 
 
 def test_build_field_query_dict_basic_noop():

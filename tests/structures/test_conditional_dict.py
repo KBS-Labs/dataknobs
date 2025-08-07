@@ -1,4 +1,4 @@
-from dataknobs.structures.conditional_dict import cdict
+from dataknobs_structures.conditional_dict import cdict
 
 
 def test_basics():

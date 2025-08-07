@@ -1,7 +1,7 @@
 import io
 import json
 import pytest
-import dataknobs.utils.json_utils as jutils
+import dataknobs_utils.json_utils as jutils
 
 
 def test_get_value():

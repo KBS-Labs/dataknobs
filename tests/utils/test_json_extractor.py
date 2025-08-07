@@ -1,7 +1,7 @@
 import pytest
 
 
-import dataknobs.utils.json_extractor as json_extractor
+import dataknobs_utils.json_extractor as json_extractor
 
 
 class TestJSONExtractor:

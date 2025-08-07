@@ -2,7 +2,7 @@ import gzip
 import os
 import re
 import tempfile
-import dataknobs.utils.file_utils as dk_futils
+import dataknobs_utils.file_utils as dk_futils
 
 
 def test_basics():

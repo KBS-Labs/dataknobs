@@ -3,7 +3,7 @@ import os
 import pandas as pd
 import psycopg2
 from abc import ABC, abstractmethod
-from dataknobs.utils.sys_utils import load_project_vars
+from dataknobs_utils.sys_utils import load_project_vars
 from dotenv import load_dotenv
 from functools import lru_cache
 from typing import Any, Dict, List

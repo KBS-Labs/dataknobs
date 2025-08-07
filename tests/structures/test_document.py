@@ -1,4 +1,4 @@
-import dataknobs.structures.document as dk_doc
+import dataknobs_structures.document as dk_doc
 
 
 def test_simple_text():

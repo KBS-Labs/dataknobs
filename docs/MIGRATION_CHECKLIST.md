@@ -28,7 +28,7 @@ This checklist guides the migration of Dataknobs from a single Poetry-managed pa
 
 ## Code Refactoring
 - [x] Move code to new packages (`structures`, `utils`, `xization`, `common`).
-- [ ] Update imports to reflect new structure (e.g., `from dataknobs_structures import func`).
+- [x] Update imports to reflect new structure (e.g., `from dataknobs_structures import func`).
 - [x] Configure `legacy` package to re-export APIs from new packages.
 - [ ] Extract shared code to `dataknobs-common` (if applicable).
 - [x] Update `legacy` package's `pyproject.toml` to depend on new packages (e.g., `dataknobs-structures==1.0.0`).

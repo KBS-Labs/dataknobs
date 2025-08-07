@@ -1,5 +1,5 @@
 import json
-import dataknobs.utils.requests_utils as requests_utils
+import dataknobs_utils.requests_utils as requests_utils
 
 
 def test_get_current_ip():

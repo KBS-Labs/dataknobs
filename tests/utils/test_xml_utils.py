@@ -1,4 +1,4 @@
-import dataknobs.utils.xml_utils as xml_utils
+import dataknobs_utils.xml_utils as xml_utils
 import io
 
 

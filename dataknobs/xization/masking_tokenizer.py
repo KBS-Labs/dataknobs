@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
-import dataknobs.structures.document as dk_doc
-import dataknobs.utils.emoji_utils as emoji_utils
+import dataknobs_structures.document as dk_doc
+import dataknobs_utils.emoji_utils as emoji_utils
 from abc import ABC, abstractmethod
 from typing import Any, Callable, List, Tuple, Union
 

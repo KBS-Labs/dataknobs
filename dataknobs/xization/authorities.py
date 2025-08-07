@@ -1,6 +1,6 @@
 import pandas as pd
 import re
-import dataknobs.xization.annotations as dk_annots
+import dataknobs_xization.annotations as dk_annots
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List, Set, Union
 

@@ -41,10 +41,10 @@ import os
 import pandas as pd
 from datetime import datetime
 
-import dataknobs.utils.requests_utils as requests_utils
-import dataknobs.utils.resource_utils as resource_utils
-import dataknobs.utils.sql_utils as sql_utils
-import dataknobs.utils.elasticsearch_utils as es_utils
+import dataknobs_utils.requests_utils as requests_utils
+import dataknobs_utils.resource_utils as resource_utils
+import dataknobs_utils.sql_utils as sql_utils
+import dataknobs_utils.elasticsearch_utils as es_utils
 
 
 # ## Initializations

@@ -1,11 +1,11 @@
 import more_itertools
 import numpy as np
 import pandas as pd
-import dataknobs.xization.annotations as dk_anns
-import dataknobs.xization.authorities as dk_auth
-import dataknobs.structures.document as dk_doc
-import dataknobs.xization.masking_tokenizer as dk_tok
-import dataknobs.utils.emoji_utils as emoji_utils
+import dataknobs_xization.annotations as dk_anns
+import dataknobs_xization.authorities as dk_auth
+import dataknobs_structures.document as dk_doc
+import dataknobs_xization.masking_tokenizer as dk_tok
+import dataknobs_utils.emoji_utils as emoji_utils
 from abc import abstractmethod
 from collections import defaultdict
 from typing import Any, Callable, Dict, List, Set, Union

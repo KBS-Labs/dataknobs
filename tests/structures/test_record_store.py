@@ -2,7 +2,7 @@ import numpy as np
 import os
 import pandas as pd
 import tempfile
-import dataknobs.structures.record_store as record_store
+import dataknobs_structures.record_store as record_store
 
 
 def test_basics():

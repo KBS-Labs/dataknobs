@@ -1,4 +1,4 @@
-import dataknobs.structures.tree as dk_tree
+import dataknobs_structures.tree as dk_tree
 
 
 def test_basics():

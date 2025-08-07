@@ -3,7 +3,7 @@ import os
 import random
 import sys
 import time
-import dataknobs.utils.stats_utils as dk_stats
+import dataknobs_utils.stats_utils as dk_stats
 from datetime import datetime
 
 

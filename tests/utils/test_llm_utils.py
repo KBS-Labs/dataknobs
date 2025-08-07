@@ -1,4 +1,4 @@
-import dataknobs.utils.llm_utils as llm_utils
+import dataknobs_utils.llm_utils as llm_utils
 import datetime
 
 

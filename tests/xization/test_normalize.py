@@ -1,5 +1,5 @@
 import re
-import dataknobs.xization.normalize as dk_norm
+import dataknobs_xization.normalize as dk_norm
 
 
 def test_expand_camelcase_fn():

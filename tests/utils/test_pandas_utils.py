@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-import dataknobs.utils.pandas_utils as pd_utils
+import dataknobs_utils.pandas_utils as pd_utils
 
 
 DEEP_DATA = [

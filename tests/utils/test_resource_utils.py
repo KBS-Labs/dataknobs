@@ -1,6 +1,6 @@
 import os
 import tempfile
-import dataknobs.utils.resource_utils as resource_utils
+import dataknobs_utils.resource_utils as resource_utils
 
 
 def test_get_nltk_wordnet():

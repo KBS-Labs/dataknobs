@@ -1,5 +1,5 @@
 import json
-from dataknobs.structures.tree import Tree
+from dataknobs_structures.tree import Tree
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Union
 

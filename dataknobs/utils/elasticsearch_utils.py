@@ -1,8 +1,8 @@
 import json
 #import os
 import pandas as pd
-import dataknobs.utils.requests_utils as requests_utils
-import dataknobs.utils.pandas_utils as pd_utils
+import dataknobs_utils.requests_utils as requests_utils
+import dataknobs_utils.pandas_utils as pd_utils
 from typing import Dict, List
 
 

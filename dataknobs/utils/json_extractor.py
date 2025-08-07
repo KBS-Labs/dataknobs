@@ -1,6 +1,6 @@
 import json
 import re
-from dataknobs.utils.json_utils import get_value
+from dataknobs_utils.json_utils import get_value
 from typing import Dict, List, Tuple, Any, Optional
 
 class JSONExtractor:

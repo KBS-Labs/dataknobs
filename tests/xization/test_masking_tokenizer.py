@@ -1,6 +1,6 @@
-import dataknobs.structures.document as dk_doc
-import dataknobs.utils.emoji_utils as dk_emoji
-import dataknobs.xization.masking_tokenizer as dk_tok
+import dataknobs_structures.document as dk_doc
+import dataknobs_utils.emoji_utils as dk_emoji
+import dataknobs_xization.masking_tokenizer as dk_tok
 
 
 def test_empty_tokenization():

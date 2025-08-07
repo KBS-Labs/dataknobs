@@ -1,5 +1,5 @@
 import re
-import dataknobs.xization.authorities as dk_auth
+import dataknobs_xization.authorities as dk_auth
 
 
 def text_authority_annotations_metadata():
