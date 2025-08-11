@@ -12,8 +12,7 @@ dependencies = [
     "dataknobs-structures==1.0.0",
     "dataknobs-utils==1.0.0",
     "dataknobs-xization==1.0.0",
-    "flask>=3.1.1",
-    "python3-nmap>=1.9.1",
+    "flask>=3.0.0",
 ]
 
 [tool.uv.sources]

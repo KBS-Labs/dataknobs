@@ -1,12 +1,6 @@
 # uv configuration for dataknobs monorepo
 # https://docs.astral.sh/uv/reference/settings/
 
-# Index configuration
-index-url = "https://pypi.org/simple"
-
-# Extra index for test packages  
-extra-index-url = ["https://test.pypi.org/simple"]
-
 # Cache directory
 cache-dir = ".uv-cache"
 
