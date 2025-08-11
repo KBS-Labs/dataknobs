@@ -99,19 +99,16 @@ if [ "$CURRENT_BRANCH" != "main" ] && [ "$CURRENT_BRANCH" != "master" ]; then
 fi
 
 # Package information
-declare -A PACKAGES=(
-    ["common"]="packages/common"
-    ["structures"]="packages/structures"
-    ["utils"]="packages/utils"
-    ["xization"]="packages/xization"
-    ["legacy"]="packages/legacy"
-)
+# Use regular arrays for compatibility
+PACKAGE_NAMES=("common" "structures" "utils" "xization" "legacy")
+PACKAGE_DIRS=("packages/common" "packages/structures" "packages/utils" "packages/xization" "packages/legacy")
 
 # Display current versions
 echo -e "\n${CYAN}Current Package Versions:${NC}"
 echo "----------------------------------------"
-for package in "${!PACKAGES[@]}"; do
-    dir="${PACKAGES[$package]}"
+for i in "${!PACKAGE_NAMES[@]}"; do
+    package="${PACKAGE_NAMES[$i]}"
+    dir="${PACKAGE_DIRS[$i]}"
     version=$(get_version "$dir")
     tag="${package}/v${version}"
     
@@ -136,8 +133,9 @@ read -p "Choice (1-4): " choice
 case $choice in
     1)
         # Tag all untagged packages
-        for package in "${!PACKAGES[@]}"; do
-            dir="${PACKAGES[$package]}"
+        for i in "${!PACKAGE_NAMES[@]}"; do
+            package="${PACKAGE_NAMES[$i]}"
+            dir="${PACKAGE_DIRS[$i]}"
             version=$(get_version "$dir")
             tag="${package}/v${version}"
             
@@ -149,8 +147,9 @@ case $choice in
     
     2)
         # Select specific packages
-        for package in "${!PACKAGES[@]}"; do
-            dir="${PACKAGES[$package]}"
+        for i in "${!PACKAGE_NAMES[@]}"; do
+            package="${PACKAGE_NAMES[$i]}"
+            dir="${PACKAGE_DIRS[$i]}"
             version=$(get_version "$dir")
             tag="${package}/v${version}"
             
