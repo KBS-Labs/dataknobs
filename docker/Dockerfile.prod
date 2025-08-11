@@ -10,10 +10,9 @@ RUN chmod 1777 /tmp \
   && rm -rf /var/tmp /tmp /var/lib/apt/lists/* \
   && mkdir -p /var/tmp /tmp
 
-# Install poetry and tox
-RUN curl -sSL https://install.python-poetry.org | python3 -
-RUN ln -s /root/.local/bin/poetry /usr/local/bin/poetry
-RUN pip3 install tox
+# Install uv
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.cargo/bin:${PATH}"
 
 # used as a volume (connects to the host machine's disk at runtime)
 RUN mkdir -p /data
@@ -22,10 +21,10 @@ WORKDIR /workdir
 
 COPY . .
 
-RUN poetry config virtualenvs.create false  \
-    && poetry install --no-interaction  \
-    && rm -rf /root/.cache.pypoetry
+# Install dependencies using uv
+RUN uv sync --frozen --no-dev
 
-RUN pip install uwsgi
+# Install uwsgi in the environment
+RUN uv pip install uwsgi
 
 CMD "./run_api.sh"

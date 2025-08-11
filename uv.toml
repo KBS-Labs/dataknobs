@@ -1,0 +1,11 @@
+# uv configuration for dataknobs monorepo
+# https://docs.astral.sh/uv/reference/settings/
+
+# Cache directory
+cache-dir = ".uv-cache"
+
+# Compile bytecode for faster startup
+compile-bytecode = true
+
+# Prerelease handling
+prerelease = "if-necessary-or-explicit"

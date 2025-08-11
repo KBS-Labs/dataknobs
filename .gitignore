@@ -35,3 +35,12 @@ VERSION
 activate
 .tox
 .docker
+
+# uv
+.venv/
+uv.lock
+test-env/
+.uv-cache/
+
+# MkDocs documentation
+site/

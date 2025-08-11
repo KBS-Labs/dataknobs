@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  dataknobs-dev:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    volumes:
+      - .:/workdir
+      - ./data:/data
+    ports:
+      - "5000:5000"
+      - "8888:8888"  # Jupyter
+      - "8000:8000"  # Documentation
+    environment:
+      - ENV=dev
+      - FLASK_PORT=5000
+    command: uv run python -m dataknobs.flask_api
+
+  dataknobs-prod:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.prod
+    volumes:
+      - ./data:/data
+    ports:
+      - "5001:5000"
+    environment:
+      - ENV=prod
+      - FLASK_PORT=5000
+
+  jupyter:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dev
+    volumes:
+      - .:/workdir
+      - ./data:/data
+    ports:
+      - "8888:8888"
+    command: uv run jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root

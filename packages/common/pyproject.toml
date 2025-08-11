@@ -1,0 +1,18 @@
+[project]
+name = "dataknobs-common"
+version = "1.0.0"
+description = "Common utilities and base classes for dataknobs packages"
+readme = "README.md"
+authors = [
+    { name = "Spence Koehler", email = "KoehlerSB747@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.21.0",
+    "python-dotenv>=0.19.0",
+    "more-itertools>=8.10.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

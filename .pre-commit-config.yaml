@@ -1,0 +1,50 @@
+# Pre-commit hooks for dataknobs
+# Install with: pre-commit install
+# Run manually: pre-commit run --all-files
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.1.9
+    hooks:
+      # Run the linter
+      - id: ruff
+        args: [--fix, --config, pyproject.toml]
+      # Run the formatter
+      - id: ruff-format
+        args: [--config, pyproject.toml]
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.8.0
+    hooks:
+      - id: mypy
+        args: [--config-file, pyproject.toml]
+        additional_dependencies:
+          - types-requests
+          - types-beautifulsoup4
+          - types-psycopg2
+          - pandas-stubs
+          - numpy
+        files: ^packages/.*/src/.*\.py$
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: detect-private-key
+      - id: debug-statements
+        language_version: python3
+
+  - repo: local
+    hooks:
+      - id: python-syntax-check
+        name: Check Python syntax
+        entry: python -m py_compile
+        language: python
+        types: [python]
+        require_serial: true

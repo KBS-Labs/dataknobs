@@ -1,0 +1,210 @@
+site_name: Dataknobs Documentation
+site_description: Comprehensive documentation for Dataknobs - AI Knowledge Base Structures
+site_author: Your Team
+site_url: https://your-domain.com/dataknobs  # Update with your actual URL
+repo_url: https://github.com/yourusername/dataknobs  # Update with your repo
+repo_name: dataknobs
+edit_uri: edit/main/docs/
+
+# Theme configuration
+theme:
+  name: material
+  palette:
+    # Light mode
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  
+  features:
+    - content.code.annotate
+    - content.code.copy
+    - content.tabs.link
+    - navigation.footer
+    - navigation.indexes
+    - navigation.instant
+    - navigation.sections
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - navigation.tracking
+    - search.highlight
+    - search.share
+    - search.suggest
+    - toc.follow
+  
+  icon:
+    repo: fontawesome/brands/github
+    logo: material/database
+
+# Navigation structure
+nav:
+  - Home:
+    - index.md
+    - getting-started.md
+    - installation.md
+    - migration-guide.md
+  
+  - User Guide:
+    - user-guide/index.md
+    - user-guide/quickstart.md
+    - user-guide/basic-usage.md
+    - user-guide/advanced-usage.md
+    - user-guide/best-practices.md
+  
+  - Packages:
+    - packages/index.md
+    - Common:
+      - packages/common/index.md
+      - packages/common/api.md
+    - Structures:
+      - packages/structures/index.md
+      - packages/structures/tree.md
+      - packages/structures/document.md
+      - packages/structures/record-store.md
+      - packages/structures/conditional-dict.md
+      - packages/structures/api.md
+    - Utils:
+      - packages/utils/index.md
+      - packages/utils/json-utils.md
+      - packages/utils/file-utils.md
+      - packages/utils/elasticsearch.md
+      - packages/utils/llm-utils.md
+      - packages/utils/api.md
+    - Xization:
+      - packages/xization/index.md
+      - packages/xization/tokenization.md
+      - packages/xization/normalization.md
+      - packages/xization/masking.md
+      - packages/xization/api.md
+    - Legacy:
+      - packages/legacy/index.md
+      - packages/legacy/migration.md
+  
+  - API Reference:
+    - api/index.md
+    - api/dataknobs-structures.md
+    - api/dataknobs-utils.md
+    - api/dataknobs-xization.md
+    - api/dataknobs-common.md
+  
+  - Development:
+    - development/index.md
+    - development/contributing.md
+    - development/testing.md
+    - development/ci-cd.md
+    - development/release-process.md
+    - development/architecture.md
+  
+  - Examples:
+    - examples/index.md
+    - examples/basic-tree.md
+    - examples/document-processing.md
+    - examples/text-normalization.md
+    - examples/elasticsearch-integration.md
+  
+  - Changelog: changelog.md
+  - License: license.md
+
+# Plugins
+plugins:
+  - search:
+      separator: '[\s\-\.]+'
+  - awesome-pages
+  - git-revision-date-localized:
+      enable_creation_date: true
+      type: iso_datetime
+      enable_git_follow: false
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [
+            packages/common/src,
+            packages/structures/src,
+            packages/utils/src,
+            packages/xization/src,
+            packages/legacy/src
+          ]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            show_root_toc_entry: true
+            show_object_full_path: false
+            show_category_heading: true
+            show_if_no_docstring: false
+            show_signature_annotations: true
+            show_bases: true
+            merge_init_into_class: true
+            separate_signature: true
+            line_length: 80
+            summary: true
+
+# Extensions
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.betterem:
+      smart_enable: all
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+# Extra configuration
+extra:
+  version:
+    provider: mike
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/yourusername/dataknobs  # Update
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/dataknobs/
+  analytics:
+    provider: google
+    property: G-XXXXXXXXXX  # Add your Google Analytics ID if needed
+
+# Extra CSS and JavaScript
+extra_css:
+  - stylesheets/extra.css
+
+extra_javascript:
+  - javascripts/extra.js

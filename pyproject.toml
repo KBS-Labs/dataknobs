@@ -1,38 +1,169 @@
-[tool.poetry]
-name = "dataknobs"
-version = "0.0.14"
-description = "Useful implementations of data structures and design patterns for AI knowledge bases."
-authors = ["Spence Koehler <KoehlerSB747@gmail.com>"]
+[project]
+name = "dataknobs-workspace"
+version = "1.0.0"
+description = "Dataknobs monorepo workspace"
 readme = "README.md"
-packages = [{include = "dataknobs"}]
+requires-python = ">=3.10"
 
-[tool.poetry.dependencies]
-python = ">=3.10,<4.0"
-numpy = "^2.2.4"
-pandas = "^2.2.3"
-requests = "^2.32.4"
-psycopg2-binary = "^2.9.10"
-python-dotenv = "^1.1.0"
-nltk = "^3.9.1"
-more-itertools = "^10.6.0"
-lxml = "^5.3.1"
-beautifulsoup4 = "^4.13.3"
-json-stream = "^2.3.3"
-scikit-learn = "^1.6.1"
-python3-nmap = "^1.9.1"
-flask = "^3.1.1"
-graphviz = "^0.20.3"
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.3.5",
+    "pytest-cov>=6.0.0",
+    "pylint>=3.3.6",
+    "black>=24.0.0",
+    "isort>=5.13.0",
+    "mypy>=1.0.0",
+    "jupyter>=1.1.1",
+    "ipywidgets>=8.1.5",
+    "matplotlib>=3.10.1",
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.5.0",
+    "mkdocstrings[python]>=0.24.0",
+    "mkdocs-monorepo-plugin>=1.0.5",
+    "mkdocs-awesome-pages-plugin>=2.9.0",
+    "mkdocs-git-revision-date-localized-plugin>=1.2.0",
+]
 
-[tool.poetry.group.dev.dependencies]
-jupyter = "^1.1.1"
-ipywidgets = "^8.1.5"
-matplotlib = "^3.10.1"
+[tool.uv.workspace]
+members = [
+    "packages/common",
+    "packages/structures", 
+    "packages/utils",
+    "packages/xization",
+    "packages/legacy",
+]
 
-[tool.poetry.group.tests.dependencies]
-pytest = "^8.3.5"
-pylint = "^3.3.6"
-pytest-cov = "^6.0.0"
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "packages/common/src:packages/structures/src:packages/utils/src:packages/xization/src"
+cache_dir = ".mypy_cache"
+incremental = true
+#plugins = ["numpy.typing.mypy_plugin"] -- DEPRECATED
+
+# Per-module options
+[[tool.mypy.overrides]]
+module = [
+    "nltk.*",
+    "graphviz.*",
+    "pyparsing.*",
+    "json_stream.*",
+    "sklearn.*",
+    "python_nmap.*",
+    "more_itertools.*",
+    "flask.*"
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "dataknobs_legacy.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = false
+
+[tool.ruff]
+# Ruff configuration for the entire workspace
+target-version = "py310"
+line-length = 100
+
+# Include/exclude patterns
+include = ["*.py", "*.pyi", "**/pyproject.toml"]
+extend-include = ["*.ipynb"]
+src = ["packages/*/src", "packages/*/tests"]
+
+[tool.ruff.lint]
+# Rule selection
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "D",    # pydocstyle
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+    "TCH",  # flake8-type-checking
+    "RUF",  # Ruff-specific rules
+    "PTH",  # flake8-use-pathlib
+    "ERA",  # flake8-eradicate
+    "PL",   # Pylint
+    "NPY",  # NumPy-specific rules
+    "PD",   # pandas-vet
+    "ANN",  # flake8-annotations
+    "ARG",  # flake8-unused-arguments
+    "PYI",  # flake8-pyi
+]
+
+ignore = [
+    "D100", # Missing docstring in public module
+    "D104", # Missing docstring in public package
+    "D203", # 1 blank line required before class docstring (conflicts with D211)
+    "D213", # Multi-line docstring summary should start at the second line (conflicts with D212)
+    "D401", # First line should be in imperative mood
+    "PD901", # df is a bad variable name (common in data science)
+    "PLR0913", # Too many arguments to function call
+    "PLR2004", # Magic value used in comparison
+    "ANN401", # Dynamically typed expressions (Any) are disallowed
+    "UP006", # Use `dict` instead of `Dict` for type annotations
+    "UP007", # Use `X | Y` for union types
+]
+
+# Allow these names that would normally be flagged by N
+allowed-confusables = ["α", "β", "γ", "δ", "ε", "θ", "λ", "μ", "σ", "φ", "ω"]
+
+# Allow unused variables when underscore-prefixed
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+# Ignore certain errors in specific files
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["D104", "F401"]  # Module docstring and unused imports in __init__ files
+"tests/*" = ["D100", "D101", "D102", "D103", "S101"]  # Docstrings not required in tests, assert allowed
+"packages/legacy/*" = ["D", "N", "UP"]  # Relax rules for legacy code
+"*.ipynb" = ["E402", "F811", "F401"]  # Allow imports not at top, redefinition, unused imports in notebooks
+
+[tool.ruff.lint.isort]
+# Configure import sorting
+combine-as-imports = true
+force-wrap-aliases = true
+known-first-party = ["dataknobs", "dataknobs_common", "dataknobs_structures", "dataknobs_utils", "dataknobs_xization"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"  # Use Google docstring convention
+
+[tool.ruff.lint.pylint]
+max-args = 8
+max-branches = 12
+max-returns = 6
+max-statements = 50
+
+[tool.ruff.format]
+# Use double quotes for strings
+quote-style = "double"
+
+# Indent with spaces
+indent-style = "space"
+
+# Unix-style line endings
+line-ending = "lf"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dataknobs_workspace"]
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"

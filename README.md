@@ -5,82 +5,145 @@ DataKnobs
 
 Useful implementations of data structures and design patterns for knowledge bases and AI, or the knobs and levers for fine-tuning and leveraging your data.
 
-This repo also serves as a template or sandbox for development, experimentation, and testing of general data structures, algorithms, and utilities for DS, AI, ML, and NLP.
+This monorepo contains modular packages for development, experimentation, and testing of general data structures, algorithms, and utilities for DS, AI, ML, and NLP.
 
-Provides connectors for other popular text and data processing packages like:
-  * numpy and pandas
-  * nltk
-  * wordnet
-  * postgres
-  * elasticsearch
+## 📦 Packages
 
-## General project information
+The project is organized as a monorepo with the following packages:
 
-The purpose of this project is:
+- **[dataknobs-structures](packages/structures/)**: Data structures for AI knowledge bases (trees, documents, record stores)
+- **[dataknobs-utils](packages/utils/)**: Utility functions (file I/O, JSON processing, pandas helpers, web requests)
+- **[dataknobs-xization](packages/xization/)**: Text normalization and tokenization tools
+- **[dataknobs-common](packages/common/)**: Shared base functionality
+- **[dataknobs](packages/legacy/)**: Legacy compatibility package (deprecated)
 
-  * To provide dependable implementations of useful data structures.
-  * To show examples of design patterns and ways to apply AI concepts.
-  * To prototype tools for delivering a robust DS/AI/ML/NLP utilities library package.
-  * To facilitate interactive development, demonstration, visualization, and testing of the library components via jupter notebooks and/or scripts.
+## 🚀 Installation
 
-## Installation and Usage
+### For New Projects (Recommended)
 
-```bash/python
-% pip install dataknobs
-% python
->>> import dataknobs as dk
->>> ...
+Install only the packages you need:
+
+```bash
+# Install specific packages
+pip install dataknobs-structures
+pip install dataknobs-utils
+pip install dataknobs-xization
+
+# Or install multiple packages
+pip install dataknobs-structures dataknobs-utils
+```
+
+### For Existing Projects
+
+For backward compatibility, you can still install the legacy package:
+
+```bash
+pip install dataknobs
+```
+
+⚠️ **Note**: The legacy package shows deprecation warnings. Please migrate to the modular packages.
+
+## 📖 Usage
+
+### Using Modular Packages (Recommended)
+
+```python
+# Import from specific packages
+from dataknobs_structures import Tree, Document
+from dataknobs_utils import json_utils, file_utils
+from dataknobs_xization import MaskingTokenizer
+
+# Create a tree structure
+tree = Tree("root")
+tree.add_child("child1")
+
+# Work with JSON
+data = json_utils.load_json_file("data.json")
+value = json_utils.get_value(data, "path.to.value")
+```
+
+### Using Legacy Package (Deprecated)
+
+```python
+# Old style imports (shows deprecation warning)
+from dataknobs.structures.tree import Tree
+from dataknobs.utils.json_utils import get_value
 ```
 
 
-## Development
+## 🛠️ Development
 
-### Development machine prerequisites
+This project uses [uv](https://github.com/astral-sh/uv) for fast Python package management and a monorepo structure for better modularity.
 
-The following minimum configuration should exist for development:
+### Prerequisites
 
-  * tox
-  * pyenv
-     * pyenv install 3.9
-  * poetry
+- Python 3.10+
+- [uv](https://github.com/astral-sh/uv) package manager
+- Docker (optional, for containerized development)
 
-With optional:
+### Quick Start
 
-  * docker
-  * bash
+```bash
+# Clone the repository
+git clone https://github.com/your-org/dataknobs.git
+cd dataknobs
 
-By convention, a data directory can be leveraged for development that is mounted as a shared volumne in Docker as /data. This has the default of $HOME/data, but can be overridden with the DATADIR environment variable.
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
+# Install all dependencies
+uv sync --all-packages
 
-### Development quickstart guide
+# Run tests for all packages
+uv run pytest packages/*/tests/ -v
 
-  * In a terminal, clone the repo and cd into the project directory.
-
-#### Testing
-
-  * Tests and Lint: "tox"
-  * Just unit tests: "tox -e tests"
-  * Just lint: "tox -e lint"
-
-#### Using docker
-
-  * Development:
-```
-% tox -e dev
-# poetry shell
-# python
+# Run tests for a specific package
+uv run pytest packages/structures/tests/ -v
 ```
 
-  * Notebook:
-    * execute "tox -e nb"
-      * copy/paste url into browser
+### Development with Docker
 
-#### Using virtual environments
+```bash
+# Build and run development environment
+docker-compose up dataknobs-dev
 
-  * Development:
-    * Manual: source ".project_vars", poetry install, poetry shell
-    * Automated: execute "bin/start_dev.sh"  (requires "/bin/bash" on your machine)
+# Run Jupyter notebook server
+docker-compose up jupyter
 
-  * Notebook:
-    * execute "bin/start_notebook.sh"
-      * copy/paste url into browser
+# Run production server
+docker-compose up dataknobs-prod
+```
+
+### Testing
+
+```bash
+# Run all tests with coverage
+uv run pytest packages/*/tests/ --cov=packages --cov-report=term-missing
+
+# Run linting
+uv run pylint packages/*/src --rcfile=.pylintrc
+
+# Using tox (legacy)
+tox -e tests  # Run tests
+tox -e lint   # Run linting
+```
+
+### Building Packages
+
+```bash
+# Build all packages
+for pkg in packages/*; do
+  cd "$pkg" && uv build && cd ../..
+done
+
+# Build specific package
+cd packages/structures && uv build
+```
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## 📄 License
+
+This project is licensed under the terms specified in the LICENSE file.

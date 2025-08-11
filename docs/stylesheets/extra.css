@@ -1,0 +1,103 @@
+/* Custom styles for Dataknobs documentation */
+
+/* Grid cards on home page */
+.md-typeset .grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1rem;
+  margin: 2rem 0;
+}
+
+.md-typeset .grid.cards > * {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.2rem;
+  padding: 1rem;
+  transition: border-color 0.25s, box-shadow 0.25s;
+}
+
+.md-typeset .grid.cards > *:hover {
+  border-color: var(--md-accent-fg-color);
+  box-shadow: 0 0.2rem 0.5rem rgba(0, 0, 0, 0.1);
+}
+
+/* Package version badges */
+.package-badge {
+  display: inline-block;
+  padding: 0.2em 0.6em;
+  font-size: 0.875em;
+  font-weight: 600;
+  line-height: 1;
+  color: #fff;
+  background-color: var(--md-primary-fg-color);
+  border-radius: 0.25rem;
+  margin-left: 0.5rem;
+}
+
+/* Code block improvements */
+.md-typeset pre > code {
+  font-size: 0.85em;
+  line-height: 1.5;
+}
+
+/* API documentation styling */
+.doc-class {
+  border-left: 3px solid var(--md-primary-fg-color);
+  padding-left: 1rem;
+  margin: 1rem 0;
+}
+
+.doc-method {
+  border-left: 3px solid var(--md-accent-fg-color);
+  padding-left: 1rem;
+  margin: 1rem 0;
+}
+
+/* Admonition customization */
+.md-typeset .admonition.example,
+.md-typeset details.example {
+  border-color: rgb(43, 155, 70);
+}
+
+.md-typeset .example > .admonition-title,
+.md-typeset .example > summary {
+  background-color: rgba(43, 155, 70, 0.1);
+  border-color: rgb(43, 155, 70);
+}
+
+.md-typeset .example > .admonition-title::before,
+.md-typeset .example > summary::before {
+  background-color: rgb(43, 155, 70);
+  -webkit-mask-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M8.58 16.58l-6.29-6.29L1 11.58l8 8 16-16L23.71 2z"/></svg>');
+  mask-image: url('data:image/svg+xml;charset=utf-8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M8.58 16.58l-6.29-6.29L1 11.58l8 8 16-16L23.71 2z"/></svg>');
+}
+
+/* Version selector styling */
+.md-version__current {
+  font-weight: bold;
+}
+
+/* Table improvements */
+.md-typeset table:not([class]) {
+  font-size: 0.85rem;
+}
+
+.md-typeset table:not([class]) th {
+  background-color: var(--md-default-bg-color--light);
+  font-weight: 600;
+}
+
+/* Search results highlighting */
+.md-search-result mark {
+  background-color: var(--md-accent-fg-color--transparent);
+  color: var(--md-accent-fg-color);
+}
+
+/* Navigation tabs */
+.md-tabs__link--active {
+  font-weight: 600;
+}
+
+/* Footer styling */
+.md-footer-meta {
+  background-color: var(--md-default-bg-color--lighter);
+}
