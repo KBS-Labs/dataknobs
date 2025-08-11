@@ -1,6 +1,6 @@
-# Dataknobs Documentation
+# Documentation Guide
 
-This directory contains the source files for the Dataknobs documentation site.
+This guide explains how to write, build, and maintain documentation for the Dataknobs project.
 
 ## Structure
 
@@ -33,6 +33,14 @@ uv pip install mkdocs mkdocs-material mkdocstrings[python] \
   mkdocs-git-revision-date-localized-plugin
 ```
 
+### Available Scripts
+
+The project provides several scripts in the `bin/` directory for documentation management:
+
+- **`bin/docs-serve.sh`** - Start local documentation server with hot reload
+- **`bin/docs-build.sh`** - Build documentation for production
+- **`bin/docs-deploy.sh`** - Deploy documentation to GitHub Pages
+
 ### Local Development
 
 Serve documentation locally with hot reload:
@@ -63,9 +71,23 @@ The built site will be in the `site/` directory.
 
 ### Deploying to GitHub Pages
 
-Deploy directly to GitHub Pages:
+The easiest way to deploy is using the provided deployment script:
 
 ```bash
+# Using the deployment script (recommended)
+./bin/docs-deploy.sh
+```
+
+This script will:
+- Check for uncommitted changes
+- Build the documentation
+- Deploy to the `gh-pages` branch
+- Provide the URL where docs will be available
+
+Alternatively, deploy directly with mkdocs:
+
+```bash
+# Direct deployment with mkdocs
 mkdocs gh-deploy
 ```
 

@@ -199,7 +199,7 @@ print(f"Summary: {article.summary}")
 
 ## API Reference
 
-For complete API documentation, see the [Structures API Reference](../api/dataknobs-structures.md).
+For complete API documentation, see the [Structures API Reference](../../api/dataknobs-structures.md).
 
 ## Integration with Other Packages
 
