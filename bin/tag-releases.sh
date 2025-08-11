@@ -91,7 +91,8 @@ echo -e "${BLUE}Current branch: $CURRENT_BRANCH${NC}"
 
 if [ "$CURRENT_BRANCH" != "main" ] && [ "$CURRENT_BRANCH" != "master" ]; then
     echo -e "${YELLOW}Warning: Not on main/master branch${NC}"
-    read -p "Continue on $CURRENT_BRANCH? (y/n) " -n 1 -r
+    echo -n "Continue on $CURRENT_BRANCH? (y/n) "
+    read -n 1 REPLY
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         exit 1
@@ -128,7 +129,8 @@ echo "1) All untagged packages"
 echo "2) Select specific packages"
 echo "3) Create custom tag"
 echo "4) Exit"
-read -p "Choice (1-4): " choice
+echo -n "Choice (1-4): "
+read choice
 
 case $choice in
     1)
@@ -156,7 +158,8 @@ case $choice in
             if tag_exists "$tag"; then
                 echo -e "${package}: v${version} ${GREEN}[already tagged]${NC}"
             else
-                read -p "Tag ${package} v${version}? (y/n) " -n 1 -r
+                echo -n "Tag ${package} v${version}? (y/n) "
+                read -n 1 REPLY
                 echo
                 if [[ $REPLY =~ ^[Yy]$ ]]; then
                     create_tag "$package" "$version"
@@ -167,8 +170,10 @@ case $choice in
     
     3)
         # Custom tag
-        read -p "Enter package name: " package
-        read -p "Enter version (without 'v'): " version
+        echo -n "Enter package name: "
+        read package
+        echo -n "Enter version (without 'v'): "
+        read version
         
         if [ -z "$package" ] || [ -z "$version" ]; then
             echo -e "${RED}Error: Package name and version required${NC}"
@@ -191,7 +196,8 @@ esac
 
 # Ask about pushing tags
 echo ""
-read -p "Push tags to remote? (y/n) " -n 1 -r
+echo -n "Push tags to remote? (y/n) "
+read -n 1 REPLY
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     echo -e "${CYAN}Pushing tags to remote...${NC}"
