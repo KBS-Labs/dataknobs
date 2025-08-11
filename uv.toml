@@ -1,0 +1,59 @@
+# uv configuration for dataknobs monorepo
+# https://docs.astral.sh/uv/reference/settings/
+
+[tool.uv]
+# Workspace configuration
+workspace = [
+    "packages/common",
+    "packages/structures",
+    "packages/utils",
+    "packages/xization",
+    "packages/legacy",
+]
+
+# Python version constraint for all packages
+python = ">=3.10"
+
+# Development dependencies available to all packages
+dev-dependencies = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-mock>=3.0.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+    "black>=23.0.0",
+    "isort>=5.0.0",
+]
+
+# Build configuration
+[build]
+# Use modern build backend
+backend = "hatchling"
+
+# Index configuration
+[index]
+# Primary index
+url = "https://pypi.org/simple"
+
+# Test index for pre-releases
+[[index.extra]]
+name = "testpypi"
+url = "https://test.pypi.org/simple"
+
+# Environment configuration
+[env]
+# Set common environment variables
+PYTHONPATH = "${PYTHONPATH}:${PWD}"
+
+# Cache configuration
+[cache]
+# Cache directory for faster installs
+dir = ".uv-cache"
+
+# Resolution strategy
+[resolution]
+# Prefer newer versions when resolving
+strategy = "highest"
+
+# Allow pre-releases for development
+prerelease = "if-necessary"

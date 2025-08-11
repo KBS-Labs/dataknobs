@@ -6,14 +6,14 @@ This checklist guides the migration of Dataknobs from a single Poetry-managed pa
 - [x] Identify logical components (structures, utils, xization) in the current `dataknobs` package.
 - [x] Determine if shared code requires a `dataknobs-common` package.
 - [x] Define versioning strategy (start new packages at `1.0.0`).
-- [ ] Plan deprecation timeline for the `legacy` package (e.g., 6–12 months).
+- [x] Plan deprecation timeline for the `legacy` package (e.g., 6–12 months) - See DEPRECATION_TIMELINE.md.
 
 ## Monorepo Setup
 - [x] Create monorepo directory structure:
   - `packages/legacy/`, `packages/structures/`, `packages/utils/`, `packages/xization/`, `packages/common/`.
   - `docs/`, `.github/workflows/`, `README.md`, `LICENSE`.
 - [x] Initialize new packages with `uv init` in each `packages/*/` directory.
-- [ ] Create optional `uv.toml` for monorepo-wide settings.
+- [x] Create optional `uv.toml` for monorepo-wide settings.
 
 ## Migrate to `uv`
 - [x] Install `uv` (already installed via Homebrew).
@@ -63,12 +63,12 @@ This checklist guides the migration of Dataknobs from a single Poetry-managed pa
 - [x] Add README.md to all packages (structures, utils, xization, common, legacy).
 
 ## Release
-- [ ] Publish pre-release versions to TestPyPI (`uv publish --index https://test.pypi.org/legacy/`).
+- [ ] Publish pre-release versions to TestPyPI (`bin/publish-test.sh` script available).
 - [ ] Solicit feedback from active users on pre-releases.
-- [ ] Tag releases (e.g., `git tag structures/v1.0.0`) for each package.
+- [ ] Tag releases (e.g., `git tag structures/v1.0.0`) for each package (`bin/tag-releases.sh` script available).
 - [ ] Publish new packages (`dataknobs-structures`, `dataknobs-utils`, `dataknobs-xization`, `dataknobs-common`) to PyPI.
 - [ ] Publish updated `legacy` package (`dataknobs`) to PyPI.
-- [ ] Create release notes detailing the migration and deprecation plan.
+- [x] Create release notes detailing the migration and deprecation plan (See RELEASE_NOTES.md).
 
 ## Communication
 - [ ] Announce migration in GitHub release notes.
