@@ -1,0 +1,22 @@
+# Template for PyPI authentication
+# Copy this file to ~/.pypirc and update with your actual token
+#
+# To get a PyPI token:
+# 1. Go to https://pypi.org/manage/account/token/
+# 2. Create a new API token
+# 3. Copy the token (starts with pypi-)
+# 4. Replace YOUR-PYPI-TOKEN-HERE below
+
+[distutils]
+index-servers =
+    pypi
+    testpypi
+
+[pypi]
+username = __token__
+password = YOUR-PYPI-TOKEN-HERE
+
+[testpypi]
+repository = https://test.pypi.org/legacy/
+username = __token__
+password = YOUR-TESTPYPI-TOKEN-HERE
