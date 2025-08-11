@@ -35,6 +35,7 @@ VERSION
 activate
 .tox
 .docker
+.pypirc
 
 # uv
 .venv/
