@@ -431,6 +431,6 @@ For complete API documentation, see the [Xization API Reference](api.md).
 
 ## See Also
 
-- [Text Processing Examples](../../examples/text-processing.md)
+- [Text Normalization Examples](../../examples/text-normalization.md)
 - [Integration with Structures](../structures/index.md)
 - [Utils Package](../utils/index.md)

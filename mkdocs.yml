@@ -101,6 +101,7 @@ nav:
     - development/index.md
     - development/contributing.md
     - development/testing.md
+    - development/documentation-guide.md
     - development/ci-cd.md
     - development/release-process.md
     - development/architecture.md

@@ -21,6 +21,7 @@ If you're new to Dataknobs development:
 - **[Contributing Guide](contributing.md)** - How to contribute code, documentation, and report issues
 - **[Architecture Overview](architecture.md)** - System architecture and design principles
 - **[Testing Guide](testing.md)** - Testing strategies, frameworks, and best practices
+- **[Documentation Guide](documentation-guide.md)** - How to write and maintain documentation
 
 ### Operations
 - **[CI/CD Pipeline](ci-cd.md)** - Continuous integration and deployment processes
