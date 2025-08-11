@@ -91,27 +91,24 @@ echo -e "${BLUE}Current branch: $CURRENT_BRANCH${NC}"
 
 if [ "$CURRENT_BRANCH" != "main" ] && [ "$CURRENT_BRANCH" != "master" ]; then
     echo -e "${YELLOW}Warning: Not on main/master branch${NC}"
-    read -p "Continue on $CURRENT_BRANCH? (y/n) " -n 1 -r
-    echo
+    echo -n "Continue on $CURRENT_BRANCH? (y/n) "
+    read REPLY
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
         exit 1
     fi
 fi
 
 # Package information
-declare -A PACKAGES=(
-    ["common"]="packages/common"
-    ["structures"]="packages/structures"
-    ["utils"]="packages/utils"
-    ["xization"]="packages/xization"
-    ["legacy"]="packages/legacy"
-)
+# Use regular arrays for compatibility
+PACKAGE_NAMES=("common" "structures" "utils" "xization" "legacy")
+PACKAGE_DIRS=("packages/common" "packages/structures" "packages/utils" "packages/xization" "packages/legacy")
 
 # Display current versions
 echo -e "\n${CYAN}Current Package Versions:${NC}"
 echo "----------------------------------------"
-for package in "${!PACKAGES[@]}"; do
-    dir="${PACKAGES[$package]}"
+for i in "${!PACKAGE_NAMES[@]}"; do
+    package="${PACKAGE_NAMES[$i]}"
+    dir="${PACKAGE_DIRS[$i]}"
     version=$(get_version "$dir")
     tag="${package}/v${version}"
     
@@ -131,13 +128,15 @@ echo "1) All untagged packages"
 echo "2) Select specific packages"
 echo "3) Create custom tag"
 echo "4) Exit"
-read -p "Choice (1-4): " choice
+echo -n "Choice (1-4): "
+read -r choice
 
-case $choice in
+case "$choice" in
     1)
         # Tag all untagged packages
-        for package in "${!PACKAGES[@]}"; do
-            dir="${PACKAGES[$package]}"
+        for i in "${!PACKAGE_NAMES[@]}"; do
+            package="${PACKAGE_NAMES[$i]}"
+            dir="${PACKAGE_DIRS[$i]}"
             version=$(get_version "$dir")
             tag="${package}/v${version}"
             
@@ -149,16 +148,17 @@ case $choice in
     
     2)
         # Select specific packages
-        for package in "${!PACKAGES[@]}"; do
-            dir="${PACKAGES[$package]}"
+        for i in "${!PACKAGE_NAMES[@]}"; do
+            package="${PACKAGE_NAMES[$i]}"
+            dir="${PACKAGE_DIRS[$i]}"
             version=$(get_version "$dir")
             tag="${package}/v${version}"
             
             if tag_exists "$tag"; then
                 echo -e "${package}: v${version} ${GREEN}[already tagged]${NC}"
             else
-                read -p "Tag ${package} v${version}? (y/n) " -n 1 -r
-                echo
+                echo -n "Tag ${package} v${version}? (y/n) "
+                read REPLY
                 if [[ $REPLY =~ ^[Yy]$ ]]; then
                     create_tag "$package" "$version"
                 fi
@@ -168,8 +168,10 @@ case $choice in
     
     3)
         # Custom tag
-        read -p "Enter package name: " package
-        read -p "Enter version (without 'v'): " version
+        echo -n "Enter package name: "
+        read package
+        echo -n "Enter version (without 'v'): "
+        read version
         
         if [ -z "$package" ] || [ -z "$version" ]; then
             echo -e "${RED}Error: Package name and version required${NC}"
@@ -192,8 +194,8 @@ esac
 
 # Ask about pushing tags
 echo ""
-read -p "Push tags to remote? (y/n) " -n 1 -r
-echo
+echo -n "Push tags to remote? (y/n) "
+read REPLY
 if [[ $REPLY =~ ^[Yy]$ ]]; then
     echo -e "${CYAN}Pushing tags to remote...${NC}"
     git push --tags
