@@ -1,26 +1,17 @@
 # uv configuration for dataknobs monorepo
 # https://docs.astral.sh/uv/reference/settings/
 
-# Note: uv.toml uses flat configuration without [tool.uv] section
-# That syntax is for pyproject.toml files
-
 # Index configuration
 index-url = "https://pypi.org/simple"
 
-# Extra index for test packages
+# Extra index for test packages  
 extra-index-url = ["https://test.pypi.org/simple"]
-
-# Python version constraint
-requires-python = ">=3.10"
 
 # Cache directory
 cache-dir = ".uv-cache"
 
 # Compile bytecode for faster startup
 compile-bytecode = true
-
-# Resolution strategy
-resolution = "highest"
 
 # Prerelease handling
 prerelease = "if-necessary-or-explicit"
