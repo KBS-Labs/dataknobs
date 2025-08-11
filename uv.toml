@@ -1,59 +1,26 @@
 # uv configuration for dataknobs monorepo
 # https://docs.astral.sh/uv/reference/settings/
 
-[tool.uv]
-# Workspace configuration
-workspace = [
-    "packages/common",
-    "packages/structures",
-    "packages/utils",
-    "packages/xization",
-    "packages/legacy",
-]
-
-# Python version constraint for all packages
-python = ">=3.10"
-
-# Development dependencies available to all packages
-dev-dependencies = [
-    "pytest>=7.0.0",
-    "pytest-cov>=4.0.0",
-    "pytest-mock>=3.0.0",
-    "mypy>=1.0.0",
-    "ruff>=0.1.0",
-    "black>=23.0.0",
-    "isort>=5.0.0",
-]
-
-# Build configuration
-[build]
-# Use modern build backend
-backend = "hatchling"
+# Note: uv.toml uses flat configuration without [tool.uv] section
+# That syntax is for pyproject.toml files
 
 # Index configuration
-[index]
-# Primary index
-url = "https://pypi.org/simple"
+index-url = "https://pypi.org/simple"
 
-# Test index for pre-releases
-[[index.extra]]
-name = "testpypi"
-url = "https://test.pypi.org/simple"
+# Extra index for test packages
+extra-index-url = ["https://test.pypi.org/simple"]
 
-# Environment configuration
-[env]
-# Set common environment variables
-PYTHONPATH = "${PYTHONPATH}:${PWD}"
+# Python version constraint
+requires-python = ">=3.10"
 
-# Cache configuration
-[cache]
-# Cache directory for faster installs
-dir = ".uv-cache"
+# Cache directory
+cache-dir = ".uv-cache"
+
+# Compile bytecode for faster startup
+compile-bytecode = true
 
 # Resolution strategy
-[resolution]
-# Prefer newer versions when resolving
-strategy = "highest"
+resolution = "highest"
 
-# Allow pre-releases for development
-prerelease = "if-necessary"
+# Prerelease handling
+prerelease = "if-necessary-or-explicit"

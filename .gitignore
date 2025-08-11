@@ -40,6 +40,7 @@ activate
 .venv/
 uv.lock
 test-env/
+.uv-cache/
 
 # MkDocs documentation
 site/
