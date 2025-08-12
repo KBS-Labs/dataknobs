@@ -27,6 +27,7 @@ dev-dependencies = [
 [tool.uv.workspace]
 members = [
     "packages/common",
+    "packages/config",
     "packages/structures", 
     "packages/utils",
     "packages/xization",
@@ -49,7 +50,7 @@ warn_unreachable = true
 strict_equality = true
 namespace_packages = true
 explicit_package_bases = true
-mypy_path = "packages/common/src:packages/structures/src:packages/utils/src:packages/xization/src"
+mypy_path = "packages/common/src:packages/config/src:packages/structures/src:packages/utils/src:packages/xization/src"
 cache_dir = ".mypy_cache"
 incremental = true
 #plugins = ["numpy.typing.mypy_plugin"] -- DEPRECATED
@@ -140,7 +141,7 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 # Configure import sorting
 combine-as-imports = true
 force-wrap-aliases = true
-known-first-party = ["dataknobs", "dataknobs_common", "dataknobs_structures", "dataknobs_utils", "dataknobs_xization"]
+known-first-party = ["dataknobs", "dataknobs_common", "dataknobs_config", "dataknobs_structures", "dataknobs_utils", "dataknobs_xization"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"  # Use Google docstring convention

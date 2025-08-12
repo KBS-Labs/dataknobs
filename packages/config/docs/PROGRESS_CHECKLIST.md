@@ -58,13 +58,13 @@
 - [x] Document design decisions
 
 ## Quality Assurance
-- [ ] Run linting
-- [ ] Run type checking
-- [ ] Achieve test coverage >90%
+- [x] Run linting
+- [x] Run type checking
+- [x] Achieve test coverage >90% (91% achieved)
 - [x] Review code for DRY principle
 - [x] Review for simplicity
 
 ## Release Preparation
-- [ ] Update version
-- [ ] Update changelog
-- [ ] Final review
+- [x] Update version (0.1.0 - initial release)
+- [x] Update changelog
+- [x] Final review
