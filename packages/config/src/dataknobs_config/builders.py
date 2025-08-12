@@ -2,7 +2,10 @@
 
 import copy
 import importlib
-from typing import Any, Dict, Type
+from typing import Any, Dict, Optional, Type, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .config import Config
 
 from .exceptions import ConfigError, ValidationError
 
@@ -16,7 +19,7 @@ class ObjectBuilder:
         - Object caching
     """
 
-    def __init__(self, config_instance):
+    def __init__(self, config_instance: 'Config') -> None:
         """Initialize the object builder.
 
         Args:
@@ -25,7 +28,7 @@ class ObjectBuilder:
         self._config = config_instance
         self._cache: Dict[str, Any] = {}
 
-    def build(self, ref: str, cache: bool = True, **kwargs) -> Any:
+    def build(self, ref: str, cache: bool = True, **kwargs: Any) -> Any:
         """Build an object from a configuration reference.
 
         Args:
@@ -55,7 +58,7 @@ class ObjectBuilder:
 
         return obj
 
-    def _build_from_config(self, config: dict, **kwargs) -> Any:
+    def _build_from_config(self, config: dict, **kwargs: Any) -> Any:
         """Build an object from a configuration dictionary.
 
         Args:
@@ -149,7 +152,7 @@ class ObjectBuilder:
                 f"Factory {factory_path} must have 'create', 'build' method or be callable"
             )
 
-    def _load_class(self, class_path: str) -> Type:
+    def _load_class(self, class_path: str) -> Type[Any]:
         """Load a class from a module path.
 
         Args:
@@ -175,14 +178,15 @@ class ObjectBuilder:
             if not hasattr(module, class_name):
                 raise ConfigError(f"Class {class_name} not found in {module_path}")
 
-            return getattr(module, class_name)
+            cls: Type[Any] = getattr(module, class_name)
+            return cls
 
         except ImportError as e:
             raise ConfigError(f"Failed to import {class_path}: {e}")
         except Exception as e:
             raise ConfigError(f"Failed to load class {class_path}: {e}")
 
-    def clear_cache(self, ref: str | None = None) -> None:
+    def clear_cache(self, ref: Optional[str] = None) -> None:
         """Clear cached objects.
 
         Args:
@@ -193,7 +197,7 @@ class ObjectBuilder:
         else:
             self._cache.clear()
 
-    def get_cached(self, ref: str) -> Any | None:
+    def get_cached(self, ref: str) -> Optional[Any]:
         """Get a cached object without building.
 
         Args:
@@ -232,7 +236,7 @@ class FactoryBase:
     the create method.
     """
 
-    def create(self, **config) -> Any:
+    def create(self, **config: Any) -> Any:
         """Create an object from configuration.
 
         Args:

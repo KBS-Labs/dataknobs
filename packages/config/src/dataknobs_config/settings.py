@@ -19,7 +19,7 @@ class SettingsManager:
         - <attribute>: Global defaults
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the settings manager."""
         self._settings: Dict[str, Any] = {}
 
@@ -157,12 +157,12 @@ class SettingsManager:
         # Check for type-specific root
         type_root = self.get_setting(f"{type_name}.global_root")
         if type_root:
-            return type_root
+            return str(type_root)
 
         # Check for global root
         global_root = self.get_setting("global_root")
         if global_root:
-            return global_root
+            return str(global_root)
 
         # No base path available - will be handled by _resolve_path
         return None

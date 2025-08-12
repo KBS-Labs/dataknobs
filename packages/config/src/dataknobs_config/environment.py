@@ -2,7 +2,7 @@
 
 import os
 import re
-from typing import Any, Dict, Tuple, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
 from .exceptions import InvalidReferenceError
 
@@ -21,7 +21,7 @@ class EnvironmentOverrides:
     ENV_PREFIX = "DATAKNOBS_"
     ENV_SEPARATOR = "__"
 
-    def __init__(self, prefix: str = None):
+    def __init__(self, prefix: Optional[str] = None) -> None:
         """Initialize the environment override handler.
 
         Args:
@@ -79,23 +79,24 @@ class EnvironmentOverrides:
         attribute = self.ENV_SEPARATOR.join(parts[2:]).lower()
 
         # Convert index strings to integers
+        name_or_index_typed: Union[str, int]
         if name_or_index.isdigit() or (
             name_or_index.startswith("-") and name_or_index[1:].isdigit()
         ):
-            name_or_index = int(name_or_index)
+            name_or_index_typed = int(name_or_index)
         else:
             # Keep string names lowercase for consistency
-            name_or_index = name_or_index.lower()
+            name_or_index_typed = name_or_index.lower()
 
         # Build reference string with attribute
-        if isinstance(name_or_index, int) and name_or_index == 0:
+        if isinstance(name_or_index_typed, int) and name_or_index_typed == 0:
             ref = f"xref:{type_name}.{attribute}"
         else:
-            ref = f"xref:{type_name}[{name_or_index}].{attribute}"
+            ref = f"xref:{type_name}[{name_or_index_typed}].{attribute}"
 
         return ref
 
-    def reference_to_env_var(self, ref: str, attribute: str = None) -> str:
+    def reference_to_env_var(self, ref: str, attribute: Optional[str] = None) -> str:
         """Convert a reference string to an environment variable name.
 
         Args:
@@ -121,7 +122,7 @@ class EnvironmentOverrides:
 
         return f"{self.prefix}{type_part}{self.ENV_SEPARATOR}{selector_part}{self.ENV_SEPARATOR}{attr_part}"
 
-    def parse_env_reference(self, ref: str) -> Tuple[str, Union[str, int], str]:
+    def parse_env_reference(self, ref: str) -> Tuple[str, Union[str, int], Optional[str]]:
         """Parse a reference string with attribute.
 
         Args:
@@ -156,7 +157,7 @@ class EnvironmentOverrides:
                         selector = selector.rstrip("]")
                     else:
                         type_name = type_part
-                        selector = "0"
+                        selector = None
 
                     attribute = ".".join(parts[1:])
                 else:
@@ -171,6 +172,7 @@ class EnvironmentOverrides:
             raise InvalidReferenceError(f"Missing type in reference: {ref}")
 
         # Parse selector
+        name_or_index: Union[str, int]
         if selector is None:
             name_or_index = 0
         elif selector.isdigit() or (selector.startswith("-") and selector[1:].isdigit()):

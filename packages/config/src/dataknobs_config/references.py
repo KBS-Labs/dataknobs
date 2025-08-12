@@ -1,7 +1,10 @@
 """String reference system for cross-referencing configurations."""
 
 import re
-from typing import Any, Tuple, Union
+from typing import Any, Dict, Tuple, Union, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .config import Config
 
 from .exceptions import InvalidReferenceError
 
@@ -21,14 +24,14 @@ class ReferenceResolver:
     # Regex pattern for parsing references
     REFERENCE_PATTERN = re.compile(r"^xref:([a-zA-Z_][a-zA-Z0-9_]*)?(?:\[([^\]]+)\])?$")
 
-    def __init__(self, config_instance):
+    def __init__(self, config_instance: 'Config') -> None:
         """Initialize the reference resolver.
 
         Args:
             config_instance: The Config instance to resolve references against
         """
         self._config = config_instance
-        self._resolving = set()  # Track references being resolved to detect cycles
+        self._resolving: set[str] = set()  # Track references being resolved to detect cycles
 
     def resolve(self, ref: str) -> dict:
         """Resolve a string reference to a configuration.
@@ -91,6 +94,7 @@ class ReferenceResolver:
             raise InvalidReferenceError(f"Missing type in reference: {ref}")
 
         # Parse selector
+        name_or_index: Union[str, int]
         if selector is None:
             # No selector means first item (index 0)
             name_or_index = 0
@@ -144,7 +148,7 @@ class ReferenceResolver:
         Returns:
             Configuration with resolved references
         """
-        resolved = {}
+        resolved: Dict[str, Any] = {}
 
         for key, value in config.items():
             if self.is_reference(value):
@@ -155,9 +159,10 @@ class ReferenceResolver:
                 resolved[key] = self._resolve_nested_references(value)
             elif isinstance(value, list):
                 # Resolve references in lists
-                resolved[key] = [
+                resolved_list: list[Any] = [
                     self.resolve(item) if self.is_reference(item) else item for item in value
                 ]
+                resolved[key] = resolved_list
             else:
                 # Keep value as-is
                 resolved[key] = value

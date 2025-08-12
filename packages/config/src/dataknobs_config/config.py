@@ -4,9 +4,9 @@ import copy
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 from .builders import ObjectBuilder
 from .environment import EnvironmentOverrides
@@ -27,7 +27,7 @@ class Config:
     configuration dictionaries, organized by type.
     """
 
-    def __init__(self, *sources: Union[str, Path, dict], **kwargs):
+    def __init__(self, *sources: Union[str, Path, dict], **kwargs: Any) -> None:
         """Initialize a Config object from one or more sources.
 
         Args:
@@ -171,18 +171,19 @@ class Config:
                 raise ConfigError("config_root not set for relative file reference")
             path = os.path.join(config_root, path)
 
-        path = Path(path).resolve()
+        path_obj = Path(path).resolve()
 
-        if not path.exists():
-            raise ConfigFileNotFoundError(f"Referenced configuration file not found: {path}")
+        if not path_obj.exists():
+            raise ConfigFileNotFoundError(f"Referenced configuration file not found: {path_obj}")
 
         # Load file based on extension
-        suffix = path.suffix.lower()
-        with open(path) as f:
+        suffix = path_obj.suffix.lower()
+        with open(path_obj) as f:
             if suffix in [".yaml", ".yml"]:
                 return yaml.safe_load(f) or {}
             elif suffix == ".json":
-                return json.load(f)
+                data: Dict[Any, Any] = json.load(f)
+                return data
             else:
                 raise ValidationError(f"Unsupported file format: {suffix}")
 
@@ -409,7 +410,9 @@ class Config:
                         continue
                     else:
                         # Replace existing with same name
-                        self.set(type_name, config.get("name"), config)
+                        name = config.get("name")
+                        if name is not None:
+                            self.set(type_name, name, config)
                 else:
                     # Add new configuration
                     self._data[type_name].append(copy.deepcopy(config))
@@ -425,11 +428,11 @@ class Config:
         # Add settings if any
         settings = self._settings_manager.to_dict()
         if settings:
-            result["settings"] = settings
+            result["settings"] = settings  # type: ignore[assignment]
 
         return result
 
-    def to_file(self, path: Union[str, Path], format: str | None = None) -> None:
+    def to_file(self, path: Union[str, Path], format: Optional[str] = None) -> None:
         """Save configuration to a file.
 
         Args:
@@ -458,7 +461,7 @@ class Config:
             else:
                 raise ValidationError(f"Unsupported format: {format}")
 
-    def build_object(self, ref: str, cache: bool = True, **kwargs) -> Any:
+    def build_object(self, ref: str, cache: bool = True, **kwargs: Any) -> Any:
         """Build an object from a configuration reference.
 
         Args:
@@ -471,7 +474,7 @@ class Config:
         """
         return self._object_builder.build(ref, cache=cache, **kwargs)
 
-    def clear_object_cache(self, ref: str | None = None) -> None:
+    def clear_object_cache(self, ref: Optional[str] = None) -> None:
         """Clear cached objects.
 
         Args:
@@ -529,7 +532,7 @@ class Config:
 
         return factory
 
-    def get_instance(self, type_name: str, name_or_index: Union[str, int] = 0, **kwargs) -> Any:
+    def get_instance(self, type_name: str, name_or_index: Union[str, int] = 0, **kwargs: Any) -> Any:
         """Get an instance from a configuration.
 
         This is a convenience method that combines get() and build_object().
