@@ -1,12 +1,11 @@
-"""
-Pytest configuration and fixtures for config package tests.
-"""
+"""Pytest configuration and fixtures for config package tests."""
 
 import os
-import pytest
-import tempfile
 import shutil
+import tempfile
 from pathlib import Path
+
+import pytest
 
 
 @pytest.fixture
@@ -33,7 +32,7 @@ def sample_config_dict():
                 "host": "backup.example.com",
                 "port": 5432,
                 "database": "myapp_backup",
-            }
+            },
         ],
         "cache": [
             {
@@ -50,16 +49,18 @@ def sample_config_dict():
             "path_resolution_attributes": ["config_path", "database.data_dir"],
             "default_timeout": 30,
             "database.default_pool_size": 10,
-        }
+        },
     }
 
 
 @pytest.fixture
 def env_vars(monkeypatch):
     """Helper to set environment variables."""
+
     def _set_env(**kwargs):
         for key, value in kwargs.items():
             monkeypatch.setenv(key, str(value))
+
     return _set_env
 
 
