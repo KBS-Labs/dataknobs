@@ -1,0 +1,24 @@
+{
+  "server": [
+    {
+      "name": "web",
+      "host": "0.0.0.0",
+      "port": 8000,
+      "debug": false
+    }
+  ],
+  "logging": [
+    {
+      "name": "default",
+      "level": "INFO",
+      "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+      "file": "./logs/app.log"
+    }
+  ],
+  "settings": {
+    "config_root": "/etc/app",
+    "global_root": "/etc/app",
+    "path_resolution_attributes": ["logging.file"],
+    "default_workers": 2
+  }
+}

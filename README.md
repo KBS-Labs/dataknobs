@@ -11,6 +11,7 @@ This monorepo contains modular packages for development, experimentation, and te
 
 The project is organized as a monorepo with the following packages:
 
+- **[dataknobs-config](packages/config/)**: Modular configuration system with environment overrides and cross-references
 - **[dataknobs-structures](packages/structures/)**: Data structures for AI knowledge bases (trees, documents, record stores)
 - **[dataknobs-utils](packages/utils/)**: Utility functions (file I/O, JSON processing, pandas helpers, web requests)
 - **[dataknobs-xization](packages/xization/)**: Text normalization and tokenization tools
@@ -25,12 +26,13 @@ Install only the packages you need:
 
 ```bash
 # Install specific packages
+pip install dataknobs-config
 pip install dataknobs-structures
 pip install dataknobs-utils
 pip install dataknobs-xization
 
 # Or install multiple packages
-pip install dataknobs-structures dataknobs-utils
+pip install dataknobs-config dataknobs-structures dataknobs-utils
 ```
 
 ### For Existing Projects
@@ -49,9 +51,14 @@ pip install dataknobs
 
 ```python
 # Import from specific packages
+from dataknobs_config import Config
 from dataknobs_structures import Tree, Document
 from dataknobs_utils import json_utils, file_utils
 from dataknobs_xization import MaskingTokenizer
+
+# Use the configuration system
+config = Config("config.yaml")
+db_config = config.get("database", "production")
 
 # Create a tree structure
 tree = Tree("root")

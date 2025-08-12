@@ -1,0 +1,33 @@
+database:
+  - name: primary
+    host: localhost
+    port: 5432
+    database: testdb
+    config_path: ./configs/db.yaml
+  - name: secondary  
+    host: backup.local
+    port: 5433
+    database: testdb_backup
+
+cache:
+  - name: redis
+    host: localhost
+    port: 6379
+    ttl: 3600
+
+api:
+  - name: main
+    host: 0.0.0.0
+    port: 8080
+    workers: 4
+    database_ref: "xref:database[primary]"
+
+settings:
+  config_root: /app/config
+  global_root: /app
+  database.global_root: /app/database
+  path_resolution_attributes:
+    - config_path
+    - database.data_dir
+  default_timeout: 30
+  database.default_pool_size: 10
