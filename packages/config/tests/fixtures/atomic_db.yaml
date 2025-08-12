@@ -1,0 +1,6 @@
+name: atomic_db
+host: db.example.com
+port: 3306
+database: production
+username: dbuser
+pool_size: 20
