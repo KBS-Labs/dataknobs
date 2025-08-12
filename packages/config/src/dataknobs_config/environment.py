@@ -2,7 +2,7 @@
 
 import os
 import re
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, Tuple, Union
 
 from .exceptions import InvalidReferenceError
 
@@ -21,7 +21,7 @@ class EnvironmentOverrides:
     ENV_PREFIX = "DATAKNOBS_"
     ENV_SEPARATOR = "__"
 
-    def __init__(self, prefix: Optional[str] = None) -> None:
+    def __init__(self, prefix: str | None = None) -> None:
         """Initialize the environment override handler.
 
         Args:
@@ -96,7 +96,7 @@ class EnvironmentOverrides:
 
         return ref
 
-    def reference_to_env_var(self, ref: str, attribute: Optional[str] = None) -> str:
+    def reference_to_env_var(self, ref: str, attribute: str | None = None) -> str:
         """Convert a reference string to an environment variable name.
 
         Args:
@@ -122,7 +122,7 @@ class EnvironmentOverrides:
 
         return f"{self.prefix}{type_part}{self.ENV_SEPARATOR}{selector_part}{self.ENV_SEPARATOR}{attr_part}"
 
-    def parse_env_reference(self, ref: str) -> Tuple[str, Union[str, int], Optional[str]]:
+    def parse_env_reference(self, ref: str) -> Tuple[str, Union[str, int], str | None]:
         """Parse a reference string with attribute.
 
         Args:

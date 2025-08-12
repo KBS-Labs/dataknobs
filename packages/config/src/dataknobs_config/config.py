@@ -4,7 +4,7 @@ import copy
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 
 import yaml  # type: ignore[import-untyped]
 
@@ -432,7 +432,7 @@ class Config:
 
         return result
 
-    def to_file(self, path: Union[str, Path], format: Optional[str] = None) -> None:
+    def to_file(self, path: Union[str, Path], format: str | None = None) -> None:
         """Save configuration to a file.
 
         Args:
@@ -474,7 +474,7 @@ class Config:
         """
         return self._object_builder.build(ref, cache=cache, **kwargs)
 
-    def clear_object_cache(self, ref: Optional[str] = None) -> None:
+    def clear_object_cache(self, ref: str | None = None) -> None:
         """Clear cached objects.
 
         Args:
@@ -532,7 +532,9 @@ class Config:
 
         return factory
 
-    def get_instance(self, type_name: str, name_or_index: Union[str, int] = 0, **kwargs: Any) -> Any:
+    def get_instance(
+        self, type_name: str, name_or_index: Union[str, int] = 0, **kwargs: Any
+    ) -> Any:
         """Get an instance from a configuration.
 
         This is a convenience method that combines get() and build_object().

@@ -2,7 +2,7 @@
 
 import copy
 import importlib
-from typing import Any, Dict, Optional, Type, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Type
 
 if TYPE_CHECKING:
     from .config import Config
@@ -19,7 +19,7 @@ class ObjectBuilder:
         - Object caching
     """
 
-    def __init__(self, config_instance: 'Config') -> None:
+    def __init__(self, config_instance: "Config") -> None:
         """Initialize the object builder.
 
         Args:
@@ -186,7 +186,7 @@ class ObjectBuilder:
         except Exception as e:
             raise ConfigError(f"Failed to load class {class_path}: {e}")
 
-    def clear_cache(self, ref: Optional[str] = None) -> None:
+    def clear_cache(self, ref: str | None = None) -> None:
         """Clear cached objects.
 
         Args:
@@ -197,7 +197,7 @@ class ObjectBuilder:
         else:
             self._cache.clear()
 
-    def get_cached(self, ref: str) -> Optional[Any]:
+    def get_cached(self, ref: str) -> Any | None:
         """Get a cached object without building.
 
         Args:

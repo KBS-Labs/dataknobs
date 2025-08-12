@@ -1,7 +1,7 @@
 """String reference system for cross-referencing configurations."""
 
 import re
-from typing import Any, Dict, Tuple, Union, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Tuple, Union
 
 if TYPE_CHECKING:
     from .config import Config
@@ -24,7 +24,7 @@ class ReferenceResolver:
     # Regex pattern for parsing references
     REFERENCE_PATTERN = re.compile(r"^xref:([a-zA-Z_][a-zA-Z0-9_]*)?(?:\[([^\]]+)\])?$")
 
-    def __init__(self, config_instance: 'Config') -> None:
+    def __init__(self, config_instance: "Config") -> None:
         """Initialize the reference resolver.
 
         Args:
