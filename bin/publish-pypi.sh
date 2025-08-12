@@ -91,14 +91,16 @@ else
     exit 1
 fi
 
-# Package directories in order (common first, legacy last)
-PACKAGES=(
-    "packages/common"
-    "packages/structures"
-    "packages/utils"
-    "packages/xization"
-    "packages/legacy"
-)
+# Get the root directory and source package discovery
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/bin/package-discovery.sh"
+
+# Get package directories in dependency order
+PACKAGE_NAMES=($(get_packages_in_order))
+PACKAGES=()
+for pkg in "${PACKAGE_NAMES[@]}"; do
+    PACKAGES+=("packages/$pkg")
+done
 
 # Function to get version from pyproject.toml
 get_version() {

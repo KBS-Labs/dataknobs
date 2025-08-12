@@ -15,6 +15,9 @@ NC='\033[0m' # No Color
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# Source package discovery utility
+source "$ROOT_DIR/bin/package-discovery.sh"
+
 # Usage function
 usage() {
     echo -e "${CYAN}dataknobs development helper${NC}"
@@ -37,7 +40,7 @@ usage() {
     echo "  -h, --help    Show this help message"
     echo ""
     echo "Targets (for test, lint, validate):"
-    echo "  - Package names: 'common', 'utils', 'structures', 'xization'"
+    echo "  - Package names: 'common', 'utils', 'structures', 'xization', 'config'"
     echo "  - Directory paths: 'packages/utils/src'"
     echo "  - File paths: 'packages/utils/src/dataknobs_utils/file_utils.py'"
     echo ""
@@ -122,13 +125,14 @@ test() {
 lint() {
     echo -e "${YELLOW}Running linting and type checking...${NC}"
     
-    # Default packages
-    PACKAGES=(
-        "common"
-        "structures" 
-        "xization"
-        "utils"
-    )
+    # Get packages dynamically (excluding legacy for linting)
+    ALL_PACKAGES=($(discover_packages))
+    PACKAGES=()
+    for pkg in "${ALL_PACKAGES[@]}"; do
+        if [[ "$pkg" != "legacy" ]]; then
+            PACKAGES+=("$pkg")
+        fi
+    done
     
     # Determine what to lint
     if [[ $# -eq 0 ]]; then
@@ -282,7 +286,8 @@ docs() {
     # Check if packages are installed (needed for API docs)
     echo -e "${YELLOW}Ensuring packages are installed for API documentation...${NC}"
     uv pip install -e packages/common -e packages/structures \
-        -e packages/utils -e packages/xization -e packages/legacy
+       -e packages/utils -e packages/xization -e packages/legacy \
+       -e packages/config
     
     echo -e "${GREEN}Starting documentation server at http://localhost:8000${NC}"
     echo -e "${CYAN}Press Ctrl+C to stop${NC}"
@@ -304,7 +309,8 @@ docs_build() {
     # Check if packages are installed (needed for API docs)
     echo -e "${YELLOW}Ensuring packages are installed for API documentation...${NC}"
     uv pip install -e packages/common -e packages/structures \
-        -e packages/utils -e packages/xization -e packages/legacy
+       -e packages/utils -e packages/xization -e packages/legacy \
+       -e packages/config
     
     # Clean previous build
     echo -e "${YELLOW}Cleaning previous build...${NC}"

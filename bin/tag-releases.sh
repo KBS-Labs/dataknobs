@@ -15,6 +15,9 @@ NC='\033[0m' # No Color
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# Source package discovery utility
+source "$ROOT_DIR/bin/package-discovery.sh"
+
 echo -e "${CYAN}Dataknobs Release Tagging Tool${NC}"
 echo ""
 
@@ -55,24 +58,18 @@ create_tag() {
 
 "
     
-    # Add package-specific notes
-    case $package in
-        "structures")
-            message+="- Core data structures (Tree, Document, RecordStore, ConditionalDict)"
-            ;;
-        "utils")
-            message+="- Utility functions for JSON, files, Elasticsearch, and more"
-            ;;
-        "xization")
-            message+="- Text processing, normalization, and tokenization tools"
-            ;;
-        "common")
-            message+="- Shared components and base functionality"
-            ;;
-        "legacy")
-            message+="- Legacy compatibility package (deprecated)"
-            ;;
-    esac
+    # Add package description from pyproject.toml if available
+    local pyproject="packages/$package/pyproject.toml"
+    if [ -f "$pyproject" ]; then
+        local description=$(grep '^description = ' "$pyproject" | cut -d'"' -f2)
+        if [ -n "$description" ]; then
+            message+="- $description"
+        else
+            message+="- Package: dataknobs-$package"
+        fi
+    else
+        message+="- Package: dataknobs-$package"
+    fi
     
     git tag -a "$tag" -m "$message"
     echo -e "${GREEN}✓ Tagged: $tag${NC}"
@@ -98,10 +95,12 @@ if [ "$CURRENT_BRANCH" != "main" ] && [ "$CURRENT_BRANCH" != "master" ]; then
     fi
 fi
 
-# Package information
-# Use regular arrays for compatibility
-PACKAGE_NAMES=("common" "structures" "utils" "xization" "legacy")
-PACKAGE_DIRS=("packages/common" "packages/structures" "packages/utils" "packages/xization" "packages/legacy")
+# Get package information dynamically
+PACKAGE_NAMES=($(get_packages_in_order))
+PACKAGE_DIRS=()
+for pkg in "${PACKAGE_NAMES[@]}"; do
+    PACKAGE_DIRS+=("packages/$pkg")
+done
 
 # Display current versions
 echo -e "\n${CYAN}Current Package Versions:${NC}"
