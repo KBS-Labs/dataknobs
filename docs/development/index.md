@@ -326,9 +326,9 @@ def your_function():
 ## Resources
 
 ### Documentation
-- [User Guide](../user-guide/) - End-user documentation
-- [API Reference](../api/) - Detailed API documentation
-- [Examples](../examples/) - Usage examples and tutorials
+- [User Guide](../user-guide/index.md) - End-user documentation
+- [API Reference](../api/index.md) - Detailed API documentation
+- [Examples](../examples/index.md) - Usage examples and tutorials
 
 ### External Resources
 - [Python Documentation](https://docs.python.org/)

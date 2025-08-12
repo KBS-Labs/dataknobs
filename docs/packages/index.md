@@ -6,6 +6,7 @@ Dataknobs is organized as a collection of modular packages, each serving a speci
 
 | Package | Purpose | Key Features |
 |---------|---------|--------------|
+| [dataknobs-config](config/index.md) | Configuration management | Modular configs, Environment overrides, Cross-references |
 | [dataknobs-structures](structures/index.md) | Core data structures | Tree, Document, RecordStore, ConditionalDict |
 | [dataknobs-utils](utils/index.md) | Utility functions | JSON, File, Elasticsearch, LLM utilities |
 | [dataknobs-xization](xization/index.md) | Text processing | Tokenization, Normalization, Masking |
@@ -18,9 +19,10 @@ Install the packages you need:
 
 ```bash
 # Install all main packages
-pip install dataknobs-structures dataknobs-utils dataknobs-xization
+pip install dataknobs-config dataknobs-structures dataknobs-utils dataknobs-xization
 
 # Or install individually
+pip install dataknobs-config
 pip install dataknobs-structures
 ```
 
@@ -41,6 +43,7 @@ graph TD
 
 ## Choosing Packages
 
+- **dataknobs-config**: For configuration management with environment overrides
 - **dataknobs-structures**: If you need tree structures, documents, or record storage
 - **dataknobs-utils**: For JSON processing, file operations, or integrations
 - **dataknobs-xization**: For text processing, tokenization, or normalization

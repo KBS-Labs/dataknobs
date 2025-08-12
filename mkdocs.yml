@@ -66,6 +66,9 @@ nav:
     - Common:
       - packages/common/index.md
       - packages/common/api.md
+    - Config:
+      - packages/config/index.md
+      - packages/config/api.md
     - Structures:
       - packages/structures/index.md
       - packages/structures/tree.md
@@ -92,6 +95,7 @@ nav:
   
   - API Reference:
     - api/index.md
+    - api/dataknobs-config.md
     - api/dataknobs-structures.md
     - api/dataknobs-utils.md
     - api/dataknobs-xization.md
@@ -105,6 +109,7 @@ nav:
     - development/ci-cd.md
     - development/release-process.md
     - development/architecture.md
+    - Deprecation Timeline: DEPRECATION_TIMELINE.md
   
   - Examples:
     - examples/index.md
@@ -130,6 +135,7 @@ plugins:
         python:
           paths: [
             packages/common/src,
+            packages/config/src,
             packages/structures/src,
             packages/utils/src,
             packages/xization/src,

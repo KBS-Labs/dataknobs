@@ -14,6 +14,9 @@ NC='\033[0m' # No Color
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# Source the package discovery utility
+source "$ROOT_DIR/bin/package-discovery.sh"
+
 # Default values
 TARGETS=()
 FORMAT_ONLY=false
@@ -63,14 +66,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# All packages
-ALL_PACKAGES=(
-    "common"
-    "structures" 
-    "xization"
-    "utils"
-    "legacy"
-)
+# Get all packages dynamically
+ALL_PACKAGES=($(discover_packages))
 
 # Determine what to fix
 FIX_TARGETS=()

@@ -13,22 +13,20 @@ NC='\033[0m' # No Color
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# Source the package discovery utility
+source "$ROOT_DIR/bin/package-discovery.sh"
+
 echo -e "${YELLOW}Building dataknobs packages...${NC}"
 
-# Build order matters due to dependencies
-PACKAGES=(
-    "common"
-    "structures" 
-    "xization"
-    "utils"
-    "legacy"
-)
+# Get packages in dependency order
+PACKAGES=($(get_packages_in_order))
 
-# Clean previous builds
+echo -e "${YELLOW}Discovered packages (in build order): ${PACKAGES[*]}${NC}"
+
+# Clean previous builds in root dist directory
 echo -e "${YELLOW}Cleaning previous builds...${NC}"
-for package in "${PACKAGES[@]}"; do
-    rm -rf "packages/$package/dist"
-done
+rm -rf dist
+mkdir -p dist
 
 # Build each package
 for package in "${PACKAGES[@]}"; do
@@ -39,6 +37,11 @@ for package in "${PACKAGES[@]}"; do
     # Build the package
     if uv build; then
         echo -e "${GREEN}✓ Successfully built dataknobs-$package${NC}"
+        # Move built artifacts to root dist directory
+        if [[ -d "dist" ]]; then
+            mv dist/* "$ROOT_DIR/dist/" 2>/dev/null || true
+            rmdir dist 2>/dev/null || true
+        fi
     else
         echo -e "${RED}✗ Failed to build dataknobs-$package${NC}"
         exit 1
@@ -51,4 +54,4 @@ echo -e "\n${GREEN}All packages built successfully!${NC}"
 
 # List all built packages
 echo -e "\n${YELLOW}Built packages:${NC}"
-find dist -name "*.whl" -o -name "*.tar.gz" | sort
+find dist -name "*.whl" -o -name "*.tar.gz" 2>/dev/null | sort || echo "No packages found"

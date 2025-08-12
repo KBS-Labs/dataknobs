@@ -14,14 +14,24 @@ NC='\033[0m' # No Color
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# Source the package discovery utility
+source "$ROOT_DIR/bin/package-discovery.sh"
+
 # Default values
 MODE="dev"
 VENV_NAME=""
 FORCE_REINSTALL=false
+SPECIFIC_PACKAGE=""
 
 # Usage function
 usage() {
-    echo "Usage: $0 [OPTIONS]"
+    echo "Usage: $0 [OPTIONS] [PACKAGE]"
+    echo ""
+    echo "Install dataknobs packages in development or production mode"
+    echo ""
+    echo "Arguments:"
+    echo "  PACKAGE               Specific package to install (optional)"
+    echo "                        If not specified, installs all packages"
     echo ""
     echo "Options:"
     echo "  -m, --mode MODE       Installation mode: 'dev' (default) or 'prod'"
@@ -29,10 +39,15 @@ usage() {
     echo "  -f, --force           Force reinstall packages"
     echo "  -h, --help            Show this help message"
     echo ""
+    echo "Available packages:"
+    local all_pkgs=($(discover_packages))
+    echo "  ${all_pkgs[*]}"
+    echo ""
     echo "Examples:"
-    echo "  $0                    # Install in dev mode with current environment"
-    echo "  $0 -m prod -e venv    # Install in prod mode in 'venv' environment"
-    echo "  $0 -f                 # Force reinstall in dev mode"
+    echo "  $0                    # Install all packages in dev mode"
+    echo "  $0 config             # Install only config package in dev mode"
+    echo "  $0 -m prod -e venv    # Install all in prod mode in 'venv' environment"
+    echo "  $0 -f utils           # Force reinstall utils package in dev mode"
     exit 0
 }
 
@@ -55,8 +70,13 @@ while [[ $# -gt 0 ]]; do
             usage
             ;;
         *)
-            echo "Unknown option: $1"
-            usage
+            if [[ -z "$SPECIFIC_PACKAGE" ]]; then
+                SPECIFIC_PACKAGE="$1"
+            else
+                echo "Unknown option: $1"
+                usage
+            fi
+            shift
             ;;
     esac
 done
@@ -79,14 +99,24 @@ if [[ -n "$VENV_NAME" ]]; then
     source "$VENV_NAME/bin/activate"
 fi
 
-# Install order matters due to dependencies
-PACKAGES=(
-    "common"
-    "structures" 
-    "xization"
-    "utils"
-    "legacy"
-)
+# Get packages in dependency order
+ALL_PACKAGES=($(get_packages_in_order))
+
+# Determine which packages to install
+if [[ -n "$SPECIFIC_PACKAGE" ]]; then
+    if ! package_exists "$SPECIFIC_PACKAGE"; then
+        echo -e "${RED}Error: Package '$SPECIFIC_PACKAGE' not found${NC}"
+        echo "Available packages: ${ALL_PACKAGES[*]}"
+        exit 1
+    fi
+    # When installing a specific package, we need to ensure its dependencies are installed
+    # For simplicity, we'll just install the specific package
+    PACKAGES=("$SPECIFIC_PACKAGE")
+    echo -e "${YELLOW}Installing specific package: $SPECIFIC_PACKAGE${NC}"
+else
+    PACKAGES=("${ALL_PACKAGES[@]}")
+    echo -e "${YELLOW}Installing all packages: ${PACKAGES[*]}${NC}"
+fi
 
 if [[ "$MODE" == "dev" ]]; then
     echo -e "${YELLOW}Installing in development mode (editable)...${NC}"
@@ -110,18 +140,18 @@ if [[ "$MODE" == "dev" ]]; then
 else
     echo -e "${YELLOW}Installing in production mode...${NC}"
     
-    # In prod mode, build first if needed
-    if [[ ! -d "packages/common/dist" ]]; then
+    # In prod mode, build first if needed (check root dist directory)
+    if [[ ! -d "dist" ]] || [[ -z "$(find dist -name '*.whl' 2>/dev/null)" ]]; then
         echo -e "${YELLOW}No built packages found. Building first...${NC}"
         "$ROOT_DIR/bin/build-packages.sh"
     fi
     
-    # Install from built wheels
+    # Install from built wheels in root dist directory
     for package in "${PACKAGES[@]}"; do
         echo -e "\n${YELLOW}Installing dataknobs-$package...${NC}"
         
-        # Find the latest wheel
-        WHEEL=$(find "packages/$package/dist" -name "*.whl" | sort -V | tail -n1)
+        # Find the latest wheel for this specific package
+        WHEEL=$(find dist -name "dataknobs_${package//-/_}-*.whl" 2>/dev/null | sort -V | tail -n1)
         
         if [[ -z "$WHEEL" ]]; then
             echo -e "${RED}No wheel found for dataknobs-$package${NC}"
@@ -142,8 +172,8 @@ else
     done
 fi
 
-echo -e "\n${GREEN}All packages installed successfully!${NC}"
+echo -e "\n${GREEN}All requested packages installed successfully!${NC}"
 
 # Show installed packages
 echo -e "\n${YELLOW}Installed dataknobs packages:${NC}"
-uv pip list | grep dataknobs
+uv pip list | grep dataknobs || echo "No dataknobs packages found"

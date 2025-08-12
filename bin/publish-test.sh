@@ -99,14 +99,11 @@ if ! command -v twine &> /dev/null; then
     uv pip install twine
 fi
 
-# Array of packages to publish
-PACKAGES=(
-    "common"
-    "structures"
-    "utils"
-    "xization"
-    "legacy"
-)
+# Source package discovery utility
+source "$ROOT_DIR/bin/package-discovery.sh"
+
+# Get packages in dependency order
+PACKAGES=($(get_packages_in_order))
 
 # Ask which packages to publish
 echo -e "${CYAN}Which packages do you want to publish to TestPyPI?${NC}"

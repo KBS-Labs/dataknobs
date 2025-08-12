@@ -14,6 +14,9 @@ NC='\033[0m' # No Color
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# Source the package discovery utility
+source "$ROOT_DIR/bin/package-discovery.sh"
+
 # Default values
 PACKAGE=""
 VERBOSE=false
@@ -33,6 +36,10 @@ usage() {
     echo "  -v, --verbose         Run tests in verbose mode"
     echo "  -c, --coverage        Generate coverage report"
     echo "  -h, --help            Show this help message"
+    echo ""
+    echo "Available packages:"
+    local all_pkgs=($(discover_packages))
+    echo "  ${all_pkgs[*]}"
     echo ""
     echo "Examples:"
     echo "  $0                    # Test all packages"
@@ -67,18 +74,14 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Test order matters due to dependencies
-ALL_PACKAGES=(
-    "common"
-    "structures" 
-    "xization"
-    "utils"
-)
+# Get all packages in test order (dependency order)
+ALL_PACKAGES=($(get_packages_in_order))
 
 # Determine which packages to test
 if [[ -n "$PACKAGE" ]]; then
-    if [[ ! -d "packages/$PACKAGE" ]]; then
+    if ! package_exists "$PACKAGE"; then
         echo -e "${RED}Error: Package '$PACKAGE' not found${NC}"
+        echo "Available packages: ${ALL_PACKAGES[*]}"
         exit 1
     fi
     PACKAGES=("$PACKAGE")
@@ -87,6 +90,7 @@ else
 fi
 
 echo -e "${YELLOW}Running tests for dataknobs packages...${NC}"
+echo -e "${YELLOW}Testing packages: ${PACKAGES[*]}${NC}"
 
 # Keep track of results
 declare -A TEST_RESULTS
@@ -105,7 +109,17 @@ for package in "${PACKAGES[@]}"; do
         PYTEST_CMD="$PYTEST_CMD -v"
     fi
     if [[ "$COVERAGE" == true ]]; then
-        PYTEST_CMD="$PYTEST_CMD --cov=dataknobs_${package//-/_} --cov-report=term-missing"
+        # Handle package name conversion (e.g., config -> dataknobs_config)
+        pkg_module="dataknobs_${package//-/_}"
+        
+        # Check if src directory exists and adjust coverage path
+        if [[ -d "src/$pkg_module" ]]; then
+            PYTEST_CMD="$PYTEST_CMD --cov=src/$pkg_module --cov-report=term-missing"
+        elif [[ -d "src/dataknobs_${package}" ]]; then
+            PYTEST_CMD="$PYTEST_CMD --cov=src/dataknobs_${package} --cov-report=term-missing"
+        else
+            PYTEST_CMD="$PYTEST_CMD --cov=$pkg_module --cov-report=term-missing"
+        fi
     fi
     
     # Run tests and capture result
