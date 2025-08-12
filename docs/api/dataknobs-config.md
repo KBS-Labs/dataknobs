@@ -149,4 +149,4 @@ app_config = config.get("app", "web")
 config.to_file("output.yaml")
 ```
 
-For more details, see the [package README](../../packages/config/README.md).
+For more details, see the [package documentation](../packages/config/index.md).

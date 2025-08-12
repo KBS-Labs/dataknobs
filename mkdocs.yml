@@ -109,6 +109,7 @@ nav:
     - development/ci-cd.md
     - development/release-process.md
     - development/architecture.md
+    - Deprecation Timeline: DEPRECATION_TIMELINE.md
   
   - Examples:
     - examples/index.md
