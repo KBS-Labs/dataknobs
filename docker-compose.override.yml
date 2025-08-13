@@ -47,12 +47,11 @@ services:
     environment:
       - SERVICES=s3
       - DEBUG=0
-      - DATA_DIR=/tmp/localstack/data
     ports:
       - "4566:4566"
     volumes:
       - ~/data:/data
-      - ~/dataknobs_localstack_data:/tmp/localstack
+      - ~/dataknobs_localstack_data:/var/lib/localstack
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - devnet 

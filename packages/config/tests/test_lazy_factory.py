@@ -43,7 +43,7 @@ class TestLazyFactoryAccess:
                 "database": [
                     {
                         "name": "primary",
-                        "factory": "test_lazy_factory.MockDatabaseFactory",
+                        "factory": "packages.config.tests.test_lazy_factory.MockDatabaseFactory",
                         "host": "localhost",
                         "port": 5432,
                     }
@@ -73,7 +73,7 @@ class TestLazyFactoryAccess:
                 "database": [
                     {
                         "name": "primary",
-                        "factory": "test_lazy_factory.MockDatabaseFactory",
+                        "factory": "packages.config.tests.test_lazy_factory.MockDatabaseFactory",
                     }
                 ]
             }
@@ -113,8 +113,8 @@ class TestLazyFactoryAccess:
         config = Config(
             {
                 "cache": [
-                    {"name": "redis1", "factory": "test_lazy_factory.MockCacheFactory"},
-                    {"name": "redis2", "factory": "test_lazy_factory.MockDatabaseFactory"},
+                    {"name": "redis1", "factory": "packages.config.tests.test_lazy_factory.MockCacheFactory"},
+                    {"name": "redis2", "factory": "packages.config.tests.test_lazy_factory.MockDatabaseFactory"},
                 ]
             }
         )
@@ -133,7 +133,7 @@ class TestLazyFactoryAccess:
                 "database": [
                     {
                         "name": "primary",
-                        "factory": "test_lazy_factory.MockDatabaseFactory",
+                        "factory": "packages.config.tests.test_lazy_factory.MockDatabaseFactory",
                         "host": "localhost",
                         "port": 5432,
                     }
@@ -167,7 +167,7 @@ class TestLazyFactoryAccess:
                 "database": [
                     {
                         "name": "primary",
-                        "class": "test_lazy_factory.MockDatabase",
+                        "class": "packages.config.tests.test_lazy_factory.MockDatabase",
                         "host": "localhost",
                         "port": 5432,
                     }
@@ -201,7 +201,7 @@ class TestLazyFactoryAccess:
                 "database": [
                     {
                         "name": "primary",
-                        "factory": "test_lazy_factory.MockDatabaseFactory",
+                        "factory": "packages.config.tests.test_lazy_factory.MockDatabaseFactory",
                         "host": "localhost",
                     }
                 ]
@@ -220,8 +220,8 @@ class TestLazyFactoryAccess:
         config = Config(
             {
                 "services": [
-                    {"name": "db", "factory": "test_lazy_factory.MockDatabaseFactory"},
-                    {"name": "cache", "factory": "test_lazy_factory.MockCacheFactory"},
+                    {"name": "db", "factory": "packages.config.tests.test_lazy_factory.MockDatabaseFactory"},
+                    {"name": "cache", "factory": "packages.config.tests.test_lazy_factory.MockCacheFactory"},
                 ]
             }
         )
@@ -243,7 +243,7 @@ class TestLazyFactoryAccess:
     def test_factory_cache_clearing(self):
         """Test that factory cache can be cleared."""
         config = Config(
-            {"database": [{"name": "primary", "factory": "test_lazy_factory.MockDatabaseFactory"}]}
+            {"database": [{"name": "primary", "factory": "packages.config.tests.test_lazy_factory.MockDatabaseFactory"}]}
         )
 
         # Get factory and use it

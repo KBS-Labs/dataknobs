@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 
 from dataknobs_data import Database, SyncDatabase
 from dataknobs_data.records import Record
@@ -17,7 +18,7 @@ from dataknobs_data.query import Query, Filter, SortSpec, Operator, SortOrder
 class TestFileDatabase:
     """Test async FileDatabase implementation."""
     
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def temp_file(self):
         """Create a temporary file for testing."""
         fd, path = tempfile.mkstemp(suffix=".json")
@@ -31,14 +32,14 @@ class TestFileDatabase:
         if os.path.exists(lock_file):
             os.remove(lock_file)
     
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def db_json(self, temp_file):
         """Create a JSON file database."""
         db = Database.create("file", {"path": temp_file})
         yield db
         await db.close()
     
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def db_csv(self):
         """Create a CSV file database."""
         fd, path = tempfile.mkstemp(suffix=".csv")
@@ -53,7 +54,7 @@ class TestFileDatabase:
         if os.path.exists(lock_file):
             os.remove(lock_file)
     
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def db_gzip(self):
         """Create a gzipped JSON file database."""
         fd, path = tempfile.mkstemp(suffix=".json.gz")

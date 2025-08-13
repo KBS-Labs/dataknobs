@@ -50,7 +50,7 @@ class TestObjectConstruction:
                 "database": [
                     {
                         "name": "primary",
-                        "class": "test_builders.MockDatabase",
+                        "class": "packages.config.tests.test_builders.MockDatabase",
                         "host": "localhost",
                         "port": 5432,
                     }
@@ -71,7 +71,7 @@ class TestObjectConstruction:
                 "database": [
                     {
                         "name": "test",
-                        "class": "test_builders.MockDatabase",
+                        "class": "packages.config.tests.test_builders.MockDatabase",
                         "host": "testhost",
                         "port": 3306,
                         "extra_param": "value",
@@ -93,7 +93,7 @@ class TestObjectConstruction:
                 "database": [
                     {
                         "name": "primary",
-                        "factory": "test_builders.MockDatabaseFactory",
+                        "factory": "packages.config.tests.test_builders.MockDatabaseFactory",
                         "host": "localhost",
                         "port": 5432,
                     }
@@ -115,7 +115,7 @@ class TestObjectConstruction:
                 "cache": [
                     {
                         "name": "redis",
-                        "factory": "test_builders.MockCallableFactory",
+                        "factory": "packages.config.tests.test_builders.MockCallableFactory",
                         "host": "localhost",
                         "port": 6379,
                         "ttl": 7200,
@@ -149,7 +149,7 @@ class TestObjectConstruction:
         config = Config(
             {
                 "database": [
-                    {"name": "test", "class": "test_builders.MockDatabase", "host": "localhost"}
+                    {"name": "test", "class": "packages.config.tests.test_builders.MockDatabase", "host": "localhost"}
                 ]
             }
         )
@@ -171,7 +171,7 @@ class TestObjectCaching:
                 "cache": [
                     {
                         "name": "redis",
-                        "class": "test_builders.MockCache",
+                        "class": "packages.config.tests.test_builders.MockCache",
                         "host": "localhost",
                         "port": 6379,
                     }
@@ -191,7 +191,7 @@ class TestObjectCaching:
                 "cache": [
                     {
                         "name": "redis",
-                        "class": "test_builders.MockCache",
+                        "class": "packages.config.tests.test_builders.MockCache",
                         "host": "localhost",
                         "port": 6379,
                     }
@@ -212,7 +212,7 @@ class TestObjectCaching:
                 "cache": [
                     {
                         "name": "redis",
-                        "class": "test_builders.MockCache",
+                        "class": "packages.config.tests.test_builders.MockCache",
                         "host": "localhost",
                         "port": 6379,
                     }
@@ -233,13 +233,13 @@ class TestObjectCaching:
                 "cache": [
                     {
                         "name": "redis1",
-                        "class": "test_builders.MockCache",
+                        "class": "packages.config.tests.test_builders.MockCache",
                         "host": "host1",
                         "port": 6379,
                     },
                     {
                         "name": "redis2",
-                        "class": "test_builders.MockCache",
+                        "class": "packages.config.tests.test_builders.MockCache",
                         "host": "host2",
                         "port": 6380,
                     },

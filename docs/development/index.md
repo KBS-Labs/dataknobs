@@ -11,14 +11,18 @@ Dataknobs is a modular Python ecosystem for AI knowledge base structures and tex
 If you're new to Dataknobs development:
 
 1. **[Contributing Guide](contributing.md)** - Start here to learn how to contribute
-2. **[Architecture Overview](architecture.md)** - Understand the system design
-3. **[Testing Guide](testing.md)** - Learn about our testing approach
-4. **[CI/CD Pipeline](ci-cd.md)** - Understand our deployment process
+2. **[UV Virtual Environment Guide](uv-environment.md)** - How to work with UV package manager
+3. **[Quality Checks Process](quality-checks.md)** - Developer-driven quality assurance
+4. **[Architecture Overview](architecture.md)** - Understand the system design
+5. **[Testing Guide](testing.md)** - Learn about our testing approach
+6. **[CI/CD Pipeline](ci-cd.md)** - Understand our deployment process
 
 ## Development Topics
 
 ### Core Development
 - **[Contributing Guide](contributing.md)** - How to contribute code, documentation, and report issues
+- **[UV Virtual Environment Guide](uv-environment.md)** - Working with UV package manager and virtual environments
+- **[Quality Checks Process](quality-checks.md)** - Running quality checks locally before PRs
 - **[Architecture Overview](architecture.md)** - System architecture and design principles
 - **[Testing Guide](testing.md)** - Testing strategies, frameworks, and best practices
 - **[Documentation Guide](documentation-guide.md)** - How to write and maintain documentation
@@ -48,46 +52,49 @@ dataknobs/
 
 ### Prerequisites
 
-- **Python**: 3.8 or higher
-- **Package Manager**: pip or poetry
+- **Python**: 3.10 or higher
+- **Package Manager**: UV (fast Python package manager)
 - **Version Control**: Git
-- **Optional**: Docker for containerized development
+- **Docker**: For running PostgreSQL, Elasticsearch, and LocalStack services
 
-### Quick Setup
+### Quick Setup with UV
 
 ```bash
 # Clone the repository
 git clone https://github.com/yourusername/dataknobs.git
 cd dataknobs
 
-# Install dependencies
-pip install -r requirements-dev.txt
-
-# Install packages in development mode
-pip install -e packages/common
-pip install -e packages/structures
-pip install -e packages/utils
-pip install -e packages/xization
-
-# Run tests to verify setup
-pytest tests/
-```
-
-### Using Poetry (Recommended)
-
-```bash
-# Install poetry if you haven't already
-pip install poetry
-
-# Install dependencies
-poetry install
+# Install all dependencies
+uv sync --all-packages
 
 # Activate virtual environment
-poetry shell
+source .venv/bin/activate  # On Linux/macOS
+# or
+.venv\Scripts\activate  # On Windows
 
-# Run tests
-poetry run pytest
+# Run quality checks before PRs
+./bin/run-quality-checks.sh
+
+# Or run tests directly
+pytest
 ```
+
+### Docker Services
+
+The project uses Docker containers for development services:
+
+```bash
+# Start all services
+docker-compose up -d postgres elasticsearch localstack
+
+# Check service status
+docker-compose ps
+
+# Stop services
+docker-compose down
+```
+
+For more details, see the [UV Virtual Environment Guide](uv-environment.md) and [Quality Checks Process](quality-checks.md).
 
 ## Package Overview
 

@@ -1,0 +1,23 @@
+{
+  "timestamp": "2025-08-13T21:47:44Z",
+  "overall_status": "FAIL",
+  "environment": "docker-internal",
+  "checks": {
+    "lint": {
+      "status": "warning",
+      "exit_code": 30
+    },
+    "style": {
+      "status": "warning",
+      "exit_code": 1
+    },
+    "unit_tests": {
+      "status": "pass",
+      "exit_code": 0
+    },
+    "integration_tests": {
+      "status": "fail",
+      "exit_code": 5
+    }
+  }
+}

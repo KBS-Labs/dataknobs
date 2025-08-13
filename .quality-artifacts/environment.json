@@ -1,0 +1,11 @@
+{
+  "timestamp": "2025-08-13T21:47:44Z",
+  "python_version": "Python 3.13.5",
+  "uv_version": "uv 0.8.4",
+  "os": "Linux",
+  "os_version": "6.10.14-linuxkit",
+  "git_branch": "sbk/data-abstractions",
+  "git_commit": "21432abb16611d9d2dbf7abeab6510601c222fc9",
+  "docker_container": "true",
+  "docker_services": "postgres, elasticsearch, localstack"
+}

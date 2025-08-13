@@ -1046,7 +1046,7 @@ requires-dist = [
     { name = "aiofiles", specifier = ">=23.0.0" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=24.0.0" },
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.26.0" },
-    { name = "dataknobs-data", extras = ["postgres", "s3", "elasticsearch", "parquet"], marker = "extra == 'all'" },
+    { name = "dataknobs-data", extras = ["postgres", "s3", "elasticsearch", "parquet"], marker = "extra == 'all'", editable = "packages/data" },
     { name = "dataknobs-utils", editable = "packages/utils" },
     { name = "elasticsearch", marker = "extra == 'elasticsearch'", specifier = ">=8.0.0" },
     { name = "elasticsearch-async", marker = "extra == 'elasticsearch'", specifier = ">=6.2.0" },
@@ -1104,7 +1104,7 @@ dev = [
 requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=24.0.0" },
     { name = "dataknobs-data", editable = "packages/data" },
-    { name = "dataknobs-kv", extras = ["cache"], marker = "extra == 'all'" },
+    { name = "dataknobs-kv", extras = ["cache"], marker = "extra == 'all'", editable = "packages/kv" },
     { name = "diskcache", marker = "extra == 'cache'", specifier = ">=5.0.0" },
     { name = "fakeredis", marker = "extra == 'dev'", specifier = ">=2.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
@@ -1178,6 +1178,16 @@ requires-dist = [
 name = "dataknobs-workspace"
 version = "1.0.0"
 source = { editable = "." }
+dependencies = [
+    { name = "dataknobs" },
+    { name = "dataknobs-common" },
+    { name = "dataknobs-config" },
+    { name = "dataknobs-data" },
+    { name = "dataknobs-kv" },
+    { name = "dataknobs-structures" },
+    { name = "dataknobs-utils" },
+    { name = "dataknobs-xization" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -1195,10 +1205,21 @@ dev = [
     { name = "mypy" },
     { name = "pylint" },
     { name = "pytest" },
+    { name = "pytest-asyncio" },
     { name = "pytest-cov" },
 ]
 
 [package.metadata]
+requires-dist = [
+    { name = "dataknobs", editable = "packages/legacy" },
+    { name = "dataknobs-common", editable = "packages/common" },
+    { name = "dataknobs-config", editable = "packages/config" },
+    { name = "dataknobs-data", editable = "packages/data" },
+    { name = "dataknobs-kv", editable = "packages/kv" },
+    { name = "dataknobs-structures", editable = "packages/structures" },
+    { name = "dataknobs-utils", editable = "packages/utils" },
+    { name = "dataknobs-xization", editable = "packages/xization" },
+]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1216,6 +1237,7 @@ dev = [
     { name = "mypy", specifier = ">=1.0.0" },
     { name = "pylint", specifier = ">=3.3.6" },
     { name = "pytest", specifier = ">=8.3.5" },
+    { name = "pytest-asyncio", specifier = ">=0.21.0" },
     { name = "pytest-cov", specifier = ">=6.0.0" },
 ]
 

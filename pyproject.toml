@@ -4,11 +4,22 @@ version = "1.0.0"
 description = "Dataknobs monorepo workspace"
 readme = "README.md"
 requires-python = ">=3.10"
+dependencies = [
+    "dataknobs-common",
+    "dataknobs-config",
+    "dataknobs-data",
+    "dataknobs-kv",
+    "dataknobs-structures",
+    "dataknobs-utils",
+    "dataknobs-xization",
+    "dataknobs",
+]
 
 [tool.uv]
 dev-dependencies = [
     "pytest>=8.3.5",
     "pytest-cov>=6.0.0",
+    "pytest-asyncio>=0.21.0",
     "pylint>=3.3.6",
     "black>=24.0.0",
     "isort>=5.13.0",
@@ -25,16 +36,17 @@ dev-dependencies = [
 ]
 
 [tool.uv.workspace]
-members = [
-    "packages/common",
-    "packages/config",
-    "packages/data",
-    "packages/kv",
-    "packages/structures", 
-    "packages/utils",
-    "packages/xization",
-    "packages/legacy",
-]
+members = ["packages/*"]
+
+[tool.uv.sources]
+dataknobs-common = { workspace = true }
+dataknobs-config = { workspace = true }
+dataknobs-data = { workspace = true }
+dataknobs-kv = { workspace = true }
+dataknobs-structures = { workspace = true }
+dataknobs-utils = { workspace = true }
+dataknobs-xization = { workspace = true }
+dataknobs = { workspace = true }
 
 [tool.mypy]
 python_version = "3.10"

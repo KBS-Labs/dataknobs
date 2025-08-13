@@ -1,0 +1,9 @@
+1e2a4fc5ad42ef89f2e611be593b68e307c699f59f40bfd2311a4885e14f9faa  ./coverage-integration.xml
+1bdc7e51f6f06bb16b94ae5e6ef3eaa53b31ed6e1bb1a318edf97ad7e6db59d4  ./coverage-unit.xml
+4cc1a3dd92db61caa7138016e11d1abc6aeb0751049a3811cd33961a013f6a10  ./coverage.xml
+17da4852d2e9062cfbaf08dca39ff2d8e591a754774233bbec35c4c753d67d57  ./environment.json
+df98035b3d898eb90041d2546e0c2b4f378811958cc7b4a1ff4c531566e57486  ./integration-test-results.xml
+d72f697257062d9cbced2afec3d533d78e2e467f717a0b6152fb934c39e9723d  ./lint-report.json
+f930c679718fcbf5188a502eda3266854c29d743beb4b447c46864f5312c3188  ./quality-summary.json
+8934c0993dc0dd13ada2815b5b3c48b236377521a0581ca776f722f0fe8c10cd  ./style-check.json
+bd6bb644a780e0e4f33ab6220a07fc72d341fdbb10307446b50967cbaa48dc75  ./unit-test-results.xml
