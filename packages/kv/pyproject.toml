@@ -48,6 +48,9 @@ dev = [
 "Bug Tracker" = "https://github.com/dataknobs/dataknobs/issues"
 "Documentation" = "https://dataknobs.readthedocs.io"
 
+[tool.uv.sources]
+dataknobs-data = { workspace = true }
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
