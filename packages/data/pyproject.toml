@@ -1,0 +1,164 @@
+[project]
+name = "dataknobs-data"
+version = "0.1.0"
+description = "Unified data abstraction layer for consistent database operations across multiple storage technologies"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "DataKnobs Team", email = "team@dataknobs.com"}
+]
+keywords = ["data", "database", "abstraction", "storage", "records"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "pandas>=2.0.0",
+    "pydantic>=2.0.0",
+    "aiofiles>=23.0.0",
+    "dataknobs-utils>=0.1.0",
+]
+
+[project.optional-dependencies]
+postgres = [
+    "psycopg2>=2.9.0",
+    "sqlalchemy>=2.0.0",
+]
+s3 = [
+    "boto3>=1.26.0",
+    "aioboto3>=11.0.0",
+]
+elasticsearch = [
+    "elasticsearch>=8.0.0",
+    "elasticsearch-async>=6.2.0",
+]
+parquet = [
+    "pyarrow>=14.0.0",
+]
+all = [
+    "dataknobs-data[postgres,s3,elasticsearch,parquet]",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-mock>=3.11.0",
+    "black>=24.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+    "moto>=4.2.0",  # For S3 testing
+    "testcontainers>=3.7.0",  # For database testing
+]
+
+[project.urls]
+"Homepage" = "https://github.com/dataknobs/dataknobs"
+"Bug Tracker" = "https://github.com/dataknobs/dataknobs/issues"
+"Documentation" = "https://dataknobs.readthedocs.io"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dataknobs_data"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--cov=dataknobs_data",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+    "--cov-report=xml",
+    "-v",
+]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["src/dataknobs_data"]
+omit = [
+    "*/tests/*",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+    "pandas.*",
+    "psycopg2.*",
+    "boto3.*",
+    "aioboto3.*",
+    "elasticsearch.*",
+    "moto.*",
+    "testcontainers.*",
+]
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "D",    # pydocstyle
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+    "TCH",  # flake8-type-checking
+    "RUF",  # Ruff-specific rules
+]
+
+ignore = [
+    "D100", # Missing docstring in public module
+    "D104", # Missing docstring in public package
+    "D203", # 1 blank line required before class docstring
+    "D213", # Multi-line docstring summary should start at the second line
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["D104", "F401"]
+"tests/*" = ["D100", "D101", "D102", "D103", "S101"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["dataknobs_data", "dataknobs_utils"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
