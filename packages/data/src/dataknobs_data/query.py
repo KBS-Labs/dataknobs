@@ -116,10 +116,25 @@ class Query:
     """Represents a database query with filters, sorting, and pagination."""
     
     filters: List[Filter] = field(default_factory=list)
-    sort: List[SortSpec] = field(default_factory=list)
-    limit: Optional[int] = None
-    offset: Optional[int] = None
+    sort_specs: List[SortSpec] = field(default_factory=list)
+    limit_value: Optional[int] = None
+    offset_value: Optional[int] = None
     fields: Optional[List[str]] = None  # Field projection
+    
+    @property
+    def sort(self) -> List[SortSpec]:
+        """Get sort specifications (backward compatibility)."""
+        return self.sort_specs
+    
+    @property
+    def limit(self) -> Optional[int]:
+        """Get limit value (backward compatibility)."""
+        return self.limit_value
+    
+    @property
+    def offset(self) -> Optional[int]:
+        """Get offset value (backward compatibility)."""
+        return self.offset_value
     
     def filter(self, field: str, operator: Union[str, Operator], value: Any = None) -> 'Query':
         """Add a filter to the query (fluent interface).
@@ -167,8 +182,12 @@ class Query:
         if isinstance(order, str):
             order = SortOrder.ASC if order.lower() == "asc" else SortOrder.DESC
         
-        self.sort.append(SortSpec(field=field, order=order))
+        self.sort_specs.append(SortSpec(field=field, order=order))
         return self
+    
+    def sort(self, field: str, order: Union[str, SortOrder] = "asc") -> 'Query':
+        """Add sorting (fluent interface)."""
+        return self.sort_by(field, order)
     
     def set_limit(self, limit: int) -> 'Query':
         """Set the result limit (fluent interface).
@@ -179,8 +198,12 @@ class Query:
         Returns:
             Self for method chaining
         """
-        self.limit = limit
+        self.limit_value = limit
         return self
+    
+    def limit(self, value: int) -> 'Query':
+        """Set limit (fluent interface)."""
+        return self.set_limit(value)
     
     def set_offset(self, offset: int) -> 'Query':
         """Set the result offset (fluent interface).
@@ -191,8 +214,12 @@ class Query:
         Returns:
             Self for method chaining
         """
-        self.offset = offset
+        self.offset_value = offset
         return self
+    
+    def offset(self, value: int) -> 'Query':
+        """Set offset (fluent interface)."""
+        return self.set_offset(value)
     
     def select(self, *fields: str) -> 'Query':
         """Set field projection (fluent interface).
@@ -213,19 +240,19 @@ class Query:
     
     def clear_sort(self) -> 'Query':
         """Clear all sort specifications (fluent interface)."""
-        self.sort = []
+        self.sort_specs = []
         return self
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert query to dictionary representation."""
         result = {
             "filters": [f.to_dict() for f in self.filters],
-            "sort": [s.to_dict() for s in self.sort],
+            "sort": [s.to_dict() for s in self.sort_specs],
         }
-        if self.limit is not None:
-            result["limit"] = self.limit
-        if self.offset is not None:
-            result["offset"] = self.offset
+        if self.limit_value is not None:
+            result["limit"] = self.limit_value
+        if self.offset_value is not None:
+            result["offset"] = self.offset_value
         if self.fields is not None:
             result["fields"] = self.fields
         return result
@@ -239,10 +266,10 @@ class Query:
             query.filters.append(Filter.from_dict(filter_data))
         
         for sort_data in data.get("sort", []):
-            query.sort.append(SortSpec.from_dict(sort_data))
+            query.sort_specs.append(SortSpec.from_dict(sort_data))
         
-        query.limit = data.get("limit")
-        query.offset = data.get("offset")
+        query.limit_value = data.get("limit")
+        query.offset_value = data.get("offset")
         query.fields = data.get("fields")
         
         return query
@@ -252,8 +279,8 @@ class Query:
         import copy
         return Query(
             filters=copy.deepcopy(self.filters),
-            sort=copy.deepcopy(self.sort),
-            limit=self.limit,
-            offset=self.offset,
+            sort_specs=copy.deepcopy(self.sort_specs),
+            limit_value=self.limit_value,
+            offset_value=self.offset_value,
             fields=self.fields.copy() if self.fields else None
         )

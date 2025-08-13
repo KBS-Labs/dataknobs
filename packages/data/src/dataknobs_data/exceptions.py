@@ -61,6 +61,13 @@ class SerializationError(DataknobsDataError):
         super().__init__(f"Serialization error ({format}): {message}")
 
 
+class DataFormatError(DataknobsDataError):
+    """Raised when data format is invalid or unsupported."""
+    def __init__(self, format: str, message: str):
+        self.format = format
+        super().__init__(f"Data format error ({format}): {message}")
+
+
 class BackendNotFoundError(DataknobsDataError):
     """Raised when a requested backend is not available."""
     def __init__(self, backend: str, available: list = None):

@@ -144,9 +144,9 @@ class TestQuery:
         """Test creating a query."""
         query = Query()
         assert query.filters == []
-        assert query.sort == []
-        assert query.limit is None
-        assert query.offset is None
+        assert query.sort_specs == []
+        assert query.limit_value is None
+        assert query.offset_value is None
         assert query.fields is None
     
     def test_query_fluent_interface(self):
@@ -166,14 +166,14 @@ class TestQuery:
         assert query.filters[1].field == "status"
         assert query.filters[1].operator == Operator.IN
         
-        assert len(query.sort) == 2
-        assert query.sort[0].field == "age"
-        assert query.sort[0].order == SortOrder.DESC
-        assert query.sort[1].field == "name"
-        assert query.sort[1].order == SortOrder.ASC
+        assert len(query.sort_specs) == 2
+        assert query.sort_specs[0].field == "age"
+        assert query.sort_specs[0].order == SortOrder.DESC
+        assert query.sort_specs[1].field == "name"
+        assert query.sort_specs[1].order == SortOrder.ASC
         
-        assert query.limit == 10
-        assert query.offset == 20
+        assert query.limit_value == 10
+        assert query.offset_value == 20
         assert query.fields == ["name", "age", "email"]
     
     def test_query_filter_operator_mapping(self):
@@ -212,14 +212,14 @@ class TestQuery:
                 .sort_by("d"))
         
         assert len(query.filters) == 2
-        assert len(query.sort) == 2
+        assert len(query.sort_specs) == 2
         
         query.clear_filters()
         assert len(query.filters) == 0
-        assert len(query.sort) == 2
+        assert len(query.sort_specs) == 2
         
         query.clear_sort()
-        assert len(query.sort) == 0
+        assert len(query.sort_specs) == 0
     
     def test_query_to_from_dict(self):
         """Test query serialization."""
@@ -240,10 +240,10 @@ class TestQuery:
         restored = Query.from_dict(dict_repr)
         assert len(restored.filters) == 1
         assert restored.filters[0].field == "age"
-        assert len(restored.sort) == 1
-        assert restored.sort[0].field == "name"
-        assert restored.limit == 10
-        assert restored.offset == 5
+        assert len(restored.sort_specs) == 1
+        assert restored.sort_specs[0].field == "name"
+        assert restored.limit_value == 10
+        assert restored.offset_value == 5
         assert restored.fields == ["name", "age"]
     
     def test_query_copy(self):
@@ -261,8 +261,8 @@ class TestQuery:
         
         # Original should be unchanged
         assert len(original.filters) == 1
-        assert original.limit == 10
+        assert original.limit_value == 10
         
         # Copy should have changes
         assert len(copy.filters) == 2
-        assert copy.limit == 20
+        assert copy.limit_value == 20

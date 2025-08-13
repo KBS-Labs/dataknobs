@@ -82,8 +82,8 @@ class MemoryDatabase(Database):
                     results.append((id, record))
             
             # Apply sorting
-            if query.sort:
-                for sort_spec in reversed(query.sort):
+            if query.sort_specs:
+                for sort_spec in reversed(query.sort_specs):
                     reverse = sort_spec.order.value == "desc"
                     results.sort(
                         key=lambda x: x[1].get_value(sort_spec.field, ""),
@@ -94,10 +94,10 @@ class MemoryDatabase(Database):
             records = [record for _, record in results]
             
             # Apply offset and limit
-            if query.offset:
-                records = records[query.offset:]
-            if query.limit:
-                records = records[:query.limit]
+            if query.offset_value:
+                records = records[query.offset_value:]
+            if query.limit_value:
+                records = records[:query.limit_value]
             
             # Apply field projection
             if query.fields:
@@ -223,8 +223,8 @@ class SyncMemoryDatabase(SyncDatabase):
                     results.append((id, record))
             
             # Apply sorting
-            if query.sort:
-                for sort_spec in reversed(query.sort):
+            if query.sort_specs:
+                for sort_spec in reversed(query.sort_specs):
                     reverse = sort_spec.order.value == "desc"
                     results.sort(
                         key=lambda x: x[1].get_value(sort_spec.field, ""),
@@ -235,10 +235,10 @@ class SyncMemoryDatabase(SyncDatabase):
             records = [record for _, record in results]
             
             # Apply offset and limit
-            if query.offset:
-                records = records[query.offset:]
-            if query.limit:
-                records = records[:query.limit]
+            if query.offset_value:
+                records = records[query.offset_value:]
+            if query.limit_value:
+                records = records[:query.limit_value]
             
             # Apply field projection
             if query.fields:
