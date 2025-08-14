@@ -19457,7 +19457,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.file:[432:459]\n==dataknobs_data.backends.memory:[90:117]\n            if query.sort_specs:\n                for sort_spec in reversed(query.sort_specs):\n                    reverse = sort_spec.order.value == \"desc\"\n                    results.sort(key=lambda x: x[1].get_value(sort_spec.field, \"\"), reverse=reverse)\n\n            # Extract records\n            records = [record for _, record in results]\n\n            # Apply offset and limit\n            if query.offset_value:\n                records = records[query.offset_value :]\n            if query.limit_value:\n                records = records[: query.limit_value]\n\n            # Apply field projection\n            if query.fields:\n                projected_records = []\n                for record in records:\n                    projected_records.append(record.project(query.fields))\n                records = projected_records\n\n            # Return deep copies\n            return [record.copy(deep=True) for record in records]\n\n    async def _count_all(self) -> int:\n        \"\"\"Count all records in the file.\"\"\"\n        async with self._lock:",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.file:[432:459]\n==dataknobs_data.backends.memory:[90:117]\n            if query.sort_specs:\n                for sort_spec in reversed(query.sort_specs):\n                    reverse = sort_spec.order.value == \"desc\"\n                    results.sort(key=lambda x: x[1].get_value(sort_spec.field, \"\"), reverse=reverse)\n\n            # Extract records\n            records = [record for _, record in results]\n\n            # Apply offset and limit\n            if query.offset_value:\n                records = records[query.offset_value :]\n            if query.limit_value:\n                records = records[: query.limit_value]\n\n            # Apply field projection\n            if query.fields:\n                projected_records = []\n                for record in records:\n                    projected_records.append(record.project(query.fields))\n                records = projected_records\n\n            # Return deep copies\n            return [record.copy(deep=True) for record in records]\n\n    async def _count_all(self) -> int:\n        \"\"\"Count all records in memory.\"\"\"\n        async with self._lock:",
         "message-id": "R0801"
     },
     {
@@ -19509,7 +19509,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_config.environment:[167:182]\n==dataknobs_config.references:[89:107]\n            type_name = match.group(1)\n            selector = match.group(2)\n\n        if not type_name:\n            raise InvalidReferenceError(f\"Missing type in reference: {ref}\")\n\n        # Parse selector\n        name_or_index: Union[str, int]\n        if selector is None:\n            name_or_index = 0\n        elif selector.isdigit() or (selector.startswith(\"-\") and selector[1:].isdigit()):\n            name_or_index = int(selector)\n        else:\n            name_or_index = selector\n",
+        "message": "Similar lines in 2 files\n==dataknobs_config.environment:[167:182]\n==dataknobs_config.references:[89:107]\n        type_name = match.group(1)\n        selector = match.group(2)\n\n        if not type_name:\n            raise InvalidReferenceError(f\"Missing type in reference: {ref}\")\n\n        # Parse selector\n        name_or_index: Union[str, int]\n        if selector is None:\n            # No selector means first item (index 0)\n            name_or_index = 0\n        elif selector.isdigit() or (selector.startswith(\"-\") and selector[1:].isdigit()):\n            # Numeric selector (index)\n            name_or_index = int(selector)\n        else:\n            # String selector (name)\n            name_or_index = selector\n",
         "message-id": "R0801"
     },
     {
@@ -19548,7 +19548,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_xization.annotations:[275:295]\n==dataknobs_xization.authorities:[198:219]\n    ) -> Dict[str, Any]:\n        \"\"\"Build an annotation row with the mandatory key values and those from\n        the remaining keyword arguments.\n\n        For those kwargs whose names match metadata column names, override the\n        data_defaults and add remaining data_default attributes.\n\n        :param result_row_dict: The result row dictionary being built\n        :param start_pos: The token start position\n        :param end_pos: The token end position\n        :param text: The token text\n        :param ann_type: The annotation type\n        :return: The result_row_dict\n        \"\"\"\n        return self.do_build_row(\n            {\n                self.metadata.start_pos_col: start_pos,\n                self.metadata.end_pos_col: end_pos,\n                self.metadata.text_col: text,\n                self.metadata.ann_type_col: ann_type,",
+        "message": "Similar lines in 2 files\n==dataknobs_xization.annotations:[275:295]\n==dataknobs_xization.authorities:[198:219]\n    ) -> Dict[str, Any]:\n        \"\"\"Build an annotation row with the mandatory key values and those from\n        the remaining keyword arguments.\n\n        For those kwargs whose names match metadata column names, override the\n        data_defaults and add remaining data_default attributes.\n\n        :param result_row_dict: The result row dictionary being built\n        :param start_pos: The token start position\n        :param end_pos: The token end position\n        :param text: The token text\n        :param ann_type: The annotation type\n        :param auth_id: The authority ID for the row\n        :return: The result_row_dict\n        \"\"\"\n        return self.do_build_row(\n            {\n                self.metadata.start_pos_col: start_pos,\n                self.metadata.end_pos_col: end_pos,\n                self.metadata.text_col: text,\n                self.metadata.ann_type_col: ann_type,",
         "message-id": "R0801"
     },
     {
@@ -19561,7 +19561,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_xization.authorities:[552:576]\n==dataknobs_xization.lexicon:[261:283]\n    def find_variations(\n        self,\n        variation: str,\n        starts_with: bool = False,\n        ends_with: bool = False,\n        scope: str = \"fullmatch\",\n    ) -> pd.Series:\n        \"\"\"Find all matches to the given variation.\n        :param variation: The text to find; treated as a regular expression\n            unless either starts_with or ends_with is True.\n        :param starts_with: When True, find all terms that start with the\n            variation text.\n        :param ends_with: When True, find all terms that end with the variation\n            text.\n        :param scope: 'fullmatch' (default), 'match', or 'contains' for\n            strict, less strict, and least strict matching\n        :return: The matching variations as a pd.Series\n\n        Note only the first true of starts_with, ends_with, and scope will\n        be applied. If none of these are true, an full match on the pattern\n        is performed.\n        \"\"\"",
+        "message": "Similar lines in 2 files\n==dataknobs_xization.authorities:[552:576]\n==dataknobs_xization.lexicon:[261:283]\n    def find_variations(\n        self,\n        variation: str,\n        starts_with: bool = False,\n        ends_with: bool = False,\n        scope: str = \"fullmatch\",\n    ) -> pd.Series:\n        \"\"\"Find all matches to the given variation.\n        :param variation: The text to find; treated as a regular expression\n            unless either starts_with or ends_with is True.\n        :param starts_with: When True, find all terms that start with the\n            variation text.\n        :param ends_with: When True, find all terms that end with the variation\n            text.\n        :param scope: 'fullmatch' (default), 'match', or 'contains' for\n            strict, less strict, and least strict matching\n        :param category_constraints: When present, limit results to terms with\n            the given constraints.\n        :return: The matching variations as a pd.Series\n\n        Note only the first true of starts_with, ends_with, and scope will\n        be applied. If none of these are true, an full match on the pattern\n        is performed.\n        \"\"\"",
         "message-id": "R0801"
     },
     {
@@ -19704,7 +19704,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "cyclic-import",
-        "message": "Cyclic import (dataknobs_data.backends -> dataknobs_data.backends.elasticsearch -> dataknobs_data.database)",
+        "message": "Cyclic import (dataknobs_data.backends -> dataknobs_data.backends.memory -> dataknobs_data.database)",
         "message-id": "R0401"
     },
     {
@@ -19717,7 +19717,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "cyclic-import",
-        "message": "Cyclic import (dataknobs_data.backends -> dataknobs_data.backends.memory -> dataknobs_data.database)",
+        "message": "Cyclic import (dataknobs_data.backends -> dataknobs_data.backends.elasticsearch -> dataknobs_data.database)",
         "message-id": "R0401"
     },
     {

@@ -178,6 +178,8 @@ else
         # Run tests and capture exit code properly
         set +e  # Temporarily disable exit on error
         # Run tests, excluding only those explicitly marked as integration
+        # Clean up any existing coverage data
+        rm -f .coverage .coverage.*
         uv run pytest packages/*/tests/ -v \
             -m "not integration" \
             --junit-xml="$ARTIFACTS_DIR/unit-test-results.xml" \
@@ -185,6 +187,10 @@ else
             --cov-report=xml:"$ARTIFACTS_DIR/coverage-unit.xml" \
             --cov-report=term 2>&1 | tee "$ARTIFACTS_DIR/unit-test-output.txt"
         UNIT_TEST_STATUS=${PIPESTATUS[0]}  # Get pytest exit code, not tee's
+        # Save the coverage database file
+        if [ -f .coverage ]; then
+            cp .coverage "$ARTIFACTS_DIR/.coverage.unit"
+        fi
         set -e  # Re-enable exit on error
         
         if [ $UNIT_TEST_STATUS -eq 0 ]; then
@@ -220,12 +226,18 @@ if [ "$INT_TEST_COUNT" -eq "0" ]; then
 else
     # Run tests and capture exit code properly
     set +e  # Temporarily disable exit on error
+    # Clean up any existing coverage data
+    rm -f .coverage .coverage.*
     uv run pytest packages/*/tests/ -v -m "integration" \
         --junit-xml="$ARTIFACTS_DIR/integration-test-results.xml" \
         --cov=packages \
         --cov-report=xml:"$ARTIFACTS_DIR/coverage-integration.xml" \
         --cov-report=term 2>&1 | tee "$ARTIFACTS_DIR/integration-test-output.txt"
     INTEGRATION_TEST_STATUS=${PIPESTATUS[0]}  # Get pytest exit code, not tee's
+    # Save the coverage database file
+    if [ -f .coverage ]; then
+        cp .coverage "$ARTIFACTS_DIR/.coverage.integration"
+    fi
     set -e  # Re-enable exit on error
     
     if [ $INTEGRATION_TEST_STATUS -eq 0 ]; then
@@ -239,18 +251,58 @@ fi
 
 # Combine coverage reports
 print_status "Processing coverage reports..."
-if [ -f "$ARTIFACTS_DIR/coverage-unit.xml" ] && [ -f "$ARTIFACTS_DIR/coverage-integration.xml" ]; then
-    # Try to combine, but don't fail if it doesn't work
-    uv run coverage combine "$ARTIFACTS_DIR/coverage-unit.xml" "$ARTIFACTS_DIR/coverage-integration.xml" 2>/dev/null || true
-    uv run coverage xml -o "$ARTIFACTS_DIR/coverage.xml" 2>/dev/null || true
-    
-    if [ ! -f "$ARTIFACTS_DIR/coverage.xml" ]; then
-        cp "$ARTIFACTS_DIR/coverage-unit.xml" "$ARTIFACTS_DIR/coverage.xml" 2>/dev/null || true
+if [ -f "$ARTIFACTS_DIR/.coverage.unit" ] && [ -f "$ARTIFACTS_DIR/.coverage.integration" ]; then
+    # Combine the coverage database files
+    cd "$ARTIFACTS_DIR"
+    uv run coverage combine .coverage.unit .coverage.integration 2>/dev/null || {
+        print_warning "Could not combine coverage databases, using unit coverage only"
+        cp .coverage.unit .coverage 2>/dev/null || true
+    }
+    # Generate combined XML report
+    if [ -f .coverage ]; then
+        uv run coverage xml -o coverage.xml 2>/dev/null || {
+            print_warning "Could not generate combined XML, using existing XML"
+            if [ ! -f coverage.xml ] && [ -f coverage-unit.xml ]; then
+                cp coverage-unit.xml coverage.xml
+            fi
+        }
     fi
+    cd "$PROJECT_ROOT"
     print_success "Coverage reports processed"
-elif [ -f "$ARTIFACTS_DIR/coverage-unit.xml" ]; then
-    cp "$ARTIFACTS_DIR/coverage-unit.xml" "$ARTIFACTS_DIR/coverage.xml"
+elif [ -f "$ARTIFACTS_DIR/.coverage.unit" ]; then
+    # Only unit test coverage available
+    cd "$ARTIFACTS_DIR"
+    cp .coverage.unit .coverage
+    uv run coverage xml -o coverage.xml 2>/dev/null || {
+        if [ -f coverage-unit.xml ]; then
+            cp coverage-unit.xml coverage.xml
+        fi
+    }
+    cd "$PROJECT_ROOT"
     print_success "Coverage report created from unit tests"
+elif [ -f "$ARTIFACTS_DIR/.coverage.integration" ]; then
+    # Only integration test coverage available
+    cd "$ARTIFACTS_DIR"
+    cp .coverage.integration .coverage
+    uv run coverage xml -o coverage.xml 2>/dev/null || {
+        if [ -f coverage-integration.xml ]; then
+            cp coverage-integration.xml coverage.xml
+        fi
+    }
+    cd "$PROJECT_ROOT"
+    print_success "Coverage report created from integration tests"
+elif [ -f "$ARTIFACTS_DIR/coverage-unit.xml" ] || [ -f "$ARTIFACTS_DIR/coverage-integration.xml" ]; then
+    # Fallback: use existing XML reports if no database files
+    if [ -f "$ARTIFACTS_DIR/coverage-unit.xml" ] && [ -f "$ARTIFACTS_DIR/coverage-integration.xml" ]; then
+        # Both XML files exist, just copy unit as we can't merge XML
+        cp "$ARTIFACTS_DIR/coverage-unit.xml" "$ARTIFACTS_DIR/coverage.xml"
+        print_warning "Using unit test coverage XML (cannot merge XML files)"
+    elif [ -f "$ARTIFACTS_DIR/coverage-unit.xml" ]; then
+        cp "$ARTIFACTS_DIR/coverage-unit.xml" "$ARTIFACTS_DIR/coverage.xml"
+    else
+        cp "$ARTIFACTS_DIR/coverage-integration.xml" "$ARTIFACTS_DIR/coverage.xml"
+    fi
+    print_success "Coverage report created from existing XML"
 else
     # Create empty coverage report if no tests ran
     echo '<?xml version="1.0" encoding="utf-8"?><coverage version="1" line-rate="0"><packages></packages></coverage>' > "$ARTIFACTS_DIR/coverage.xml"
