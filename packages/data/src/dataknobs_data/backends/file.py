@@ -12,6 +12,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from dataknobs_config import ConfigurableBase
+
 from ..database import Database, SyncDatabase
 from ..query import Query
 from ..records import Record
@@ -181,11 +183,21 @@ class CSVFormat(FileFormat):
                     f.write("")
             return
 
-        # Extract all field names
+        # Extract all field names and prepare flattened data
         all_fields = set()
-        for record_data in data.values():
+        flattened_data = {}
+        for record_id, record_data in data.items():
             if "fields" in record_data:
-                all_fields.update(record_data["fields"].keys())
+                # Flatten field values for CSV format
+                flat_fields = {}
+                for field_name, field_data in record_data["fields"].items():
+                    # Handle both full field dicts and simple values
+                    if isinstance(field_data, dict) and "value" in field_data:
+                        flat_fields[field_name] = field_data["value"]
+                    else:
+                        flat_fields[field_name] = field_data
+                    all_fields.add(field_name)
+                flattened_data[record_id] = flat_fields
 
         fieldnames = ["__id__"] + sorted(list(all_fields))
 
@@ -193,19 +205,17 @@ class CSVFormat(FileFormat):
             with gzip.open(filepath, "wt", encoding="utf-8", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
-                for record_id, record_data in data.items():
+                for record_id, fields in flattened_data.items():
                     row = {"__id__": record_id}
-                    if "fields" in record_data:
-                        row.update(record_data["fields"])
+                    row.update(fields)
                     writer.writerow(row)
         else:
             with open(filepath, "w", encoding="utf-8", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
-                for record_id, record_data in data.items():
+                for record_id, fields in flattened_data.items():
                     row = {"__id__": record_id}
-                    if "fields" in record_data:
-                        row.update(record_data["fields"])
+                    row.update(fields)
                     writer.writerow(row)
 
 
@@ -254,7 +264,13 @@ class ParquetFormat(FileFormat):
                 for record_id, record_data in data.items():
                     row = {"__id__": record_id}
                     if "fields" in record_data:
-                        row.update(record_data["fields"])
+                        # Flatten field values for Parquet format
+                        for field_name, field_data in record_data["fields"].items():
+                            # Handle both full field dicts and simple values
+                            if isinstance(field_data, dict) and "value" in field_data:
+                                row[field_name] = field_data["value"]
+                            else:
+                                row[field_name] = field_data
                     rows.append(row)
 
                 df = pd.DataFrame(rows)
@@ -264,7 +280,7 @@ class ParquetFormat(FileFormat):
             raise ImportError("Parquet support requires pandas and pyarrow packages")
 
 
-class FileDatabase(Database):
+class FileDatabase(Database, ConfigurableBase):
     """Async file-based database implementation."""
 
     FORMAT_HANDLERS = {
@@ -304,6 +320,11 @@ class FileDatabase(Database):
         # Get the appropriate format handler
         ext = f".{self.format}"
         self.handler = self.FORMAT_HANDLERS.get(ext, JSONFormat)
+    
+    @classmethod
+    def from_config(cls, config: dict) -> "FileDatabase":
+        """Create from config dictionary."""
+        return cls(config)
 
     def _generate_id(self) -> str:
         """Generate a unique ID for a record."""
@@ -489,7 +510,7 @@ class FileDatabase(Database):
             return results
 
 
-class SyncFileDatabase(SyncDatabase):
+class SyncFileDatabase(SyncDatabase, ConfigurableBase):
     """Synchronous file-based database implementation."""
 
     FORMAT_HANDLERS = {
@@ -529,6 +550,11 @@ class SyncFileDatabase(SyncDatabase):
         # Get the appropriate format handler
         ext = f".{self.format}"
         self.handler = self.FORMAT_HANDLERS.get(ext, JSONFormat)
+    
+    @classmethod
+    def from_config(cls, config: dict) -> "SyncFileDatabase":
+        """Create from config dictionary."""
+        return cls(config)
 
     def _generate_id(self) -> str:
         """Generate a unique ID for a record."""

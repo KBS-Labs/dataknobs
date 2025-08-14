@@ -16,6 +16,7 @@ from .exceptions import (
     SerializationError,
     TransactionError,
 )
+from .factory import DatabaseFactory, database_factory, async_database_factory
 from .fields import Field, FieldType
 from .query import Filter, Operator, Query, SortOrder, SortSpec
 from .records import Record
@@ -34,6 +35,10 @@ __all__ = [
     "Operator",
     "SortOrder",
     "SortSpec",
+    # Factory
+    "DatabaseFactory",
+    "database_factory",
+    "async_database_factory",
     # Exceptions
     "DataknobsDataError",
     "RecordNotFoundError",

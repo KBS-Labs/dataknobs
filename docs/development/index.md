@@ -11,17 +11,20 @@ Dataknobs is a modular Python ecosystem for AI knowledge base structures and tex
 If you're new to Dataknobs development:
 
 1. **[Contributing Guide](contributing.md)** - Start here to learn how to contribute
-2. **[UV Virtual Environment Guide](uv-environment.md)** - How to work with UV package manager
-3. **[Quality Checks Process](quality-checks.md)** - Developer-driven quality assurance
-4. **[Architecture Overview](architecture.md)** - Understand the system design
-5. **[Testing Guide](testing.md)** - Learn about our testing approach
-6. **[Integration Testing & CI](integration-testing-ci.md)** - Integration testing in CI/CD pipeline
-7. **[CI/CD Pipeline](ci-cd.md)** - Understand our deployment process
+2. **[Configuration System](configuration-system.md)** - Understand the DataKnobs configuration patterns
+3. **[UV Virtual Environment Guide](uv-environment.md)** - How to work with UV package manager
+4. **[Quality Checks Process](quality-checks.md)** - Developer-driven quality assurance
+5. **[Architecture Overview](architecture.md)** - Understand the system design
+6. **[Testing Guide](testing.md)** - Learn about our testing approach
+7. **[Integration Testing & CI](integration-testing-ci.md)** - Integration testing in CI/CD pipeline
+8. **[CI/CD Pipeline](ci-cd.md)** - Understand our deployment process
 
 ## Development Topics
 
 ### Core Development
 - **[Contributing Guide](contributing.md)** - How to contribute code, documentation, and report issues
+- **[Configuration System](configuration-system.md)** - DataKnobs configuration patterns and best practices
+- **[Adding Config Support](adding-config-support.md)** - Step-by-step guide to add configuration support to packages
 - **[UV Virtual Environment Guide](uv-environment.md)** - Working with UV package manager and virtual environments
 - **[Quality Checks Process](quality-checks.md)** - Running quality checks locally before PRs
 - **[Architecture Overview](architecture.md)** - System architecture and design principles

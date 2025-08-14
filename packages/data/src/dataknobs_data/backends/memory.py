@@ -6,18 +6,25 @@ import uuid
 from collections import OrderedDict
 from typing import Any
 
+from dataknobs_config import ConfigurableBase
+
 from ..database import Database, SyncDatabase
 from ..query import Query
 from ..records import Record
 
 
-class MemoryDatabase(Database):
+class MemoryDatabase(Database, ConfigurableBase):
     """Async in-memory database implementation."""
 
     def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config)
         self._storage: OrderedDict[str, Record] = OrderedDict()
         self._lock = asyncio.Lock()
+    
+    @classmethod
+    def from_config(cls, config: dict) -> "MemoryDatabase":
+        """Create from config dictionary."""
+        return cls(config)
 
     def _generate_id(self) -> str:
         """Generate a unique ID for a record."""
@@ -149,13 +156,18 @@ class MemoryDatabase(Database):
             return results
 
 
-class SyncMemoryDatabase(SyncDatabase):
+class SyncMemoryDatabase(SyncDatabase, ConfigurableBase):
     """Synchronous in-memory database implementation."""
 
     def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config)
         self._storage: OrderedDict[str, Record] = OrderedDict()
         self._lock = threading.RLock()
+    
+    @classmethod
+    def from_config(cls, config: dict) -> "SyncMemoryDatabase":
+        """Create from config dictionary."""
+        return cls(config)
 
     def _generate_id(self) -> str:
         """Generate a unique ID for a record."""

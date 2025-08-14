@@ -36,6 +36,7 @@
   - [x] Storage structure
   - [x] ID generation
   - [x] Thread safety
+  - [x] Config package integration (ConfigurableBase)
 - [x] CRUD operations
   - [x] Create method
   - [x] Read method
@@ -53,16 +54,18 @@
   - [x] Concurrent access tests
   - [x] Performance benchmarks
   - [x] Edge cases
+  - [x] Config integration tests
 
 ## Phase 3: File Backend
 - [x] Implement FileDatabase class
   - [x] File management
   - [x] Locking mechanism
   - [x] Atomic writes
+  - [x] Config package integration (ConfigurableBase)
 - [x] Format support
   - [x] JSON serialization
-  - [x] CSV support
-  - [x] Parquet support
+  - [x] CSV support (with field value extraction fix)
+  - [x] Parquet support (with field value extraction fix)
   - [x] Compression
 - [x] Operations
   - [x] CRUD implementation
@@ -74,6 +77,7 @@
   - [x] Concurrent access tests
   - [x] Large file handling
   - [x] Corruption recovery (empty file handling)
+  - [x] Config integration tests
 
 ## Phase 4: Database Backends
 - [x] PostgreSQL Backend
@@ -83,6 +87,7 @@
   - [x] Query translation
   - [x] Transaction support (via atomic writes)
   - [x] Connection pooling (via PostgresDB)
+  - [x] Config package integration (ConfigurableBase)
   - [x] Tests
 - [x] Elasticsearch Backend
   - [x] Connection management
@@ -91,32 +96,39 @@
   - [x] Query translation
   - [x] Bulk operations (via batch methods)
   - [ ] Aggregations (future enhancement)
+  - [x] Config package integration (ConfigurableBase)
   - [x] Tests
 - [x] Integration with existing utils
   - [x] sql_utils integration
   - [x] elasticsearch_utils integration
   - [x] Connection configuration
   - [x] Error handling
+- [x] Config Package Integration
+  - [x] All backends inherit from ConfigurableBase
+  - [x] Support for Config.get_instance() construction
+  - [x] from_config() classmethod implementation
+  - [x] Integration tests for config-based construction
 
 ## Phase 5: Cloud Storage
-- [ ] S3 Backend
-  - [ ] Connection management
-  - [ ] Object organization
-  - [ ] CRUD operations
-  - [ ] Metadata as tags
-  - [ ] Batch operations
-  - [ ] Cost optimization
-  - [ ] Tests
-- [ ] Authentication
-  - [ ] IAM roles
-  - [ ] Access keys
-  - [ ] Session tokens
-  - [ ] Region support
-- [ ] Performance
-  - [ ] Parallel uploads
-  - [ ] Multipart support
-  - [ ] Caching
-  - [ ] Retry logic
+- [x] S3 Backend
+  - [x] Connection management (boto3 client with retries)
+  - [x] Object organization (prefix-based namespacing)
+  - [x] CRUD operations (create, read, update, delete, exists)
+  - [x] Metadata as tags (S3 object tags)
+  - [x] Batch operations (parallel create/read/delete)
+  - [x] Cost optimization (caching, efficient searches)
+  - [x] Tests (moto mocking and LocalStack integration)
+  - [x] Config package integration (ConfigurableBase)
+- [x] Authentication
+  - [x] IAM roles (automatic in EC2/ECS)
+  - [x] Access keys (via config or environment)
+  - [x] Session tokens (optional support)
+  - [x] Region support (configurable)
+- [x] Performance
+  - [x] Parallel uploads (ThreadPoolExecutor)
+  - [x] Multipart support (configurable thresholds)
+  - [x] Caching (index cache for listings)
+  - [x] Retry logic (exponential backoff via boto3)
 
 ## Phase 6: Advanced Features
 - [ ] Async/Await Support

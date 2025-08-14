@@ -22,6 +22,9 @@ dependencies = [
     "pydantic>=2.0.0",
     "aiofiles>=23.0.0",
     "dataknobs-utils>=0.1.0",
+    "dataknobs-config>=0.1.0",
+    "boto3>=1.38.27",
+    "moto>=5.1.10",
 ]
 
 [project.optional-dependencies]
@@ -62,6 +65,7 @@ dev = [
 
 [tool.uv.sources]
 dataknobs-utils = { workspace = true }
+dataknobs-config = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

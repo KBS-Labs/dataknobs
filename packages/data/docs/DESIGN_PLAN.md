@@ -105,34 +105,44 @@ SortSpec = {
 
 ### 4. Storage Backends
 
+All backends inherit from `ConfigurableBase` to ensure compatibility with the DataKnobs config system, allowing for:
+- Configuration-based instantiation via `Config.build()`
+- Factory pattern support via `FactoryBase`
+- Consistent construction patterns across all backends
+
 #### Memory Backend
 - In-memory dictionary storage
 - Fast for testing and small datasets
 - Optional persistence to JSON/pickle
+- Inherits from `ConfigurableBase`
 
 #### File Backend
 - JSON, CSV, Parquet file storage
 - Atomic writes with temporary files
 - Optional compression support
 - File locking for concurrent access
+- Inherits from `ConfigurableBase`
 
 #### S3 Backend
 - AWS S3 object storage
 - Prefix-based organization
 - Metadata as object tags
 - Batch operations support
+- Inherits from `ConfigurableBase`
 
 #### PostgreSQL Backend
 - Leverages existing `sql_utils`
 - JSONB for flexible schema
 - Index support for performance
 - Transaction support
+- Inherits from `ConfigurableBase`
 
 #### Elasticsearch Backend
 - Leverages existing `elasticsearch_utils`
 - Full-text search capabilities
 - Aggregation support
 - Real-time indexing
+- Inherits from `ConfigurableBase`
 
 ### 5. Serialization System
 
@@ -201,6 +211,8 @@ results_df = db.search_as_dataframe(query)
 ```
 
 ### Backend Configuration
+
+#### Direct Instantiation
 ```python
 # File backend
 db = Database.create("file", {
@@ -223,6 +235,61 @@ db = Database.create("s3", {
     "prefix": "records/",
     "region": "us-west-2"
 })
+```
+
+#### Config Package Integration
+All database backends inherit from `ConfigurableBase` to support the DataKnobs config system:
+
+```python
+from dataknobs_config import Config
+
+# Define configuration
+config = Config()
+config.load({
+    "databases": {
+        "primary": {
+            "class": "dataknobs_data.backends.postgres.PostgresDatabase",
+            "host": "localhost",
+            "database": "mydb",
+            "table": "records"
+        },
+        "cache": {
+            "class": "dataknobs_data.backends.memory.MemoryDatabase"
+        },
+        "archive": {
+            "class": "dataknobs_data.backends.s3.S3Database",
+            "bucket": "my-archive",
+            "prefix": "records/"
+        }
+    }
+})
+
+# Build databases from config
+primary_db = config.build("databases.primary")
+cache_db = config.build("databases.cache")
+archive_db = config.build("databases.archive")
+```
+
+#### Factory Pattern
+The backend factory inherits from `FactoryBase` to support dynamic backend creation:
+
+```python
+from dataknobs_data import DatabaseFactory
+
+# Using factory with config
+config.load({
+    "database_factory": {
+        "factory": "dataknobs_data.DatabaseFactory"
+    },
+    "database_config": {
+        "type": "postgres",
+        "host": "localhost",
+        "database": "mydb"
+    }
+})
+
+factory = config.build("database_factory")
+db = factory.create(**config.get("database_config"))
 ```
 
 ## Implementation Phases

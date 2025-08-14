@@ -15,6 +15,7 @@ The `dataknobs-data` package enables seamless data management regardless of the 
 - **Type Safety**: Strong typing with Pydantic validation
 - **Async Support**: Both synchronous and asynchronous APIs
 - **Query System**: Powerful, backend-agnostic query capabilities
+- **Configuration Support**: Full integration with DataKnobs configuration system
 - **Extensible**: Easy to add custom storage backends
 
 ## Installation
@@ -100,6 +101,139 @@ db = Database.create("elasticsearch", {
     "index": "records",
     "doc_type": "_doc"
 })
+```
+
+## Configuration Support
+
+The data package fully integrates with the DataKnobs configuration system. All backends inherit from `ConfigurableBase` and can be instantiated from configuration files.
+
+### Using Configuration Files
+
+```yaml
+# config.yaml
+databases:
+  - name: primary
+    class: dataknobs_data.backends.postgres.PostgresDatabase
+    host: ${DB_HOST:localhost}  # Environment variable with default
+    port: ${DB_PORT:5432}
+    database: myapp
+    user: ${DB_USER:postgres}
+    password: ${DB_PASSWORD}
+    table: records
+    
+  - name: cache
+    class: dataknobs_data.backends.memory.MemoryDatabase
+    
+  - name: archive
+    class: dataknobs_data.backends.file.SyncFileDatabase
+    path: /data/archive.json
+    format: json
+    compression: gzip
+    
+  - name: cloud_storage
+    class: dataknobs_data.backends.s3.S3Database
+    bucket: ${S3_BUCKET:my-data-bucket}
+    prefix: ${S3_PREFIX:records/}
+    region: ${AWS_REGION:us-east-1}
+    endpoint_url: ${S3_ENDPOINT}  # Optional, for LocalStack/MinIO
+```
+
+### Loading from Configuration
+
+```python
+from dataknobs_config import Config
+from dataknobs_data import Record, Query
+
+# Load configuration
+config = Config("config.yaml")
+
+# Create database instances from config
+primary_db = config.get_instance("databases", "primary")
+cache_db = config.get_instance("databases", "cache")
+archive_db = config.get_instance("databases", "archive")
+
+# Use the databases normally
+record = Record({"name": "test", "value": 42})
+record_id = primary_db.create(record)
+
+# Cache frequently accessed data
+cache_db.create(record)
+
+# Archive old records
+archive_db.create(record)
+```
+
+### Direct Configuration
+
+```python
+from dataknobs_data.backends.postgres import PostgresDatabase
+
+# All backends support from_config classmethod
+db = PostgresDatabase.from_config({
+    "host": "localhost",
+    "database": "myapp",
+    "user": "postgres",
+    "password": "secret"
+})
+```
+
+## Backend Factory
+
+The data package provides a factory pattern for dynamic backend selection:
+
+### Using the Factory Directly
+
+```python
+from dataknobs_data import DatabaseFactory
+
+factory = DatabaseFactory()
+
+# Create different backends
+memory_db = factory.create(backend="memory")
+file_db = factory.create(backend="file", path="data.json", format="json")
+s3_db = factory.create(backend="s3", bucket="my-bucket", prefix="data/")
+```
+
+### Factory with Configuration
+
+```python
+from dataknobs_config import Config
+from dataknobs_data import database_factory
+
+# Register factory for cleaner configs
+config = Config()
+config.register_factory("database", database_factory)
+
+# Use registered factory in configuration
+config.load({
+    "databases": [{
+        "name": "main",
+        "factory": "database",  # Uses registered factory
+        "backend": "postgres",
+        "host": "localhost",
+        "database": "myapp"
+    }]
+})
+
+db = config.get_instance("databases", "main")
+```
+
+### Factory Configuration Examples
+
+```yaml
+# Using registered factory (cleaner)
+databases:
+  - name: main
+    factory: database
+    backend: ${DB_BACKEND:postgres}
+    host: ${DB_HOST:localhost}
+    
+# Using module path (no registration needed)
+databases:
+  - name: main
+    factory: dataknobs_data.factory.database_factory
+    backend: postgres
+    host: localhost
 ```
 
 ## Pandas Integration

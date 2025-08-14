@@ -11,6 +11,7 @@ from .exceptions import (
     InvalidReferenceError,
     ValidationError,
 )
+from .substitution import VariableSubstitution
 
 __version__ = "0.1.0"
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     "FactoryBase",
     "InvalidReferenceError",
     "ValidationError",
+    "VariableSubstitution",
 ]

@@ -4,6 +4,7 @@ import asyncio
 import uuid
 from typing import Any
 
+from dataknobs_config import ConfigurableBase
 from dataknobs_utils.elasticsearch_utils import SimplifiedElasticsearchIndex
 
 from ..database import Database, SyncDatabase
@@ -12,7 +13,7 @@ from ..query import Operator, Query, SortOrder
 from ..records import Record
 
 
-class SyncElasticsearchDatabase(SyncDatabase):
+class SyncElasticsearchDatabase(SyncDatabase, ConfigurableBase):
     """Synchronous Elasticsearch database backend."""
 
     def __init__(self, config: dict[str, Any] | None = None):
@@ -28,6 +29,11 @@ class SyncElasticsearchDatabase(SyncDatabase):
                 - mappings: Index mappings dict
         """
         super().__init__(config)
+    
+    @classmethod
+    def from_config(cls, config: dict) -> "SyncElasticsearchDatabase":
+        """Create from config dictionary."""
+        return cls(config)
 
     def _initialize(self) -> None:
         """Initialize the Elasticsearch connection and index."""
@@ -390,7 +396,7 @@ class SyncElasticsearchDatabase(SyncDatabase):
         pass
 
 
-class ElasticsearchDatabase(Database):
+class ElasticsearchDatabase(Database, ConfigurableBase):
     """Asynchronous Elasticsearch database backend."""
 
     def __init__(self, config: dict[str, Any] | None = None):
@@ -398,6 +404,11 @@ class ElasticsearchDatabase(Database):
         # Create sync database for delegation
         self._sync_db = SyncElasticsearchDatabase(config)
         super().__init__(config)
+    
+    @classmethod
+    def from_config(cls, config: dict) -> "ElasticsearchDatabase":
+        """Create from config dictionary."""
+        return cls(config)
 
     def _initialize(self) -> None:
         """Initialize is handled by sync database."""

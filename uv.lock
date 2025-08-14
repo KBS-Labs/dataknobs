@@ -993,7 +993,10 @@ version = "0.1.0"
 source = { editable = "packages/data" }
 dependencies = [
     { name = "aiofiles" },
+    { name = "boto3" },
+    { name = "dataknobs-config" },
     { name = "dataknobs-utils" },
+    { name = "moto" },
     { name = "pandas" },
     { name = "pydantic" },
 ]
@@ -1047,11 +1050,14 @@ requires-dist = [
     { name = "aioboto3", marker = "extra == 's3'", specifier = ">=11.0.0" },
     { name = "aiofiles", specifier = ">=23.0.0" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=24.0.0" },
+    { name = "boto3", specifier = ">=1.38.27" },
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.26.0" },
+    { name = "dataknobs-config", editable = "packages/config" },
     { name = "dataknobs-data", extras = ["postgres", "s3", "elasticsearch", "parquet"], marker = "extra == 'all'", editable = "packages/data" },
     { name = "dataknobs-utils", editable = "packages/utils" },
     { name = "elasticsearch", marker = "extra == 'elasticsearch'", specifier = ">=8.0.0" },
     { name = "elasticsearch-async", marker = "extra == 'elasticsearch'", specifier = ">=6.2.0" },
+    { name = "moto", specifier = ">=5.1.10" },
     { name = "moto", marker = "extra == 'dev'", specifier = ">=4.2.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "pandas", specifier = ">=2.0.0" },

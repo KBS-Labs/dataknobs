@@ -5,6 +5,7 @@ import json
 import uuid
 from typing import Any
 
+from dataknobs_config import ConfigurableBase
 from dataknobs_utils.sql_utils import DotenvPostgresConnector, PostgresDB
 
 from ..database import Database, SyncDatabase
@@ -12,7 +13,7 @@ from ..query import Operator, Query, SortOrder
 from ..records import Record
 
 
-class SyncPostgresDatabase(SyncDatabase):
+class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
     """Synchronous PostgreSQL database backend."""
 
     def __init__(self, config: dict[str, Any] | None = None):
@@ -29,6 +30,11 @@ class SyncPostgresDatabase(SyncDatabase):
                 - schema: Schema name (default: "public")
         """
         super().__init__(config)
+    
+    @classmethod
+    def from_config(cls, config: dict) -> "SyncPostgresDatabase":
+        """Create from config dictionary."""
+        return cls(config)
 
     def _initialize(self) -> None:
         """Initialize the PostgreSQL connection and table."""
@@ -354,7 +360,7 @@ class SyncPostgresDatabase(SyncDatabase):
         pass
 
 
-class PostgresDatabase(Database):
+class PostgresDatabase(Database, ConfigurableBase):
     """Asynchronous PostgreSQL database backend."""
 
     def __init__(self, config: dict[str, Any] | None = None):
@@ -362,6 +368,11 @@ class PostgresDatabase(Database):
         # Create sync database for delegation
         self._sync_db = SyncPostgresDatabase(config)
         super().__init__(config)
+    
+    @classmethod
+    def from_config(cls, config: dict) -> "PostgresDatabase":
+        """Create from config dictionary."""
+        return cls(config)
 
     def _initialize(self) -> None:
         """Initialize is handled by sync database."""

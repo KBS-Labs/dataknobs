@@ -2,6 +2,7 @@
 
 import copy
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Union
@@ -18,6 +19,9 @@ from .exceptions import (
 )
 from .references import ReferenceResolver
 from .settings import SettingsManager
+from .substitution import VariableSubstitution
+
+logger = logging.getLogger(__name__)
 
 
 class Config:
@@ -39,6 +43,8 @@ class Config:
         self._reference_resolver = ReferenceResolver(self)
         self._environment_overrides = EnvironmentOverrides()
         self._object_builder = ObjectBuilder(self)
+        self._variable_substitution = VariableSubstitution()
+        self._registered_factories: Dict[str, Any] = {}
 
         # Load sources
         for source in sources:
@@ -151,6 +157,9 @@ class Config:
 
                 # Apply path resolution
                 config = self._resolve_paths(config, type_name)
+                
+                # Apply environment variable substitution
+                config = self._variable_substitution.substitute(config)
 
                 # Store configuration
                 self._data[type_name].append(config)
@@ -518,19 +527,76 @@ class Config:
 
         # Load and instantiate the factory
         factory_path = config["factory"]
-        factory_cls = self._object_builder._load_class(factory_path)
-
-        # Create factory instance
-        try:
-            factory = factory_cls()
-        except TypeError:
-            # Factory might be a module-level function or callable class
-            factory = factory_cls
+        
+        # Check if it's a registered factory first
+        if factory_path in self._registered_factories:
+            factory = self._registered_factories[factory_path]
+        else:
+            # Try to load as a module path
+            factory_cls = self._object_builder._load_class(factory_path)
+            
+            # Create factory instance
+            try:
+                factory = factory_cls()
+            except TypeError:
+                # Factory might be a module-level function or callable class
+                factory = factory_cls
 
         # Cache the factory instance
         self._object_builder._cache[factory_ref] = factory
 
         return factory
+    
+    def register_factory(self, name: str, factory: Any) -> None:
+        """Register a factory instance for use in configurations.
+        
+        Registered factories take precedence over module paths. This allows:
+        1. Cleaner configuration files (no module paths needed)
+        2. Runtime factory substitution (useful for testing)
+        3. Pre-configured factory instances
+        
+        Args:
+            name: Name to register the factory under
+            factory: Factory instance or class
+            
+        Example:
+            >>> config.register_factory("database", database_factory)
+            >>> config.load({
+            ...     "databases": [{
+            ...         "name": "main",
+            ...         "factory": "database",  # Uses registered factory
+            ...         "backend": "postgres"
+            ...     }]
+            ... })
+            
+        Note:
+            If a factory name matches both a registered factory and a module
+            path, the registered factory takes precedence.
+        """
+        self._registered_factories[name] = factory
+        logger.debug(f"Registered factory '{name}': {factory}")
+    
+    def unregister_factory(self, name: str) -> None:
+        """Unregister a factory.
+        
+        Args:
+            name: Name of the factory to unregister
+            
+        Raises:
+            KeyError: If factory is not registered
+        """
+        if name not in self._registered_factories:
+            raise KeyError(f"Factory '{name}' is not registered")
+        del self._registered_factories[name]
+        logger.debug(f"Unregistered factory '{name}'")
+    
+    def get_registered_factories(self) -> Dict[str, Any]:
+        """Get all registered factories.
+        
+        Returns:
+            Dictionary mapping factory names to factory instances
+        """
+        return self._registered_factories.copy()
 
     def get_instance(
         self, type_name: str, name_or_index: Union[str, int] = 0, **kwargs: Any
