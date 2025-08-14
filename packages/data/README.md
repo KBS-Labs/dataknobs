@@ -10,13 +10,16 @@ The `dataknobs-data` package enables seamless data management regardless of the 
 
 - **Unified Interface**: Same API regardless of storage backend
 - **Multiple Backends**: Memory, File (JSON/CSV/Parquet), PostgreSQL, Elasticsearch, S3
-- **Record-Based**: Data represented as structured records with metadata
-- **Pandas Integration**: Seamless conversion to/from DataFrames
-- **Type Safety**: Strong typing with Pydantic validation
+- **Record-Based**: Data represented as structured records with metadata and first-class ID support
+- **Pandas Integration**: Seamless bidirectional conversion to/from DataFrames with type preservation
+- **Migration Utilities**: Backend-to-backend migration, schema evolution, and data transformation
+- **Schema Validation**: Comprehensive validation system with constraints and type coercion
+- **Type Safety**: Strong typing with field validation and automatic type conversion
 - **Async Support**: Both synchronous and asynchronous APIs
 - **Query System**: Powerful, backend-agnostic query capabilities
 - **Configuration Support**: Full integration with DataKnobs configuration system
-- **Extensible**: Easy to add custom storage backends
+- **Batch Operations**: Efficient bulk insert, update, and upsert operations
+- **Extensible**: Easy to add custom storage backends, validators, and transformers
 
 ## Installation
 
@@ -34,33 +37,45 @@ pip install dataknobs-data[all]         # All backends
 ## Quick Start
 
 ```python
-from dataknobs_data import Database, Record, Query
+from dataknobs_data import Record, Field, FieldType
+from dataknobs_data.backends.memory import MemoryDatabase
 
-# Create a database instance (memory backend for testing)
-db = Database.create("memory")
+# Create a database instance
+db = MemoryDatabase()
 
-# Create and store a record
-record = Record({
-    "name": "John Doe",
-    "age": 30,
-    "email": "john@example.com",
-    "active": True
-})
+# Create a record with automatic ID generation
+record = Record(
+    fields={
+        "name": Field("name", FieldType.STRING, "John Doe"),
+        "age": Field("age", FieldType.INTEGER, 30),
+        "email": Field("email", FieldType.STRING, "john@example.com"),
+        "active": Field("active", FieldType.BOOLEAN, True)
+    }
+)
+print(record.id)  # Auto-generated UUID
 
 # CRUD operations
-record_id = db.create(record)
-retrieved = db.read(record_id)
-db.update(record_id, updated_record)
-db.delete(record_id)
+db.create(record)
+retrieved = db.read(record.id)
+record.fields["age"].value = 31
+db.update(record.id, record)
+db.delete(record.id)
 
 # Search with queries
-query = (Query()
-    .filter("age", ">=", 25)
-    .filter("active", "=", True)
-    .sort("name", "ASC")
-    .limit(10))
+from dataknobs_data import Query, Filter, Sort
+
+query = Query(
+    filters=[
+        Filter("age", ">=", 25),
+        Filter("active", "=", True)
+    ],
+    sort=[Sort("name", "asc")],
+    limit=10
+)
 
 results = db.search(query)
+for record in results:
+    print(f"{record.id}: {record.fields['name'].value}")
 ```
 
 ## Backend Configuration
@@ -238,25 +253,123 @@ databases:
 
 ## Pandas Integration
 
+The data package provides comprehensive pandas integration for data analysis workflows:
+
 ```python
 import pandas as pd
-from dataknobs_data import Database
+from dataknobs_data.pandas import DataFrameConverter, BatchOperations
 
-db = Database.create("memory")
+# Convert records to DataFrame with type preservation
+converter = DataFrameConverter()
+df = converter.records_to_dataframe(records, preserve_types=True)
 
-# Create records from DataFrame
-df = pd.DataFrame({
-    "name": ["Alice", "Bob", "Charlie"],
-    "age": [25, 30, 35],
-    "city": ["NYC", "LA", "Chicago"]
-})
+# Perform pandas operations
+df_filtered = df[df['age'] > 25]
+df_aggregated = df.groupby('category').agg({'price': 'mean'})
 
-records = db.from_dataframe(df)
-db.create_batch(records)
+# Convert back to records
+new_records = converter.dataframe_to_records(df_filtered)
 
-# Query and get results as DataFrame
-query = Query().filter("age", ">", 25)
-results_df = db.search_as_dataframe(query)
+# Bulk operations with DataFrames
+batch_ops = BatchOperations(database)
+result = batch_ops.bulk_insert_dataframe(df, batch_size=1000)
+print(f"Inserted {result.successful} records")
+
+# Upsert from DataFrame
+result = batch_ops.bulk_upsert_dataframe(
+    df, 
+    id_column="user_id",
+    merge_strategy="update"
+)
+```
+
+## Schema Validation
+
+Define and enforce data schemas with comprehensive validation:
+
+```python
+from dataknobs_data.validation import Schema, FieldDefinition
+from dataknobs_data.validation.constraints import *
+
+# Define schema with constraints
+user_schema = Schema(
+    name="UserSchema",
+    fields={
+        "email": FieldDefinition(
+            name="email",
+            type=str,
+            required=True,
+            constraints=[EmailConstraint(), UniqueConstraint()]
+        ),
+        "age": FieldDefinition(
+            name="age",
+            type=int,
+            constraints=[MinValueConstraint(0), MaxValueConstraint(150)]
+        ),
+        "status": FieldDefinition(
+            name="status",
+            type=str,
+            default="active",
+            constraints=[EnumConstraint(["active", "inactive", "suspended"])]
+        )
+    }
+)
+
+# Validate records
+result = user_schema.validate(record)
+if not result.is_valid:
+    for error in result.errors:
+        print(f"{error.field}: {error.message}")
+
+# Automatic type coercion
+schema_with_coercion = Schema(
+    name="ProductSchema",
+    fields=fields,
+    coerce_types=True  # Automatically convert compatible types
+)
+```
+
+## Data Migration
+
+Migrate data between backends with transformation support:
+
+```python
+from dataknobs_data.migration import DataMigrator, DataTransformer
+
+# Migrate between backends
+source_db = Database.create("postgres", postgres_config)
+target_db = Database.create("s3", s3_config)
+
+migrator = DataMigrator(source_db, target_db)
+
+# Simple migration
+result = migrator.migrate_sync(batch_size=1000)
+print(f"Migrated {result.successful_records} records")
+
+# Migration with transformation
+transformer = DataTransformer(
+    field_mapping={"old_name": "new_name"},
+    value_transformers={
+        "email": lambda v: v.lower(),
+        "age": lambda v: int(v) if v else 0
+    }
+)
+
+result = migrator.migrate_sync(
+    transform=transformer.transform,
+    progress_callback=lambda p: print(f"Progress: {p.percentage:.1f}%")
+)
+
+# Schema evolution
+from dataknobs_data.migration import SchemaEvolution
+
+evolution = SchemaEvolution("user_schema")
+evolution.add_version("1.0.0", schema_v1)
+evolution.add_version("2.0.0", schema_v2)
+
+# Auto-generate migration
+migration = evolution.generate_migration("1.0.0", "2.0.0")
+migrated_records = migration.apply(records)
 ```
 
 ## Advanced Queries
@@ -294,25 +407,6 @@ async def main():
 asyncio.run(main())
 ```
 
-## Migration Between Backends
-
-```python
-from dataknobs_data import Database, migrate_data
-
-# Source and destination databases
-source_db = Database.create("file", {"path": "data.json"})
-dest_db = Database.create("postgres", postgres_config)
-
-# Migrate all data
-migrate_data(source_db, dest_db)
-
-# Migrate with transformation
-def transform(record):
-    record["processed"] = True
-    return record
-
-migrate_data(source_db, dest_db, transform=transform)
-```
 
 ## Custom Backend
 

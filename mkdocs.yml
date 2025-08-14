@@ -74,10 +74,28 @@ nav:
       - packages/config/api.md
     - Data:
       - packages/data/index.md
-      - packages/data/backends.md
-      - packages/data/s3-backend.md
-      - packages/data/factory-pattern.md
-      - packages/data/configuration.md
+      - Core Concepts:
+        - packages/data/record-model.md
+        - packages/data/field-types.md
+        - packages/data/query.md
+      - Backends:
+        - packages/data/backends.md
+        - packages/data/memory-backend.md
+        - packages/data/file-backend.md
+        - packages/data/postgres-backend.md
+        - packages/data/elasticsearch-backend.md
+        - packages/data/s3-backend.md
+      - Advanced Features:
+        - packages/data/migration.md
+        - packages/data/validation.md
+        - packages/data/pandas-integration.md
+      - Configuration:
+        - packages/data/factory-pattern.md
+        - packages/data/configuration.md
+      - Tutorials:
+        - packages/data/tutorials/migration-tutorial.md
+        - packages/data/tutorials/validation-tutorial.md
+        - packages/data/tutorials/pandas-tutorial.md
       - packages/data/examples.md
       - packages/data/api.md
     - Structures:
@@ -137,6 +155,9 @@ nav:
     - examples/elasticsearch-integration.md
     - examples/data-backends.md
     - examples/s3-storage.md
+    - examples/data-migration.md
+    - examples/data-validation.md
+    - examples/pandas-workflow.md
     - examples/factory-pattern.md
     - examples/configuration.md
   
@@ -158,6 +179,7 @@ plugins:
           paths: [
             packages/common/src,
             packages/config/src,
+            packages/data/src,
             packages/structures/src,
             packages/utils/src,
             packages/xization/src,
