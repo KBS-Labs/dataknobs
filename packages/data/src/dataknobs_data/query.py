@@ -1,26 +1,28 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 
 
 class Operator(Enum):
     """Query operators for filtering."""
-    EQ = "="           # Equal
-    NEQ = "!="         # Not equal
-    GT = ">"           # Greater than
-    GTE = ">="         # Greater than or equal
-    LT = "<"           # Less than
-    LTE = "<="         # Less than or equal
-    IN = "in"          # In list
+
+    EQ = "="  # Equal
+    NEQ = "!="  # Not equal
+    GT = ">"  # Greater than
+    GTE = ">="  # Greater than or equal
+    LT = "<"  # Less than
+    LTE = "<="  # Less than or equal
+    IN = "in"  # In list
     NOT_IN = "not_in"  # Not in list
-    LIKE = "like"      # String pattern matching (SQL LIKE)
-    REGEX = "regex"    # Regular expression matching
+    LIKE = "like"  # String pattern matching (SQL LIKE)
+    REGEX = "regex"  # Regular expression matching
     EXISTS = "exists"  # Field exists
     NOT_EXISTS = "not_exists"  # Field does not exist
 
 
 class SortOrder(Enum):
     """Sort order for query results."""
+
     ASC = "asc"
     DESC = "desc"
 
@@ -28,10 +30,11 @@ class SortOrder(Enum):
 @dataclass
 class Filter:
     """Represents a filter condition."""
+
     field: str
     operator: Operator
     value: Any = None
-    
+
     def matches(self, record_value: Any) -> bool:
         """Check if a record value matches this filter."""
         if self.operator == Operator.EXISTS:
@@ -40,7 +43,7 @@ class Filter:
             return record_value is None
         elif record_value is None:
             return False
-        
+
         if self.operator == Operator.EQ:
             return record_value == self.value
         elif self.operator == Operator.NEQ:
@@ -61,89 +64,80 @@ class Filter:
             if not isinstance(record_value, str):
                 return False
             import re
-            pattern = self.value.replace('%', '.*').replace('_', '.')
+
+            pattern = self.value.replace("%", ".*").replace("_", ".")
             return bool(re.match(f"^{pattern}$", record_value))
         elif self.operator == Operator.REGEX:
             if not isinstance(record_value, str):
                 return False
             import re
+
             return bool(re.search(self.value, record_value))
-        
+
         return False
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert filter to dictionary representation."""
-        return {
-            "field": self.field,
-            "operator": self.operator.value,
-            "value": self.value
-        }
-    
+        return {"field": self.field, "operator": self.operator.value, "value": self.value}
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Filter':
+    def from_dict(cls, data: Dict[str, Any]) -> "Filter":
         """Create filter from dictionary representation."""
         return cls(
-            field=data["field"],
-            operator=Operator(data["operator"]),
-            value=data.get("value")
+            field=data["field"], operator=Operator(data["operator"]), value=data.get("value")
         )
 
 
 @dataclass
 class SortSpec:
     """Represents a sort specification."""
+
     field: str
     order: SortOrder = SortOrder.ASC
-    
+
     def to_dict(self) -> Dict[str, str]:
         """Convert sort spec to dictionary representation."""
-        return {
-            "field": self.field,
-            "order": self.order.value
-        }
-    
+        return {"field": self.field, "order": self.order.value}
+
     @classmethod
-    def from_dict(cls, data: Dict[str, str]) -> 'SortSpec':
+    def from_dict(cls, data: Dict[str, str]) -> "SortSpec":
         """Create sort spec from dictionary representation."""
-        return cls(
-            field=data["field"],
-            order=SortOrder(data.get("order", "asc"))
-        )
+        return cls(field=data["field"], order=SortOrder(data.get("order", "asc")))
 
 
 @dataclass
 class Query:
     """Represents a database query with filters, sorting, and pagination."""
-    
+
     filters: List[Filter] = field(default_factory=list)
     sort_specs: List[SortSpec] = field(default_factory=list)
-    limit_value: Optional[int] = None
-    offset_value: Optional[int] = None
-    fields: Optional[List[str]] = None  # Field projection
-    
+    limit_value: int | None = None
+    offset_value: int | None = None
+    fields: List[str] | None = None  # Field projection
+
     @property
     def sort(self) -> List[SortSpec]:
         """Get sort specifications (backward compatibility)."""
         return self.sort_specs
-    
+
     @property
-    def limit(self) -> Optional[int]:
+    def limit(self) -> int | None:
         """Get limit value (backward compatibility)."""
         return self.limit_value
-    
+
     @property
-    def offset(self) -> Optional[int]:
+    def offset(self) -> int | None:
         """Get offset value (backward compatibility)."""
         return self.offset_value
-    
-    def filter(self, field: str, operator: Union[str, Operator], value: Any = None) -> 'Query':
+
+    def filter(self, field: str, operator: Union[str, Operator], value: Any = None) -> "Query":
         """Add a filter to the query (fluent interface).
-        
+
         Args:
             field: The field name to filter on
             operator: The operator (string or Operator enum)
             value: The value to compare against
-            
+
         Returns:
             Self for method chaining
         """
@@ -165,84 +159,84 @@ class Query:
                 "not_exists": Operator.NOT_EXISTS,
             }
             operator = op_map.get(operator, Operator.EQ)
-        
+
         self.filters.append(Filter(field=field, operator=operator, value=value))
         return self
-    
-    def sort_by(self, field: str, order: Union[str, SortOrder] = "asc") -> 'Query':
+
+    def sort_by(self, field: str, order: Union[str, SortOrder] = "asc") -> "Query":
         """Add a sort specification to the query (fluent interface).
-        
+
         Args:
             field: The field name to sort by
             order: The sort order ("asc", "desc", or SortOrder enum)
-            
+
         Returns:
             Self for method chaining
         """
         if isinstance(order, str):
             order = SortOrder.ASC if order.lower() == "asc" else SortOrder.DESC
-        
+
         self.sort_specs.append(SortSpec(field=field, order=order))
         return self
-    
-    def sort(self, field: str, order: Union[str, SortOrder] = "asc") -> 'Query':
+
+    def sort(self, field: str, order: Union[str, SortOrder] = "asc") -> "Query":
         """Add sorting (fluent interface)."""
         return self.sort_by(field, order)
-    
-    def set_limit(self, limit: int) -> 'Query':
+
+    def set_limit(self, limit: int) -> "Query":
         """Set the result limit (fluent interface).
-        
+
         Args:
             limit: Maximum number of results
-            
+
         Returns:
             Self for method chaining
         """
         self.limit_value = limit
         return self
-    
-    def limit(self, value: int) -> 'Query':
+
+    def limit(self, value: int) -> "Query":
         """Set limit (fluent interface)."""
         return self.set_limit(value)
-    
-    def set_offset(self, offset: int) -> 'Query':
+
+    def set_offset(self, offset: int) -> "Query":
         """Set the result offset (fluent interface).
-        
+
         Args:
             offset: Number of results to skip
-            
+
         Returns:
             Self for method chaining
         """
         self.offset_value = offset
         return self
-    
-    def offset(self, value: int) -> 'Query':
+
+    def offset(self, value: int) -> "Query":
         """Set offset (fluent interface)."""
         return self.set_offset(value)
-    
-    def select(self, *fields: str) -> 'Query':
+
+    def select(self, *fields: str) -> "Query":
         """Set field projection (fluent interface).
-        
+
         Args:
             fields: Field names to include in results
-            
+
         Returns:
             Self for method chaining
         """
         self.fields = list(fields) if fields else None
         return self
-    
-    def clear_filters(self) -> 'Query':
+
+    def clear_filters(self) -> "Query":
         """Clear all filters (fluent interface)."""
         self.filters = []
         return self
-    
-    def clear_sort(self) -> 'Query':
+
+    def clear_sort(self) -> "Query":
         """Clear all sort specifications (fluent interface)."""
         self.sort_specs = []
         return self
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert query to dictionary representation."""
         result = {
@@ -256,31 +250,32 @@ class Query:
         if self.fields is not None:
             result["fields"] = self.fields
         return result
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Query':
+    def from_dict(cls, data: Dict[str, Any]) -> "Query":
         """Create query from dictionary representation."""
         query = cls()
-        
+
         for filter_data in data.get("filters", []):
             query.filters.append(Filter.from_dict(filter_data))
-        
+
         for sort_data in data.get("sort", []):
             query.sort_specs.append(SortSpec.from_dict(sort_data))
-        
+
         query.limit_value = data.get("limit")
         query.offset_value = data.get("offset")
         query.fields = data.get("fields")
-        
+
         return query
-    
-    def copy(self) -> 'Query':
+
+    def copy(self) -> "Query":
         """Create a copy of the query."""
         import copy
+
         return Query(
             filters=copy.deepcopy(self.filters),
             sort_specs=copy.deepcopy(self.sort_specs),
             limit_value=self.limit_value,
             offset_value=self.offset_value,
-            fields=self.fields.copy() if self.fields else None
+            fields=self.fields.copy() if self.fields else None,
         )

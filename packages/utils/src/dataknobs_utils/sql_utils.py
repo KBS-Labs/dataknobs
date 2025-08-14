@@ -1,7 +1,7 @@
 import os
 from abc import ABC, abstractmethod
 from functools import lru_cache
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import numpy as np
 import pandas as pd
@@ -14,13 +14,19 @@ except ImportError:
     def load_dotenv() -> None:
         pass
 
+
 from dataknobs_utils.sys_utils import load_project_vars
 
 
 class RecordFetcher(ABC):
     """Abstract base class for fetching records from a data source."""
 
-    def __init__(self, id_field_name: str = "id", fields_to_retrieve: Optional[List[str]] = None, one_based_ids: bool = False) -> None:
+    def __init__(
+        self,
+        id_field_name: str = "id",
+        fields_to_retrieve: List[str] | None = None,
+        one_based_ids: bool = False,
+    ) -> None:
         """:param id_field_name: The name of the integer "id" field for the data source.
         :param fields_to_retrieve: The subset of fields to retrieve (retrieve all if None).
         :param one_based_ids: True if the data source IDs are 1-based.
@@ -31,7 +37,7 @@ class RecordFetcher(ABC):
 
     @abstractmethod
     def get_records(
-        self, ids: List[int], one_based: bool = False, fields_to_retrieve: Optional[List[str]] = None
+        self, ids: List[int], one_based: bool = False, fields_to_retrieve: List[str] | None = None
     ) -> pd.DataFrame:
         """:param ids: The collection of IDs of the records to retrieve
         :param one_based: True if the ids are one-based.
@@ -42,26 +48,43 @@ class RecordFetcher(ABC):
 
 
 class DotenvPostgresConnector:
-    def __init__(self, host: Optional[str] = None, db: Optional[str] = None, user: Optional[str] = None, pwd: Optional[str] = None, pvname: str = ".project_vars") -> None:
+    def __init__(
+        self,
+        host: str | None = None,
+        db: str | None = None,
+        user: str | None = None,
+        pwd: str | None = None,
+        pvname: str = ".project_vars",
+    ) -> None:
         config = load_project_vars(pvname=pvname)
         if host is None or db is None or user is None or pwd is None:
             load_dotenv()
 
         self.host = (
-            os.getenv("POSTGRES_HOST", config.get("POSTGRES_HOST", "localhost") if config else "localhost")
+            os.getenv(
+                "POSTGRES_HOST", config.get("POSTGRES_HOST", "localhost") if config else "localhost"
+            )
             if host is None
             else host
         )
         self.database = (
-            os.getenv("POSTGRES_DB", config.get("POSTGRES_DB", "postgres") if config else "postgres") if db is None else db
+            os.getenv(
+                "POSTGRES_DB", config.get("POSTGRES_DB", "postgres") if config else "postgres"
+            )
+            if db is None
+            else db
         )
         self.user = (
-            os.getenv("POSTGRES_USER", config.get("POSTGRES_USER", "postgres") if config else "postgres")
+            os.getenv(
+                "POSTGRES_USER", config.get("POSTGRES_USER", "postgres") if config else "postgres"
+            )
             if user is None
             else user
         )
         self.password = (
-            os.getenv("POSTGRES_PASSWORD", config.get("POSTGRES_PASSWORD", None) if config else None)
+            os.getenv(
+                "POSTGRES_PASSWORD", config.get("POSTGRES_PASSWORD", None) if config else None
+            )
             if pwd is None
             else pwd
         )
@@ -80,10 +103,16 @@ class DotenvPostgresConnector:
 
 
 class PostgresDB:
-    def __init__(self, host: Optional[str] = None, db: Optional[str] = None, user: Optional[str] = None, pwd: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        host: str | None = None,
+        db: str | None = None,
+        user: str | None = None,
+        pwd: str | None = None,
+    ) -> None:
         self._connector = DotenvPostgresConnector(host=host, db=db, user=user, pwd=pwd)
-        self._tables_df: Optional[pd.DataFrame] = None
-        self._table_names: Optional[List[str]] = None
+        self._tables_df: pd.DataFrame | None = None
+        self._table_names: List[str] | None = None
 
     @property
     def table_names(self) -> List[str]:
@@ -136,7 +165,7 @@ class PostgresDB:
     def query(
         self,
         query: str,
-        params: Optional[Dict[str, Any]] = None,
+        params: Dict[str, Any] | None = None,
     ) -> pd.DataFrame:
         """Submit a query, returning the results as a dataframe.
 
@@ -196,7 +225,7 @@ class PostgresDB:
             line = None
             dtype = df[col].dtype
             # Check if it's a numpy dtype (not an ExtensionDtype)
-            if hasattr(dtype, 'type'):
+            if hasattr(dtype, "type"):
                 if np.issubdtype(dtype, np.integer):
                     line = f"{col} integer"
                 elif np.issubdtype(dtype, np.float64):
@@ -223,7 +252,12 @@ class PostgresRecordFetcher(RecordFetcher):
     """Class for fetching records from a Postgres DB."""
 
     def __init__(
-        self, db: PostgresDB, table_name: str, id_field_name: str = "id", fields_to_retrieve: Optional[List[str]] = None, one_based_ids: bool = False
+        self,
+        db: PostgresDB,
+        table_name: str,
+        id_field_name: str = "id",
+        fields_to_retrieve: List[str] | None = None,
+        one_based_ids: bool = False,
     ) -> None:
         """:param db: The postgres database
         :param table_name: The name of the table of the data source.
@@ -243,7 +277,7 @@ class PostgresRecordFetcher(RecordFetcher):
         self,
         ids: List[int],
         one_based: bool = False,
-        fields_to_retrieve: Optional[List[str]] = None,
+        fields_to_retrieve: List[str] | None = None,
     ) -> pd.DataFrame:
         """Get the records as a dataframe for the given IDs.
 
@@ -277,7 +311,7 @@ class DictionaryRecordFetcher(RecordFetcher):
         the_dict: Dict[int, List[Any]],
         all_field_names: List[str],
         id_field_name: str = "id",
-        fields_to_retrieve: Optional[List[str]] = None,
+        fields_to_retrieve: List[str] | None = None,
         one_based_ids: bool = False,
     ):
         """:param db: The postgres database
@@ -299,7 +333,7 @@ class DictionaryRecordFetcher(RecordFetcher):
         self,
         ids: List[int],
         one_based: bool = False,
-        fields_to_retrieve: Optional[List[str]] = None,
+        fields_to_retrieve: List[str] | None = None,
     ) -> pd.DataFrame:
         """Get the records as a dataframe for the given IDs.
 
@@ -328,7 +362,11 @@ class DataFrameRecordFetcher(RecordFetcher):
     """Class for fetching records from a pandas dataframe."""
 
     def __init__(
-        self, df: pd.DataFrame, id_field_name: str = "id", fields_to_retrieve: Optional[List[str]] = None, one_based_ids: bool = False
+        self,
+        df: pd.DataFrame,
+        id_field_name: str = "id",
+        fields_to_retrieve: List[str] | None = None,
+        one_based_ids: bool = False,
     ) -> None:
         """:param df: The dataframe of records
         :param id_field_name: The name of the integer "id" field in the table.
@@ -346,7 +384,7 @@ class DataFrameRecordFetcher(RecordFetcher):
         self,
         ids: List[int],
         one_based: bool = False,
-        fields_to_retrieve: Optional[List[str]] = None,
+        fields_to_retrieve: List[str] | None = None,
     ) -> pd.DataFrame:
         """Get the records as a dataframe for the given IDs.
 

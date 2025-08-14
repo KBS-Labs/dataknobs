@@ -1,5 +1,6 @@
 import json
-from typing import Any, Dict, Generator, List, Optional, TextIO, Union
+from collections.abc import Generator
+from typing import Any, Dict, List, TextIO, Union
 
 # import os
 import pandas as pd
@@ -9,9 +10,7 @@ from dataknobs_utils import requests_utils
 
 
 def build_field_query_dict(
-    fields: Union[str, List[str]], 
-    text: str, 
-    operator: Optional[str] = None
+    fields: Union[str, List[str]], text: str, operator: str | None = None
 ) -> Dict[str, Any]:
     """Build an elasticsearch field query to find the text in the field(s).
     :param fields: The field (str) or fields (list[str]) to query.
@@ -44,11 +43,7 @@ def build_field_query_dict(
     return rv
 
 
-def build_phrase_query_dict(
-    field: str, 
-    phrase: str, 
-    slop: int = 0
-) -> Dict[str, Any]:
+def build_phrase_query_dict(field: str, phrase: str, slop: int = 0) -> Dict[str, Any]:
     """Build an elasticsearch phrase query to find the phrase in the field.
     :param field: The field to query
     :param phrase: The phrase to find
@@ -66,7 +61,7 @@ def build_phrase_query_dict(
     }
 
 
-def build_hits_dataframe(query_result: Dict[str, Any]) -> Optional[pd.DataFrame]:
+def build_hits_dataframe(query_result: Dict[str, Any]) -> pd.DataFrame | None:
     """Build a dataframe from an elasticsearch query result's hits."""
     df = None
     if "hits" in query_result:
@@ -78,7 +73,7 @@ def build_hits_dataframe(query_result: Dict[str, Any]) -> Optional[pd.DataFrame]
     return df
 
 
-def build_aggs_dataframe(query_result: Dict[str, Any]) -> Optional[pd.DataFrame]:
+def build_aggs_dataframe(query_result: Dict[str, Any]) -> pd.DataFrame | None:
     """Build a dataframe from an elasticsearch query result's aggregations."""
     # TODO: implement this
     return None
@@ -147,9 +142,7 @@ def batchfile_record_generator(batchfile_path: str) -> Generator[Any, None, None
 
 
 def collect_batchfile_values(
-    batchfile_path: str, 
-    fieldname: str, 
-    default_value: Any = ""
+    batchfile_path: str, fieldname: str, default_value: Any = ""
 ) -> List[Any]:
     """Given the path to an elasticsearch batchfile and a source record fieldname,
     collect all of the values for the named field.
@@ -192,11 +185,11 @@ class ElasticsearchIndex:
 
     def __init__(
         self,
-        request_helper: Optional[Any],
+        request_helper: Any | None,
         table_settings: List[TableSettings],
-        elasticsearch_ip: Optional[str] = None,
+        elasticsearch_ip: str | None = None,
         elasticsearch_port: int = 9200,
-        mock_requests: Optional[Any] = None,
+        mock_requests: Any | None = None,
     ) -> None:
         self.request_helper: Any  # Always set, never None
         if request_helper is None:
@@ -228,11 +221,11 @@ class ElasticsearchIndex:
         self,
         rtype: str,
         path: str,
-        payload: Optional[str] = None,
-        params: Optional[Dict[str, Any]] = None,
-        files: Optional[Dict[str, Any]] = None,
-        response_handler: Optional[Any] = None,
-        headers: Optional[Dict[str, str]] = None,
+        payload: str | None = None,
+        params: Dict[str, Any] | None = None,
+        files: Dict[str, Any] | None = None,
+        response_handler: Any | None = None,
+        headers: Dict[str, str] | None = None,
         timeout: int = 0,
         verbose: bool = False,
     ) -> Any:
@@ -318,9 +311,9 @@ class ElasticsearchIndex:
     def search(
         self,
         query: Dict[str, Any],
-        table: Optional[str] = None,
+        table: str | None = None,
         verbose: bool = False,
-    ) -> Optional[Any]:
+    ) -> Any | None:
         """Submit the elasticsearch search DSL query.
 
         :param query: The elasticsearch search query of the form, e.g.,:

@@ -4,10 +4,8 @@ import pytest
 
 from dataknobs_config import Config, ConfigError
 from dataknobs_config.examples import (
-    Database,
-    DatabaseFactory,
     Cache,
-    CacheFactory,
+    Database,
 )
 
 
@@ -120,7 +118,11 @@ class TestObjectConstruction:
         config = Config(
             {
                 "database": [
-                    {"name": "test", "class": "dataknobs_config.examples.Database", "host": "localhost"}
+                    {
+                        "name": "test",
+                        "class": "dataknobs_config.examples.Database",
+                        "host": "localhost",
+                    }
                 ]
             }
         )

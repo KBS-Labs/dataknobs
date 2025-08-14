@@ -3,7 +3,7 @@ pattern.
 """
 
 from collections.abc import Callable
-from typing import Any, Dict, Optional, Union, Iterable, Tuple
+from typing import Any, Dict
 
 
 class cdict(dict):
@@ -16,7 +16,9 @@ class cdict(dict):
     property.
     """
 
-    def __init__(self, accept_fn: Callable[[Dict, Any, Any], bool], *args: Any, **kwargs: Any) -> None:
+    def __init__(
+        self, accept_fn: Callable[[Dict, Any, Any], bool], *args: Any, **kwargs: Any
+    ) -> None:
         """:param accept_fn: A fn(d, key, value) that returns True to accept
         the key/value into this dict d, or False to reject.
         """

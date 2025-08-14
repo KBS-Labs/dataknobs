@@ -37,7 +37,7 @@ import os
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from typing import Dict, List, Set, Optional, Union
+from typing import Dict, List, Set, Union
 
 LATEST_EMOJI_DATA = "resources/emoji-test.15.0.txt"
 
@@ -61,11 +61,11 @@ class Emoji:
     status: str  # component  (fully-  minimally-  un) + qualified
     since_version: str  # "Ex.x"
     short_name: str  # (english) short name
-    group: Optional[str] = None  # test file "group" name
-    subgroup: Optional[str] = None  # test file "subgroup" name
+    group: str | None = None  # test file "group" name
+    subgroup: str | None = None  # test file "subgroup" name
 
 
-def build_emoji_dataclass(emoji_test_line: str) -> Optional[Emoji]:
+def build_emoji_dataclass(emoji_test_line: str) -> Emoji | None:
     """Build an Emoji dataclass from the emoji-test file line."""
     result = None
     m = ETESTLINE_RE.match(emoji_test_line)
@@ -88,9 +88,9 @@ class EmojiData:
 
     def __init__(self, emoji_test_path: str):
         self.emojis: Dict[str, Emoji] = dict()  # emojichars -> EmojiData
-        self._echars: Optional[List[int]] = None
-        self._ldepechars: Optional[Dict[int, Set[int]]] = None
-        self._rdepechars: Optional[Dict[int, Set[int]]] = None
+        self._echars: List[int] | None = None
+        self._ldepechars: Dict[int, Set[int]] | None = None
+        self._rdepechars: Dict[int, Set[int]] | None = None
         self._load_emoji_test(emoji_test_path)
 
     @property
@@ -150,11 +150,15 @@ class EmojiData:
         result = list()
         start_pos = -1
         textlen = len(emoji_text)
-        prevc: Optional[str] = None
+        prevc: str | None = None
         for idx, c in enumerate(emoji_text):
             c_ord = ord(c)
             isechar = c_ord in self.echars
-            isrechar = c_ord in self.rdepechars and prevc is not None and ord(prevc) in self.rdepechars[c_ord]
+            isrechar = (
+                c_ord in self.rdepechars
+                and prevc is not None
+                and ord(prevc) in self.rdepechars[c_ord]
+            )
             islechar = (
                 idx + 1 < textlen
                 and c_ord in self.ldepechars
@@ -226,14 +230,14 @@ class EmojiData:
                 elif not line.startswith("#"):
                     line = line.strip()
                     if line:
-                        emoji_data: Optional[Emoji] = build_emoji_dataclass(line)
+                        emoji_data: Emoji | None = build_emoji_dataclass(line)
                         if emoji_data is not None:
                             emoji_data.group = curgroup
                             emoji_data.subgroup = cursubgroup
                             self.emojis[emoji_data.emoji] = emoji_data
 
 
-def load_emoji_data() -> Optional[EmojiData]:
+def load_emoji_data() -> EmojiData | None:
     """Load latest emoji-test.txt or reference EMOJI_TEST_DATA env var."""
     result = None
     datapath = os.environ.get("EMOJI_TEST_DATA", LATEST_EMOJI_DATA)

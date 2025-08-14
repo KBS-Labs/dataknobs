@@ -9,48 +9,50 @@ import platform
 import tempfile
 import threading
 import uuid
-from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List
 
 from ..database import Database, SyncDatabase
-from ..exceptions import RecordNotFoundError, DataFormatError
 from ..query import Query
 from ..records import Record
 
 
 class FileLock:
     """Cross-platform file locking."""
-    
+
     def __init__(self, filepath: str):
         self.filepath = filepath
         self.lockfile = filepath + ".lock"
         self.lock_handle = None
-        
+
     def acquire(self):
         """Acquire the file lock."""
         if platform.system() == "Windows":
             import msvcrt
+
             while True:
                 try:
                     self.lock_handle = open(self.lockfile, "wb")
                     msvcrt.locking(self.lock_handle.fileno(), msvcrt.LK_NBLCK, 1)
                     break
-                except (IOError, OSError):
+                except OSError:
                     if self.lock_handle:
                         self.lock_handle.close()
                     import time
+
                     time.sleep(0.01)
         else:
             import fcntl
+
             self.lock_handle = open(self.lockfile, "wb")
             fcntl.lockf(self.lock_handle, fcntl.LOCK_EX)
-    
+
     def release(self):
         """Release the file lock."""
         if self.lock_handle:
             if platform.system() == "Windows":
                 import msvcrt
+
                 try:
                     msvcrt.locking(self.lock_handle.fileno(), msvcrt.LK_UNLCK, 1)
                 except:
@@ -60,23 +62,23 @@ class FileLock:
                 os.remove(self.lockfile)
             except:
                 pass
-    
+
     def __enter__(self):
         self.acquire()
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.release()
 
 
 class FileFormat:
     """Base class for file format handlers."""
-    
+
     @staticmethod
     def load(filepath: str) -> Dict[str, Dict[str, Any]]:
         """Load data from file."""
         raise NotImplementedError
-    
+
     @staticmethod
     def save(filepath: str, data: Dict[str, Dict[str, Any]]):
         """Save data to file."""
@@ -85,17 +87,17 @@ class FileFormat:
 
 class JSONFormat(FileFormat):
     """JSON file format handler."""
-    
+
     @staticmethod
     def load(filepath: str) -> Dict[str, Dict[str, Any]]:
         """Load data from JSON file."""
         if not os.path.exists(filepath):
             return {}
-        
+
         # Check if file is empty
         if os.path.getsize(filepath) == 0:
             return {}
-        
+
         try:
             if filepath.endswith(".gz"):
                 try:
@@ -106,22 +108,22 @@ class JSONFormat(FileFormat):
                         data = json.loads(content)
                 except (gzip.BadGzipFile, OSError):
                     # File has .gz extension but isn't gzipped, treat as regular file
-                    with open(filepath, "r", encoding="utf-8") as f:
+                    with open(filepath, encoding="utf-8") as f:
                         content = f.read()
                         if not content.strip():
                             return {}
                         data = json.loads(content)
             else:
-                with open(filepath, "r", encoding="utf-8") as f:
+                with open(filepath, encoding="utf-8") as f:
                     content = f.read()
                     if not content.strip():
                         return {}
                     data = json.loads(content)
-            
+
             return data
         except json.JSONDecodeError:
             return {}
-    
+
     @staticmethod
     def save(filepath: str, data: Dict[str, Dict[str, Any]]):
         """Save data to JSON file."""
@@ -135,17 +137,17 @@ class JSONFormat(FileFormat):
 
 class CSVFormat(FileFormat):
     """CSV file format handler."""
-    
+
     @staticmethod
     def load(filepath: str) -> Dict[str, Dict[str, Any]]:
         """Load data from CSV file."""
         if not os.path.exists(filepath):
             return {}
-        
+
         # Check if file is empty
         if os.path.getsize(filepath) == 0:
             return {}
-        
+
         data = {}
         try:
             if filepath.endswith(".gz"):
@@ -156,17 +158,17 @@ class CSVFormat(FileFormat):
                             record_id = row.pop("__id__")
                             data[record_id] = {"fields": row}
             else:
-                with open(filepath, "r", encoding="utf-8") as f:
+                with open(filepath, encoding="utf-8") as f:
                     reader = csv.DictReader(f)
                     for row in reader:
                         if "__id__" in row:
                             record_id = row.pop("__id__")
                             data[record_id] = {"fields": row}
-        except (csv.Error, IOError):
+        except (OSError, csv.Error):
             return {}
-        
+
         return data
-    
+
     @staticmethod
     def save(filepath: str, data: Dict[str, Dict[str, Any]]):
         """Save data to CSV file."""
@@ -178,15 +180,15 @@ class CSVFormat(FileFormat):
                 with open(filepath, "w", encoding="utf-8") as f:
                     f.write("")
             return
-        
+
         # Extract all field names
         all_fields = set()
         for record_data in data.values():
             if "fields" in record_data:
                 all_fields.update(record_data["fields"].keys())
-        
+
         fieldnames = ["__id__"] + sorted(list(all_fields))
-        
+
         if filepath.endswith(".gz"):
             with gzip.open(filepath, "wt", encoding="utf-8", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -209,41 +211,41 @@ class CSVFormat(FileFormat):
 
 class ParquetFormat(FileFormat):
     """Parquet file format handler."""
-    
+
     @staticmethod
     def load(filepath: str) -> Dict[str, Dict[str, Any]]:
         """Load data from Parquet file."""
         if not os.path.exists(filepath):
             return {}
-        
+
         try:
             import pandas as pd
             import pyarrow.parquet as pq
-            
+
             df = pd.read_parquet(filepath)
             data = {}
-            
+
             for idx, row in df.iterrows():
                 row_dict = row.to_dict()
                 if "__id__" in row_dict:
                     record_id = row_dict.pop("__id__")
                 else:
                     record_id = str(idx)
-                
+
                 # Remove NaN values
                 fields = {k: v for k, v in row_dict.items() if pd.notna(v)}
                 data[record_id] = {"fields": fields}
-            
+
             return data
         except ImportError:
             raise ImportError("Parquet support requires pandas and pyarrow packages")
-    
+
     @staticmethod
     def save(filepath: str, data: Dict[str, Dict[str, Any]]):
         """Save data to Parquet file."""
         try:
             import pandas as pd
-            
+
             if not data:
                 # Create empty DataFrame
                 df = pd.DataFrame()
@@ -254,9 +256,9 @@ class ParquetFormat(FileFormat):
                     if "fields" in record_data:
                         row.update(record_data["fields"])
                     rows.append(row)
-                
+
                 df = pd.DataFrame(rows)
-            
+
             df.to_parquet(filepath, index=False, compression="snappy")
         except ImportError:
             raise ImportError("Parquet support requires pandas and pyarrow packages")
@@ -264,7 +266,7 @@ class ParquetFormat(FileFormat):
 
 class FileDatabase(Database):
     """Async file-based database implementation."""
-    
+
     FORMAT_HANDLERS = {
         ".json": JSONFormat,
         ".csv": CSVFormat,
@@ -272,15 +274,15 @@ class FileDatabase(Database):
         ".parquet": ParquetFormat,
         ".pq": ParquetFormat,
     }
-    
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+
+    def __init__(self, config: Dict[str, Any] | None = None):
         super().__init__(config)
         self.filepath = self.config.get("path", "data.json")
         self.format = self.config.get("format")
         self.compression = self.config.get("compression", None)
         self._lock = asyncio.Lock()
         self._file_lock = FileLock(self.filepath)
-        
+
         # Detect format from file extension if not specified
         if not self.format:
             path = Path(self.filepath)
@@ -288,25 +290,25 @@ class FileDatabase(Database):
             if path.suffix == ".gz":
                 self.compression = "gzip"
                 path = Path(path.stem)
-            
+
             ext = path.suffix.lower()
             if ext in self.FORMAT_HANDLERS:
                 self.format = ext.lstrip(".")
             else:
                 self.format = "json"  # Default to JSON
-        
+
         # Apply compression to filepath if specified
         if self.compression == "gzip" and not self.filepath.endswith(".gz"):
             self.filepath += ".gz"
-        
+
         # Get the appropriate format handler
         ext = f".{self.format}"
         self.handler = self.FORMAT_HANDLERS.get(ext, JSONFormat)
-    
+
     def _generate_id(self) -> str:
         """Generate a unique ID for a record."""
         return str(uuid.uuid4())
-    
+
     async def _load_data(self) -> Dict[str, Record]:
         """Load all data from file."""
         with self._file_lock:
@@ -315,18 +317,18 @@ class FileDatabase(Database):
             for record_id, record_dict in raw_data.items():
                 data[record_id] = Record.from_dict(record_dict)
             return data
-    
+
     async def _save_data(self, data: Dict[str, Record]):
         """Save all data to file atomically."""
         # Convert records to dictionaries
         raw_data = {}
         for record_id, record in data.items():
             raw_data[record_id] = record.to_dict(include_metadata=True, flatten=False)
-        
+
         # Write to temporary file first
         temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.filepath) or ".")
         os.close(temp_fd)
-        
+
         try:
             with self._file_lock:
                 self.handler.save(temp_path, raw_data)
@@ -337,7 +339,7 @@ class FileDatabase(Database):
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             raise
-    
+
     async def create(self, record: Record) -> str:
         """Create a new record in the file."""
         async with self._lock:
@@ -346,14 +348,14 @@ class FileDatabase(Database):
             data[record_id] = record.copy(deep=True)
             await self._save_data(data)
             return record_id
-    
-    async def read(self, id: str) -> Optional[Record]:
+
+    async def read(self, id: str) -> Record | None:
         """Read a record from the file."""
         async with self._lock:
             data = await self._load_data()
             record = data.get(id)
             return record.copy(deep=True) if record else None
-    
+
     async def update(self, id: str, record: Record) -> bool:
         """Update a record in the file."""
         async with self._lock:
@@ -363,7 +365,7 @@ class FileDatabase(Database):
                 await self._save_data(data)
                 return True
             return False
-    
+
     async def delete(self, id: str) -> bool:
         """Delete a record from the file."""
         async with self._lock:
@@ -373,13 +375,13 @@ class FileDatabase(Database):
                 await self._save_data(data)
                 return True
             return False
-    
+
     async def exists(self, id: str) -> bool:
         """Check if a record exists in the file."""
         async with self._lock:
             data = await self._load_data()
             return id in data
-    
+
     async def upsert(self, id: str, record: Record) -> str:
         """Update or insert a record with the specified ID."""
         async with self._lock:
@@ -387,13 +389,13 @@ class FileDatabase(Database):
             data[id] = record.copy(deep=True)
             await self._save_data(data)
             return id
-    
+
     async def search(self, query: Query) -> List[Record]:
         """Search for records matching the query."""
         async with self._lock:
             data = await self._load_data()
             results = []
-            
+
             for record_id, record in data.items():
                 # Apply filters
                 matches = True
@@ -402,44 +404,41 @@ class FileDatabase(Database):
                     if not filter.matches(field_value):
                         matches = False
                         break
-                
+
                 if matches:
                     results.append((record_id, record))
-            
+
             # Apply sorting
             if query.sort_specs:
                 for sort_spec in reversed(query.sort_specs):
                     reverse = sort_spec.order.value == "desc"
-                    results.sort(
-                        key=lambda x: x[1].get_value(sort_spec.field, ""),
-                        reverse=reverse
-                    )
-            
+                    results.sort(key=lambda x: x[1].get_value(sort_spec.field, ""), reverse=reverse)
+
             # Extract records
             records = [record for _, record in results]
-            
+
             # Apply offset and limit
             if query.offset_value:
-                records = records[query.offset_value:]
+                records = records[query.offset_value :]
             if query.limit_value:
-                records = records[:query.limit_value]
-            
+                records = records[: query.limit_value]
+
             # Apply field projection
             if query.fields:
                 projected_records = []
                 for record in records:
                     projected_records.append(record.project(query.fields))
                 records = projected_records
-            
+
             # Return deep copies
             return [record.copy(deep=True) for record in records]
-    
+
     async def _count_all(self) -> int:
         """Count all records in the file."""
         async with self._lock:
             data = await self._load_data()
             return len(data)
-    
+
     async def clear(self) -> int:
         """Clear all records from the file."""
         async with self._lock:
@@ -447,7 +446,7 @@ class FileDatabase(Database):
             count = len(data)
             await self._save_data({})
             return count
-    
+
     async def create_batch(self, records: List[Record]) -> List[str]:
         """Create multiple records efficiently."""
         async with self._lock:
@@ -459,8 +458,8 @@ class FileDatabase(Database):
                 ids.append(record_id)
             await self._save_data(data)
             return ids
-    
-    async def read_batch(self, ids: List[str]) -> List[Optional[Record]]:
+
+    async def read_batch(self, ids: List[str]) -> List[Record | None]:
         """Read multiple records efficiently."""
         async with self._lock:
             data = await self._load_data()
@@ -469,7 +468,7 @@ class FileDatabase(Database):
                 record = data.get(record_id)
                 results.append(record.copy(deep=True) if record else None)
             return results
-    
+
     async def delete_batch(self, ids: List[str]) -> List[bool]:
         """Delete multiple records efficiently."""
         async with self._lock:
@@ -483,16 +482,16 @@ class FileDatabase(Database):
                     modified = True
                 else:
                     results.append(False)
-            
+
             if modified:
                 await self._save_data(data)
-            
+
             return results
 
 
 class SyncFileDatabase(SyncDatabase):
     """Synchronous file-based database implementation."""
-    
+
     FORMAT_HANDLERS = {
         ".json": JSONFormat,
         ".csv": CSVFormat,
@@ -500,15 +499,15 @@ class SyncFileDatabase(SyncDatabase):
         ".parquet": ParquetFormat,
         ".pq": ParquetFormat,
     }
-    
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+
+    def __init__(self, config: Dict[str, Any] | None = None):
         super().__init__(config)
         self.filepath = self.config.get("path", "data.json")
         self.format = self.config.get("format")
         self.compression = self.config.get("compression", None)
         self._lock = threading.RLock()
         self._file_lock = FileLock(self.filepath)
-        
+
         # Detect format from file extension if not specified
         if not self.format:
             path = Path(self.filepath)
@@ -516,25 +515,25 @@ class SyncFileDatabase(SyncDatabase):
             if path.suffix == ".gz":
                 self.compression = "gzip"
                 path = Path(path.stem)
-            
+
             ext = path.suffix.lower()
             if ext in self.FORMAT_HANDLERS:
                 self.format = ext.lstrip(".")
             else:
                 self.format = "json"  # Default to JSON
-        
+
         # Apply compression to filepath if specified
         if self.compression == "gzip" and not self.filepath.endswith(".gz"):
             self.filepath += ".gz"
-        
+
         # Get the appropriate format handler
         ext = f".{self.format}"
         self.handler = self.FORMAT_HANDLERS.get(ext, JSONFormat)
-    
+
     def _generate_id(self) -> str:
         """Generate a unique ID for a record."""
         return str(uuid.uuid4())
-    
+
     def _load_data(self) -> Dict[str, Record]:
         """Load all data from file."""
         with self._file_lock:
@@ -543,18 +542,18 @@ class SyncFileDatabase(SyncDatabase):
             for record_id, record_dict in raw_data.items():
                 data[record_id] = Record.from_dict(record_dict)
             return data
-    
+
     def _save_data(self, data: Dict[str, Record]):
         """Save all data to file atomically."""
         # Convert records to dictionaries
         raw_data = {}
         for record_id, record in data.items():
             raw_data[record_id] = record.to_dict(include_metadata=True, flatten=False)
-        
+
         # Write to temporary file first
         temp_fd, temp_path = tempfile.mkstemp(dir=os.path.dirname(self.filepath) or ".")
         os.close(temp_fd)
-        
+
         try:
             with self._file_lock:
                 self.handler.save(temp_path, raw_data)
@@ -565,7 +564,7 @@ class SyncFileDatabase(SyncDatabase):
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             raise
-    
+
     def create(self, record: Record) -> str:
         """Create a new record in the file."""
         with self._lock:
@@ -574,14 +573,14 @@ class SyncFileDatabase(SyncDatabase):
             data[record_id] = record.copy(deep=True)
             self._save_data(data)
             return record_id
-    
-    def read(self, id: str) -> Optional[Record]:
+
+    def read(self, id: str) -> Record | None:
         """Read a record from the file."""
         with self._lock:
             data = self._load_data()
             record = data.get(id)
             return record.copy(deep=True) if record else None
-    
+
     def update(self, id: str, record: Record) -> bool:
         """Update a record in the file."""
         with self._lock:
@@ -591,7 +590,7 @@ class SyncFileDatabase(SyncDatabase):
                 self._save_data(data)
                 return True
             return False
-    
+
     def delete(self, id: str) -> bool:
         """Delete a record from the file."""
         with self._lock:
@@ -601,13 +600,13 @@ class SyncFileDatabase(SyncDatabase):
                 self._save_data(data)
                 return True
             return False
-    
+
     def exists(self, id: str) -> bool:
         """Check if a record exists in the file."""
         with self._lock:
             data = self._load_data()
             return id in data
-    
+
     def upsert(self, id: str, record: Record) -> str:
         """Update or insert a record with the specified ID."""
         with self._lock:
@@ -615,13 +614,13 @@ class SyncFileDatabase(SyncDatabase):
             data[id] = record.copy(deep=True)
             self._save_data(data)
             return id
-    
+
     def search(self, query: Query) -> List[Record]:
         """Search for records matching the query."""
         with self._lock:
             data = self._load_data()
             results = []
-            
+
             for record_id, record in data.items():
                 # Apply filters
                 matches = True
@@ -630,44 +629,41 @@ class SyncFileDatabase(SyncDatabase):
                     if not filter.matches(field_value):
                         matches = False
                         break
-                
+
                 if matches:
                     results.append((record_id, record))
-            
+
             # Apply sorting
             if query.sort_specs:
                 for sort_spec in reversed(query.sort_specs):
                     reverse = sort_spec.order.value == "desc"
-                    results.sort(
-                        key=lambda x: x[1].get_value(sort_spec.field, ""),
-                        reverse=reverse
-                    )
-            
+                    results.sort(key=lambda x: x[1].get_value(sort_spec.field, ""), reverse=reverse)
+
             # Extract records
             records = [record for _, record in results]
-            
+
             # Apply offset and limit
             if query.offset_value:
-                records = records[query.offset_value:]
+                records = records[query.offset_value :]
             if query.limit_value:
-                records = records[:query.limit_value]
-            
+                records = records[: query.limit_value]
+
             # Apply field projection
             if query.fields:
                 projected_records = []
                 for record in records:
                     projected_records.append(record.project(query.fields))
                 records = projected_records
-            
+
             # Return deep copies
             return [record.copy(deep=True) for record in records]
-    
+
     def _count_all(self) -> int:
         """Count all records in the file."""
         with self._lock:
             data = self._load_data()
             return len(data)
-    
+
     def clear(self) -> int:
         """Clear all records from the file."""
         with self._lock:
@@ -675,7 +671,7 @@ class SyncFileDatabase(SyncDatabase):
             count = len(data)
             self._save_data({})
             return count
-    
+
     def create_batch(self, records: List[Record]) -> List[str]:
         """Create multiple records efficiently."""
         with self._lock:
@@ -687,8 +683,8 @@ class SyncFileDatabase(SyncDatabase):
                 ids.append(record_id)
             self._save_data(data)
             return ids
-    
-    def read_batch(self, ids: List[str]) -> List[Optional[Record]]:
+
+    def read_batch(self, ids: List[str]) -> List[Record | None]:
         """Read multiple records efficiently."""
         with self._lock:
             data = self._load_data()
@@ -697,7 +693,7 @@ class SyncFileDatabase(SyncDatabase):
                 record = data.get(record_id)
                 results.append(record.copy(deep=True) if record else None)
             return results
-    
+
     def delete_batch(self, ids: List[str]) -> List[bool]:
         """Delete multiple records efficiently."""
         with self._lock:
@@ -711,8 +707,8 @@ class SyncFileDatabase(SyncDatabase):
                     modified = True
                 else:
                     results.append(False)
-            
+
             if modified:
                 self._save_data(data)
-            
+
             return results

@@ -2,7 +2,7 @@ import os
 import re
 import socket
 from pathlib import Path
-from typing import Dict, Union, Optional, Any
+from typing import Any, Dict, Union
 
 import nmap3  # type: ignore[import-not-found]
 from dotenv import dotenv_values  # type: ignore[import-not-found]
@@ -10,7 +10,7 @@ from dotenv import dotenv_values  # type: ignore[import-not-found]
 
 def load_project_vars(
     pvname: str = ".project_vars", include_dot_env: bool = True
-) -> Optional[Dict[str, str]]:
+) -> Dict[str, str] | None:
     """Load "closest" project variables.
 
     :param pvname: The name of the project variables file.
@@ -45,9 +45,9 @@ class MySubnet:
     """
 
     def __init__(self) -> None:
-        self._my_hostname: Optional[str] = None
-        self._my_ip: Optional[str] = None
-        self._subnet_ips: Optional[Dict[str, str]] = None
+        self._my_hostname: str | None = None
+        self._my_ip: str | None = None
+        self._subnet_ips: Dict[str, str] | None = None
 
     def rescan(self) -> None:
         """Rescan subnet hosts."""
@@ -80,11 +80,13 @@ class MySubnet:
             def is_up(scan_data: Any) -> bool:
                 if isinstance(scan_data, dict):
                     state_info = scan_data.get("state", {})
-                    state_value = state_info.get("state", "down") if isinstance(state_info, dict) else "down"
+                    state_value = (
+                        state_info.get("state", "down") if isinstance(state_info, dict) else "down"
+                    )
                     return bool(state_value == "up")
                 return False
 
-            def get_hostname(scan_data: Any) -> Optional[str]:
+            def get_hostname(scan_data: Any) -> str | None:
                 if isinstance(scan_data, dict):
                     hn = scan_data.get("hostname", [])
                     return hn[0].get("name", None) if len(hn) > 0 else None
@@ -108,7 +110,7 @@ class MySubnet:
         """
         return {name: ip for name, ip in self.all_ips.items() if re.match(name_re, name)}
 
-    def get_ip(self, name_re: Union[str, re.Pattern]) -> Optional[str]:
+    def get_ip(self, name_re: Union[str, re.Pattern]) -> str | None:
         """Get the "first" IP address of the hosts whose names match the regex.
         :param name_re: The name or regex pattern to match
         :return: The "first" matching IP address or None

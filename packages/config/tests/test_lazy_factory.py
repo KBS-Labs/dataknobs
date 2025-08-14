@@ -4,9 +4,9 @@ import pytest
 
 from dataknobs_config import Config, ConfigError
 from dataknobs_config.examples import (
-    DatabaseFactory,
     CacheFactory,
     Database,
+    DatabaseFactory,
 )
 
 
@@ -127,7 +127,6 @@ class TestLazyFactoryAccess:
 
     def test_get_instance_with_class(self):
         """Test get_instance with class configuration."""
-
         config = Config(
             {
                 "database": [
@@ -209,7 +208,11 @@ class TestLazyFactoryAccess:
     def test_factory_cache_clearing(self):
         """Test that factory cache can be cleared."""
         config = Config(
-            {"database": [{"name": "primary", "factory": "dataknobs_config.examples.DatabaseFactory"}]}
+            {
+                "database": [
+                    {"name": "primary", "factory": "dataknobs_config.examples.DatabaseFactory"}
+                ]
+            }
         )
 
         # Get factory and use it
