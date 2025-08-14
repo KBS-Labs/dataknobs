@@ -54,10 +54,11 @@ class DotenvPostgresConnector:
         db: str | None = None,
         user: str | None = None,
         pwd: str | None = None,
+        port: int | None = None,
         pvname: str = ".project_vars",
     ) -> None:
         config = load_project_vars(pvname=pvname)
-        if host is None or db is None or user is None or pwd is None:
+        if host is None or db is None or user is None or pwd is None or port is None:
             load_dotenv()
 
         self.host = (
@@ -88,6 +89,13 @@ class DotenvPostgresConnector:
             if pwd is None
             else pwd
         )
+        self.port = (
+            int(os.getenv(
+                "POSTGRES_PORT", config.get("POSTGRES_PORT", 5432) if config else 5432
+            ))
+            if port is None
+            else port
+        )
 
     def get_conn(self) -> Any:
         """Get a connection to the database.
@@ -99,6 +107,7 @@ class DotenvPostgresConnector:
             database=self.database,
             user=self.user,
             password=self.password,
+            port=self.port,
         )
 
 
@@ -109,8 +118,13 @@ class PostgresDB:
         db: str | None = None,
         user: str | None = None,
         pwd: str | None = None,
+        port: int | None = None,
     ) -> None:
-        self._connector = DotenvPostgresConnector(host=host, db=db, user=user, pwd=pwd)
+        # Allow passing a connector directly (for backward compatibility)
+        if isinstance(host, DotenvPostgresConnector):
+            self._connector = host
+        else:
+            self._connector = DotenvPostgresConnector(host=host, db=db, user=user, pwd=pwd, port=port)
         self._tables_df: pd.DataFrame | None = None
         self._table_names: List[str] | None = None
 

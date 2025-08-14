@@ -4,7 +4,7 @@ import asyncio
 import threading
 import uuid
 from collections import OrderedDict
-from typing import Any, Dict, List
+from typing import Any
 
 from ..database import Database, SyncDatabase
 from ..query import Query
@@ -14,7 +14,7 @@ from ..records import Record
 class MemoryDatabase(Database):
     """Async in-memory database implementation."""
 
-    def __init__(self, config: Dict[str, Any] | None = None):
+    def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config)
         self._storage: OrderedDict[str, Record] = OrderedDict()
         self._lock = asyncio.Lock()
@@ -63,7 +63,7 @@ class MemoryDatabase(Database):
             self._storage[id] = record.copy(deep=True)
             return id
 
-    async def search(self, query: Query) -> List[Record]:
+    async def search(self, query: Query) -> list[Record]:
         """Search for records matching the query."""
         async with self._lock:
             results = []
@@ -117,7 +117,7 @@ class MemoryDatabase(Database):
             self._storage.clear()
             return count
 
-    async def create_batch(self, records: List[Record]) -> List[str]:
+    async def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records efficiently."""
         async with self._lock:
             ids = []
@@ -127,7 +127,7 @@ class MemoryDatabase(Database):
                 ids.append(id)
             return ids
 
-    async def read_batch(self, ids: List[str]) -> List[Record | None]:
+    async def read_batch(self, ids: list[str]) -> list[Record | None]:
         """Read multiple records efficiently."""
         async with self._lock:
             results = []
@@ -136,7 +136,7 @@ class MemoryDatabase(Database):
                 results.append(record.copy(deep=True) if record else None)
             return results
 
-    async def delete_batch(self, ids: List[str]) -> List[bool]:
+    async def delete_batch(self, ids: list[str]) -> list[bool]:
         """Delete multiple records efficiently."""
         async with self._lock:
             results = []
@@ -152,7 +152,7 @@ class MemoryDatabase(Database):
 class SyncMemoryDatabase(SyncDatabase):
     """Synchronous in-memory database implementation."""
 
-    def __init__(self, config: Dict[str, Any] | None = None):
+    def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config)
         self._storage: OrderedDict[str, Record] = OrderedDict()
         self._lock = threading.RLock()
@@ -201,7 +201,7 @@ class SyncMemoryDatabase(SyncDatabase):
             self._storage[id] = record.copy(deep=True)
             return id
 
-    def search(self, query: Query) -> List[Record]:
+    def search(self, query: Query) -> list[Record]:
         """Search for records matching the query."""
         with self._lock:
             results = []
@@ -255,7 +255,7 @@ class SyncMemoryDatabase(SyncDatabase):
             self._storage.clear()
             return count
 
-    def create_batch(self, records: List[Record]) -> List[str]:
+    def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records efficiently."""
         with self._lock:
             ids = []
@@ -265,7 +265,7 @@ class SyncMemoryDatabase(SyncDatabase):
                 ids.append(id)
             return ids
 
-    def read_batch(self, ids: List[str]) -> List[Record | None]:
+    def read_batch(self, ids: list[str]) -> list[Record | None]:
         """Read multiple records efficiently."""
         with self._lock:
             results = []
@@ -274,7 +274,7 @@ class SyncMemoryDatabase(SyncDatabase):
                 results.append(record.copy(deep=True) if record else None)
             return results
 
-    def delete_batch(self, ids: List[str]) -> List[bool]:
+    def delete_batch(self, ids: list[str]) -> list[bool]:
         """Delete multiple records efficiently."""
         with self._lock:
             results = []

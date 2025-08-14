@@ -4,12 +4,12 @@ from typing import Dict, Type
 
 from ..database import Database, SyncDatabase
 
-BACKEND_REGISTRY: Dict[str, Type[Database]] = {}
-SYNC_BACKEND_REGISTRY: Dict[str, Type[SyncDatabase]] = {}
+BACKEND_REGISTRY: dict[str, type[Database]] = {}
+SYNC_BACKEND_REGISTRY: dict[str, type[SyncDatabase]] = {}
 
 
 def register_backend(
-    name: str, async_class: Type[Database] = None, sync_class: Type[SyncDatabase] = None
+    name: str, async_class: type[Database] = None, sync_class: type[SyncDatabase] = None
 ):
     """Register a backend implementation.
 

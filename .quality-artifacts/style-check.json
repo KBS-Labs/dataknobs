@@ -1146,171 +1146,6 @@
   },
   {
     "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 23,
-      "row": 7
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/__init__.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 23,
-            "row": 7
-          },
-          "location": {
-            "column": 19,
-            "row": 7
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
-    "location": {
-      "column": 19,
-      "row": 7
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 7,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 33,
-      "row": 7
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/__init__.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "type",
-          "end_location": {
-            "column": 33,
-            "row": 7
-          },
-          "location": {
-            "column": 29,
-            "row": 7
-          }
-        }
-      ],
-      "message": "Replace with `type`"
-    },
-    "location": {
-      "column": 29,
-      "row": 7
-    },
-    "message": "Use `type` instead of `Type` for type annotation",
-    "noqa_row": 7,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 28,
-      "row": 8
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/__init__.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 28,
-            "row": 8
-          },
-          "location": {
-            "column": 24,
-            "row": 8
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
-    "location": {
-      "column": 24,
-      "row": 8
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 8,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 38,
-      "row": 8
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/__init__.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "type",
-          "end_location": {
-            "column": 38,
-            "row": 8
-          },
-          "location": {
-            "column": 34,
-            "row": 8
-          }
-        }
-      ],
-      "message": "Replace with `type`"
-    },
-    "location": {
-      "column": 34,
-      "row": 8
-    },
-    "message": "Use `type` instead of `Type` for type annotation",
-    "noqa_row": 8,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 33,
-      "row": 12
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/__init__.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "type",
-          "end_location": {
-            "column": 33,
-            "row": 12
-          },
-          "location": {
-            "column": 29,
-            "row": 12
-          }
-        }
-      ],
-      "message": "Replace with `type`"
-    },
-    "location": {
-      "column": 29,
-      "row": 12
-    },
-    "message": "Use `type` instead of `Type` for type annotation",
-    "noqa_row": 12,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
     "code": "RUF013",
     "end_location": {
       "column": 43,
@@ -1321,7 +1156,7 @@
       "applicability": "unsafe",
       "edits": [
         {
-          "content": "Type[Database] | None",
+          "content": "type[Database] | None",
           "end_location": {
             "column": 43,
             "row": 12
@@ -1344,39 +1179,6 @@
   },
   {
     "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 68,
-      "row": 12
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/__init__.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "type",
-          "end_location": {
-            "column": 68,
-            "row": 12
-          },
-          "location": {
-            "column": 64,
-            "row": 12
-          }
-        }
-      ],
-      "message": "Replace with `type`"
-    },
-    "location": {
-      "column": 64,
-      "row": 12
-    },
-    "message": "Use `type` instead of `Type` for type annotation",
-    "noqa_row": 12,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
     "code": "RUF013",
     "end_location": {
       "column": 82,
@@ -1387,7 +1189,7 @@
       "applicability": "unsafe",
       "edits": [
         {
-          "content": "Type[SyncDatabase] | None",
+          "content": "type[SyncDatabase] | None",
           "end_location": {
             "column": 82,
             "row": 12
@@ -1410,37 +1212,54 @@
   },
   {
     "cell": null,
-    "code": "UP035",
+    "code": "E501",
     "end_location": {
-      "column": 35,
-      "row": 13
+      "column": 114,
+      "row": 178
     },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
     "fix": null,
     "location": {
-      "column": 1,
-      "row": 13
+      "column": 101,
+      "row": 178
     },
-    "message": "`typing.Dict` is deprecated, use `dict` instead",
-    "noqa_row": 13,
-    "url": "https://docs.astral.sh/ruff/rules/deprecated-import"
+    "message": "Line too long (113 > 100)",
+    "noqa_row": 178,
+    "url": "https://docs.astral.sh/ruff/rules/line-too-long"
   },
   {
     "cell": null,
-    "code": "UP035",
+    "code": "E501",
     "end_location": {
-      "column": 35,
-      "row": 13
+      "column": 115,
+      "row": 194
     },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
     "fix": null,
     "location": {
-      "column": 1,
-      "row": 13
+      "column": 101,
+      "row": 194
     },
-    "message": "`typing.List` is deprecated, use `list` instead",
-    "noqa_row": 13,
-    "url": "https://docs.astral.sh/ruff/rules/deprecated-import"
+    "message": "Line too long (114 > 100)",
+    "noqa_row": 194,
+    "url": "https://docs.astral.sh/ruff/rules/line-too-long"
+  },
+  {
+    "cell": null,
+    "code": "E501",
+    "end_location": {
+      "column": 107,
+      "row": 198
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": null,
+    "location": {
+      "column": 101,
+      "row": 198
+    },
+    "message": "Line too long (106 > 100)",
+    "noqa_row": 198,
+    "url": "https://docs.astral.sh/ruff/rules/line-too-long"
   },
   {
     "cell": null,
@@ -1695,402 +1514,6 @@
   },
   {
     "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 36,
-      "row": 78
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 36,
-            "row": 78
-          },
-          "location": {
-            "column": 32,
-            "row": 78
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
-    "location": {
-      "column": 32,
-      "row": 78
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 78,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 46,
-      "row": 78
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 46,
-            "row": 78
-          },
-          "location": {
-            "column": 42,
-            "row": 78
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
-    "location": {
-      "column": 42,
-      "row": 78
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 78,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 39,
-      "row": 83
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 39,
-            "row": 83
-          },
-          "location": {
-            "column": 35,
-            "row": 83
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
-    "location": {
-      "column": 35,
-      "row": 83
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 83,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 49,
-      "row": 83
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 49,
-            "row": 83
-          },
-          "location": {
-            "column": 45,
-            "row": 83
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
-    "location": {
-      "column": 45,
-      "row": 83
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 83,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 36,
-      "row": 92
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 36,
-            "row": 92
-          },
-          "location": {
-            "column": 32,
-            "row": 92
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
-    "location": {
-      "column": 32,
-      "row": 92
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 92,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 46,
-      "row": 92
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 46,
-            "row": 92
-          },
-          "location": {
-            "column": 42,
-            "row": 92
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
-    "location": {
-      "column": 42,
-      "row": 92
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 92,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 39,
-      "row": 128
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 39,
-            "row": 128
-          },
-          "location": {
-            "column": 35,
-            "row": 128
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
-    "location": {
-      "column": 35,
-      "row": 128
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 128,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 49,
-      "row": 128
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 49,
-            "row": 128
-          },
-          "location": {
-            "column": 45,
-            "row": 128
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
-    "location": {
-      "column": 45,
-      "row": 128
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 128,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 36,
-      "row": 142
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 36,
-            "row": 142
-          },
-          "location": {
-            "column": 32,
-            "row": 142
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
-    "location": {
-      "column": 32,
-      "row": 142
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 142,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 46,
-      "row": 142
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 46,
-            "row": 142
-          },
-          "location": {
-            "column": 42,
-            "row": 142
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
-    "location": {
-      "column": 42,
-      "row": 142
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 142,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 39,
-      "row": 173
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 39,
-            "row": 173
-          },
-          "location": {
-            "column": 35,
-            "row": 173
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
-    "location": {
-      "column": 35,
-      "row": 173
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 173,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 49,
-      "row": 173
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 49,
-            "row": 173
-          },
-          "location": {
-            "column": 45,
-            "row": 173
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
-    "location": {
-      "column": 45,
-      "row": 173
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 173,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
     "code": "RUF005",
     "end_location": {
       "column": 59,
@@ -2154,72 +1577,6 @@
     "message": "Unnecessary `list()` call within `sorted()`",
     "noqa_row": 190,
     "url": "https://docs.astral.sh/ruff/rules/unnecessary-double-cast-or-process"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 36,
-      "row": 216
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 36,
-            "row": 216
-          },
-          "location": {
-            "column": 32,
-            "row": 216
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
-    "location": {
-      "column": 32,
-      "row": 216
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 216,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 46,
-      "row": 216
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 46,
-            "row": 216
-          },
-          "location": {
-            "column": 42,
-            "row": 216
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
-    "location": {
-      "column": 42,
-      "row": 216
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 216,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
   },
   {
     "cell": null,
@@ -2290,72 +1647,6 @@
   },
   {
     "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 39,
-      "row": 244
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 39,
-            "row": 244
-          },
-          "location": {
-            "column": 35,
-            "row": 244
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
-    "location": {
-      "column": 35,
-      "row": 244
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 244,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 49,
-      "row": 244
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 49,
-            "row": 244
-          },
-          "location": {
-            "column": 45,
-            "row": 244
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
-    "location": {
-      "column": 45,
-      "row": 244
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 244,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
     "code": "B904",
     "end_location": {
       "column": 86,
@@ -2407,336 +1698,6 @@
   },
   {
     "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 36,
-      "row": 278
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 36,
-            "row": 278
-          },
-          "location": {
-            "column": 32,
-            "row": 278
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
-    "location": {
-      "column": 32,
-      "row": 278
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 278,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 39,
-      "row": 312
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 39,
-            "row": 312
-          },
-          "location": {
-            "column": 35,
-            "row": 312
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
-    "location": {
-      "column": 35,
-      "row": 312
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 312,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 42,
-      "row": 321
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 42,
-            "row": 321
-          },
-          "location": {
-            "column": 38,
-            "row": 321
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
-    "location": {
-      "column": 38,
-      "row": 321
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 321,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 49,
-      "row": 393
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 49,
-            "row": 393
-          },
-          "location": {
-            "column": 45,
-            "row": 393
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 45,
-      "row": 393
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 393,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 47,
-      "row": 450
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 47,
-            "row": 450
-          },
-          "location": {
-            "column": 43,
-            "row": 450
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 43,
-      "row": 450
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 450,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 64,
-      "row": 450
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 64,
-            "row": 450
-          },
-          "location": {
-            "column": 60,
-            "row": 450
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 60,
-      "row": 450
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 450,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 41,
-      "row": 462
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 41,
-            "row": 462
-          },
-          "location": {
-            "column": 37,
-            "row": 462
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 37,
-      "row": 462
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 462,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 55,
-      "row": 462
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 55,
-            "row": 462
-          },
-          "location": {
-            "column": 51,
-            "row": 462
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 51,
-      "row": 462
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 462,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 43,
-      "row": 472
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 43,
-            "row": 472
-          },
-          "location": {
-            "column": 39,
-            "row": 472
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 39,
-      "row": 472
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 472,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 57,
-      "row": 472
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 57,
-            "row": 472
-          },
-          "location": {
-            "column": 53,
-            "row": 472
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 53,
-      "row": 472
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 472,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
     "code": "RUF012",
     "end_location": {
       "column": 6,
@@ -2771,929 +1732,319 @@
   },
   {
     "cell": null,
-    "code": "UP006",
+    "code": "D107",
     "end_location": {
-      "column": 36,
-      "row": 503
+      "column": 17,
+      "row": 17
     },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 36,
-            "row": 503
-          },
-          "location": {
-            "column": 32,
-            "row": 503
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
+    "fix": null,
     "location": {
-      "column": 32,
-      "row": 503
+      "column": 9,
+      "row": 17
     },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 503,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
+    "message": "Missing docstring in `__init__`",
+    "noqa_row": 17,
+    "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
   },
   {
     "cell": null,
-    "code": "UP006",
+    "code": "D107",
     "end_location": {
-      "column": 33,
-      "row": 537
+      "column": 17,
+      "row": 155
     },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
+    "fix": null,
+    "location": {
+      "column": 9,
+      "row": 155
+    },
+    "message": "Missing docstring in `__init__`",
+    "noqa_row": 155,
+    "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
+  },
+  {
+    "cell": null,
+    "code": "E501",
+    "end_location": {
+      "column": 103,
+      "row": 50
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
+    "fix": null,
+    "location": {
+      "column": 101,
+      "row": 50
+    },
+    "message": "Line too long (102 > 100)",
+    "noqa_row": 50,
+    "url": "https://docs.astral.sh/ruff/rules/line-too-long"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 69
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
     "fix": {
-      "applicability": "safe",
+      "applicability": "unsafe",
       "edits": [
         {
-          "content": "dict",
+          "content": "",
           "end_location": {
-            "column": 33,
-            "row": 537
+            "column": 9,
+            "row": 69
+          },
+          "location": {
+            "column": 1,
+            "row": 69
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 69
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 75,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W291",
+    "end_location": {
+      "column": 63,
+      "row": 70
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 63,
+            "row": 70
+          },
+          "location": {
+            "column": 62,
+            "row": 70
+          }
+        }
+      ],
+      "message": "Remove trailing whitespace"
+    },
+    "location": {
+      "column": 62,
+      "row": 70
+    },
+    "message": "Trailing whitespace",
+    "noqa_row": 75,
+    "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 72
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 72
+          },
+          "location": {
+            "column": 1,
+            "row": 72
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 72
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 75,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W291",
+    "end_location": {
+      "column": 30,
+      "row": 137
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 30,
+            "row": 137
           },
           "location": {
             "column": 29,
-            "row": 537
+            "row": 137
           }
         }
       ],
-      "message": "Replace with `dict`"
+      "message": "Remove trailing whitespace"
     },
     "location": {
       "column": 29,
-      "row": 537
+      "row": 137
     },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 537,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
+    "message": "Trailing whitespace",
+    "noqa_row": 141,
+    "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
   },
   {
     "cell": null,
-    "code": "UP006",
+    "code": "SIM117",
     "end_location": {
-      "column": 36,
-      "row": 546
+      "column": 42,
+      "row": 145
     },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
     "fix": {
-      "applicability": "safe",
+      "applicability": "unsafe",
       "edits": [
         {
-          "content": "dict",
+          "content": "        with self.db.get_conn() as conn, conn.cursor() as cursor:\n            cursor.execute(sql, row)\n            affected = cursor.rowcount\n            conn.commit()",
           "end_location": {
-            "column": 36,
-            "row": 546
+            "column": 30,
+            "row": 148
           },
           "location": {
-            "column": 32,
-            "row": 546
+            "column": 1,
+            "row": 144
           }
         }
       ],
-      "message": "Replace with `dict`"
+      "message": "Combine `with` statements"
     },
-    "location": {
-      "column": 32,
-      "row": 546
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 546,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 43,
-      "row": 618
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 43,
-            "row": 618
-          },
-          "location": {
-            "column": 39,
-            "row": 618
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 39,
-      "row": 618
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 618,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 41,
-      "row": 675
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 41,
-            "row": 675
-          },
-          "location": {
-            "column": 37,
-            "row": 675
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 37,
-      "row": 675
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 675,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 58,
-      "row": 675
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 58,
-            "row": 675
-          },
-          "location": {
-            "column": 54,
-            "row": 675
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 54,
-      "row": 675
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 675,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 35,
-      "row": 687
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 35,
-            "row": 687
-          },
-          "location": {
-            "column": 31,
-            "row": 687
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 31,
-      "row": 687
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 687,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 49,
-      "row": 687
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 49,
-            "row": 687
-          },
-          "location": {
-            "column": 45,
-            "row": 687
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 45,
-      "row": 687
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 687,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 37,
-      "row": 697
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 37,
-            "row": 697
-          },
-          "location": {
-            "column": 33,
-            "row": 697
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 33,
-      "row": 697
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 697,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 51,
-      "row": 697
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/file.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 51,
-            "row": 697
-          },
-          "location": {
-            "column": 47,
-            "row": 697
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 47,
-      "row": 697
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 697,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP035",
-    "end_location": {
-      "column": 35,
-      "row": 7
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
-    "fix": null,
-    "location": {
-      "column": 1,
-      "row": 7
-    },
-    "message": "`typing.Dict` is deprecated, use `dict` instead",
-    "noqa_row": 7,
-    "url": "https://docs.astral.sh/ruff/rules/deprecated-import"
-  },
-  {
-    "cell": null,
-    "code": "UP035",
-    "end_location": {
-      "column": 35,
-      "row": 7
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
-    "fix": null,
-    "location": {
-      "column": 1,
-      "row": 7
-    },
-    "message": "`typing.List` is deprecated, use `list` instead",
-    "noqa_row": 7,
-    "url": "https://docs.astral.sh/ruff/rules/deprecated-import"
-  },
-  {
-    "cell": null,
-    "code": "D107",
-    "end_location": {
-      "column": 17,
-      "row": 17
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
-    "fix": null,
     "location": {
       "column": 9,
-      "row": 17
+      "row": 144
     },
-    "message": "Missing docstring in `__init__`",
-    "noqa_row": 17,
-    "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
+    "message": "Use a single `with` statement with multiple contexts instead of nested `with` statements",
+    "noqa_row": 144,
+    "url": "https://docs.astral.sh/ruff/rules/multiple-with-statements"
   },
   {
     "cell": null,
-    "code": "UP006",
+    "code": "SIM117",
     "end_location": {
-      "column": 36,
-      "row": 17
+      "column": 42,
+      "row": 160
     },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
     "fix": {
-      "applicability": "safe",
+      "applicability": "unsafe",
       "edits": [
         {
-          "content": "dict",
+          "content": "        with self.db.get_conn() as conn, conn.cursor() as cursor:\n            cursor.execute(sql, {\"id\": id})\n            affected = cursor.rowcount\n            conn.commit()",
           "end_location": {
-            "column": 36,
-            "row": 17
+            "column": 30,
+            "row": 163
           },
           "location": {
-            "column": 32,
-            "row": 17
+            "column": 1,
+            "row": 159
           }
         }
       ],
-      "message": "Replace with `dict`"
+      "message": "Combine `with` statements"
     },
-    "location": {
-      "column": 32,
-      "row": 17
-    },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 17,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 49,
-      "row": 66
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 49,
-            "row": 66
-          },
-          "location": {
-            "column": 45,
-            "row": 66
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 45,
-      "row": 66
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 66,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 47,
-      "row": 120
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 47,
-            "row": 120
-          },
-          "location": {
-            "column": 43,
-            "row": 120
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 43,
-      "row": 120
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 120,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 64,
-      "row": 120
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 64,
-            "row": 120
-          },
-          "location": {
-            "column": 60,
-            "row": 120
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 60,
-      "row": 120
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 120,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 41,
-      "row": 130
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 41,
-            "row": 130
-          },
-          "location": {
-            "column": 37,
-            "row": 130
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 37,
-      "row": 130
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 130,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 55,
-      "row": 130
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 55,
-            "row": 130
-          },
-          "location": {
-            "column": 51,
-            "row": 130
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 51,
-      "row": 130
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 130,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 43,
-      "row": 139
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 43,
-            "row": 139
-          },
-          "location": {
-            "column": 39,
-            "row": 139
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 39,
-      "row": 139
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 139,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 57,
-      "row": 139
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 57,
-            "row": 139
-          },
-          "location": {
-            "column": 53,
-            "row": 139
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 53,
-      "row": 139
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 139,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "D107",
-    "end_location": {
-      "column": 17,
-      "row": 155
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
-    "fix": null,
     "location": {
       "column": 9,
-      "row": 155
+      "row": 159
     },
-    "message": "Missing docstring in `__init__`",
-    "noqa_row": 155,
-    "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
+    "message": "Use a single `with` statement with multiple contexts instead of nested `with` statements",
+    "noqa_row": 159,
+    "url": "https://docs.astral.sh/ruff/rules/multiple-with-statements"
   },
   {
     "cell": null,
-    "code": "UP006",
+    "code": "E501",
     "end_location": {
-      "column": 36,
-      "row": 155
+      "column": 106,
+      "row": 211
     },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "dict",
-          "end_location": {
-            "column": 36,
-            "row": 155
-          },
-          "location": {
-            "column": 32,
-            "row": 155
-          }
-        }
-      ],
-      "message": "Replace with `dict`"
-    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
+    "fix": null,
     "location": {
-      "column": 32,
-      "row": 155
+      "column": 101,
+      "row": 211
     },
-    "message": "Use `dict` instead of `Dict` for type annotation",
-    "noqa_row": 155,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
+    "message": "Line too long (105 > 100)",
+    "noqa_row": 211,
+    "url": "https://docs.astral.sh/ruff/rules/line-too-long"
   },
   {
     "cell": null,
-    "code": "UP006",
+    "code": "E501",
     "end_location": {
-      "column": 43,
-      "row": 204
+      "column": 106,
+      "row": 216
     },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 43,
-            "row": 204
-          },
-          "location": {
-            "column": 39,
-            "row": 204
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
+    "fix": null,
     "location": {
-      "column": 39,
-      "row": 204
+      "column": 101,
+      "row": 216
     },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 204,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
+    "message": "Line too long (105 > 100)",
+    "noqa_row": 216,
+    "url": "https://docs.astral.sh/ruff/rules/line-too-long"
   },
   {
     "cell": null,
-    "code": "UP006",
+    "code": "SIM117",
     "end_location": {
-      "column": 41,
-      "row": 258
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 41,
-            "row": 258
-          },
-          "location": {
-            "column": 37,
-            "row": 258
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 37,
-      "row": 258
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 258,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 58,
-      "row": 258
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 58,
-            "row": 258
-          },
-          "location": {
-            "column": 54,
-            "row": 258
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 54,
-      "row": 258
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 258,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 35,
+      "column": 42,
       "row": 268
     },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
     "fix": {
-      "applicability": "safe",
+      "applicability": "unsafe",
       "edits": [
         {
-          "content": "list",
+          "content": "        with self.db.get_conn() as conn, conn.cursor() as cursor:\n            cursor.execute(sql)\n            affected = cursor.rowcount\n            conn.commit()",
           "end_location": {
-            "column": 35,
-            "row": 268
+            "column": 30,
+            "row": 271
           },
           "location": {
-            "column": 31,
-            "row": 268
+            "column": 1,
+            "row": 267
           }
         }
       ],
-      "message": "Replace with `list`"
+      "message": "Combine `with` statements"
     },
     "location": {
-      "column": 31,
-      "row": 268
+      "column": 9,
+      "row": 267
     },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 268,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 49,
-      "row": 268
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 49,
-            "row": 268
-          },
-          "location": {
-            "column": 45,
-            "row": 268
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 45,
-      "row": 268
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 268,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 37,
-      "row": 277
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 37,
-            "row": 277
-          },
-          "location": {
-            "column": 33,
-            "row": 277
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 33,
-      "row": 277
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 277,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 51,
-      "row": 277
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/memory.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 51,
-            "row": 277
-          },
-          "location": {
-            "column": 47,
-            "row": 277
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 47,
-      "row": 277
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 277,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
+    "message": "Use a single `with` statement with multiple contexts instead of nested `with` statements",
+    "noqa_row": 267,
+    "url": "https://docs.astral.sh/ruff/rules/multiple-with-statements"
   },
   {
     "cell": null,
@@ -4514,16 +2865,16 @@
     "code": "D107",
     "end_location": {
       "column": 17,
-      "row": 43
+      "row": 49
     },
     "filename": "/workdir/packages/data/src/dataknobs_data/exceptions.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 43
+      "row": 49
     },
     "message": "Missing docstring in `__init__`",
-    "noqa_row": 43,
+    "noqa_row": 49,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
   },
   {
@@ -4531,16 +2882,16 @@
     "code": "D107",
     "end_location": {
       "column": 17,
-      "row": 51
+      "row": 57
     },
     "filename": "/workdir/packages/data/src/dataknobs_data/exceptions.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 51
+      "row": 57
     },
     "message": "Missing docstring in `__init__`",
-    "noqa_row": 51,
+    "noqa_row": 57,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
   },
   {
@@ -4548,16 +2899,16 @@
     "code": "D107",
     "end_location": {
       "column": 17,
-      "row": 59
+      "row": 65
     },
     "filename": "/workdir/packages/data/src/dataknobs_data/exceptions.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 59
+      "row": 65
     },
     "message": "Missing docstring in `__init__`",
-    "noqa_row": 59,
+    "noqa_row": 65,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
   },
   {
@@ -4565,16 +2916,16 @@
     "code": "F821",
     "end_location": {
       "column": 51,
-      "row": 59
+      "row": 65
     },
     "filename": "/workdir/packages/data/src/dataknobs_data/exceptions.py",
     "fix": null,
     "location": {
       "column": 46,
-      "row": 59
+      "row": 65
     },
     "message": "Undefined name `Query`",
-    "noqa_row": 59,
+    "noqa_row": 65,
     "url": "https://docs.astral.sh/ruff/rules/undefined-name"
   },
   {
@@ -4582,16 +2933,16 @@
     "code": "D107",
     "end_location": {
       "column": 17,
-      "row": 67
+      "row": 73
     },
     "filename": "/workdir/packages/data/src/dataknobs_data/exceptions.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 67
+      "row": 73
     },
     "message": "Missing docstring in `__init__`",
-    "noqa_row": 67,
+    "noqa_row": 73,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
   },
   {
@@ -4599,16 +2950,16 @@
     "code": "D107",
     "end_location": {
       "column": 17,
-      "row": 75
+      "row": 81
     },
     "filename": "/workdir/packages/data/src/dataknobs_data/exceptions.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 75
+      "row": 81
     },
     "message": "Missing docstring in `__init__`",
-    "noqa_row": 75,
+    "noqa_row": 81,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
   },
   {
@@ -4616,16 +2967,16 @@
     "code": "D107",
     "end_location": {
       "column": 17,
-      "row": 83
+      "row": 89
     },
     "filename": "/workdir/packages/data/src/dataknobs_data/exceptions.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 83
+      "row": 89
     },
     "message": "Missing docstring in `__init__`",
-    "noqa_row": 83,
+    "noqa_row": 89,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
   },
   {
@@ -4633,7 +2984,7 @@
     "code": "RUF013",
     "end_location": {
       "column": 53,
-      "row": 83
+      "row": 89
     },
     "filename": "/workdir/packages/data/src/dataknobs_data/exceptions.py",
     "fix": {
@@ -4643,11 +2994,11 @@
           "content": "list | None",
           "end_location": {
             "column": 53,
-            "row": 83
+            "row": 89
           },
           "location": {
             "column": 49,
-            "row": 83
+            "row": 89
           }
         }
       ],
@@ -4655,10 +3006,10 @@
     },
     "location": {
       "column": 49,
-      "row": 83
+      "row": 89
     },
     "message": "PEP 484 prohibits implicit `Optional`",
-    "noqa_row": 83,
+    "noqa_row": 89,
     "url": "https://docs.astral.sh/ruff/rules/implicit-optional"
   },
   {
@@ -4666,16 +3017,16 @@
     "code": "D107",
     "end_location": {
       "column": 17,
-      "row": 95
+      "row": 101
     },
     "filename": "/workdir/packages/data/src/dataknobs_data/exceptions.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 95
+      "row": 101
     },
     "message": "Missing docstring in `__init__`",
-    "noqa_row": 95,
+    "noqa_row": 101,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
   },
   {
@@ -4683,16 +3034,16 @@
     "code": "D107",
     "end_location": {
       "column": 17,
-      "row": 103
+      "row": 109
     },
     "filename": "/workdir/packages/data/src/dataknobs_data/exceptions.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 103
+      "row": 109
     },
     "message": "Missing docstring in `__init__`",
-    "noqa_row": 103,
+    "noqa_row": 109,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
   },
   {
@@ -4700,16 +3051,16 @@
     "code": "D107",
     "end_location": {
       "column": 17,
-      "row": 110
+      "row": 116
     },
     "filename": "/workdir/packages/data/src/dataknobs_data/exceptions.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 110
+      "row": 116
     },
     "message": "Missing docstring in `__init__`",
-    "noqa_row": 110,
+    "noqa_row": 116,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
   },
   {
@@ -4717,16 +3068,16 @@
     "code": "D107",
     "end_location": {
       "column": 17,
-      "row": 117
+      "row": 123
     },
     "filename": "/workdir/packages/data/src/dataknobs_data/exceptions.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 117
+      "row": 123
     },
     "message": "Missing docstring in `__init__`",
-    "noqa_row": 117,
+    "noqa_row": 123,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
   },
   {
@@ -15611,16 +13962,16 @@
     "code": "D101",
     "end_location": {
       "column": 17,
-      "row": 105
+      "row": 114
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": null,
     "location": {
       "column": 7,
-      "row": 105
+      "row": 114
     },
     "message": "Missing docstring in public class",
-    "noqa_row": 105,
+    "noqa_row": 114,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-class"
   },
   {
@@ -15628,33 +13979,50 @@
     "code": "D107",
     "end_location": {
       "column": 17,
-      "row": 106
+      "row": 115
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 106
+      "row": 115
     },
     "message": "Missing docstring in `__init__`",
-    "noqa_row": 106,
+    "noqa_row": 115,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
+  },
+  {
+    "cell": null,
+    "code": "E501",
+    "end_location": {
+      "column": 103,
+      "row": 127
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
+    "fix": null,
+    "location": {
+      "column": 101,
+      "row": 127
+    },
+    "message": "Line too long (102 > 100)",
+    "noqa_row": 127,
+    "url": "https://docs.astral.sh/ruff/rules/line-too-long"
   },
   {
     "cell": null,
     "code": "D205",
     "end_location": {
       "column": 12,
-      "row": 130
+      "row": 144
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 126
+      "row": 140
     },
     "message": "1 blank line required between summary line and description",
-    "noqa_row": 130,
+    "noqa_row": 144,
     "url": "https://docs.astral.sh/ruff/rules/missing-blank-line-after-summary"
   },
   {
@@ -15662,16 +14030,16 @@
     "code": "D102",
     "end_location": {
       "column": 20,
-      "row": 135
+      "row": 149
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 135
+      "row": 149
     },
     "message": "Missing docstring in public method",
-    "noqa_row": 135,
+    "noqa_row": 149,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
   },
   {
@@ -15679,16 +14047,16 @@
     "code": "D205",
     "end_location": {
       "column": 12,
-      "row": 146
+      "row": 160
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 143
+      "row": 157
     },
     "message": "1 blank line required between summary line and description",
-    "noqa_row": 146,
+    "noqa_row": 160,
     "url": "https://docs.astral.sh/ruff/rules/missing-blank-line-after-summary"
   },
   {
@@ -15696,7 +14064,7 @@
     "code": "D415",
     "end_location": {
       "column": 12,
-      "row": 146
+      "row": 160
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": {
@@ -15706,11 +14074,11 @@
           "content": ".",
           "end_location": {
             "column": 47,
-            "row": 145
+            "row": 159
           },
           "location": {
             "column": 47,
-            "row": 145
+            "row": 159
           }
         }
       ],
@@ -15718,10 +14086,10 @@
     },
     "location": {
       "column": 9,
-      "row": 143
+      "row": 157
     },
     "message": "First line should end with a period, question mark, or exclamation point",
-    "noqa_row": 146,
+    "noqa_row": 160,
     "url": "https://docs.astral.sh/ruff/rules/missing-terminal-punctuation"
   },
   {
@@ -15729,50 +14097,17 @@
     "code": "B019",
     "end_location": {
       "column": 26,
-      "row": 164
+      "row": 178
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": null,
     "location": {
       "column": 5,
-      "row": 164
-    },
-    "message": "Use of `functools.lru_cache` or `functools.cache` on methods can lead to memory leaks",
-    "noqa_row": 164,
-    "url": "https://docs.astral.sh/ruff/rules/cached-instance-method"
-  },
-  {
-    "cell": null,
-    "code": "SIM117",
-    "end_location": {
-      "column": 40,
       "row": 178
     },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
-    "fix": {
-      "applicability": "unsafe",
-      "edits": [
-        {
-          "content": "        with self.get_conn() as conn, conn.cursor() as curs:\n            if params is None:\n                curs.execute(query)\n            else:\n                curs.execute(query, params)\n            df = pd.DataFrame(curs.fetchall(), columns=[desc[0] for desc in curs.description])",
-          "end_location": {
-            "column": 99,
-            "row": 183
-          },
-          "location": {
-            "column": 1,
-            "row": 177
-          }
-        }
-      ],
-      "message": "Combine `with` statements"
-    },
-    "location": {
-      "column": 9,
-      "row": 177
-    },
-    "message": "Use a single `with` statement with multiple contexts instead of nested `with` statements",
-    "noqa_row": 177,
-    "url": "https://docs.astral.sh/ruff/rules/multiple-with-statements"
+    "message": "Use of `functools.lru_cache` or `functools.cache` on methods can lead to memory leaks",
+    "noqa_row": 178,
+    "url": "https://docs.astral.sh/ruff/rules/cached-instance-method"
   },
   {
     "cell": null,
@@ -15786,10 +14121,10 @@
       "applicability": "unsafe",
       "edits": [
         {
-          "content": "        with self.get_conn() as conn, conn.cursor() as curs:\n            curs.execute(stmt)",
+          "content": "        with self.get_conn() as conn, conn.cursor() as curs:\n            if params is None:\n                curs.execute(query)\n            else:\n                curs.execute(query, params)\n            df = pd.DataFrame(curs.fetchall(), columns=[desc[0] for desc in curs.description])",
           "end_location": {
-            "column": 35,
-            "row": 193
+            "column": 99,
+            "row": 197
           },
           "location": {
             "column": 1,
@@ -15812,7 +14147,40 @@
     "code": "SIM117",
     "end_location": {
       "column": 40,
-      "row": 207
+      "row": 206
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "        with self.get_conn() as conn, conn.cursor() as curs:\n            curs.execute(stmt)",
+          "end_location": {
+            "column": 35,
+            "row": 207
+          },
+          "location": {
+            "column": 1,
+            "row": 205
+          }
+        }
+      ],
+      "message": "Combine `with` statements"
+    },
+    "location": {
+      "column": 9,
+      "row": 205
+    },
+    "message": "Use a single `with` statement with multiple contexts instead of nested `with` statements",
+    "noqa_row": 205,
+    "url": "https://docs.astral.sh/ruff/rules/multiple-with-statements"
+  },
+  {
+    "cell": null,
+    "code": "SIM117",
+    "end_location": {
+      "column": 40,
+      "row": 221
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": {
@@ -15822,11 +14190,11 @@
           "content": "        with self.get_conn() as conn, conn.cursor() as curs:\n            sql = f\"INSERT INTO {table_name} ({fields}) VALUES \" + \",\".join(\n                curs.mogrify(\n                    f\"({template})\",\n                    [str(row[col]) for col in df.columns],\n                ).decode(\"utf-8\")\n                for row in df.to_records()\n            )\n            curs.execute(sql)",
           "end_location": {
             "column": 34,
-            "row": 215
+            "row": 229
           },
           "location": {
             "column": 1,
-            "row": 206
+            "row": 220
           }
         }
       ],
@@ -15834,10 +14202,10 @@
     },
     "location": {
       "column": 9,
-      "row": 206
+      "row": 220
     },
     "message": "Use a single `with` statement with multiple contexts instead of nested `with` statements",
-    "noqa_row": 206,
+    "noqa_row": 220,
     "url": "https://docs.astral.sh/ruff/rules/multiple-with-statements"
   },
   {
@@ -15845,16 +14213,16 @@
     "code": "D205",
     "end_location": {
       "column": 12,
-      "row": 222
+      "row": 236
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 218
+      "row": 232
     },
     "message": "1 blank line required between summary line and description",
-    "noqa_row": 222,
+    "noqa_row": 236,
     "url": "https://docs.astral.sh/ruff/rules/missing-blank-line-after-summary"
   },
   {
@@ -15862,7 +14230,7 @@
     "code": "D415",
     "end_location": {
       "column": 12,
-      "row": 222
+      "row": 236
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": {
@@ -15872,11 +14240,11 @@
           "content": ".",
           "end_location": {
             "column": 72,
-            "row": 221
+            "row": 235
           },
           "location": {
             "column": 72,
-            "row": 221
+            "row": 235
           }
         }
       ],
@@ -15884,10 +14252,10 @@
     },
     "location": {
       "column": 9,
-      "row": 218
+      "row": 232
     },
     "message": "First line should end with a period, question mark, or exclamation point",
-    "noqa_row": 222,
+    "noqa_row": 236,
     "url": "https://docs.astral.sh/ruff/rules/missing-terminal-punctuation"
   },
   {
@@ -15895,16 +14263,16 @@
     "code": "D205",
     "end_location": {
       "column": 12,
-      "row": 267
+      "row": 281
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 262
+      "row": 276
     },
     "message": "1 blank line required between summary line and description",
-    "noqa_row": 267,
+    "noqa_row": 281,
     "url": "https://docs.astral.sh/ruff/rules/missing-blank-line-after-summary"
   },
   {
@@ -15912,7 +14280,7 @@
     "code": "SIM108",
     "end_location": {
       "column": 25,
-      "row": 294
+      "row": 308
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": {
@@ -15922,11 +14290,11 @@
           "content": "fields = \", \".join(fields_to_retrieve) if fields_to_retrieve is not None else \"*\"",
           "end_location": {
             "column": 25,
-            "row": 294
+            "row": 308
           },
           "location": {
             "column": 9,
-            "row": 291
+            "row": 305
           }
         }
       ],
@@ -15934,10 +14302,10 @@
     },
     "location": {
       "column": 9,
-      "row": 291
+      "row": 305
     },
     "message": "Use ternary operator `fields = \", \".join(fields_to_retrieve) if fields_to_retrieve is not None else \"*\"` instead of `if`-`else`-block",
-    "noqa_row": 291,
+    "noqa_row": 305,
     "url": "https://docs.astral.sh/ruff/rules/if-else-block-instead-of-if-exp"
   },
   {
@@ -15945,7 +14313,7 @@
     "code": "ANN204",
     "end_location": {
       "column": 17,
-      "row": 309
+      "row": 323
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": {
@@ -15955,11 +14323,11 @@
           "content": " -> None",
           "end_location": {
             "column": 6,
-            "row": 316
+            "row": 330
           },
           "location": {
             "column": 6,
-            "row": 316
+            "row": 330
           }
         }
       ],
@@ -15967,10 +14335,10 @@
     },
     "location": {
       "column": 9,
-      "row": 309
+      "row": 323
     },
     "message": "Missing return type annotation for special method `__init__`",
-    "noqa_row": 309,
+    "noqa_row": 323,
     "url": "https://docs.astral.sh/ruff/rules/missing-return-type-special-method"
   },
   {
@@ -15978,16 +14346,16 @@
     "code": "D205",
     "end_location": {
       "column": 12,
-      "row": 323
+      "row": 337
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 317
+      "row": 331
     },
     "message": "1 blank line required between summary line and description",
-    "noqa_row": 323,
+    "noqa_row": 337,
     "url": "https://docs.astral.sh/ruff/rules/missing-blank-line-after-summary"
   },
   {
@@ -15995,16 +14363,16 @@
     "code": "D205",
     "end_location": {
       "column": 12,
-      "row": 375
+      "row": 389
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 371
+      "row": 385
     },
     "message": "1 blank line required between summary line and description",
-    "noqa_row": 375,
+    "noqa_row": 389,
     "url": "https://docs.astral.sh/ruff/rules/missing-blank-line-after-summary"
   },
   {

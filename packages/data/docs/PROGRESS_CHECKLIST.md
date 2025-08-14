@@ -76,27 +76,27 @@
   - [x] Corruption recovery (empty file handling)
 
 ## Phase 4: Database Backends
-- [ ] PostgreSQL Backend
-  - [ ] Connection management
-  - [ ] Schema creation
-  - [ ] CRUD operations
-  - [ ] Query translation
-  - [ ] Transaction support
-  - [ ] Connection pooling
-  - [ ] Tests
-- [ ] Elasticsearch Backend
-  - [ ] Connection management
-  - [ ] Index management
-  - [ ] CRUD operations
-  - [ ] Query translation
-  - [ ] Bulk operations
-  - [ ] Aggregations
-  - [ ] Tests
-- [ ] Integration with existing utils
-  - [ ] sql_utils integration
-  - [ ] elasticsearch_utils integration
-  - [ ] Connection configuration
-  - [ ] Error handling
+- [x] PostgreSQL Backend
+  - [x] Connection management
+  - [x] Schema creation
+  - [x] CRUD operations
+  - [x] Query translation
+  - [x] Transaction support (via atomic writes)
+  - [x] Connection pooling (via PostgresDB)
+  - [x] Tests
+- [x] Elasticsearch Backend
+  - [x] Connection management
+  - [x] Index management
+  - [x] CRUD operations
+  - [x] Query translation
+  - [x] Bulk operations (via batch methods)
+  - [ ] Aggregations (future enhancement)
+  - [x] Tests
+- [x] Integration with existing utils
+  - [x] sql_utils integration
+  - [x] elasticsearch_utils integration
+  - [x] Connection configuration
+  - [x] Error handling
 
 ## Phase 5: Cloud Storage
 - [ ] S3 Backend

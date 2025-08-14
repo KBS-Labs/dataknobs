@@ -10,7 +10,7 @@ import tempfile
 import threading
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 from ..database import Database, SyncDatabase
 from ..query import Query
@@ -75,12 +75,12 @@ class FileFormat:
     """Base class for file format handlers."""
 
     @staticmethod
-    def load(filepath: str) -> Dict[str, Dict[str, Any]]:
+    def load(filepath: str) -> dict[str, dict[str, Any]]:
         """Load data from file."""
         raise NotImplementedError
 
     @staticmethod
-    def save(filepath: str, data: Dict[str, Dict[str, Any]]):
+    def save(filepath: str, data: dict[str, dict[str, Any]]):
         """Save data to file."""
         raise NotImplementedError
 
@@ -89,7 +89,7 @@ class JSONFormat(FileFormat):
     """JSON file format handler."""
 
     @staticmethod
-    def load(filepath: str) -> Dict[str, Dict[str, Any]]:
+    def load(filepath: str) -> dict[str, dict[str, Any]]:
         """Load data from JSON file."""
         if not os.path.exists(filepath):
             return {}
@@ -125,7 +125,7 @@ class JSONFormat(FileFormat):
             return {}
 
     @staticmethod
-    def save(filepath: str, data: Dict[str, Dict[str, Any]]):
+    def save(filepath: str, data: dict[str, dict[str, Any]]):
         """Save data to JSON file."""
         if filepath.endswith(".gz"):
             with gzip.open(filepath, "wt", encoding="utf-8") as f:
@@ -139,7 +139,7 @@ class CSVFormat(FileFormat):
     """CSV file format handler."""
 
     @staticmethod
-    def load(filepath: str) -> Dict[str, Dict[str, Any]]:
+    def load(filepath: str) -> dict[str, dict[str, Any]]:
         """Load data from CSV file."""
         if not os.path.exists(filepath):
             return {}
@@ -170,7 +170,7 @@ class CSVFormat(FileFormat):
         return data
 
     @staticmethod
-    def save(filepath: str, data: Dict[str, Dict[str, Any]]):
+    def save(filepath: str, data: dict[str, dict[str, Any]]):
         """Save data to CSV file."""
         if not data:
             if filepath.endswith(".gz"):
@@ -213,7 +213,7 @@ class ParquetFormat(FileFormat):
     """Parquet file format handler."""
 
     @staticmethod
-    def load(filepath: str) -> Dict[str, Dict[str, Any]]:
+    def load(filepath: str) -> dict[str, dict[str, Any]]:
         """Load data from Parquet file."""
         if not os.path.exists(filepath):
             return {}
@@ -241,7 +241,7 @@ class ParquetFormat(FileFormat):
             raise ImportError("Parquet support requires pandas and pyarrow packages")
 
     @staticmethod
-    def save(filepath: str, data: Dict[str, Dict[str, Any]]):
+    def save(filepath: str, data: dict[str, dict[str, Any]]):
         """Save data to Parquet file."""
         try:
             import pandas as pd
@@ -275,7 +275,7 @@ class FileDatabase(Database):
         ".pq": ParquetFormat,
     }
 
-    def __init__(self, config: Dict[str, Any] | None = None):
+    def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config)
         self.filepath = self.config.get("path", "data.json")
         self.format = self.config.get("format")
@@ -309,7 +309,7 @@ class FileDatabase(Database):
         """Generate a unique ID for a record."""
         return str(uuid.uuid4())
 
-    async def _load_data(self) -> Dict[str, Record]:
+    async def _load_data(self) -> dict[str, Record]:
         """Load all data from file."""
         with self._file_lock:
             raw_data = self.handler.load(self.filepath)
@@ -318,7 +318,7 @@ class FileDatabase(Database):
                 data[record_id] = Record.from_dict(record_dict)
             return data
 
-    async def _save_data(self, data: Dict[str, Record]):
+    async def _save_data(self, data: dict[str, Record]):
         """Save all data to file atomically."""
         # Convert records to dictionaries
         raw_data = {}
@@ -390,7 +390,7 @@ class FileDatabase(Database):
             await self._save_data(data)
             return id
 
-    async def search(self, query: Query) -> List[Record]:
+    async def search(self, query: Query) -> list[Record]:
         """Search for records matching the query."""
         async with self._lock:
             data = await self._load_data()
@@ -447,7 +447,7 @@ class FileDatabase(Database):
             await self._save_data({})
             return count
 
-    async def create_batch(self, records: List[Record]) -> List[str]:
+    async def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records efficiently."""
         async with self._lock:
             data = await self._load_data()
@@ -459,7 +459,7 @@ class FileDatabase(Database):
             await self._save_data(data)
             return ids
 
-    async def read_batch(self, ids: List[str]) -> List[Record | None]:
+    async def read_batch(self, ids: list[str]) -> list[Record | None]:
         """Read multiple records efficiently."""
         async with self._lock:
             data = await self._load_data()
@@ -469,7 +469,7 @@ class FileDatabase(Database):
                 results.append(record.copy(deep=True) if record else None)
             return results
 
-    async def delete_batch(self, ids: List[str]) -> List[bool]:
+    async def delete_batch(self, ids: list[str]) -> list[bool]:
         """Delete multiple records efficiently."""
         async with self._lock:
             data = await self._load_data()
@@ -500,7 +500,7 @@ class SyncFileDatabase(SyncDatabase):
         ".pq": ParquetFormat,
     }
 
-    def __init__(self, config: Dict[str, Any] | None = None):
+    def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config)
         self.filepath = self.config.get("path", "data.json")
         self.format = self.config.get("format")
@@ -534,7 +534,7 @@ class SyncFileDatabase(SyncDatabase):
         """Generate a unique ID for a record."""
         return str(uuid.uuid4())
 
-    def _load_data(self) -> Dict[str, Record]:
+    def _load_data(self) -> dict[str, Record]:
         """Load all data from file."""
         with self._file_lock:
             raw_data = self.handler.load(self.filepath)
@@ -543,7 +543,7 @@ class SyncFileDatabase(SyncDatabase):
                 data[record_id] = Record.from_dict(record_dict)
             return data
 
-    def _save_data(self, data: Dict[str, Record]):
+    def _save_data(self, data: dict[str, Record]):
         """Save all data to file atomically."""
         # Convert records to dictionaries
         raw_data = {}
@@ -615,7 +615,7 @@ class SyncFileDatabase(SyncDatabase):
             self._save_data(data)
             return id
 
-    def search(self, query: Query) -> List[Record]:
+    def search(self, query: Query) -> list[Record]:
         """Search for records matching the query."""
         with self._lock:
             data = self._load_data()
@@ -672,7 +672,7 @@ class SyncFileDatabase(SyncDatabase):
             self._save_data({})
             return count
 
-    def create_batch(self, records: List[Record]) -> List[str]:
+    def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records efficiently."""
         with self._lock:
             data = self._load_data()
@@ -684,7 +684,7 @@ class SyncFileDatabase(SyncDatabase):
             self._save_data(data)
             return ids
 
-    def read_batch(self, ids: List[str]) -> List[Record | None]:
+    def read_batch(self, ids: list[str]) -> list[Record | None]:
         """Read multiple records efficiently."""
         with self._lock:
             data = self._load_data()
@@ -694,7 +694,7 @@ class SyncFileDatabase(SyncDatabase):
                 results.append(record.copy(deep=True) if record else None)
             return results
 
-    def delete_batch(self, ids: List[str]) -> List[bool]:
+    def delete_batch(self, ids: list[str]) -> list[bool]:
         """Delete multiple records efficiently."""
         with self._lock:
             data = self._load_data()

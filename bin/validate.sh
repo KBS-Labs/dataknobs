@@ -257,7 +257,9 @@ for target in "${VALIDATE_TARGETS[@]}"; do
         count=$(grep -c "TODO\|FIXME" "$target" 2>/dev/null || echo 0)
         TODO_COUNT=$((TODO_COUNT + count))
     elif [[ -d "$target" ]]; then
-        count=$(find "$target" -name "*.py" -exec grep -c "TODO\|FIXME" {} + 2>/dev/null | awk -F: '{sum += $2} END {print sum}' || echo 0)
+        count=$(find "$target" -name "*.py" -exec grep -c "TODO\|FIXME" {} + 2>/dev/null | awk -F: '{sum += $2} END {print sum ? sum : 0}')
+        # Ensure count is a valid number
+        count=${count:-0}
         TODO_COUNT=$((TODO_COUNT + count))
     fi
 done

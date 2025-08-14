@@ -37,6 +37,12 @@ class FieldTypeError(DataknobsDataError):
         )
 
 
+class DatabaseError(DataknobsDataError):
+    """General database error."""
+
+    pass
+
+
 class DatabaseConnectionError(DataknobsDataError):
     """Raised when database connection fails."""
 
