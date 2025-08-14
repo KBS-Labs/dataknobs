@@ -53,3 +53,4 @@ services:
 networks:
   devnet:
     name: devnet
+    external: true

@@ -15,7 +15,8 @@ If you're new to Dataknobs development:
 3. **[Quality Checks Process](quality-checks.md)** - Developer-driven quality assurance
 4. **[Architecture Overview](architecture.md)** - Understand the system design
 5. **[Testing Guide](testing.md)** - Learn about our testing approach
-6. **[CI/CD Pipeline](ci-cd.md)** - Understand our deployment process
+6. **[Integration Testing & CI](integration-testing-ci.md)** - Integration testing in CI/CD pipeline
+7. **[CI/CD Pipeline](ci-cd.md)** - Understand our deployment process
 
 ## Development Topics
 
@@ -24,8 +25,11 @@ If you're new to Dataknobs development:
 - **[UV Virtual Environment Guide](uv-environment.md)** - Working with UV package manager and virtual environments
 - **[Quality Checks Process](quality-checks.md)** - Running quality checks locally before PRs
 - **[Architecture Overview](architecture.md)** - System architecture and design principles
-- **[Testing Guide](testing.md)** - Testing strategies, frameworks, and best practices
 - **[Documentation Guide](documentation-guide.md)** - How to write and maintain documentation
+
+### Testing
+- **[Testing Guide](testing.md)** - Testing strategies, frameworks, and best practices
+- **[Integration Testing & CI](integration-testing-ci.md)** - Integration testing with real services and CI/CD quality gates
 
 ### Operations
 - **[CI/CD Pipeline](ci-cd.md)** - Continuous integration and deployment processes
@@ -72,11 +76,13 @@ source .venv/bin/activate  # On Linux/macOS
 # or
 .venv\Scripts\activate  # On Windows
 
-# Run quality checks before PRs
+# Run quality checks before PRs (includes integration tests)
 ./bin/run-quality-checks.sh
 
-# Or run tests directly
-pytest
+# Or run specific test types
+pytest                                  # Run all tests
+pytest -m "not integration"             # Unit tests only
+./bin/run-integration-tests.sh         # Integration tests with services
 ```
 
 ### Docker Services
@@ -159,9 +165,10 @@ For more details, see the [UV Virtual Environment Guide](uv-environment.md) and 
 
 ### 4. Testing
 - Write unit tests for all new functionality
-- Ensure integration tests pass
-- Achieve minimum code coverage targets
-- Test across supported Python versions
+- Run integration tests with real services (PostgreSQL, Elasticsearch)
+- Ensure all tests pass with `./bin/run-quality-checks.sh`
+- Achieve minimum code coverage targets (70% overall, 90% for new code)
+- Test across supported Python versions (3.10+)
 
 ### 5. Review Process
 - Create pull request with detailed description
@@ -216,8 +223,14 @@ bandit -r packages/
 
 ### Testing
 ```bash
-# Run all tests
+# Run all tests (unit + integration)
 pytest
+
+# Run unit tests only
+pytest -m "not integration"
+
+# Run integration tests with services
+./bin/run-integration-tests.sh
 
 # Run with coverage
 pytest --cov=packages/
@@ -225,8 +238,11 @@ pytest --cov=packages/
 # Run specific package tests
 pytest packages/structures/tests/
 
-# Run integration tests
-pytest tests/integration/
+# Run specific integration tests
+pytest -m integration packages/data/tests/integration/
+
+# Run quality checks (linting + tests + coverage)
+./bin/run-quality-checks.sh
 ```
 
 ### Documentation

@@ -1212,19 +1212,532 @@
   },
   {
     "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 136
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 136
+          },
+          "location": {
+            "column": 1,
+            "row": 136
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 136
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 136,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 140
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 140
+          },
+          "location": {
+            "column": 1,
+            "row": 140
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 140
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 140,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 146
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 146
+          },
+          "location": {
+            "column": 1,
+            "row": 146
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 146
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 146,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 154
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 154
+          },
+          "location": {
+            "column": 1,
+            "row": 154
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 154
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 154,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 157
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 157
+          },
+          "location": {
+            "column": 1,
+            "row": 157
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 157
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 157,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 162
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 162
+          },
+          "location": {
+            "column": 1,
+            "row": 162
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 162
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 162,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 166
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 166
+          },
+          "location": {
+            "column": 1,
+            "row": 166
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 166
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 166,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 168
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 168
+          },
+          "location": {
+            "column": 1,
+            "row": 168
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 168
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 168,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 176
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 176
+          },
+          "location": {
+            "column": 1,
+            "row": 176
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 176
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 176,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 184
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 184
+          },
+          "location": {
+            "column": 1,
+            "row": 184
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 184
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 184,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 188
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 188
+          },
+          "location": {
+            "column": 1,
+            "row": 188
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 188
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 188,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 199
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 199
+          },
+          "location": {
+            "column": 1,
+            "row": 199
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 199
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 199,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W291",
+    "end_location": {
+      "column": 60,
+      "row": 204
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 60,
+            "row": 204
+          },
+          "location": {
+            "column": 59,
+            "row": 204
+          }
+        }
+      ],
+      "message": "Remove trailing whitespace"
+    },
+    "location": {
+      "column": 59,
+      "row": 204
+    },
+    "message": "Trailing whitespace",
+    "noqa_row": 204,
+    "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W291",
+    "end_location": {
+      "column": 42,
+      "row": 205
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 42,
+            "row": 205
+          },
+          "location": {
+            "column": 41,
+            "row": 205
+          }
+        }
+      ],
+      "message": "Remove trailing whitespace"
+    },
+    "location": {
+      "column": 41,
+      "row": 205
+    },
+    "message": "Trailing whitespace",
+    "noqa_row": 205,
+    "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "SIM102",
+    "end_location": {
+      "column": 54,
+      "row": 211
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": null,
+    "location": {
+      "column": 13,
+      "row": 209
+    },
+    "message": "Use a single `if` statement instead of nested `if` statements",
+    "noqa_row": 209,
+    "url": "https://docs.astral.sh/ruff/rules/collapsible-if"
+  },
+  {
+    "cell": null,
     "code": "E501",
     "end_location": {
       "column": 114,
-      "row": 178
+      "row": 216
     },
     "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
     "fix": null,
     "location": {
       "column": 101,
-      "row": 178
+      "row": 216
     },
     "message": "Line too long (113 > 100)",
-    "noqa_row": 178,
+    "noqa_row": 216,
+    "url": "https://docs.astral.sh/ruff/rules/line-too-long"
+  },
+  {
+    "cell": null,
+    "code": "E501",
+    "end_location": {
+      "column": 114,
+      "row": 219
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": null,
+    "location": {
+      "column": 101,
+      "row": 219
+    },
+    "message": "Line too long (113 > 100)",
+    "noqa_row": 219,
+    "url": "https://docs.astral.sh/ruff/rules/line-too-long"
+  },
+  {
+    "cell": null,
+    "code": "E501",
+    "end_location": {
+      "column": 103,
+      "row": 220
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": null,
+    "location": {
+      "column": 101,
+      "row": 220
+    },
+    "message": "Line too long (102 > 100)",
+    "noqa_row": 220,
     "url": "https://docs.astral.sh/ruff/rules/line-too-long"
   },
   {
@@ -1232,16 +1745,16 @@
     "code": "E501",
     "end_location": {
       "column": 115,
-      "row": 194
+      "row": 238
     },
     "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
     "fix": null,
     "location": {
       "column": 101,
-      "row": 194
+      "row": 238
     },
     "message": "Line too long (114 > 100)",
-    "noqa_row": 194,
+    "noqa_row": 238,
     "url": "https://docs.astral.sh/ruff/rules/line-too-long"
   },
   {
@@ -1249,17 +1762,614 @@
     "code": "E501",
     "end_location": {
       "column": 107,
-      "row": 198
+      "row": 242
     },
     "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
     "fix": null,
     "location": {
       "column": 101,
-      "row": 198
+      "row": 242
     },
     "message": "Line too long (106 > 100)",
-    "noqa_row": 198,
+    "noqa_row": 242,
     "url": "https://docs.astral.sh/ruff/rules/line-too-long"
+  },
+  {
+    "cell": null,
+    "code": "W291",
+    "end_location": {
+      "column": 66,
+      "row": 258
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 66,
+            "row": 258
+          },
+          "location": {
+            "column": 65,
+            "row": 258
+          }
+        }
+      ],
+      "message": "Remove trailing whitespace"
+    },
+    "location": {
+      "column": 65,
+      "row": 258
+    },
+    "message": "Trailing whitespace",
+    "noqa_row": 258,
+    "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 302
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 302
+          },
+          "location": {
+            "column": 1,
+            "row": 302
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 302
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 302,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 305
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 305
+          },
+          "location": {
+            "column": 1,
+            "row": 305
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 305
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 311,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 308
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 308
+          },
+          "location": {
+            "column": 1,
+            "row": 308
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 308
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 311,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 314
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 314
+          },
+          "location": {
+            "column": 1,
+            "row": 314
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 314
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 314,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 317
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 317
+          },
+          "location": {
+            "column": 1,
+            "row": 317
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 317
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 317,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 320
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 320
+          },
+          "location": {
+            "column": 1,
+            "row": 320
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 320
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 320,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W291",
+    "end_location": {
+      "column": 60,
+      "row": 325
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 60,
+            "row": 325
+          },
+          "location": {
+            "column": 59,
+            "row": 325
+          }
+        }
+      ],
+      "message": "Remove trailing whitespace"
+    },
+    "location": {
+      "column": 59,
+      "row": 325
+    },
+    "message": "Trailing whitespace",
+    "noqa_row": 325,
+    "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W291",
+    "end_location": {
+      "column": 42,
+      "row": 326
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 42,
+            "row": 326
+          },
+          "location": {
+            "column": 41,
+            "row": 326
+          }
+        }
+      ],
+      "message": "Remove trailing whitespace"
+    },
+    "location": {
+      "column": 41,
+      "row": 326
+    },
+    "message": "Trailing whitespace",
+    "noqa_row": 326,
+    "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "SIM102",
+    "end_location": {
+      "column": 54,
+      "row": 332
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": null,
+    "location": {
+      "column": 13,
+      "row": 330
+    },
+    "message": "Use a single `if` statement instead of nested `if` statements",
+    "noqa_row": 330,
+    "url": "https://docs.astral.sh/ruff/rules/collapsible-if"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 334
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 334
+          },
+          "location": {
+            "column": 1,
+            "row": 334
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 334
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 334,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "E501",
+    "end_location": {
+      "column": 114,
+      "row": 337
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": null,
+    "location": {
+      "column": 101,
+      "row": 337
+    },
+    "message": "Line too long (113 > 100)",
+    "noqa_row": 337,
+    "url": "https://docs.astral.sh/ruff/rules/line-too-long"
+  },
+  {
+    "cell": null,
+    "code": "E501",
+    "end_location": {
+      "column": 114,
+      "row": 340
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": null,
+    "location": {
+      "column": 101,
+      "row": 340
+    },
+    "message": "Line too long (113 > 100)",
+    "noqa_row": 340,
+    "url": "https://docs.astral.sh/ruff/rules/line-too-long"
+  },
+  {
+    "cell": null,
+    "code": "E501",
+    "end_location": {
+      "column": 103,
+      "row": 341
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": null,
+    "location": {
+      "column": 101,
+      "row": 341
+    },
+    "message": "Line too long (102 > 100)",
+    "noqa_row": 341,
+    "url": "https://docs.astral.sh/ruff/rules/line-too-long"
+  },
+  {
+    "cell": null,
+    "code": "E501",
+    "end_location": {
+      "column": 115,
+      "row": 356
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": null,
+    "location": {
+      "column": 101,
+      "row": 356
+    },
+    "message": "Line too long (114 > 100)",
+    "noqa_row": 356,
+    "url": "https://docs.astral.sh/ruff/rules/line-too-long"
+  },
+  {
+    "cell": null,
+    "code": "E501",
+    "end_location": {
+      "column": 107,
+      "row": 360
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": null,
+    "location": {
+      "column": 101,
+      "row": 360
+    },
+    "message": "Line too long (106 > 100)",
+    "noqa_row": 360,
+    "url": "https://docs.astral.sh/ruff/rules/line-too-long"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 363
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 363
+          },
+          "location": {
+            "column": 1,
+            "row": 363
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 363
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 363,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 367
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 367
+          },
+          "location": {
+            "column": 1,
+            "row": 367
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 367
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 367,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 380
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 380
+          },
+          "location": {
+            "column": 1,
+            "row": 380
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 380
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 380,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 384
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 384
+          },
+          "location": {
+            "column": 1,
+            "row": 384
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 384
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 384,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 440
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/elasticsearch.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 440
+          },
+          "location": {
+            "column": 1,
+            "row": 440
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 440
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 440,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
     "cell": null,
@@ -1915,85 +3025,19 @@
   },
   {
     "cell": null,
-    "code": "SIM117",
-    "end_location": {
-      "column": 42,
-      "row": 145
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
-    "fix": {
-      "applicability": "unsafe",
-      "edits": [
-        {
-          "content": "        with self.db.get_conn() as conn, conn.cursor() as cursor:\n            cursor.execute(sql, row)\n            affected = cursor.rowcount\n            conn.commit()",
-          "end_location": {
-            "column": 30,
-            "row": 148
-          },
-          "location": {
-            "column": 1,
-            "row": 144
-          }
-        }
-      ],
-      "message": "Combine `with` statements"
-    },
-    "location": {
-      "column": 9,
-      "row": 144
-    },
-    "message": "Use a single `with` statement with multiple contexts instead of nested `with` statements",
-    "noqa_row": 144,
-    "url": "https://docs.astral.sh/ruff/rules/multiple-with-statements"
-  },
-  {
-    "cell": null,
-    "code": "SIM117",
-    "end_location": {
-      "column": 42,
-      "row": 160
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
-    "fix": {
-      "applicability": "unsafe",
-      "edits": [
-        {
-          "content": "        with self.db.get_conn() as conn, conn.cursor() as cursor:\n            cursor.execute(sql, {\"id\": id})\n            affected = cursor.rowcount\n            conn.commit()",
-          "end_location": {
-            "column": 30,
-            "row": 163
-          },
-          "location": {
-            "column": 1,
-            "row": 159
-          }
-        }
-      ],
-      "message": "Combine `with` statements"
-    },
-    "location": {
-      "column": 9,
-      "row": 159
-    },
-    "message": "Use a single `with` statement with multiple contexts instead of nested `with` statements",
-    "noqa_row": 159,
-    "url": "https://docs.astral.sh/ruff/rules/multiple-with-statements"
-  },
-  {
-    "cell": null,
     "code": "E501",
     "end_location": {
       "column": 106,
-      "row": 211
+      "row": 209
     },
     "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
     "fix": null,
     "location": {
       "column": 101,
-      "row": 211
+      "row": 209
     },
     "message": "Line too long (105 > 100)",
-    "noqa_row": 211,
+    "noqa_row": 209,
     "url": "https://docs.astral.sh/ruff/rules/line-too-long"
   },
   {
@@ -2001,24 +3045,339 @@
     "code": "E501",
     "end_location": {
       "column": 106,
-      "row": 216
+      "row": 214
     },
     "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
     "fix": null,
     "location": {
       "column": 101,
-      "row": 216
+      "row": 214
     },
     "message": "Line too long (105 > 100)",
-    "noqa_row": 216,
+    "noqa_row": 214,
     "url": "https://docs.astral.sh/ruff/rules/line-too-long"
+  },
+  {
+    "cell": null,
+    "code": "E501",
+    "end_location": {
+      "column": 191,
+      "row": 237
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
+    "fix": null,
+    "location": {
+      "column": 101,
+      "row": 237
+    },
+    "message": "Line too long (190 > 100)",
+    "noqa_row": 237,
+    "url": "https://docs.astral.sh/ruff/rules/line-too-long"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 260
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 260
+          },
+          "location": {
+            "column": 1,
+            "row": 260
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 260
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 260,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 263
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 263
+          },
+          "location": {
+            "column": 1,
+            "row": 263
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 263
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 269,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 266
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 266
+          },
+          "location": {
+            "column": 1,
+            "row": 266
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 266
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 269,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 272
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 272
+          },
+          "location": {
+            "column": 1,
+            "row": 272
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 272
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 272,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 277
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 277
+          },
+          "location": {
+            "column": 1,
+            "row": 277
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 277
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 277,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 282
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 282
+          },
+          "location": {
+            "column": 1,
+            "row": 282
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 282
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 282,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "E501",
+    "end_location": {
+      "column": 106,
+      "row": 313
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
+    "fix": null,
+    "location": {
+      "column": 101,
+      "row": 313
+    },
+    "message": "Line too long (105 > 100)",
+    "noqa_row": 313,
+    "url": "https://docs.astral.sh/ruff/rules/line-too-long"
+  },
+  {
+    "cell": null,
+    "code": "E501",
+    "end_location": {
+      "column": 106,
+      "row": 318
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
+    "fix": null,
+    "location": {
+      "column": 101,
+      "row": 318
+    },
+    "message": "Line too long (105 > 100)",
+    "noqa_row": 318,
+    "url": "https://docs.astral.sh/ruff/rules/line-too-long"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 329
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 329
+          },
+          "location": {
+            "column": 1,
+            "row": 329
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 329
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 329,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 332
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 332
+          },
+          "location": {
+            "column": 1,
+            "row": 332
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 332
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 332,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
     "cell": null,
     "code": "SIM117",
     "end_location": {
       "column": 42,
-      "row": 268
+      "row": 344
     },
     "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
     "fix": {
@@ -2028,11 +3387,11 @@
           "content": "        with self.db.get_conn() as conn, conn.cursor() as cursor:\n            cursor.execute(sql)\n            affected = cursor.rowcount\n            conn.commit()",
           "end_location": {
             "column": 30,
-            "row": 271
+            "row": 347
           },
           "location": {
             "column": 1,
-            "row": 267
+            "row": 343
           }
         }
       ],
@@ -2040,11 +3399,44 @@
     },
     "location": {
       "column": 9,
-      "row": 267
+      "row": 343
     },
     "message": "Use a single `with` statement with multiple contexts instead of nested `with` statements",
-    "noqa_row": 267,
+    "noqa_row": 343,
     "url": "https://docs.astral.sh/ruff/rules/multiple-with-statements"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 404
+    },
+    "filename": "/workdir/packages/data/src/dataknobs_data/backends/postgres.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 404
+          },
+          "location": {
+            "column": 1,
+            "row": 404
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 404
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 404,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
     "cell": null,
@@ -3581,7 +4973,7 @@
     "cell": null,
     "code": "UP006",
     "end_location": {
-      "column": 27,
+      "column": 36,
       "row": 119
     },
     "filename": "/workdir/packages/data/src/dataknobs_data/query.py",
@@ -3591,11 +4983,11 @@
         {
           "content": "list",
           "end_location": {
-            "column": 27,
+            "column": 36,
             "row": 119
           },
           "location": {
-            "column": 23,
+            "column": 32,
             "row": 119
           }
         }
@@ -3603,7 +4995,7 @@
       "message": "Replace with `list`"
     },
     "location": {
-      "column": 23,
+      "column": 32,
       "row": 119
     },
     "message": "Use `list` instead of `List` for type annotation",
@@ -3675,23 +5067,6 @@
     "message": "Use `X | Y` for type annotations",
     "noqa_row": 166,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-union"
-  },
-  {
-    "cell": null,
-    "code": "F811",
-    "end_location": {
-      "column": 13,
-      "row": 182
-    },
-    "filename": "/workdir/packages/data/src/dataknobs_data/query.py",
-    "fix": null,
-    "location": {
-      "column": 9,
-      "row": 182
-    },
-    "message": "Redefinition of unused `sort` from line 119",
-    "noqa_row": 182,
-    "url": "https://docs.astral.sh/ruff/rules/redefined-while-unused"
   },
   {
     "cell": null,
@@ -6406,6 +7781,1475 @@
     "message": "Use ternary operator `df = pd.concat([df, rdf]) if df is not None else rdf` instead of `if`-`else`-block",
     "noqa_row": 381,
     "url": "https://docs.astral.sh/ruff/rules/if-else-block-instead-of-if-exp"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 407
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 407
+          },
+          "location": {
+            "column": 1,
+            "row": 407
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 407
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 410,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 411
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 411
+          },
+          "location": {
+            "column": 1,
+            "row": 411
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 411
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 411,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "ANN204",
+    "end_location": {
+      "column": 17,
+      "row": 412
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": " -> None",
+          "end_location": {
+            "column": 6,
+            "row": 419
+          },
+          "location": {
+            "column": 6,
+            "row": 419
+          }
+        }
+      ],
+      "message": "Add return type annotation: `None`"
+    },
+    "location": {
+      "column": 9,
+      "row": 412
+    },
+    "message": "Missing return type annotation for special method `__init__`",
+    "noqa_row": 412,
+    "url": "https://docs.astral.sh/ruff/rules/missing-return-type-special-method"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 421
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 421
+          },
+          "location": {
+            "column": 1,
+            "row": 421
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 421
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 428,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 434
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 434
+          },
+          "location": {
+            "column": 1,
+            "row": 434
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 434
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 434,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 437
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 437
+          },
+          "location": {
+            "column": 1,
+            "row": 437
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 437
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 437,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 448
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 448
+          },
+          "location": {
+            "column": 1,
+            "row": 448
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 448
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 448,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 452
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 452
+          },
+          "location": {
+            "column": 1,
+            "row": 452
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 452
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 452,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 459
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 459
+          },
+          "location": {
+            "column": 1,
+            "row": 459
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 459
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 459,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 462
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 462
+          },
+          "location": {
+            "column": 1,
+            "row": 462
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 462
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 468,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 465
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 465
+          },
+          "location": {
+            "column": 1,
+            "row": 465
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 465
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 468,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 477
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 477
+          },
+          "location": {
+            "column": 1,
+            "row": 477
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 477
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 477,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 480
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 480
+          },
+          "location": {
+            "column": 1,
+            "row": 480
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 480
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 483,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 489
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 489
+          },
+          "location": {
+            "column": 1,
+            "row": 489
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 489
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 489,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 496
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 496
+          },
+          "location": {
+            "column": 1,
+            "row": 496
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 496
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 496,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 499
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 499
+          },
+          "location": {
+            "column": 1,
+            "row": 499
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 499
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 505,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 502
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 502
+          },
+          "location": {
+            "column": 1,
+            "row": 502
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 502
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 505,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 514
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 514
+          },
+          "location": {
+            "column": 1,
+            "row": 514
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 514
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 514,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "E501",
+    "end_location": {
+      "column": 111,
+      "row": 515
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": null,
+    "location": {
+      "column": 101,
+      "row": 515
+    },
+    "message": "Line too long (110 > 100)",
+    "noqa_row": 515,
+    "url": "https://docs.astral.sh/ruff/rules/line-too-long"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 517
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 517
+          },
+          "location": {
+            "column": 1,
+            "row": 517
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 517
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 525,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 522
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 522
+          },
+          "location": {
+            "column": 1,
+            "row": 522
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 522
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 525,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 528
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 528
+          },
+          "location": {
+            "column": 1,
+            "row": 528
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 528
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 528,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 530
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 530
+          },
+          "location": {
+            "column": 1,
+            "row": 530
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 530
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 530,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 534
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 534
+          },
+          "location": {
+            "column": 1,
+            "row": 534
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 534
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 534,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 537
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 537
+          },
+          "location": {
+            "column": 1,
+            "row": 537
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 537
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 543,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 540
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 540
+          },
+          "location": {
+            "column": 1,
+            "row": 540
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 540
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 543,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 545
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 545
+          },
+          "location": {
+            "column": 1,
+            "row": 545
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 545
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 545,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 549
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 549
+          },
+          "location": {
+            "column": 1,
+            "row": 549
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 549
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 549,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 552
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 552
+          },
+          "location": {
+            "column": 1,
+            "row": 552
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 552
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 560,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 557
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 557
+          },
+          "location": {
+            "column": 1,
+            "row": 557
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 557
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 560,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 564
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 564
+          },
+          "location": {
+            "column": 1,
+            "row": 564
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 564
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 564,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 567
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 567
+          },
+          "location": {
+            "column": 1,
+            "row": 567
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 567
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 573,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 570
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 570
+          },
+          "location": {
+            "column": 1,
+            "row": 570
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 570
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 573,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 575
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 575
+          },
+          "location": {
+            "column": 1,
+            "row": 575
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 575
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 575,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 580
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 580
+          },
+          "location": {
+            "column": 1,
+            "row": 580
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 580
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 580,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 582
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 582
+          },
+          "location": {
+            "column": 1,
+            "row": 582
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 582
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 582,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 585
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 585
+          },
+          "location": {
+            "column": 1,
+            "row": 585
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 585
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 591,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 588
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 588
+          },
+          "location": {
+            "column": 1,
+            "row": 588
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 588
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 591,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 593
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 593
+          },
+          "location": {
+            "column": 1,
+            "row": 593
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 593
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 593,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 597
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 597
+          },
+          "location": {
+            "column": 1,
+            "row": 597
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 597
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 597,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 600
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 600
+          },
+          "location": {
+            "column": 1,
+            "row": 600
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 600
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 606,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 603
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 603
+          },
+          "location": {
+            "column": 1,
+            "row": 603
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 603
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 606,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 608
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 608
+          },
+          "location": {
+            "column": 1,
+            "row": 608
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 608
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 608,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 612
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 612
+          },
+          "location": {
+            "column": 1,
+            "row": 612
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 612
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 612,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 615
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/elasticsearch_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 615
+          },
+          "location": {
+            "column": 1,
+            "row": 615
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 615
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 618,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
     "cell": null,
@@ -12910,19 +15754,118 @@
   },
   {
     "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 233
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 233
+          },
+          "location": {
+            "column": 1,
+            "row": 233
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 233
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 233,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 238
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 238
+          },
+          "location": {
+            "column": 1,
+            "row": 238
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 238
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 238,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 243
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 243
+          },
+          "location": {
+            "column": 1,
+            "row": 243
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 243
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 243,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
     "code": "D102",
     "end_location": {
       "column": 14,
-      "row": 235
+      "row": 255
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 235
+      "row": 255
     },
     "message": "Missing docstring in public method",
-    "noqa_row": 235,
+    "noqa_row": 255,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
   },
   {
@@ -12930,7 +15873,7 @@
     "code": "C408",
     "end_location": {
       "column": 33,
-      "row": 237
+      "row": 257
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -12940,22 +15883,22 @@
           "content": "{",
           "end_location": {
             "column": 32,
-            "row": 237
+            "row": 257
           },
           "location": {
             "column": 27,
-            "row": 237
+            "row": 257
           }
         },
         {
           "content": "}",
           "end_location": {
             "column": 33,
-            "row": 237
+            "row": 257
           },
           "location": {
             "column": 32,
-            "row": 237
+            "row": 257
           }
         }
       ],
@@ -12963,10 +15906,10 @@
     },
     "location": {
       "column": 27,
-      "row": 237
+      "row": 257
     },
     "message": "Unnecessary `dict()` call (rewrite as a literal)",
-    "noqa_row": 237,
+    "noqa_row": 257,
     "url": "https://docs.astral.sh/ruff/rules/unnecessary-collection-call"
   },
   {
@@ -12974,16 +15917,16 @@
     "code": "D102",
     "end_location": {
       "column": 18,
-      "row": 240
+      "row": 260
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 240
+      "row": 260
     },
     "message": "Missing docstring in public method",
-    "noqa_row": 240,
+    "noqa_row": 260,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
   },
   {
@@ -12991,16 +15934,16 @@
     "code": "D102",
     "end_location": {
       "column": 18,
-      "row": 243
+      "row": 263
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 243
+      "row": 263
     },
     "message": "Missing docstring in public method",
-    "noqa_row": 243,
+    "noqa_row": 263,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
   },
   {
@@ -13008,16 +15951,16 @@
     "code": "D107",
     "end_location": {
       "column": 17,
-      "row": 250
+      "row": 270
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 250
+      "row": 270
     },
     "message": "Missing docstring in `__init__`",
-    "noqa_row": 250,
+    "noqa_row": 270,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
   },
   {
@@ -13025,41 +15968,91 @@
     "code": "D102",
     "end_location": {
       "column": 18,
-      "row": 266
+      "row": 286
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 266
+      "row": 286
     },
     "message": "Missing docstring in public method",
-    "noqa_row": 266,
+    "noqa_row": 286,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
+  },
+  {
+    "cell": null,
+    "code": "PLR0912",
+    "end_location": {
+      "column": 16,
+      "row": 289
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": null,
+    "location": {
+      "column": 9,
+      "row": 289
+    },
+    "message": "Too many branches (15 > 12)",
+    "noqa_row": 289,
+    "url": "https://docs.astral.sh/ruff/rules/too-many-branches"
   },
   {
     "cell": null,
     "code": "D205",
     "end_location": {
       "column": 12,
-      "row": 292
+      "row": 312
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 281
+      "row": 301
     },
     "message": "1 blank line required between summary line and description",
-    "noqa_row": 292,
+    "noqa_row": 312,
     "url": "https://docs.astral.sh/ruff/rules/missing-blank-line-after-summary"
+  },
+  {
+    "cell": null,
+    "code": "F841",
+    "end_location": {
+      "column": 34,
+      "row": 384
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 34,
+            "row": 384
+          },
+          "location": {
+            "column": 29,
+            "row": 384
+          }
+        }
+      ],
+      "message": "Remove assignment to unused variable `e`"
+    },
+    "location": {
+      "column": 33,
+      "row": 384
+    },
+    "message": "Local variable `e` is assigned to but never used",
+    "noqa_row": 384,
+    "url": "https://docs.astral.sh/ruff/rules/unused-variable"
   },
   {
     "cell": null,
     "code": "SIM108",
     "end_location": {
       "column": 31,
-      "row": 358
+      "row": 394
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -13069,11 +16062,11 @@
           "content": "verbose = sys.stderr if isinstance(verbose, bool) and verbose else None",
           "end_location": {
             "column": 31,
-            "row": 358
+            "row": 394
           },
           "location": {
             "column": 13,
-            "row": 355
+            "row": 391
           }
         }
       ],
@@ -13081,18 +16074,513 @@
     },
     "location": {
       "column": 13,
-      "row": 355
+      "row": 391
     },
     "message": "Use ternary operator `verbose = sys.stderr if isinstance(verbose, bool) and verbose else None` instead of `if`-`else`-block",
-    "noqa_row": 355,
+    "noqa_row": 391,
     "url": "https://docs.astral.sh/ruff/rules/if-else-block-instead-of-if-exp"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 399
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 399
+          },
+          "location": {
+            "column": 1,
+            "row": 399
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 399
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 399,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 409
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 409
+          },
+          "location": {
+            "column": 1,
+            "row": 409
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 409
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 419,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 416
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 416
+          },
+          "location": {
+            "column": 1,
+            "row": 416
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 416
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 419,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 428
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 428
+          },
+          "location": {
+            "column": 1,
+            "row": 428
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 428
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 428,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 440
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 440
+          },
+          "location": {
+            "column": 1,
+            "row": 440
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 440
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 452,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 449
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 449
+          },
+          "location": {
+            "column": 1,
+            "row": 449
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 449
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 452,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 463
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 463
+          },
+          "location": {
+            "column": 1,
+            "row": 463
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 463
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 463,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 474
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 474
+          },
+          "location": {
+            "column": 1,
+            "row": 474
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 474
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 485,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 482
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 482
+          },
+          "location": {
+            "column": 1,
+            "row": 482
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 482
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 485,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 495
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 495
+          },
+          "location": {
+            "column": 1,
+            "row": 495
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 495
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 495,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 505
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 505
+          },
+          "location": {
+            "column": 1,
+            "row": 505
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 505
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 515,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 512
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 512
+          },
+          "location": {
+            "column": 1,
+            "row": 512
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 512
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 515,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 524
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 524
+          },
+          "location": {
+            "column": 1,
+            "row": 524
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 524
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 524,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 534
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 534
+          },
+          "location": {
+            "column": 1,
+            "row": 534
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 534
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 544,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 541
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 541
+          },
+          "location": {
+            "column": 1,
+            "row": 541
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 541
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 544,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
     "cell": null,
     "code": "D415",
     "end_location": {
       "column": 33,
-      "row": 366
+      "row": 556
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -13102,11 +16590,11 @@
           "content": ".",
           "end_location": {
             "column": 30,
-            "row": 366
+            "row": 556
           },
           "location": {
             "column": 30,
-            "row": 366
+            "row": 556
           }
         }
       ],
@@ -13114,10 +16602,10 @@
     },
     "location": {
       "column": 5,
-      "row": 366
+      "row": 556
     },
     "message": "First line should end with a period, question mark, or exclamation point",
-    "noqa_row": 366,
+    "noqa_row": 556,
     "url": "https://docs.astral.sh/ruff/rules/missing-terminal-punctuation"
   },
   {
@@ -13125,16 +16613,16 @@
     "code": "D107",
     "end_location": {
       "column": 17,
-      "row": 368
+      "row": 558
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 368
+      "row": 558
     },
     "message": "Missing docstring in `__init__`",
-    "noqa_row": 368,
+    "noqa_row": 558,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
   },
   {
@@ -13142,7 +16630,7 @@
     "code": "D415",
     "end_location": {
       "column": 63,
-      "row": 376
+      "row": 566
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -13152,11 +16640,11 @@
           "content": ".",
           "end_location": {
             "column": 60,
-            "row": 376
+            "row": 566
           },
           "location": {
             "column": 60,
-            "row": 376
+            "row": 566
           }
         }
       ],
@@ -13164,10 +16652,10 @@
     },
     "location": {
       "column": 9,
-      "row": 376
+      "row": 566
     },
     "message": "First line should end with a period, question mark, or exclamation point",
-    "noqa_row": 376,
+    "noqa_row": 566,
     "url": "https://docs.astral.sh/ruff/rules/missing-terminal-punctuation"
   },
   {
@@ -13175,16 +16663,16 @@
     "code": "D101",
     "end_location": {
       "column": 19,
-      "row": 380
+      "row": 570
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 7,
-      "row": 380
+      "row": 570
     },
     "message": "Missing docstring in public class",
-    "noqa_row": 380,
+    "noqa_row": 570,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-class"
   },
   {
@@ -13192,16 +16680,16 @@
     "code": "D107",
     "end_location": {
       "column": 17,
-      "row": 381
+      "row": 571
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 381
+      "row": 571
     },
     "message": "Missing docstring in `__init__`",
-    "noqa_row": 381,
+    "noqa_row": 571,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
   },
   {
@@ -13209,7 +16697,7 @@
     "code": "C408",
     "end_location": {
       "column": 57,
-      "row": 382
+      "row": 572
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -13219,22 +16707,22 @@
           "content": "{",
           "end_location": {
             "column": 56,
-            "row": 382
+            "row": 572
           },
           "location": {
             "column": 51,
-            "row": 382
+            "row": 572
           }
         },
         {
           "content": "}",
           "end_location": {
             "column": 57,
-            "row": 382
+            "row": 572
           },
           "location": {
             "column": 56,
-            "row": 382
+            "row": 572
           }
         }
       ],
@@ -13242,10 +16730,10 @@
     },
     "location": {
       "column": 51,
-      "row": 382
+      "row": 572
     },
     "message": "Unnecessary `dict()` call (rewrite as a literal)",
-    "noqa_row": 382,
+    "noqa_row": 572,
     "url": "https://docs.astral.sh/ruff/rules/unnecessary-collection-call"
   },
   {
@@ -13253,16 +16741,16 @@
     "code": "D102",
     "end_location": {
       "column": 12,
-      "row": 385
+      "row": 575
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 385
+      "row": 575
     },
     "message": "Missing docstring in public method",
-    "noqa_row": 385,
+    "noqa_row": 575,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
   },
   {
@@ -13270,16 +16758,16 @@
     "code": "D102",
     "end_location": {
       "column": 12,
-      "row": 429
+      "row": 619
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 429
+      "row": 619
     },
     "message": "Missing docstring in public method",
-    "noqa_row": 429,
+    "noqa_row": 619,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
   },
   {
@@ -13287,16 +16775,16 @@
     "code": "D102",
     "end_location": {
       "column": 13,
-      "row": 439
+      "row": 629
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 439
+      "row": 629
     },
     "message": "Missing docstring in public method",
-    "noqa_row": 439,
+    "noqa_row": 629,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
   },
   {
@@ -13304,16 +16792,16 @@
     "code": "D102",
     "end_location": {
       "column": 12,
-      "row": 451
+      "row": 641
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 451
+      "row": 641
     },
     "message": "Missing docstring in public method",
-    "noqa_row": 451,
+    "noqa_row": 641,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
   },
   {
@@ -13321,16 +16809,16 @@
     "code": "D102",
     "end_location": {
       "column": 15,
-      "row": 462
+      "row": 652
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 462
+      "row": 652
     },
     "message": "Missing docstring in public method",
-    "noqa_row": 462,
+    "noqa_row": 652,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
   },
   {
@@ -13840,6 +17328,39 @@
   },
   {
     "cell": null,
+    "code": "F401",
+    "end_location": {
+      "column": 32,
+      "row": 3
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 1,
+            "row": 4
+          },
+          "location": {
+            "column": 1,
+            "row": 3
+          }
+        }
+      ],
+      "message": "Remove unused import: `functools.lru_cache`"
+    },
+    "location": {
+      "column": 23,
+      "row": 3
+    },
+    "message": "`functools.lru_cache` imported but unused",
+    "noqa_row": 3,
+    "url": "https://docs.astral.sh/ruff/rules/unused-import"
+  },
+  {
+    "cell": null,
     "code": "UP035",
     "end_location": {
       "column": 35,
@@ -14094,27 +17615,10 @@
   },
   {
     "cell": null,
-    "code": "B019",
-    "end_location": {
-      "column": 26,
-      "row": 178
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
-    "fix": null,
-    "location": {
-      "column": 5,
-      "row": 178
-    },
-    "message": "Use of `functools.lru_cache` or `functools.cache` on methods can lead to memory leaks",
-    "noqa_row": 178,
-    "url": "https://docs.astral.sh/ruff/rules/cached-instance-method"
-  },
-  {
-    "cell": null,
     "code": "SIM117",
     "end_location": {
       "column": 40,
-      "row": 192
+      "row": 191
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": {
@@ -14124,11 +17628,11 @@
           "content": "        with self.get_conn() as conn, conn.cursor() as curs:\n            if params is None:\n                curs.execute(query)\n            else:\n                curs.execute(query, params)\n            df = pd.DataFrame(curs.fetchall(), columns=[desc[0] for desc in curs.description])",
           "end_location": {
             "column": 99,
-            "row": 197
+            "row": 196
           },
           "location": {
             "column": 1,
-            "row": 191
+            "row": 190
           }
         }
       ],
@@ -14136,10 +17640,10 @@
     },
     "location": {
       "column": 9,
-      "row": 191
+      "row": 190
     },
     "message": "Use a single `with` statement with multiple contexts instead of nested `with` statements",
-    "noqa_row": 191,
+    "noqa_row": 190,
     "url": "https://docs.astral.sh/ruff/rules/multiple-with-statements"
   },
   {
@@ -14147,21 +17651,21 @@
     "code": "SIM117",
     "end_location": {
       "column": 40,
-      "row": 206
+      "row": 207
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": {
       "applicability": "unsafe",
       "edits": [
         {
-          "content": "        with self.get_conn() as conn, conn.cursor() as curs:\n            curs.execute(stmt)",
+          "content": "        with self.get_conn() as conn, conn.cursor() as curs:\n            curs.execute(stmt, params)\n            rowcount = curs.rowcount\n            conn.commit()",
           "end_location": {
-            "column": 35,
-            "row": 207
+            "column": 30,
+            "row": 210
           },
           "location": {
             "column": 1,
-            "row": 205
+            "row": 206
           }
         }
       ],
@@ -14169,10 +17673,10 @@
     },
     "location": {
       "column": 9,
-      "row": 205
+      "row": 206
     },
     "message": "Use a single `with` statement with multiple contexts instead of nested `with` statements",
-    "noqa_row": 205,
+    "noqa_row": 206,
     "url": "https://docs.astral.sh/ruff/rules/multiple-with-statements"
   },
   {
@@ -14180,7 +17684,7 @@
     "code": "SIM117",
     "end_location": {
       "column": 40,
-      "row": 221
+      "row": 225
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": {
@@ -14190,11 +17694,11 @@
           "content": "        with self.get_conn() as conn, conn.cursor() as curs:\n            sql = f\"INSERT INTO {table_name} ({fields}) VALUES \" + \",\".join(\n                curs.mogrify(\n                    f\"({template})\",\n                    [str(row[col]) for col in df.columns],\n                ).decode(\"utf-8\")\n                for row in df.to_records()\n            )\n            curs.execute(sql)",
           "end_location": {
             "column": 34,
-            "row": 229
+            "row": 233
           },
           "location": {
             "column": 1,
-            "row": 220
+            "row": 224
           }
         }
       ],
@@ -14202,10 +17706,10 @@
     },
     "location": {
       "column": 9,
-      "row": 220
+      "row": 224
     },
     "message": "Use a single `with` statement with multiple contexts instead of nested `with` statements",
-    "noqa_row": 220,
+    "noqa_row": 224,
     "url": "https://docs.astral.sh/ruff/rules/multiple-with-statements"
   },
   {
@@ -14213,16 +17717,16 @@
     "code": "D205",
     "end_location": {
       "column": 12,
-      "row": 236
+      "row": 240
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 232
+      "row": 236
     },
     "message": "1 blank line required between summary line and description",
-    "noqa_row": 236,
+    "noqa_row": 240,
     "url": "https://docs.astral.sh/ruff/rules/missing-blank-line-after-summary"
   },
   {
@@ -14230,7 +17734,7 @@
     "code": "D415",
     "end_location": {
       "column": 12,
-      "row": 236
+      "row": 240
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": {
@@ -14240,11 +17744,11 @@
           "content": ".",
           "end_location": {
             "column": 72,
-            "row": 235
+            "row": 239
           },
           "location": {
             "column": 72,
-            "row": 235
+            "row": 239
           }
         }
       ],
@@ -14252,10 +17756,10 @@
     },
     "location": {
       "column": 9,
-      "row": 232
+      "row": 236
     },
     "message": "First line should end with a period, question mark, or exclamation point",
-    "noqa_row": 236,
+    "noqa_row": 240,
     "url": "https://docs.astral.sh/ruff/rules/missing-terminal-punctuation"
   },
   {
@@ -14263,16 +17767,16 @@
     "code": "D205",
     "end_location": {
       "column": 12,
-      "row": 281
+      "row": 285
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 276
+      "row": 280
     },
     "message": "1 blank line required between summary line and description",
-    "noqa_row": 281,
+    "noqa_row": 285,
     "url": "https://docs.astral.sh/ruff/rules/missing-blank-line-after-summary"
   },
   {
@@ -14280,7 +17784,7 @@
     "code": "SIM108",
     "end_location": {
       "column": 25,
-      "row": 308
+      "row": 312
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": {
@@ -14290,11 +17794,11 @@
           "content": "fields = \", \".join(fields_to_retrieve) if fields_to_retrieve is not None else \"*\"",
           "end_location": {
             "column": 25,
-            "row": 308
+            "row": 312
           },
           "location": {
             "column": 9,
-            "row": 305
+            "row": 309
           }
         }
       ],
@@ -14302,10 +17806,10 @@
     },
     "location": {
       "column": 9,
-      "row": 305
+      "row": 309
     },
     "message": "Use ternary operator `fields = \", \".join(fields_to_retrieve) if fields_to_retrieve is not None else \"*\"` instead of `if`-`else`-block",
-    "noqa_row": 305,
+    "noqa_row": 309,
     "url": "https://docs.astral.sh/ruff/rules/if-else-block-instead-of-if-exp"
   },
   {
@@ -14313,7 +17817,7 @@
     "code": "ANN204",
     "end_location": {
       "column": 17,
-      "row": 323
+      "row": 327
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": {
@@ -14323,11 +17827,11 @@
           "content": " -> None",
           "end_location": {
             "column": 6,
-            "row": 330
+            "row": 334
           },
           "location": {
             "column": 6,
-            "row": 330
+            "row": 334
           }
         }
       ],
@@ -14335,10 +17839,10 @@
     },
     "location": {
       "column": 9,
-      "row": 323
+      "row": 327
     },
     "message": "Missing return type annotation for special method `__init__`",
-    "noqa_row": 323,
+    "noqa_row": 327,
     "url": "https://docs.astral.sh/ruff/rules/missing-return-type-special-method"
   },
   {
@@ -14346,16 +17850,16 @@
     "code": "D205",
     "end_location": {
       "column": 12,
-      "row": 337
+      "row": 341
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 331
+      "row": 335
     },
     "message": "1 blank line required between summary line and description",
-    "noqa_row": 337,
+    "noqa_row": 341,
     "url": "https://docs.astral.sh/ruff/rules/missing-blank-line-after-summary"
   },
   {
@@ -14363,16 +17867,16 @@
     "code": "D205",
     "end_location": {
       "column": 12,
-      "row": 389
+      "row": 393
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/sql_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 385
+      "row": 389
     },
     "message": "1 blank line required between summary line and description",
-    "noqa_row": 389,
+    "noqa_row": 393,
     "url": "https://docs.astral.sh/ruff/rules/missing-blank-line-after-summary"
   },
   {

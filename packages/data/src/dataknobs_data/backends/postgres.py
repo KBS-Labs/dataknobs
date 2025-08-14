@@ -141,12 +141,7 @@ class SyncPostgresDatabase(SyncDatabase):
         """
 
         # Execute update and check if any rows were affected
-        with self.db.get_conn() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(sql, row)
-                affected = cursor.rowcount
-                conn.commit()
-
+        affected = self.db.execute(sql, row)
         return affected > 0
 
     def delete(self, id: str) -> bool:
@@ -156,12 +151,7 @@ class SyncPostgresDatabase(SyncDatabase):
         WHERE id = %(id)s
         """
 
-        with self.db.get_conn() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(sql, {"id": id})
-                affected = cursor.rowcount
-                conn.commit()
-
+        affected = self.db.execute(sql, {"id": id})
         return affected > 0
 
     def exists(self, id: str) -> bool:
@@ -188,10 +178,18 @@ class SyncPostgresDatabase(SyncDatabase):
 
             if filter_obj.operator == Operator.EQ:
                 where_clauses.append(f"{field_path} = %({param_name})s")
-                params[param_name] = str(filter_obj.value)
+                # Handle boolean values correctly (JSON stores as lowercase)
+                if isinstance(filter_obj.value, bool):
+                    params[param_name] = str(filter_obj.value).lower()
+                else:
+                    params[param_name] = str(filter_obj.value)
             elif filter_obj.operator == Operator.NEQ:
                 where_clauses.append(f"{field_path} != %({param_name})s")
-                params[param_name] = str(filter_obj.value)
+                # Handle boolean values correctly (JSON stores as lowercase)
+                if isinstance(filter_obj.value, bool):
+                    params[param_name] = str(filter_obj.value).lower()
+                else:
+                    params[param_name] = str(filter_obj.value)
             elif filter_obj.operator == Operator.GT:
                 where_clauses.append(f"CAST({field_path} AS NUMERIC) > %({param_name})s")
                 params[param_name] = filter_obj.value
@@ -229,19 +227,21 @@ class SyncPostgresDatabase(SyncDatabase):
             sql_parts.append("WHERE " + " AND ".join(where_clauses))
 
         # Apply sorting
-        if query.sort:
+        if query.sort_specs:
             order_parts = []
-            for sort_spec in query.sort:
+            for sort_spec in query.sort_specs:
                 field_path = f"data->>'{sort_spec.field}'"
                 order = "DESC" if sort_spec.order == SortOrder.DESC else "ASC"
-                order_parts.append(f"{field_path} {order}")
+                # Try to cast numeric fields for proper sorting
+                # This will use numeric sorting if the field looks numeric, otherwise string
+                order_parts.append(f"CASE WHEN data->>'{sort_spec.field}' ~ '^[0-9]+(\\.[0-9]+)?$' THEN CAST(data->>'{sort_spec.field}' AS NUMERIC) ELSE 0 END {order}, {field_path} {order}")
             sql_parts.append("ORDER BY " + ", ".join(order_parts))
 
         # Apply limit and offset
-        if query.limit:
-            sql_parts.append(f"LIMIT {query.limit}")
-        if query.offset:
-            sql_parts.append(f"OFFSET {query.offset}")
+        if query.limit_value:
+            sql_parts.append(f"LIMIT {query.limit_value}")
+        if query.offset_value:
+            sql_parts.append(f"OFFSET {query.offset_value}")
 
         sql = " ".join(sql_parts)
         df = self.db.query(sql, params)
@@ -256,6 +256,82 @@ class SyncPostgresDatabase(SyncDatabase):
         """Count all records in the database."""
         sql = f"SELECT COUNT(*) as count FROM {self.schema_name}.{self.table_name}"
         df = self.db.query(sql)
+        return int(df.iloc[0]["count"])
+    
+    def count(self, query: Query | None = None) -> int:
+        """Count records matching a query using efficient SQL COUNT.
+        
+        Args:
+            query: Optional search query (counts all if None)
+            
+        Returns:
+            Number of matching records
+        """
+        if not query or not query.filters:
+            return self._count_all()
+        
+        # Build SQL count query from Query object
+        sql_parts = [f"SELECT COUNT(*) as count FROM {self.schema_name}.{self.table_name}"]
+        where_clauses = []
+        params = {}
+        
+        # Apply filters (same logic as search method)
+        for i, filter_obj in enumerate(query.filters):
+            param_name = f"filter_{i}"
+            field_path = f"data->>'{filter_obj.field}'"
+            
+            if filter_obj.operator == Operator.EQ:
+                where_clauses.append(f"{field_path} = %({param_name})s")
+                # Handle boolean values correctly (JSON stores as lowercase)
+                if isinstance(filter_obj.value, bool):
+                    params[param_name] = str(filter_obj.value).lower()
+                else:
+                    params[param_name] = str(filter_obj.value)
+            elif filter_obj.operator == Operator.NEQ:
+                where_clauses.append(f"{field_path} != %({param_name})s")
+                # Handle boolean values correctly (JSON stores as lowercase)
+                if isinstance(filter_obj.value, bool):
+                    params[param_name] = str(filter_obj.value).lower()
+                else:
+                    params[param_name] = str(filter_obj.value)
+            elif filter_obj.operator == Operator.GT:
+                where_clauses.append(f"CAST({field_path} AS NUMERIC) > %({param_name})s")
+                params[param_name] = filter_obj.value
+            elif filter_obj.operator == Operator.GTE:
+                where_clauses.append(f"CAST({field_path} AS NUMERIC) >= %({param_name})s")
+                params[param_name] = filter_obj.value
+            elif filter_obj.operator == Operator.LT:
+                where_clauses.append(f"CAST({field_path} AS NUMERIC) < %({param_name})s")
+                params[param_name] = filter_obj.value
+            elif filter_obj.operator == Operator.LTE:
+                where_clauses.append(f"CAST({field_path} AS NUMERIC) <= %({param_name})s")
+                params[param_name] = filter_obj.value
+            elif filter_obj.operator == Operator.LIKE:
+                where_clauses.append(f"{field_path} LIKE %({param_name})s")
+                params[param_name] = filter_obj.value
+            elif filter_obj.operator == Operator.IN:
+                placeholders = ", ".join([f"%({param_name}_{j})s" for j in range(len(filter_obj.value))])
+                where_clauses.append(f"{field_path} IN ({placeholders})")
+                for j, val in enumerate(filter_obj.value):
+                    params[f"{param_name}_{j}"] = str(val)
+            elif filter_obj.operator == Operator.NOT_IN:
+                placeholders = ", ".join([f"%({param_name}_{j})s" for j in range(len(filter_obj.value))])
+                where_clauses.append(f"{field_path} NOT IN ({placeholders})")
+                for j, val in enumerate(filter_obj.value):
+                    params[f"{param_name}_{j}"] = str(val)
+            elif filter_obj.operator == Operator.EXISTS:
+                where_clauses.append(f"data ? '{filter_obj.field}'")
+            elif filter_obj.operator == Operator.NOT_EXISTS:
+                where_clauses.append(f"NOT (data ? '{filter_obj.field}')")
+            elif filter_obj.operator == Operator.REGEX:
+                where_clauses.append(f"{field_path} ~ %({param_name})s")
+                params[param_name] = filter_obj.value
+        
+        if where_clauses:
+            sql_parts.append("WHERE " + " AND ".join(where_clauses))
+        
+        sql = " ".join(sql_parts)
+        df = self.db.query(sql, params)
         return int(df.iloc[0]["count"])
 
     def clear(self) -> int:
@@ -325,6 +401,11 @@ class PostgresDatabase(Database):
         """Count all records asynchronously."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._sync_db._count_all)
+    
+    async def count(self, query: Query | None = None) -> int:
+        """Count records matching a query asynchronously."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._sync_db.count, query)
 
     async def clear(self) -> int:
         """Clear all records asynchronously."""

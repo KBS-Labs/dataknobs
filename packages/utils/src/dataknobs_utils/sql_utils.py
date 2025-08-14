@@ -175,7 +175,6 @@ class PostgresDB:
         """Do the work of getting table names."""
         return self.tables_df["table_name"].tolist()
 
-    @lru_cache(maxsize=2)
     def query(
         self,
         query: str,
@@ -197,14 +196,19 @@ class PostgresDB:
                 df = pd.DataFrame(curs.fetchall(), columns=[desc[0] for desc in curs.description])
         return df
 
-    def execute(self, stmt: str) -> None:
+    def execute(self, stmt: str, params: Dict[str, Any] | None = None) -> int:
         """Execute a statement.
 
         :param stmt: The sql statement to execute
+        :param params: Optional dictionary of parameters for the query
+        :return: Number of rows affected
         """
         with self.get_conn() as conn:
             with conn.cursor() as curs:
-                curs.execute(stmt)
+                curs.execute(stmt, params)
+                rowcount = curs.rowcount
+                conn.commit()
+        return rowcount
 
     def upload(self, table_name: str, df: pd.DataFrame) -> None:
         """Upload the dataframe data to the table.

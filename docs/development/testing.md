@@ -93,16 +93,58 @@ class TestTreeBasicOperations:
 
 ### Integration Tests
 
-Test interactions between multiple components:
+Test interactions between multiple components and with real external services.
+
+#### Running Integration Tests
+
+The easiest way to run integration tests with all required services:
+
+```bash
+# Start services and run all integration tests
+./bin/run-integration-tests.sh
+
+# Run with verbose output
+./bin/run-integration-tests.sh -v
+
+# Keep services running after tests (for debugging)
+KEEP_SERVICES=true ./bin/run-integration-tests.sh
+```
+
+This script automatically:
+- Starts Docker services (PostgreSQL, Elasticsearch, LocalStack)
+- Waits for services to be ready
+- Sets up test databases
+- Runs integration tests
+- Generates test reports in `.quality-artifacts/`
+
+#### Marking Integration Tests
+
+Always mark integration tests with the `@pytest.mark.integration` decorator:
+
+```python
+import pytest
+
+@pytest.mark.integration
+class TestDatabaseIntegration:
+    """Tests requiring real database connections."""
+    
+    def test_postgres_connection(self, postgres_test_db):
+        """Test PostgreSQL operations."""
+        # Test code here
+```
+
+#### Example Integration Test
 
 ```python
 # tests/integration/test_text_processing_pipeline.py
+import pytest
 import tempfile
 from pathlib import Path
 from dataknobs_utils import file_utils
 from dataknobs_xization import normalize
 from dataknobs_structures import Tree, Document
 
+@pytest.mark.integration
 class TestTextProcessingPipeline:
     """Test integration of text processing components."""
     

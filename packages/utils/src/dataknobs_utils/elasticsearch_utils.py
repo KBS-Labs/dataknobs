@@ -400,3 +400,221 @@ class ElasticsearchIndex:
         if df is not None:
             resp.add_extra("df", df)
         return resp
+
+
+class SimplifiedElasticsearchIndex:
+    """Simplified Elasticsearch index wrapper for single index operations.
+    
+    This class provides a simpler API for working with a single Elasticsearch index,
+    suitable for use as a database backend.
+    """
+    
+    def __init__(
+        self,
+        index_name: str,
+        host: str = "localhost",
+        port: int = 9200,
+        settings: Dict[str, Any] | None = None,
+        mappings: Dict[str, Any] | None = None,
+    ):
+        """Initialize the index wrapper.
+        
+        Args:
+            index_name: Name of the Elasticsearch index
+            host: Elasticsearch host
+            port: Elasticsearch port
+            settings: Optional index settings
+            mappings: Optional index mappings
+        """
+        self.index_name = index_name
+        self.host = host
+        self.port = port
+        self.settings = settings or {"number_of_shards": 1, "number_of_replicas": 0}
+        self.mappings = mappings or {}
+        
+        # Create RequestHelper for making requests
+        self.request_helper = requests_utils.RequestHelper(host, port)
+    
+    def _request(
+        self,
+        method: str,
+        path: str,
+        body: Any | None = None,
+        params: Dict[str, Any] | None = None,
+    ) -> Any:
+        """Make a request to Elasticsearch."""
+        # Build path without leading slash (RequestHelper will add it)
+        full_path = f"{self.index_name}/{path}" if path else self.index_name
+        
+        # Convert body to JSON if it's a dict
+        if isinstance(body, dict):
+            body = json.dumps(body)
+        
+        return self.request_helper.request(
+            method,
+            full_path,
+            payload=body,
+            params=params,
+        )
+    
+    def exists(self, doc_id: str | None = None) -> bool:
+        """Check if index or document exists.
+        
+        Args:
+            doc_id: If provided, check if document exists. Otherwise check if index exists.
+            
+        Returns:
+            True if exists, False otherwise
+        """
+        if doc_id:
+            # Check if document exists
+            response = self._request("head", f"_doc/{doc_id}")
+            return response.succeeded
+        else:
+            # Check if index exists
+            response = self.request_helper.request("head", self.index_name)
+            return response.succeeded
+    
+    def create(self) -> bool:
+        """Create the index with settings and mappings.
+        
+        Returns:
+            True if created successfully
+        """
+        body = {}
+        if self.settings:
+            body["settings"] = self.settings
+        if self.mappings:
+            body["mappings"] = self.mappings
+        
+        response = self.request_helper.request(
+            "put",
+            self.index_name,
+            payload=json.dumps(body) if body else None,
+        )
+        return response.succeeded
+    
+    def delete(self, doc_id: str | None = None) -> bool:
+        """Delete the index or a document.
+        
+        Args:
+            doc_id: If provided, delete document. Otherwise delete entire index.
+            
+        Returns:
+            True if deleted successfully
+        """
+        if doc_id:
+            # Delete document
+            response = self._request("delete", f"_doc/{doc_id}")
+            return response.succeeded
+        else:
+            # Delete index
+            response = self.request_helper.request("delete", self.index_name)
+            return response.succeeded
+    
+    def index(self, body: Dict[str, Any], doc_id: str | None = None, refresh: bool = False) -> Dict[str, Any]:
+        """Index a document.
+        
+        Args:
+            body: Document to index
+            doc_id: Optional document ID (will be auto-generated if not provided)
+            refresh: Whether to refresh immediately for search visibility
+            
+        Returns:
+            Response with created document ID
+        """
+        path = f"_doc/{doc_id}" if doc_id else "_doc"
+        params = {"refresh": "true"} if refresh else None
+        
+        response = self._request("put" if doc_id else "post", path, body, params)
+        
+        if response.succeeded and response.json:
+            return response.json
+        return {"_id": None, "result": "error"}
+    
+    def get(self, doc_id: str) -> Dict[str, Any] | None:
+        """Get a document by ID.
+        
+        Args:
+            doc_id: Document ID
+            
+        Returns:
+            Document data or None if not found
+        """
+        response = self._request("get", f"_doc/{doc_id}")
+        
+        if response.succeeded and response.json:
+            return response.json
+        return None
+    
+    def update(self, doc_id: str, body: Dict[str, Any], refresh: bool = False) -> bool:
+        """Update a document.
+        
+        Args:
+            doc_id: Document ID
+            body: Update body (should contain "doc" field with partial update)
+            refresh: Whether to refresh immediately
+            
+        Returns:
+            True if updated successfully
+        """
+        params = {"refresh": "true"} if refresh else None
+        response = self._request("post", f"_update/{doc_id}", body, params)
+        return response.succeeded
+    
+    def search(self, body: Dict[str, Any] | None = None) -> Any:
+        """Search documents.
+        
+        Args:
+            body: Search query body
+            
+        Returns:
+            ServerResponse object with search results
+        """
+        response = self._request("post", "_search", body or {})
+        
+        # Return the ServerResponse object directly
+        # If it failed, set a default response
+        if not response.succeeded:
+            response.result = {"hits": {"total": {"value": 0}, "hits": []}}
+        
+        return response
+    
+    def count(self, body: Dict[str, Any] | None = None) -> int:
+        """Count documents.
+        
+        Args:
+            body: Optional query to count matching documents
+            
+        Returns:
+            Number of documents
+        """
+        response = self._request("post", "_count", body or {})
+        
+        if response.succeeded and response.json:
+            return response.json.get("count", 0)
+        return 0
+    
+    def delete_by_query(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        """Delete documents matching a query.
+        
+        Args:
+            body: Query to match documents for deletion
+            
+        Returns:
+            Response with deletion info
+        """
+        response = self._request("post", "_delete_by_query", body)
+        
+        if response.succeeded and response.json:
+            return response.json
+        return {"deleted": 0}
+    
+    def refresh(self) -> bool:
+        """Refresh the index to make recent changes searchable.
+        
+        Returns:
+            True if refreshed successfully
+        """
+        response = self._request("post", "_refresh")
+        return response.succeeded

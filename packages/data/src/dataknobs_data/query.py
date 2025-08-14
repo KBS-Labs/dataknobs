@@ -116,7 +116,7 @@ class Query:
     fields: List[str] | None = None  # Field projection
 
     @property
-    def sort(self) -> List[SortSpec]:
+    def sort_property(self) -> List[SortSpec]:
         """Get sort specifications (backward compatibility)."""
         return self.sort_specs
 

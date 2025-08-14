@@ -90,6 +90,13 @@ addopts = [
     "-v",
 ]
 asyncio_mode = "auto"
+markers = [
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+    "slow: marks tests as slow running",
+    "postgres: marks tests that require PostgreSQL",
+    "elasticsearch: marks tests that require Elasticsearch",
+    "s3: marks tests that require S3/LocalStack",
+]
 
 [tool.coverage.run]
 source = ["src/dataknobs_data"]

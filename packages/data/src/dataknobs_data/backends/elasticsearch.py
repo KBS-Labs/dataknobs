@@ -4,10 +4,7 @@ import asyncio
 import uuid
 from typing import Any
 
-from dataknobs_utils.elasticsearch_utils import (
-    ElasticsearchIndex,
-    TableSettings,
-)
+from dataknobs_utils.elasticsearch_utils import SimplifiedElasticsearchIndex
 
 from ..database import Database, SyncDatabase
 from ..exceptions import DatabaseError
@@ -60,16 +57,12 @@ class SyncElasticsearchDatabase(SyncDatabase):
         })
 
         # Initialize the Elasticsearch index
-        table_settings = TableSettings(
-            settings=settings,
-            mappings=mappings,
-        )
-
-        self.es_index = ElasticsearchIndex(
+        self.es_index = SimplifiedElasticsearchIndex(
             index_name=self.index_name,
             host=self.host,
             port=self.port,
-            table_settings=table_settings,
+            settings=settings,
+            mappings=mappings,
         )
 
         # Ensure index exists
@@ -104,26 +97,24 @@ class SyncElasticsearchDatabase(SyncDatabase):
 
         # Index the document
         response = self.es_index.index(
-            doc_id=id,
             body=doc,
+            doc_id=id,
             refresh=self.refresh,
         )
 
-        if not response.succeeded:
-            raise DatabaseError(f"Failed to create record: {response.text}")
+        if not response.get("_id"):
+            raise DatabaseError(f"Failed to create record: {response}")
 
-        return id
+        return response["_id"]
 
     def read(self, id: str) -> Record | None:
         """Read a record by ID."""
         response = self.es_index.get(doc_id=id)
 
-        if not response.succeeded:
-            if "404" in str(response.status_code):
-                return None
-            raise DatabaseError(f"Failed to read record: {response.text}")
+        if not response:
+            return None
 
-        doc = response.json().get("_source", {})
+        doc = response.get("_source", {})
         return self._doc_to_record(doc)
 
     def update(self, id: str, record: Record) -> bool:
@@ -131,37 +122,71 @@ class SyncElasticsearchDatabase(SyncDatabase):
         doc = self._record_to_doc(record, id)
 
         # Update the document
-        response = self.es_index.update(
+        success = self.es_index.update(
             doc_id=id,
             body={"doc": doc},
             refresh=self.refresh,
         )
 
-        if not response.succeeded:
-            if "404" in str(response.status_code):
-                return False
-            raise DatabaseError(f"Failed to update record: {response.text}")
-
-        return True
+        return success
 
     def delete(self, id: str) -> bool:
         """Delete a record by ID."""
-        response = self.es_index.delete(
-            doc_id=id,
-            refresh=self.refresh,
-        )
-
-        if not response.succeeded:
-            if "404" in str(response.status_code):
-                return False
-            raise DatabaseError(f"Failed to delete record: {response.text}")
-
-        return True
+        success = self.es_index.delete(doc_id=id)
+        
+        # Refresh if needed
+        if success and self.refresh:
+            self.es_index.refresh()
+        
+        return success
 
     def exists(self, id: str) -> bool:
         """Check if a record exists."""
-        response = self.es_index.exists(doc_id=id)
-        return response.succeeded and response.json()
+        return self.es_index.exists(doc_id=id)
+    
+    def create_batch(self, records: list[Record]) -> list[str]:
+        """Create multiple records in batch with a single refresh."""
+        ids = []
+        for record in records:
+            # Generate ID
+            id = str(uuid.uuid4())
+            doc = self._record_to_doc(record, id)
+            
+            # Index without refresh (we'll refresh once at the end)
+            response = self.es_index.index(body=doc, doc_id=id, refresh=False)
+            
+            if response.get("_id"):
+                ids.append(id)
+            else:
+                ids.append(None)
+        
+        # Single refresh after all documents are indexed
+        if self.refresh and any(ids):
+            self.es_index.refresh()
+        
+        return ids
+    
+    def read_batch(self, ids: list[str]) -> list[Record | None]:
+        """Read multiple records in batch."""
+        records = []
+        for id in ids:
+            record = self.read(id)
+            records.append(record)
+        return records
+    
+    def delete_batch(self, ids: list[str]) -> list[bool]:
+        """Delete multiple records in batch with a single refresh."""
+        results = []
+        for id in ids:
+            # Delete without refresh (we'll refresh once at the end)
+            success = self.es_index.delete(doc_id=id)
+            results.append(success)
+        
+        # Single refresh after all documents are deleted
+        if self.refresh and any(results):
+            self.es_index.refresh()
+        
+        return results
 
     def search(self, query: Query) -> list[Record]:
         """Search for records matching a query."""
@@ -171,11 +196,28 @@ class SyncElasticsearchDatabase(SyncDatabase):
         # Apply filters
         for filter_obj in query.filters:
             field_path = f"data.{filter_obj.field}"
+            
+            # For string fields in exact match queries, use .keyword suffix
+            # LIKE and REGEX need to use the text field, not keyword
+            if filter_obj.operator in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
+                if isinstance(filter_obj.value, str) or (
+                    isinstance(filter_obj.value, list) and 
+                    filter_obj.value and 
+                    isinstance(filter_obj.value[0], str)
+                ):
+                    field_path = f"{field_path}.keyword"
+            elif filter_obj.operator == Operator.LIKE:
+                # Wildcard needs .keyword for proper matching
+                if isinstance(filter_obj.value, str):
+                    field_path = f"{field_path}.keyword"
 
             if filter_obj.operator == Operator.EQ:
-                es_query["bool"]["must"].append({"term": {field_path: filter_obj.value}})
+                # Handle boolean values correctly
+                value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
+                es_query["bool"]["must"].append({"term": {field_path: value}})
             elif filter_obj.operator == Operator.NEQ:
-                es_query["bool"]["must"].append({"bool": {"must_not": {"term": {field_path: filter_obj.value}}}})
+                value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
+                es_query["bool"]["must"].append({"bool": {"must_not": {"term": {field_path: value}}}})
             elif filter_obj.operator == Operator.GT:
                 es_query["bool"]["must"].append({"range": {field_path: {"gt": filter_obj.value}}})
             elif filter_obj.operator == Operator.GTE:
@@ -186,7 +228,9 @@ class SyncElasticsearchDatabase(SyncDatabase):
                 es_query["bool"]["must"].append({"range": {field_path: {"lte": filter_obj.value}}})
             elif filter_obj.operator == Operator.LIKE:
                 # Convert SQL LIKE pattern to Elasticsearch wildcard
+                # Wildcard queries should use the keyword field for exact matching
                 pattern = filter_obj.value.replace("%", "*").replace("_", "?")
+                # Use the base field path for LIKE (already has .keyword added above if string)
                 es_query["bool"]["must"].append({"wildcard": {field_path: pattern}})
             elif filter_obj.operator == Operator.IN:
                 es_query["bool"]["must"].append({"terms": {field_path: filter_obj.value}})
@@ -205,9 +249,17 @@ class SyncElasticsearchDatabase(SyncDatabase):
 
         # Build sort
         sort = []
-        if query.sort:
-            for sort_spec in query.sort:
+        if query.sort_specs:
+            for sort_spec in query.sort_specs:
                 field_path = f"data.{sort_spec.field}"
+                # Don't add .keyword if user already specified it or for common numeric fields
+                # This is a heuristic - ideally we'd check the mapping
+                numeric_fields = ['age', 'salary', 'balance', 'count', 'score', 'amount', 'price']
+                if (not sort_spec.field.endswith('.keyword') and 
+                    not sort_spec.field.endswith('.raw') and
+                    sort_spec.field.lower() not in numeric_fields):
+                    # Likely a text field, add .keyword for sorting
+                    field_path = f"data.{sort_spec.field}.keyword"
                 order = "desc" if sort_spec.order == SortOrder.DESC else "asc"
                 sort.append({field_path: {"order": order}})
 
@@ -215,10 +267,10 @@ class SyncElasticsearchDatabase(SyncDatabase):
         search_body = {"query": es_query}
         if sort:
             search_body["sort"] = sort
-        if query.limit:
-            search_body["size"] = query.limit
-        if query.offset:
-            search_body["from"] = query.offset
+        if query.limit_value:
+            search_body["size"] = query.limit_value
+        if query.offset_value:
+            search_body["from"] = query.offset_value
 
         # Execute search
         response = self.es_index.search(body=search_body)
@@ -228,7 +280,7 @@ class SyncElasticsearchDatabase(SyncDatabase):
 
         # Parse results
         records = []
-        hits = response.json().get("hits", {}).get("hits", [])
+        hits = response.json.get("hits", {}).get("hits", [])
         for hit in hits:
             doc = hit.get("_source", {})
             records.append(self._doc_to_record(doc))
@@ -246,12 +298,75 @@ class SyncElasticsearchDatabase(SyncDatabase):
 
     def _count_all(self) -> int:
         """Count all records in the database."""
-        response = self.es_index.count()
-
-        if not response.succeeded:
-            raise DatabaseError(f"Failed to count records: {response.text}")
-
-        return response.json().get("count", 0)
+        return self.es_index.count()
+    
+    def count(self, query: Query | None = None) -> int:
+        """Count records matching a query using efficient Elasticsearch count.
+        
+        Args:
+            query: Optional search query (counts all if None)
+            
+        Returns:
+            Number of matching records
+        """
+        if not query or not query.filters:
+            return self._count_all()
+        
+        # Build Elasticsearch query from Query object (same as search)
+        es_query = {"bool": {"must": []}}
+        
+        for filter_obj in query.filters:
+            field_path = f"data.{filter_obj.field}"
+            
+            # For string fields in exact match queries, use .keyword suffix
+            # LIKE and REGEX need different handling
+            if filter_obj.operator in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
+                if isinstance(filter_obj.value, str) or (
+                    isinstance(filter_obj.value, list) and 
+                    filter_obj.value and 
+                    isinstance(filter_obj.value[0], str)
+                ):
+                    field_path = f"{field_path}.keyword"
+            elif filter_obj.operator == Operator.LIKE:
+                # Wildcard needs .keyword for proper matching
+                if isinstance(filter_obj.value, str):
+                    field_path = f"{field_path}.keyword"
+            
+            if filter_obj.operator == Operator.EQ:
+                # Handle boolean values correctly
+                value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
+                es_query["bool"]["must"].append({"term": {field_path: value}})
+            elif filter_obj.operator == Operator.NEQ:
+                value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
+                es_query["bool"]["must"].append({"bool": {"must_not": {"term": {field_path: value}}}})
+            elif filter_obj.operator == Operator.GT:
+                es_query["bool"]["must"].append({"range": {field_path: {"gt": filter_obj.value}}})
+            elif filter_obj.operator == Operator.GTE:
+                es_query["bool"]["must"].append({"range": {field_path: {"gte": filter_obj.value}}})
+            elif filter_obj.operator == Operator.LT:
+                es_query["bool"]["must"].append({"range": {field_path: {"lt": filter_obj.value}}})
+            elif filter_obj.operator == Operator.LTE:
+                es_query["bool"]["must"].append({"range": {field_path: {"lte": filter_obj.value}}})
+            elif filter_obj.operator == Operator.LIKE:
+                pattern = filter_obj.value.replace("%", "*").replace("_", "?")
+                es_query["bool"]["must"].append({"wildcard": {field_path: pattern}})
+            elif filter_obj.operator == Operator.IN:
+                es_query["bool"]["must"].append({"terms": {field_path: filter_obj.value}})
+            elif filter_obj.operator == Operator.NOT_IN:
+                es_query["bool"]["must"].append({"bool": {"must_not": {"terms": {field_path: filter_obj.value}}}})
+            elif filter_obj.operator == Operator.EXISTS:
+                es_query["bool"]["must"].append({"exists": {"field": field_path}})
+            elif filter_obj.operator == Operator.NOT_EXISTS:
+                es_query["bool"]["must"].append({"bool": {"must_not": {"exists": {"field": field_path}}}})
+            elif filter_obj.operator == Operator.REGEX:
+                es_query["bool"]["must"].append({"regexp": {field_path: filter_obj.value}})
+        
+        # If no filters were added, use match_all
+        if not es_query["bool"]["must"]:
+            es_query = {"match_all": {}}
+        
+        # Count with the query
+        return self.es_index.count(body={"query": es_query})
 
     def clear(self) -> int:
         """Clear all records from the database."""
@@ -260,14 +375,14 @@ class SyncElasticsearchDatabase(SyncDatabase):
 
         # Delete by query - delete all documents
         response = self.es_index.delete_by_query(
-            body={"query": {"match_all": {}}},
-            refresh=self.refresh,
+            body={"query": {"match_all": {}}}
         )
-
-        if not response.succeeded:
-            raise DatabaseError(f"Failed to clear records: {response.text}")
-
-        return count
+        
+        # Refresh if needed
+        if self.refresh:
+            self.es_index.refresh()
+        
+        return response.get("deleted", count)
 
     def close(self) -> None:
         """Close the database connection."""
@@ -322,6 +437,11 @@ class ElasticsearchDatabase(Database):
         """Count all records asynchronously."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._sync_db._count_all)
+    
+    async def count(self, query: Query | None = None) -> int:
+        """Count records matching a query asynchronously."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._sync_db.count, query)
 
     async def clear(self) -> int:
         """Clear all records asynchronously."""

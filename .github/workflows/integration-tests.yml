@@ -1,0 +1,333 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'packages/data/**'
+      - 'packages/utils/**'
+      - 'docker-compose*.yml'
+      - '.github/workflows/integration-tests.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'packages/data/**'
+      - 'packages/utils/**'
+      - 'docker-compose*.yml'
+      - '.github/workflows/integration-tests.yml'
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      debug_enabled:
+        description: 'Enable debug logging'
+        required: false
+        default: 'false'
+
+env:
+  PYTHON_VERSION: '3.11'
+  UV_VERSION: '0.4.18'
+
+jobs:
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dataknobs_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      
+      elasticsearch:
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: false
+          ES_JAVA_OPTS: -Xms512m -Xmx512m
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -f http://localhost:9200/_cluster/health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      
+      localstack:
+        image: localstack/localstack:3.0
+        env:
+          SERVICES: s3
+          DEBUG: 0
+        ports:
+          - 4566:4566
+        options: >-
+          --health-cmd "curl -f http://localhost:4566/_localstack/health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ env.PYTHON_VERSION }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+    
+    - name: Install uv
+      run: |
+        curl -LsSf https://astral.sh/uv/${{ env.UV_VERSION }}/install.sh | sh
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+    
+    - name: Cache uv dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/uv
+          .venv
+        key: ${{ runner.os }}-uv-${{ hashFiles('**/pyproject.toml', '**/requirements*.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-uv-
+    
+    - name: Install dependencies
+      run: |
+        uv venv
+        uv pip install -e packages/utils
+        uv pip install -e packages/data
+        uv pip install pytest pytest-asyncio pytest-cov pytest-html
+    
+    - name: Wait for services to be ready
+      run: |
+        echo "Waiting for PostgreSQL..."
+        for i in {1..30}; do
+          if pg_isready -h localhost -p 5432 -U postgres; then
+            echo "PostgreSQL is ready"
+            break
+          fi
+          echo "Waiting for PostgreSQL to be ready... ($i/30)"
+          sleep 1
+        done
+        
+        echo "Waiting for Elasticsearch..."
+        for i in {1..60}; do
+          if curl -s http://localhost:9200/_cluster/health | grep -q '"status"'; then
+            echo "Elasticsearch is ready"
+            break
+          fi
+          echo "Waiting for Elasticsearch to be ready... ($i/60)"
+          sleep 1
+        done
+        
+        echo "Waiting for LocalStack..."
+        for i in {1..30}; do
+          if curl -s http://localhost:4566/_localstack/health | grep -q '"s3"'; then
+            echo "LocalStack is ready"
+            break
+          fi
+          echo "Waiting for LocalStack to be ready... ($i/30)"
+          sleep 1
+        done
+    
+    - name: Create test database
+      run: |
+        PGPASSWORD=postgres psql -h localhost -U postgres -c "CREATE DATABASE IF NOT EXISTS dataknobs_test;"
+    
+    - name: Run PostgreSQL integration tests
+      env:
+        POSTGRES_HOST: localhost
+        POSTGRES_PORT: 5432
+        POSTGRES_USER: postgres
+        POSTGRES_PASSWORD: postgres
+        POSTGRES_DB: dataknobs_test
+      run: |
+        uv run pytest packages/data/tests/integration/test_postgres_integration.py \
+          -v \
+          --tb=short \
+          --junit-xml=junit-postgres.xml \
+          --cov=packages/data/src/dataknobs_data/backends/postgres \
+          --cov-report=xml:coverage-postgres.xml \
+          --cov-report=term
+    
+    - name: Run Elasticsearch integration tests
+      env:
+        ELASTICSEARCH_HOST: localhost
+        ELASTICSEARCH_PORT: 9200
+      run: |
+        uv run pytest packages/data/tests/integration/test_elasticsearch_integration.py \
+          -v \
+          --tb=short \
+          --junit-xml=junit-elasticsearch.xml \
+          --cov=packages/data/src/dataknobs_data/backends/elasticsearch \
+          --cov-report=xml:coverage-elasticsearch.xml \
+          --cov-report=term
+    
+    - name: Run all integration tests
+      env:
+        POSTGRES_HOST: localhost
+        POSTGRES_PORT: 5432
+        POSTGRES_USER: postgres
+        POSTGRES_PASSWORD: postgres
+        POSTGRES_DB: dataknobs_test
+        ELASTICSEARCH_HOST: localhost
+        ELASTICSEARCH_PORT: 9200
+        AWS_ENDPOINT_URL: http://localhost:4566
+        AWS_ACCESS_KEY_ID: test
+        AWS_SECRET_ACCESS_KEY: test
+        AWS_DEFAULT_REGION: us-east-1
+      run: |
+        uv run pytest packages/data/tests/integration/ \
+          -v \
+          --tb=short \
+          --junit-xml=junit-integration.xml \
+          --html=integration-report.html \
+          --self-contained-html \
+          --cov=packages/data/src/dataknobs_data \
+          --cov-report=xml:coverage-integration.xml \
+          --cov-report=html:htmlcov \
+          --cov-report=term
+    
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: integration-test-results
+        path: |
+          junit-*.xml
+          integration-report.html
+          coverage-*.xml
+          htmlcov/
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      if: always()
+      with:
+        files: ./coverage-integration.xml
+        flags: integration
+        name: integration-coverage
+        fail_ci_if_error: false
+    
+    - name: Comment test results on PR
+      uses: EnricoMi/publish-unit-test-result-action@v2
+      if: always() && github.event_name == 'pull_request'
+      with:
+        files: |
+          junit-*.xml
+        check_name: Integration Test Results
+        comment_title: Integration Test Results
+    
+    - name: Debug information
+      if: failure() || inputs.debug_enabled == 'true'
+      run: |
+        echo "=== Docker ps ==="
+        docker ps -a
+        
+        echo "=== PostgreSQL logs ==="
+        docker logs $(docker ps -q -f "ancestor=postgres:15") || true
+        
+        echo "=== Elasticsearch logs ==="
+        docker logs $(docker ps -q -f "ancestor=docker.elastic.co/elasticsearch/elasticsearch:8.11.0") || true
+        
+        echo "=== LocalStack logs ==="
+        docker logs $(docker ps -q -f "ancestor=localstack/localstack:3.0") || true
+        
+        echo "=== Python environment ==="
+        uv pip list
+        
+        echo "=== Test environment variables ==="
+        env | grep -E "(POSTGRES|ELASTICSEARCH|AWS)" | sort
+
+  integration-tests-matrix:
+    name: Integration Tests Matrix
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python-version: ['3.10', '3.11', '3.12']
+        exclude:
+          # Reduce matrix for faster CI
+          - os: macos-latest
+            python-version: '3.10'
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dataknobs_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      
+      elasticsearch:
+        image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: false
+          ES_JAVA_OPTS: -Xms512m -Xmx512m
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd "curl -f http://localhost:9200/_cluster/health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install uv
+      run: |
+        curl -LsSf https://astral.sh/uv/${{ env.UV_VERSION }}/install.sh | sh
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+    
+    - name: Install dependencies
+      run: |
+        uv venv
+        uv pip install -e packages/utils
+        uv pip install -e packages/data
+        uv pip install pytest pytest-asyncio pytest-cov
+    
+    - name: Run integration tests
+      env:
+        POSTGRES_HOST: localhost
+        POSTGRES_PORT: 5432
+        POSTGRES_USER: postgres
+        POSTGRES_PASSWORD: postgres
+        POSTGRES_DB: dataknobs_test
+        ELASTICSEARCH_HOST: localhost
+        ELASTICSEARCH_PORT: 9200
+      run: |
+        uv run pytest packages/data/tests/integration/ \
+          -v \
+          --tb=short \
+          --junit-xml=junit-${{ matrix.os }}-${{ matrix.python-version }}.xml
+    
+    - name: Upload test results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: test-results-${{ matrix.os }}-${{ matrix.python-version }}
+        path: junit-*.xml

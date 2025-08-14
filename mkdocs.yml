@@ -104,7 +104,10 @@ nav:
   - Development:
     - development/index.md
     - development/contributing.md
+    - development/uv-environment.md
+    - development/quality-checks.md
     - development/testing.md
+    - development/integration-testing-ci.md
     - development/documentation-guide.md
     - development/ci-cd.md
     - development/release-process.md

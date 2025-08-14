@@ -1,6 +1,6 @@
 {
-  "timestamp": "2025-08-14T01:36:28Z",
-  "overall_status": "FAIL",
+  "timestamp": "2025-08-14T03:32:43Z",
+  "overall_status": "PASS",
   "environment": "docker-internal",
   "checks": {
     "lint": {
@@ -16,8 +16,8 @@
       "exit_code": 0
     },
     "integration_tests": {
-      "status": "fail",
-      "exit_code": 5
+      "status": "pass",
+      "exit_code": 0
     }
   }
 }

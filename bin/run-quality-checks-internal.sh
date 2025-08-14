@@ -57,6 +57,16 @@ if [ -f /.dockerenv ] || [ -n "$DOCKER_CONTAINER" ]; then
     export DATABASE_URL="postgresql://postgres:postgres@postgres:5432/dataknobs"
     export ELASTICSEARCH_URL="http://elasticsearch:9200"
     export AWS_ENDPOINT_URL="http://localstack:4566"
+    
+    # Also set individual host/port variables for test fixtures
+    export POSTGRES_HOST="postgres"
+    export POSTGRES_PORT=5432
+    export POSTGRES_USER="postgres"
+    export POSTGRES_PASSWORD="postgres"
+    export POSTGRES_DB="dataknobs_test"
+    
+    export ELASTICSEARCH_HOST="elasticsearch"
+    export ELASTICSEARCH_PORT=9200
 else
     print_warning "Not running inside Docker container - use bin/run-quality-checks.sh instead"
     exit 1
