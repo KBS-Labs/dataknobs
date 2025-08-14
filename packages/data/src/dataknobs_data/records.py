@@ -1,31 +1,46 @@
 from collections import OrderedDict
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
+import uuid
 
 from .fields import Field, FieldType
 
 
 @dataclass
 class Record:
-    """Represents a structured data record with fields and metadata."""
+    """Represents a structured data record with fields and metadata.
+    
+    The record ID can be accessed via the `id` property, which:
+    - Returns the explicitly set ID if available
+    - Falls back to metadata['id'] if present
+    - Returns None if no ID is set
+    """
 
     fields: OrderedDict[str, Field] = field(default_factory=OrderedDict)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    _id: Optional[str] = field(default=None, repr=False)
 
     def __init__(
         self,
         data: Union[Dict[str, Any], OrderedDict[str, Field]] | None = None,
         metadata: Dict[str, Any] | None = None,
+        id: Optional[str] = None,
     ):
         """Initialize a record from various data formats.
 
         Args:
             data: Can be a dict of field names to values, or an OrderedDict of Field objects
             metadata: Optional metadata for the record
+            id: Optional unique identifier for the record
         """
         self.metadata = metadata or {}
         self.fields = OrderedDict()
+        self._id = id
+        
+        # If id is provided in metadata but not as parameter, use it
+        if self._id is None and "id" in self.metadata:
+            self._id = str(self.metadata["id"])
 
         if data:
             if isinstance(data, OrderedDict) and all(isinstance(v, Field) for v in data.values()):
@@ -36,6 +51,36 @@ class Record:
                         self.fields[key] = value
                     else:
                         self.fields[key] = Field(name=key, value=value)
+    
+    @property
+    def id(self) -> Optional[str]:
+        """Get the record ID.
+        
+        Returns the explicitly set ID, or falls back to metadata['id'] if present.
+        """
+        if self._id is not None:
+            return self._id
+        return self.metadata.get("id")
+    
+    @id.setter
+    def id(self, value: Optional[str]) -> None:
+        """Set the record ID."""
+        self._id = value
+        # Also update metadata for backward compatibility
+        if value is not None:
+            self.metadata["id"] = value
+        elif "id" in self.metadata:
+            del self.metadata["id"]
+    
+    def generate_id(self) -> str:
+        """Generate and set a new UUID for this record.
+        
+        Returns:
+            The generated UUID string
+        """
+        new_id = str(uuid.uuid4())
+        self.id = new_id
+        return new_id
 
     def get_field(self, name: str) -> Field | None:
         """Get a field by name."""
@@ -129,8 +174,12 @@ class Record:
         """
         if flatten:
             result = {name: field.value for name, field in self.fields.items()}
+            if self.id:
+                result["_id"] = self.id
         else:
             result = {"fields": {name: field.to_dict() for name, field in self.fields.items()}}
+            if self.id:
+                result["id"] = self.id
             if include_metadata:
                 result["metadata"] = self.metadata
         return result
@@ -146,9 +195,12 @@ class Record:
                 else:
                     fields[name] = Field(name=name, value=field_data)
             metadata = data.get("metadata", {})
-            return cls(data=fields, metadata=metadata)
+            record_id = data.get("id") or data.get("_id")
+            return cls(data=fields, metadata=metadata, id=record_id)
         else:
-            return cls(data=data)
+            # Check for _id in flattened format
+            record_id = data.pop("_id", None) if "_id" in data else None
+            return cls(data=data, id=record_id)
 
     def copy(self, deep: bool = True) -> "Record":
         """Create a copy of the record.
@@ -172,7 +224,7 @@ class Record:
             new_fields = OrderedDict(self.fields)
             new_metadata = self.metadata.copy()
 
-        return Record(data=new_fields, metadata=new_metadata)
+        return Record(data=new_fields, metadata=new_metadata, id=self.id)
 
     def project(self, field_names: List[str]) -> "Record":
         """Create a new record with only specified fields."""
@@ -180,7 +232,7 @@ class Record:
         for name in field_names:
             if name in self.fields:
                 projected_fields[name] = self.fields[name]
-        return Record(data=projected_fields, metadata=self.metadata.copy())
+        return Record(data=projected_fields, metadata=self.metadata.copy(), id=self.id)
 
     def merge(self, other: "Record", overwrite: bool = True) -> "Record":
         """Merge another record into this one.
@@ -200,5 +252,8 @@ class Record:
         merged_metadata = self.metadata.copy()
         if overwrite:
             merged_metadata.update(other.metadata)
+        
+        # Use the ID from this record, or from other if this doesn't have one
+        merged_id = self.id if self.id else other.id
 
-        return Record(data=merged_fields, metadata=merged_metadata)
+        return Record(data=merged_fields, metadata=merged_metadata, id=merged_id)
