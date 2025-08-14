@@ -114,19 +114,19 @@ nav:
     - api/dataknobs-common.md
   
   - Development:
-    - development/index.md
-    - development/contributing.md
-    - development/configuration-system.md
-    - development/adding-config-support.md
-    - development/uv-environment.md
-    - development/quality-checks.md
-    - development/testing.md
-    - development/testing-guide.md
-    - development/integration-testing-ci.md
-    - development/documentation-guide.md
-    - development/ci-cd.md
-    - development/release-process.md
-    - development/architecture.md
+    - Overview: development/index.md
+    - Contributing: development/contributing.md
+    - Configuration System: development/configuration-system.md
+    - Adding Config Support: development/adding-config-support.md
+    - UV Environment: development/uv-environment.md
+    - Quality Checks: development/quality-checks.md
+    - Testing: development/testing.md
+    - Testing Guide: development/testing-guide.md
+    - Integration Testing & CI: development/integration-testing-ci.md
+    - Documentation Guide: development/documentation-guide.md
+    - CI/CD: development/ci-cd.md
+    - Release Process: development/release-process.md
+    - Architecture: development/architecture.md
     - Deprecation Timeline: DEPRECATION_TIMELINE.md
   
   - Examples:
