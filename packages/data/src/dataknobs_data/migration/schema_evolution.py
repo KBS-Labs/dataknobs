@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Type
+from typing import Any, Callable, Dict, List, Optional, Type, Union
 
 from dataknobs_data.fields import Field, FieldType
 from dataknobs_data.records import Record
@@ -25,12 +25,22 @@ class MigrationType(Enum):
 
 
 @dataclass
+class SchemaField:
+    """Represents a field in a schema version."""
+    name: str
+    type: Union[str, FieldType]
+    required: bool = False
+    default: Any = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class SchemaVersion:
     """Represents a schema version."""
     version: str
     created_at: datetime = field(default_factory=datetime.now)
     description: str = ""
-    fields: Dict[str, Field] = field(default_factory=dict)
+    fields: Dict[str, SchemaField] = field(default_factory=dict)
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -58,7 +68,8 @@ class SchemaVersion:
             if hasattr(FieldType, field_type.upper()):
                 field_type = FieldType[field_type.upper()]
             
-            fields[name] = Field(
+            fields[name] = SchemaField(
+                name=name,
                 type=field_type,
                 required=field_data.get('required', False),
                 default=field_data.get('default'),
@@ -115,11 +126,20 @@ class Migration:
                 field_name = operation['field_name']
                 default_value = operation.get('default_value')
                 if field_name not in record.fields:
+                    field_type = operation.get('field_type', 'str')
+                    if isinstance(field_type, str) and hasattr(FieldType, field_type.upper()):
+                        field_type = FieldType[field_type.upper()]
+                    elif isinstance(field_type, str):
+                        # Map common type names to FieldType
+                        type_map = {'str': FieldType.STRING, 'int': FieldType.INTEGER, 
+                                   'float': FieldType.FLOAT, 'bool': FieldType.BOOLEAN}
+                        field_type = type_map.get(field_type, FieldType.STRING)
+                    
                     record.fields[field_name] = Field(
-                        type=operation.get('field_type', 'str'),
-                        default=default_value
+                        name=field_name,
+                        value=default_value,
+                        type=field_type
                     )
-                    record.fields[field_name].value = default_value
             else:
                 # Reverse: remove the field
                 field_name = operation['field_name']
@@ -135,8 +155,18 @@ class Migration:
                 # Reverse: add the field back with stored value
                 field_name = operation['field_name']
                 if field_name not in record.fields:
+                    field_type = operation.get('field_type', 'str')
+                    if isinstance(field_type, str) and hasattr(FieldType, field_type.upper()):
+                        field_type = FieldType[field_type.upper()]
+                    elif isinstance(field_type, str):
+                        type_map = {'str': FieldType.STRING, 'int': FieldType.INTEGER, 
+                                   'float': FieldType.FLOAT, 'bool': FieldType.BOOLEAN}
+                        field_type = type_map.get(field_type, FieldType.STRING)
+                    
                     record.fields[field_name] = Field(
-                        type=operation.get('field_type', 'str')
+                        name=field_name,
+                        value=None,
+                        type=field_type
                     )
         
         elif op_type == MigrationType.RENAME_FIELD:

@@ -255,14 +255,16 @@ class DataTransformer:
                     value = mapping.apply(source_field.value)
                     
                     new_record.fields[mapping.target_field] = Field(
-                        type=type(value).__name__ if value is not None else 'str',
+                        name=mapping.target_field,
                         value=value,
+                        type=type(value).__name__ if value is not None else 'str',
                         metadata=source_field.metadata.copy() if source_field.metadata else {}
                     )
                 elif mapping.default_value is not None:
                     new_record.fields[mapping.target_field] = Field(
-                        type=type(mapping.default_value).__name__,
-                        value=mapping.default_value
+                        name=mapping.target_field,
+                        value=mapping.default_value,
+                        type=type(mapping.default_value).__name__
                     )
         else:
             # No explicit mappings, copy all fields

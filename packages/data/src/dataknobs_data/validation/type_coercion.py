@@ -3,7 +3,7 @@
 import json
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Type, Union
+from typing import Any, Callable, Dict, List, Type, Union
 
 from dataknobs_data.fields import FieldType
 
@@ -35,8 +35,7 @@ class TypeCoercer:
             FieldType.INTEGER: self._to_int,
             FieldType.FLOAT: self._to_float,
             FieldType.BOOLEAN: self._to_bool,
-            FieldType.LIST: self._to_list,
-            FieldType.DICT: self._to_dict,
+            FieldType.JSON: self._to_dict,  # JSON can represent lists/dicts
             FieldType.DATETIME: self._to_datetime,
         }
     

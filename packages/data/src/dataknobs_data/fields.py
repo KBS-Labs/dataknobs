@@ -1,3 +1,4 @@
+import copy
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -54,6 +55,15 @@ class Field:
         else:
             return FieldType.JSON
 
+    def copy(self) -> "Field":
+        """Create a deep copy of the field."""
+        return Field(
+            name=self.name,
+            value=copy.deepcopy(self.value),
+            type=self.type,
+            metadata=copy.deepcopy(self.metadata)
+        )
+    
     def validate(self) -> bool:
         """Validate that the value matches the field type."""
         if self.value is None:

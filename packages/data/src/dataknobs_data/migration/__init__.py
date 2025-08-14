@@ -1,7 +1,7 @@
 """Data migration utilities for dataknobs-data package."""
 
 from .migrator import DataMigrator, MigrationResult, MigrationProgress
-from .schema_evolution import SchemaEvolution, SchemaVersion, Migration
+from .schema_evolution import SchemaEvolution, SchemaVersion, Migration, MigrationType
 from .transformers import (
     DataTransformer,
     FieldMapping,
@@ -16,6 +16,7 @@ __all__ = [
     "SchemaEvolution",
     "SchemaVersion",
     "Migration",
+    "MigrationType",
     "DataTransformer",
     "FieldMapping",
     "ValueTransformer",

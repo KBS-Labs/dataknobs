@@ -134,8 +134,9 @@ class FieldDefinition:
                 FieldType.FLOAT: (int, float),
                 FieldType.BOOLEAN: bool,
                 FieldType.DATETIME: (datetime, str),  # Allow string for datetime
-                FieldType.LIST: list,
-                FieldType.DICT: dict,
+                FieldType.JSON: (list, dict),  # JSON can be list or dict
+                FieldType.TEXT: str,
+                FieldType.BINARY: bytes,
             }
             expected = type_map.get(self.type, object)
             return isinstance(value, expected)
@@ -243,7 +244,7 @@ class Schema:
         else:
             record = Record()
             for key, value in data.items():
-                record.fields[key] = Field(value=value)
+                record.fields[key] = Field(name=key, value=value)
         
         coercer = TypeCoercer()
         
@@ -262,8 +263,9 @@ class Schema:
             elif field_def.default is not None:
                 # Add field with default value
                 record.fields[field_name] = Field(
-                    type=field_def.type,
+                    name=field_name,
                     value=field_def.default,
+                    type=field_def.type,
                     metadata=field_def.metadata.copy()
                 )
             elif field_def.required:
