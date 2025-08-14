@@ -28,7 +28,7 @@ usage() {
     echo "  setup         Set up development environment"
     echo "  build         Build all packages"
     echo "  install       Install packages in dev mode"
-    echo "  test          Run tests (packages, directories, or files)"
+    echo "  test          Run tests with flexible pytest options (see: test -h)"
     echo "  lint          Run linting and type checking (packages, directories, or files)"
     echo "  validate      Validate code quality and catch errors"
     echo "  clean         Clean build artifacts and caches"
@@ -47,8 +47,10 @@ usage() {
     echo "Examples:"
     echo "  $0 setup                          # Set up fresh development environment"
     echo "  $0 test                           # Run all tests"
-    echo "  $0 test utils                     # Test utils package"
-    echo "  $0 test packages/utils/tests      # Test specific directory"
+    echo "  $0 test data                      # Test data package"
+    echo "  $0 test data -xvs                 # Test with exit-on-fail, verbose, no-capture"
+    echo "  $0 test data --tb=short           # Test with short tracebacks"
+    echo "  $0 test data -k test_s3           # Run only tests matching 'test_s3'"
     echo "  $0 lint packages/utils/src        # Lint specific directory"
     echo "  $0 lint myfile.py                 # Lint specific file"
     echo "  $0 build                          # Build all packages"
@@ -96,33 +98,13 @@ install() {
 test() {
     echo -e "${YELLOW}Running tests...${NC}"
     
-    # Use the new test runner if available, otherwise fall back to old behavior
+    # Always use the enhanced test runner
     if [[ -x "$ROOT_DIR/bin/test.sh" ]]; then
         "$ROOT_DIR/bin/test.sh" "$@"
     else
-        # Fall back to old behavior (test-packages.sh)
-        if [[ $# -eq 0 ]]; then
-            # No arguments, test all packages
-            "$ROOT_DIR/bin/test-packages.sh"
-        else
-            # Check first argument to determine type
-            arg="$1"
-            if [[ -d "packages/$arg" ]]; then
-                # It's a package name
-                "$ROOT_DIR/bin/test-packages.sh" "$@"
-            elif [[ -d "$arg" ]]; then
-                # It's a directory path
-                echo -e "${BLUE}Testing directory: $arg${NC}"
-                uv run pytest "$arg" -v
-            elif [[ -f "$arg" ]]; then
-                # It's a file path
-                echo -e "${BLUE}Testing file: $arg${NC}"
-                uv run pytest "$arg" -v
-            else
-                # Try as package name anyway
-                "$ROOT_DIR/bin/test-packages.sh" "$@"
-            fi
-        fi
+        echo -e "${RED}Error: test.sh not found or not executable${NC}"
+        echo -e "${YELLOW}Please ensure bin/test.sh exists and is executable${NC}"
+        exit 1
     fi
 }
 
