@@ -121,12 +121,12 @@ class Query:
         return self.sort_specs
 
     @property
-    def limit(self) -> int | None:
+    def limit_property(self) -> int | None:
         """Get limit value (backward compatibility)."""
         return self.limit_value
 
     @property
-    def offset(self) -> int | None:
+    def offset_property(self) -> int | None:
         """Get offset value (backward compatibility)."""
         return self.offset_value
 
@@ -151,7 +151,9 @@ class Query:
                 "<": Operator.LT,
                 "<=": Operator.LTE,
                 "in": Operator.IN,
+                "IN": Operator.IN,
                 "not_in": Operator.NOT_IN,
+                "NOT IN": Operator.NOT_IN,
                 "like": Operator.LIKE,
                 "LIKE": Operator.LIKE,
                 "regex": Operator.REGEX,

@@ -32,6 +32,7 @@ If you're new to Dataknobs development:
 
 ### Testing
 - **[Testing Guide](testing.md)** - Testing strategies, frameworks, and best practices
+- **[Testing Commands](testing-guide.md)** - Practical guide to running tests with the new test infrastructure
 - **[Integration Testing & CI](integration-testing-ci.md)** - Integration testing with real services and CI/CD quality gates
 
 ### Operations
@@ -82,10 +83,12 @@ source .venv/bin/activate  # On Linux/macOS
 # Run quality checks before PRs (includes integration tests)
 ./bin/run-quality-checks.sh
 
-# Or run specific test types
-pytest                                  # Run all tests
-pytest -m "not integration"             # Unit tests only
-./bin/run-integration-tests.sh         # Integration tests with services
+# Or run specific test types with the new test infrastructure
+./bin/test.sh                          # Run all tests (unit + integration)
+./bin/test.sh -t unit                  # Unit tests only
+./bin/test.sh -t integration           # Integration tests with services
+./bin/test.sh data                     # Test specific package
+./bin/run-integration-tests.sh -s      # Start services for manual testing
 ```
 
 ### Docker Services
@@ -226,23 +229,35 @@ bandit -r packages/
 
 ### Testing
 ```bash
-# Run all tests (unit + integration)
-pytest
+# Run all tests (unit + integration) with new infrastructure
+./bin/test.sh
 
 # Run unit tests only
-pytest -m "not integration"
+./bin/test.sh -t unit
 
 # Run integration tests with services
-./bin/run-integration-tests.sh
+./bin/test.sh -t integration
 
-# Run with coverage
-pytest --cov=packages/
+# Test specific package
+./bin/test.sh data                     # All tests for data package
+./bin/test.sh -t unit config          # Unit tests for config package
+./bin/test.sh -t integration data      # Integration tests for data package
 
-# Run specific package tests
-pytest packages/structures/tests/
+# Advanced options
+./bin/test.sh -v                      # Verbose output
+./bin/test.sh -k test_s3              # Run tests matching pattern
+./bin/test.sh -x                      # Stop on first failure
+./bin/test.sh -n -t integration       # Run integration tests without starting services
 
-# Run specific integration tests
-pytest -m integration packages/data/tests/integration/
+# Service management
+./bin/run-integration-tests.sh -s     # Start services only
+./bin/run-integration-tests.sh -k     # Keep services running after tests
+
+# Legacy pytest commands (still available)
+pytest                                 # Run all tests
+pytest -m "not integration"            # Unit tests only
+pytest --cov=packages/                # Run with coverage
+pytest packages/structures/tests/     # Run specific package tests
 
 # Run quality checks (linting + tests + coverage)
 ./bin/run-quality-checks.sh

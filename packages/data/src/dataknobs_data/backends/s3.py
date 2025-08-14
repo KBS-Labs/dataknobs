@@ -482,65 +482,66 @@ class S3Database(Database, ConfigurableBase):
                 filtered.append(record)
         
         # Apply sorting
-        if query.sort:
-            for field, order in reversed(query.sort):
-                reverse = (order.upper() == "DESC")
+        if query.sort_specs:
+            for sort_spec in reversed(query.sort_specs):
+                reverse = (sort_spec.order.value == "desc")
                 filtered.sort(
-                    key=lambda r: r.get_value(field) if r.get_value(field) is not None else "",
+                    key=lambda r: r.get_value(sort_spec.field) if r.get_value(sort_spec.field) is not None else "",
                     reverse=reverse
                 )
         
         # Apply pagination
-        start = query.offset or 0
-        end = start + query.limit if query.limit else None
+        start = query.offset_value or 0
+        end = start + query.limit_value if query.limit_value else None
         filtered = filtered[start:end]
         
-        # Apply projection
-        if query.projection:
+        # Apply projection (field selection)
+        if query.fields:
             for record in filtered:
                 # Keep only projected fields
                 projected_fields = {
                     k: v for k, v in record.fields.items()
-                    if k in query.projection
+                    if k in query.fields
                 }
                 record.fields = projected_fields
         
         return filtered
     
-    def _matches_filters(self, record: Record, filters: List[tuple]) -> bool:
+    def _matches_filters(self, record: Record, filters: List) -> bool:
         """Check if a record matches all filters."""
-        for field, op, value in filters:
-            field_value = record.get_value(field)
+        from dataknobs_data.query import Operator
+        
+        for filter_obj in filters:
+            field_value = record.get_value(filter_obj.field)
+            op = filter_obj.operator
+            value = filter_obj.value
             
-            if op == "=":
+            if op == Operator.EQ:
                 if field_value != value:
                     return False
-            elif op == "!=":
+            elif op == Operator.NEQ:
                 if field_value == value:
                     return False
-            elif op == ">":
+            elif op == Operator.GT:
                 if field_value is None or field_value <= value:
                     return False
-            elif op == ">=":
+            elif op == Operator.GTE:
                 if field_value is None or field_value < value:
                     return False
-            elif op == "<":
+            elif op == Operator.LT:
                 if field_value is None or field_value >= value:
                     return False
-            elif op == "<=":
+            elif op == Operator.LTE:
                 if field_value is None or field_value > value:
                     return False
-            elif op == "IN":
+            elif op == Operator.IN:
                 if field_value not in value:
                     return False
-            elif op == "NOT IN":
+            elif op == Operator.NOT_IN:
                 if field_value in value:
                     return False
-            elif op == "LIKE":
+            elif op == Operator.LIKE:
                 if field_value is None or not self._matches_pattern(str(field_value), value):
-                    return False
-            elif op == "NOT LIKE":
-                if field_value is not None and self._matches_pattern(str(field_value), value):
                     return False
         
         return True

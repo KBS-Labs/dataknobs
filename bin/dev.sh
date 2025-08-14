@@ -96,27 +96,32 @@ install() {
 test() {
     echo -e "${YELLOW}Running tests...${NC}"
     
-    # Check if arguments are packages, directories, or files
-    if [[ $# -eq 0 ]]; then
-        # No arguments, test all packages
-        "$ROOT_DIR/bin/test-packages.sh"
+    # Use the new test runner if available, otherwise fall back to old behavior
+    if [[ -x "$ROOT_DIR/bin/test.sh" ]]; then
+        "$ROOT_DIR/bin/test.sh" "$@"
     else
-        # Check first argument to determine type
-        arg="$1"
-        if [[ -d "packages/$arg" ]]; then
-            # It's a package name
-            "$ROOT_DIR/bin/test-packages.sh" "$@"
-        elif [[ -d "$arg" ]]; then
-            # It's a directory path
-            echo -e "${BLUE}Testing directory: $arg${NC}"
-            uv run pytest "$arg" -v
-        elif [[ -f "$arg" ]]; then
-            # It's a file path
-            echo -e "${BLUE}Testing file: $arg${NC}"
-            uv run pytest "$arg" -v
+        # Fall back to old behavior (test-packages.sh)
+        if [[ $# -eq 0 ]]; then
+            # No arguments, test all packages
+            "$ROOT_DIR/bin/test-packages.sh"
         else
-            # Try as package name anyway
-            "$ROOT_DIR/bin/test-packages.sh" "$@"
+            # Check first argument to determine type
+            arg="$1"
+            if [[ -d "packages/$arg" ]]; then
+                # It's a package name
+                "$ROOT_DIR/bin/test-packages.sh" "$@"
+            elif [[ -d "$arg" ]]; then
+                # It's a directory path
+                echo -e "${BLUE}Testing directory: $arg${NC}"
+                uv run pytest "$arg" -v
+            elif [[ -f "$arg" ]]; then
+                # It's a file path
+                echo -e "${BLUE}Testing file: $arg${NC}"
+                uv run pytest "$arg" -v
+            else
+                # Try as package name anyway
+                "$ROOT_DIR/bin/test-packages.sh" "$@"
+            fi
         fi
     fi
 }
