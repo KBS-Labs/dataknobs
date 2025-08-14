@@ -13,9 +13,28 @@ DBG_HEADERS = {"Content-Type": "application/json", "error_trace": "true"}
 
 def get_current_ip() -> str:
     """Get the running machine's IPv4 address.
+
+    This function attempts to get the machine's IP address by connecting to
+    an external service (Google DNS) to determine the local IP used for
+    outbound connections. If that fails, it falls back to trying hostname
+    resolution, and finally returns localhost as a last resort.
+
     :return: The IP address
     """
-    return socket.gethostbyname(socket.gethostname())
+    try:
+        # Create a socket and connect to an external service to get the local IP
+        # We use Google's DNS server (8.8.8.8) as it's widely available
+        # Note: This doesn't actually send any DNS queries, just establishes a connection
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        # Fallback to hostname resolution
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except socket.gaierror:
+            # If hostname doesn't resolve (common on macOS), return localhost
+            return "127.0.0.1"
 
 
 def json_api_response_handler(resp: requests.models.Response) -> Tuple[requests.models.Response, Optional[Dict[str, Any]]]:

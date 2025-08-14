@@ -109,11 +109,11 @@ test() {
         elif [[ -d "$arg" ]]; then
             # It's a directory path
             echo -e "${BLUE}Testing directory: $arg${NC}"
-            pytest "$arg" -v
+            uv run pytest "$arg" -v
         elif [[ -f "$arg" ]]; then
             # It's a file path
             echo -e "${BLUE}Testing file: $arg${NC}"
-            pytest "$arg" -v
+            uv run pytest "$arg" -v
         else
             # Try as package name anyway
             "$ROOT_DIR/bin/test-packages.sh" "$@"

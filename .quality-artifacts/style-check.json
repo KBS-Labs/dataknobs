@@ -424,6 +424,2390 @@
   },
   {
     "cell": null,
+    "code": "I001",
+    "end_location": {
+      "column": 54,
+      "row": 9
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/__init__.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "from .cache import Cache, CacheFactory, create_cache\nfrom .database import Database, DatabaseFactory\nfrom .services import ServiceManager, ServiceRegistry\n\n",
+          "end_location": {
+            "column": 1,
+            "row": 11
+          },
+          "location": {
+            "column": 1,
+            "row": 7
+          }
+        }
+      ],
+      "message": "Organize imports"
+    },
+    "location": {
+      "column": 1,
+      "row": 7
+    },
+    "message": "Import block is un-sorted or un-formatted",
+    "noqa_row": 7,
+    "url": "https://docs.astral.sh/ruff/rules/unsorted-imports"
+  },
+  {
+    "cell": null,
+    "code": "RUF022",
+    "end_location": {
+      "column": 2,
+      "row": 19
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/__init__.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "[\n    \"Cache\",\n    \"CacheFactory\",\n    \"Database\",\n    \"DatabaseFactory\",\n    \"ServiceManager\",\n    \"ServiceRegistry\",\n    \"create_cache\",\n]",
+          "end_location": {
+            "column": 2,
+            "row": 19
+          },
+          "location": {
+            "column": 11,
+            "row": 11
+          }
+        }
+      ],
+      "message": "Apply an isort-style sorting to `__all__`"
+    },
+    "location": {
+      "column": 11,
+      "row": 11
+    },
+    "message": "`__all__` is not sorted",
+    "noqa_row": 11,
+    "url": "https://docs.astral.sh/ruff/rules/unsorted-dunder-all"
+  },
+  {
+    "cell": null,
+    "code": "W291",
+    "end_location": {
+      "column": 24,
+      "row": 13
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/__init__.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 24,
+            "row": 13
+          },
+          "location": {
+            "column": 23,
+            "row": 13
+          }
+        }
+      ],
+      "message": "Remove trailing whitespace"
+    },
+    "location": {
+      "column": 23,
+      "row": 13
+    },
+    "message": "Trailing whitespace",
+    "noqa_row": 13,
+    "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W292",
+    "end_location": {
+      "column": 2,
+      "row": 19
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/__init__.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "\n",
+          "end_location": {
+            "column": 2,
+            "row": 19
+          },
+          "location": {
+            "column": 2,
+            "row": 19
+          }
+        }
+      ],
+      "message": "Add trailing newline"
+    },
+    "location": {
+      "column": 2,
+      "row": 19
+    },
+    "message": "No newline at end of file",
+    "noqa_row": 19,
+    "url": "https://docs.astral.sh/ruff/rules/missing-newline-at-end-of-file"
+  },
+  {
+    "cell": null,
+    "code": "UP035",
+    "end_location": {
+      "column": 39,
+      "row": 3
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": null,
+    "location": {
+      "column": 1,
+      "row": 3
+    },
+    "message": "`typing.Dict` is deprecated, use `dict` instead",
+    "noqa_row": 3,
+    "url": "https://docs.astral.sh/ruff/rules/deprecated-import"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 8
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 8
+          },
+          "location": {
+            "column": 1,
+            "row": 8
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 8
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 11,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 12
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 12
+          },
+          "location": {
+            "column": 1,
+            "row": 12
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 12
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 12,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "ANN204",
+    "end_location": {
+      "column": 17,
+      "row": 13
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": " -> None",
+          "end_location": {
+            "column": 72,
+            "row": 13
+          },
+          "location": {
+            "column": 72,
+            "row": 13
+          }
+        }
+      ],
+      "message": "Add return type annotation: `None`"
+    },
+    "location": {
+      "column": 9,
+      "row": 13
+    },
+    "message": "Missing return type annotation for special method `__init__`",
+    "noqa_row": 13,
+    "url": "https://docs.astral.sh/ruff/rules/missing-return-type-special-method"
+  },
+  {
+    "cell": null,
+    "code": "ANN003",
+    "end_location": {
+      "column": 71,
+      "row": 13
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": null,
+    "location": {
+      "column": 63,
+      "row": 13
+    },
+    "message": "Missing type annotation for `**kwargs`",
+    "noqa_row": 13,
+    "url": "https://docs.astral.sh/ruff/rules/missing-type-kwargs"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 15
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 15
+          },
+          "location": {
+            "column": 1,
+            "row": 15
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 15
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 21,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W291",
+    "end_location": {
+      "column": 38,
+      "row": 18
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 38,
+            "row": 18
+          },
+          "location": {
+            "column": 36,
+            "row": 18
+          }
+        }
+      ],
+      "message": "Remove trailing whitespace"
+    },
+    "location": {
+      "column": 36,
+      "row": 18
+    },
+    "message": "Trailing whitespace",
+    "noqa_row": 21,
+    "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 28
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 28
+          },
+          "location": {
+            "column": 1,
+            "row": 28
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 28
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 28,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "UP045",
+    "end_location": {
+      "column": 45,
+      "row": 29
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "Any | None",
+          "end_location": {
+            "column": 45,
+            "row": 29
+          },
+          "location": {
+            "column": 32,
+            "row": 29
+          }
+        }
+      ],
+      "message": "Convert to `X | None`"
+    },
+    "location": {
+      "column": 32,
+      "row": 29
+    },
+    "message": "Use `X | None` for type annotations",
+    "noqa_row": 29,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 33
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 33
+          },
+          "location": {
+            "column": 1,
+            "row": 33
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 33
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 33,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 38
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 38
+          },
+          "location": {
+            "column": 1,
+            "row": 38
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 38
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 38,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 46
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 46
+          },
+          "location": {
+            "column": 1,
+            "row": 46
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 46
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 49,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 50
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 50
+          },
+          "location": {
+            "column": 1,
+            "row": 50
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 50
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 50,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "ANN204",
+    "end_location": {
+      "column": 17,
+      "row": 51
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": " -> None",
+          "end_location": {
+            "column": 23,
+            "row": 51
+          },
+          "location": {
+            "column": 23,
+            "row": 51
+          }
+        }
+      ],
+      "message": "Add return type annotation: `None`"
+    },
+    "location": {
+      "column": 9,
+      "row": 51
+    },
+    "message": "Missing return type annotation for special method `__init__`",
+    "noqa_row": 51,
+    "url": "https://docs.astral.sh/ruff/rules/missing-return-type-special-method"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 55
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 55
+          },
+          "location": {
+            "column": 1,
+            "row": 55
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 55
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 55,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "ANN204",
+    "end_location": {
+      "column": 17,
+      "row": 56
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": null,
+    "location": {
+      "column": 9,
+      "row": 56
+    },
+    "message": "Missing return type annotation for special method `__call__`",
+    "noqa_row": 56,
+    "url": "https://docs.astral.sh/ruff/rules/missing-return-type-special-method"
+  },
+  {
+    "cell": null,
+    "code": "ANN003",
+    "end_location": {
+      "column": 32,
+      "row": 56
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": null,
+    "location": {
+      "column": 24,
+      "row": 56
+    },
+    "message": "Missing type annotation for `**config`",
+    "noqa_row": 56,
+    "url": "https://docs.astral.sh/ruff/rules/missing-type-kwargs"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 58
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 58
+          },
+          "location": {
+            "column": 1,
+            "row": 58
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 58
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 64,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 61
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 61
+          },
+          "location": {
+            "column": 1,
+            "row": 61
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 61
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 64,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 67
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 67
+          },
+          "location": {
+            "column": 1,
+            "row": 67
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 67
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 67,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 70
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 70
+          },
+          "location": {
+            "column": 1,
+            "row": 70
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 70
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 70,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "ANN201",
+    "end_location": {
+      "column": 17,
+      "row": 75
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": null,
+    "location": {
+      "column": 5,
+      "row": 75
+    },
+    "message": "Missing return type annotation for public function `create_cache`",
+    "noqa_row": 75,
+    "url": "https://docs.astral.sh/ruff/rules/missing-return-type-undocumented-public-function"
+  },
+  {
+    "cell": null,
+    "code": "ANN003",
+    "end_location": {
+      "column": 26,
+      "row": 75
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": null,
+    "location": {
+      "column": 18,
+      "row": 75
+    },
+    "message": "Missing type annotation for `**config`",
+    "noqa_row": 75,
+    "url": "https://docs.astral.sh/ruff/rules/missing-type-kwargs"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 77
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 77
+          },
+          "location": {
+            "column": 1,
+            "row": 77
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 77
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 85,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 79
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 79
+          },
+          "location": {
+            "column": 1,
+            "row": 79
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 79
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 85,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 82
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 82
+          },
+          "location": {
+            "column": 1,
+            "row": 82
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 82
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 85,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 89
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 89
+          },
+          "location": {
+            "column": 1,
+            "row": 89
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 89
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 89,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W292",
+    "end_location": {
+      "column": 27,
+      "row": 90
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/cache.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "\n",
+          "end_location": {
+            "column": 27,
+            "row": 90
+          },
+          "location": {
+            "column": 27,
+            "row": 90
+          }
+        }
+      ],
+      "message": "Add trailing newline"
+    },
+    "location": {
+      "column": 27,
+      "row": 90
+    },
+    "message": "No newline at end of file",
+    "noqa_row": 90,
+    "url": "https://docs.astral.sh/ruff/rules/missing-newline-at-end-of-file"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 8
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 8
+          },
+          "location": {
+            "column": 1,
+            "row": 8
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 8
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 11,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 12
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 12
+          },
+          "location": {
+            "column": 1,
+            "row": 12
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 12
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 12,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "ANN204",
+    "end_location": {
+      "column": 17,
+      "row": 13
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": " -> None",
+          "end_location": {
+            "column": 55,
+            "row": 13
+          },
+          "location": {
+            "column": 55,
+            "row": 13
+          }
+        }
+      ],
+      "message": "Add return type annotation: `None`"
+    },
+    "location": {
+      "column": 9,
+      "row": 13
+    },
+    "message": "Missing return type annotation for special method `__init__`",
+    "noqa_row": 13,
+    "url": "https://docs.astral.sh/ruff/rules/missing-return-type-special-method"
+  },
+  {
+    "cell": null,
+    "code": "ANN003",
+    "end_location": {
+      "column": 54,
+      "row": 13
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": null,
+    "location": {
+      "column": 46,
+      "row": 13
+    },
+    "message": "Missing type annotation for `**kwargs`",
+    "noqa_row": 13,
+    "url": "https://docs.astral.sh/ruff/rules/missing-type-kwargs"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 15
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 15
+          },
+          "location": {
+            "column": 1,
+            "row": 15
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 15
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 20,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W291",
+    "end_location": {
+      "column": 55,
+      "row": 26
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 55,
+            "row": 26
+          },
+          "location": {
+            "column": 54,
+            "row": 26
+          }
+        }
+      ],
+      "message": "Remove trailing whitespace"
+    },
+    "location": {
+      "column": 54,
+      "row": 26
+    },
+    "message": "Trailing whitespace",
+    "noqa_row": 26,
+    "url": "https://docs.astral.sh/ruff/rules/trailing-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 29
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 29
+          },
+          "location": {
+            "column": 1,
+            "row": 29
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 29
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 29,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "ANN201",
+    "end_location": {
+      "column": 16,
+      "row": 30
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": " -> str",
+          "end_location": {
+            "column": 22,
+            "row": 30
+          },
+          "location": {
+            "column": 22,
+            "row": 30
+          }
+        }
+      ],
+      "message": "Add return type annotation: `str`"
+    },
+    "location": {
+      "column": 9,
+      "row": 30
+    },
+    "message": "Missing return type annotation for public function `connect`",
+    "noqa_row": 30,
+    "url": "https://docs.astral.sh/ruff/rules/missing-return-type-undocumented-public-function"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 34
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 34
+          },
+          "location": {
+            "column": 1,
+            "row": 34
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 34
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 34,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "ANN201",
+    "end_location": {
+      "column": 19,
+      "row": 35
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": " -> str",
+          "end_location": {
+            "column": 25,
+            "row": 35
+          },
+          "location": {
+            "column": 25,
+            "row": 35
+          }
+        }
+      ],
+      "message": "Add return type annotation: `str`"
+    },
+    "location": {
+      "column": 9,
+      "row": 35
+    },
+    "message": "Missing return type annotation for public function `disconnect`",
+    "noqa_row": 35,
+    "url": "https://docs.astral.sh/ruff/rules/missing-return-type-undocumented-public-function"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 39
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 39
+          },
+          "location": {
+            "column": 1,
+            "row": 39
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 39
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 39,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "ANN201",
+    "end_location": {
+      "column": 21,
+      "row": 41
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": null,
+    "location": {
+      "column": 9,
+      "row": 41
+    },
+    "message": "Missing return type annotation for public function `is_connected`",
+    "noqa_row": 41,
+    "url": "https://docs.astral.sh/ruff/rules/missing-return-type-undocumented-public-function"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 48
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 48
+          },
+          "location": {
+            "column": 1,
+            "row": 48
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 48
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 50,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 51
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 51
+          },
+          "location": {
+            "column": 1,
+            "row": 51
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 51
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 51,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "ANN204",
+    "end_location": {
+      "column": 17,
+      "row": 52
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": " -> None",
+          "end_location": {
+            "column": 23,
+            "row": 52
+          },
+          "location": {
+            "column": 23,
+            "row": 52
+          }
+        }
+      ],
+      "message": "Add return type annotation: `None`"
+    },
+    "location": {
+      "column": 9,
+      "row": 52
+    },
+    "message": "Missing return type annotation for special method `__init__`",
+    "noqa_row": 52,
+    "url": "https://docs.astral.sh/ruff/rules/missing-return-type-special-method"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 56
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 56
+          },
+          "location": {
+            "column": 1,
+            "row": 56
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 56
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 56,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "ANN201",
+    "end_location": {
+      "column": 15,
+      "row": 57
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": null,
+    "location": {
+      "column": 9,
+      "row": 57
+    },
+    "message": "Missing return type annotation for public function `create`",
+    "noqa_row": 57,
+    "url": "https://docs.astral.sh/ruff/rules/missing-return-type-undocumented-public-function"
+  },
+  {
+    "cell": null,
+    "code": "ANN003",
+    "end_location": {
+      "column": 30,
+      "row": 57
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": null,
+    "location": {
+      "column": 22,
+      "row": 57
+    },
+    "message": "Missing type annotation for `**config`",
+    "noqa_row": 57,
+    "url": "https://docs.astral.sh/ruff/rules/missing-type-kwargs"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 59
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 59
+          },
+          "location": {
+            "column": 1,
+            "row": 59
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 59
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 65,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 62
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 62
+          },
+          "location": {
+            "column": 1,
+            "row": 62
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 62
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 65,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 69
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 69
+          },
+          "location": {
+            "column": 1,
+            "row": 69
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 69
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 69,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 72
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 72
+          },
+          "location": {
+            "column": 1,
+            "row": 72
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 72
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 72,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W292",
+    "end_location": {
+      "column": 34,
+      "row": 74
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/database.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "\n",
+          "end_location": {
+            "column": 34,
+            "row": 74
+          },
+          "location": {
+            "column": 34,
+            "row": 74
+          }
+        }
+      ],
+      "message": "Add trailing newline"
+    },
+    "location": {
+      "column": 34,
+      "row": 74
+    },
+    "message": "No newline at end of file",
+    "noqa_row": 74,
+    "url": "https://docs.astral.sh/ruff/rules/missing-newline-at-end-of-file"
+  },
+  {
+    "cell": null,
+    "code": "UP035",
+    "end_location": {
+      "column": 39,
+      "row": 3
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": null,
+    "location": {
+      "column": 1,
+      "row": 3
+    },
+    "message": "`typing.Dict` is deprecated, use `dict` instead",
+    "noqa_row": 3,
+    "url": "https://docs.astral.sh/ruff/rules/deprecated-import"
+  },
+  {
+    "cell": null,
+    "code": "I001",
+    "end_location": {
+      "column": 46,
+      "row": 4
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "from typing import Any, Dict, Optional\n\nfrom dataknobs_config import ConfigurableBase\n\n\n",
+          "end_location": {
+            "column": 1,
+            "row": 7
+          },
+          "location": {
+            "column": 1,
+            "row": 3
+          }
+        }
+      ],
+      "message": "Organize imports"
+    },
+    "location": {
+      "column": 1,
+      "row": 3
+    },
+    "message": "Import block is un-sorted or un-formatted",
+    "noqa_row": 3,
+    "url": "https://docs.astral.sh/ruff/rules/unsorted-imports"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 9
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 9
+          },
+          "location": {
+            "column": 1,
+            "row": 9
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 9
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 12,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 13
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 13
+          },
+          "location": {
+            "column": 1,
+            "row": 13
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 13
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 13,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "ANN204",
+    "end_location": {
+      "column": 17,
+      "row": 14
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": " -> None",
+          "end_location": {
+            "column": 44,
+            "row": 14
+          },
+          "location": {
+            "column": 44,
+            "row": 14
+          }
+        }
+      ],
+      "message": "Add return type annotation: `None`"
+    },
+    "location": {
+      "column": 9,
+      "row": 14
+    },
+    "message": "Missing return type annotation for special method `__init__`",
+    "noqa_row": 14,
+    "url": "https://docs.astral.sh/ruff/rules/missing-return-type-special-method"
+  },
+  {
+    "cell": null,
+    "code": "ANN003",
+    "end_location": {
+      "column": 43,
+      "row": 14
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": null,
+    "location": {
+      "column": 35,
+      "row": 14
+    },
+    "message": "Missing type annotation for `**kwargs`",
+    "noqa_row": 14,
+    "url": "https://docs.astral.sh/ruff/rules/missing-type-kwargs"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 16
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 16
+          },
+          "location": {
+            "column": 1,
+            "row": 16
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 16
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 20,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 26
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 26
+          },
+          "location": {
+            "column": 1,
+            "row": 26
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 26
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 26,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 30
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 30
+          },
+          "location": {
+            "column": 1,
+            "row": 30
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 30
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 30,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "UP045",
+    "end_location": {
+      "column": 54,
+      "row": 31
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "Any | None",
+          "end_location": {
+            "column": 54,
+            "row": 31
+          },
+          "location": {
+            "column": 41,
+            "row": 31
+          }
+        }
+      ],
+      "message": "Convert to `X | None`"
+    },
+    "location": {
+      "column": 41,
+      "row": 31
+    },
+    "message": "Use `X | None` for type annotations",
+    "noqa_row": 31,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 34
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 34
+          },
+          "location": {
+            "column": 1,
+            "row": 34
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 34
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 34,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 45
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 45
+          },
+          "location": {
+            "column": 1,
+            "row": 45
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 45
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 47,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 48
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 48
+          },
+          "location": {
+            "column": 1,
+            "row": 48
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 48
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 48,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 50
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 50
+          },
+          "location": {
+            "column": 1,
+            "row": 50
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 50
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 50,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "ANN204",
+    "end_location": {
+      "column": 16,
+      "row": 51
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": null,
+    "location": {
+      "column": 9,
+      "row": 51
+    },
+    "message": "Missing return type annotation for special method `__new__`",
+    "noqa_row": 51,
+    "url": "https://docs.astral.sh/ruff/rules/missing-return-type-special-method"
+  },
+  {
+    "cell": null,
+    "code": "ANN003",
+    "end_location": {
+      "column": 30,
+      "row": 51
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": null,
+    "location": {
+      "column": 22,
+      "row": 51
+    },
+    "message": "Missing type annotation for `**kwargs`",
+    "noqa_row": 51,
+    "url": "https://docs.astral.sh/ruff/rules/missing-type-kwargs"
+  },
+  {
+    "cell": null,
+    "code": "ARG004",
+    "end_location": {
+      "column": 30,
+      "row": 51
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": null,
+    "location": {
+      "column": 24,
+      "row": 51
+    },
+    "message": "Unused static method argument: `kwargs`",
+    "noqa_row": 51,
+    "url": "https://docs.astral.sh/ruff/rules/unused-static-method-argument"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 56
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 56
+          },
+          "location": {
+            "column": 1,
+            "row": 56
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 56
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 56,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "ANN204",
+    "end_location": {
+      "column": 17,
+      "row": 57
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": " -> None",
+          "end_location": {
+            "column": 33,
+            "row": 57
+          },
+          "location": {
+            "column": 33,
+            "row": 57
+          }
+        }
+      ],
+      "message": "Add return type annotation: `None`"
+    },
+    "location": {
+      "column": 9,
+      "row": 57
+    },
+    "message": "Missing return type annotation for special method `__init__`",
+    "noqa_row": 57,
+    "url": "https://docs.astral.sh/ruff/rules/missing-return-type-special-method"
+  },
+  {
+    "cell": null,
+    "code": "ANN003",
+    "end_location": {
+      "column": 32,
+      "row": 57
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": null,
+    "location": {
+      "column": 24,
+      "row": 57
+    },
+    "message": "Missing type annotation for `**kwargs`",
+    "noqa_row": 57,
+    "url": "https://docs.astral.sh/ruff/rules/missing-type-kwargs"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 63
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 63
+          },
+          "location": {
+            "column": 1,
+            "row": 63
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 63
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 63,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 67
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 67
+          },
+          "location": {
+            "column": 1,
+            "row": 67
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 67
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 67,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "UP045",
+    "end_location": {
+      "column": 46,
+      "row": 68
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "Any | None",
+          "end_location": {
+            "column": 46,
+            "row": 68
+          },
+          "location": {
+            "column": 33,
+            "row": 68
+          }
+        }
+      ],
+      "message": "Convert to `X | None`"
+    },
+    "location": {
+      "column": 33,
+      "row": 68
+    },
+    "message": "Use `X | None` for type annotations",
+    "noqa_row": 68,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 71
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 71
+          },
+          "location": {
+            "column": 1,
+            "row": 71
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 71
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 71,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W292",
+    "end_location": {
+      "column": 42,
+      "row": 74
+    },
+    "filename": "/workdir/packages/config/src/dataknobs_config/examples/services.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "\n",
+          "end_location": {
+            "column": 42,
+            "row": 74
+          },
+          "location": {
+            "column": 42,
+            "row": 74
+          }
+        }
+      ],
+      "message": "Add trailing newline"
+    },
+    "location": {
+      "column": 42,
+      "row": 74
+    },
+    "message": "No newline at end of file",
+    "noqa_row": 74,
+    "url": "https://docs.astral.sh/ruff/rules/missing-newline-at-end-of-file"
+  },
+  {
+    "cell": null,
     "code": "UP035",
     "end_location": {
       "column": 58,
@@ -29967,69 +32351,19 @@
   },
   {
     "cell": null,
-    "code": "D205",
-    "end_location": {
-      "column": 8,
-      "row": 17
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": null,
-    "location": {
-      "column": 5,
-      "row": 15
-    },
-    "message": "1 blank line required between summary line and description",
-    "noqa_row": 17,
-    "url": "https://docs.astral.sh/ruff/rules/missing-blank-line-after-summary"
-  },
-  {
-    "cell": null,
-    "code": "D415",
-    "end_location": {
-      "column": 8,
-      "row": 17
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": {
-      "applicability": "unsafe",
-      "edits": [
-        {
-          "content": ".",
-          "end_location": {
-            "column": 28,
-            "row": 16
-          },
-          "location": {
-            "column": 28,
-            "row": 16
-          }
-        }
-      ],
-      "message": "Add closing punctuation"
-    },
-    "location": {
-      "column": 5,
-      "row": 15
-    },
-    "message": "First line should end with a period, question mark, or exclamation point",
-    "noqa_row": 17,
-    "url": "https://docs.astral.sh/ruff/rules/missing-terminal-punctuation"
-  },
-  {
-    "cell": null,
     "code": "D103",
     "end_location": {
       "column": 30,
-      "row": 21
+      "row": 40
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 5,
-      "row": 21
+      "row": 40
     },
     "message": "Missing docstring in public function",
-    "noqa_row": 21,
+    "noqa_row": 40,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-function"
   },
   {
@@ -30037,7 +32371,7 @@
     "code": "UP045",
     "end_location": {
       "column": 122,
-      "row": 21
+      "row": 40
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -30047,11 +32381,11 @@
           "content": "Dict[str, Any] | None",
           "end_location": {
             "column": 122,
-            "row": 21
+            "row": 40
           },
           "location": {
             "column": 98,
-            "row": 21
+            "row": 40
           }
         }
       ],
@@ -30059,10 +32393,10 @@
     },
     "location": {
       "column": 98,
-      "row": 21
+      "row": 40
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 21,
+    "noqa_row": 40,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -30070,16 +32404,16 @@
     "code": "E501",
     "end_location": {
       "column": 124,
-      "row": 21
+      "row": 40
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 101,
-      "row": 21
+      "row": 40
     },
     "message": "Line too long (123 > 100)",
-    "noqa_row": 21,
+    "noqa_row": 40,
     "url": "https://docs.astral.sh/ruff/rules/line-too-long"
   },
   {
@@ -30087,16 +32421,16 @@
     "code": "D103",
     "end_location": {
       "column": 31,
-      "row": 28
+      "row": 47
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 5,
-      "row": 28
+      "row": 47
     },
     "message": "Missing docstring in public function",
-    "noqa_row": 28,
+    "noqa_row": 47,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-function"
   },
   {
@@ -30104,16 +32438,16 @@
     "code": "E501",
     "end_location": {
       "column": 104,
-      "row": 28
+      "row": 47
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 101,
-      "row": 28
+      "row": 47
     },
     "message": "Line too long (103 > 100)",
-    "noqa_row": 28,
+    "noqa_row": 47,
     "url": "https://docs.astral.sh/ruff/rules/line-too-long"
   },
   {
@@ -30121,7 +32455,7 @@
     "code": "UP045",
     "end_location": {
       "column": 37,
-      "row": 37
+      "row": 56
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -30131,11 +32465,11 @@
           "content": "Dict[str, Any] | None",
           "end_location": {
             "column": 37,
-            "row": 37
+            "row": 56
           },
           "location": {
             "column": 13,
-            "row": 37
+            "row": 56
           }
         }
       ],
@@ -30143,10 +32477,10 @@
     },
     "location": {
       "column": 13,
-      "row": 37
+      "row": 56
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 37,
+    "noqa_row": 56,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -30154,7 +32488,7 @@
     "code": "UP045",
     "end_location": {
       "column": 38,
-      "row": 38
+      "row": 57
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -30164,11 +32498,11 @@
           "content": "Dict[str, Any] | None",
           "end_location": {
             "column": 38,
-            "row": 38
+            "row": 57
           },
           "location": {
             "column": 14,
-            "row": 38
+            "row": 57
           }
         }
       ],
@@ -30176,10 +32510,10 @@
     },
     "location": {
       "column": 14,
-      "row": 38
+      "row": 57
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 38,
+    "noqa_row": 57,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -30187,132 +32521,16 @@
     "code": "D205",
     "end_location": {
       "column": 8,
-      "row": 53
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": null,
-    "location": {
-      "column": 5,
-      "row": 45
-    },
-    "message": "1 blank line required between summary line and description",
-    "noqa_row": 53,
-    "url": "https://docs.astral.sh/ruff/rules/missing-blank-line-after-summary"
-  },
-  {
-    "cell": null,
-    "code": "D415",
-    "end_location": {
-      "column": 8,
-      "row": 53
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": {
-      "applicability": "unsafe",
-      "edits": [
-        {
-          "content": ".",
-          "end_location": {
-            "column": 71,
-            "row": 52
-          },
-          "location": {
-            "column": 71,
-            "row": 52
-          }
-        }
-      ],
-      "message": "Add closing punctuation"
-    },
-    "location": {
-      "column": 5,
-      "row": 45
-    },
-    "message": "First line should end with a period, question mark, or exclamation point",
-    "noqa_row": 53,
-    "url": "https://docs.astral.sh/ruff/rules/missing-terminal-punctuation"
-  },
-  {
-    "cell": null,
-    "code": "UP045",
-    "end_location": {
-      "column": 37,
-      "row": 64
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "Dict[str, Any] | None",
-          "end_location": {
-            "column": 37,
-            "row": 64
-          },
-          "location": {
-            "column": 13,
-            "row": 64
-          }
-        }
-      ],
-      "message": "Convert to `X | None`"
-    },
-    "location": {
-      "column": 13,
-      "row": 64
-    },
-    "message": "Use `X | None` for type annotations",
-    "noqa_row": 64,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
-  },
-  {
-    "cell": null,
-    "code": "UP045",
-    "end_location": {
-      "column": 38,
-      "row": 65
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "Dict[str, Any] | None",
-          "end_location": {
-            "column": 38,
-            "row": 65
-          },
-          "location": {
-            "column": 14,
-            "row": 65
-          }
-        }
-      ],
-      "message": "Convert to `X | None`"
-    },
-    "location": {
-      "column": 14,
-      "row": 65
-    },
-    "message": "Use `X | None` for type annotations",
-    "noqa_row": 65,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
-  },
-  {
-    "cell": null,
-    "code": "D205",
-    "end_location": {
-      "column": 8,
-      "row": 80
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": null,
-    "location": {
-      "column": 5,
       "row": 72
     },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": null,
+    "location": {
+      "column": 5,
+      "row": 64
+    },
     "message": "1 blank line required between summary line and description",
-    "noqa_row": 80,
+    "noqa_row": 72,
     "url": "https://docs.astral.sh/ruff/rules/missing-blank-line-after-summary"
   },
   {
@@ -30320,91 +32538,8 @@
     "code": "D415",
     "end_location": {
       "column": 8,
-      "row": 80
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": {
-      "applicability": "unsafe",
-      "edits": [
-        {
-          "content": ".",
-          "end_location": {
-            "column": 71,
-            "row": 79
-          },
-          "location": {
-            "column": 71,
-            "row": 79
-          }
-        }
-      ],
-      "message": "Add closing punctuation"
-    },
-    "location": {
-      "column": 5,
       "row": 72
     },
-    "message": "First line should end with a period, question mark, or exclamation point",
-    "noqa_row": 80,
-    "url": "https://docs.astral.sh/ruff/rules/missing-terminal-punctuation"
-  },
-  {
-    "cell": null,
-    "code": "UP045",
-    "end_location": {
-      "column": 38,
-      "row": 97
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "Dict[str, Any] | None",
-          "end_location": {
-            "column": 38,
-            "row": 97
-          },
-          "location": {
-            "column": 14,
-            "row": 97
-          }
-        }
-      ],
-      "message": "Convert to `X | None`"
-    },
-    "location": {
-      "column": 14,
-      "row": 97
-    },
-    "message": "Use `X | None` for type annotations",
-    "noqa_row": 97,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
-  },
-  {
-    "cell": null,
-    "code": "D205",
-    "end_location": {
-      "column": 8,
-      "row": 122
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": null,
-    "location": {
-      "column": 5,
-      "row": 104
-    },
-    "message": "1 blank line required between summary line and description",
-    "noqa_row": 122,
-    "url": "https://docs.astral.sh/ruff/rules/missing-blank-line-after-summary"
-  },
-  {
-    "cell": null,
-    "code": "D415",
-    "end_location": {
-      "column": 8,
-      "row": 122
-    },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
       "applicability": "unsafe",
@@ -30413,11 +32548,11 @@
           "content": ".",
           "end_location": {
             "column": 71,
-            "row": 121
+            "row": 71
           },
           "location": {
             "column": 71,
-            "row": 121
+            "row": 71
           }
         }
       ],
@@ -30425,10 +32560,10 @@
     },
     "location": {
       "column": 5,
-      "row": 104
+      "row": 64
     },
     "message": "First line should end with a period, question mark, or exclamation point",
-    "noqa_row": 122,
+    "noqa_row": 72,
     "url": "https://docs.astral.sh/ruff/rules/missing-terminal-punctuation"
   },
   {
@@ -30436,7 +32571,7 @@
     "code": "UP045",
     "end_location": {
       "column": 37,
-      "row": 131
+      "row": 83
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -30446,11 +32581,11 @@
           "content": "Dict[str, Any] | None",
           "end_location": {
             "column": 37,
-            "row": 131
+            "row": 83
           },
           "location": {
             "column": 13,
-            "row": 131
+            "row": 83
           }
         }
       ],
@@ -30458,10 +32593,10 @@
     },
     "location": {
       "column": 13,
-      "row": 131
+      "row": 83
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 131,
+    "noqa_row": 83,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -30469,7 +32604,7 @@
     "code": "UP045",
     "end_location": {
       "column": 38,
-      "row": 132
+      "row": 84
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -30479,11 +32614,11 @@
           "content": "Dict[str, Any] | None",
           "end_location": {
             "column": 38,
-            "row": 132
+            "row": 84
           },
           "location": {
             "column": 14,
-            "row": 132
+            "row": 84
           }
         }
       ],
@@ -30491,10 +32626,10 @@
     },
     "location": {
       "column": 14,
-      "row": 132
+      "row": 84
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 132,
+    "noqa_row": 84,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -30502,16 +32637,16 @@
     "code": "D205",
     "end_location": {
       "column": 8,
-      "row": 147
+      "row": 99
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 5,
-      "row": 139
+      "row": 91
     },
     "message": "1 blank line required between summary line and description",
-    "noqa_row": 147,
+    "noqa_row": 99,
     "url": "https://docs.astral.sh/ruff/rules/missing-blank-line-after-summary"
   },
   {
@@ -30519,7 +32654,7 @@
     "code": "D415",
     "end_location": {
       "column": 8,
-      "row": 147
+      "row": 99
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -30529,11 +32664,11 @@
           "content": ".",
           "end_location": {
             "column": 71,
-            "row": 146
+            "row": 98
           },
           "location": {
             "column": 71,
-            "row": 146
+            "row": 98
           }
         }
       ],
@@ -30541,10 +32676,93 @@
     },
     "location": {
       "column": 5,
-      "row": 139
+      "row": 91
     },
     "message": "First line should end with a period, question mark, or exclamation point",
-    "noqa_row": 147,
+    "noqa_row": 99,
+    "url": "https://docs.astral.sh/ruff/rules/missing-terminal-punctuation"
+  },
+  {
+    "cell": null,
+    "code": "UP045",
+    "end_location": {
+      "column": 38,
+      "row": 116
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "Dict[str, Any] | None",
+          "end_location": {
+            "column": 38,
+            "row": 116
+          },
+          "location": {
+            "column": 14,
+            "row": 116
+          }
+        }
+      ],
+      "message": "Convert to `X | None`"
+    },
+    "location": {
+      "column": 14,
+      "row": 116
+    },
+    "message": "Use `X | None` for type annotations",
+    "noqa_row": 116,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
+  },
+  {
+    "cell": null,
+    "code": "D205",
+    "end_location": {
+      "column": 8,
+      "row": 141
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": null,
+    "location": {
+      "column": 5,
+      "row": 123
+    },
+    "message": "1 blank line required between summary line and description",
+    "noqa_row": 141,
+    "url": "https://docs.astral.sh/ruff/rules/missing-blank-line-after-summary"
+  },
+  {
+    "cell": null,
+    "code": "D415",
+    "end_location": {
+      "column": 8,
+      "row": 141
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": ".",
+          "end_location": {
+            "column": 71,
+            "row": 140
+          },
+          "location": {
+            "column": 71,
+            "row": 140
+          }
+        }
+      ],
+      "message": "Add closing punctuation"
+    },
+    "location": {
+      "column": 5,
+      "row": 123
+    },
+    "message": "First line should end with a period, question mark, or exclamation point",
+    "noqa_row": 141,
     "url": "https://docs.astral.sh/ruff/rules/missing-terminal-punctuation"
   },
   {
@@ -30552,7 +32770,7 @@
     "code": "UP045",
     "end_location": {
       "column": 37,
-      "row": 163
+      "row": 150
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -30562,11 +32780,11 @@
           "content": "Dict[str, Any] | None",
           "end_location": {
             "column": 37,
-            "row": 163
+            "row": 150
           },
           "location": {
             "column": 13,
-            "row": 163
+            "row": 150
           }
         }
       ],
@@ -30574,10 +32792,10 @@
     },
     "location": {
       "column": 13,
-      "row": 163
+      "row": 150
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 163,
+    "noqa_row": 150,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -30585,7 +32803,7 @@
     "code": "UP045",
     "end_location": {
       "column": 38,
-      "row": 164
+      "row": 151
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -30595,11 +32813,11 @@
           "content": "Dict[str, Any] | None",
           "end_location": {
             "column": 38,
-            "row": 164
+            "row": 151
           },
           "location": {
             "column": 14,
-            "row": 164
+            "row": 151
           }
         }
       ],
@@ -30607,10 +32825,10 @@
     },
     "location": {
       "column": 14,
-      "row": 164
+      "row": 151
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 164,
+    "noqa_row": 151,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -30618,16 +32836,16 @@
     "code": "D205",
     "end_location": {
       "column": 8,
-      "row": 179
+      "row": 166
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 5,
-      "row": 171
+      "row": 158
     },
     "message": "1 blank line required between summary line and description",
-    "noqa_row": 179,
+    "noqa_row": 166,
     "url": "https://docs.astral.sh/ruff/rules/missing-blank-line-after-summary"
   },
   {
@@ -30635,7 +32853,7 @@
     "code": "D415",
     "end_location": {
       "column": 8,
-      "row": 179
+      "row": 166
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -30645,11 +32863,11 @@
           "content": ".",
           "end_location": {
             "column": 71,
-            "row": 178
+            "row": 165
           },
           "location": {
             "column": 71,
-            "row": 178
+            "row": 165
           }
         }
       ],
@@ -30657,10 +32875,126 @@
     },
     "location": {
       "column": 5,
-      "row": 171
+      "row": 158
     },
     "message": "First line should end with a period, question mark, or exclamation point",
-    "noqa_row": 179,
+    "noqa_row": 166,
+    "url": "https://docs.astral.sh/ruff/rules/missing-terminal-punctuation"
+  },
+  {
+    "cell": null,
+    "code": "UP045",
+    "end_location": {
+      "column": 37,
+      "row": 182
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "Dict[str, Any] | None",
+          "end_location": {
+            "column": 37,
+            "row": 182
+          },
+          "location": {
+            "column": 13,
+            "row": 182
+          }
+        }
+      ],
+      "message": "Convert to `X | None`"
+    },
+    "location": {
+      "column": 13,
+      "row": 182
+    },
+    "message": "Use `X | None` for type annotations",
+    "noqa_row": 182,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
+  },
+  {
+    "cell": null,
+    "code": "UP045",
+    "end_location": {
+      "column": 38,
+      "row": 183
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "Dict[str, Any] | None",
+          "end_location": {
+            "column": 38,
+            "row": 183
+          },
+          "location": {
+            "column": 14,
+            "row": 183
+          }
+        }
+      ],
+      "message": "Convert to `X | None`"
+    },
+    "location": {
+      "column": 14,
+      "row": 183
+    },
+    "message": "Use `X | None` for type annotations",
+    "noqa_row": 183,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
+  },
+  {
+    "cell": null,
+    "code": "D205",
+    "end_location": {
+      "column": 8,
+      "row": 198
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": null,
+    "location": {
+      "column": 5,
+      "row": 190
+    },
+    "message": "1 blank line required between summary line and description",
+    "noqa_row": 198,
+    "url": "https://docs.astral.sh/ruff/rules/missing-blank-line-after-summary"
+  },
+  {
+    "cell": null,
+    "code": "D415",
+    "end_location": {
+      "column": 8,
+      "row": 198
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": ".",
+          "end_location": {
+            "column": 71,
+            "row": 197
+          },
+          "location": {
+            "column": 71,
+            "row": 197
+          }
+        }
+      ],
+      "message": "Add closing punctuation"
+    },
+    "location": {
+      "column": 5,
+      "row": 190
+    },
+    "message": "First line should end with a period, question mark, or exclamation point",
+    "noqa_row": 198,
     "url": "https://docs.astral.sh/ruff/rules/missing-terminal-punctuation"
   },
   {
@@ -30668,16 +33002,16 @@
     "code": "D107",
     "end_location": {
       "column": 17,
-      "row": 190
+      "row": 209
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 190
+      "row": 209
     },
     "message": "Missing docstring in `__init__`",
-    "noqa_row": 190,
+    "noqa_row": 209,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
   },
   {
@@ -30685,7 +33019,7 @@
     "code": "UP045",
     "end_location": {
       "column": 64,
-      "row": 190
+      "row": 209
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -30695,11 +33029,11 @@
           "content": "requests.models.Response | None",
           "end_location": {
             "column": 64,
-            "row": 190
+            "row": 209
           },
           "location": {
             "column": 30,
-            "row": 190
+            "row": 209
           }
         }
       ],
@@ -30707,10 +33041,10 @@
     },
     "location": {
       "column": 30,
-      "row": 190
+      "row": 209
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 190,
+    "noqa_row": 209,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -30718,7 +33052,7 @@
     "code": "UP045",
     "end_location": {
       "column": 46,
-      "row": 193
+      "row": 212
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -30728,11 +33062,11 @@
           "content": "Dict[str, Any] | None",
           "end_location": {
             "column": 46,
-            "row": 193
+            "row": 212
           },
           "location": {
             "column": 22,
-            "row": 193
+            "row": 212
           }
         }
       ],
@@ -30740,10 +33074,10 @@
     },
     "location": {
       "column": 22,
-      "row": 193
+      "row": 212
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 193,
+    "noqa_row": 212,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -30751,16 +33085,16 @@
     "code": "D105",
     "end_location": {
       "column": 17,
-      "row": 195
+      "row": 214
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 195
+      "row": 214
     },
     "message": "Missing docstring in magic method",
-    "noqa_row": 195,
+    "noqa_row": 214,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-magic-method"
   },
   {
@@ -30768,16 +33102,16 @@
     "code": "D102",
     "end_location": {
       "column": 18,
-      "row": 204
+      "row": 223
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 204
+      "row": 223
     },
     "message": "Missing docstring in public method",
-    "noqa_row": 204,
+    "noqa_row": 223,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
   },
   {
@@ -30785,16 +33119,16 @@
     "code": "D102",
     "end_location": {
       "column": 15,
-      "row": 208
+      "row": 227
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 208
+      "row": 227
     },
     "message": "Missing docstring in public method",
-    "noqa_row": 208,
+    "noqa_row": 227,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
   },
   {
@@ -30802,7 +33136,7 @@
     "code": "UP045",
     "end_location": {
       "column": 38,
-      "row": 208
+      "row": 227
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -30812,11 +33146,11 @@
           "content": "int | None",
           "end_location": {
             "column": 38,
-            "row": 208
+            "row": 227
           },
           "location": {
             "column": 25,
-            "row": 208
+            "row": 227
           }
         }
       ],
@@ -30824,10 +33158,10 @@
     },
     "location": {
       "column": 25,
-      "row": 208
+      "row": 227
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 208,
+    "noqa_row": 227,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -30835,16 +33169,16 @@
     "code": "D102",
     "end_location": {
       "column": 14,
-      "row": 212
+      "row": 231
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 212
+      "row": 231
     },
     "message": "Missing docstring in public method",
-    "noqa_row": 212,
+    "noqa_row": 231,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
   },
   {
@@ -30852,7 +33186,7 @@
     "code": "C408",
     "end_location": {
       "column": 33,
-      "row": 214
+      "row": 233
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -30862,22 +33196,22 @@
           "content": "{",
           "end_location": {
             "column": 32,
-            "row": 214
+            "row": 233
           },
           "location": {
             "column": 27,
-            "row": 214
+            "row": 233
           }
         },
         {
           "content": "}",
           "end_location": {
             "column": 33,
-            "row": 214
+            "row": 233
           },
           "location": {
             "column": 32,
-            "row": 214
+            "row": 233
           }
         }
       ],
@@ -30885,10 +33219,10 @@
     },
     "location": {
       "column": 27,
-      "row": 214
+      "row": 233
     },
     "message": "Unnecessary `dict()` call (rewrite as a literal)",
-    "noqa_row": 214,
+    "noqa_row": 233,
     "url": "https://docs.astral.sh/ruff/rules/unnecessary-collection-call"
   },
   {
@@ -30896,16 +33230,16 @@
     "code": "D102",
     "end_location": {
       "column": 18,
-      "row": 217
+      "row": 236
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 217
+      "row": 236
     },
     "message": "Missing docstring in public method",
-    "noqa_row": 217,
+    "noqa_row": 236,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
   },
   {
@@ -30913,16 +33247,16 @@
     "code": "D102",
     "end_location": {
       "column": 18,
-      "row": 220
+      "row": 239
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 220
+      "row": 239
     },
     "message": "Missing docstring in public method",
-    "noqa_row": 220,
+    "noqa_row": 239,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
   },
   {
@@ -30930,16 +33264,16 @@
     "code": "D107",
     "end_location": {
       "column": 17,
-      "row": 227
+      "row": 246
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 227
+      "row": 246
     },
     "message": "Missing docstring in `__init__`",
-    "noqa_row": 227,
+    "noqa_row": 246,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
   },
   {
@@ -30947,122 +33281,6 @@
     "code": "UP045",
     "end_location": {
       "column": 42,
-      "row": 232
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "Dict[str, Any] | None",
-          "end_location": {
-            "column": 42,
-            "row": 232
-          },
-          "location": {
-            "column": 18,
-            "row": 232
-          }
-        }
-      ],
-      "message": "Convert to `X | None`"
-    },
-    "location": {
-      "column": 18,
-      "row": 232
-    },
-    "message": "Use `X | None` for type annotations",
-    "noqa_row": 232,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
-  },
-  {
-    "cell": null,
-    "code": "UP045",
-    "end_location": {
-      "column": 37,
-      "row": 234
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "Any | None",
-          "end_location": {
-            "column": 37,
-            "row": 234
-          },
-          "location": {
-            "column": 24,
-            "row": 234
-          }
-        }
-      ],
-      "message": "Convert to `X | None`"
-    },
-    "location": {
-      "column": 24,
-      "row": 234
-    },
-    "message": "Use `X | None` for type annotations",
-    "noqa_row": 234,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
-  },
-  {
-    "cell": null,
-    "code": "D102",
-    "end_location": {
-      "column": 18,
-      "row": 243
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": null,
-    "location": {
-      "column": 9,
-      "row": 243
-    },
-    "message": "Missing docstring in public method",
-    "noqa_row": 243,
-    "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
-  },
-  {
-    "cell": null,
-    "code": "UP045",
-    "end_location": {
-      "column": 42,
-      "row": 250
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "Dict[str, Any] | None",
-          "end_location": {
-            "column": 42,
-            "row": 250
-          },
-          "location": {
-            "column": 18,
-            "row": 250
-          }
-        }
-      ],
-      "message": "Convert to `X | None`"
-    },
-    "location": {
-      "column": 18,
-      "row": 250
-    },
-    "message": "Use `X | None` for type annotations",
-    "noqa_row": 250,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
-  },
-  {
-    "cell": null,
-    "code": "UP045",
-    "end_location": {
-      "column": 41,
       "row": 251
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
@@ -31072,11 +33290,11 @@
         {
           "content": "Dict[str, Any] | None",
           "end_location": {
-            "column": 41,
+            "column": 42,
             "row": 251
           },
           "location": {
-            "column": 17,
+            "column": 18,
             "row": 251
           }
         }
@@ -31084,7 +33302,7 @@
       "message": "Convert to `X | None`"
     },
     "location": {
-      "column": 17,
+      "column": 18,
       "row": 251
     },
     "message": "Use `X | None` for type annotations",
@@ -31095,40 +33313,7 @@
     "cell": null,
     "code": "UP045",
     "end_location": {
-      "column": 40,
-      "row": 252
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "Dict[str, Any] | None",
-          "end_location": {
-            "column": 40,
-            "row": 252
-          },
-          "location": {
-            "column": 16,
-            "row": 252
-          }
-        }
-      ],
-      "message": "Convert to `X | None`"
-    },
-    "location": {
-      "column": 16,
-      "row": 252
-    },
-    "message": "Use `X | None` for type annotations",
-    "noqa_row": 252,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
-  },
-  {
-    "cell": null,
-    "code": "UP045",
-    "end_location": {
-      "column": 45,
+      "column": 37,
       "row": 253
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
@@ -31136,13 +33321,13 @@
       "applicability": "safe",
       "edits": [
         {
-          "content": "Callable | None",
+          "content": "Any | None",
           "end_location": {
-            "column": 45,
+            "column": 37,
             "row": 253
           },
           "location": {
-            "column": 27,
+            "column": 24,
             "row": 253
           }
         }
@@ -31150,7 +33335,7 @@
       "message": "Convert to `X | None`"
     },
     "location": {
-      "column": 27,
+      "column": 24,
       "row": 253
     },
     "message": "Use `X | None` for type annotations",
@@ -31159,337 +33344,27 @@
   },
   {
     "cell": null,
-    "code": "UP045",
-    "end_location": {
-      "column": 42,
-      "row": 254
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "Dict[str, Any] | None",
-          "end_location": {
-            "column": 42,
-            "row": 254
-          },
-          "location": {
-            "column": 18,
-            "row": 254
-          }
-        }
-      ],
-      "message": "Convert to `X | None`"
-    },
-    "location": {
-      "column": 18,
-      "row": 254
-    },
-    "message": "Use `X | None` for type annotations",
-    "noqa_row": 254,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
-  },
-  {
-    "cell": null,
-    "code": "D205",
-    "end_location": {
-      "column": 12,
-      "row": 269
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": null,
-    "location": {
-      "column": 9,
-      "row": 258
-    },
-    "message": "1 blank line required between summary line and description",
-    "noqa_row": 269,
-    "url": "https://docs.astral.sh/ruff/rules/missing-blank-line-after-summary"
-  },
-  {
-    "cell": null,
-    "code": "SIM108",
-    "end_location": {
-      "column": 31,
-      "row": 335
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": {
-      "applicability": "unsafe",
-      "edits": [
-        {
-          "content": "verbose = sys.stderr if isinstance(verbose, bool) and verbose else None",
-          "end_location": {
-            "column": 31,
-            "row": 335
-          },
-          "location": {
-            "column": 13,
-            "row": 332
-          }
-        }
-      ],
-      "message": "Replace `if`-`else`-block with `verbose = sys.stderr if isinstance(verbose, bool) and verbose else None`"
-    },
-    "location": {
-      "column": 13,
-      "row": 332
-    },
-    "message": "Use ternary operator `verbose = sys.stderr if isinstance(verbose, bool) and verbose else None` instead of `if`-`else`-block",
-    "noqa_row": 332,
-    "url": "https://docs.astral.sh/ruff/rules/if-else-block-instead-of-if-exp"
-  },
-  {
-    "cell": null,
-    "code": "D415",
-    "end_location": {
-      "column": 33,
-      "row": 343
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": {
-      "applicability": "unsafe",
-      "edits": [
-        {
-          "content": ".",
-          "end_location": {
-            "column": 30,
-            "row": 343
-          },
-          "location": {
-            "column": 30,
-            "row": 343
-          }
-        }
-      ],
-      "message": "Add closing punctuation"
-    },
-    "location": {
-      "column": 5,
-      "row": 343
-    },
-    "message": "First line should end with a period, question mark, or exclamation point",
-    "noqa_row": 343,
-    "url": "https://docs.astral.sh/ruff/rules/missing-terminal-punctuation"
-  },
-  {
-    "cell": null,
-    "code": "D107",
-    "end_location": {
-      "column": 17,
-      "row": 345
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": null,
-    "location": {
-      "column": 9,
-      "row": 345
-    },
-    "message": "Missing docstring in `__init__`",
-    "noqa_row": 345,
-    "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
-  },
-  {
-    "cell": null,
-    "code": "D415",
-    "end_location": {
-      "column": 63,
-      "row": 353
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": {
-      "applicability": "unsafe",
-      "edits": [
-        {
-          "content": ".",
-          "end_location": {
-            "column": 60,
-            "row": 353
-          },
-          "location": {
-            "column": 60,
-            "row": 353
-          }
-        }
-      ],
-      "message": "Add closing punctuation"
-    },
-    "location": {
-      "column": 9,
-      "row": 353
-    },
-    "message": "First line should end with a period, question mark, or exclamation point",
-    "noqa_row": 353,
-    "url": "https://docs.astral.sh/ruff/rules/missing-terminal-punctuation"
-  },
-  {
-    "cell": null,
-    "code": "D101",
-    "end_location": {
-      "column": 19,
-      "row": 357
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": null,
-    "location": {
-      "column": 7,
-      "row": 357
-    },
-    "message": "Missing docstring in public class",
-    "noqa_row": 357,
-    "url": "https://docs.astral.sh/ruff/rules/undocumented-public-class"
-  },
-  {
-    "cell": null,
-    "code": "D107",
-    "end_location": {
-      "column": 17,
-      "row": 358
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": null,
-    "location": {
-      "column": 9,
-      "row": 358
-    },
-    "message": "Missing docstring in `__init__`",
-    "noqa_row": 358,
-    "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
-  },
-  {
-    "cell": null,
-    "code": "C408",
-    "end_location": {
-      "column": 57,
-      "row": 359
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": {
-      "applicability": "unsafe",
-      "edits": [
-        {
-          "content": "{",
-          "end_location": {
-            "column": 56,
-            "row": 359
-          },
-          "location": {
-            "column": 51,
-            "row": 359
-          }
-        },
-        {
-          "content": "}",
-          "end_location": {
-            "column": 57,
-            "row": 359
-          },
-          "location": {
-            "column": 56,
-            "row": 359
-          }
-        }
-      ],
-      "message": "Rewrite as a literal"
-    },
-    "location": {
-      "column": 51,
-      "row": 359
-    },
-    "message": "Unnecessary `dict()` call (rewrite as a literal)",
-    "noqa_row": 359,
-    "url": "https://docs.astral.sh/ruff/rules/unnecessary-collection-call"
-  },
-  {
-    "cell": null,
     "code": "D102",
     "end_location": {
-      "column": 12,
-      "row": 362
+      "column": 18,
+      "row": 262
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 362
+      "row": 262
     },
     "message": "Missing docstring in public method",
-    "noqa_row": 362,
+    "noqa_row": 262,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
   },
   {
     "cell": null,
     "code": "UP045",
     "end_location": {
-      "column": 28,
-      "row": 367
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "Any | None",
-          "end_location": {
-            "column": 28,
-            "row": 367
-          },
-          "location": {
-            "column": 15,
-            "row": 367
-          }
-        }
-      ],
-      "message": "Convert to `X | None`"
-    },
-    "location": {
-      "column": 15,
-      "row": 367
-    },
-    "message": "Use `X | None` for type annotations",
-    "noqa_row": 367,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
-  },
-  {
-    "cell": null,
-    "code": "UP045",
-    "end_location": {
-      "column": 29,
-      "row": 368
-    },
-    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "Any | None",
-          "end_location": {
-            "column": 29,
-            "row": 368
-          },
-          "location": {
-            "column": 16,
-            "row": 368
-          }
-        }
-      ],
-      "message": "Convert to `X | None`"
-    },
-    "location": {
-      "column": 16,
-      "row": 368
-    },
-    "message": "Use `X | None` for type annotations",
-    "noqa_row": 368,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
-  },
-  {
-    "cell": null,
-    "code": "UP045",
-    "end_location": {
       "column": 42,
-      "row": 369
+      "row": 269
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -31499,11 +33374,11 @@
           "content": "Dict[str, Any] | None",
           "end_location": {
             "column": 42,
-            "row": 369
+            "row": 269
           },
           "location": {
             "column": 18,
-            "row": 369
+            "row": 269
           }
         }
       ],
@@ -31511,10 +33386,10 @@
     },
     "location": {
       "column": 18,
-      "row": 369
+      "row": 269
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 369,
+    "noqa_row": 269,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -31522,7 +33397,7 @@
     "code": "UP045",
     "end_location": {
       "column": 41,
-      "row": 370
+      "row": 270
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -31532,11 +33407,11 @@
           "content": "Dict[str, Any] | None",
           "end_location": {
             "column": 41,
-            "row": 370
+            "row": 270
           },
           "location": {
             "column": 17,
-            "row": 370
+            "row": 270
           }
         }
       ],
@@ -31544,18 +33419,345 @@
     },
     "location": {
       "column": 17,
-      "row": 370
+      "row": 270
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 370,
+    "noqa_row": 270,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
     "cell": null,
     "code": "UP045",
     "end_location": {
+      "column": 40,
+      "row": 271
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "Dict[str, Any] | None",
+          "end_location": {
+            "column": 40,
+            "row": 271
+          },
+          "location": {
+            "column": 16,
+            "row": 271
+          }
+        }
+      ],
+      "message": "Convert to `X | None`"
+    },
+    "location": {
+      "column": 16,
+      "row": 271
+    },
+    "message": "Use `X | None` for type annotations",
+    "noqa_row": 271,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
+  },
+  {
+    "cell": null,
+    "code": "UP045",
+    "end_location": {
+      "column": 45,
+      "row": 272
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "Callable | None",
+          "end_location": {
+            "column": 45,
+            "row": 272
+          },
+          "location": {
+            "column": 27,
+            "row": 272
+          }
+        }
+      ],
+      "message": "Convert to `X | None`"
+    },
+    "location": {
+      "column": 27,
+      "row": 272
+    },
+    "message": "Use `X | None` for type annotations",
+    "noqa_row": 272,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
+  },
+  {
+    "cell": null,
+    "code": "UP045",
+    "end_location": {
+      "column": 42,
+      "row": 273
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "Dict[str, Any] | None",
+          "end_location": {
+            "column": 42,
+            "row": 273
+          },
+          "location": {
+            "column": 18,
+            "row": 273
+          }
+        }
+      ],
+      "message": "Convert to `X | None`"
+    },
+    "location": {
+      "column": 18,
+      "row": 273
+    },
+    "message": "Use `X | None` for type annotations",
+    "noqa_row": 273,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
+  },
+  {
+    "cell": null,
+    "code": "D205",
+    "end_location": {
+      "column": 12,
+      "row": 288
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": null,
+    "location": {
+      "column": 9,
+      "row": 277
+    },
+    "message": "1 blank line required between summary line and description",
+    "noqa_row": 288,
+    "url": "https://docs.astral.sh/ruff/rules/missing-blank-line-after-summary"
+  },
+  {
+    "cell": null,
+    "code": "SIM108",
+    "end_location": {
+      "column": 31,
+      "row": 354
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "verbose = sys.stderr if isinstance(verbose, bool) and verbose else None",
+          "end_location": {
+            "column": 31,
+            "row": 354
+          },
+          "location": {
+            "column": 13,
+            "row": 351
+          }
+        }
+      ],
+      "message": "Replace `if`-`else`-block with `verbose = sys.stderr if isinstance(verbose, bool) and verbose else None`"
+    },
+    "location": {
+      "column": 13,
+      "row": 351
+    },
+    "message": "Use ternary operator `verbose = sys.stderr if isinstance(verbose, bool) and verbose else None` instead of `if`-`else`-block",
+    "noqa_row": 351,
+    "url": "https://docs.astral.sh/ruff/rules/if-else-block-instead-of-if-exp"
+  },
+  {
+    "cell": null,
+    "code": "D415",
+    "end_location": {
+      "column": 33,
+      "row": 362
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": ".",
+          "end_location": {
+            "column": 30,
+            "row": 362
+          },
+          "location": {
+            "column": 30,
+            "row": 362
+          }
+        }
+      ],
+      "message": "Add closing punctuation"
+    },
+    "location": {
+      "column": 5,
+      "row": 362
+    },
+    "message": "First line should end with a period, question mark, or exclamation point",
+    "noqa_row": 362,
+    "url": "https://docs.astral.sh/ruff/rules/missing-terminal-punctuation"
+  },
+  {
+    "cell": null,
+    "code": "D107",
+    "end_location": {
+      "column": 17,
+      "row": 364
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": null,
+    "location": {
+      "column": 9,
+      "row": 364
+    },
+    "message": "Missing docstring in `__init__`",
+    "noqa_row": 364,
+    "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
+  },
+  {
+    "cell": null,
+    "code": "D415",
+    "end_location": {
+      "column": 63,
+      "row": 372
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": ".",
+          "end_location": {
+            "column": 60,
+            "row": 372
+          },
+          "location": {
+            "column": 60,
+            "row": 372
+          }
+        }
+      ],
+      "message": "Add closing punctuation"
+    },
+    "location": {
+      "column": 9,
+      "row": 372
+    },
+    "message": "First line should end with a period, question mark, or exclamation point",
+    "noqa_row": 372,
+    "url": "https://docs.astral.sh/ruff/rules/missing-terminal-punctuation"
+  },
+  {
+    "cell": null,
+    "code": "D101",
+    "end_location": {
+      "column": 19,
+      "row": 376
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": null,
+    "location": {
+      "column": 7,
+      "row": 376
+    },
+    "message": "Missing docstring in public class",
+    "noqa_row": 376,
+    "url": "https://docs.astral.sh/ruff/rules/undocumented-public-class"
+  },
+  {
+    "cell": null,
+    "code": "D107",
+    "end_location": {
+      "column": 17,
+      "row": 377
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": null,
+    "location": {
+      "column": 9,
+      "row": 377
+    },
+    "message": "Missing docstring in `__init__`",
+    "noqa_row": 377,
+    "url": "https://docs.astral.sh/ruff/rules/undocumented-public-init"
+  },
+  {
+    "cell": null,
+    "code": "C408",
+    "end_location": {
+      "column": 57,
+      "row": 378
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "{",
+          "end_location": {
+            "column": 56,
+            "row": 378
+          },
+          "location": {
+            "column": 51,
+            "row": 378
+          }
+        },
+        {
+          "content": "}",
+          "end_location": {
+            "column": 57,
+            "row": 378
+          },
+          "location": {
+            "column": 56,
+            "row": 378
+          }
+        }
+      ],
+      "message": "Rewrite as a literal"
+    },
+    "location": {
+      "column": 51,
+      "row": 378
+    },
+    "message": "Unnecessary `dict()` call (rewrite as a literal)",
+    "noqa_row": 378,
+    "url": "https://docs.astral.sh/ruff/rules/unnecessary-collection-call"
+  },
+  {
+    "cell": null,
+    "code": "D102",
+    "end_location": {
+      "column": 12,
+      "row": 381
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": null,
+    "location": {
+      "column": 9,
+      "row": 381
+    },
+    "message": "Missing docstring in public method",
+    "noqa_row": 381,
+    "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
+  },
+  {
+    "cell": null,
+    "code": "UP045",
+    "end_location": {
       "column": 28,
-      "row": 388
+      "row": 386
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -31565,11 +33767,11 @@
           "content": "Any | None",
           "end_location": {
             "column": 28,
-            "row": 388
+            "row": 386
           },
           "location": {
             "column": 15,
-            "row": 388
+            "row": 386
           }
         }
       ],
@@ -31577,6 +33779,72 @@
     },
     "location": {
       "column": 15,
+      "row": 386
+    },
+    "message": "Use `X | None` for type annotations",
+    "noqa_row": 386,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
+  },
+  {
+    "cell": null,
+    "code": "UP045",
+    "end_location": {
+      "column": 29,
+      "row": 387
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "Any | None",
+          "end_location": {
+            "column": 29,
+            "row": 387
+          },
+          "location": {
+            "column": 16,
+            "row": 387
+          }
+        }
+      ],
+      "message": "Convert to `X | None`"
+    },
+    "location": {
+      "column": 16,
+      "row": 387
+    },
+    "message": "Use `X | None` for type annotations",
+    "noqa_row": 387,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
+  },
+  {
+    "cell": null,
+    "code": "UP045",
+    "end_location": {
+      "column": 42,
+      "row": 388
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "Dict[str, Any] | None",
+          "end_location": {
+            "column": 42,
+            "row": 388
+          },
+          "location": {
+            "column": 18,
+            "row": 388
+          }
+        }
+      ],
+      "message": "Convert to `X | None`"
+    },
+    "location": {
+      "column": 18,
       "row": 388
     },
     "message": "Use `X | None` for type annotations",
@@ -31587,7 +33855,7 @@
     "cell": null,
     "code": "UP045",
     "end_location": {
-      "column": 29,
+      "column": 41,
       "row": 389
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
@@ -31595,13 +33863,13 @@
       "applicability": "safe",
       "edits": [
         {
-          "content": "Any | None",
+          "content": "Dict[str, Any] | None",
           "end_location": {
-            "column": 29,
+            "column": 41,
             "row": 389
           },
           "location": {
-            "column": 16,
+            "column": 17,
             "row": 389
           }
         }
@@ -31609,7 +33877,7 @@
       "message": "Convert to `X | None`"
     },
     "location": {
-      "column": 16,
+      "column": 17,
       "row": 389
     },
     "message": "Use `X | None` for type annotations",
@@ -31620,8 +33888,74 @@
     "cell": null,
     "code": "UP045",
     "end_location": {
+      "column": 28,
+      "row": 407
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "Any | None",
+          "end_location": {
+            "column": 28,
+            "row": 407
+          },
+          "location": {
+            "column": 15,
+            "row": 407
+          }
+        }
+      ],
+      "message": "Convert to `X | None`"
+    },
+    "location": {
+      "column": 15,
+      "row": 407
+    },
+    "message": "Use `X | None` for type annotations",
+    "noqa_row": 407,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
+  },
+  {
+    "cell": null,
+    "code": "UP045",
+    "end_location": {
+      "column": 29,
+      "row": 408
+    },
+    "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "Any | None",
+          "end_location": {
+            "column": 29,
+            "row": 408
+          },
+          "location": {
+            "column": 16,
+            "row": 408
+          }
+        }
+      ],
+      "message": "Convert to `X | None`"
+    },
+    "location": {
+      "column": 16,
+      "row": 408
+    },
+    "message": "Use `X | None` for type annotations",
+    "noqa_row": 408,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
+  },
+  {
+    "cell": null,
+    "code": "UP045",
+    "end_location": {
       "column": 42,
-      "row": 390
+      "row": 409
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -31631,11 +33965,11 @@
           "content": "Dict[str, Any] | None",
           "end_location": {
             "column": 42,
-            "row": 390
+            "row": 409
           },
           "location": {
             "column": 18,
-            "row": 390
+            "row": 409
           }
         }
       ],
@@ -31643,10 +33977,10 @@
     },
     "location": {
       "column": 18,
-      "row": 390
+      "row": 409
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 390,
+    "noqa_row": 409,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -31654,7 +33988,7 @@
     "code": "UP045",
     "end_location": {
       "column": 41,
-      "row": 391
+      "row": 410
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -31664,11 +33998,11 @@
           "content": "Dict[str, Any] | None",
           "end_location": {
             "column": 41,
-            "row": 391
+            "row": 410
           },
           "location": {
             "column": 17,
-            "row": 391
+            "row": 410
           }
         }
       ],
@@ -31676,10 +34010,10 @@
     },
     "location": {
       "column": 17,
-      "row": 391
+      "row": 410
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 391,
+    "noqa_row": 410,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -31687,7 +34021,7 @@
     "code": "UP045",
     "end_location": {
       "column": 31,
-      "row": 392
+      "row": 411
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -31697,11 +34031,11 @@
           "content": "int | None",
           "end_location": {
             "column": 31,
-            "row": 392
+            "row": 411
           },
           "location": {
             "column": 18,
-            "row": 392
+            "row": 411
           }
         }
       ],
@@ -31709,10 +34043,10 @@
     },
     "location": {
       "column": 18,
-      "row": 392
+      "row": 411
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 392,
+    "noqa_row": 411,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -31720,16 +34054,16 @@
     "code": "D102",
     "end_location": {
       "column": 12,
-      "row": 406
+      "row": 425
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 406
+      "row": 425
     },
     "message": "Missing docstring in public method",
-    "noqa_row": 406,
+    "noqa_row": 425,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
   },
   {
@@ -31737,7 +34071,7 @@
     "code": "UP045",
     "end_location": {
       "column": 70,
-      "row": 406
+      "row": 425
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -31747,11 +34081,11 @@
           "content": "Dict[str, Any] | None",
           "end_location": {
             "column": 70,
-            "row": 406
+            "row": 425
           },
           "location": {
             "column": 46,
-            "row": 406
+            "row": 425
           }
         }
       ],
@@ -31759,10 +34093,10 @@
     },
     "location": {
       "column": 46,
-      "row": 406
+      "row": 425
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 406,
+    "noqa_row": 425,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -31770,7 +34104,7 @@
     "code": "UP045",
     "end_location": {
       "column": 111,
-      "row": 406
+      "row": 425
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -31780,11 +34114,11 @@
           "content": "Dict[str, Any] | None",
           "end_location": {
             "column": 111,
-            "row": 406
+            "row": 425
           },
           "location": {
             "column": 87,
-            "row": 406
+            "row": 425
           }
         }
       ],
@@ -31792,10 +34126,10 @@
     },
     "location": {
       "column": 87,
-      "row": 406
+      "row": 425
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 406,
+    "noqa_row": 425,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -31803,16 +34137,16 @@
     "code": "E501",
     "end_location": {
       "column": 167,
-      "row": 406
+      "row": 425
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 101,
-      "row": 406
+      "row": 425
     },
     "message": "Line too long (166 > 100)",
-    "noqa_row": 406,
+    "noqa_row": 425,
     "url": "https://docs.astral.sh/ruff/rules/line-too-long"
   },
   {
@@ -31820,7 +34154,7 @@
     "code": "UP045",
     "end_location": {
       "column": 142,
-      "row": 406
+      "row": 425
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -31830,11 +34164,11 @@
           "content": "int | None",
           "end_location": {
             "column": 142,
-            "row": 406
+            "row": 425
           },
           "location": {
             "column": 129,
-            "row": 406
+            "row": 425
           }
         }
       ],
@@ -31842,10 +34176,10 @@
     },
     "location": {
       "column": 129,
-      "row": 406
+      "row": 425
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 406,
+    "noqa_row": 425,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -31853,16 +34187,16 @@
     "code": "D102",
     "end_location": {
       "column": 13,
-      "row": 410
+      "row": 429
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 410
+      "row": 429
     },
     "message": "Missing docstring in public method",
-    "noqa_row": 410,
+    "noqa_row": 429,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
   },
   {
@@ -31870,7 +34204,7 @@
     "code": "UP045",
     "end_location": {
       "column": 57,
-      "row": 410
+      "row": 429
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -31880,11 +34214,11 @@
           "content": "Any | None",
           "end_location": {
             "column": 57,
-            "row": 410
+            "row": 429
           },
           "location": {
             "column": 44,
-            "row": 410
+            "row": 429
           }
         }
       ],
@@ -31892,10 +34226,10 @@
     },
     "location": {
       "column": 44,
-      "row": 410
+      "row": 429
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 410,
+    "noqa_row": 429,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -31903,7 +34237,7 @@
     "code": "UP045",
     "end_location": {
       "column": 86,
-      "row": 410
+      "row": 429
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -31913,11 +34247,11 @@
           "content": "Any | None",
           "end_location": {
             "column": 86,
-            "row": 410
+            "row": 429
           },
           "location": {
             "column": 73,
-            "row": 410
+            "row": 429
           }
         }
       ],
@@ -31925,10 +34259,10 @@
     },
     "location": {
       "column": 73,
-      "row": 410
+      "row": 429
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 410,
+    "noqa_row": 429,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -31936,16 +34270,16 @@
     "code": "E501",
     "end_location": {
       "column": 225,
-      "row": 410
+      "row": 429
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 101,
-      "row": 410
+      "row": 429
     },
     "message": "Line too long (224 > 100)",
-    "noqa_row": 410,
+    "noqa_row": 429,
     "url": "https://docs.astral.sh/ruff/rules/line-too-long"
   },
   {
@@ -31953,7 +34287,7 @@
     "code": "UP045",
     "end_location": {
       "column": 128,
-      "row": 410
+      "row": 429
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -31963,11 +34297,11 @@
           "content": "Dict[str, Any] | None",
           "end_location": {
             "column": 128,
-            "row": 410
+            "row": 429
           },
           "location": {
             "column": 104,
-            "row": 410
+            "row": 429
           }
         }
       ],
@@ -31975,10 +34309,10 @@
     },
     "location": {
       "column": 104,
-      "row": 410
+      "row": 429
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 410,
+    "noqa_row": 429,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -31986,7 +34320,7 @@
     "code": "UP045",
     "end_location": {
       "column": 169,
-      "row": 410
+      "row": 429
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -31996,11 +34330,11 @@
           "content": "Dict[str, Any] | None",
           "end_location": {
             "column": 169,
-            "row": 410
+            "row": 429
           },
           "location": {
             "column": 145,
-            "row": 410
+            "row": 429
           }
         }
       ],
@@ -32008,10 +34342,10 @@
     },
     "location": {
       "column": 145,
-      "row": 410
+      "row": 429
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 410,
+    "noqa_row": 429,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -32019,7 +34353,7 @@
     "code": "UP045",
     "end_location": {
       "column": 200,
-      "row": 410
+      "row": 429
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -32029,11 +34363,11 @@
           "content": "int | None",
           "end_location": {
             "column": 200,
-            "row": 410
+            "row": 429
           },
           "location": {
             "column": 187,
-            "row": 410
+            "row": 429
           }
         }
       ],
@@ -32041,10 +34375,10 @@
     },
     "location": {
       "column": 187,
-      "row": 410
+      "row": 429
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 410,
+    "noqa_row": 429,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -32052,16 +34386,16 @@
     "code": "D102",
     "end_location": {
       "column": 12,
-      "row": 414
+      "row": 433
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 414
+      "row": 433
     },
     "message": "Missing docstring in public method",
-    "noqa_row": 414,
+    "noqa_row": 433,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
   },
   {
@@ -32069,7 +34403,7 @@
     "code": "UP045",
     "end_location": {
       "column": 56,
-      "row": 414
+      "row": 433
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -32079,11 +34413,11 @@
           "content": "Any | None",
           "end_location": {
             "column": 56,
-            "row": 414
+            "row": 433
           },
           "location": {
             "column": 43,
-            "row": 414
+            "row": 433
           }
         }
       ],
@@ -32091,10 +34425,10 @@
     },
     "location": {
       "column": 43,
-      "row": 414
+      "row": 433
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 414,
+    "noqa_row": 433,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -32102,7 +34436,7 @@
     "code": "UP045",
     "end_location": {
       "column": 98,
-      "row": 414
+      "row": 433
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -32112,11 +34446,11 @@
           "content": "Dict[str, Any] | None",
           "end_location": {
             "column": 98,
-            "row": 414
+            "row": 433
           },
           "location": {
             "column": 74,
-            "row": 414
+            "row": 433
           }
         }
       ],
@@ -32124,10 +34458,10 @@
     },
     "location": {
       "column": 74,
-      "row": 414
+      "row": 433
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 414,
+    "noqa_row": 433,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -32135,16 +34469,16 @@
     "code": "E501",
     "end_location": {
       "column": 195,
-      "row": 414
+      "row": 433
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 101,
-      "row": 414
+      "row": 433
     },
     "message": "Line too long (194 > 100)",
-    "noqa_row": 414,
+    "noqa_row": 433,
     "url": "https://docs.astral.sh/ruff/rules/line-too-long"
   },
   {
@@ -32152,7 +34486,7 @@
     "code": "UP045",
     "end_location": {
       "column": 139,
-      "row": 414
+      "row": 433
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -32162,11 +34496,11 @@
           "content": "Dict[str, Any] | None",
           "end_location": {
             "column": 139,
-            "row": 414
+            "row": 433
           },
           "location": {
             "column": 115,
-            "row": 414
+            "row": 433
           }
         }
       ],
@@ -32174,10 +34508,10 @@
     },
     "location": {
       "column": 115,
-      "row": 414
+      "row": 433
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 414,
+    "noqa_row": 433,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -32185,7 +34519,7 @@
     "code": "UP045",
     "end_location": {
       "column": 170,
-      "row": 414
+      "row": 433
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -32195,11 +34529,11 @@
           "content": "int | None",
           "end_location": {
             "column": 170,
-            "row": 414
+            "row": 433
           },
           "location": {
             "column": 157,
-            "row": 414
+            "row": 433
           }
         }
       ],
@@ -32207,10 +34541,10 @@
     },
     "location": {
       "column": 157,
-      "row": 414
+      "row": 433
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 414,
+    "noqa_row": 433,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -32218,16 +34552,16 @@
     "code": "D102",
     "end_location": {
       "column": 15,
-      "row": 418
+      "row": 437
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 9,
-      "row": 418
+      "row": 437
     },
     "message": "Missing docstring in public method",
-    "noqa_row": 418,
+    "noqa_row": 437,
     "url": "https://docs.astral.sh/ruff/rules/undocumented-public-method"
   },
   {
@@ -32235,7 +34569,7 @@
     "code": "UP045",
     "end_location": {
       "column": 73,
-      "row": 418
+      "row": 437
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -32245,11 +34579,11 @@
           "content": "Dict[str, Any] | None",
           "end_location": {
             "column": 73,
-            "row": 418
+            "row": 437
           },
           "location": {
             "column": 49,
-            "row": 418
+            "row": 437
           }
         }
       ],
@@ -32257,10 +34591,10 @@
     },
     "location": {
       "column": 49,
-      "row": 418
+      "row": 437
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 418,
+    "noqa_row": 437,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -32268,7 +34602,7 @@
     "code": "UP045",
     "end_location": {
       "column": 114,
-      "row": 418
+      "row": 437
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -32278,11 +34612,11 @@
           "content": "Dict[str, Any] | None",
           "end_location": {
             "column": 114,
-            "row": 418
+            "row": 437
           },
           "location": {
             "column": 90,
-            "row": 418
+            "row": 437
           }
         }
       ],
@@ -32290,10 +34624,10 @@
     },
     "location": {
       "column": 90,
-      "row": 418
+      "row": 437
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 418,
+    "noqa_row": 437,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -32301,16 +34635,16 @@
     "code": "E501",
     "end_location": {
       "column": 170,
-      "row": 418
+      "row": 437
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": null,
     "location": {
       "column": 101,
-      "row": 418
+      "row": 437
     },
     "message": "Line too long (169 > 100)",
-    "noqa_row": 418,
+    "noqa_row": 437,
     "url": "https://docs.astral.sh/ruff/rules/line-too-long"
   },
   {
@@ -32318,7 +34652,7 @@
     "code": "UP045",
     "end_location": {
       "column": 145,
-      "row": 418
+      "row": 437
     },
     "filename": "/workdir/packages/utils/src/dataknobs_utils/requests_utils.py",
     "fix": {
@@ -32328,11 +34662,11 @@
           "content": "int | None",
           "end_location": {
             "column": 145,
-            "row": 418
+            "row": 437
           },
           "location": {
             "column": 132,
-            "row": 418
+            "row": 437
           }
         }
       ],
@@ -32340,10 +34674,10 @@
     },
     "location": {
       "column": 132,
-      "row": 418
+      "row": 437
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 418,
+    "noqa_row": 437,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
