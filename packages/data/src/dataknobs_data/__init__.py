@@ -1,6 +1,6 @@
 """DataKnobs Data Package - Unified data abstraction layer."""
 
-from .database import Database, SyncDatabase
+from .database import AsyncDatabase, SyncDatabase
 from .exceptions import (
     BackendNotFoundError,
     ConcurrencyError,
@@ -32,7 +32,7 @@ __version__ = "0.1.0"
 
 __all__ = [
     # Core classes
-    "Database",
+    "AsyncDatabase",
     "SyncDatabase",
     "Record",
     "Field",

@@ -39,12 +39,12 @@ pip install dataknobs-data[all]         # All backends
 ## Quick Start
 
 ```python
-from dataknobs_data import Database, Record, Query, Operator
+from dataknobs_data import AsyncDatabase, Record, Query, Operator
 
 # Async usage
 async def main():
     # Create and auto-connect to database
-    db = await Database.create("memory")
+    db = await AsyncDatabase.create("memory")
     
     # Create a record
     record = Record({
@@ -407,7 +407,7 @@ For complete API documentation, see [API Reference](docs/API_REFERENCE.md).
 ## Custom Backend
 
 ```python
-from dataknobs_data import Database, DatabaseBackend
+from dataknobs_data import AsyncDatabase, DatabaseBackend
 
 class CustomBackend(DatabaseBackend):
     def create(self, record):
@@ -421,10 +421,10 @@ class CustomBackend(DatabaseBackend):
     # ... other methods
 
 # Register custom backend
-Database.register_backend("custom", CustomBackend)
+AsyncDatabase.register_backend("custom", CustomBackend)
 
 # Use custom backend
-db = Database.create("custom", config)
+db = AsyncDatabase.create("custom", config)
 ```
 
 ## Development
@@ -454,7 +454,7 @@ black src/dataknobs_data
 The package follows a modular architecture:
 
 - **Records**: Data representation with fields and metadata
-- **Database Interface**: Abstract base class for all backends
+- **Database Interface**: Abstract base classes (AsyncDatabase/SyncDatabase) for all backends
 - **Query System**: Backend-agnostic query building
 - **Backends**: Implementations for different storage technologies
 - **Serializers**: Type conversion and format handling

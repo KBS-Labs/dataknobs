@@ -213,11 +213,11 @@ class TestAsyncDatabaseFactory:
         """Test creating async memory backend."""
         factory = AsyncDatabaseFactory()
         
-        with patch('dataknobs_data.backends.memory.MemoryDatabase') as MockMemory:
+        with patch('dataknobs_data.backends.memory.AsyncMemoryDatabase') as MockMemory:
             mock_db = MagicMock()
             MockMemory.from_config.return_value = mock_db
             
-            with patch.dict('sys.modules', {'dataknobs_data.backends.memory': MagicMock(MemoryDatabase=MockMemory)}):
+            with patch.dict('sys.modules', {'dataknobs_data.backends.memory': MagicMock(AsyncMemoryDatabase=MockMemory)}):
                 db = factory.create(backend="memory")
                 assert db == mock_db
                 MockMemory.from_config.assert_called_once_with({})
@@ -226,11 +226,11 @@ class TestAsyncDatabaseFactory:
         """Test creating async file backend."""
         factory = AsyncDatabaseFactory()
         
-        with patch('dataknobs_data.backends.file.FileDatabase') as MockFile:
+        with patch('dataknobs_data.backends.file.AsyncFileDatabase') as MockFile:
             mock_db = MagicMock()
             MockFile.from_config.return_value = mock_db
             
-            with patch.dict('sys.modules', {'dataknobs_data.backends.file': MagicMock(FileDatabase=MockFile)}):
+            with patch.dict('sys.modules', {'dataknobs_data.backends.file': MagicMock(AsyncFileDatabase=MockFile)}):
                 db = factory.create(backend="file", path="/tmp/test.json")
                 assert db == mock_db
                 MockFile.from_config.assert_called_once_with({'path': '/tmp/test.json'})
@@ -239,11 +239,11 @@ class TestAsyncDatabaseFactory:
         """Test creating async postgres backend."""
         factory = AsyncDatabaseFactory()
         
-        with patch('dataknobs_data.backends.postgres.PostgresDatabase') as MockPostgres:
+        with patch('dataknobs_data.backends.postgres.AsyncPostgresDatabase') as MockPostgres:
             mock_db = MagicMock()
             MockPostgres.from_config.return_value = mock_db
             
-            with patch.dict('sys.modules', {'dataknobs_data.backends.postgres': MagicMock(PostgresDatabase=MockPostgres)}):
+            with patch.dict('sys.modules', {'dataknobs_data.backends.postgres': MagicMock(AsyncPostgresDatabase=MockPostgres)}):
                 db = factory.create(
                     backend="postgres",
                     host="localhost",
@@ -255,11 +255,11 @@ class TestAsyncDatabaseFactory:
         """Test creating async elasticsearch backend."""
         factory = AsyncDatabaseFactory()
         
-        with patch('dataknobs_data.backends.elasticsearch.ElasticsearchDatabase') as MockES:
+        with patch('dataknobs_data.backends.elasticsearch.AsyncElasticsearchDatabase') as MockES:
             mock_db = MagicMock()
             MockES.from_config.return_value = mock_db
             
-            with patch.dict('sys.modules', {'dataknobs_data.backends.elasticsearch': MagicMock(ElasticsearchDatabase=MockES)}):
+            with patch.dict('sys.modules', {'dataknobs_data.backends.elasticsearch': MagicMock(AsyncElasticsearchDatabase=MockES)}):
                 db = factory.create(backend="elasticsearch", hosts=["localhost"])
                 assert db == mock_db
     
@@ -268,11 +268,11 @@ class TestAsyncDatabaseFactory:
         factory = AsyncDatabaseFactory()
         
         for alias in ["memory", "mem"]:
-            with patch('dataknobs_data.backends.memory.MemoryDatabase') as MockMemory:
+            with patch('dataknobs_data.backends.memory.AsyncMemoryDatabase') as MockMemory:
                 mock_db = MagicMock()
                 MockMemory.from_config.return_value = mock_db
                 
-                with patch.dict('sys.modules', {'dataknobs_data.backends.memory': MagicMock(MemoryDatabase=MockMemory)}):
+                with patch.dict('sys.modules', {'dataknobs_data.backends.memory': MagicMock(AsyncMemoryDatabase=MockMemory)}):
                     db = factory.create(backend=alias)
                     assert db == mock_db
     
@@ -281,11 +281,11 @@ class TestAsyncDatabaseFactory:
         factory = AsyncDatabaseFactory()
         
         for alias in ["postgres", "postgresql", "pg"]:
-            with patch('dataknobs_data.backends.postgres.PostgresDatabase') as MockPostgres:
+            with patch('dataknobs_data.backends.postgres.AsyncPostgresDatabase') as MockPostgres:
                 mock_db = MagicMock()
                 MockPostgres.from_config.return_value = mock_db
                 
-                with patch.dict('sys.modules', {'dataknobs_data.backends.postgres': MagicMock(PostgresDatabase=MockPostgres)}):
+                with patch.dict('sys.modules', {'dataknobs_data.backends.postgres': MagicMock(AsyncPostgresDatabase=MockPostgres)}):
                     db = factory.create(backend=alias)
                     assert db == mock_db
     
@@ -294,11 +294,11 @@ class TestAsyncDatabaseFactory:
         factory = AsyncDatabaseFactory()
         
         for alias in ["elasticsearch", "es"]:
-            with patch('dataknobs_data.backends.elasticsearch.ElasticsearchDatabase') as MockES:
+            with patch('dataknobs_data.backends.elasticsearch.AsyncElasticsearchDatabase') as MockES:
                 mock_db = MagicMock()
                 MockES.from_config.return_value = mock_db
                 
-                with patch.dict('sys.modules', {'dataknobs_data.backends.elasticsearch': MagicMock(ElasticsearchDatabase=MockES)}):
+                with patch.dict('sys.modules', {'dataknobs_data.backends.elasticsearch': MagicMock(AsyncElasticsearchDatabase=MockES)}):
                     db = factory.create(backend=alias, hosts=["localhost"])
                     assert db == mock_db
     
@@ -306,13 +306,13 @@ class TestAsyncDatabaseFactory:
         """Test S3 async backend creation with proper config."""
         factory = AsyncDatabaseFactory()
         
-        with patch('dataknobs_data.backends.s3.S3Database') as MockS3:
+        with patch('dataknobs_data.backends.s3.AsyncS3Database') as MockS3:
             mock_db = MagicMock()
             MockS3.from_config.return_value = mock_db
             
             # S3 requires bucket configuration
             config = {"backend": "s3", "bucket": "test-bucket"}
-            with patch.dict('sys.modules', {'dataknobs_data.backends.s3': MagicMock(S3Database=MockS3)}):
+            with patch.dict('sys.modules', {'dataknobs_data.backends.s3': MagicMock(AsyncS3Database=MockS3)}):
                 db = factory.create(**config)
                 assert db == mock_db
                 MockS3.from_config.assert_called_once_with({"bucket": "test-bucket"})
@@ -328,11 +328,11 @@ class TestAsyncDatabaseFactory:
         """Test that missing backend defaults to memory for async."""
         factory = AsyncDatabaseFactory()
         
-        with patch('dataknobs_data.backends.memory.MemoryDatabase') as MockMemory:
+        with patch('dataknobs_data.backends.memory.AsyncMemoryDatabase') as MockMemory:
             mock_db = MagicMock()
             MockMemory.from_config.return_value = mock_db
             
-            with patch.dict('sys.modules', {'dataknobs_data.backends.memory': MagicMock(MemoryDatabase=MockMemory)}):
+            with patch.dict('sys.modules', {'dataknobs_data.backends.memory': MagicMock(AsyncMemoryDatabase=MockMemory)}):
                 db = factory.create()  # No backend specified
                 assert db == mock_db
                 MockMemory.from_config.assert_called_once_with({})

@@ -9,7 +9,7 @@ import numpy as np
 
 from dataknobs_data.records import Record
 from dataknobs_data.query import Query
-from dataknobs_data.database import Database, SyncDatabase
+from dataknobs_data.database import AsyncDatabase, SyncDatabase
 from .converter import DataFrameConverter, ConversionOptions
 
 logger = logging.getLogger(__name__)
@@ -106,7 +106,7 @@ class BatchOperations:
     
     def __init__(
         self,
-        database: Union[Database, SyncDatabase],
+        database: Union[AsyncDatabase, SyncDatabase],
         converter: Optional[DataFrameConverter] = None
     ):
         """Initialize batch operations.

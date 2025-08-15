@@ -9,7 +9,7 @@ from typing import Any, AsyncIterator, Iterator, Optional
 from dataknobs_config import ConfigurableBase
 from dataknobs_utils.sql_utils import DotenvPostgresConnector, PostgresDB
 
-from ..database import Database, SyncDatabase
+from ..database import AsyncDatabase, SyncDatabase
 from ..query import Operator, Query, SortOrder
 from ..records import Record
 from ..streaming import StreamConfig, StreamResult
@@ -460,7 +460,7 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
         self.db.execute(sql, params)
 
 
-class PostgresDatabase(Database, ConfigurableBase):
+class AsyncPostgresDatabase(AsyncDatabase, ConfigurableBase):
     """Asynchronous PostgreSQL database backend with proper connection management."""
 
     def __init__(self, config: dict[str, Any] | None = None):
@@ -471,7 +471,7 @@ class PostgresDatabase(Database, ConfigurableBase):
         self._connected = False
     
     @classmethod
-    def from_config(cls, config: dict) -> "PostgresDatabase":
+    def from_config(cls, config: dict) -> "AsyncPostgresDatabase":
         """Create from config dictionary."""
         return cls(config)
 

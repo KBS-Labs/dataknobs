@@ -3,7 +3,7 @@
 import asyncio
 import pytest
 
-from dataknobs_data.backends.memory import MemoryDatabase, SyncMemoryDatabase
+from dataknobs_data.backends.memory import AsyncMemoryDatabase, SyncMemoryDatabase
 from dataknobs_data.records import Record
 from dataknobs_data.query import Query
 
@@ -23,7 +23,7 @@ class TestAsyncV2Streaming:
     async def test_basic_streaming_with_migration(self):
         """Test basic streaming with migration operations."""
         # Setup database with test data
-        db = MemoryDatabase()
+        db = AsyncMemoryDatabase()
         await db.connect()
         
         # Create test records
@@ -54,7 +54,7 @@ class TestAsyncV2Streaming:
     @pytest.mark.asyncio
     async def test_streaming_with_validation(self):
         """Test streaming with validation."""
-        db = MemoryDatabase()
+        db = AsyncMemoryDatabase()
         await db.connect()
         
         # Create mixed valid/invalid records
@@ -97,7 +97,7 @@ class TestAsyncV2Streaming:
     @pytest.mark.asyncio
     async def test_streaming_with_transformer(self):
         """Test streaming with transformer."""
-        db = MemoryDatabase()
+        db = AsyncMemoryDatabase()
         await db.connect()
         
         # Create test records
@@ -202,7 +202,7 @@ class TestStreamingIntegration:
     @pytest.mark.asyncio
     async def test_migration_chain(self):
         """Test chaining multiple migrations in streaming."""
-        db = MemoryDatabase()
+        db = AsyncMemoryDatabase()
         await db.connect()
         
         # Create test data

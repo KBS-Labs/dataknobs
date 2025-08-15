@@ -13,7 +13,7 @@ from datetime import datetime
 from dataknobs_config import ConfigurableBase
 from dataknobs_data.records import Record
 from dataknobs_data.query import Query
-from dataknobs_data.database import Database, SyncDatabase
+from dataknobs_data.database import AsyncDatabase, SyncDatabase
 from dataknobs_data.streaming import StreamConfig, StreamResult
 
 logger = logging.getLogger(__name__)
@@ -545,7 +545,7 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
         )
 
 
-class S3Database(Database, ConfigurableBase):
+class AsyncS3Database(AsyncDatabase, ConfigurableBase):
     """Async S3-based database backend with proper connection management."""
     
     def __init__(self, config: dict[str, Any] | None = None):
@@ -556,7 +556,7 @@ class S3Database(Database, ConfigurableBase):
         self._connected = False
     
     @classmethod
-    def from_config(cls, config: dict) -> "S3Database":
+    def from_config(cls, config: dict) -> "AsyncS3Database":
         """Create from config dictionary."""
         return cls(config)
     

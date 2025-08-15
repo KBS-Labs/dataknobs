@@ -6,7 +6,7 @@ from typing import AsyncIterator, Iterator
 
 import pytest
 
-from dataknobs_data.backends.memory import MemoryDatabase, SyncMemoryDatabase
+from dataknobs_data.backends.memory import AsyncMemoryDatabase, SyncMemoryDatabase
 from dataknobs_data.query import Query
 from dataknobs_data.records import Record
 from dataknobs_data.streaming import StreamConfig, StreamProcessor, StreamResult
@@ -412,7 +412,7 @@ class TestAsyncMemoryDatabaseStreaming:
     
     async def setup_records(self):
         """Set up test database with records."""
-        self.db = MemoryDatabase()
+        self.db = AsyncMemoryDatabase()
         
         self.records = []
         for i in range(100):
@@ -450,7 +450,7 @@ class TestAsyncMemoryDatabaseStreaming:
     
     async def test_stream_write(self):
         """Test async streaming records into database."""
-        new_db = MemoryDatabase()
+        new_db = AsyncMemoryDatabase()
         
         async def record_generator():
             for i in range(50):
@@ -491,7 +491,7 @@ class TestAsyncMemoryDatabaseStreaming:
     
     async def test_error_handling_with_callback(self):
         """Test error handling with custom callback."""
-        db = MemoryDatabase()
+        db = AsyncMemoryDatabase()
         errors_seen = []
         
         def error_handler(error, record):
@@ -620,8 +620,8 @@ class TestStreamingIntegration:
     @pytest.mark.asyncio
     async def test_async_memory_to_memory_migration(self):
         """Test async streaming migration."""
-        source = MemoryDatabase()
-        target = MemoryDatabase()
+        source = AsyncMemoryDatabase()
+        target = AsyncMemoryDatabase()
         
         # Populate source
         for i in range(100):

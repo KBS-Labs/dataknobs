@@ -1,7 +1,7 @@
 """Test proper connection management in database backends."""
 
 import pytest
-from dataknobs_data.backends.memory import MemoryDatabase, SyncMemoryDatabase
+from dataknobs_data.backends.memory import AsyncMemoryDatabase, SyncMemoryDatabase
 from dataknobs_data.records import Record
 
 
@@ -30,7 +30,7 @@ class TestConnectionManagement:
     @pytest.mark.asyncio
     async def test_async_memory_connect_close(self):
         """Test async memory database connect/close."""
-        db = MemoryDatabase()
+        db = AsyncMemoryDatabase()
         
         # Should be able to connect
         await db.connect()
@@ -59,7 +59,7 @@ class TestConnectionManagement:
     @pytest.mark.asyncio
     async def test_async_context_manager(self):
         """Test async database as context manager calls connect/close."""
-        async with MemoryDatabase() as db:
+        async with AsyncMemoryDatabase() as db:
             # Should automatically connect
             record = Record({"test": "data"})
             id = await db.create(record)

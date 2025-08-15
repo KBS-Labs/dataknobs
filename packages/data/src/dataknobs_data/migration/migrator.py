@@ -6,7 +6,7 @@ import asyncio
 import concurrent.futures
 from typing import Callable, Iterator, Optional, Union, List
 
-from dataknobs_data.database import Database as AsyncDatabase, SyncDatabase as Database
+from dataknobs_data.database import AsyncDatabase, SyncDatabase
 from dataknobs_data.query import Query
 from dataknobs_data.records import Record
 from dataknobs_data.streaming import StreamConfig, StreamResult
@@ -26,8 +26,8 @@ class Migrator:
     
     def migrate(
         self,
-        source: Database,
-        target: Database,
+        source: SyncDatabase,
+        target: SyncDatabase,
         transform: Optional[Union[Transformer, Migration]] = None,
         query: Optional[Query] = None,
         batch_size: int = 1000,
@@ -101,8 +101,8 @@ class Migrator:
     
     def migrate_stream(
         self,
-        source: Database,
-        target: Database,
+        source: SyncDatabase,
+        target: SyncDatabase,
         transform: Optional[Union[Transformer, Migration]] = None,
         query: Optional[Query] = None,
         config: Optional[StreamConfig] = None,
@@ -180,8 +180,8 @@ class Migrator:
     
     def migrate_parallel(
         self,
-        source: Database,
-        target: Database,
+        source: SyncDatabase,
+        target: SyncDatabase,
         transform: Optional[Union[Transformer, Migration]] = None,
         partitions: int = 4,
         partition_field: str = "partition_id",
@@ -304,7 +304,7 @@ class Migrator:
     
     def _write_batch(
         self,
-        target: Database,
+        target: SyncDatabase,
         batch: List[Record],
         progress: MigrationProgress,
         on_error: Optional[Callable[[Exception, Record], bool]] = None
@@ -335,8 +335,8 @@ class Migrator:
     
     def validate_migration(
         self,
-        source: Database,
-        target: Database,
+        source: SyncDatabase,
+        target: SyncDatabase,
         query: Optional[Query] = None,
         sample_size: Optional[int] = None
     ) -> tuple[bool, List[str]]:

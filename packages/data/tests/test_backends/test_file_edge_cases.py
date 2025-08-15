@@ -19,10 +19,10 @@ from dataknobs_data.backends.file import (
     JSONFormat,
     CSVFormat,
     ParquetFormat,
-    FileDatabase,
+    AsyncFileDatabase,
     SyncFileDatabase
 )
-from dataknobs_data import Database, SyncDatabase
+from dataknobs_data import AsyncDatabase, SyncDatabase
 from dataknobs_data.query import Query
 from dataknobs_data.records import Record
 
@@ -269,7 +269,7 @@ class TestFileDatabaseEdgeCases:
         
         try:
             # FileDatabase now defaults to JSON for unknown formats
-            db = FileDatabase({"path": filepath})
+            db = AsyncFileDatabase({"path": filepath})
             assert db.format == "json"  # Should default to JSON
             await db.close()
         finally:
@@ -282,7 +282,7 @@ class TestFileDatabaseEdgeCases:
             filepath = f.name
         
         try:
-            db = FileDatabase({"path": filepath})
+            db = AsyncFileDatabase({"path": filepath})
             
             # Create records
             record = Record({"name": "test", "compressed": True})
@@ -308,7 +308,7 @@ class TestFileDatabaseEdgeCases:
             filepath = f.name
         
         try:
-            db = FileDatabase({"path": filepath})
+            db = AsyncFileDatabase({"path": filepath})
             
             record = Record({"name": "bz2_test"})
             record_id = await db.create(record)
@@ -328,7 +328,7 @@ class TestFileDatabaseEdgeCases:
             filepath = f.name
         
         try:
-            db = FileDatabase({"path": filepath})
+            db = AsyncFileDatabase({"path": filepath})
             
             record = Record({"name": "xz_test"})
             record_id = await db.create(record)
@@ -354,7 +354,7 @@ class TestFileDatabaseEdgeCases:
                 "compression": "gzip"
             }
             
-            db = FileDatabase.from_config(config)
+            db = AsyncFileDatabase.from_config(config)
             # FileDatabase appends .gz when compression is set
             assert db.filepath == filepath + ".gz"
             assert db.compression == "gzip"
@@ -377,7 +377,7 @@ class TestFileDatabaseEdgeCases:
             filepath = f.name
         
         try:
-            db = FileDatabase({"path": filepath})
+            db = AsyncFileDatabase({"path": filepath})
             
             # Create record without ID
             record = Record({"name": "no_id"})
@@ -402,7 +402,7 @@ class TestFileDatabaseEdgeCases:
             filepath = f.name
         
         try:
-            db = FileDatabase({"path": filepath})
+            db = AsyncFileDatabase({"path": filepath})
             
             # Create multiple records concurrently
             async def create_record(i):

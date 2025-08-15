@@ -15,7 +15,7 @@ from typing import Any, AsyncIterator, Iterator, Optional
 
 from dataknobs_config import ConfigurableBase
 
-from ..database import Database, SyncDatabase
+from ..database import AsyncDatabase, SyncDatabase
 from ..query import Query
 from ..records import Record
 from ..streaming import AsyncStreamingMixin, StreamConfig, StreamResult, StreamingMixin
@@ -318,7 +318,7 @@ class ParquetFormat(FileFormat):
             raise ImportError("Parquet support requires pandas and pyarrow packages")
 
 
-class FileDatabase(Database, ConfigurableBase):
+class AsyncFileDatabase(AsyncDatabase, ConfigurableBase):
     """Async file-based database implementation."""
 
     FORMAT_HANDLERS = {
@@ -360,7 +360,7 @@ class FileDatabase(Database, ConfigurableBase):
         self.handler = self.FORMAT_HANDLERS.get(ext, JSONFormat)
     
     @classmethod
-    def from_config(cls, config: dict) -> "FileDatabase":
+    def from_config(cls, config: dict) -> "AsyncFileDatabase":
         """Create from config dictionary."""
         return cls(config)
 

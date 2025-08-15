@@ -2609,7 +2609,7 @@
       "applicability": "safe",
       "edits": [
         {
-          "content": "# Import validation and migration modules\nfrom . import migration, validation\nfrom .database import Database, SyncDatabase\nfrom .exceptions import (\n    BackendNotFoundError,\n    ConcurrencyError,\n    ConfigurationError,\n    DatabaseConnectionError,\n    DatabaseOperationError,\n    DataknobsDataError,\n    FieldTypeError,\n    MigrationError,\n    QueryError,\n    RecordNotFoundError,\n    RecordValidationError,\n    SerializationError,\n    TransactionError,\n)\nfrom .factory import DatabaseFactory, async_database_factory, database_factory\n\n# Import core modules\nfrom .fields import Field, FieldType\nfrom .query import Filter, Operator, Query, SortOrder, SortSpec\nfrom .records import Record\nfrom .streaming import StreamConfig, StreamResult\n\n",
+          "content": "# Import validation and migration modules\nfrom . import migration, validation\nfrom .database import AsyncDatabase, SyncDatabase\nfrom .exceptions import (\n    BackendNotFoundError,\n    ConcurrencyError,\n    ConfigurationError,\n    DatabaseConnectionError,\n    DatabaseOperationError,\n    DataknobsDataError,\n    FieldTypeError,\n    MigrationError,\n    QueryError,\n    RecordNotFoundError,\n    RecordValidationError,\n    SerializationError,\n    TransactionError,\n)\nfrom .factory import DatabaseFactory, async_database_factory, database_factory\n\n# Import core modules\nfrom .fields import Field, FieldType\nfrom .query import Filter, Operator, Query, SortOrder, SortSpec\nfrom .records import Record\nfrom .streaming import StreamConfig, StreamResult\n\n",
           "end_location": {
             "column": 1,
             "row": 31
@@ -2642,7 +2642,7 @@
       "applicability": "unsafe",
       "edits": [
         {
-          "content": "[\n    \"BackendNotFoundError\",\n    \"ConcurrencyError\",\n    \"ConfigurationError\",\n    # Core classes\n    \"Database\",\n    \"DatabaseConnectionError\",\n    # Factory\n    \"DatabaseFactory\",\n    \"DatabaseOperationError\",\n    # Exceptions\n    \"DataknobsDataError\",\n    \"Field\",\n    \"FieldType\",\n    \"FieldTypeError\",\n    \"Filter\",\n    \"MigrationError\",\n    \"Operator\",\n    \"Query\",\n    \"QueryError\",\n    \"Record\",\n    \"RecordNotFoundError\",\n    \"RecordValidationError\",\n    \"SerializationError\",\n    \"SortOrder\",\n    \"SortSpec\",\n    # Streaming\n    \"StreamConfig\",\n    \"StreamResult\",\n    \"SyncDatabase\",\n    \"TransactionError\",\n    \"async_database_factory\",\n    \"database_factory\",\n    \"migration\",\n    # Validation and Migration modules\n    \"validation\",\n]",
+          "content": "[\n    # Core classes\n    \"AsyncDatabase\",\n    \"BackendNotFoundError\",\n    \"ConcurrencyError\",\n    \"ConfigurationError\",\n    \"DatabaseConnectionError\",\n    # Factory\n    \"DatabaseFactory\",\n    \"DatabaseOperationError\",\n    # Exceptions\n    \"DataknobsDataError\",\n    \"Field\",\n    \"FieldType\",\n    \"FieldTypeError\",\n    \"Filter\",\n    \"MigrationError\",\n    \"Operator\",\n    \"Query\",\n    \"QueryError\",\n    \"Record\",\n    \"RecordNotFoundError\",\n    \"RecordValidationError\",\n    \"SerializationError\",\n    \"SortOrder\",\n    \"SortSpec\",\n    # Streaming\n    \"StreamConfig\",\n    \"StreamResult\",\n    \"SyncDatabase\",\n    \"TransactionError\",\n    \"async_database_factory\",\n    \"database_factory\",\n    \"migration\",\n    # Validation and Migration modules\n    \"validation\",\n]",
           "end_location": {
             "column": 2,
             "row": 69
@@ -2701,7 +2701,7 @@
     "cell": null,
     "code": "RUF013",
     "end_location": {
-      "column": 43,
+      "column": 48,
       "row": 12
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/backends/__init__.py",
@@ -2709,9 +2709,9 @@
       "applicability": "unsafe",
       "edits": [
         {
-          "content": "type[Database] | None",
+          "content": "type[AsyncDatabase] | None",
           "end_location": {
-            "column": 43,
+            "column": 48,
             "row": 12
           },
           "location": {
@@ -2734,7 +2734,7 @@
     "cell": null,
     "code": "RUF013",
     "end_location": {
-      "column": 82,
+      "column": 87,
       "row": 12
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/backends/__init__.py",
@@ -2744,11 +2744,11 @@
         {
           "content": "type[SyncDatabase] | None",
           "end_location": {
-            "column": 82,
+            "column": 87,
             "row": 12
           },
           "location": {
-            "column": 64,
+            "column": 69,
             "row": 12
           }
         }
@@ -2756,7 +2756,7 @@
       "message": "Convert to `T | None`"
     },
     "location": {
-      "column": 64,
+      "column": 69,
       "row": 12
     },
     "message": "PEP 484 prohibits implicit `Optional`",
@@ -2775,7 +2775,7 @@
       "applicability": "safe",
       "edits": [
         {
-          "content": "import asyncio\nimport time\nimport uuid\nfrom typing import Any, AsyncIterator, Iterator, Optional\n\nfrom dataknobs_config import ConfigurableBase\n\nfrom dataknobs_utils.elasticsearch_utils import SimplifiedElasticsearchIndex\n\nfrom ..database import Database, SyncDatabase\nfrom ..exceptions import DatabaseError\nfrom ..query import Operator, Query, SortOrder\nfrom ..records import Record\nfrom ..streaming import StreamConfig, StreamResult\n\n\n",
+          "content": "import asyncio\nimport time\nimport uuid\nfrom typing import Any, AsyncIterator, Iterator, Optional\n\nfrom dataknobs_config import ConfigurableBase\n\nfrom dataknobs_utils.elasticsearch_utils import SimplifiedElasticsearchIndex\n\nfrom ..database import AsyncDatabase, SyncDatabase\nfrom ..exceptions import DatabaseError\nfrom ..query import Operator, Query, SortOrder\nfrom ..records import Record\nfrom ..streaming import StreamConfig, StreamResult\n\n\n",
           "end_location": {
             "column": 1,
             "row": 18
@@ -5241,7 +5241,7 @@
       "applicability": "safe",
       "edits": [
         {
-          "content": "import asyncio\nimport csv\nimport gzip\nimport json\nimport os\nimport platform\nimport tempfile\nimport threading\nimport time\nimport uuid\nfrom pathlib import Path\nfrom typing import Any, AsyncIterator, Iterator, Optional\n\nfrom dataknobs_config import ConfigurableBase\n\nfrom ..database import Database, SyncDatabase\nfrom ..query import Query\nfrom ..records import Record\nfrom ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult\n\n\n",
+          "content": "import asyncio\nimport csv\nimport gzip\nimport json\nimport os\nimport platform\nimport tempfile\nimport threading\nimport time\nimport uuid\nfrom pathlib import Path\nfrom typing import Any, AsyncIterator, Iterator, Optional\n\nfrom dataknobs_config import ConfigurableBase\n\nfrom ..database import AsyncDatabase, SyncDatabase\nfrom ..query import Query\nfrom ..records import Record\nfrom ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult\n\n\n",
           "end_location": {
             "column": 1,
             "row": 24
@@ -6766,7 +6766,7 @@
       "applicability": "safe",
       "edits": [
         {
-          "content": "import asyncio\nimport threading\nimport time\nimport uuid\nfrom collections import OrderedDict\nfrom typing import Any, AsyncIterator, Iterator, Optional\n\nfrom dataknobs_config import ConfigurableBase\n\nfrom ..database import Database, SyncDatabase\nfrom ..query import Query\nfrom ..records import Record\nfrom ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult\n\n\n",
+          "content": "import asyncio\nimport threading\nimport time\nimport uuid\nfrom collections import OrderedDict\nfrom typing import Any, AsyncIterator, Iterator, Optional\n\nfrom dataknobs_config import ConfigurableBase\n\nfrom ..database import AsyncDatabase, SyncDatabase\nfrom ..query import Query\nfrom ..records import Record\nfrom ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult\n\n\n",
           "end_location": {
             "column": 1,
             "row": 18
@@ -7724,7 +7724,7 @@
       "applicability": "safe",
       "edits": [
         {
-          "content": "import asyncio\nimport json\nimport time\nimport uuid\nfrom typing import Any, AsyncIterator, Iterator, Optional\n\nfrom dataknobs_config import ConfigurableBase\n\nfrom dataknobs_utils.sql_utils import DotenvPostgresConnector, PostgresDB\n\nfrom ..database import Database, SyncDatabase\nfrom ..query import Operator, Query, SortOrder\nfrom ..records import Record\nfrom ..streaming import StreamConfig, StreamResult\n\n\n",
+          "content": "import asyncio\nimport json\nimport time\nimport uuid\nfrom typing import Any, AsyncIterator, Iterator, Optional\n\nfrom dataknobs_config import ConfigurableBase\n\nfrom dataknobs_utils.sql_utils import DotenvPostgresConnector, PostgresDB\n\nfrom ..database import AsyncDatabase, SyncDatabase\nfrom ..query import Operator, Query, SortOrder\nfrom ..records import Record\nfrom ..streaming import StreamConfig, StreamResult\n\n\n",
           "end_location": {
             "column": 1,
             "row": 18
@@ -9523,7 +9523,7 @@
       "applicability": "safe",
       "edits": [
         {
-          "content": "import asyncio\nimport hashlib\nimport json\nimport logging\nimport time\nfrom concurrent.futures import ThreadPoolExecutor, as_completed\nfrom datetime import datetime\nfrom typing import Any, AsyncIterator, Dict, Iterator, List, Optional\nfrom uuid import uuid4\n\nfrom dataknobs_config import ConfigurableBase\n\nfrom dataknobs_data.database import Database, SyncDatabase\nfrom dataknobs_data.query import Query\nfrom dataknobs_data.records import Record\nfrom dataknobs_data.streaming import StreamConfig, StreamResult\n\n",
+          "content": "import asyncio\nimport hashlib\nimport json\nimport logging\nimport time\nfrom concurrent.futures import ThreadPoolExecutor, as_completed\nfrom datetime import datetime\nfrom typing import Any, AsyncIterator, Dict, Iterator, List, Optional\nfrom uuid import uuid4\n\nfrom dataknobs_config import ConfigurableBase\n\nfrom dataknobs_data.database import AsyncDatabase, SyncDatabase\nfrom dataknobs_data.query import Query\nfrom dataknobs_data.records import Record\nfrom dataknobs_data.streaming import StreamConfig, StreamResult\n\n",
           "end_location": {
             "column": 1,
             "row": 19
@@ -14444,7 +14444,7 @@
       "column": 5,
       "row": 21
     },
-    "message": "`Database._initialize` is an empty method in an abstract base class, but has no abstract decorator",
+    "message": "`AsyncDatabase._initialize` is an empty method in an abstract base class, but has no abstract decorator",
     "noqa_row": 21,
     "url": "https://docs.astral.sh/ruff/rules/empty-method-without-abstract-decorator"
   },
@@ -14692,7 +14692,7 @@
       "column": 5,
       "row": 187
     },
-    "message": "`Database.connect` is an empty method in an abstract base class, but has no abstract decorator",
+    "message": "`AsyncDatabase.connect` is an empty method in an abstract base class, but has no abstract decorator",
     "noqa_row": 187,
     "url": "https://docs.astral.sh/ruff/rules/empty-method-without-abstract-decorator"
   },
@@ -14709,7 +14709,7 @@
       "column": 5,
       "row": 191
     },
-    "message": "`Database.close` is an empty method in an abstract base class, but has no abstract decorator",
+    "message": "`AsyncDatabase.close` is an empty method in an abstract base class, but has no abstract decorator",
     "noqa_row": 191,
     "url": "https://docs.astral.sh/ruff/rules/empty-method-without-abstract-decorator"
   },
@@ -22230,7 +22230,7 @@
       "applicability": "safe",
       "edits": [
         {
-          "content": "import asyncio\nimport concurrent.futures\nfrom typing import Callable, Iterator, List, Optional, Union\n\nfrom dataknobs_data.database import Database as AsyncDatabase\nfrom dataknobs_data.database import SyncDatabase as Database\nfrom dataknobs_data.query import Query\nfrom dataknobs_data.records import Record\nfrom dataknobs_data.streaming import StreamConfig, StreamResult\n\nfrom .migration import Migration\nfrom .progress import MigrationProgress\nfrom .transformer import Transformer\n\n\n",
+          "content": "import asyncio\nimport concurrent.futures\nfrom typing import Callable, Iterator, List, Optional, Union\n\nfrom dataknobs_data.database import AsyncDatabase, SyncDatabase\nfrom dataknobs_data.query import Query\nfrom dataknobs_data.records import Record\nfrom dataknobs_data.streaming import StreamConfig, StreamResult\n\nfrom .migration import Migration\nfrom .progress import MigrationProgress\nfrom .transformer import Transformer\n\n\n",
           "end_location": {
             "column": 1,
             "row": 19
@@ -32764,7 +32764,7 @@
       "applicability": "safe",
       "edits": [
         {
-          "content": "import logging\nfrom dataclasses import dataclass\nfrom typing import Any, Callable, Dict, Generator, List, Optional, Union\n\nimport numpy as np\nimport pandas as pd\n\nfrom dataknobs_data.database import Database, SyncDatabase\nfrom dataknobs_data.query import Query\nfrom dataknobs_data.records import Record\n\nfrom .converter import ConversionOptions, DataFrameConverter\n\n",
+          "content": "import logging\nfrom dataclasses import dataclass\nfrom typing import Any, Callable, Dict, Generator, List, Optional, Union\n\nimport numpy as np\nimport pandas as pd\n\nfrom dataknobs_data.database import AsyncDatabase, SyncDatabase\nfrom dataknobs_data.query import Query\nfrom dataknobs_data.records import Record\n\nfrom .converter import ConversionOptions, DataFrameConverter\n\n",
           "end_location": {
             "column": 1,
             "row": 15
@@ -33582,7 +33582,7 @@
     "cell": null,
     "code": "UP007",
     "end_location": {
-      "column": 48,
+      "column": 53,
       "row": 109
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/pandas/batch_ops.py",
@@ -33590,9 +33590,9 @@
       "applicability": "safe",
       "edits": [
         {
-          "content": "Database | SyncDatabase",
+          "content": "AsyncDatabase | SyncDatabase",
           "end_location": {
-            "column": 48,
+            "column": 53,
             "row": 109
           },
           "location": {

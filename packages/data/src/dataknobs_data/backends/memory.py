@@ -9,13 +9,13 @@ from typing import Any, AsyncIterator, Iterator, Optional
 
 from dataknobs_config import ConfigurableBase
 
-from ..database import Database, SyncDatabase
+from ..database import AsyncDatabase, SyncDatabase
 from ..query import Query
 from ..records import Record
 from ..streaming import AsyncStreamingMixin, StreamConfig, StreamResult, StreamingMixin
 
 
-class MemoryDatabase(Database, ConfigurableBase):
+class AsyncMemoryDatabase(AsyncDatabase, ConfigurableBase):
     """Async in-memory database implementation."""
 
     def __init__(self, config: dict[str, Any] | None = None):
@@ -24,7 +24,7 @@ class MemoryDatabase(Database, ConfigurableBase):
         self._lock = asyncio.Lock()
     
     @classmethod
-    def from_config(cls, config: dict) -> "MemoryDatabase":
+    def from_config(cls, config: dict) -> "AsyncMemoryDatabase":
         """Create from config dictionary."""
         return cls(config)
 

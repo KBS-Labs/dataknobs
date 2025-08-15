@@ -7,7 +7,7 @@ import tempfile
 import pytest
 import pytest_asyncio
 
-from dataknobs_data import Database, SyncDatabase
+from dataknobs_data import AsyncDatabase, SyncDatabase
 from dataknobs_data.query import Operator, Query, SortOrder
 from dataknobs_data.records import Record
 
@@ -32,7 +32,7 @@ class TestFileDatabase:
     @pytest_asyncio.fixture
     async def db_json(self, temp_file):
         """Create a JSON file database."""
-        db = await Database.create("file", {"path": temp_file})
+        db = await AsyncDatabase.create("file", {"path": temp_file})
         yield db
         await db.close()
 
@@ -41,7 +41,7 @@ class TestFileDatabase:
         """Create a CSV file database."""
         fd, path = tempfile.mkstemp(suffix=".csv")
         os.close(fd)
-        db = await Database.create("file", {"path": path})
+        db = await AsyncDatabase.create("file", {"path": path})
         yield db
         await db.close()
         # Cleanup
@@ -56,7 +56,7 @@ class TestFileDatabase:
         """Create a gzipped JSON file database."""
         fd, path = tempfile.mkstemp(suffix=".json.gz")
         os.close(fd)
-        db = await Database.create("file", {"path": path})
+        db = await AsyncDatabase.create("file", {"path": path})
         yield db
         await db.close()
         # Cleanup
@@ -240,12 +240,12 @@ class TestFileDatabase:
     async def test_persistence(self, temp_file):
         """Test data persistence across database instances."""
         # Create and save data
-        db1 = await Database.create("file", {"path": temp_file})
+        db1 = await AsyncDatabase.create("file", {"path": temp_file})
         record_id = await db1.create(Record({"name": "Persistent", "value": 42}))
         await db1.close()
 
         # Load data in new instance
-        db2 = await Database.create("file", {"path": temp_file})
+        db2 = await AsyncDatabase.create("file", {"path": temp_file})
         retrieved = await db2.read(record_id)
         assert retrieved is not None
         assert retrieved.get_value("name") == "Persistent"

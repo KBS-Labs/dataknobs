@@ -6,7 +6,7 @@ import uuid
 
 import pytest
 
-from dataknobs_data import Database, Query, Record, SyncDatabase
+from dataknobs_data import AsyncDatabase, Query, Record, SyncDatabase
 from dataknobs_data.query import Filter, Operator, SortOrder
 
 pytestmark = pytest.mark.integration
@@ -374,7 +374,7 @@ class TestPostgresAsyncIntegration:
 
     async def test_async_crud_operations(self, postgres_test_db):
         """Test async CRUD operations."""
-        db = await Database.create("postgres", postgres_test_db)
+        db = await AsyncDatabase.create("postgres", postgres_test_db)
         
         # Create
         record = Record({
@@ -412,7 +412,7 @@ class TestPostgresAsyncIntegration:
 
     async def test_async_batch_operations(self, postgres_test_db, sample_records):
         """Test async batch operations."""
-        db = await Database.create("postgres", postgres_test_db)
+        db = await AsyncDatabase.create("postgres", postgres_test_db)
         
         # Create batch
         ids = await db.create_batch(sample_records)
@@ -430,7 +430,7 @@ class TestPostgresAsyncIntegration:
 
     async def test_async_concurrent_operations(self, postgres_test_db):
         """Test concurrent async operations."""
-        db = await Database.create("postgres", postgres_test_db)
+        db = await AsyncDatabase.create("postgres", postgres_test_db)
         
         # Create multiple records concurrently
         tasks = []
@@ -456,7 +456,7 @@ class TestPostgresAsyncIntegration:
 
     async def test_async_search_operations(self, postgres_test_db, sample_records):
         """Test async search operations."""
-        db = await Database.create("postgres", postgres_test_db)
+        db = await AsyncDatabase.create("postgres", postgres_test_db)
         
         # Insert data
         ids = await db.create_batch(sample_records)

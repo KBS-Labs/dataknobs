@@ -6,8 +6,8 @@ from .records import Record
 from .streaming import StreamConfig, StreamResult
 
 
-class Database(ABC):
-    """Abstract base class for database implementations."""
+class AsyncDatabase(ABC):
+    """Abstract base class for async database implementations."""
 
     def __init__(self, config: Dict[str, Any] | None = None):
         """Initialize the database with optional configuration.
@@ -266,7 +266,7 @@ class Database(ABC):
                 yield record
 
     @classmethod
-    async def create(cls, backend: str, config: Dict[str, Any] | None = None) -> "Database":
+    async def create(cls, backend: str, config: Dict[str, Any] | None = None) -> "AsyncDatabase":
         """Factory method to create and connect a database instance.
 
         Args:
@@ -274,7 +274,7 @@ class Database(ABC):
             config: Backend-specific configuration
 
         Returns:
-            Connected Database instance
+            Connected AsyncDatabase instance
         """
         from .backends import BACKEND_REGISTRY
 

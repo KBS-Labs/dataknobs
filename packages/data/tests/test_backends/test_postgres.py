@@ -5,7 +5,7 @@ import uuid
 
 import pytest
 
-from dataknobs_data import Database, Query, Record, SyncDatabase
+from dataknobs_data import AsyncDatabase, Query, Record, SyncDatabase
 from dataknobs_data.query import Filter, Operator, SortOrder, SortSpec
 
 # Skip all tests if PostgreSQL is not available
@@ -45,7 +45,7 @@ def sync_db(postgres_config):
 @pytest.fixture
 async def async_db(postgres_config):
     """Create an asynchronous PostgreSQL database for testing."""
-    db = await Database.create("postgres", postgres_config)
+    db = await AsyncDatabase.create("postgres", postgres_config)
     yield db
     # Cleanup
     try:
@@ -340,7 +340,7 @@ class TestAsyncPostgresDatabase:
 
     async def test_async_context_manager(self, postgres_config):
         """Test async context manager."""
-        async with await Database.create("postgres", postgres_config) as db:
+        async with await AsyncDatabase.create("postgres", postgres_config) as db:
             record = Record({"context": "manager"})
             id = await db.create(record)
             assert await db.exists(id)

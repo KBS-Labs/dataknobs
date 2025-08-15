@@ -124,9 +124,9 @@ class TestConfigIntegration:
     
     @pytest.mark.parametrize("backend_class,config_params", [
         ("dataknobs_data.backends.memory.SyncMemoryDatabase", {}),
-        ("dataknobs_data.backends.memory.MemoryDatabase", {}),
+        ("dataknobs_data.backends.memory.AsyncMemoryDatabase", {}),
         ("dataknobs_data.backends.file.SyncFileDatabase", {"path": "/tmp/test.json"}),
-        ("dataknobs_data.backends.file.FileDatabase", {"path": "/tmp/test.json"}),
+        ("dataknobs_data.backends.file.AsyncFileDatabase", {"path": "/tmp/test.json"}),
     ])
     def test_all_backends_configurable(self, backend_class, config_params):
         """Test that all backend classes can be instantiated via config."""

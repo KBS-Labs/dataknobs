@@ -193,24 +193,24 @@ class AsyncDatabaseFactory(FactoryBase):
         backend_type = config.pop("backend", "memory").lower()
         
         if backend_type in ("memory", "mem"):
-            from dataknobs_data.backends.memory import MemoryDatabase
-            return MemoryDatabase.from_config(config)
+            from dataknobs_data.backends.memory import AsyncMemoryDatabase
+            return AsyncMemoryDatabase.from_config(config)
             
         elif backend_type == "file":
-            from dataknobs_data.backends.file import FileDatabase
-            return FileDatabase.from_config(config)
+            from dataknobs_data.backends.file import AsyncFileDatabase
+            return AsyncFileDatabase.from_config(config)
             
         elif backend_type in ("postgres", "postgresql", "pg"):
-            from dataknobs_data.backends.postgres import PostgresDatabase
-            return PostgresDatabase.from_config(config)
+            from dataknobs_data.backends.postgres import AsyncPostgresDatabase
+            return AsyncPostgresDatabase.from_config(config)
             
         elif backend_type in ("elasticsearch", "es"):
-            from dataknobs_data.backends.elasticsearch import ElasticsearchDatabase
-            return ElasticsearchDatabase.from_config(config)
+            from dataknobs_data.backends.elasticsearch import AsyncElasticsearchDatabase
+            return AsyncElasticsearchDatabase.from_config(config)
             
         elif backend_type == "s3":
-            from dataknobs_data.backends.s3 import S3Database
-            return S3Database.from_config(config)
+            from dataknobs_data.backends.s3 import AsyncS3Database
+            return AsyncS3Database.from_config(config)
 
         else:
             raise ValueError(

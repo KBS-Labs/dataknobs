@@ -7,7 +7,7 @@ import uuid
 
 import pytest
 
-from dataknobs_data import Database, Query, Record, SyncDatabase
+from dataknobs_data import AsyncDatabase, Query, Record, SyncDatabase
 from dataknobs_data.query import Filter, Operator, SortOrder
 
 pytestmark = pytest.mark.integration
@@ -498,7 +498,7 @@ class TestElasticsearchAsyncIntegration:
 
     async def test_async_crud_operations(self, elasticsearch_test_index):
         """Test async CRUD operations."""
-        db = await Database.create("elasticsearch", elasticsearch_test_index)
+        db = await AsyncDatabase.create("elasticsearch", elasticsearch_test_index)
         
         # Create
         record = Record({
@@ -543,7 +543,7 @@ class TestElasticsearchAsyncIntegration:
 
     async def test_async_batch_operations(self, elasticsearch_test_index, sample_records):
         """Test async batch operations."""
-        db = await Database.create("elasticsearch", elasticsearch_test_index)
+        db = await AsyncDatabase.create("elasticsearch", elasticsearch_test_index)
         
         # Create batch
         ids = await db.create_batch(sample_records)
@@ -563,7 +563,7 @@ class TestElasticsearchAsyncIntegration:
 
     async def test_async_concurrent_operations(self, elasticsearch_test_index):
         """Test concurrent async operations."""
-        db = await Database.create("elasticsearch", elasticsearch_test_index)
+        db = await AsyncDatabase.create("elasticsearch", elasticsearch_test_index)
         
         # Create multiple records concurrently
         tasks = []
@@ -591,7 +591,7 @@ class TestElasticsearchAsyncIntegration:
 
     async def test_async_search_operations(self, elasticsearch_test_index, sample_records):
         """Test async search operations."""
-        db = await Database.create("elasticsearch", elasticsearch_test_index)
+        db = await AsyncDatabase.create("elasticsearch", elasticsearch_test_index)
         
         # Insert data
         ids = await db.create_batch(sample_records)

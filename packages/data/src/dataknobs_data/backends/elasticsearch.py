@@ -8,7 +8,7 @@ from typing import Any, AsyncIterator, Iterator, Optional
 from dataknobs_config import ConfigurableBase
 from dataknobs_utils.elasticsearch_utils import SimplifiedElasticsearchIndex
 
-from ..database import Database, SyncDatabase
+from ..database import AsyncDatabase, SyncDatabase
 from ..exceptions import DatabaseError
 from ..query import Operator, Query, SortOrder
 from ..records import Record
@@ -507,7 +507,7 @@ class SyncElasticsearchDatabase(SyncDatabase, ConfigurableBase):
         return result
 
 
-class ElasticsearchDatabase(Database, ConfigurableBase):
+class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
     """Asynchronous Elasticsearch database backend."""
 
     def __init__(self, config: dict[str, Any] | None = None):
@@ -518,7 +518,7 @@ class ElasticsearchDatabase(Database, ConfigurableBase):
         self._connected = False
     
     @classmethod
-    def from_config(cls, config: dict) -> "ElasticsearchDatabase":
+    def from_config(cls, config: dict) -> "AsyncElasticsearchDatabase":
         """Create from config dictionary."""
         return cls(config)
 

@@ -2,14 +2,14 @@
 
 from typing import Dict, Type
 
-from ..database import Database, SyncDatabase
+from ..database import AsyncDatabase, SyncDatabase
 
-BACKEND_REGISTRY: dict[str, type[Database]] = {}
+BACKEND_REGISTRY: dict[str, type[AsyncDatabase]] = {}
 SYNC_BACKEND_REGISTRY: dict[str, type[SyncDatabase]] = {}
 
 
 def register_backend(
-    name: str, async_class: type[Database] = None, sync_class: type[SyncDatabase] = None
+    name: str, async_class: type[AsyncDatabase] = None, sync_class: type[SyncDatabase] = None
 ):
     """Register a backend implementation.
 
@@ -26,39 +26,39 @@ def register_backend(
 
 # Import and register backends
 try:
-    from .memory import MemoryDatabase, SyncMemoryDatabase
+    from .memory import AsyncMemoryDatabase, SyncMemoryDatabase
 
-    register_backend("memory", MemoryDatabase, SyncMemoryDatabase)
+    register_backend("memory", AsyncMemoryDatabase, SyncMemoryDatabase)
 except ImportError:
     pass
 
 try:
-    from .file import FileDatabase, SyncFileDatabase
+    from .file import AsyncFileDatabase, SyncFileDatabase
 
-    register_backend("file", FileDatabase, SyncFileDatabase)
+    register_backend("file", AsyncFileDatabase, SyncFileDatabase)
 except ImportError:
     pass
 
 try:
-    from .s3 import S3Database, SyncS3Database
+    from .s3 import AsyncS3Database, SyncS3Database
 
-    register_backend("s3", S3Database, SyncS3Database)
+    register_backend("s3", AsyncS3Database, SyncS3Database)
 except ImportError:
     pass
 
 try:
-    from .postgres import PostgresDatabase, SyncPostgresDatabase
+    from .postgres import AsyncPostgresDatabase, SyncPostgresDatabase
 
-    register_backend("postgres", PostgresDatabase, SyncPostgresDatabase)
-    register_backend("postgresql", PostgresDatabase, SyncPostgresDatabase)
+    register_backend("postgres", AsyncPostgresDatabase, SyncPostgresDatabase)
+    register_backend("postgresql", AsyncPostgresDatabase, SyncPostgresDatabase)
 except ImportError:
     pass
 
 try:
-    from .elasticsearch import ElasticsearchDatabase, SyncElasticsearchDatabase
+    from .elasticsearch import AsyncElasticsearchDatabase, SyncElasticsearchDatabase
 
-    register_backend("elasticsearch", ElasticsearchDatabase, SyncElasticsearchDatabase)
-    register_backend("es", ElasticsearchDatabase, SyncElasticsearchDatabase)
+    register_backend("elasticsearch", AsyncElasticsearchDatabase, SyncElasticsearchDatabase)
+    register_backend("es", AsyncElasticsearchDatabase, SyncElasticsearchDatabase)
 except ImportError:
     pass
 

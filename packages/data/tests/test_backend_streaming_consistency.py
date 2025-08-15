@@ -78,12 +78,12 @@ class TestBackendConsistency:
     
     def test_backend_inheritance(self):
         """Verify backends inherit from correct base classes."""
-        from dataknobs_data.database import Database, SyncDatabase
+        from dataknobs_data.database import AsyncDatabase, SyncDatabase
         
-        # Check async backends inherit from Database
+        # Check async backends inherit from AsyncDatabase
         for backend_name, backend_class in BACKEND_REGISTRY.items():
-            assert issubclass(backend_class, Database), \
-                f"Async backend {backend_class.__name__} should inherit from Database"
+            assert issubclass(backend_class, AsyncDatabase), \
+                f"Async backend {backend_class.__name__} should inherit from AsyncDatabase"
         
         # Check sync backends inherit from SyncDatabase
         for backend_name, backend_class in SYNC_BACKEND_REGISTRY.items():
