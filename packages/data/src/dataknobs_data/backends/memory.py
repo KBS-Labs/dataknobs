@@ -2,15 +2,17 @@
 
 import asyncio
 import threading
+import time
 import uuid
 from collections import OrderedDict
-from typing import Any
+from typing import Any, AsyncIterator, Iterator, Optional
 
 from dataknobs_config import ConfigurableBase
 
 from ..database import Database, SyncDatabase
 from ..query import Query
 from ..records import Record
+from ..streaming import AsyncStreamingMixin, StreamConfig, StreamResult, StreamingMixin
 
 
 class MemoryDatabase(Database, ConfigurableBase):
@@ -155,6 +157,76 @@ class MemoryDatabase(Database, ConfigurableBase):
                     results.append(False)
             return results
 
+    async def stream_read(
+        self,
+        query: Optional[Query] = None,
+        config: Optional[StreamConfig] = None
+    ) -> AsyncIterator[Record]:
+        """Stream records from memory."""
+        config = config or StreamConfig()
+        
+        # Get all matching records
+        if query:
+            records = await self.search(query)
+        else:
+            async with self._lock:
+                records = list(self._storage.values())
+        
+        # Yield records in batches
+        for i in range(0, len(records), config.batch_size):
+            batch = records[i:i + config.batch_size]
+            for record in batch:
+                yield record.copy(deep=True)
+                # Small yield to prevent blocking
+                await asyncio.sleep(0)
+    
+    async def stream_write(
+        self,
+        records: AsyncIterator[Record],
+        config: Optional[StreamConfig] = None
+    ) -> StreamResult:
+        """Stream records into memory."""
+        config = config or StreamConfig()
+        result = StreamResult()
+        start_time = time.time()
+        
+        batch = []
+        async for record in records:
+            batch.append(record)
+            
+            if len(batch) >= config.batch_size:
+                # Write batch
+                try:
+                    ids = await self.create_batch(batch)
+                    result.successful += len(ids)
+                    result.total_processed += len(batch)
+                except Exception as e:
+                    result.failed += len(batch)
+                    result.total_processed += len(batch)
+                    if config.on_error:
+                        for rec in batch:
+                            if not config.on_error(e, rec):
+                                result.add_error(None, e)
+                                break
+                    else:
+                        result.add_error(None, e)
+                
+                batch = []
+        
+        # Write remaining batch
+        if batch:
+            try:
+                ids = await self.create_batch(batch)
+                result.successful += len(ids)
+                result.total_processed += len(batch)
+            except Exception as e:
+                result.failed += len(batch)
+                result.total_processed += len(batch)
+                result.add_error(None, e)
+        
+        result.duration = time.time() - start_time
+        return result
+
 
 class SyncMemoryDatabase(SyncDatabase, ConfigurableBase):
     """Synchronous in-memory database implementation."""
@@ -297,3 +369,71 @@ class SyncMemoryDatabase(SyncDatabase, ConfigurableBase):
                 else:
                     results.append(False)
             return results
+
+    def stream_read(
+        self,
+        query: Optional[Query] = None,
+        config: Optional[StreamConfig] = None
+    ) -> Iterator[Record]:
+        """Stream records from memory."""
+        config = config or StreamConfig()
+        
+        # Get all matching records
+        if query:
+            records = self.search(query)
+        else:
+            with self._lock:
+                records = list(self._storage.values())
+        
+        # Yield records in batches
+        for i in range(0, len(records), config.batch_size):
+            batch = records[i:i + config.batch_size]
+            for record in batch:
+                yield record.copy(deep=True)
+    
+    def stream_write(
+        self,
+        records: Iterator[Record],
+        config: Optional[StreamConfig] = None
+    ) -> StreamResult:
+        """Stream records into memory."""
+        config = config or StreamConfig()
+        result = StreamResult()
+        start_time = time.time()
+        
+        batch = []
+        for record in records:
+            batch.append(record)
+            
+            if len(batch) >= config.batch_size:
+                # Write batch
+                try:
+                    ids = self.create_batch(batch)
+                    result.successful += len(ids)
+                    result.total_processed += len(batch)
+                except Exception as e:
+                    result.failed += len(batch)
+                    result.total_processed += len(batch)
+                    if config.on_error:
+                        for rec in batch:
+                            if not config.on_error(e, rec):
+                                result.add_error(None, e)
+                                break
+                    else:
+                        result.add_error(None, e)
+                
+                batch = []
+        
+        # Write remaining batch
+        if batch:
+            try:
+                ids = self.create_batch(batch)
+                result.successful += len(ids)
+                result.total_processed += len(batch)
+            except Exception as e:
+                result.failed += len(batch)
+                result.total_processed += len(batch)
+                result.add_error(None, e)
+        
+        result.duration = time.time() - start_time
+        return result

@@ -127,48 +127,25 @@ check_service_health() {
     return 1
 }
 
-# Function to start services
-start_services() {
-    echo -e "${YELLOW}Starting Docker services...${NC}"
-    
-    # Ensure network exists
-    docker network create devnet 2>/dev/null || true
-    
-    # Start services
-    docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE up -d postgres elasticsearch localstack
-    
-    echo -e "\n${YELLOW}Checking service health...${NC}"
-    
-    # Check PostgreSQL
-    check_service_health "PostgreSQL" 30 \
-        "docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE exec -T postgres pg_isready -U postgres"
-    
-    # Check Elasticsearch (may take longer to start)
-    check_service_health "Elasticsearch" 90 \
-        "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"[green|yellow]\"'"
-    
-    # Check LocalStack (S3)
-    check_service_health "LocalStack" 30 \
-        "curl -s http://localhost:4566/_localstack/health | grep -q '\"s3\":\"available\"'"
-    
-    # Create test database
-    echo -e "\n${YELLOW}Creating test database...${NC}"
-    docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE exec -T postgres \
-        psql -U postgres -tc "SELECT 1 FROM pg_database WHERE datname = 'dataknobs_test'" | grep -q 1 || \
-        docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE exec -T postgres \
-        psql -U postgres -c "CREATE DATABASE dataknobs_test;" 2>/dev/null || true
-    
-    echo -e "${GREEN}Services are ready!${NC}"
-}
-
 # Function to cleanup resources
 cleanup() {
-    if [ "$KEEP_SERVICES" = false ] && [ "$SKIP_SERVICES" = false ] && [ "$IN_DOCKER" = false ]; then
-        echo -e "\n${YELLOW}Cleaning up services...${NC}"
-        docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE down -v 2>/dev/null || true
-    elif [ "$KEEP_SERVICES" = true ]; then
-        echo -e "\n${YELLOW}Services are still running. To stop them, run:${NC}"
-        echo "docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE down -v"
+    # Only cleanup if manage-services.sh indicates we should
+    if [ "$SKIP_SERVICES" = false ] && [ "$IN_DOCKER" = false ]; then
+        if [ -f "/tmp/.dataknobs_services_started_$$" ]; then
+            # We started the services, so we should stop them (unless KEEP_SERVICES is set)
+            if [ "$KEEP_SERVICES" = false ]; then
+                echo -e "\n${YELLOW}Cleaning up services...${NC}"
+                "$SCRIPT_DIR/manage-services.sh" stop
+            else
+                echo -e "\n${YELLOW}Services are still running. To stop them, run:${NC}"
+                echo "$SCRIPT_DIR/manage-services.sh stop"
+            fi
+        else
+            # We didn't start the services, so don't stop them
+            if [ "$VERBOSE" = "-v" ]; then
+                echo -e "\n${YELLOW}Services were already running, leaving them up${NC}"
+            fi
+        fi
     fi
 }
 
@@ -183,7 +160,13 @@ echo "======================================="
 
 # Start services if needed
 if [ "$SKIP_SERVICES" = false ] && [ "$IN_DOCKER" = false ]; then
-    start_services
+    # Use the manage-services script to ensure services are running
+    # It will only start them if they're not already running
+    export KEEP_SERVICES  # Pass through the KEEP_SERVICES flag
+    if ! "$SCRIPT_DIR/manage-services.sh" ensure; then
+        echo -e "${RED}Failed to start services${NC}"
+        exit 1
+    fi
 fi
 
 # If services-only mode, exit here

@@ -2,8 +2,9 @@
 
 import asyncio
 import json
+import time
 import uuid
-from typing import Any
+from typing import Any, AsyncIterator, Iterator, Optional
 
 from dataknobs_config import ConfigurableBase
 from dataknobs_utils.sql_utils import DotenvPostgresConnector, PostgresDB
@@ -11,6 +12,7 @@ from dataknobs_utils.sql_utils import DotenvPostgresConnector, PostgresDB
 from ..database import Database, SyncDatabase
 from ..query import Operator, Query, SortOrder
 from ..records import Record
+from ..streaming import StreamConfig, StreamResult
 
 
 class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
@@ -359,6 +361,74 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
         # PostgresDB manages its own connections via context managers
         pass
 
+    def stream_read(
+        self,
+        query: Optional[Query] = None,
+        config: Optional[StreamConfig] = None
+    ) -> Iterator[Record]:
+        """Stream records from PostgreSQL."""
+        config = config or StreamConfig()
+        
+        # Use search to get all matching records
+        # For future optimization: use server-side cursor
+        if query:
+            records = self.search(query)
+        else:
+            records = self.search(Query())
+        
+        # Yield records in batches for consistency
+        for i in range(0, len(records), config.batch_size):
+            batch = records[i:i + config.batch_size]
+            for record in batch:
+                yield record
+    
+    def stream_write(
+        self,
+        records: Iterator[Record],
+        config: Optional[StreamConfig] = None
+    ) -> StreamResult:
+        """Stream records into PostgreSQL."""
+        config = config or StreamConfig()
+        result = StreamResult()
+        start_time = time.time()
+        
+        batch = []
+        for record in records:
+            batch.append(record)
+            
+            if len(batch) >= config.batch_size:
+                # Write batch
+                try:
+                    ids = self.create_batch(batch)
+                    result.successful += len(ids)
+                    result.total_processed += len(batch)
+                except Exception as e:
+                    result.failed += len(batch)
+                    result.total_processed += len(batch)
+                    if config.on_error:
+                        for rec in batch:
+                            if not config.on_error(e, rec):
+                                result.add_error(None, e)
+                                break
+                    else:
+                        result.add_error(None, e)
+                
+                batch = []
+        
+        # Write remaining batch
+        if batch:
+            try:
+                ids = self.create_batch(batch)
+                result.successful += len(ids)
+                result.total_processed += len(batch)
+            except Exception as e:
+                result.failed += len(batch)
+                result.total_processed += len(batch)
+                result.add_error(None, e)
+        
+        result.duration = time.time() - start_time
+        return result
+
 
 class PostgresDatabase(Database, ConfigurableBase):
     """Asynchronous PostgreSQL database backend."""
@@ -427,3 +497,71 @@ class PostgresDatabase(Database, ConfigurableBase):
         """Close the database connection asynchronously."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._sync_db.close)
+
+    async def stream_read(
+        self,
+        query: Optional[Query] = None,
+        config: Optional[StreamConfig] = None
+    ) -> AsyncIterator[Record]:
+        """Stream records from PostgreSQL asynchronously."""
+        config = config or StreamConfig()
+        
+        # Use search to get all matching records
+        # For future optimization: use async server-side cursor
+        if query:
+            records = await self.search(query)
+        else:
+            records = await self.search(Query())
+        
+        # Yield records in batches for consistency
+        for i in range(0, len(records), config.batch_size):
+            batch = records[i:i + config.batch_size]
+            for record in batch:
+                yield record
+    
+    async def stream_write(
+        self,
+        records: AsyncIterator[Record],
+        config: Optional[StreamConfig] = None
+    ) -> StreamResult:
+        """Stream records into PostgreSQL asynchronously."""
+        config = config or StreamConfig()
+        result = StreamResult()
+        start_time = time.time()
+        
+        batch = []
+        async for record in records:
+            batch.append(record)
+            
+            if len(batch) >= config.batch_size:
+                # Write batch
+                try:
+                    ids = await self.create_batch(batch)
+                    result.successful += len(ids)
+                    result.total_processed += len(batch)
+                except Exception as e:
+                    result.failed += len(batch)
+                    result.total_processed += len(batch)
+                    if config.on_error:
+                        for rec in batch:
+                            if not config.on_error(e, rec):
+                                result.add_error(None, e)
+                                break
+                    else:
+                        result.add_error(None, e)
+                
+                batch = []
+        
+        # Write remaining batch
+        if batch:
+            try:
+                ids = await self.create_batch(batch)
+                result.successful += len(ids)
+                result.total_processed += len(batch)
+            except Exception as e:
+                result.failed += len(batch)
+                result.total_processed += len(batch)
+                result.add_error(None, e)
+        
+        result.duration = time.time() - start_time
+        return result

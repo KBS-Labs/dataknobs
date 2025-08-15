@@ -40,9 +40,9 @@ except ImportError:
     pass
 
 try:
-    from .s3 import S3Database
+    from .s3 import S3Database, SyncS3Database
 
-    register_backend("s3", None, S3Database)
+    register_backend("s3", S3Database, SyncS3Database)
 except ImportError:
     pass
 

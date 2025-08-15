@@ -1,8 +1,9 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
 
 from .query import Query
 from .records import Record
+from .streaming import StreamConfig, StreamResult
 
 
 class Database(ABC):
@@ -195,6 +196,70 @@ class Database(ABC):
         """Async context manager exit."""
         await self.close()
 
+    @abstractmethod
+    async def stream_read(
+        self,
+        query: Optional[Query] = None,
+        config: Optional[StreamConfig] = None
+    ) -> AsyncIterator[Record]:
+        """Stream records from database.
+        
+        Yields records one at a time, fetching in batches internally.
+        
+        Args:
+            query: Optional query to filter records
+            config: Streaming configuration
+            
+        Yields:
+            Records matching the query
+        """
+        raise NotImplementedError
+    
+    @abstractmethod
+    async def stream_write(
+        self,
+        records: AsyncIterator[Record],
+        config: Optional[StreamConfig] = None
+    ) -> StreamResult:
+        """Stream records into database.
+        
+        Accepts an iterator and writes in batches.
+        
+        Args:
+            records: Iterator of records to write
+            config: Streaming configuration
+            
+        Returns:
+            Result of the streaming operation
+        """
+        raise NotImplementedError
+    
+    async def stream_transform(
+        self,
+        query: Optional[Query] = None,
+        transform: Optional[Callable[[Record], Optional[Record]]] = None,
+        config: Optional[StreamConfig] = None
+    ) -> AsyncIterator[Record]:
+        """Stream records through a transformation.
+        
+        Default implementation, can be overridden for efficiency.
+        
+        Args:
+            query: Optional query to filter records
+            transform: Optional transformation function
+            config: Streaming configuration
+            
+        Yields:
+            Transformed records
+        """
+        async for record in self.stream_read(query, config):
+            if transform:
+                transformed = transform(record)
+                if transformed:  # None means filter out
+                    yield transformed
+            else:
+                yield record
+
     @classmethod
     def create(cls, backend: str, config: Dict[str, Any] | None = None) -> "Database":
         """Factory method to create a database instance.
@@ -323,6 +388,70 @@ class SyncDatabase(ABC):
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit."""
         self.close()
+
+    @abstractmethod
+    def stream_read(
+        self,
+        query: Optional[Query] = None,
+        config: Optional[StreamConfig] = None
+    ) -> Iterator[Record]:
+        """Stream records from database.
+        
+        Yields records one at a time, fetching in batches internally.
+        
+        Args:
+            query: Optional query to filter records
+            config: Streaming configuration
+            
+        Yields:
+            Records matching the query
+        """
+        raise NotImplementedError
+    
+    @abstractmethod
+    def stream_write(
+        self,
+        records: Iterator[Record],
+        config: Optional[StreamConfig] = None
+    ) -> StreamResult:
+        """Stream records into database.
+        
+        Accepts an iterator and writes in batches.
+        
+        Args:
+            records: Iterator of records to write
+            config: Streaming configuration
+            
+        Returns:
+            Result of the streaming operation
+        """
+        raise NotImplementedError
+    
+    def stream_transform(
+        self,
+        query: Optional[Query] = None,
+        transform: Optional[Callable[[Record], Optional[Record]]] = None,
+        config: Optional[StreamConfig] = None
+    ) -> Iterator[Record]:
+        """Stream records through a transformation.
+        
+        Default implementation, can be overridden for efficiency.
+        
+        Args:
+            query: Optional query to filter records
+            transform: Optional transformation function
+            config: Streaming configuration
+            
+        Yields:
+            Transformed records
+        """
+        for record in self.stream_read(query, config):
+            if transform:
+                transformed = transform(record)
+                if transformed:  # None means filter out
+                    yield transformed
+            else:
+                yield record
 
     @classmethod
     def create(cls, backend: str, config: Dict[str, Any] | None = None) -> "SyncDatabase":

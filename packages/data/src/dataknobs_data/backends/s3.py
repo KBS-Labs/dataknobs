@@ -1,8 +1,10 @@
 """S3 backend implementation for dataknobs-data package."""
 
+import asyncio
 import json
 import logging
-from typing import Any, Dict, List, Optional, Iterator
+import time
+from typing import Any, AsyncIterator, Dict, List, Optional, Iterator
 from uuid import uuid4
 import hashlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -11,12 +13,13 @@ from datetime import datetime
 from dataknobs_config import ConfigurableBase
 from dataknobs_data.records import Record
 from dataknobs_data.query import Query
-from dataknobs_data.database import SyncDatabase as Database
+from dataknobs_data.database import Database, SyncDatabase
+from dataknobs_data.streaming import StreamConfig, StreamResult
 
 logger = logging.getLogger(__name__)
 
 
-class S3Database(Database, ConfigurableBase):
+class SyncS3Database(SyncDatabase, ConfigurableBase):
     """S3-based database backend.
     
     Stores records as JSON objects in S3 with metadata as tags.
@@ -694,3 +697,267 @@ class S3Database(Database, ConfigurableBase):
         # S3 client doesn't need explicit closing, but clear cache
         self._index_cache = {}
         logger.debug("Closed S3Database connection")
+
+    def stream_read(
+        self,
+        query: Optional[Query] = None,
+        config: Optional[StreamConfig] = None
+    ) -> Iterator[Record]:
+        """Stream records from S3."""
+        config = config or StreamConfig()
+        
+        # Use search to get all matching records
+        if query:
+            records = self.search(query)
+        else:
+            records = self.search(Query())
+        
+        # Yield records in batches for consistency
+        for i in range(0, len(records), config.batch_size):
+            batch = records[i:i + config.batch_size]
+            for record in batch:
+                yield record
+    
+    def stream_write(
+        self,
+        records: Iterator[Record],
+        config: Optional[StreamConfig] = None
+    ) -> StreamResult:
+        """Stream records into S3."""
+        config = config or StreamConfig()
+        result = StreamResult()
+        start_time = time.time()
+        
+        batch = []
+        for record in records:
+            batch.append(record)
+            
+            if len(batch) >= config.batch_size:
+                # Write batch
+                try:
+                    ids = self.create_batch(batch)
+                    result.successful += len(ids)
+                    result.total_processed += len(batch)
+                except Exception as e:
+                    result.failed += len(batch)
+                    result.total_processed += len(batch)
+                    if config.on_error:
+                        for rec in batch:
+                            if not config.on_error(e, rec):
+                                result.add_error(None, e)
+                                break
+                    else:
+                        result.add_error(None, e)
+                
+                batch = []
+        
+        # Write remaining batch
+        if batch:
+            try:
+                ids = self.create_batch(batch)
+                result.successful += len(ids)
+                result.total_processed += len(batch)
+            except Exception as e:
+                result.failed += len(batch)
+                result.total_processed += len(batch)
+                result.add_error(None, e)
+        
+        result.duration = time.time() - start_time
+        return result
+
+
+class S3Database(Database, ConfigurableBase):
+    """Async S3-based database backend using aioboto3.
+    
+    Stores records as JSON objects in S3 with metadata as tags.
+    """
+    
+    def __init__(self, config: dict[str, Any] | None = None):
+        """Initialize async S3 database.
+        
+        Args:
+            config: Configuration with the following keys:
+                - bucket: S3 bucket name (required)
+                - prefix: Object key prefix (optional, default: "")
+                - region: AWS region (optional, default: "us-east-1")
+                - aws_access_key_id: AWS access key (optional)
+                - aws_secret_access_key: AWS secret key (optional)
+                - session_token: AWS session token (optional)
+                - endpoint_url: Custom S3 endpoint (optional, for S3-compatible services)
+                - max_workers: Max parallel operations (optional, default: 10)
+        """
+        super().__init__(config)
+        self._sync_db = SyncS3Database(config)
+        self._aioboto3_session = None
+        self._s3_client = None
+    
+    @classmethod
+    def from_config(cls, config: dict) -> "S3Database":
+        """Create from config dictionary."""
+        return cls(config)
+    
+    async def _get_client(self):
+        """Get or create aioboto3 S3 client."""
+        if self._s3_client is None:
+            try:
+                import aioboto3
+            except ImportError:
+                raise ImportError(
+                    "aioboto3 is required for async S3 support. "
+                    "Install it with: pip install aioboto3"
+                )
+            
+            # Create session with credentials if provided
+            session_kwargs = {}
+            if self._sync_db.aws_access_key_id:
+                session_kwargs['aws_access_key_id'] = self._sync_db.aws_access_key_id
+            if self._sync_db.aws_secret_access_key:
+                session_kwargs['aws_secret_access_key'] = self._sync_db.aws_secret_access_key
+            if self._sync_db.session_token:
+                session_kwargs['aws_session_token'] = self._sync_db.session_token
+            
+            self._aioboto3_session = aioboto3.Session(**session_kwargs)
+            
+            # Create client
+            client_kwargs = {'region_name': self._sync_db.region}
+            if self._sync_db.endpoint_url:
+                client_kwargs['endpoint_url'] = self._sync_db.endpoint_url
+            
+            self._s3_client = self._aioboto3_session.client('s3', **client_kwargs)
+        
+        return self._s3_client
+    
+    async def create(self, record: Record) -> str:
+        """Create a record asynchronously."""
+        # For now, use sync implementation wrapped in executor
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._sync_db.create, record)
+    
+    async def read(self, id: str) -> Record | None:
+        """Read a record asynchronously."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._sync_db.read, id)
+    
+    async def update(self, id: str, record: Record) -> bool:
+        """Update a record asynchronously."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._sync_db.update, id, record)
+    
+    async def delete(self, id: str) -> bool:
+        """Delete a record asynchronously."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._sync_db.delete, id)
+    
+    async def search(self, query: Query) -> List[Record]:
+        """Search for records asynchronously."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._sync_db.search, query)
+    
+    async def exists(self, id: str) -> bool:
+        """Check if a record exists asynchronously."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._sync_db.exists, id)
+    
+    async def _count_all(self) -> int:
+        """Count all records asynchronously."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._sync_db._count_all)
+    
+    async def create_batch(self, records: List[Record]) -> List[str]:
+        """Create multiple records asynchronously."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._sync_db.create_batch, records)
+    
+    async def read_batch(self, ids: List[str]) -> List[Record | None]:
+        """Read multiple records asynchronously."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._sync_db.read_batch, ids)
+    
+    async def delete_batch(self, ids: List[str]) -> List[bool]:
+        """Delete multiple records asynchronously."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._sync_db.delete_batch, ids)
+    
+    async def clear(self) -> int:
+        """Clear all records asynchronously."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._sync_db.clear)
+    
+    async def close(self) -> None:
+        """Close the database connection asynchronously."""
+        if self._s3_client:
+            await self._s3_client.close()
+            self._s3_client = None
+        if self._aioboto3_session:
+            await self._aioboto3_session.close()
+            self._aioboto3_session = None
+        # Also close sync db
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._sync_db.close)
+    
+    async def stream_read(
+        self,
+        query: Optional[Query] = None,
+        config: Optional[StreamConfig] = None
+    ) -> AsyncIterator[Record]:
+        """Stream records from S3 asynchronously."""
+        config = config or StreamConfig()
+        
+        # Use search to get all matching records
+        if query:
+            records = await self.search(query)
+        else:
+            records = await self.search(Query())
+        
+        # Yield records in batches for consistency
+        for i in range(0, len(records), config.batch_size):
+            batch = records[i:i + config.batch_size]
+            for record in batch:
+                yield record
+    
+    async def stream_write(
+        self,
+        records: AsyncIterator[Record],
+        config: Optional[StreamConfig] = None
+    ) -> StreamResult:
+        """Stream records into S3 asynchronously."""
+        config = config or StreamConfig()
+        result = StreamResult()
+        start_time = time.time()
+        
+        batch = []
+        async for record in records:
+            batch.append(record)
+            
+            if len(batch) >= config.batch_size:
+                # Write batch
+                try:
+                    ids = await self.create_batch(batch)
+                    result.successful += len(ids)
+                    result.total_processed += len(batch)
+                except Exception as e:
+                    result.failed += len(batch)
+                    result.total_processed += len(batch)
+                    if config.on_error:
+                        for rec in batch:
+                            if not config.on_error(e, rec):
+                                result.add_error(None, e)
+                                break
+                    else:
+                        result.add_error(None, e)
+                
+                batch = []
+        
+        # Write remaining batch
+        if batch:
+            try:
+                ids = await self.create_batch(batch)
+                result.successful += len(ids)
+                result.total_processed += len(batch)
+            except Exception as e:
+                result.failed += len(batch)
+                result.total_processed += len(batch)
+                result.add_error(None, e)
+        
+        result.duration = time.time() - start_time
+        return result

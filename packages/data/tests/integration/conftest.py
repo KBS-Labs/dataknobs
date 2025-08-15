@@ -7,6 +7,7 @@ from typing import Generator
 import pytest
 import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+import requests
 
 from dataknobs_utils.elasticsearch_utils import SimplifiedElasticsearchIndex
 from dataknobs_utils.requests_utils import RequestHelper
@@ -34,19 +35,48 @@ def wait_for_postgres(host: str, port: int, user: str, password: str, max_retrie
 
 def wait_for_elasticsearch(host: str, port: int, max_retries: int = 30):
     """Wait for Elasticsearch to be ready."""
-    helper = RequestHelper(host, port)
+    import socket
     
+    # First check if port is open
     for i in range(max_retries):
-        try:
-            response = helper.get("_cluster/health")
-            if response.succeeded:
-                return True
-        except Exception:
-            pass
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        result = sock.connect_ex((host, port))
+        sock.close()
+        
+        if result == 0:
+            # Port is open, now check if Elasticsearch is responding
+            helper = RequestHelper(host, port, timeout=5)
+            
+            try:
+                response = helper.get("_cluster/health")
+                if response.succeeded:
+                    # Check cluster health status
+                    if response.json and "status" in response.json:
+                        status = response.json["status"]
+                        # Yellow or green status is acceptable
+                        if status in ["yellow", "green"]:
+                            return True
+                        else:
+                            print(f"Elasticsearch cluster status is {status}, waiting...")
+                    else:
+                        return True
+            except requests.exceptions.ConnectionError as e:
+                print(f"Connection error to Elasticsearch at {host}:{port}: {e}")
+            except requests.exceptions.Timeout as e:
+                print(f"Timeout connecting to Elasticsearch at {host}:{port}: {e}")
+            except Exception as e:
+                print(f"Unexpected error connecting to Elasticsearch at {host}:{port}: {type(e).__name__}: {e}")
+        else:
+            print(f"Port {port} on {host} is not open yet (attempt {i+1}/{max_retries})")
         
         if i == max_retries - 1:
-            raise ConnectionError(f"Could not connect to Elasticsearch at {host}:{port}")
+            raise ConnectionError(
+                f"Could not connect to Elasticsearch at {host}:{port} after {max_retries} attempts. "
+                f"Please ensure Elasticsearch is running and accessible."
+            )
         time.sleep(1)
+    
     return False
 
 

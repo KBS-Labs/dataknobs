@@ -27,6 +27,7 @@ fi
 # Default values
 TEST_TYPE="both"
 PACKAGE=""
+TEST_PATH=""  # For direct file/directory paths
 START_SERVICES="auto"
 COVERAGE="yes"
 PYTEST_ARGS=""
@@ -47,13 +48,20 @@ show_usage() {
     cat << EOF
 ${CYAN}DataKnobs Test Runner${NC}
 
-Usage: $0 [OPTIONS] [PACKAGE] [-- PYTEST_ARGS]
+Usage: $0 [OPTIONS] [PACKAGE|PATH] [-- PYTEST_ARGS]
 
 Run unit and/or integration tests for DataKnobs packages with flexible pytest options.
 
+PACKAGE|PATH can be:
+  - A package name (e.g., 'data', 'config')
+  - A test file path (e.g., 'packages/data/tests/test_backends/test_s3.py')
+  - A test directory (e.g., 'packages/data/tests/integration/')
+
 ${YELLOW}Options:${NC}
     -t, --type TYPE          Test type: unit, integration, or both (default: both)
-    -p, --package PACKAGE    Package to test (e.g., data, config, structures)
+    -p, --package PACKAGE    Package or path to test
+                            Can be a package name (e.g., data, config)
+                            or a file/directory path (e.g., packages/data/tests/test_s3.py)
                             If not specified, tests all packages
     -s, --services          Start services for integration tests (auto by default)
     -n, --no-services       Don't start services (assume they're already running)
@@ -84,6 +92,8 @@ ${YELLOW}Examples:${NC}
     $0                                    # Run all tests with default settings
     $0 data                               # Test data package
     $0 -t unit data                       # Unit tests only for data package
+    $0 packages/data/tests/test_s3.py    # Run specific test file
+    $0 packages/data/tests/integration/  # Run all integration tests for data
     $0 data -xvs                          # Exit on first failure, verbose, no capture
     $0 data -vv --tb=short                # Very verbose with short tracebacks
     $0 data --tb=no                       # No tracebacks
@@ -110,7 +120,12 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         -p|--package)
-            PACKAGE="$2"
+            # Check if it's a file path or package name
+            if [[ "$2" == *"/"* ]] || [ -f "$2" ] || [ -d "$2" ]; then
+                TEST_PATH="$2"
+            else
+                PACKAGE="$2"
+            fi
             shift 2
             ;;
         -s|--services)
@@ -205,9 +220,14 @@ while [[ $# -gt 0 ]]; do
             break
             ;;
         *)
-            # Assume it's a package name if no package specified yet
-            if [ -z "$PACKAGE" ]; then
-                PACKAGE="$1"
+            # Check if it's a package name or file path
+            if [ -z "$PACKAGE" ] && [ -z "$TEST_PATH" ]; then
+                # Check if it looks like a file/directory path
+                if [[ "$1" == *"/"* ]] || [ -f "$1" ] || [ -d "$1" ]; then
+                    TEST_PATH="$1"
+                else
+                    PACKAGE="$1"
+                fi
             else
                 echo -e "${RED}Unknown option: $1${NC}"
                 echo "Use -- to pass custom arguments to pytest"
@@ -234,6 +254,121 @@ if [[ "$TEST_TYPE" != "unit" && "$TEST_TYPE" != "integration" && "$TEST_TYPE" !=
     echo "Must be one of: unit, integration, both"
     exit 1
 fi
+
+# Function to extract package name from a test path
+extract_package_from_path() {
+    local path=$1
+    # Convert to absolute path if relative
+    if [[ "$path" != /* ]]; then
+        path="$ROOT_DIR/$path"
+    fi
+    
+    # Extract package name if path is under packages/
+    if [[ "$path" == *"/packages/"* ]]; then
+        local package_part="${path#*/packages/}"
+        echo "${package_part%%/*}"
+    else
+        echo ""
+    fi
+}
+
+# Function to run tests for a specific file or directory
+run_path_tests() {
+    local path=$1
+    echo -e "${YELLOW}Running tests from path: $path${NC}"
+    
+    # Convert to absolute path if relative
+    if [[ "$path" != /* ]]; then
+        # First check if the path exists relative to current directory
+        if [ -e "$path" ]; then
+            path="$(cd "$(dirname "$path")" && pwd)/$(basename "$path")"
+        # Otherwise try relative to ROOT_DIR
+        elif [ -e "$ROOT_DIR/$path" ]; then
+            path="$ROOT_DIR/$path"
+        else
+            echo -e "${RED}Path not found: $path${NC}"
+            return 1
+        fi
+    elif [ ! -e "$path" ]; then
+        echo -e "${RED}Path not found: $path${NC}"
+        return 1
+    fi
+    
+    # Check if it's an integration test path to determine if services are needed
+    if [[ "$path" == *"/integration"* ]] || [[ "$path" == *"/integration/"* ]]; then
+        # Start services if needed using manage-services.sh
+        if [ "$START_SERVICES" = "auto" ] || [ "$START_SERVICES" = "yes" ]; then
+            if [ "$IN_DOCKER" = true ]; then
+                echo -e "${BLUE}Running in Docker container, checking service connectivity...${NC}"
+                "$SCRIPT_DIR/manage-services.sh" ensure >/dev/null 2>&1 || {
+                    echo -e "${YELLOW}Warning: Some services may not be reachable from container${NC}"
+                }
+            else
+                if [ "$START_SERVICES" = "yes" ] || [ "$START_SERVICES" = "auto" ]; then
+                    echo -e "${YELLOW}Ensuring services are running for integration tests...${NC}"
+                    "$SCRIPT_DIR/manage-services.sh" ensure || {
+                        echo -e "${RED}Failed to ensure services are running${NC}"
+                        return 1
+                    }
+                    SERVICES_STARTED=true
+                fi
+            fi
+        fi
+        
+        # Set environment variables for integration tests
+        export POSTGRES_HOST="${POSTGRES_HOST:-localhost}"
+        export POSTGRES_PORT="${POSTGRES_PORT:-5432}"
+        export POSTGRES_USER="${POSTGRES_USER:-postgres}"
+        export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-postgres}"
+        export POSTGRES_DB="${POSTGRES_DB:-dataknobs_test}"
+        export ELASTICSEARCH_HOST="${ELASTICSEARCH_HOST:-localhost}"
+        export ELASTICSEARCH_PORT="${ELASTICSEARCH_PORT:-9200}"
+        export AWS_ENDPOINT_URL="${AWS_ENDPOINT_URL:-http://localhost:4566}"
+        export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-test}"
+        export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
+        export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
+        export LOCALSTACK_ENDPOINT="${LOCALSTACK_ENDPOINT:-http://localhost:4566}"
+    fi
+    
+    # Build coverage args if enabled
+    local cov_args=""
+    if [ "$COVERAGE" = "yes" ]; then
+        # Try to extract package name for coverage
+        local package=$(extract_package_from_path "$path")
+        if [ -n "$package" ]; then
+            cov_args="--cov=packages/$package/src/dataknobs_${package}"
+        else
+            # Fall back to covering the test path itself
+            cov_args="--cov=$path"
+        fi
+        
+        # Add coverage report types
+        IFS=',' read -ra REPORT_TYPES <<< "$COV_REPORT"
+        for report_type in "${REPORT_TYPES[@]}"; do
+            case $report_type in
+                term|term-missing)
+                    cov_args="$cov_args --cov-report=$report_type"
+                    ;;
+                html)
+                    cov_args="$cov_args --cov-report=html:htmlcov"
+                    ;;
+                xml)
+                    cov_args="$cov_args --cov-report=xml:coverage.xml"
+                    ;;
+            esac
+        done
+    fi
+    
+    # Run tests
+    local cmd="pytest $path $cov_args $PYTEST_ARGS --color=yes"
+    echo -e "${CYAN}Command: $cmd${NC}"
+    
+    if command -v uv &> /dev/null; then
+        eval "uv run $cmd" || return $?
+    else
+        eval "$cmd" || return $?
+    fi
+}
 
 # Function to discover packages with tests
 discover_test_packages() {
@@ -327,38 +462,28 @@ run_integration_tests() {
         return 0
     fi
     
-    # Start services if needed (and not in Docker with services already running)
+    # Start services if needed using manage-services.sh
     if [ "$START_SERVICES" = "auto" ] || [ "$START_SERVICES" = "yes" ]; then
         if [ "$IN_DOCKER" = true ]; then
-            echo -e "${BLUE}Running in Docker container, checking for services...${NC}"
-            # In Docker, services might be running in the same container or linked containers
-            if [ "$START_SERVICES" = "auto" ]; then
-                # Check if we can connect to services
-                if nc -z localhost 5432 2>/dev/null && nc -z localhost 9200 2>/dev/null; then
-                    echo -e "${BLUE}Services detected, skipping startup${NC}"
-                    START_SERVICES="no"
-                else
-                    echo -e "${YELLOW}Services not detected, will attempt to start${NC}"
-                    START_SERVICES="yes"
-                fi
-            fi
+            echo -e "${BLUE}Running in Docker container, checking service connectivity...${NC}"
+            # Use manage-services.sh to check service connectivity from within container
+            "$SCRIPT_DIR/manage-services.sh" ensure >/dev/null 2>&1 || {
+                echo -e "${YELLOW}Warning: Some services may not be reachable from container${NC}"
+            }
+            START_SERVICES="no"  # Don't try to start services from within container
         else
             if [ "$START_SERVICES" = "auto" ]; then
-                # Check if services are already running
-                if docker ps 2>/dev/null | grep -q "dataknobs.*postgres\|dataknobs.*elasticsearch\|dataknobs.*localstack"; then
-                    echo -e "${BLUE}Services appear to be running, skipping startup${NC}"
-                else
-                    START_SERVICES="yes"
-                fi
+                START_SERVICES="yes"  # Let manage-services.sh decide if they're already running
             fi
-        fi
-        
-        if [ "$START_SERVICES" = "yes" ] && [ -f "$SCRIPT_DIR/run-integration-tests.sh" ]; then
-            echo -e "${YELLOW}Starting services for integration tests...${NC}"
-            "$SCRIPT_DIR/run-integration-tests.sh" --services-only || {
-                echo -e "${RED}Failed to start services${NC}"
-                return 1
-            }
+            
+            if [ "$START_SERVICES" = "yes" ]; then
+                echo -e "${YELLOW}Ensuring services are running for integration tests...${NC}"
+                "$SCRIPT_DIR/manage-services.sh" ensure || {
+                    echo -e "${RED}Failed to ensure services are running${NC}"
+                    return 1
+                }
+                SERVICES_STARTED=true
+            fi
         fi
     fi
     
@@ -417,32 +542,27 @@ run_combined_tests() {
     
     # Check if we need to start services for integration tests
     if [ -d "$test_path/integration" ]; then
-        # Start services if needed
+        # Start services if needed using manage-services.sh
         if [ "$START_SERVICES" = "auto" ] || [ "$START_SERVICES" = "yes" ]; then
             if [ "$IN_DOCKER" = true ]; then
-                echo -e "${BLUE}Running in Docker container, checking for services...${NC}"
-                if [ "$START_SERVICES" = "auto" ]; then
-                    if nc -z localhost 5432 2>/dev/null && nc -z localhost 9200 2>/dev/null; then
-                        echo -e "${BLUE}Services detected, skipping startup${NC}"
-                    else
-                        echo -e "${YELLOW}Services not detected in container${NC}"
-                    fi
-                fi
+                echo -e "${BLUE}Running in Docker container, checking service connectivity...${NC}"
+                # Use manage-services.sh to check service connectivity from within container
+                "$SCRIPT_DIR/manage-services.sh" ensure >/dev/null 2>&1 || {
+                    echo -e "${YELLOW}Warning: Some services may not be reachable from container${NC}"
+                }
+                START_SERVICES="no"  # Don't try to start services from within container
             else
                 if [ "$START_SERVICES" = "auto" ]; then
-                    if docker ps 2>/dev/null | grep -q "dataknobs.*postgres\|dataknobs.*elasticsearch\|dataknobs.*localstack"; then
-                        echo -e "${BLUE}Services appear to be running, skipping startup${NC}"
-                    else
-                        START_SERVICES="yes"
-                    fi
+                    START_SERVICES="yes"  # Let manage-services.sh decide if they're already running
                 fi
                 
-                if [ "$START_SERVICES" = "yes" ] && [ -f "$SCRIPT_DIR/run-integration-tests.sh" ]; then
-                    echo -e "${YELLOW}Starting services for integration tests...${NC}"
-                    "$SCRIPT_DIR/run-integration-tests.sh" --services-only || {
-                        echo -e "${RED}Failed to start services${NC}"
+                if [ "$START_SERVICES" = "yes" ]; then
+                    echo -e "${YELLOW}Ensuring services are running for integration tests...${NC}"
+                    "$SCRIPT_DIR/manage-services.sh" ensure || {
+                        echo -e "${RED}Failed to ensure services are running${NC}"
                         echo -e "${YELLOW}Integration tests may fail without services${NC}"
                     }
+                    SERVICES_STARTED=true
                 fi
             fi
         fi
@@ -502,8 +622,13 @@ if [ "$IN_DOCKER" = true ]; then
     echo -e "Environment: ${CYAN}Docker Container${NC}"
 fi
 
-# Determine which packages to test
-if [ -n "$PACKAGE" ]; then
+# Determine what to test (file path vs package)
+if [ -n "$TEST_PATH" ]; then
+    # Test specific file or directory path
+    echo -e "Test path: ${BLUE}$TEST_PATH${NC}"
+    # For file paths, we'll run them directly, not through package logic
+    USE_PATH_MODE=true
+elif [ -n "$PACKAGE" ]; then
     # Test specific package
     if [ ! -d "$ROOT_DIR/packages/$PACKAGE" ]; then
         echo -e "${RED}Package not found: $PACKAGE${NC}"
@@ -511,10 +636,12 @@ if [ -n "$PACKAGE" ]; then
     fi
     PACKAGES=("$PACKAGE")
     echo -e "Package: ${BLUE}$PACKAGE${NC}"
+    USE_PATH_MODE=false
 else
     # Discover packages based on test type
     PACKAGES=($(discover_test_packages "$TEST_TYPE"))
     echo -e "Packages: ${BLUE}${PACKAGES[*]}${NC}"
+    USE_PATH_MODE=false
 fi
 
 if [ -n "$PYTEST_ARGS" ] || [ -n "$CUSTOM_PYTEST_ARGS" ]; then
@@ -524,24 +651,44 @@ echo ""
 
 # Track overall test result
 OVERALL_RESULT=0
+SERVICES_STARTED=false
 
-# Run tests for each package
-for pkg in "${PACKAGES[@]}"; do
-    echo -e "\n${GREEN}Testing package: $pkg${NC}"
-    echo "----------------------------------------"
-    
-    case "$TEST_TYPE" in
-        unit)
-            run_unit_tests "$pkg" || OVERALL_RESULT=$?
-            ;;
-        integration)
-            run_integration_tests "$pkg" || OVERALL_RESULT=$?
-            ;;
-        both)
-            run_combined_tests "$pkg" || OVERALL_RESULT=$?
-            ;;
-    esac
-done
+# Function to cleanup services if we started them
+cleanup_services() {
+    if [ "$SERVICES_STARTED" = true ] && [ "$IN_DOCKER" = false ]; then
+        if [ -f "/tmp/.dataknobs_services_started_$$" ]; then
+            echo -e "\n${YELLOW}Cleaning up services...${NC}"
+            "$SCRIPT_DIR/manage-services.sh" stop
+        fi
+    fi
+}
+
+# Set trap for cleanup on exit
+trap cleanup_services EXIT INT TERM
+
+# Run tests based on mode
+if [ "$USE_PATH_MODE" = true ]; then
+    # Run tests for the specified path
+    run_path_tests "$TEST_PATH" || OVERALL_RESULT=$?
+else
+    # Run tests for each package
+    for pkg in "${PACKAGES[@]}"; do
+        echo -e "\n${GREEN}Testing package: $pkg${NC}"
+        echo "----------------------------------------"
+        
+        case "$TEST_TYPE" in
+            unit)
+                run_unit_tests "$pkg" || OVERALL_RESULT=$?
+                ;;
+            integration)
+                run_integration_tests "$pkg" || OVERALL_RESULT=$?
+                ;;
+            both)
+                run_combined_tests "$pkg" || OVERALL_RESULT=$?
+                ;;
+        esac
+    done
+fi
 
 # Summary
 echo ""

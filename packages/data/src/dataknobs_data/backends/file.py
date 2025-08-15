@@ -8,15 +8,17 @@ import os
 import platform
 import tempfile
 import threading
+import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator, Iterator, Optional
 
 from dataknobs_config import ConfigurableBase
 
 from ..database import Database, SyncDatabase
 from ..query import Query
 from ..records import Record
+from ..streaming import AsyncStreamingMixin, StreamConfig, StreamResult, StreamingMixin
 
 
 class FileLock:
@@ -509,6 +511,76 @@ class FileDatabase(Database, ConfigurableBase):
 
             return results
 
+    async def stream_read(
+        self,
+        query: Optional[Query] = None,
+        config: Optional[StreamConfig] = None
+    ) -> AsyncIterator[Record]:
+        """Stream records from file."""
+        # For file backend, we can use the default implementation
+        # since we need to load all data anyway
+        config = config or StreamConfig()
+        
+        # Use search to get all matching records
+        if query:
+            records = await self.search(query)
+        else:
+            records = await self.search(Query())
+        
+        # Yield records in batches for consistency
+        for i in range(0, len(records), config.batch_size):
+            batch = records[i:i + config.batch_size]
+            for record in batch:
+                yield record
+    
+    async def stream_write(
+        self,
+        records: AsyncIterator[Record],
+        config: Optional[StreamConfig] = None
+    ) -> StreamResult:
+        """Stream records into file."""
+        # Use the default implementation from mixin
+        config = config or StreamConfig()
+        result = StreamResult()
+        start_time = time.time()
+        
+        batch = []
+        async for record in records:
+            batch.append(record)
+            
+            if len(batch) >= config.batch_size:
+                # Write batch
+                try:
+                    ids = await self.create_batch(batch)
+                    result.successful += len(ids)
+                    result.total_processed += len(batch)
+                except Exception as e:
+                    result.failed += len(batch)
+                    result.total_processed += len(batch)
+                    if config.on_error:
+                        for rec in batch:
+                            if not config.on_error(e, rec):
+                                result.add_error(None, e)
+                                break
+                    else:
+                        result.add_error(None, e)
+                
+                batch = []
+        
+        # Write remaining batch
+        if batch:
+            try:
+                ids = await self.create_batch(batch)
+                result.successful += len(ids)
+                result.total_processed += len(batch)
+            except Exception as e:
+                result.failed += len(batch)
+                result.total_processed += len(batch)
+                result.add_error(None, e)
+        
+        result.duration = time.time() - start_time
+        return result
+
 
 class SyncFileDatabase(SyncDatabase, ConfigurableBase):
     """Synchronous file-based database implementation."""
@@ -738,3 +810,73 @@ class SyncFileDatabase(SyncDatabase, ConfigurableBase):
                 self._save_data(data)
 
             return results
+
+    def stream_read(
+        self,
+        query: Optional[Query] = None,
+        config: Optional[StreamConfig] = None
+    ) -> Iterator[Record]:
+        """Stream records from file."""
+        # For file backend, we can use the default implementation
+        # since we need to load all data anyway
+        config = config or StreamConfig()
+        
+        # Use search to get all matching records
+        if query:
+            records = self.search(query)
+        else:
+            records = self.search(Query())
+        
+        # Yield records in batches for consistency
+        for i in range(0, len(records), config.batch_size):
+            batch = records[i:i + config.batch_size]
+            for record in batch:
+                yield record
+    
+    def stream_write(
+        self,
+        records: Iterator[Record],
+        config: Optional[StreamConfig] = None
+    ) -> StreamResult:
+        """Stream records into file."""
+        # Use the default implementation
+        config = config or StreamConfig()
+        result = StreamResult()
+        start_time = time.time()
+        
+        batch = []
+        for record in records:
+            batch.append(record)
+            
+            if len(batch) >= config.batch_size:
+                # Write batch
+                try:
+                    ids = self.create_batch(batch)
+                    result.successful += len(ids)
+                    result.total_processed += len(batch)
+                except Exception as e:
+                    result.failed += len(batch)
+                    result.total_processed += len(batch)
+                    if config.on_error:
+                        for rec in batch:
+                            if not config.on_error(e, rec):
+                                result.add_error(None, e)
+                                break
+                    else:
+                        result.add_error(None, e)
+                
+                batch = []
+        
+        # Write remaining batch
+        if batch:
+            try:
+                ids = self.create_batch(batch)
+                result.successful += len(ids)
+                result.total_processed += len(batch)
+            except Exception as e:
+                result.failed += len(batch)
+                result.total_processed += len(batch)
+                result.add_error(None, e)
+        
+        result.duration = time.time() - start_time
+        return result

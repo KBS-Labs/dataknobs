@@ -47,6 +47,25 @@ print_warning() {
     echo -e "${YELLOW}⚠${NC} $1"
 }
 
+# Function to cleanup resources
+cleanup() {
+    # Only cleanup if manage-services.sh indicates we should (i.e., we started them)
+    if [ -f "/tmp/.dataknobs_services_started_$$" ]; then
+        if [ "${KEEP_SERVICES}" != "true" ]; then
+            echo ""
+            print_status "Cleaning up services..."
+            "$SCRIPT_DIR/manage-services.sh" stop
+        else
+            echo ""
+            print_status "Services are still running. To stop them, run:"
+            echo "$SCRIPT_DIR/manage-services.sh stop"
+        fi
+    fi
+}
+
+# Set trap for cleanup on exit
+trap cleanup EXIT INT TERM
+
 # Create artifacts directory
 mkdir -p "$ARTIFACTS_DIR"
 
@@ -58,64 +77,13 @@ else
     print_warning "Package sync had issues, continuing anyway"
 fi
 
-# Check if Docker is running
-print_status "Checking Docker status..."
-if ! docker info >/dev/null 2>&1; then
-    print_error "Docker is not running. Please start Docker and try again."
+# Start services using the unified service management script
+print_status "Ensuring test services are running..."
+if ! "$SCRIPT_DIR/manage-services.sh" ensure; then
+    print_error "Failed to start services"
     exit 1
 fi
-print_success "Docker is running"
-
-# Start services with docker-compose
-print_status "Starting required services (PostgreSQL, Elasticsearch, LocalStack)..."
-cd "$PROJECT_ROOT"
-docker-compose -f docker-compose.yml -f docker-compose.override.yml up -d postgres elasticsearch localstack 2>/dev/null || {
-    print_warning "Some services may already be running"
-}
-
-# Wait for services to be healthy
-print_status "Waiting for services to be ready..."
-MAX_WAIT=60
-WAITED=0
-
-# Wait for PostgreSQL
-while ! docker-compose exec -T postgres pg_isready -U postgres >/dev/null 2>&1; do
-    sleep 1
-    WAITED=$((WAITED + 1))
-    if [ $WAITED -gt $MAX_WAIT ]; then
-        print_error "PostgreSQL failed to start within $MAX_WAIT seconds"
-        exit 1
-    fi
-    printf "."
-done
-echo ""
-print_success "PostgreSQL is ready"
-
-# Wait for Elasticsearch
-while ! curl -s http://localhost:9200/_cluster/health >/dev/null 2>&1; do
-    sleep 1
-    WAITED=$((WAITED + 1))
-    if [ $WAITED -gt $MAX_WAIT ]; then
-        print_error "Elasticsearch failed to start within $MAX_WAIT seconds"
-        exit 1
-    fi
-    printf "."
-done
-echo ""
-print_success "Elasticsearch is ready"
-
-# Wait for LocalStack
-while ! curl -s http://localhost:4566/_localstack/health >/dev/null 2>&1; do
-    sleep 1
-    WAITED=$((WAITED + 1))
-    if [ $WAITED -gt $MAX_WAIT ]; then
-        print_error "LocalStack failed to start within $MAX_WAIT seconds"
-        exit 1
-    fi
-    printf "."
-done
-echo ""
-print_success "LocalStack is ready"
+print_success "Services are ready"
 
 # Capture environment information
 print_status "Capturing environment information..."
