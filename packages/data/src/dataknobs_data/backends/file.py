@@ -160,14 +160,44 @@ class CSVFormat(FileFormat):
                     for row in reader:
                         if "__id__" in row:
                             record_id = row.pop("__id__")
-                            data[record_id] = {"fields": row}
+                            # Try to deserialize JSON strings back to objects
+                            fields = {}
+                            for key, value in row.items():
+                                if value and isinstance(value, str):
+                                    # Try to parse as JSON if it looks like JSON
+                                    if (value.startswith('{') and value.endswith('}')) or \
+                                       (value.startswith('[') and value.endswith(']')):
+                                        try:
+                                            fields[key] = json.loads(value)
+                                        except json.JSONDecodeError:
+                                            fields[key] = value
+                                    else:
+                                        fields[key] = value
+                                else:
+                                    fields[key] = value
+                            data[record_id] = {"fields": fields}
             else:
                 with open(filepath, encoding="utf-8") as f:
                     reader = csv.DictReader(f)
                     for row in reader:
                         if "__id__" in row:
                             record_id = row.pop("__id__")
-                            data[record_id] = {"fields": row}
+                            # Try to deserialize JSON strings back to objects
+                            fields = {}
+                            for key, value in row.items():
+                                if value and isinstance(value, str):
+                                    # Try to parse as JSON if it looks like JSON
+                                    if (value.startswith('{') and value.endswith('}')) or \
+                                       (value.startswith('[') and value.endswith(']')):
+                                        try:
+                                            fields[key] = json.loads(value)
+                                        except json.JSONDecodeError:
+                                            fields[key] = value
+                                    else:
+                                        fields[key] = value
+                                else:
+                                    fields[key] = value
+                            data[record_id] = {"fields": fields}
         except (OSError, csv.Error):
             return {}
 
@@ -195,9 +225,15 @@ class CSVFormat(FileFormat):
                 for field_name, field_data in record_data["fields"].items():
                     # Handle both full field dicts and simple values
                     if isinstance(field_data, dict) and "value" in field_data:
-                        flat_fields[field_name] = field_data["value"]
+                        value = field_data["value"]
                     else:
-                        flat_fields[field_name] = field_data
+                        value = field_data
+                    
+                    # Serialize complex types as JSON strings
+                    if isinstance(value, (dict, list)):
+                        flat_fields[field_name] = json.dumps(value)
+                    else:
+                        flat_fields[field_name] = value
                     all_fields.add(field_name)
                 flattened_data[record_id] = flat_fields
 

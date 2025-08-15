@@ -84,8 +84,8 @@ class DatabaseFactory(FactoryBase):
                 
         elif backend_type == "s3":
             try:
-                from dataknobs_data.backends.s3 import S3Database
-                return S3Database.from_config(config)
+                from dataknobs_data.backends.s3 import SyncS3Database
+                return SyncS3Database.from_config(config)
             except ImportError as e:
                 raise ValueError(
                     f"S3 backend requires boto3. "
@@ -208,10 +208,14 @@ class AsyncDatabaseFactory(FactoryBase):
             from dataknobs_data.backends.elasticsearch import ElasticsearchDatabase
             return ElasticsearchDatabase.from_config(config)
             
+        elif backend_type == "s3":
+            from dataknobs_data.backends.s3 import S3Database
+            return S3Database.from_config(config)
+
         else:
             raise ValueError(
                 f"Backend '{backend_type}' does not support async operations yet. "
-                f"Available async backends: memory, file, postgres, elasticsearch"
+                f"Available async backends: memory, file, postgres, elasticsearch, s3"
             )
 
 

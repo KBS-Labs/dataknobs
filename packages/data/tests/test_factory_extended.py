@@ -302,12 +302,20 @@ class TestAsyncDatabaseFactory:
                     db = factory.create(backend=alias, hosts=["localhost"])
                     assert db == mock_db
     
-    def test_async_unsupported_backend(self):
-        """Test error for unsupported async backend."""
+    def test_async_s3_backend(self):
+        """Test S3 async backend creation with proper config."""
         factory = AsyncDatabaseFactory()
         
-        with pytest.raises(ValueError, match="does not support async operations"):
-            factory.create(backend="s3")
+        with patch('dataknobs_data.backends.s3.S3Database') as MockS3:
+            mock_db = MagicMock()
+            MockS3.from_config.return_value = mock_db
+            
+            # S3 requires bucket configuration
+            config = {"backend": "s3", "bucket": "test-bucket"}
+            with patch.dict('sys.modules', {'dataknobs_data.backends.s3': MagicMock(S3Database=MockS3)}):
+                db = factory.create(**config)
+                assert db == mock_db
+                MockS3.from_config.assert_called_once_with({"bucket": "test-bucket"})
     
     def test_async_unknown_backend(self):
         """Test error for unknown async backend."""

@@ -9,7 +9,7 @@ from dataknobs_config import Config
 from dataknobs_data import DatabaseFactory, database_factory
 from dataknobs_data.backends.memory import SyncMemoryDatabase
 from dataknobs_data.backends.file import SyncFileDatabase
-from dataknobs_data.backends.s3 import S3Database
+from dataknobs_data.backends.s3 import SyncS3Database
 from dataknobs_data import Record
 
 
@@ -63,7 +63,7 @@ class TestDatabaseFactory:
             prefix="test/",
             region="us-west-2"
         )
-        assert isinstance(db, S3Database)
+        assert isinstance(db, SyncS3Database)
     
     def test_backend_aliases(self):
         """Test that backend aliases work."""
@@ -146,7 +146,7 @@ class TestFactoryWithConfig:
         })
         
         db = config.get_instance("databases", "env_db")
-        assert isinstance(db, S3Database)
+        assert isinstance(db, SyncS3Database)
         assert db.bucket == "env-bucket"
         assert db.prefix == "env-prefix/"
     

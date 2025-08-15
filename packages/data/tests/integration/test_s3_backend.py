@@ -8,7 +8,7 @@ import boto3
 from moto import mock_aws
 
 from dataknobs_data import Record, Query
-from dataknobs_data.backends.s3 import S3Database
+from dataknobs_data.backends.s3 import SyncS3Database
 
 
 @pytest.fixture
@@ -26,8 +26,8 @@ def s3_config():
 def mock_s3_backend(s3_config):
     """Create a mock S3 backend using moto."""
     with mock_aws():
-        # The S3Database will create the bucket if it doesn't exist
-        db = S3Database(s3_config)
+        # The SyncS3Database will create the bucket if it doesn't exist
+        db = SyncS3Database(s3_config)
         yield db
         # Cleanup
         db.clear()
@@ -62,7 +62,7 @@ def localstack_s3_backend(s3_config):
     config["access_key_id"] = "test"
     config["secret_access_key"] = "test"
     
-    db = S3Database(config)
+    db = SyncS3Database(config)
     yield db
     # Cleanup
     db.clear()
@@ -440,7 +440,7 @@ class TestS3Configuration:
     """Test S3 backend configuration."""
     
     def test_from_config_method(self):
-        """Test creating S3Database from config."""
+        """Test creating SyncS3Database from config."""
         with mock_aws():
             config = {
                 "bucket": "test-bucket",
@@ -448,7 +448,7 @@ class TestS3Configuration:
                 "region": "us-west-2"
             }
             
-            db = S3Database.from_config(config)
+            db = SyncS3Database.from_config(config)
             assert db.bucket == "test-bucket"
             assert db.prefix == "data/"
             assert db.region == "us-west-2"
@@ -456,13 +456,13 @@ class TestS3Configuration:
     def test_missing_required_config(self):
         """Test that missing bucket raises error."""
         with pytest.raises(ValueError, match="bucket name is required"):
-            S3Database({})
+            SyncS3Database({})
     
     def test_default_values(self):
         """Test default configuration values."""
         with mock_aws():
             config = {"bucket": "test-bucket"}
-            db = S3Database(config)
+            db = SyncS3Database(config)
             
             assert db.prefix == "records/"
             assert db.region == "us-east-1"
@@ -481,7 +481,7 @@ class TestS3Configuration:
         }
         
         # Create database without connecting (avoid _ensure_bucket_exists)
-        db = S3Database.__new__(S3Database)
+        db = SyncS3Database.__new__(SyncS3Database)
         db.bucket = config["bucket"]
         db.endpoint_url = config.get("endpoint_url")
         db.access_key_id = config.get("access_key_id")

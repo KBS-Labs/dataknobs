@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 from dataknobs_config import Config
-from dataknobs_data.backends.s3 import S3Database
+from dataknobs_data.backends.s3 import SyncS3Database
 
 
 class TestS3ConfigIntegration:
@@ -11,7 +11,7 @@ class TestS3ConfigIntegration:
     
     @patch('boto3.client')
     def test_s3_config_integration(self, mock_boto_client):
-        """Test that S3Database can be instantiated via Config."""
+        """Test that SyncS3Database can be instantiated via Config."""
         # Mock S3 client
         mock_s3 = MagicMock()
         mock_boto_client.return_value = mock_s3
@@ -22,7 +22,7 @@ class TestS3ConfigIntegration:
         config.load({
             "databases": [{
                 "name": "s3_storage",
-                "class": "dataknobs_data.backends.s3.S3Database",
+                "class": "dataknobs_data.backends.s3.SyncS3Database",
                 "bucket": "my-test-bucket",
                 "prefix": "records/prod/",
                 "region": "us-west-2",
@@ -33,8 +33,8 @@ class TestS3ConfigIntegration:
         # Get instance through Config
         db = config.get_instance("databases", "s3_storage")
         
-        # Verify it's an S3Database instance
-        assert isinstance(db, S3Database)
+        # Verify it's an SyncS3Database instance
+        assert isinstance(db, SyncS3Database)
         assert db.bucket == "my-test-bucket"
         assert db.prefix == "records/prod/"
         assert db.region == "us-west-2"
@@ -59,7 +59,7 @@ class TestS3ConfigIntegration:
         config.load({
             "databases": [{
                 "name": "s3_env",
-                "class": "dataknobs_data.backends.s3.S3Database",
+                "class": "dataknobs_data.backends.s3.SyncS3Database",
                 "bucket": "${S3_BUCKET}",
                 "prefix": "${S3_PREFIX}",
                 "region": "${AWS_REGION}",
@@ -92,7 +92,7 @@ class TestS3ConfigIntegration:
         config.load({
             "databases": [{
                 "name": "s3_defaults",
-                "class": "dataknobs_data.backends.s3.S3Database",
+                "class": "dataknobs_data.backends.s3.SyncS3Database",
                 "bucket": "${S3_BUCKET:default-bucket}",
                 "prefix": "${S3_PREFIX:default-prefix/}",
                 "region": "${AWS_REGION:us-east-1}"
@@ -109,7 +109,7 @@ class TestS3ConfigIntegration:
     
     @patch('boto3.client')
     def test_s3_from_config_directly(self, mock_boto_client):
-        """Test creating S3Database directly with from_config."""
+        """Test creating SyncS3Database directly with from_config."""
         # Mock S3 client
         mock_s3 = MagicMock()
         mock_boto_client.return_value = mock_s3
@@ -123,9 +123,9 @@ class TestS3ConfigIntegration:
             "max_retries": 5
         }
         
-        db = S3Database.from_config(config_dict)
+        db = SyncS3Database.from_config(config_dict)
         
-        assert isinstance(db, S3Database)
+        assert isinstance(db, SyncS3Database)
         assert db.bucket == "direct-bucket"
         assert db.prefix == "direct/"
         assert db.region == "ap-southeast-1"
@@ -138,7 +138,7 @@ class TestS3ConfigIntegration:
         config.load({
             "databases": [{
                 "name": "s3_invalid",
-                "class": "dataknobs_data.backends.s3.S3Database",
+                "class": "dataknobs_data.backends.s3.SyncS3Database",
                 # Missing required 'bucket' parameter
                 "prefix": "records/"
             }]
