@@ -8,7 +8,7 @@ from datetime import datetime
 from dataknobs_data.records import Record
 from dataknobs_data.fields import FieldType
 
-from dataknobs_data.validation_v2 import (
+from dataknobs_data.validation import (
     ValidationResult,
     ValidationContext,
     Constraint,

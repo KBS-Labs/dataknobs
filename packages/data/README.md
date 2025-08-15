@@ -14,11 +14,13 @@ The `dataknobs-data` package enables seamless data management regardless of the 
 - **Pandas Integration**: Seamless bidirectional conversion to/from DataFrames with type preservation
 - **Migration Utilities**: Backend-to-backend migration, schema evolution, and data transformation
 - **Schema Validation**: Comprehensive validation system with constraints and type coercion
+- **Streaming Support**: Efficient streaming APIs for large datasets
 - **Type Safety**: Strong typing with field validation and automatic type conversion
 - **Async Support**: Both synchronous and asynchronous APIs
 - **Query System**: Powerful, backend-agnostic query capabilities
 - **Configuration Support**: Full integration with DataKnobs configuration system
 - **Batch Operations**: Efficient bulk insert, update, and upsert operations
+- **Connection Management**: Automatic connection lifecycle management
 - **Extensible**: Easy to add custom storage backends, validators, and transformers
 
 ## Installation
@@ -37,84 +39,92 @@ pip install dataknobs-data[all]         # All backends
 ## Quick Start
 
 ```python
-from dataknobs_data import Record, Field, FieldType
-from dataknobs_data.backends.memory import MemoryDatabase
+from dataknobs_data import Database, Record, Query, Operator
 
-# Create a database instance
-db = MemoryDatabase()
+# Async usage
+async def main():
+    # Create and auto-connect to database
+    db = await Database.create("memory")
+    
+    # Create a record
+    record = Record({
+        "name": "John Doe",
+        "age": 30,
+        "email": "john@example.com",
+        "active": True
+    })
+    
+    # CRUD operations
+    id = await db.create(record)
+    retrieved = await db.read(id)
+    record.set_value("age", 31)
+    await db.update(id, record)
+    await db.delete(id)
+    
+    # Search with queries
+    query = (Query()
+        .filter("age", Operator.GTE, 25)
+        .filter("active", Operator.EQ, True)
+        .sort("name")
+        .limit(10))
+    
+    results = await db.search(query)
+    for record in results:
+        print(f"{record.get_value('name')}: {record.get_value('age')}")
+    
+    await db.close()
 
-# Create a record with automatic ID generation
-record = Record(
-    fields={
-        "name": Field("name", FieldType.STRING, "John Doe"),
-        "age": Field("age", FieldType.INTEGER, 30),
-        "email": Field("email", FieldType.STRING, "john@example.com"),
-        "active": Field("active", FieldType.BOOLEAN, True)
-    }
-)
-print(record.id)  # Auto-generated UUID
+# Synchronous usage
+from dataknobs_data import SyncDatabase
 
-# CRUD operations
-db.create(record)
-retrieved = db.read(record.id)
-record.fields["age"].value = 31
-db.update(record.id, record)
-db.delete(record.id)
-
-# Search with queries
-from dataknobs_data import Query, Filter, Sort
-
-query = Query(
-    filters=[
-        Filter("age", ">=", 25),
-        Filter("active", "=", True)
-    ],
-    sort=[Sort("name", "asc")],
-    limit=10
-)
-
-results = db.search(query)
-for record in results:
-    print(f"{record.id}: {record.fields['name'].value}")
+db = SyncDatabase.create("memory")
+record = Record({"name": "Jane Doe", "age": 28})
+id = db.create(record)
+retrieved = db.read(id)
+db.close()
 ```
 
 ## Backend Configuration
 
 ### File Backend
 ```python
-db = Database.create("file", {
+db = await Database.create("file", {
     "path": "/data/records.json",
-    "format": "json",  # or "csv", "parquet"
-    "compression": "gzip"  # optional
+    "pretty": True,
+    "backup": True
 })
 ```
 
 ### PostgreSQL Backend
 ```python
-db = Database.create("postgres", {
+db = await Database.create("postgres", {
     "host": "localhost",
     "database": "mydb",
     "user": "user",
     "password": "pass",
-    "table": "records"
+    "table": "records",
+    "schema": "public"
 })
 ```
 
 ### S3 Backend
 ```python
-db = Database.create("s3", {
+db = await Database.create("s3", {
     "bucket": "my-bucket",
     "prefix": "records/",
-    "region": "us-west-2"
+    "region": "us-west-2",
+    "aws_access_key_id": "key",
+    "aws_secret_access_key": "secret"
 })
 ```
 
 ### Elasticsearch Backend
 ```python
-db = Database.create("elasticsearch", {
-    "hosts": ["localhost:9200"],
+db = await Database.create("elasticsearch", {
+    "host": "localhost",
+    "port": 9200,
     "index": "records",
-    "doc_type": "_doc"
+    "refresh": True
 })
 ```
 
@@ -288,45 +298,31 @@ result = batch_ops.bulk_upsert_dataframe(
 Define and enforce data schemas with comprehensive validation:
 
 ```python
-from dataknobs_data.validation import Schema, FieldDefinition
+from dataknobs_data.validation import Schema, FieldType
 from dataknobs_data.validation.constraints import *
 
 # Define schema with constraints
-user_schema = Schema(
-    name="UserSchema",
-    fields={
-        "email": FieldDefinition(
-            name="email",
-            type=str,
-            required=True,
-            constraints=[EmailConstraint(), UniqueConstraint()]
-        ),
-        "age": FieldDefinition(
-            name="age",
-            type=int,
-            constraints=[MinValueConstraint(0), MaxValueConstraint(150)]
-        ),
-        "status": FieldDefinition(
-            name="status",
-            type=str,
-            default="active",
-            constraints=[EnumConstraint(["active", "inactive", "suspended"])]
-        )
-    }
-)
+user_schema = Schema("UserSchema")
+user_schema.field("email", FieldType.STRING, 
+    required=True,
+    constraints=[Pattern(r"^.+@.+\..+$"), Unique()])
+user_schema.field("age", FieldType.INTEGER,
+    constraints=[Range(min=0, max=150)])
+user_schema.field("status", FieldType.STRING,
+    default="active",
+    constraints=[Enum(["active", "inactive", "suspended"])])
 
 # Validate records
 result = user_schema.validate(record)
-if not result.is_valid:
+if not result.valid:
     for error in result.errors:
-        print(f"{error.field}: {error.message}")
+        print(error)
 
 # Automatic type coercion
-schema_with_coercion = Schema(
-    name="ProductSchema",
-    fields=fields,
-    coerce_types=True  # Automatically convert compatible types
-)
+record = Record({"age": "30"})  # String value
+result = user_schema.validate(record, coerce=True)  # Converts to int
+if result.valid:
+    print(record.get_value("age"))  # 30 (as integer)
 ```
 
 ## Data Migration
@@ -334,42 +330,35 @@ schema_with_coercion = Schema(
 Migrate data between backends with transformation support:
 
 ```python
-from dataknobs_data.migration import DataMigrator, DataTransformer
+from dataknobs_data.migration import Migration, Migrator
+from dataknobs_data.migration.operations import *
+
+# Define migration
+migration = Migration("upgrade_schema", "2.0.0")
+migration.add_operation(AddField("created_at", default=datetime.now()))
+migration.add_operation(RenameField("user_name", "username"))
+migration.add_operation(TransformField("email", lambda x: x.lower()))
 
 # Migrate between backends
-source_db = Database.create("postgres", postgres_config)
-target_db = Database.create("s3", s3_config)
-
-migrator = DataMigrator(source_db, target_db)
-
-# Simple migration
-result = migrator.migrate_sync(batch_size=1000)
-print(f"Migrated {result.successful_records} records")
-
-# Migration with transformation
-transformer = DataTransformer(
-    field_mapping={"old_name": "new_name"},
-    value_transformers={
-        "email": lambda v: v.lower(),
-        "age": lambda v: int(v) if v else 0
-    }
-)
-
-result = migrator.migrate_sync(
-    transform=transformer.transform,
-    progress_callback=lambda p: print(f"Progress: {p.percentage:.1f}%")
-)
-
-# Schema evolution
-from dataknobs_data.migration import SchemaEvolution
-
-evolution = SchemaEvolution("user_schema")
-evolution.add_version("1.0.0", schema_v1)
-evolution.add_version("2.0.0", schema_v2)
-
-# Auto-generate migration
-migration = evolution.generate_migration("1.0.0", "2.0.0")
-migrated_records = migration.apply(records)
+async def migrate_data():
+    source_db = await Database.create("postgres", postgres_config)
+    target_db = await Database.create("s3", s3_config)
+    
+    migrator = Migrator(source_db, target_db)
+    
+    # Run migration with progress tracking
+    progress = await migrator.migrate(
+        migration=migration,
+        batch_size=1000,
+        on_progress=lambda p: print(f"Progress: {p.percentage:.1f}%")
+    )
+    
+    print(f"Migrated: {progress.successful} records")
+    print(f"Failed: {progress.failed} records")
+    print(f"Duration: {progress.duration}s")
+    
+    await source_db.close()
+    await target_db.close()
 ```
 
 ## Advanced Queries
@@ -377,36 +366,43 @@ migrated_records = migration.apply(records)
 ```python
 # Complex query with multiple filters
 query = (Query()
-    .filter("status", "IN", ["active", "pending"])
-    .filter("created_at", ">=", "2024-01-01")
-    .filter("name", "LIKE", "John%")
-    .sort([("priority", "DESC"), ("created_at", "ASC")])
+    .filter("status", Operator.IN, ["active", "pending"])
+    .filter("created_at", Operator.GTE, "2024-01-01")
+    .filter("name", Operator.LIKE, "John%")
+    .sort("priority", SortOrder.DESC)
+    .sort("created_at", SortOrder.ASC)
     .offset(20)
     .limit(10)
-    .project(["name", "email", "status"]))  # Select specific fields
+    .select(["name", "email", "status"]))  # Select specific fields
 
-results = db.search(query)
+results = await db.search(query)
 ```
 
-## Async Support
+## Streaming Support
 
 ```python
-import asyncio
-from dataknobs_data import AsyncDatabase
+from dataknobs_data import StreamConfig
 
-async def main():
-    db = AsyncDatabase.create("postgres", config)
-    
-    # Async CRUD operations
-    record_id = await db.create(record)
-    retrieved = await db.read(record_id)
-    
-    # Async search
-    results = await db.search(query)
-    
-asyncio.run(main())
+# Stream large datasets efficiently
+config = StreamConfig(
+    batch_size=100,
+    buffer_size=1000
+)
+
+# Stream read
+async for record in db.stream_read(query, config):
+    # Process each record without loading all into memory
+    process_record(record)
+
+# Stream write
+result = await db.stream_write(record_generator(), config)
+print(f"Streamed {result.total_processed} records")
 ```
 
+
+## Documentation
+
+For complete API documentation, see [API Reference](docs/API_REFERENCE.md).
 
 ## Custom Backend
 

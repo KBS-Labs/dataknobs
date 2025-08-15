@@ -1,14 +1,14 @@
-"""Test factory integration for v2 modules."""
+"""Test factory integration for validation and migration modules."""
 
 import pytest
 
-from dataknobs_data.validation_v2 import (
+from dataknobs_data.validation import (
     SchemaFactory,
     CoercerFactory,
     Schema,
     Coercer,
 )
-from dataknobs_data.migration_v2 import (
+from dataknobs_data.migration import (
     MigrationFactory,
     TransformerFactory,
     MigratorFactory,

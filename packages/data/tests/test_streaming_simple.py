@@ -7,8 +7,8 @@ from dataknobs_data.backends.memory import MemoryDatabase, SyncMemoryDatabase
 from dataknobs_data.records import Record
 from dataknobs_data.query import Query
 
-from dataknobs_data.validation_v2 import Schema, Required, Range
-from dataknobs_data.migration_v2 import (
+from dataknobs_data.validation import Schema, Required, Range
+from dataknobs_data.migration import (
     Migration,
     AddField,
     RenameField,
@@ -245,4 +245,4 @@ class TestStreamingIntegration:
 
 
 # Import RemoveField for the test
-from dataknobs_data.migration_v2 import RemoveField
+from dataknobs_data.migration import RemoveField

@@ -11,7 +11,7 @@ from dataknobs_data.fields import FieldType
 from dataknobs_data.backends.memory import SyncMemoryDatabase as MemoryDatabase
 from dataknobs_data.query import Query
 
-from dataknobs_data.migration_v2 import (
+from dataknobs_data.migration import (
     Operation,
     AddField,
     RemoveField,

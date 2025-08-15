@@ -24,13 +24,9 @@ from .query import Filter, Operator, Query, SortOrder, SortSpec
 from .records import Record
 from .streaming import StreamConfig, StreamResult
 
-# Import v2 modules as the primary validation and migration modules
-from . import validation_v2 as validation
-from . import migration_v2 as migration
-
-# Also make v2 modules available for backwards compatibility during transition
-from . import validation_v2
-from . import migration_v2
+# Import validation and migration modules
+from . import validation
+from . import migration
 
 __version__ = "0.1.0"
 
@@ -56,8 +52,6 @@ __all__ = [
     # Validation and Migration modules
     "validation",
     "migration",
-    "validation_v2",
-    "migration_v2",
     # Exceptions
     "DataknobsDataError",
     "RecordNotFoundError",
