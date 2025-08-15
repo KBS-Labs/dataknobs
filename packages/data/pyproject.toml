@@ -73,6 +73,7 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
+    "asyncpg>=0.30.0",
     "pytest-asyncio>=1.1.0",
     "pytest-cov>=6.2.1",
     "ruff>=0.12.8",
