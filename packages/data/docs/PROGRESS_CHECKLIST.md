@@ -214,21 +214,34 @@
   - [ ] Real-world scenarios
 
 ## Phase 9: Testing & Quality
-- [ ] Unit Tests
-  - [ ] 100% coverage target
-  - [ ] All backends
-  - [ ] Error scenarios
-  - [ ] Edge cases
+- [x] Test Infrastructure Enhancement
+  - [x] Combined coverage reporting from unit and integration tests
+  - [x] Flexible pytest flag support in test.sh
+  - [x] Docker container compatibility
+  - [x] Enhanced dev.sh with test argument pass-through
+- [x] Initial Test Coverage Improvements (78% achieved)
+  - [x] Exceptions module tests (100% coverage)
+  - [x] Factory module tests (improved coverage)
+  - [x] Pandas batch_ops tests (improved coverage)
+  - [x] Migration module tests (fixed failing tests)
+- [ ] Module Redesign (IN PROGRESS)
+  - [x] Identified design issues in validation and migration modules
+  - [x] Created comprehensive redesign plan (REDESIGN_PLAN.md)
+  - [ ] Implement validation_v2 module with clean API
+  - [ ] Implement migration_v2 module with clean API
+  - [ ] Write comprehensive tests for redesigned modules
+  - [ ] Remove old validation and migration modules
+- [ ] Complete Test Coverage
+  - [ ] 90%+ coverage for redesigned modules
+  - [ ] 85%+ overall package coverage
+  - [ ] All backends tested
+  - [ ] Error scenarios covered
+  - [ ] Edge cases handled
 - [ ] Integration Tests
   - [ ] Cross-backend operations
-  - [ ] Migration scenarios
+  - [ ] Migration scenarios with new API
   - [ ] Real database connections
   - [ ] Performance tests
-- [ ] Performance Benchmarks
-  - [ ] Operation latency
-  - [ ] Throughput tests
-  - [ ] Memory usage
-  - [ ] Comparison with native
 - [ ] Code Quality
   - [ ] Type checking (mypy)
   - [ ] Linting (ruff)
