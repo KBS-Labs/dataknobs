@@ -140,6 +140,8 @@ class TestConstraints:
     
     def test_range_constraint(self):
         """Test Range constraint."""
+        import math
+        
         constraint = Range(min=0, max=100)
         
         # Test in range
@@ -158,6 +160,16 @@ class TestConstraints:
         
         # Test None (should be valid)
         assert constraint.check(None).valid
+        
+        # Test special float values
+        # Infinity should fail (out of range)
+        assert not constraint.check(math.inf).valid
+        assert not constraint.check(-math.inf).valid
+        
+        # NaN should fail with specific error
+        result = constraint.check(math.nan)
+        assert not result.valid
+        assert "NaN" in result.errors[0]
     
     def test_length_constraint(self):
         """Test Length constraint."""

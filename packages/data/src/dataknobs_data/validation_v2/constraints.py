@@ -2,6 +2,7 @@
 Constraint implementations with consistent, composable API.
 """
 
+import math
 import re
 from abc import ABC, abstractmethod
 from typing import Any, List, Optional, Callable, Union, Pattern as RegexPattern
@@ -174,6 +175,13 @@ class Range(Constraint):
             return ValidationResult.failure(
                 value,
                 [f"Value must be a number, got {type(value).__name__}"]
+            )
+        
+        # Check for NaN (Not a Number) - NaN is not valid for range comparisons
+        if isinstance(value, float) and math.isnan(value):
+            return ValidationResult.failure(
+                value,
+                ["Value is NaN (Not a Number), which is not valid for range comparisons"]
             )
         
         errors = []

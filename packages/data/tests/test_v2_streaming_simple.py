@@ -68,9 +68,9 @@ class TestAsyncV2Streaming:
         
         # Create validation schema
         schema = Schema("test")
-        schema.field("id", Required())
-        schema.field("price", Range(0, float('inf')))
-        schema.field("quantity", Required())
+        schema.field("id", "INTEGER", required=True)
+        schema.field("price", "FLOAT", constraints=[Range(min=0)])
+        schema.field("quantity", "INTEGER", required=True)
         
         # Stream and validate
         valid_count = 0
@@ -87,10 +87,10 @@ class TestAsyncV2Streaming:
                 invalid_count += 1
                 print(f"Invalid record {record.get_value('id')}: {result.errors}")
         
-        # TODO: Fix Range constraint validation - should catch negative price
-        # assert valid_count == 9
-        # assert invalid_count == 1
-        assert valid_count + invalid_count == 10  # At least verify all were processed
+        # Range constraint validation now properly catches negative price
+        assert valid_count == 9
+        assert invalid_count == 1
+        assert valid_count + invalid_count == 10  # Verify all were processed
         
         await db.close()
     

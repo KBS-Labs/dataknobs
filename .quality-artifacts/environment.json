@@ -1,10 +1,10 @@
 {
-  "timestamp": "2025-08-15T17:05:31Z",
+  "timestamp": "2025-08-15T17:26:49Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.7.12 (Homebrew 2025-06-06)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/data-abstractions",
-  "git_commit": "cc2872c65c642b2e2d3ccad3f07a1cc0e3a5a760",
+  "git_commit": "9a2eb0f08bd30c4786db15775380ead9b58fd7db",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
