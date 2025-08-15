@@ -24,6 +24,7 @@ from .constraints import (
 )
 from .schema import Schema, Field
 from .coercer import Coercer
+from .factory import schema_factory, coercer_factory, SchemaFactory, CoercerFactory
 
 __all__ = [
     # Result types
@@ -45,4 +46,9 @@ __all__ = [
     "Field",
     # Coercion
     "Coercer",
+    # Factories
+    "schema_factory",
+    "coercer_factory",
+    "SchemaFactory",
+    "CoercerFactory",
 ]

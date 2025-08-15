@@ -21,6 +21,14 @@ from .migration import Migration
 from .transformer import Transformer, TransformRule, MapRule, ExcludeRule, AddRule
 from .progress import MigrationProgress
 from .migrator import Migrator
+from .factory import (
+    migration_factory,
+    transformer_factory,
+    migrator_factory,
+    MigrationFactory,
+    TransformerFactory,
+    MigratorFactory,
+)
 
 __all__ = [
     # Operations
@@ -42,4 +50,11 @@ __all__ = [
     "MigrationProgress",
     # Migrator
     "Migrator",
+    # Factories
+    "migration_factory",
+    "transformer_factory",
+    "migrator_factory",
+    "MigrationFactory",
+    "TransformerFactory",
+    "MigratorFactory",
 ]

@@ -17,6 +17,10 @@ from .exceptions import (
     TransactionError,
 )
 from .factory import DatabaseFactory, database_factory, async_database_factory
+
+# Import v2 modules for easier access
+from . import validation_v2
+from . import migration_v2
 from .fields import Field, FieldType
 from .query import Filter, Operator, Query, SortOrder, SortSpec
 from .records import Record
