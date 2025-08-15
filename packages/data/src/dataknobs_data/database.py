@@ -184,12 +184,17 @@ class Database(ABC):
         """
         raise NotImplementedError
 
+    async def connect(self) -> None:
+        """Connect to the database."""
+        pass
+
     async def close(self) -> None:
         """Close the database connection."""
         pass
 
     async def __aenter__(self):
         """Async context manager entry."""
+        await self.connect()
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -261,15 +266,15 @@ class Database(ABC):
                 yield record
 
     @classmethod
-    def create(cls, backend: str, config: Dict[str, Any] | None = None) -> "Database":
-        """Factory method to create a database instance.
+    async def create(cls, backend: str, config: Dict[str, Any] | None = None) -> "Database":
+        """Factory method to create and connect a database instance.
 
         Args:
             backend: The backend type ("memory", "file", "s3", "postgres", "elasticsearch")
             config: Backend-specific configuration
 
         Returns:
-            Database instance
+            Connected Database instance
         """
         from .backends import BACKEND_REGISTRY
 
@@ -279,7 +284,9 @@ class Database(ABC):
                 f"Unknown backend: {backend}. Available: {list(BACKEND_REGISTRY.keys())}"
             )
 
-        return backend_class(config)
+        instance = backend_class(config)
+        await instance.connect()
+        return instance
 
 
 class SyncDatabase(ABC):
@@ -377,12 +384,17 @@ class SyncDatabase(ABC):
         """Clear all records from the database."""
         raise NotImplementedError
 
+    def connect(self) -> None:
+        """Connect to the database."""
+        pass
+
     def close(self) -> None:
         """Close the database connection."""
         pass
 
     def __enter__(self):
         """Context manager entry."""
+        self.connect()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -455,14 +467,14 @@ class SyncDatabase(ABC):
 
     @classmethod
     def create(cls, backend: str, config: Dict[str, Any] | None = None) -> "SyncDatabase":
-        """Factory method to create a synchronous database instance.
+        """Factory method to create and connect a synchronous database instance.
 
         Args:
             backend: The backend type ("memory", "file", "s3", "postgres", "elasticsearch")
             config: Backend-specific configuration
 
         Returns:
-            SyncDatabase instance
+            Connected SyncDatabase instance
         """
         from .backends import SYNC_BACKEND_REGISTRY
 
@@ -472,4 +484,6 @@ class SyncDatabase(ABC):
                 f"Unknown backend: {backend}. Available: {list(SYNC_BACKEND_REGISTRY.keys())}"
             )
 
-        return backend_class(config)
+        instance = backend_class(config)
+        instance.connect()
+        return instance

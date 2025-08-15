@@ -49,7 +49,7 @@ def sync_db(elasticsearch_config):
 @pytest.fixture
 async def async_db(elasticsearch_config):
     """Create an asynchronous Elasticsearch database for testing."""
-    db = Database.create("elasticsearch", elasticsearch_config)
+    db = await Database.create("elasticsearch", elasticsearch_config)
     yield db
     # Cleanup
     try:
@@ -407,7 +407,7 @@ class TestAsyncElasticsearchDatabase:
 
     async def test_async_context_manager(self, elasticsearch_config):
         """Test async context manager."""
-        async with Database.create("elasticsearch", elasticsearch_config) as db:
+        async with await Database.create("elasticsearch", elasticsearch_config) as db:
             record = Record({"context": "manager"})
             id = await db.create(record)
             assert await db.exists(id)

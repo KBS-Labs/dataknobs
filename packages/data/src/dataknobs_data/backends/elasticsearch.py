@@ -31,14 +31,20 @@ class SyncElasticsearchDatabase(SyncDatabase, ConfigurableBase):
                 - mappings: Index mappings dict
         """
         super().__init__(config)
+        self.es_index = None  # Will be initialized in connect()
+        self._connected = False
     
     @classmethod
     def from_config(cls, config: dict) -> "SyncElasticsearchDatabase":
         """Create from config dictionary."""
         return cls(config)
 
-    def _initialize(self) -> None:
-        """Initialize the Elasticsearch connection and index."""
+    def connect(self) -> None:
+        """Connect to the Elasticsearch database."""
+        if self._connected:
+            return  # Already connected
+        
+        # Initialize the Elasticsearch connection and index
         config = self.config.copy()
 
         # Extract configuration
@@ -76,6 +82,24 @@ class SyncElasticsearchDatabase(SyncDatabase, ConfigurableBase):
         # Ensure index exists
         if not self.es_index.exists():
             self.es_index.create()
+        
+        self._connected = True
+    
+    def close(self) -> None:
+        """Close the database connection."""
+        if self.es_index:
+            # ElasticsearchIndex manages its own connections
+            self._connected = False
+    
+    def _initialize(self) -> None:
+        """Initialize method - connection setup moved to connect()."""
+        # Configuration parsing stays here if needed
+        pass
+    
+    def _check_connection(self) -> None:
+        """Check if database is connected."""
+        if not self._connected or not self.es_index:
+            raise RuntimeError("Database not connected. Call connect() first.")
 
     def _record_to_doc(self, record: Record, id: str | None = None) -> dict[str, Any]:
         """Convert a Record to an Elasticsearch document."""
@@ -151,6 +175,16 @@ class SyncElasticsearchDatabase(SyncDatabase, ConfigurableBase):
     def exists(self, id: str) -> bool:
         """Check if a record exists."""
         return self.es_index.exists(doc_id=id)
+    
+    def upsert(self, id: str, record: Record) -> str:
+        """Update or insert a record with a specific ID."""
+        doc = self._record_to_doc(record, id)
+        response = self.es_index.index(body=doc, doc_id=id, refresh=self.refresh)
+        
+        if response.get("_id"):
+            return id
+        else:
+            raise DatabaseError(f"Failed to upsert record {id}: {response}")
     
     def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records in batch with a single refresh."""
@@ -262,7 +296,7 @@ class SyncElasticsearchDatabase(SyncDatabase, ConfigurableBase):
                 field_path = f"data.{sort_spec.field}"
                 # Don't add .keyword if user already specified it or for common numeric fields
                 # This is a heuristic - ideally we'd check the mapping
-                numeric_fields = ['age', 'salary', 'balance', 'count', 'score', 'amount', 'price']
+                numeric_fields = ['age', 'salary', 'balance', 'count', 'score', 'amount', 'price', 'index', 'id', 'number', 'total', 'quantity']
                 if (not sort_spec.field.endswith('.keyword') and 
                     not sort_spec.field.endswith('.raw') and
                     sort_spec.field.lower() not in numeric_fields):
@@ -283,8 +317,14 @@ class SyncElasticsearchDatabase(SyncDatabase, ConfigurableBase):
         # Execute search
         response = self.es_index.search(body=search_body)
 
-        if not response.succeeded:
-            raise DatabaseError(f"Failed to search records: {response.text}")
+        # Check if the response is valid (has the expected structure)
+        # An empty result set is still a valid response
+        if not hasattr(response, 'json') or response.json is None:
+            raise DatabaseError(f"Invalid search response: {response}")
+        
+        # Check for actual errors in the response
+        if 'error' in response.json:
+            raise DatabaseError(f"Failed to search records: {response.json['error']}")
 
         # Parse results
         records = []
@@ -306,6 +346,7 @@ class SyncElasticsearchDatabase(SyncDatabase, ConfigurableBase):
 
     def _count_all(self) -> int:
         """Count all records in the database."""
+        self._check_connection()
         return self.es_index.count()
     
     def count(self, query: Query | None = None) -> int:
@@ -378,6 +419,7 @@ class SyncElasticsearchDatabase(SyncDatabase, ConfigurableBase):
 
     def clear(self) -> int:
         """Clear all records from the database."""
+        self._check_connection()
         # Get count before deletion
         count = self._count_all()
 
@@ -473,11 +515,29 @@ class ElasticsearchDatabase(Database, ConfigurableBase):
         # Create sync database for delegation
         self._sync_db = SyncElasticsearchDatabase(config)
         super().__init__(config)
+        self._connected = False
     
     @classmethod
     def from_config(cls, config: dict) -> "ElasticsearchDatabase":
         """Create from config dictionary."""
         return cls(config)
+
+    async def connect(self) -> None:
+        """Connect to the database."""
+        if self._connected:
+            return
+        
+        # Run sync connect in executor
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._sync_db.connect)
+        self._connected = True
+
+    async def close(self) -> None:
+        """Close the database connection."""
+        if self._connected:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, self._sync_db.close)
+            self._connected = False
 
     def _initialize(self) -> None:
         """Initialize is handled by sync database."""
@@ -512,6 +572,11 @@ class ElasticsearchDatabase(Database, ConfigurableBase):
         """Check if a record exists asynchronously."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._sync_db.exists, id)
+    
+    async def upsert(self, id: str, record: Record) -> str:
+        """Update or insert a record with a specific ID."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._sync_db.upsert, id, record)
 
     async def _count_all(self) -> int:
         """Count all records asynchronously."""

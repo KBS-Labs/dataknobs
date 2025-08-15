@@ -364,6 +364,10 @@ class FileDatabase(Database, ConfigurableBase):
         """Create from config dictionary."""
         return cls(config)
 
+    async def connect(self) -> None:
+        """Connect to the database (no-op for file backend)."""
+        pass
+
     def _generate_id(self) -> str:
         """Generate a unique ID for a record."""
         return str(uuid.uuid4())
@@ -663,6 +667,10 @@ class SyncFileDatabase(SyncDatabase, ConfigurableBase):
     def from_config(cls, config: dict) -> "SyncFileDatabase":
         """Create from config dictionary."""
         return cls(config)
+
+    def connect(self) -> None:
+        """Connect to the database (no-op for file backend)."""
+        pass
 
     def _generate_id(self) -> str:
         """Generate a unique ID for a record."""

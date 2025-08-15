@@ -1,4 +1,4 @@
-"""PostgreSQL backend implementation for the data package."""
+"""PostgreSQL backend implementation with proper connection management."""
 
 import asyncio
 import json
@@ -16,10 +16,10 @@ from ..streaming import StreamConfig, StreamResult
 
 
 class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
-    """Synchronous PostgreSQL database backend."""
+    """Synchronous PostgreSQL database backend with proper connection management."""
 
     def __init__(self, config: dict[str, Any] | None = None):
-        """Initialize PostgreSQL database.
+        """Initialize PostgreSQL database configuration.
 
         Args:
             config: Configuration with the following optional keys:
@@ -32,14 +32,19 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
                 - schema: Schema name (default: "public")
         """
         super().__init__(config)
+        self.db = None  # Will be initialized in connect()
+        self._connected = False
     
     @classmethod
     def from_config(cls, config: dict) -> "SyncPostgresDatabase":
         """Create from config dictionary."""
         return cls(config)
 
-    def _initialize(self) -> None:
-        """Initialize the PostgreSQL connection and table."""
+    def connect(self) -> None:
+        """Connect to the PostgreSQL database."""
+        if self._connected:
+            return  # Already connected
+            
         config = self.config.copy()
 
         # Extract table configuration
@@ -63,9 +68,25 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
 
         # Create table if it doesn't exist
         self._ensure_table()
+        self._connected = True
+
+    def close(self) -> None:
+        """Close the database connection."""
+        if self.db:
+            # PostgresDB manages its own connections via context managers
+            # but we can mark as disconnected
+            self._connected = False
+
+    def _initialize(self) -> None:
+        """Initialize method - connection setup moved to connect()."""
+        # Configuration parsing stays here, actual connection in connect()
+        pass
 
     def _ensure_table(self) -> None:
         """Ensure the records table exists."""
+        if not self.db:
+            raise RuntimeError("Database not connected. Call connect() first.")
+            
         create_table_sql = f"""
         CREATE TABLE IF NOT EXISTS {self.schema_name}.{self.table_name} (
             id VARCHAR(255) PRIMARY KEY,
@@ -82,6 +103,11 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
         ON {self.schema_name}.{self.table_name} USING GIN (metadata);
         """
         self.db.execute(create_table_sql)
+
+    def _check_connection(self) -> None:
+        """Check if database is connected."""
+        if not self._connected or not self.db:
+            raise RuntimeError("Database not connected. Call connect() first.")
 
     def _record_to_row(self, record: Record, id: str | None = None) -> dict[str, Any]:
         """Convert a Record to a database row."""
@@ -111,6 +137,7 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
 
     def create(self, record: Record) -> str:
         """Create a new record."""
+        self._check_connection()
         id = str(uuid.uuid4())
         row = self._record_to_row(record, id)
 
@@ -123,6 +150,7 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
 
     def read(self, id: str) -> Record | None:
         """Read a record by ID."""
+        self._check_connection()
         sql = f"""
         SELECT id, data, metadata
         FROM {self.schema_name}.{self.table_name}
@@ -138,32 +166,31 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
 
     def update(self, id: str, record: Record) -> bool:
         """Update an existing record."""
+        self._check_connection()
         row = self._record_to_row(record, id)
 
         sql = f"""
         UPDATE {self.schema_name}.{self.table_name}
-        SET data = %(data)s, 
-            metadata = %(metadata)s,
-            updated_at = CURRENT_TIMESTAMP
+        SET data = %(data)s, metadata = %(metadata)s, updated_at = CURRENT_TIMESTAMP
         WHERE id = %(id)s
         """
-
-        # Execute update and check if any rows were affected
-        affected = self.db.execute(sql, row)
-        return affected > 0
+        result = self.db.execute(sql, row)
+        # PostgresDB.execute returns number of affected rows
+        return result > 0 if isinstance(result, int) else False
 
     def delete(self, id: str) -> bool:
         """Delete a record by ID."""
+        self._check_connection()
         sql = f"""
         DELETE FROM {self.schema_name}.{self.table_name}
         WHERE id = %(id)s
         """
-
-        affected = self.db.execute(sql, {"id": id})
-        return affected > 0
+        result = self.db.execute(sql, {"id": id})
+        return result > 0 if isinstance(result, int) else False
 
     def exists(self, id: str) -> bool:
         """Check if a record exists."""
+        self._check_connection()
         sql = f"""
         SELECT 1 FROM {self.schema_name}.{self.table_name}
         WHERE id = %(id)s
@@ -171,195 +198,146 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
         """
         df = self.db.query(sql, {"id": id})
         return not df.empty
+    
+    def upsert(self, id: str, record: Record) -> str:
+        """Update or insert a record with a specific ID."""
+        self._check_connection()
+        if self.exists(id):
+            self.update(id, record)
+        else:
+            # Insert with specific ID
+            row = self._record_to_row(record, id)
+            sql = f"""
+            INSERT INTO {self.schema_name}.{self.table_name} (id, data, metadata)
+            VALUES (%(id)s, %(data)s, %(metadata)s)
+            """
+            self.db.execute(sql, row)
+        return id
 
     def search(self, query: Query) -> list[Record]:
-        """Search for records matching a query."""
+        """Search for records matching the query."""
+        self._check_connection()
         # Build SQL query from Query object
-        sql_parts = [f"SELECT id, data, metadata FROM {self.schema_name}.{self.table_name}"]
         where_clauses = []
         params = {}
 
-        # Apply filters
-        for i, filter_obj in enumerate(query.filters):
-            param_name = f"filter_{i}"
-            field_path = f"data->>'{filter_obj.field}'"
-
-            if filter_obj.operator == Operator.EQ:
-                where_clauses.append(f"{field_path} = %({param_name})s")
-                # Handle boolean values correctly (JSON stores as lowercase)
-                if isinstance(filter_obj.value, bool):
-                    params[param_name] = str(filter_obj.value).lower()
+        # Build WHERE clauses for filters
+        for i, filter in enumerate(query.filters):
+            field_path = f"data->>'{filter.field}'"
+            param_name = f"param_{i}"
+            
+            if filter.operator == Operator.EQ:
+                # Handle different types appropriately
+                if isinstance(filter.value, bool):
+                    where_clauses.append(f"({field_path})::boolean = %({param_name})s")
+                    params[param_name] = filter.value
+                elif isinstance(filter.value, (int, float)):
+                    where_clauses.append(f"({field_path})::numeric = %({param_name})s")
+                    params[param_name] = filter.value
                 else:
-                    params[param_name] = str(filter_obj.value)
-            elif filter_obj.operator == Operator.NEQ:
-                where_clauses.append(f"{field_path} != %({param_name})s")
-                # Handle boolean values correctly (JSON stores as lowercase)
-                if isinstance(filter_obj.value, bool):
-                    params[param_name] = str(filter_obj.value).lower()
+                    where_clauses.append(f"{field_path} = %({param_name})s")
+                    params[param_name] = str(filter.value)
+            elif filter.operator == Operator.NEQ:
+                if isinstance(filter.value, bool):
+                    where_clauses.append(f"({field_path})::boolean != %({param_name})s")
+                    params[param_name] = filter.value
+                elif isinstance(filter.value, (int, float)):
+                    where_clauses.append(f"({field_path})::numeric != %({param_name})s")
+                    params[param_name] = filter.value
                 else:
-                    params[param_name] = str(filter_obj.value)
-            elif filter_obj.operator == Operator.GT:
-                where_clauses.append(f"CAST({field_path} AS NUMERIC) > %({param_name})s")
-                params[param_name] = filter_obj.value
-            elif filter_obj.operator == Operator.GTE:
-                where_clauses.append(f"CAST({field_path} AS NUMERIC) >= %({param_name})s")
-                params[param_name] = filter_obj.value
-            elif filter_obj.operator == Operator.LT:
-                where_clauses.append(f"CAST({field_path} AS NUMERIC) < %({param_name})s")
-                params[param_name] = filter_obj.value
-            elif filter_obj.operator == Operator.LTE:
-                where_clauses.append(f"CAST({field_path} AS NUMERIC) <= %({param_name})s")
-                params[param_name] = filter_obj.value
-            elif filter_obj.operator == Operator.LIKE:
+                    where_clauses.append(f"{field_path} != %({param_name})s")
+                    params[param_name] = str(filter.value)
+            elif filter.operator == Operator.GT:
+                where_clauses.append(f"({field_path})::numeric > %({param_name})s")
+                params[param_name] = filter.value
+            elif filter.operator == Operator.LT:
+                where_clauses.append(f"({field_path})::numeric < %({param_name})s")
+                params[param_name] = filter.value
+            elif filter.operator == Operator.GTE:
+                where_clauses.append(f"({field_path})::numeric >= %({param_name})s")
+                params[param_name] = filter.value
+            elif filter.operator == Operator.LTE:
+                where_clauses.append(f"({field_path})::numeric <= %({param_name})s")
+                params[param_name] = filter.value
+            elif filter.operator == Operator.LIKE:
                 where_clauses.append(f"{field_path} LIKE %({param_name})s")
-                params[param_name] = filter_obj.value
-            elif filter_obj.operator == Operator.IN:
-                placeholders = ", ".join([f"%({param_name}_{j})s" for j in range(len(filter_obj.value))])
-                where_clauses.append(f"{field_path} IN ({placeholders})")
-                for j, val in enumerate(filter_obj.value):
-                    params[f"{param_name}_{j}"] = str(val)
-            elif filter_obj.operator == Operator.NOT_IN:
-                placeholders = ", ".join([f"%({param_name}_{j})s" for j in range(len(filter_obj.value))])
-                where_clauses.append(f"{field_path} NOT IN ({placeholders})")
-                for j, val in enumerate(filter_obj.value):
-                    params[f"{param_name}_{j}"] = str(val)
-            elif filter_obj.operator == Operator.EXISTS:
-                where_clauses.append(f"data ? '{filter_obj.field}'")
-            elif filter_obj.operator == Operator.NOT_EXISTS:
-                where_clauses.append(f"NOT (data ? '{filter_obj.field}')")
-            elif filter_obj.operator == Operator.REGEX:
-                where_clauses.append(f"{field_path} ~ %({param_name})s")
-                params[param_name] = filter_obj.value
+                params[param_name] = f"%{filter.value}%"
+            elif filter.operator == Operator.IN:
+                # Convert values to strings for comparison with JSONB text fields
+                values = [str(v) for v in filter.value]
+                where_clauses.append(f"{field_path} = ANY(%({param_name})s)")
+                params[param_name] = values
+            elif filter.operator == Operator.NOT_IN:
+                # Convert values to strings for comparison with JSONB text fields
+                values = [str(v) for v in filter.value]
+                where_clauses.append(f"{field_path} != ALL(%({param_name})s)")
+                params[param_name] = values
 
+        # Build SQL
+        sql = f"SELECT id, data, metadata FROM {self.schema_name}.{self.table_name}"
         if where_clauses:
-            sql_parts.append("WHERE " + " AND ".join(where_clauses))
+            sql += " WHERE " + " AND ".join(where_clauses)
 
-        # Apply sorting
+        # Add ORDER BY
         if query.sort_specs:
-            order_parts = []
+            order_clauses = []
             for sort_spec in query.sort_specs:
+                # Try to cast to numeric for proper sorting
+                # This will sort numbers correctly while still working for strings
                 field_path = f"data->>'{sort_spec.field}'"
-                order = "DESC" if sort_spec.order == SortOrder.DESC else "ASC"
-                # Try to cast numeric fields for proper sorting
-                # This will use numeric sorting if the field looks numeric, otherwise string
-                order_parts.append(f"CASE WHEN data->>'{sort_spec.field}' ~ '^[0-9]+(\\.[0-9]+)?$' THEN CAST(data->>'{sort_spec.field}' AS NUMERIC) ELSE 0 END {order}, {field_path} {order}")
-            sql_parts.append("ORDER BY " + ", ".join(order_parts))
+                direction = "DESC" if sort_spec.order == SortOrder.DESC else "ASC"
+                # Use a CASE statement to handle both numeric and string sorting
+                order_clause = f"""
+                    CASE 
+                        WHEN {field_path} ~ '^[0-9]+(\\.[0-9]+)?$' 
+                        THEN ({field_path})::numeric 
+                        ELSE NULL 
+                    END {direction} NULLS LAST,
+                    {field_path} {direction}
+                """
+                order_clauses.append(order_clause)
+            sql += " ORDER BY " + ", ".join(order_clauses)
 
-        # Apply limit and offset
+        # Add LIMIT and OFFSET
         if query.limit_value:
-            sql_parts.append(f"LIMIT {query.limit_value}")
+            sql += f" LIMIT {query.limit_value}"
         if query.offset_value:
-            sql_parts.append(f"OFFSET {query.offset_value}")
+            sql += f" OFFSET {query.offset_value}"
 
-        sql = " ".join(sql_parts)
+        # Execute query
         df = self.db.query(sql, params)
 
+        # Convert to records
         records = []
         for _, row in df.iterrows():
-            records.append(self._row_to_record(row.to_dict()))
+            record = self._row_to_record(row.to_dict())
+            
+            # Apply field projection if specified
+            if query.fields:
+                record = record.project(query.fields)
+            
+            records.append(record)
 
         return records
 
     def _count_all(self) -> int:
         """Count all records in the database."""
+        self._check_connection()
         sql = f"SELECT COUNT(*) as count FROM {self.schema_name}.{self.table_name}"
         df = self.db.query(sql)
-        return int(df.iloc[0]["count"])
-    
-    def count(self, query: Query | None = None) -> int:
-        """Count records matching a query using efficient SQL COUNT.
-        
-        Args:
-            query: Optional search query (counts all if None)
-            
-        Returns:
-            Number of matching records
-        """
-        if not query or not query.filters:
-            return self._count_all()
-        
-        # Build SQL count query from Query object
-        sql_parts = [f"SELECT COUNT(*) as count FROM {self.schema_name}.{self.table_name}"]
-        where_clauses = []
-        params = {}
-        
-        # Apply filters (same logic as search method)
-        for i, filter_obj in enumerate(query.filters):
-            param_name = f"filter_{i}"
-            field_path = f"data->>'{filter_obj.field}'"
-            
-            if filter_obj.operator == Operator.EQ:
-                where_clauses.append(f"{field_path} = %({param_name})s")
-                # Handle boolean values correctly (JSON stores as lowercase)
-                if isinstance(filter_obj.value, bool):
-                    params[param_name] = str(filter_obj.value).lower()
-                else:
-                    params[param_name] = str(filter_obj.value)
-            elif filter_obj.operator == Operator.NEQ:
-                where_clauses.append(f"{field_path} != %({param_name})s")
-                # Handle boolean values correctly (JSON stores as lowercase)
-                if isinstance(filter_obj.value, bool):
-                    params[param_name] = str(filter_obj.value).lower()
-                else:
-                    params[param_name] = str(filter_obj.value)
-            elif filter_obj.operator == Operator.GT:
-                where_clauses.append(f"CAST({field_path} AS NUMERIC) > %({param_name})s")
-                params[param_name] = filter_obj.value
-            elif filter_obj.operator == Operator.GTE:
-                where_clauses.append(f"CAST({field_path} AS NUMERIC) >= %({param_name})s")
-                params[param_name] = filter_obj.value
-            elif filter_obj.operator == Operator.LT:
-                where_clauses.append(f"CAST({field_path} AS NUMERIC) < %({param_name})s")
-                params[param_name] = filter_obj.value
-            elif filter_obj.operator == Operator.LTE:
-                where_clauses.append(f"CAST({field_path} AS NUMERIC) <= %({param_name})s")
-                params[param_name] = filter_obj.value
-            elif filter_obj.operator == Operator.LIKE:
-                where_clauses.append(f"{field_path} LIKE %({param_name})s")
-                params[param_name] = filter_obj.value
-            elif filter_obj.operator == Operator.IN:
-                placeholders = ", ".join([f"%({param_name}_{j})s" for j in range(len(filter_obj.value))])
-                where_clauses.append(f"{field_path} IN ({placeholders})")
-                for j, val in enumerate(filter_obj.value):
-                    params[f"{param_name}_{j}"] = str(val)
-            elif filter_obj.operator == Operator.NOT_IN:
-                placeholders = ", ".join([f"%({param_name}_{j})s" for j in range(len(filter_obj.value))])
-                where_clauses.append(f"{field_path} NOT IN ({placeholders})")
-                for j, val in enumerate(filter_obj.value):
-                    params[f"{param_name}_{j}"] = str(val)
-            elif filter_obj.operator == Operator.EXISTS:
-                where_clauses.append(f"data ? '{filter_obj.field}'")
-            elif filter_obj.operator == Operator.NOT_EXISTS:
-                where_clauses.append(f"NOT (data ? '{filter_obj.field}')")
-            elif filter_obj.operator == Operator.REGEX:
-                where_clauses.append(f"{field_path} ~ %({param_name})s")
-                params[param_name] = filter_obj.value
-        
-        if where_clauses:
-            sql_parts.append("WHERE " + " AND ".join(where_clauses))
-        
-        sql = " ".join(sql_parts)
-        df = self.db.query(sql, params)
-        return int(df.iloc[0]["count"])
+        return int(df.iloc[0]["count"]) if not df.empty else 0
 
     def clear(self) -> int:
         """Clear all records from the database."""
-        sql = f"""
-        DELETE FROM {self.schema_name}.{self.table_name}
-        """
-
-        with self.db.get_conn() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(sql)
-                affected = cursor.rowcount
-                conn.commit()
-
-        return affected
-
-    def close(self) -> None:
-        """Close the database connection."""
-        # PostgresDB manages its own connections via context managers
-        pass
+        self._check_connection()
+        # Get count first
+        count = self._count_all()
+        
+        # Delete all records
+        sql = f"TRUNCATE TABLE {self.schema_name}.{self.table_name}"
+        self.db.execute(sql)
+        
+        return count
 
     def stream_read(
         self,
@@ -367,27 +345,59 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
         config: Optional[StreamConfig] = None
     ) -> Iterator[Record]:
         """Stream records from PostgreSQL."""
+        self._check_connection()
         config = config or StreamConfig()
         
-        # Use search to get all matching records
-        # For future optimization: use server-side cursor
-        if query:
-            records = self.search(query)
-        else:
-            records = self.search(Query())
+        # Build SQL query
+        sql = f"SELECT id, data, metadata FROM {self.schema_name}.{self.table_name}"
+        params = {}
         
-        # Yield records in batches for consistency
-        for i in range(0, len(records), config.batch_size):
-            batch = records[i:i + config.batch_size]
-            for record in batch:
+        if query and query.filters:
+            # Add WHERE clause (simplified for now)
+            where_clauses = []
+            for i, filter in enumerate(query.filters):
+                field_path = f"data->>'{filter.field}'"
+                param_name = f"param_{i}"
+                
+                if filter.operator == Operator.EQ:
+                    where_clauses.append(f"{field_path} = %({param_name})s")
+                    params[param_name] = str(filter.value)
+            
+            if where_clauses:
+                sql += " WHERE " + " AND ".join(where_clauses)
+        
+        # Use cursor for streaming
+        # Note: PostgresDB may need modification to support cursors
+        # For now, we'll fetch in batches
+        sql += f" LIMIT {config.batch_size} OFFSET %(offset)s"
+        
+        offset = 0
+        while True:
+            params["offset"] = offset
+            df = self.db.query(sql, params)
+            
+            if df.empty:
+                break
+            
+            for _, row in df.iterrows():
+                record = self._row_to_record(row.to_dict())
+                if query and query.fields:
+                    record = record.project(query.fields)
                 yield record
-    
+            
+            offset += config.batch_size
+            
+            # If we got less than batch_size, we're done
+            if len(df) < config.batch_size:
+                break
+
     def stream_write(
         self,
         records: Iterator[Record],
         config: Optional[StreamConfig] = None
     ) -> StreamResult:
         """Stream records into PostgreSQL."""
+        self._check_connection()
         config = config or StreamConfig()
         result = StreamResult()
         start_time = time.time()
@@ -399,8 +409,8 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
             if len(batch) >= config.batch_size:
                 # Write batch
                 try:
-                    ids = self.create_batch(batch)
-                    result.successful += len(ids)
+                    self._write_batch(batch)
+                    result.successful += len(batch)
                     result.total_processed += len(batch)
                 except Exception as e:
                     result.failed += len(batch)
@@ -418,8 +428,8 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
         # Write remaining batch
         if batch:
             try:
-                ids = self.create_batch(batch)
-                result.successful += len(ids)
+                self._write_batch(batch)
+                result.successful += len(batch)
                 result.total_processed += len(batch)
             except Exception as e:
                 result.failed += len(batch)
@@ -429,20 +439,58 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
         result.duration = time.time() - start_time
         return result
 
+    def _write_batch(self, records: list[Record]) -> None:
+        """Write a batch of records to the database."""
+        # Build batch insert SQL
+        values = []
+        params = {}
+        
+        for i, record in enumerate(records):
+            id = str(uuid.uuid4())
+            row = self._record_to_row(record, id)
+            values.append(f"(%(id_{i})s, %(data_{i})s, %(metadata_{i})s)")
+            params[f"id_{i}"] = row["id"]
+            params[f"data_{i}"] = row["data"]
+            params[f"metadata_{i}"] = row["metadata"]
+        
+        sql = f"""
+        INSERT INTO {self.schema_name}.{self.table_name} (id, data, metadata)
+        VALUES {', '.join(values)}
+        """
+        self.db.execute(sql, params)
+
 
 class PostgresDatabase(Database, ConfigurableBase):
-    """Asynchronous PostgreSQL database backend."""
+    """Asynchronous PostgreSQL database backend with proper connection management."""
 
     def __init__(self, config: dict[str, Any] | None = None):
         """Initialize async PostgreSQL database."""
         # Create sync database for delegation
         self._sync_db = SyncPostgresDatabase(config)
         super().__init__(config)
+        self._connected = False
     
     @classmethod
     def from_config(cls, config: dict) -> "PostgresDatabase":
         """Create from config dictionary."""
         return cls(config)
+
+    async def connect(self) -> None:
+        """Connect to the database."""
+        if self._connected:
+            return
+        
+        # Run sync connect in executor
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._sync_db.connect)
+        self._connected = True
+
+    async def close(self) -> None:
+        """Close the database connection."""
+        if self._connected:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, self._sync_db.close)
+            self._connected = False
 
     def _initialize(self) -> None:
         """Initialize is handled by sync database."""
@@ -454,7 +502,7 @@ class PostgresDatabase(Database, ConfigurableBase):
         return await loop.run_in_executor(None, self._sync_db.create, record)
 
     async def read(self, id: str) -> Record | None:
-        """Read a record by ID asynchronously."""
+        """Read a record asynchronously."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._sync_db.read, id)
 
@@ -468,35 +516,30 @@ class PostgresDatabase(Database, ConfigurableBase):
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._sync_db.delete, id)
 
+    async def exists(self, id: str) -> bool:
+        """Check if a record exists asynchronously."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._sync_db.exists, id)
+    
+    async def upsert(self, id: str, record: Record) -> str:
+        """Update or insert a record with a specific ID."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._sync_db.upsert, id, record)
+
     async def search(self, query: Query) -> list[Record]:
         """Search for records asynchronously."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._sync_db.search, query)
 
-    async def exists(self, id: str) -> bool:
-        """Check if a record exists asynchronously."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._sync_db.exists, id)
-
     async def _count_all(self) -> int:
         """Count all records asynchronously."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._sync_db._count_all)
-    
-    async def count(self, query: Query | None = None) -> int:
-        """Count records matching a query asynchronously."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._sync_db.count, query)
 
     async def clear(self) -> int:
         """Clear all records asynchronously."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._sync_db.clear)
-
-    async def close(self) -> None:
-        """Close the database connection asynchronously."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._sync_db.close)
 
     async def stream_read(
         self,
@@ -504,21 +547,22 @@ class PostgresDatabase(Database, ConfigurableBase):
         config: Optional[StreamConfig] = None
     ) -> AsyncIterator[Record]:
         """Stream records from PostgreSQL asynchronously."""
-        config = config or StreamConfig()
+        loop = asyncio.get_event_loop()
         
-        # Use search to get all matching records
-        # For future optimization: use async server-side cursor
-        if query:
-            records = await self.search(query)
-        else:
-            records = await self.search(Query())
+        # Get sync iterator in thread
+        sync_iter = await loop.run_in_executor(
+            None,
+            self._sync_db.stream_read,
+            query,
+            config
+        )
         
-        # Yield records in batches for consistency
-        for i in range(0, len(records), config.batch_size):
-            batch = records[i:i + config.batch_size]
-            for record in batch:
-                yield record
-    
+        # Convert to async iterator
+        for record in sync_iter:
+            yield record
+            # Small yield to prevent blocking
+            await asyncio.sleep(0)
+
     async def stream_write(
         self,
         records: AsyncIterator[Record],
@@ -534,10 +578,11 @@ class PostgresDatabase(Database, ConfigurableBase):
             batch.append(record)
             
             if len(batch) >= config.batch_size:
-                # Write batch
+                # Write batch in executor
+                loop = asyncio.get_event_loop()
                 try:
-                    ids = await self.create_batch(batch)
-                    result.successful += len(ids)
+                    await loop.run_in_executor(None, self._sync_db._write_batch, batch)
+                    result.successful += len(batch)
                     result.total_processed += len(batch)
                 except Exception as e:
                     result.failed += len(batch)
@@ -554,9 +599,10 @@ class PostgresDatabase(Database, ConfigurableBase):
         
         # Write remaining batch
         if batch:
+            loop = asyncio.get_event_loop()
             try:
-                ids = await self.create_batch(batch)
-                result.successful += len(ids)
+                await loop.run_in_executor(None, self._sync_db._write_batch, batch)
+                result.successful += len(batch)
                 result.total_processed += len(batch)
             except Exception as e:
                 result.failed += len(batch)

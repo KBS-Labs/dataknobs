@@ -1,4 +1,4 @@
-"""S3 backend implementation for dataknobs-data package."""
+"""S3 backend implementation with proper connection management."""
 
 import asyncio
 import json
@@ -20,46 +20,28 @@ logger = logging.getLogger(__name__)
 
 
 class SyncS3Database(SyncDatabase, ConfigurableBase):
-    """S3-based database backend.
+    """S3-based database backend with proper connection management.
     
     Stores records as JSON objects in S3 with metadata as tags.
-    
-    Configuration Options:
-        bucket (str): S3 bucket name (required)
-        prefix (str): Object key prefix for organization (default: "records/")
-        region (str): AWS region (default: "us-east-1")
-        endpoint_url (str): Custom endpoint URL (for LocalStack/MinIO)
-        access_key_id (str): AWS access key ID (from env if not provided)
-        secret_access_key (str): AWS secret access key (from env if not provided)
-        session_token (str): AWS session token (optional)
-        max_workers (int): Max threads for parallel operations (default: 10)
-        multipart_threshold (int): Size threshold for multipart upload in bytes (default: 8MB)
-        multipart_chunksize (int): Chunk size for multipart upload (default: 8MB)
-        max_retries (int): Maximum retry attempts (default: 3)
-        
-    Example Configuration:
-        databases:
-          - name: s3_storage
-            class: dataknobs_data.backends.s3.S3Database
-            bucket: my-data-bucket
-            prefix: records/prod/
-            region: us-west-2
-            endpoint_url: ${LOCALSTACK_ENDPOINT}  # For testing
     """
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
-        """Initialize S3 database backend.
+        """Initialize S3 database configuration.
         
         Args:
             config: Configuration dictionary
         """
-        import boto3
-        from botocore.config import Config as BotoConfig
-        from botocore.exceptions import ClientError
+        super().__init__(config)
         
-        self.config = config or {}
+        # Connection state
+        self.s3_client = None
+        self._connected = False
         
-        # Required configuration
+        # Cache for performance
+        self._index_cache = {}
+        self._cache_dirty = True
+        
+        # Store configuration for later connection
         self.bucket = self.config.get("bucket")
         if not self.bucket:
             raise ValueError("S3 bucket name is required in configuration")
@@ -74,9 +56,23 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
         self.max_retries = self.config.get("max_retries", 3)
         
         # AWS credentials (will use environment/IAM role if not provided)
-        aws_access_key_id = self.config.get("access_key_id")
-        aws_secret_access_key = self.config.get("secret_access_key")
-        aws_session_token = self.config.get("session_token")
+        self.aws_access_key_id = self.config.get("access_key_id")
+        self.aws_secret_access_key = self.config.get("secret_access_key")
+        self.aws_session_token = self.config.get("session_token")
+    
+    @classmethod
+    def from_config(cls, config: dict) -> "SyncS3Database":
+        """Create instance from configuration dictionary."""
+        return cls(config)
+    
+    def connect(self) -> None:
+        """Connect to S3 service."""
+        if self._connected:
+            return  # Already connected
+        
+        import boto3
+        from botocore.config import Config as BotoConfig
+        from botocore.exceptions import ClientError
         
         # Configure boto3 client
         boto_config = BotoConfig(
@@ -93,12 +89,12 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
         if self.endpoint_url:
             client_kwargs["endpoint_url"] = self.endpoint_url
         
-        if aws_access_key_id and aws_secret_access_key:
-            client_kwargs["aws_access_key_id"] = aws_access_key_id
-            client_kwargs["aws_secret_access_key"] = aws_secret_access_key
+        if self.aws_access_key_id and self.aws_secret_access_key:
+            client_kwargs["aws_access_key_id"] = self.aws_access_key_id
+            client_kwargs["aws_secret_access_key"] = self.aws_secret_access_key
             
-        if aws_session_token:
-            client_kwargs["aws_session_token"] = aws_session_token
+        if self.aws_session_token:
+            client_kwargs["aws_session_token"] = self.aws_session_token
         
         # Create S3 client
         self.s3_client = boto3.client("s3", **client_kwargs)
@@ -107,23 +103,25 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
         # Verify bucket exists or create it
         self._ensure_bucket_exists()
         
-        # Cache for performance
-        self._index_cache = {}
-        self._cache_dirty = True
-        
-        logger.info(f"Initialized S3Database with bucket={self.bucket}, prefix={self.prefix}")
+        self._connected = True
+        logger.info(f"Connected to S3 with bucket={self.bucket}, prefix={self.prefix}")
     
-    @classmethod
-    def from_config(cls, config: dict) -> "S3Database":
-        """Create instance from configuration dictionary.
-        
-        Args:
-            config: Configuration dictionary
-            
-        Returns:
-            Configured S3Database instance
-        """
-        return cls(config)
+    def close(self) -> None:
+        """Close the S3 connection."""
+        if self.s3_client:
+            # S3 client doesn't need explicit closing, but clear cache
+            self._index_cache = {}
+            self._connected = False
+            logger.info(f"Closed S3 connection to bucket={self.bucket}")
+    
+    def _initialize(self) -> None:
+        """Initialize method - connection setup moved to connect()."""
+        pass
+    
+    def _check_connection(self) -> None:
+        """Check if S3 client is connected."""
+        if not self._connected or not self.s3_client:
+            raise RuntimeError("S3 not connected. Call connect() first.")
     
     def _ensure_bucket_exists(self):
         """Ensure the S3 bucket exists, create if necessary."""
@@ -145,249 +143,136 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
             else:
                 raise
     
-    def _generate_id(self) -> str:
-        """Generate a unique record ID."""
-        return str(uuid4())
-    
     def _get_object_key(self, record_id: str) -> str:
-        """Get S3 object key for a record ID."""
+        """Generate S3 object key for a record ID."""
         return f"{self.prefix}{record_id}.json"
     
-    def _serialize_record(self, record: Record) -> bytes:
-        """Serialize a record to JSON bytes."""
-        # Convert fields to serializable format
-        fields_data = {}
-        for name, field in record.fields.items():
-            fields_data[name] = {
-                "value": field.value,
-                "type": field.type.value if field.type else None,
-                "metadata": field.metadata
-            }
+    def _record_to_s3_object(self, record: Record) -> Dict[str, Any]:
+        """Convert a Record to S3 object data."""
+        data = {}
+        for field_name, field_obj in record.fields.items():
+            data[field_name] = field_obj.value
         
-        data = {
-            "fields": fields_data,
-            "metadata": record.metadata
+        return {
+            "data": data,
+            "metadata": record.metadata or {}
         }
-        return json.dumps(data, indent=2, default=str).encode('utf-8')
     
-    def _deserialize_record(self, data: bytes) -> Record:
-        """Deserialize JSON bytes to a Record."""
-        record_data = json.loads(data.decode('utf-8'))
-        
-        # Convert fields back to simple values for Record constructor
-        fields = {}
-        for name, field_data in record_data.get("fields", {}).items():
-            if isinstance(field_data, dict) and "value" in field_data:
-                fields[name] = field_data["value"]
-            else:
-                fields[name] = field_data
-        
-        return Record(
-            data=fields,
-            metadata=record_data.get("metadata", {})
-        )
-    
-    def _record_to_tags(self, record: Record) -> Dict[str, str]:
-        """Convert record metadata to S3 tags (max 10 tags, 128 chars each)."""
-        tags = {}
-        
-        # Add metadata as tags (S3 limit: 10 tags total)
-        for i, (key, value) in enumerate(record.metadata.items()):
-            if i >= 10:
-                break
-            # S3 tag keys/values have character limits
-            tag_key = str(key)[:128]
-            tag_value = str(value)[:128] if value is not None else ""
-            tags[tag_key] = tag_value
-        
-        return tags
+    def _s3_object_to_record(self, obj_data: Dict[str, Any]) -> Record:
+        """Convert S3 object data to a Record."""
+        data = obj_data.get("data", {})
+        metadata = obj_data.get("metadata", {})
+        return Record(data=data, metadata=metadata)
     
     def create(self, record: Record) -> str:
-        """Create a new record in S3.
+        """Create a new record in S3."""
+        self._check_connection()
         
-        Args:
-            record: Record to create
-            
-        Returns:
-            The ID of the created record
-        """
-        # Generate ID and set in metadata
-        record_id = record.metadata.get("id", self._generate_id())
+        record_id = str(uuid4())
+        key = self._get_object_key(record_id)
+        
+        # Set metadata
+        record.metadata = record.metadata or {}
         record.metadata["id"] = record_id
-        
-        # Set timestamps in metadata
         now = datetime.utcnow()
         record.metadata["created_at"] = now.isoformat()
         record.metadata["updated_at"] = now.isoformat()
         
-        # Serialize record
-        data = self._serialize_record(record)
+        # Convert record to JSON
+        obj_data = self._record_to_s3_object(record)
+        body = json.dumps(obj_data)
         
-        # Prepare S3 tags
-        tags = self._record_to_tags(record)
-        tagging = "&".join([f"{k}={v}" for k, v in tags.items()])
+        # Store in S3
+        self.s3_client.put_object(
+            Bucket=self.bucket,
+            Key=key,
+            Body=body,
+            ContentType='application/json'
+        )
         
-        # Upload to S3
-        key = self._get_object_key(record_id)
+        # Invalidate cache
+        self._cache_dirty = True
         
-        try:
-            self.s3_client.put_object(
-                Bucket=self.bucket,
-                Key=key,
-                Body=data,
-                ContentType="application/json",
-                Tagging=tagging,
-                Metadata={
-                    "record_id": record_id,
-                    "dataknobs_type": "record"
-                }
-            )
-            
-            # Invalidate cache
-            self._cache_dirty = True
-            
-            logger.debug(f"Created record {record_id} in S3")
-            return record_id
-            
-        except self.ClientError as e:
-            logger.error(f"Failed to create record in S3: {e}")
-            raise
+        logger.debug(f"Created record {record_id} at {key}")
+        return record_id
     
-    def read(self, record_id: str) -> Optional[Record]:
-        """Read a record from S3.
+    def read(self, id: str) -> Optional[Record]:
+        """Read a record from S3."""
+        self._check_connection()
         
-        Args:
-            record_id: ID of the record to read
-            
-        Returns:
-            The record if found, None otherwise
-        """
-        key = self._get_object_key(record_id)
+        key = self._get_object_key(id)
         
         try:
-            response = self.s3_client.get_object(
-                Bucket=self.bucket,
-                Key=key
-            )
-            
-            data = response['Body'].read()
-            record = self._deserialize_record(data)
-            
-            logger.debug(f"Read record {record_id} from S3")
-            return record
-            
+            response = self.s3_client.get_object(Bucket=self.bucket, Key=key)
+            body = response['Body'].read()
+            obj_data = json.loads(body)
+            return self._s3_object_to_record(obj_data)
         except self.ClientError as e:
             if e.response['Error']['Code'] == 'NoSuchKey':
-                logger.debug(f"Record {record_id} not found in S3")
                 return None
-            else:
-                logger.error(f"Failed to read record from S3: {e}")
-                raise
-    
-    def update(self, record_id: str, record: Record) -> bool:
-        """Update an existing record in S3.
-        
-        Args:
-            record_id: ID of the record to update
-            record: Updated record data
-            
-        Returns:
-            True if successful, False if record not found
-        """
-        # Check if record exists
-        if not self.exists(record_id):
-            return False
-        
-        # Preserve original creation time
-        existing = self.read(record_id)
-        if existing and "created_at" in existing.metadata:
-            record.metadata["created_at"] = existing.metadata["created_at"]
-        
-        # Update timestamp and ID in metadata
-        record.metadata["updated_at"] = datetime.utcnow().isoformat()
-        record.metadata["id"] = record_id
-        
-        # Serialize and upload
-        data = self._serialize_record(record)
-        tags = self._record_to_tags(record)
-        tagging = "&".join([f"{k}={v}" for k, v in tags.items()])
-        
-        key = self._get_object_key(record_id)
-        
-        try:
-            self.s3_client.put_object(
-                Bucket=self.bucket,
-                Key=key,
-                Body=data,
-                ContentType="application/json",
-                Tagging=tagging,
-                Metadata={
-                    "record_id": record_id,
-                    "dataknobs_type": "record"
-                }
-            )
-            
-            # Invalidate cache
-            self._cache_dirty = True
-            
-            logger.debug(f"Updated record {record_id} in S3")
-            return True
-            
-        except self.ClientError as e:
-            logger.error(f"Failed to update record in S3: {e}")
             raise
     
-    def delete(self, record_id: str) -> bool:
-        """Delete a record from S3.
+    def update(self, id: str, record: Record) -> bool:
+        """Update an existing record in S3."""
+        self._check_connection()
         
-        Args:
-            record_id: ID of the record to delete
-            
-        Returns:
-            True if successful, False if record not found
-        """
-        key = self._get_object_key(record_id)
+        key = self._get_object_key(id)
         
+        # Check if exists and get existing metadata
         try:
-            # Check if exists first
-            if not self.exists(record_id):
+            response = self.s3_client.get_object(Bucket=self.bucket, Key=key)
+            existing_data = json.loads(response['Body'].read())
+            existing_metadata = existing_data.get("metadata", {})
+        except self.ClientError as e:
+            if e.response['Error']['Code'] == 'NoSuchKey':
                 return False
-            
-            self.s3_client.delete_object(
-                Bucket=self.bucket,
-                Key=key
-            )
-            
-            # Invalidate cache
-            self._cache_dirty = True
-            
-            logger.debug(f"Deleted record {record_id} from S3")
-            return True
-            
-        except self.ClientError as e:
-            logger.error(f"Failed to delete record from S3: {e}")
             raise
+        
+        # Preserve and update metadata
+        record.metadata = record.metadata or {}
+        record.metadata["id"] = id
+        record.metadata["created_at"] = existing_metadata.get("created_at", datetime.utcnow().isoformat())
+        record.metadata["updated_at"] = datetime.utcnow().isoformat()
+        
+        # Update the object
+        obj_data = self._record_to_s3_object(record)
+        body = json.dumps(obj_data)
+        
+        self.s3_client.put_object(
+            Bucket=self.bucket,
+            Key=key,
+            Body=body,
+            ContentType='application/json'
+        )
+        
+        # Invalidate cache
+        self._cache_dirty = True
+        
+        logger.debug(f"Updated record {id} at {key}")
+        return True
     
-    def exists(self, record_id: str) -> bool:
-        """Check if a record exists in S3.
+    def delete(self, id: str) -> bool:
+        """Delete a record from S3."""
+        self._check_connection()
         
-        Args:
-            record_id: ID of the record to check
-            
-        Returns:
-            True if the record exists, False otherwise
-        """
-        key = self._get_object_key(record_id)
+        key = self._get_object_key(id)
         
+        # Check if exists
         try:
             self.s3_client.head_object(Bucket=self.bucket, Key=key)
-            return True
         except self.ClientError as e:
             if e.response['Error']['Code'] == '404':
                 return False
-            else:
-                logger.error(f"Failed to check record existence in S3: {e}")
-                raise
+            raise
+        
+        # Delete the object
+        self.s3_client.delete_object(Bucket=self.bucket, Key=key)
+        
+        # Invalidate cache
+        self._cache_dirty = True
+        
+        logger.debug(f"Deleted record {id} at {key}")
+        return True
     
     def list_all(self) -> List[str]:
         """List all record IDs in the database.
@@ -395,6 +280,7 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
         Returns:
             List of all record IDs
         """
+        self._check_connection()
         record_ids = []
         
         # Use paginator for large buckets
@@ -416,307 +302,166 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
         logger.debug(f"Listed {len(record_ids)} records from S3")
         return record_ids
     
+    def exists(self, id: str) -> bool:
+        """Check if a record exists in S3."""
+        self._check_connection()
+        
+        key = self._get_object_key(id)
+        
+        try:
+            self.s3_client.head_object(Bucket=self.bucket, Key=key)
+            return True
+        except self.ClientError as e:
+            if e.response['Error']['Code'] == '404':
+                return False
+            raise
+    
     def search(self, query: Query) -> List[Record]:
         """Search for records matching the query.
         
-        Note: S3 doesn't support native querying, so this loads and filters all records.
-        For large datasets, consider using a proper database or search service.
-        
-        Args:
-            query: Query object with filters and options
-            
-        Returns:
-            List of matching records
+        Note: S3 doesn't support complex queries, so we need to list and filter.
         """
-        # Build index if cache is dirty
-        if self._cache_dirty:
-            self._rebuild_index()
+        self._check_connection()
         
-        # Get all record IDs
-        all_ids = list(self._index_cache.keys())
-        
-        # Load records in parallel
+        # List all objects with the prefix
         records = []
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_id = {executor.submit(self.read, rid): rid for rid in all_ids}
-            
-            for future in as_completed(future_to_id):
-                record = future.result()
-                if record:
-                    records.append(record)
-        
-        # Apply query filters
-        filtered = self._apply_query(records, query)
-        
-        logger.debug(f"Search returned {len(filtered)} records from S3")
-        return filtered
-    
-    def _rebuild_index(self):
-        """Rebuild the index cache from S3 listings."""
-        self._index_cache = {}
-        
         paginator = self.s3_client.get_paginator('list_objects_v2')
-        page_iterator = paginator.paginate(
-            Bucket=self.bucket,
-            Prefix=self.prefix
-        )
+        pages = paginator.paginate(Bucket=self.bucket, Prefix=self.prefix)
         
-        for page in page_iterator:
-            if 'Contents' in page:
+        for page in pages:
+            if 'Contents' not in page:
+                continue
+            
+            # Fetch objects in parallel
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = []
                 for obj in page['Contents']:
-                    key = obj['Key']
-                    if key.startswith(self.prefix) and key.endswith('.json'):
-                        record_id = key[len(self.prefix):-5]
-                        self._index_cache[record_id] = {
-                            'size': obj['Size'],
-                            'last_modified': obj['LastModified'],
-                            'etag': obj['ETag']
-                        }
+                    if obj['Key'].endswith('.json'):
+                        future = executor.submit(self._fetch_and_filter, obj['Key'], query)
+                        futures.append(future)
+                
+                for future in as_completed(futures):
+                    record = future.result()
+                    if record:
+                        records.append(record)
         
-        self._cache_dirty = False
-        logger.debug(f"Rebuilt index with {len(self._index_cache)} records")
-    
-    def _apply_query(self, records: List[Record], query: Query) -> List[Record]:
-        """Apply query filters, sorting, and pagination to records."""
-        # Apply filters
-        filtered = []
-        for record in records:
-            if self._matches_filters(record, query.filters):
-                filtered.append(record)
-        
-        # Apply sorting
+        # Apply sorting if specified
         if query.sort_specs:
             for sort_spec in reversed(query.sort_specs):
-                reverse = (sort_spec.order.value == "desc")
-                filtered.sort(
-                    key=lambda r: r.get_value(sort_spec.field) if r.get_value(sort_spec.field) is not None else "",
+                reverse = sort_spec.order.value == "desc"
+                records.sort(
+                    key=lambda r: r.get_value(sort_spec.field, ""),
                     reverse=reverse
                 )
         
-        # Apply pagination
-        start = query.offset_value or 0
-        end = start + query.limit_value if query.limit_value else None
-        filtered = filtered[start:end]
+        # Apply offset and limit
+        if query.offset_value:
+            records = records[query.offset_value:]
+        if query.limit_value:
+            records = records[:query.limit_value]
         
-        # Apply projection (field selection)
+        # Apply field projection
         if query.fields:
-            for record in filtered:
-                # Keep only projected fields
-                projected_fields = {
-                    k: v for k, v in record.fields.items()
-                    if k in query.fields
-                }
-                record.fields = projected_fields
-        
-        return filtered
-    
-    def _matches_filters(self, record: Record, filters: List) -> bool:
-        """Check if a record matches all filters."""
-        from dataknobs_data.query import Operator
-        
-        for filter_obj in filters:
-            field_value = record.get_value(filter_obj.field)
-            op = filter_obj.operator
-            value = filter_obj.value
-            
-            if op == Operator.EQ:
-                if field_value != value:
-                    return False
-            elif op == Operator.NEQ:
-                if field_value == value:
-                    return False
-            elif op == Operator.GT:
-                if field_value is None or field_value <= value:
-                    return False
-            elif op == Operator.GTE:
-                if field_value is None or field_value < value:
-                    return False
-            elif op == Operator.LT:
-                if field_value is None or field_value >= value:
-                    return False
-            elif op == Operator.LTE:
-                if field_value is None or field_value > value:
-                    return False
-            elif op == Operator.IN:
-                if field_value not in value:
-                    return False
-            elif op == Operator.NOT_IN:
-                if field_value in value:
-                    return False
-            elif op == Operator.LIKE:
-                if field_value is None or not self._matches_pattern(str(field_value), value):
-                    return False
-        
-        return True
-    
-    def _matches_pattern(self, text: str, pattern: str) -> bool:
-        """Check if text matches a SQL LIKE pattern."""
-        import re
-        # Convert SQL LIKE pattern to regex
-        regex_pattern = pattern.replace("%", ".*").replace("_", ".")
-        return bool(re.match(f"^{regex_pattern}$", text, re.IGNORECASE))
-    
-    def batch_create(self, records: List[Record]) -> List[str]:
-        """Create multiple records in parallel.
-        
-        Args:
-            records: List of records to create
-            
-        Returns:
-            List of created record IDs
-        """
-        record_ids = []
-        
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_record = {executor.submit(self.create, record): record for record in records}
-            
-            for future in as_completed(future_to_record):
-                try:
-                    record_id = future.result()
-                    record_ids.append(record_id)
-                except Exception as e:
-                    logger.error(f"Failed to create record in batch: {e}")
-                    # Continue with other records
-        
-        logger.info(f"Batch created {len(record_ids)} records in S3")
-        return record_ids
-    
-    def batch_read(self, record_ids: List[str]) -> List[Optional[Record]]:
-        """Read multiple records in parallel.
-        
-        Args:
-            record_ids: List of record IDs to read
-            
-        Returns:
-            List of records (None for not found)
-        """
-        records = [None] * len(record_ids)
-        
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_index = {
-                executor.submit(self.read, rid): i 
-                for i, rid in enumerate(record_ids)
-            }
-            
-            for future in as_completed(future_to_index):
-                index = future_to_index[future]
-                try:
-                    records[index] = future.result()
-                except Exception as e:
-                    logger.error(f"Failed to read record in batch: {e}")
-                    records[index] = None
+            records = [r.project(query.fields) for r in records]
         
         return records
     
-    def batch_delete(self, record_ids: List[str]) -> List[bool]:
-        """Delete multiple records in parallel.
-        
-        Args:
-            record_ids: List of record IDs to delete
+    def _fetch_and_filter(self, key: str, query: Query) -> Optional[Record]:
+        """Fetch an object and apply query filters."""
+        try:
+            response = self.s3_client.get_object(Bucket=self.bucket, Key=key)
+            body = response['Body'].read()
+            obj_data = json.loads(body)
+            record = self._s3_object_to_record(obj_data)
             
-        Returns:
-            List of success flags
-        """
-        results = [False] * len(record_ids)
-        
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_index = {
-                executor.submit(self.delete, rid): i 
-                for i, rid in enumerate(record_ids)
-            }
+            # Apply filters
+            for filter in query.filters:
+                field_value = record.get_value(filter.field)
+                if not filter.matches(field_value):
+                    return None
             
-            for future in as_completed(future_to_index):
-                index = future_to_index[future]
-                try:
-                    results[index] = future.result()
-                except Exception as e:
-                    logger.error(f"Failed to delete record in batch: {e}")
-                    results[index] = False
-        
-        logger.info(f"Batch deleted {sum(results)} records from S3")
-        return results
+            return record
+        except Exception as e:
+            logger.warning(f"Error fetching {key}: {e}")
+            return None
     
-    def clear(self):
-        """Clear all records from the database.
+    def _count_all(self) -> int:
+        """Count all records in S3."""
+        self._check_connection()
         
-        Warning: This deletes all objects with the configured prefix!
-        """
-        # List all objects with prefix
+        count = 0
         paginator = self.s3_client.get_paginator('list_objects_v2')
-        page_iterator = paginator.paginate(
-            Bucket=self.bucket,
-            Prefix=self.prefix
-        )
+        pages = paginator.paginate(Bucket=self.bucket, Prefix=self.prefix)
         
-        # Collect all keys to delete
-        keys_to_delete = []
-        for page in page_iterator:
+        for page in pages:
             if 'Contents' in page:
-                for obj in page['Contents']:
-                    keys_to_delete.append({'Key': obj['Key']})
+                count += sum(1 for obj in page['Contents'] if obj['Key'].endswith('.json'))
         
-        # Delete in batches (S3 allows max 1000 per request)
-        if keys_to_delete:
-            for i in range(0, len(keys_to_delete), 1000):
-                batch = keys_to_delete[i:i+1000]
+        return count
+    
+    def clear(self) -> int:
+        """Clear all records from S3."""
+        self._check_connection()
+        
+        # List and delete all objects
+        count = 0
+        paginator = self.s3_client.get_paginator('list_objects_v2')
+        pages = paginator.paginate(Bucket=self.bucket, Prefix=self.prefix)
+        
+        for page in pages:
+            if 'Contents' not in page:
+                continue
+            
+            # Delete in batches
+            objects = [{'Key': obj['Key']} for obj in page['Contents'] if obj['Key'].endswith('.json')]
+            if objects:
                 self.s3_client.delete_objects(
                     Bucket=self.bucket,
-                    Delete={'Objects': batch}
+                    Delete={'Objects': objects}
                 )
-            
-            logger.info(f"Cleared {len(keys_to_delete)} records from S3")
+                count += len(objects)
         
         # Clear cache
         self._index_cache = {}
-        self._cache_dirty = False
+        self._cache_dirty = True
+        
+        logger.info(f"Cleared {count} records from S3")
+        return count
     
-    def count(self) -> int:
-        """Count the total number of records.
-        
-        Returns:
-            Total number of records
-        """
-        if self._cache_dirty:
-            self._rebuild_index()
-        
-        return len(self._index_cache)
-    
-    def _count_all(self) -> int:
-        """Count all records in the database.
-        
-        Returns:
-            Total number of records
-        """
-        if self._cache_dirty:
-            self._rebuild_index()
-        
-        return len(self._index_cache)
-    
-    def close(self):
-        """Close the database connection."""
-        # S3 client doesn't need explicit closing, but clear cache
-        self._index_cache = {}
-        logger.debug("Closed S3Database connection")
-
     def stream_read(
         self,
         query: Optional[Query] = None,
         config: Optional[StreamConfig] = None
     ) -> Iterator[Record]:
         """Stream records from S3."""
+        self._check_connection()
         config = config or StreamConfig()
         
-        # Use search to get all matching records
-        if query:
-            records = self.search(query)
-        else:
-            records = self.search(Query())
+        # List objects and stream them
+        paginator = self.s3_client.get_paginator('list_objects_v2')
+        pages = paginator.paginate(Bucket=self.bucket, Prefix=self.prefix)
         
-        # Yield records in batches for consistency
-        for i in range(0, len(records), config.batch_size):
-            batch = records[i:i + config.batch_size]
-            for record in batch:
-                yield record
+        batch = []
+        for page in pages:
+            if 'Contents' not in page:
+                continue
+            
+            for obj in page['Contents']:
+                if not obj['Key'].endswith('.json'):
+                    continue
+                
+                record = self._fetch_and_filter(obj['Key'], query or Query())
+                if record:
+                    batch.append(record)
+                    
+                    if len(batch) >= config.batch_size:
+                        for r in batch:
+                            yield r
+                        batch = []
+        
+        # Yield remaining records
+        for r in batch:
+            yield r
     
     def stream_write(
         self,
@@ -724,6 +469,7 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
         config: Optional[StreamConfig] = None
     ) -> StreamResult:
         """Stream records into S3."""
+        self._check_connection()
         config = config or StreamConfig()
         result = StreamResult()
         start_time = time.time()
@@ -735,8 +481,8 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
             if len(batch) >= config.batch_size:
                 # Write batch
                 try:
-                    ids = self.create_batch(batch)
-                    result.successful += len(ids)
+                    self._write_batch(batch)
+                    result.successful += len(batch)
                     result.total_processed += len(batch)
                 except Exception as e:
                     result.failed += len(batch)
@@ -754,8 +500,8 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
         # Write remaining batch
         if batch:
             try:
-                ids = self.create_batch(batch)
-                result.successful += len(ids)
+                self._write_batch(batch)
+                result.successful += len(batch)
                 result.total_processed += len(batch)
             except Exception as e:
                 result.failed += len(batch)
@@ -764,76 +510,83 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
         
         result.duration = time.time() - start_time
         return result
+    
+    def _write_batch(self, records: List[Record]) -> None:
+        """Write a batch of records to S3."""
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = []
+            for record in records:
+                record_id = str(uuid4())
+                future = executor.submit(self._write_single, record_id, record)
+                futures.append(future)
+            
+            # Wait for all writes to complete
+            for future in as_completed(futures):
+                future.result()  # This will raise if there was an error
+    
+    def _write_single(self, record_id: str, record: Record) -> None:
+        """Write a single record to S3."""
+        # Set metadata
+        record.metadata = record.metadata or {}
+        record.metadata["id"] = record_id
+        now = datetime.utcnow()
+        record.metadata["created_at"] = now.isoformat()
+        record.metadata["updated_at"] = now.isoformat()
+        
+        key = self._get_object_key(record_id)
+        obj_data = self._record_to_s3_object(record)
+        body = json.dumps(obj_data)
+        
+        self.s3_client.put_object(
+            Bucket=self.bucket,
+            Key=key,
+            Body=body,
+            ContentType='application/json'
+        )
 
 
 class S3Database(Database, ConfigurableBase):
-    """Async S3-based database backend using aioboto3.
-    
-    Stores records as JSON objects in S3 with metadata as tags.
-    """
+    """Async S3-based database backend with proper connection management."""
     
     def __init__(self, config: dict[str, Any] | None = None):
-        """Initialize async S3 database.
-        
-        Args:
-            config: Configuration with the following keys:
-                - bucket: S3 bucket name (required)
-                - prefix: Object key prefix (optional, default: "")
-                - region: AWS region (optional, default: "us-east-1")
-                - aws_access_key_id: AWS access key (optional)
-                - aws_secret_access_key: AWS secret key (optional)
-                - session_token: AWS session token (optional)
-                - endpoint_url: Custom S3 endpoint (optional, for S3-compatible services)
-                - max_workers: Max parallel operations (optional, default: 10)
-        """
-        super().__init__(config)
+        """Initialize async S3 database."""
+        # Create sync database for delegation
         self._sync_db = SyncS3Database(config)
-        self._aioboto3_session = None
-        self._s3_client = None
+        super().__init__(config)
+        self._connected = False
     
     @classmethod
     def from_config(cls, config: dict) -> "S3Database":
         """Create from config dictionary."""
         return cls(config)
     
-    async def _get_client(self):
-        """Get or create aioboto3 S3 client."""
-        if self._s3_client is None:
-            try:
-                import aioboto3
-            except ImportError:
-                raise ImportError(
-                    "aioboto3 is required for async S3 support. "
-                    "Install it with: pip install aioboto3"
-                )
-            
-            # Create session with credentials if provided
-            session_kwargs = {}
-            if self._sync_db.aws_access_key_id:
-                session_kwargs['aws_access_key_id'] = self._sync_db.aws_access_key_id
-            if self._sync_db.aws_secret_access_key:
-                session_kwargs['aws_secret_access_key'] = self._sync_db.aws_secret_access_key
-            if self._sync_db.session_token:
-                session_kwargs['aws_session_token'] = self._sync_db.session_token
-            
-            self._aioboto3_session = aioboto3.Session(**session_kwargs)
-            
-            # Create client
-            client_kwargs = {'region_name': self._sync_db.region}
-            if self._sync_db.endpoint_url:
-                client_kwargs['endpoint_url'] = self._sync_db.endpoint_url
-            
-            self._s3_client = self._aioboto3_session.client('s3', **client_kwargs)
+    async def connect(self) -> None:
+        """Connect to S3 service."""
+        if self._connected:
+            return
         
-        return self._s3_client
+        # Run sync connect in executor
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._sync_db.connect)
+        self._connected = True
+    
+    async def close(self) -> None:
+        """Close the S3 connection."""
+        if self._connected:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, self._sync_db.close)
+            self._connected = False
+    
+    def _initialize(self) -> None:
+        """Initialize is handled by sync database."""
+        pass
     
     async def create(self, record: Record) -> str:
-        """Create a record asynchronously."""
-        # For now, use sync implementation wrapped in executor
+        """Create a new record asynchronously."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._sync_db.create, record)
     
-    async def read(self, id: str) -> Record | None:
+    async def read(self, id: str) -> Optional[Record]:
         """Read a record asynchronously."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._sync_db.read, id)
@@ -848,52 +601,25 @@ class S3Database(Database, ConfigurableBase):
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._sync_db.delete, id)
     
-    async def search(self, query: Query) -> List[Record]:
-        """Search for records asynchronously."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._sync_db.search, query)
-    
     async def exists(self, id: str) -> bool:
         """Check if a record exists asynchronously."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._sync_db.exists, id)
+    
+    async def search(self, query: Query) -> List[Record]:
+        """Search for records asynchronously."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self._sync_db.search, query)
     
     async def _count_all(self) -> int:
         """Count all records asynchronously."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._sync_db._count_all)
     
-    async def create_batch(self, records: List[Record]) -> List[str]:
-        """Create multiple records asynchronously."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._sync_db.create_batch, records)
-    
-    async def read_batch(self, ids: List[str]) -> List[Record | None]:
-        """Read multiple records asynchronously."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._sync_db.read_batch, ids)
-    
-    async def delete_batch(self, ids: List[str]) -> List[bool]:
-        """Delete multiple records asynchronously."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self._sync_db.delete_batch, ids)
-    
     async def clear(self) -> int:
         """Clear all records asynchronously."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self._sync_db.clear)
-    
-    async def close(self) -> None:
-        """Close the database connection asynchronously."""
-        if self._s3_client:
-            await self._s3_client.close()
-            self._s3_client = None
-        if self._aioboto3_session:
-            await self._aioboto3_session.close()
-            self._aioboto3_session = None
-        # Also close sync db
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, self._sync_db.close)
     
     async def stream_read(
         self,
@@ -901,19 +627,21 @@ class S3Database(Database, ConfigurableBase):
         config: Optional[StreamConfig] = None
     ) -> AsyncIterator[Record]:
         """Stream records from S3 asynchronously."""
-        config = config or StreamConfig()
+        loop = asyncio.get_event_loop()
         
-        # Use search to get all matching records
-        if query:
-            records = await self.search(query)
-        else:
-            records = await self.search(Query())
+        # Get sync iterator in thread
+        sync_iter = await loop.run_in_executor(
+            None,
+            self._sync_db.stream_read,
+            query,
+            config
+        )
         
-        # Yield records in batches for consistency
-        for i in range(0, len(records), config.batch_size):
-            batch = records[i:i + config.batch_size]
-            for record in batch:
-                yield record
+        # Convert to async iterator
+        for record in sync_iter:
+            yield record
+            # Small yield to prevent blocking
+            await asyncio.sleep(0)
     
     async def stream_write(
         self,
@@ -930,10 +658,11 @@ class S3Database(Database, ConfigurableBase):
             batch.append(record)
             
             if len(batch) >= config.batch_size:
-                # Write batch
+                # Write batch in executor
+                loop = asyncio.get_event_loop()
                 try:
-                    ids = await self.create_batch(batch)
-                    result.successful += len(ids)
+                    await loop.run_in_executor(None, self._sync_db._write_batch, batch)
+                    result.successful += len(batch)
                     result.total_processed += len(batch)
                 except Exception as e:
                     result.failed += len(batch)
@@ -950,9 +679,10 @@ class S3Database(Database, ConfigurableBase):
         
         # Write remaining batch
         if batch:
+            loop = asyncio.get_event_loop()
             try:
-                ids = await self.create_batch(batch)
-                result.successful += len(ids)
+                await loop.run_in_executor(None, self._sync_db._write_batch, batch)
+                result.successful += len(batch)
                 result.total_processed += len(batch)
             except Exception as e:
                 result.failed += len(batch)

@@ -311,7 +311,7 @@ class TestAsyncMemoryDatabase:
     @pytest.mark.asyncio
     async def test_async_crud_operations(self):
         """Test async CRUD operations."""
-        db = Database.create("memory")
+        db = await Database.create("memory")
 
         # Create
         record = Record({"name": "AsyncTest", "value": 99})
@@ -337,7 +337,7 @@ class TestAsyncMemoryDatabase:
     @pytest.mark.asyncio
     async def test_async_search(self):
         """Test async search operations."""
-        db = Database.create("memory")
+        db = await Database.create("memory")
 
         # Create test data
         await db.create(Record({"type": "A", "value": 1}))
@@ -355,7 +355,7 @@ class TestAsyncMemoryDatabase:
     @pytest.mark.asyncio
     async def test_async_batch_operations(self):
         """Test async batch operations."""
-        db = Database.create("memory")
+        db = await Database.create("memory")
 
         # Batch create
         records = [Record({"id": i}) for i in range(3)]
@@ -370,14 +370,14 @@ class TestAsyncMemoryDatabase:
     @pytest.mark.asyncio
     async def test_async_context_manager(self):
         """Test async context manager."""
-        async with Database.create("memory") as db:
+        async with await Database.create("memory") as db:
             id = await db.create(Record({"async": "context"}))
             assert await db.exists(id)
 
     @pytest.mark.asyncio
     async def test_concurrent_operations(self):
         """Test concurrent async operations."""
-        db = Database.create("memory")
+        db = await Database.create("memory")
 
         async def create_records(task_id):
             ids = []

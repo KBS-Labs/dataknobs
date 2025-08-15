@@ -28,9 +28,11 @@ def mock_s3_backend(s3_config):
     with mock_aws():
         # The SyncS3Database will create the bucket if it doesn't exist
         db = SyncS3Database(s3_config)
+        db.connect()
         yield db
         # Cleanup
         db.clear()
+        db.close()
 
 
 @pytest.fixture
@@ -63,9 +65,11 @@ def localstack_s3_backend(s3_config):
     config["secret_access_key"] = "test"
     
     db = SyncS3Database(config)
+    db.connect()
     yield db
     # Cleanup
     db.clear()
+    db.close()
 
 
 class TestS3Backend:
@@ -284,7 +288,7 @@ class TestS3Backend:
             for i in range(10)
         ]
         
-        record_ids = db.batch_create(records)
+        record_ids = db.create_batch(records)
         assert len(record_ids) == 10
         
         # Verify all records were created
@@ -306,7 +310,7 @@ class TestS3Backend:
         record_ids.append("non-existent-id")
         
         # Batch read
-        results = db.batch_read(record_ids)
+        results = db.read_batch(record_ids)
         assert len(results) == 6
         
         # Verify results
@@ -332,7 +336,7 @@ class TestS3Backend:
         record_ids.append("non-existent-id")
         
         # Batch delete
-        results = db.batch_delete(record_ids)
+        results = db.delete_batch(record_ids)
         assert len(results) == 6
         
         # Verify results
@@ -421,15 +425,15 @@ class TestS3Backend:
             for i in range(20)
         ]
         
-        record_ids = db.batch_create(records)
+        record_ids = db.create_batch(records)
         assert len(record_ids) == 20
         
         # Read them all concurrently
-        results = db.batch_read(record_ids)
+        results = db.read_batch(record_ids)
         assert all(r is not None for r in results)
         
         # Delete them all concurrently
-        delete_results = db.batch_delete(record_ids)
+        delete_results = db.delete_batch(record_ids)
         assert all(delete_results)
         
         # Verify all deleted
