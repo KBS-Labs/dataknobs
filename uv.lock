@@ -1047,9 +1047,9 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "aioboto3" },
+    { name = "asyncpg" },
     { name = "boto3" },
-    { name = "elasticsearch" },
-    { name = "elasticsearch-async" },
+    { name = "elasticsearch", extra = ["async"] },
     { name = "psycopg2" },
     { name = "pyarrow" },
     { name = "sqlalchemy" },
@@ -1066,13 +1066,13 @@ dev = [
     { name = "testcontainers" },
 ]
 elasticsearch = [
-    { name = "elasticsearch" },
-    { name = "elasticsearch-async" },
+    { name = "elasticsearch", extra = ["async"] },
 ]
 parquet = [
     { name = "pyarrow" },
 ]
 postgres = [
+    { name = "asyncpg" },
     { name = "psycopg2" },
     { name = "sqlalchemy" },
 ]
@@ -1083,7 +1083,9 @@ s3 = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "aioboto3" },
     { name = "asyncpg" },
+    { name = "elasticsearch", extra = ["async"] },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "ruff" },
@@ -1091,16 +1093,16 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aioboto3", marker = "extra == 's3'", specifier = ">=11.0.0" },
+    { name = "aioboto3", marker = "extra == 's3'", specifier = ">=12.0.0" },
     { name = "aiofiles", specifier = ">=23.0.0" },
+    { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.29.0" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=24.0.0" },
     { name = "boto3", specifier = ">=1.38.27" },
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.26.0" },
     { name = "dataknobs-config", editable = "packages/config" },
     { name = "dataknobs-data", extras = ["postgres", "s3", "elasticsearch", "parquet"], marker = "extra == 'all'", editable = "packages/data" },
     { name = "dataknobs-utils", editable = "packages/utils" },
-    { name = "elasticsearch", marker = "extra == 'elasticsearch'", specifier = ">=8.0.0" },
-    { name = "elasticsearch-async", marker = "extra == 'elasticsearch'", specifier = ">=6.2.0" },
+    { name = "elasticsearch", extras = ["async"], marker = "extra == 'elasticsearch'", specifier = ">=8.0.0,<9.0.0" },
     { name = "moto", specifier = ">=5.1.10" },
     { name = "moto", marker = "extra == 'dev'", specifier = ">=4.2.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
@@ -1120,7 +1122,9 @@ provides-extras = ["postgres", "s3", "elasticsearch", "parquet", "all", "dev"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "aioboto3", specifier = ">=15.0.0" },
     { name = "asyncpg", specifier = ">=0.30.0" },
+    { name = "elasticsearch", extras = ["async"], specifier = ">=8.11.0,<9.0.0" },
     { name = "pytest-asyncio", specifier = ">=1.1.0" },
     { name = "pytest-cov", specifier = ">=6.2.1" },
     { name = "ruff", specifier = ">=0.12.8" },
@@ -1394,41 +1398,35 @@ wheels = [
 
 [[package]]
 name = "elastic-transport"
-version = "9.1.0"
+version = "8.17.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "certifi" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ae/1f/2d1a1790df2b75e1e1eb90d8a3fe066a47ef95e34430657447e549cc274c/elastic_transport-9.1.0.tar.gz", hash = "sha256:1590e44a25b0fe208107d5e8d7dea15c070525f3ac9baafbe4cb659cd14f073d", size = 76483, upload-time = "2025-07-24T16:41:31.017Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6a/54/d498a766ac8fa475f931da85a154666cc81a70f8eb4a780bc8e4e934e9ac/elastic_transport-8.17.1.tar.gz", hash = "sha256:5edef32ac864dca8e2f0a613ef63491ee8d6b8cfb52881fa7313ba9290cac6d2", size = 73425, upload-time = "2025-03-13T07:28:30.776Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ef/5d/dd5a919dd887fe20a91f18faf5b4345ee3a058e483d2aa84cef0f2567e17/elastic_transport-9.1.0-py3-none-any.whl", hash = "sha256:369fa56874c74daae4ea10cbf40636d139f38f42bec0e006b9cd45a168ee7fce", size = 65142, upload-time = "2025-07-24T16:41:29.648Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/cd/b71d5bc74cde7fc6fd9b2ff9389890f45d9762cbbbf81dc5e51fd7588c4a/elastic_transport-8.17.1-py3-none-any.whl", hash = "sha256:192718f498f1d10c5e9aa8b9cf32aed405e469a7f0e9d6a8923431dbb2c59fb8", size = 64969, upload-time = "2025-03-13T07:28:29.031Z" },
 ]
 
 [[package]]
 name = "elasticsearch"
-version = "9.1.0"
+version = "8.19.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "elastic-transport" },
     { name = "python-dateutil" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/29/1e/22097cdcdfcdd3bdb417e339d97e7cdb4618f480a0abb8410065d0b08415/elasticsearch-9.1.0.tar.gz", hash = "sha256:764d2f724eac94f6bf9903e4feae07112643a9efcfdc5c868c1b69bd48c52e09", size = 848897, upload-time = "2025-07-30T08:54:52.253Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/05/00/7304af19770b9c53afe7b5b75433a1b0355d8725b4d8ed54a3f47d2a4f99/elasticsearch-8.19.0.tar.gz", hash = "sha256:66fe755e55127afc47c68eca6858006932d9d128b68834a15e7e9894517cfb67", size = 777512, upload-time = "2025-07-30T10:19:11.374Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f3/90/922dcce6273efe7663ad10ed01f122cd09ecf1845855f4b27741c432920f/elasticsearch-9.1.0-py3-none-any.whl", hash = "sha256:96bb473dc70dbd94c37c4b05a0d2511af95d1b2db1657796f42546ef631cbbe4", size = 929547, upload-time = "2025-07-30T08:54:47.949Z" },
+    { url = "https://files.pythonhosted.org/packages/e0/73/05fe3d053d6154dd92a5f8ce3c67685af983c988aa6244e5512ea73f0d1f/elasticsearch-8.19.0-py3-none-any.whl", hash = "sha256:33eee4ec4244ef217952eeee0adff64a409120a1401c3bd35790e22145727e3f", size = 926924, upload-time = "2025-07-30T10:19:06.884Z" },
 ]
 
-[[package]]
-name = "elasticsearch-async"
-version = "6.2.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
+[package.optional-dependencies]
+async = [
     { name = "aiohttp" },
-    { name = "async-timeout" },
-    { name = "elasticsearch" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e3/43/80b154f47f281ccdb3dc7d717b47094c4f32f493fdcc80391a592dc89f0f/elasticsearch-async-6.2.0.tar.gz", hash = "sha256:2534f3ec80da275723cabd6d354c83eb4b4f6241ad1432b48c2c05fb12175ab1", size = 11263, upload-time = "2018-08-09T18:28:51.899Z" }
 
 [[package]]
 name = "exceptiongroup"
