@@ -75,8 +75,8 @@ class TestPostgresPoolConfig:
 
 
 @dataclass
-class TestPoolConfig(BasePoolConfig):
-    """Test implementation of BasePoolConfig."""
+class MockPoolConfig(BasePoolConfig):
+    """Mock implementation of BasePoolConfig for testing."""
     host: str = "localhost"
     port: int = 5432
     
@@ -106,7 +106,7 @@ class TestConnectionPoolManager:
     async def test_get_pool_creates_new(self):
         """Test that get_pool creates a new pool when none exists."""
         manager = ConnectionPoolManager[MockPool]()
-        config = TestPoolConfig(host="localhost", port=5432)
+        config = MockPoolConfig(host="localhost", port=5432)
         
         async def create_pool(cfg):
             return MockPool()
@@ -120,7 +120,7 @@ class TestConnectionPoolManager:
     async def test_get_pool_reuses_existing(self):
         """Test that get_pool reuses existing pool for same loop."""
         manager = ConnectionPoolManager[MockPool]()
-        config = TestPoolConfig(host="localhost", port=5432)
+        config = MockPoolConfig(host="localhost", port=5432)
         
         create_count = 0
         
@@ -141,7 +141,7 @@ class TestConnectionPoolManager:
     async def test_get_pool_with_validation(self):
         """Test that get_pool validates existing pools."""
         manager = ConnectionPoolManager[MockPool]()
-        config = TestPoolConfig(host="localhost", port=5432)
+        config = MockPoolConfig(host="localhost", port=5432)
         
         mock_pool = MockPool()
         validation_count = 0
@@ -165,7 +165,7 @@ class TestConnectionPoolManager:
     async def test_get_pool_recreates_invalid(self):
         """Test that get_pool recreates pool when validation fails."""
         manager = ConnectionPoolManager[MockPool]()
-        config = TestPoolConfig(host="localhost", port=5432)
+        config = MockPoolConfig(host="localhost", port=5432)
         
         pool1 = MockPool()
         pool1.close = AsyncMock()
@@ -199,7 +199,7 @@ class TestConnectionPoolManager:
     async def test_remove_pool(self):
         """Test removing a pool."""
         manager = ConnectionPoolManager[MockPool]()
-        config = TestPoolConfig(host="localhost", port=5432)
+        config = MockPoolConfig(host="localhost", port=5432)
         
         mock_pool = MockPool()
         mock_pool.close = AsyncMock()
@@ -225,8 +225,8 @@ class TestConnectionPoolManager:
     async def test_close_all(self):
         """Test closing all pools."""
         manager = ConnectionPoolManager[MockPool]()
-        config1 = TestPoolConfig(host="localhost", port=5432)
-        config2 = TestPoolConfig(host="localhost", port=5433)
+        config1 = MockPoolConfig(host="localhost", port=5432)
+        config2 = MockPoolConfig(host="localhost", port=5433)
         
         pool1 = MockPool()
         pool1.close = AsyncMock()

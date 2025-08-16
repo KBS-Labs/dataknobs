@@ -125,10 +125,24 @@ class ConnectionPoolManager(Generic[PoolType]):
                 pool = pool_entry
             
             try:
+                # Check if we have a running event loop
+                try:
+                    loop = asyncio.get_running_loop()
+                    if loop.is_closed():
+                        # Event loop is closed, skip async cleanup
+                        return
+                except RuntimeError:
+                    # No running event loop, skip async cleanup
+                    return
+                
                 if close_func:
                     await close_func(pool)
                 elif hasattr(pool, 'close'):
                     await pool.close()
+            except RuntimeError as e:
+                # Silently ignore "Event loop is closed" errors
+                if "Event loop is closed" not in str(e):
+                    logger.error(f"Error closing pool: {e}")
             except Exception as e:
                 logger.error(f"Error closing pool: {e}")
             finally:
