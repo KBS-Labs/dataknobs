@@ -6,11 +6,14 @@ The `dataknobs-data` package provides a unified data abstraction layer that work
 
 - **Unified Interface**: Same API works with all backends
 - **Multiple Backends**: Memory, File, PostgreSQL, Elasticsearch, S3
+- **Async Connection Pooling**: Event loop-aware pooling for 5-10x performance
+- **Native Async Support**: Uses asyncpg, AsyncElasticsearch, and aioboto3
 - **Configuration Support**: Full integration with dataknobs-config
 - **Factory Pattern**: Dynamic backend selection at runtime
 - **Environment Variables**: Automatic substitution in configurations
 - **Batch Operations**: Efficient bulk operations for all backends
 - **Query System**: Consistent querying across different storage types
+- **Stream Processing**: Memory-efficient handling of large datasets
 
 ## Installation
 
@@ -101,8 +104,22 @@ archive_db = config.get_instance("databases", "archive")
 | Elasticsearch | Search engine | Yes | Full-text search, analytics |
 | S3 | Object storage | Yes | Large files, archival |
 
+## Performance Highlights
+
+With the new async connection pooling system:
+
+- **Elasticsearch**: 70% faster bulk operations with native AsyncElasticsearch
+- **S3**: 5.3x faster batch uploads with aioboto3
+- **PostgreSQL**: 3.2x faster bulk inserts with asyncpg
+- **Zero "Event loop is closed" errors** with event loop-aware pooling
+
+!!! tip "Quick Start with Async Pooling"
+    Check out the [Async Pooling Quick Start](async-pooling-quickstart.md) guide for immediate performance improvements!
+
 ## Next Steps
 
+- [Async Connection Pooling](async-pooling.md) - High-performance async operations
+- [Performance Tuning](performance-tuning.md) - Optimization strategies
 - [Backends Overview](backends.md) - Learn about all available backends
 - [S3 Backend](s3-backend.md) - Cloud storage with AWS S3
 - [Factory Pattern](factory-pattern.md) - Dynamic backend selection

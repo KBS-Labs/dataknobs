@@ -23,7 +23,7 @@ services:
       - "5432:5432"
     volumes:
       - ~/data:/data
-      - ~/dataknobs_postgres_data:/var/lib/postgresql/data
+      - ~/.dataknobs/data/postgres:/var/lib/postgresql/data
     networks:
       - devnet
 
@@ -38,7 +38,7 @@ services:
       - "9300:9300"
     volumes:
       - ~/data:/data
-      - ~/dataknobs_elasticsearch_data:/usr/share/elasticsearch/data
+      - ~/.dataknobs/data/elasticsearch:/usr/share/elasticsearch/data
     networks:
       - devnet
 
@@ -51,7 +51,7 @@ services:
       - "4566:4566"
     volumes:
       - ~/data:/data
-      - ~/dataknobs_localstack_data:/var/lib/localstack
+      - ~/.dataknobs/data/localstack:/var/lib/localstack
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - devnet 

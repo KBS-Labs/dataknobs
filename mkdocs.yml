@@ -86,6 +86,9 @@ nav:
         - packages/data/elasticsearch-backend.md
         - packages/data/s3-backend.md
       - Advanced Features:
+        - packages/data/async-pooling-quickstart.md
+        - packages/data/async-pooling.md
+        - packages/data/performance-tuning.md
         - packages/data/migration.md
         - packages/data/validation.md
         - packages/data/pandas-integration.md
