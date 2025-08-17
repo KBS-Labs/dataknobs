@@ -10,7 +10,10 @@ from typing import List, Optional, Dict, Any
 import pandas as pd
 from pathlib import Path
 
-from dataknobs_data import Record, Query, Filter, Operator, SortSpec, SortOrder
+from dataknobs_data import (
+    Record, Query, Filter, Operator, SortSpec, SortOrder,
+    ComplexQuery, QueryBuilder
+)
 from dataknobs_data.database import SyncDatabase, AsyncDatabase
 from dataknobs_data.streaming import StreamConfig, StreamResult
 
@@ -172,6 +175,131 @@ class SensorDashboard:
                 anomalies.append(reading)
         
         return anomalies
+    
+    def get_anomalous_readings_query(self, 
+                                    temp_range: tuple = (10, 35),
+                                    humidity_range: tuple = (20, 80)) -> List[SensorReading]:
+        """Get anomalous readings using NOT_BETWEEN operator.
+        
+        Demonstrates the new NOT_BETWEEN operator for finding outliers.
+        """
+        # Find readings with temperature OR humidity outside normal ranges
+        query = Query().filter("metadata.type", Operator.EQ, "sensor_reading").or_(
+            Filter("temperature", Operator.NOT_BETWEEN, temp_range),
+            Filter("humidity", Operator.NOT_BETWEEN, humidity_range)
+        )
+        
+        records = self.db.search(query)
+        return [SensorReading.from_record(r) for r in records]
+    
+    def get_critical_sensors(self, 
+                            battery_threshold: float = 20.0,
+                            locations: List[str] = None) -> List[SensorReading]:
+        """Get readings from critical sensors using boolean logic.
+        
+        Demonstrates complex boolean queries:
+        - Low battery sensors in specific locations
+        - OR sensors with very high/low temperatures
+        """
+        builder = QueryBuilder()
+        
+        # Base condition: sensor readings only
+        builder.where("metadata.type", Operator.EQ, "sensor_reading")
+        
+        # Critical condition 1: Low battery in important locations
+        if locations:
+            critical_location = (
+                QueryBuilder()
+                .where("battery", Operator.LT, battery_threshold)
+                .where("location", Operator.IN, locations)
+            )
+        else:
+            critical_location = QueryBuilder().where("battery", Operator.LT, battery_threshold)
+        
+        # Critical condition 2: Extreme temperatures
+        extreme_temp = QueryBuilder().or_(
+            Filter("temperature", Operator.LT, 5),  # Too cold
+            Filter("temperature", Operator.GT, 40)  # Too hot
+        )
+        
+        # Combine: (low battery AND important location) OR extreme temperatures
+        builder.and_(
+            QueryBuilder().or_(critical_location, extreme_temp)
+        )
+        
+        query = builder.build()
+        records = self.db.search(query)
+        return [SensorReading.from_record(r) for r in records]
+    
+    def get_sensors_by_multiple_locations(self, locations: List[str]) -> List[SensorReading]:
+        """Get sensors from multiple locations using OR operator.
+        
+        Demonstrates simple OR queries for multiple values.
+        """
+        if not locations:
+            return []
+        
+        # Build OR query for multiple locations
+        location_filters = [Filter("location", Operator.EQ, loc) for loc in locations]
+        
+        query = Query().filter("metadata.type", Operator.EQ, "sensor_reading").or_(
+            *location_filters
+        )
+        
+        records = self.db.search(query)
+        return [SensorReading.from_record(r) for r in records]
+    
+    def get_optimal_conditions(self,
+                              temp_range: tuple = (18, 25),
+                              humidity_range: tuple = (40, 60),
+                              min_battery: float = 50.0) -> List[SensorReading]:
+        """Get readings with optimal conditions using BETWEEN and AND.
+        
+        Demonstrates combining BETWEEN operators with AND logic.
+        """
+        query = Query(
+            filters=[
+                Filter("metadata.type", Operator.EQ, "sensor_reading"),
+                Filter("temperature", Operator.BETWEEN, temp_range),
+                Filter("humidity", Operator.BETWEEN, humidity_range),
+                Filter("battery", Operator.GTE, min_battery)
+            ]
+        )
+        
+        records = self.db.search(query)
+        return [SensorReading.from_record(r) for r in records]
+    
+    def search_maintenance_needed(self) -> List[SensorReading]:
+        """Find sensors needing maintenance using complex logic.
+        
+        Demonstrates NOT operator and complex conditions:
+        - Battery < 30% AND NOT recently checked (>7 days old)
+        - OR no readings in last 24 hours
+        """
+        now = datetime.now()
+        week_ago = now - timedelta(days=7)
+        day_ago = now - timedelta(days=1)
+        
+        # Sensors with low battery that haven't been checked recently
+        low_battery_old = (
+            QueryBuilder()
+            .where("metadata.type", Operator.EQ, "sensor_reading")
+            .where("battery", Operator.LT, 30)
+            .not_(Filter("timestamp", Operator.GT, week_ago.isoformat()))
+        )
+        
+        # Sensors with no recent readings
+        no_recent = (
+            QueryBuilder()
+            .where("metadata.type", Operator.EQ, "sensor_reading")
+            .not_(Filter("timestamp", Operator.GT, day_ago.isoformat()))
+        )
+        
+        # Combine conditions
+        query = QueryBuilder().or_(low_battery_old, no_recent).build()
+        
+        records = self.db.search(query)
+        return [SensorReading.from_record(r) for r in records]
     
     def handle_duplicate_readings(self, readings: List[SensorReading]) -> List[SensorReading]:
         """Remove duplicate readings (same sensor and timestamp)."""
