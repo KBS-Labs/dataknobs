@@ -51,7 +51,7 @@ class TestPostgresRangeOperators:
             db.db.execute(f"DROP TABLE IF EXISTS {db.schema_name}.{db.table_name}")
         except:
             pass
-        db.close()  # Use close() instead of disconnect()
+        db.disconnect()
     
     def test_numeric_between_postgres(self, postgres_db):
         """Test BETWEEN with numeric values in PostgreSQL."""
@@ -185,7 +185,7 @@ class TestPostgresRangeOperators:
                 await db._pool.execute(f"DROP TABLE IF EXISTS {db.schema_name}.{db.table_name}")
             except:
                 pass
-            await db.close()  # Use close() instead of disconnect()
+            await db.disconnect()
 
 
 @pytest.mark.skipif(
@@ -234,7 +234,7 @@ class TestElasticsearchRangeOperators:
             db.es_index.delete()
         except:
             pass
-        db.close()  # Use close() instead of disconnect()
+        db.disconnect()
     
     def test_numeric_between_elasticsearch(self, es_db):
         """Test BETWEEN with numeric values in Elasticsearch."""
@@ -406,7 +406,7 @@ class TestElasticsearchRangeOperators:
                 await db._client.indices.delete(index=db.index_name)
             except:
                 pass
-            await db.close()  # Use close() instead of disconnect()
+            await db.disconnect()
 
 
 class TestCrossBackendConsistency:
@@ -528,4 +528,4 @@ class TestCrossBackendConsistency:
                 db.db.execute(f"DROP TABLE IF EXISTS {db.schema_name}.{db.table_name}")
             except:
                 pass
-            db.close()  # Use close() instead of disconnect()
+            db.disconnect()

@@ -1485,7 +1485,7 @@
         "type": "convention",
         "module": "dataknobs_data.database",
         "obj": "",
-        "line": 240,
+        "line": 244,
         "column": 0,
         "endLine": null,
         "endColumn": null,
@@ -1498,7 +1498,7 @@
         "type": "convention",
         "module": "dataknobs_data.database",
         "obj": "",
-        "line": 259,
+        "line": 263,
         "column": 0,
         "endLine": null,
         "endColumn": null,
@@ -1511,7 +1511,7 @@
         "type": "convention",
         "module": "dataknobs_data.database",
         "obj": "",
-        "line": 458,
+        "line": 466,
         "column": 0,
         "endLine": null,
         "endColumn": null,
@@ -1524,7 +1524,7 @@
         "type": "convention",
         "module": "dataknobs_data.database",
         "obj": "",
-        "line": 477,
+        "line": 485,
         "column": 0,
         "endLine": null,
         "endColumn": null,
@@ -1758,9 +1758,9 @@
         "type": "error",
         "module": "dataknobs_data.database",
         "obj": "AsyncDatabase.create",
-        "line": 287,
+        "line": 291,
         "column": 4,
-        "endLine": 287,
+        "endLine": 291,
         "endColumn": 20,
         "path": "packages/data/src/dataknobs_data/database.py",
         "symbol": "function-redefined",
@@ -1771,9 +1771,9 @@
         "type": "error",
         "module": "dataknobs_data.database",
         "obj": "AsyncDatabase.create",
-        "line": 287,
+        "line": 291,
         "column": 48,
-        "endLine": 287,
+        "endLine": 291,
         "endColumn": 69,
         "path": "packages/data/src/dataknobs_data/database.py",
         "symbol": "unsupported-binary-operation",
@@ -1784,9 +1784,9 @@
         "type": "convention",
         "module": "dataknobs_data.database",
         "obj": "AsyncDatabase.create",
-        "line": 297,
+        "line": 301,
         "column": 8,
-        "endLine": 297,
+        "endLine": 301,
         "endColumn": 46,
         "path": "packages/data/src/dataknobs_data/database.py",
         "symbol": "import-outside-toplevel",
@@ -1797,9 +1797,9 @@
         "type": "error",
         "module": "dataknobs_data.database",
         "obj": "SyncDatabase.__init__",
-        "line": 313,
+        "line": 317,
         "column": 31,
-        "endLine": 313,
+        "endLine": 317,
         "endColumn": 52,
         "path": "packages/data/src/dataknobs_data/database.py",
         "symbol": "unsupported-binary-operation",
@@ -1810,9 +1810,9 @@
         "type": "warning",
         "module": "dataknobs_data.database",
         "obj": "SyncDatabase._initialize",
-        "line": 324,
+        "line": 328,
         "column": 8,
-        "endLine": 324,
+        "endLine": 328,
         "endColumn": 12,
         "path": "packages/data/src/dataknobs_data/database.py",
         "symbol": "unnecessary-pass",
@@ -1823,9 +1823,9 @@
         "type": "warning",
         "module": "dataknobs_data.database",
         "obj": "SyncDatabase.read",
-        "line": 332,
+        "line": 336,
         "column": 19,
-        "endLine": 332,
+        "endLine": 336,
         "endColumn": 26,
         "path": "packages/data/src/dataknobs_data/database.py",
         "symbol": "redefined-builtin",
@@ -1836,9 +1836,9 @@
         "type": "error",
         "module": "dataknobs_data.database",
         "obj": "SyncDatabase.read",
-        "line": 332,
+        "line": 336,
         "column": 31,
-        "endLine": 332,
+        "endLine": 336,
         "endColumn": 44,
         "path": "packages/data/src/dataknobs_data/database.py",
         "symbol": "unsupported-binary-operation",
@@ -1849,9 +1849,9 @@
         "type": "warning",
         "module": "dataknobs_data.database",
         "obj": "SyncDatabase.update",
-        "line": 337,
+        "line": 341,
         "column": 21,
-        "endLine": 337,
+        "endLine": 341,
         "endColumn": 28,
         "path": "packages/data/src/dataknobs_data/database.py",
         "symbol": "redefined-builtin",
@@ -1862,9 +1862,9 @@
         "type": "warning",
         "module": "dataknobs_data.database",
         "obj": "SyncDatabase.delete",
-        "line": 342,
+        "line": 346,
         "column": 21,
-        "endLine": 342,
+        "endLine": 346,
         "endColumn": 28,
         "path": "packages/data/src/dataknobs_data/database.py",
         "symbol": "redefined-builtin",
@@ -1875,19 +1875,6 @@
         "type": "warning",
         "module": "dataknobs_data.database",
         "obj": "SyncDatabase.exists",
-        "line": 352,
-        "column": 21,
-        "endLine": 352,
-        "endColumn": 28,
-        "path": "packages/data/src/dataknobs_data/database.py",
-        "symbol": "redefined-builtin",
-        "message": "Redefining built-in 'id'",
-        "message-id": "W0622"
-    },
-    {
-        "type": "warning",
-        "module": "dataknobs_data.database",
-        "obj": "SyncDatabase.upsert",
         "line": 356,
         "column": 21,
         "endLine": 356,
@@ -1900,10 +1887,23 @@
     {
         "type": "warning",
         "module": "dataknobs_data.database",
+        "obj": "SyncDatabase.upsert",
+        "line": 360,
+        "column": 21,
+        "endLine": 360,
+        "endColumn": 28,
+        "path": "packages/data/src/dataknobs_data/database.py",
+        "symbol": "redefined-builtin",
+        "message": "Redefining built-in 'id'",
+        "message-id": "W0622"
+    },
+    {
+        "type": "warning",
+        "module": "dataknobs_data.database",
         "obj": "SyncDatabase.create_batch",
-        "line": 368,
+        "line": 372,
         "column": 12,
-        "endLine": 368,
+        "endLine": 372,
         "endColumn": 14,
         "path": "packages/data/src/dataknobs_data/database.py",
         "symbol": "redefined-builtin",
@@ -1914,9 +1914,9 @@
         "type": "warning",
         "module": "dataknobs_data.database",
         "obj": "SyncDatabase.read_batch",
-        "line": 375,
+        "line": 379,
         "column": 12,
-        "endLine": 375,
+        "endLine": 379,
         "endColumn": 14,
         "path": "packages/data/src/dataknobs_data/database.py",
         "symbol": "redefined-builtin",
@@ -1927,9 +1927,9 @@
         "type": "warning",
         "module": "dataknobs_data.database",
         "obj": "SyncDatabase.delete_batch",
-        "line": 383,
+        "line": 387,
         "column": 12,
-        "endLine": 383,
+        "endLine": 387,
         "endColumn": 14,
         "path": "packages/data/src/dataknobs_data/database.py",
         "symbol": "redefined-builtin",
@@ -1940,9 +1940,9 @@
         "type": "warning",
         "module": "dataknobs_data.database",
         "obj": "SyncDatabase.update_batch",
-        "line": 401,
+        "line": 405,
         "column": 12,
-        "endLine": 401,
+        "endLine": 405,
         "endColumn": 14,
         "path": "packages/data/src/dataknobs_data/database.py",
         "symbol": "redefined-builtin",
@@ -1953,9 +1953,9 @@
         "type": "error",
         "module": "dataknobs_data.database",
         "obj": "SyncDatabase.count",
-        "line": 406,
+        "line": 410,
         "column": 27,
-        "endLine": 406,
+        "endLine": 410,
         "endColumn": 39,
         "path": "packages/data/src/dataknobs_data/database.py",
         "symbol": "unsupported-binary-operation",
@@ -1966,9 +1966,9 @@
         "type": "refactor",
         "module": "dataknobs_data.database",
         "obj": "SyncDatabase.count",
-        "line": 408,
+        "line": 412,
         "column": 8,
-        "endLine": 412,
+        "endLine": 416,
         "endColumn": 36,
         "path": "packages/data/src/dataknobs_data/database.py",
         "symbol": "no-else-return",
@@ -1979,19 +1979,6 @@
         "type": "warning",
         "module": "dataknobs_data.database",
         "obj": "SyncDatabase.connect",
-        "line": 425,
-        "column": 8,
-        "endLine": 425,
-        "endColumn": 12,
-        "path": "packages/data/src/dataknobs_data/database.py",
-        "symbol": "unnecessary-pass",
-        "message": "Unnecessary pass statement",
-        "message-id": "W0107"
-    },
-    {
-        "type": "warning",
-        "module": "dataknobs_data.database",
-        "obj": "SyncDatabase.close",
         "line": 429,
         "column": 8,
         "endLine": 429,
@@ -2002,25 +1989,38 @@
         "message-id": "W0107"
     },
     {
+        "type": "warning",
+        "module": "dataknobs_data.database",
+        "obj": "SyncDatabase.close",
+        "line": 433,
+        "column": 8,
+        "endLine": 433,
+        "endColumn": 12,
+        "path": "packages/data/src/dataknobs_data/database.py",
+        "symbol": "unnecessary-pass",
+        "message": "Unnecessary pass statement",
+        "message-id": "W0107"
+    },
+    {
         "type": "error",
         "module": "dataknobs_data.database",
         "obj": "SyncDatabase.create",
-        "line": 505,
+        "line": 513,
         "column": 4,
-        "endLine": 505,
+        "endLine": 513,
         "endColumn": 14,
         "path": "packages/data/src/dataknobs_data/database.py",
         "symbol": "function-redefined",
-        "message": "method already defined line 327",
+        "message": "method already defined line 331",
         "message-id": "E0102"
     },
     {
         "type": "error",
         "module": "dataknobs_data.database",
         "obj": "SyncDatabase.create",
-        "line": 505,
+        "line": 513,
         "column": 42,
-        "endLine": 505,
+        "endLine": 513,
         "endColumn": 63,
         "path": "packages/data/src/dataknobs_data/database.py",
         "symbol": "unsupported-binary-operation",
@@ -2031,9 +2031,9 @@
         "type": "convention",
         "module": "dataknobs_data.database",
         "obj": "SyncDatabase.create",
-        "line": 515,
+        "line": 523,
         "column": 8,
-        "endLine": 515,
+        "endLine": 523,
         "endColumn": 51,
         "path": "packages/data/src/dataknobs_data/database.py",
         "symbol": "import-outside-toplevel",
@@ -31573,7 +31573,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.postgres:[946:1006]\n==dataknobs_data.backends.s3_async:[452:510]\n    async def stream_write(\n        self,\n        records: AsyncIterator[Record],\n        config: Optional[StreamConfig] = None\n    ) -> StreamResult:\n        \"\"\"Stream records into S3.\"\"\"\n        self._check_connection()\n        config = config or StreamConfig()\n        result = StreamResult()\n        start_time = time.time()\n        quitting = False\n\n        batch = []\n        async for record in records:\n            batch.append(record)\n\n            if len(batch) >= config.batch_size:\n                # Write batch with graceful fallback\n                async def batch_func(b):\n                    await self._write_batch(b)\n                    return [r.id for r in b]\n\n                continue_processing = await async_process_batch_with_fallback(\n                    batch,\n                    batch_func,\n                    self.create,\n                    result,\n                    config\n                )\n\n                if not continue_processing:\n                    quitting = True\n                    break\n\n                batch = []\n\n        # Write remaining batch\n        if batch and not quitting:\n            async def batch_func(b):\n                await self._write_batch(b)\n                return [r.id for r in b]\n\n            await async_process_batch_with_fallback(\n                batch,\n                batch_func,\n                self.create,\n                result,\n                config\n            )\n\n        result.duration = time.time() - start_time\n        return result\n\n    async def _write_batch(self, records: list[Record]) -> None:\n        \"\"\"Write a batch of records to S3.\"\"\"\n        if not records:\n            return\n",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.postgres:[946:1006]\n==dataknobs_data.backends.s3_async:[452:510]\n    async def stream_write(\n        self,\n        records: AsyncIterator[Record],\n        config: Optional[StreamConfig] = None\n    ) -> StreamResult:\n        \"\"\"Stream records into PostgreSQL using batch inserts.\"\"\"\n        self._check_connection()\n        config = config or StreamConfig()\n        result = StreamResult()\n        start_time = time.time()\n        quitting = False\n\n        batch = []\n        async for record in records:\n            batch.append(record)\n\n            if len(batch) >= config.batch_size:\n                # Write batch with graceful fallback\n                # Use lambda wrapper for _write_batch\n                async def batch_func(b):\n                    await self._write_batch(b)\n                    return [r.id for r in b]\n\n                continue_processing = await async_process_batch_with_fallback(\n                    batch,\n                    batch_func,\n                    self.create,\n                    result,\n                    config\n                )\n\n                if not continue_processing:\n                    quitting = True\n                    break\n\n                batch = []\n\n        # Write remaining batch\n        if batch and not quitting:\n            async def batch_func(b):\n                await self._write_batch(b)\n                return [r.id for r in b]\n\n            await async_process_batch_with_fallback(\n                batch,\n                batch_func,\n                self.create,\n                result,\n                config\n            )\n\n        result.duration = time.time() - start_time\n        return result\n\n    async def _write_batch(self, records: list[Record]) -> None:\n        \"\"\"Write a batch of records using COPY for performance.\"\"\"\n        if not records:\n            return\n\n        # Prepare data for COPY",
         "message-id": "R0801"
     },
     {
@@ -31586,7 +31586,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.postgres:[454:500]\n==dataknobs_data.backends.s3:[467:513]\n    def stream_write(\n        self,\n        records: Iterator[Record],\n        config: Optional[StreamConfig] = None\n    ) -> StreamResult:\n        \"\"\"Stream records into S3.\"\"\"\n        self._check_connection()\n        config = config or StreamConfig()\n        result = StreamResult()\n        start_time = time.time()\n        quitting = False\n\n        batch = []\n        for record in records:\n            batch.append(record)\n\n            if len(batch) >= config.batch_size:\n                # Write batch with graceful fallback\n                # Use lambda wrapper for _write_batch\n                continue_processing = process_batch_with_fallback(\n                    batch,\n                    lambda b: self._write_batch(b) or [r.id for r in b],  # _write_batch returns None, we need IDs\n                    self.create,\n                    result,\n                    config\n                )\n\n                if not continue_processing:\n                    quitting = True\n                    break\n\n                batch = []\n\n        # Write remaining batch\n        if batch and not quitting:\n            process_batch_with_fallback(\n                batch,\n                lambda b: self._write_batch(b) or [r.id for r in b],\n                self.create,\n                result,\n                config\n            )\n\n        result.duration = time.time() - start_time\n        return result\n",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.postgres:[454:500]\n==dataknobs_data.backends.s3:[467:513]\n    def stream_write(\n        self,\n        records: Iterator[Record],\n        config: Optional[StreamConfig] = None\n    ) -> StreamResult:\n        \"\"\"Stream records into PostgreSQL.\"\"\"\n        self._check_connection()\n        config = config or StreamConfig()\n        result = StreamResult()\n        start_time = time.time()\n        quitting = False\n\n        batch = []\n        for record in records:\n            batch.append(record)\n\n            if len(batch) >= config.batch_size:\n                # Write batch with graceful fallback\n                # Use lambda wrapper for _write_batch\n                continue_processing = process_batch_with_fallback(\n                    batch,\n                    lambda b: self._write_batch(b) or [r.id for r in b],  # _write_batch returns None, we need IDs\n                    self.create,\n                    result,\n                    config\n                )\n\n                if not continue_processing:\n                    quitting = True\n                    break\n\n                batch = []\n\n        # Write remaining batch\n        if batch and not quitting:\n            process_batch_with_fallback(\n                batch,\n                lambda b: self._write_batch(b) or [r.id for r in b],\n                self.create,\n                result,\n                config\n            )\n\n        result.duration = time.time() - start_time\n        return result\n",
         "message-id": "R0801"
     },
     {
@@ -31599,7 +31599,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.elasticsearch:[470:497]\n==dataknobs_data.backends.file:[826:855]\n    def stream_read(\n        self,\n        query: Optional[Query] = None,\n        config: Optional[StreamConfig] = None\n    ) -> Iterator[Record]:\n        \"\"\"Stream records from Elasticsearch.\"\"\"\n        config = config or StreamConfig()\n\n        # Use search to get all matching records\n        if query:\n            records = self.search(query)\n        else:\n            records = self.search(Query())\n\n        # Yield records in batches for consistency\n        for i in range(0, len(records), config.batch_size):\n            batch = records[i:i + config.batch_size]\n            for record in batch:\n                yield record\n\n    def stream_write(\n        self,\n        records: Iterator[Record],\n        config: Optional[StreamConfig] = None\n    ) -> StreamResult:\n        \"\"\"Stream records into Elasticsearch.\"\"\"\n        # Use the default implementation from mixin",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.elasticsearch:[470:497]\n==dataknobs_data.backends.file:[826:855]\n    def stream_read(\n        self,\n        query: Optional[Query] = None,\n        config: Optional[StreamConfig] = None\n    ) -> Iterator[Record]:\n        \"\"\"Stream records from file.\"\"\"\n        # For file backend, we can use the default implementation\n        # since we need to load all data anyway\n        config = config or StreamConfig()\n\n        # Use search to get all matching records\n        if query:\n            records = self.search(query)\n        else:\n            records = self.search(Query())\n\n        # Yield records in batches for consistency\n        for i in range(0, len(records), config.batch_size):\n            batch = records[i:i + config.batch_size]\n            for record in batch:\n                yield record\n\n    def stream_write(\n        self,\n        records: Iterator[Record],\n        config: Optional[StreamConfig] = None\n    ) -> StreamResult:\n        \"\"\"Stream records into file.\"\"\"\n        # Use the default implementation",
         "message-id": "R0801"
     },
     {
@@ -31716,7 +31716,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.file:[824:840]\n==dataknobs_data.backends.memory:[344:358]\n            return results\n\n    def stream_read(\n        self,\n        query: Optional[Query] = None,\n        config: Optional[StreamConfig] = None\n    ) -> Iterator[Record]:\n        \"\"\"Stream records from file.\"\"\"\n        # For file backend, we can use the default implementation\n        # since we need to load all data anyway\n        config = config or StreamConfig()\n\n        # Use search to get all matching records\n        if query:\n            records = self.search(query)\n        else:",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.file:[824:840]\n==dataknobs_data.backends.memory:[344:358]\n            return results\n\n    def stream_read(\n        self,\n        query: Optional[Query] = None,\n        config: Optional[StreamConfig] = None\n    ) -> Iterator[Record]:\n        \"\"\"Stream records from memory.\"\"\"\n        config = config or StreamConfig()\n\n        # Get all matching records\n        if query:\n            records = self.search(query)\n        else:",
         "message-id": "R0801"
     },
     {
@@ -31755,7 +31755,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_config.environment:[197:213]\n==dataknobs_config.substitution:[126:143]\n            return False\n\n        # Try to convert to int\n        try:\n            return int(value)\n        except ValueError:\n            pass\n\n        # Try to convert to float\n        try:\n            return float(value)\n        except ValueError:\n            pass\n\n        # Return as string\n        return value\n",
+        "message": "Similar lines in 2 files\n==dataknobs_config.environment:[197:213]\n==dataknobs_config.substitution:[126:143]\n            return False\n\n        # Try to parse as integer\n        try:\n            return int(value)\n        except ValueError:\n            pass\n\n        # Try to parse as float\n        try:\n            return float(value)\n        except ValueError:\n            pass\n\n        # Return as string\n        return value",
         "message-id": "R0801"
     },
     {
@@ -31794,7 +31794,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.elasticsearch:[470:482]\n==dataknobs_data.backends.memory:[346:358]\n    def stream_read(\n        self,\n        query: Optional[Query] = None,\n        config: Optional[StreamConfig] = None\n    ) -> Iterator[Record]:\n        \"\"\"Stream records from memory.\"\"\"\n        config = config or StreamConfig()\n\n        # Get all matching records\n        if query:\n            records = self.search(query)\n        else:",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.elasticsearch:[470:482]\n==dataknobs_data.backends.memory:[346:358]\n    def stream_read(\n        self,\n        query: Optional[Query] = None,\n        config: Optional[StreamConfig] = None\n    ) -> Iterator[Record]:\n        \"\"\"Stream records from Elasticsearch.\"\"\"\n        config = config or StreamConfig()\n\n        # Use search to get all matching records\n        if query:\n            records = self.search(query)\n        else:",
         "message-id": "R0801"
     },
     {
@@ -31872,7 +31872,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.postgres:[949:959]\n==dataknobs_data.backends.s3:[470:480]\n        config: Optional[StreamConfig] = None\n    ) -> StreamResult:\n        \"\"\"Stream records into S3.\"\"\"\n        self._check_connection()\n        config = config or StreamConfig()\n        result = StreamResult()\n        start_time = time.time()\n        quitting = False\n\n        batch = []",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.postgres:[949:959]\n==dataknobs_data.backends.s3:[470:480]\n        config: Optional[StreamConfig] = None\n    ) -> StreamResult:\n        \"\"\"Stream records into PostgreSQL using batch inserts.\"\"\"\n        self._check_connection()\n        config = config or StreamConfig()\n        result = StreamResult()\n        start_time = time.time()\n        quitting = False\n\n        batch = []",
         "message-id": "R0801"
     },
     {
@@ -31911,7 +31911,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.postgres:[953:965]\n==dataknobs_data.streaming:[389:400]\n        config = config or StreamConfig()\n        result = StreamResult()\n        start_time = time.time()\n        quitting = False\n\n        batch = []\n        async for record in records:\n            batch.append(record)\n\n            if len(batch) >= config.batch_size:\n                # Write batch with graceful fallback\n                # Use lambda wrapper for _write_batch",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.postgres:[953:965]\n==dataknobs_data.streaming:[389:400]\n        config = config or StreamConfig()\n        result = StreamResult()\n        start_time = time.time()\n        quitting = False\n\n        batch = []\n        async for record in records:\n            batch.append(record)\n\n            if len(batch) >= config.batch_size:\n                # Write batch with graceful fallback",
         "message-id": "R0801"
     },
     {
@@ -31950,7 +31950,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_xization.authorities:[552:576]\n==dataknobs_xization.lexicon:[261:283]\n    def find_variations(\n        self,\n        variation: str,\n        starts_with: bool = False,\n        ends_with: bool = False,\n        scope: str = \"fullmatch\",\n    ) -> pd.Series:\n        \"\"\"Find all matches to the given variation.\n        :param variation: The text to find; treated as a regular expression\n            unless either starts_with or ends_with is True.\n        :param starts_with: When True, find all terms that start with the\n            variation text.\n        :param ends_with: When True, find all terms that end with the variation\n            text.\n        :param scope: 'fullmatch' (default), 'match', or 'contains' for\n            strict, less strict, and least strict matching\n        :return: The matching variations as a pd.Series\n\n        Note only the first true of starts_with, ends_with, and scope will\n        be applied. If none of these are true, an full match on the pattern\n        is performed.\n        \"\"\"",
+        "message": "Similar lines in 2 files\n==dataknobs_xization.authorities:[552:576]\n==dataknobs_xization.lexicon:[261:283]\n    def find_variations(\n        self,\n        variation: str,\n        starts_with: bool = False,\n        ends_with: bool = False,\n        scope: str = \"fullmatch\",\n    ) -> pd.Series:\n        \"\"\"Find all matches to the given variation.\n        :param variation: The text to find; treated as a regular expression\n            unless either starts_with or ends_with is True.\n        :param starts_with: When True, find all terms that start with the\n            variation text.\n        :param ends_with: When True, find all terms that end with the variation\n            text.\n        :param scope: 'fullmatch' (default), 'match', or 'contains' for\n            strict, less strict, and least strict matching\n        :param category_constraints: When present, limit results to terms with\n            the given constraints.\n        :return: The matching variations as a pd.Series\n\n        Note only the first true of starts_with, ends_with, and scope will\n        be applied. If none of these are true, an full match on the pattern\n        is performed.\n        \"\"\"",
         "message-id": "R0801"
     },
     {
@@ -31976,7 +31976,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.migration.operations:[144:154]\n==dataknobs_data.migration.transformer:[73:83]\n    def apply(self, record: Record) -> Record:\n        \"\"\"Remove excluded fields.\"\"\"\n        result = Record(\n            data={},\n            metadata=record.metadata.copy(),\n            id=record.id\n        )\n\n        # Copy all fields except excluded ones\n        for field_name, field in record.fields.items():",
+        "message": "Similar lines in 2 files\n==dataknobs_data.migration.operations:[144:154]\n==dataknobs_data.migration.transformer:[73:83]\n    def apply(self, record: Record) -> Record:\n        \"\"\"Rename field from old_name to new_name.\"\"\"\n        result = Record(\n            data={},\n            metadata=record.metadata.copy(),\n            id=record.id\n        )\n\n        # Copy fields with renaming\n        for field_name, field in record.fields.items():",
         "message-id": "R0801"
     },
     {
@@ -31989,7 +31989,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.elasticsearch_async:[363:373]\n==dataknobs_data.backends.postgres:[896:906]\n    async def stream_read(\n        self,\n        query: Optional[Query] = None,\n        config: Optional[StreamConfig] = None\n    ) -> AsyncIterator[Record]:\n        \"\"\"Stream records from PostgreSQL using cursor.\"\"\"\n        self._check_connection()\n        config = config or StreamConfig()\n\n        # Build SQL query",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.elasticsearch_async:[363:373]\n==dataknobs_data.backends.postgres:[896:906]\n    async def stream_read(\n        self,\n        query: Optional[Query] = None,\n        config: Optional[StreamConfig] = None\n    ) -> AsyncIterator[Record]:\n        \"\"\"Stream records from Elasticsearch using scroll API.\"\"\"\n        self._check_connection()\n        config = config or StreamConfig()\n\n        # Build query",
         "message-id": "R0801"
     },
     {
@@ -32028,7 +32028,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_xization.authorities:[515:522]\n==dataknobs_xization.lexicon:[190:196]\n            auth_anns_builder=auth_anns_builder,\n            authdata=authdata,\n            field_groups=field_groups,\n            anns_validator=anns_validator,\n            parent_auth=parent_auth,\n        )\n",
+        "message": "Similar lines in 2 files\n==dataknobs_xization.authorities:[515:522]\n==dataknobs_xization.lexicon:[190:196]\n            auth_anns_builder=auth_anns_builder,\n            authdata=authdata,\n            field_groups=field_groups,\n            anns_validator=anns_validator,\n            parent_auth=parent_auth,\n        )",
         "message-id": "R0801"
     },
     {
@@ -32158,7 +32158,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.postgres:[490:497]\n==dataknobs_data.backends.s3:[487:494]\n                    batch,\n                    lambda b: self._write_batch(b) or [r.id for r in b],  # _write_batch returns None, we need IDs\n                    self.create,\n                    result,\n                    config\n                )\n",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.postgres:[490:497]\n==dataknobs_data.backends.s3:[487:494]\n                batch,\n                lambda b: self._write_batch(b) or [r.id for r in b],\n                self.create,\n                result,\n                config\n            )\n",
         "message-id": "R0801"
     },
     {
@@ -32197,7 +32197,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.file:[576:586]\n==dataknobs_data.backends.memory:[188:198]\n    async def stream_write(\n        self,\n        records: AsyncIterator[Record],\n        config: Optional[StreamConfig] = None\n    ) -> StreamResult:\n        \"\"\"Stream records into memory.\"\"\"\n        # Use the default implementation from mixin\n        return await self._default_stream_write(records, config)\n\n",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.file:[576:586]\n==dataknobs_data.backends.memory:[188:198]\n    async def stream_write(\n        self,\n        records: AsyncIterator[Record],\n        config: Optional[StreamConfig] = None\n    ) -> StreamResult:\n        \"\"\"Stream records into file.\"\"\"\n        # Use the default implementation from mixin\n        return await self._default_stream_write(records, config)\n\n",
         "message-id": "R0801"
     },
     {
@@ -32223,7 +32223,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.elasticsearch:[490:501]\n==dataknobs_data.backends.memory:[367:375]\n    def stream_write(\n        self,\n        records: Iterator[Record],\n        config: Optional[StreamConfig] = None\n    ) -> StreamResult:\n        \"\"\"Stream records into Elasticsearch.\"\"\"\n        # Use the default implementation from mixin\n        return self._default_stream_write(records, config)\n\n\n# Import the native async implementation",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.elasticsearch:[490:501]\n==dataknobs_data.backends.memory:[367:375]\n    def stream_write(\n        self,\n        records: Iterator[Record],\n        config: Optional[StreamConfig] = None\n    ) -> StreamResult:\n        \"\"\"Stream records into memory.\"\"\"\n        # Use the default implementation from mixin\n        return self._default_stream_write(records, config)",
         "message-id": "R0801"
     },
     {
@@ -32249,7 +32249,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.postgres:[492:500]\n==dataknobs_data.streaming:[339:348]\n                self.create,\n                result,\n                config\n            )\n\n        result.duration = time.time() - start_time\n        return result\n",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.postgres:[492:500]\n==dataknobs_data.streaming:[339:348]\n                self.create,\n                result,\n                config\n            )\n\n        result.duration = time.time() - start_time\n        return result\n\n",
         "message-id": "R0801"
     },
     {
@@ -32262,7 +32262,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.file:[851:860]\n==dataknobs_data.streaming:[381:394]\n        config: Optional[StreamConfig] = None\n    ) -> StreamResult:\n        \"\"\"\n        Default implementation of async stream_write using create_batch method.\n\n        This provides batch writing functionality with graceful fallback\n        to individual record creation when batches fail.\n        \"\"\"\n        config = config or StreamConfig()\n        result = StreamResult()\n        start_time = time.time()\n        quitting = False\n",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.file:[851:860]\n==dataknobs_data.streaming:[381:394]\n        config: Optional[StreamConfig] = None\n    ) -> StreamResult:\n        \"\"\"Stream records into file.\"\"\"\n        # Use the default implementation\n        config = config or StreamConfig()\n        result = StreamResult()\n        start_time = time.time()\n        quitting = False\n",
         "message-id": "R0801"
     },
     {
@@ -32314,7 +32314,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_utils.json_utils:[625:635]\n==dataknobs_xization.annotations:[201:208]\n    @property\n    def df(self) -> pd.DataFrame:\n        \"\"\"Get the annotations as a pandas dataframe.\"\"\"\n        if self._df is None:\n            self._df = self._build_df()\n        return self._df\n",
+        "message": "Similar lines in 2 files\n==dataknobs_utils.json_utils:[625:635]\n==dataknobs_xization.annotations:[201:208]\n    @property\n    def df(self) -> pd.DataFrame:\n        \"\"\"Get schema information as a DataFrame with columns:\n\n        jq_path    value_type    value_count\n        \"\"\"\n        if self._df is None:\n            self._df = self._build_df()\n        return self._df\n",
         "message-id": "R0801"
     },
     {
@@ -32405,7 +32405,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.file:[826:834]\n==dataknobs_data.backends.s3:[432:438]\n    def stream_read(\n        self,\n        query: Optional[Query] = None,\n        config: Optional[StreamConfig] = None\n    ) -> Iterator[Record]:\n        \"\"\"Stream records from file.\"\"\"\n        # For file backend, we can use the default implementation\n        # since we need to load all data anyway",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.file:[826:834]\n==dataknobs_data.backends.s3:[432:438]\n    def stream_read(\n        self,\n        query: Optional[Query] = None,\n        config: Optional[StreamConfig] = None\n    ) -> Iterator[Record]:\n        \"\"\"Stream records from S3.\"\"\"",
         "message-id": "R0801"
     },
     {
@@ -32431,7 +32431,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.file:[554:562]\n==dataknobs_data.backends.postgres:[896:902]\n    async def stream_read(\n        self,\n        query: Optional[Query] = None,\n        config: Optional[StreamConfig] = None\n    ) -> AsyncIterator[Record]:\n        \"\"\"Stream records from file.\"\"\"\n        # For file backend, we can use the default implementation\n        # since we need to load all data anyway",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.file:[554:562]\n==dataknobs_data.backends.postgres:[896:902]\n    async def stream_read(\n        self,\n        query: Optional[Query] = None,\n        config: Optional[StreamConfig] = None\n    ) -> AsyncIterator[Record]:\n        \"\"\"Stream records from PostgreSQL using cursor.\"\"\"",
         "message-id": "R0801"
     },
     {
@@ -32444,7 +32444,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.memory:[346:352]\n==dataknobs_data.backends.postgres:[402:408]\n    def stream_read(\n        self,\n        query: Optional[Query] = None,\n        config: Optional[StreamConfig] = None\n    ) -> Iterator[Record]:\n        \"\"\"Stream records from memory.\"\"\"",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.memory:[346:352]\n==dataknobs_data.backends.postgres:[402:408]\n    def stream_read(\n        self,\n        query: Optional[Query] = None,\n        config: Optional[StreamConfig] = None\n    ) -> Iterator[Record]:\n        \"\"\"Stream records from PostgreSQL.\"\"\"",
         "message-id": "R0801"
     },
     {
@@ -32457,7 +32457,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.file:[848:855]\n==dataknobs_data.backends.memory:[367:374]\n    def stream_write(\n        self,\n        records: Iterator[Record],\n        config: Optional[StreamConfig] = None\n    ) -> StreamResult:\n        \"\"\"Stream records into memory.\"\"\"\n        # Use the default implementation from mixin",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.file:[848:855]\n==dataknobs_data.backends.memory:[367:374]\n    def stream_write(\n        self,\n        records: Iterator[Record],\n        config: Optional[StreamConfig] = None\n    ) -> StreamResult:\n        \"\"\"Stream records into file.\"\"\"\n        # Use the default implementation",
         "message-id": "R0801"
     },
     {
@@ -32470,7 +32470,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.file:[630:640]\n==dataknobs_data.backends.memory:[209:219]\n        return cls(config)\n\n    def connect(self) -> None:\n        \"\"\"Connect to the database (no-op for file backend).\"\"\"\n        pass\n\n    def _generate_id(self) -> str:\n        \"\"\"Generate a unique ID for a record.\"\"\"\n        return str(uuid.uuid4())\n",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.file:[630:640]\n==dataknobs_data.backends.memory:[209:219]\n        return cls(config)\n\n    def connect(self) -> None:\n        \"\"\"Connect to the database (no-op for memory backend).\"\"\"\n        pass\n\n    def _generate_id(self) -> str:\n        \"\"\"Generate a unique ID for a record.\"\"\"\n        return str(uuid.uuid4())\n",
         "message-id": "R0801"
     },
     {
@@ -32483,7 +32483,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.file:[364:374]\n==dataknobs_data.backends.memory:[28:38]\n        return cls(config)\n\n    async def connect(self) -> None:\n        \"\"\"Connect to the database (no-op for memory backend).\"\"\"\n        pass\n\n    def _generate_id(self) -> str:\n        \"\"\"Generate a unique ID for a record.\"\"\"\n        return str(uuid.uuid4())\n",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.file:[364:374]\n==dataknobs_data.backends.memory:[28:38]\n        return cls(config)\n\n    async def connect(self) -> None:\n        \"\"\"Connect to the database (no-op for file backend).\"\"\"\n        pass\n\n    def _generate_id(self) -> str:\n        \"\"\"Generate a unique ID for a record.\"\"\"\n        return str(uuid.uuid4())\n",
         "message-id": "R0801"
     },
     {
@@ -32561,7 +32561,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.memory:[188:195]\n==dataknobs_data.database:[241:257]\n    async def stream_write(\n        self,\n        records: AsyncIterator[Record],\n        config: Optional[StreamConfig] = None\n    ) -> StreamResult:\n        \"\"\"Stream records into memory.\"\"\"\n        # Use the default implementation from mixin",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.memory:[188:195]\n==dataknobs_data.database:[245:261]\n    async def stream_write(\n        self,\n        records: AsyncIterator[Record],\n        config: Optional[StreamConfig] = None\n    ) -> StreamResult:\n        \"\"\"Stream records into database.\n\n        Accepts an iterator and writes in batches.\n\n        Args:\n            records: Iterator of records to write\n            config: Streaming configuration\n\n        Returns:\n            Result of the streaming operation\n        \"\"\"",
         "message-id": "R0801"
     },
     {
@@ -32574,7 +32574,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.memory:[165:171]\n==dataknobs_data.database:[222:238]\n    async def stream_read(\n        self,\n        query: Optional[Query] = None,\n        config: Optional[StreamConfig] = None\n    ) -> AsyncIterator[Record]:\n        \"\"\"Stream records from database.\n\n        Yields records one at a time, fetching in batches internally.\n\n        Args:\n            query: Optional query to filter records\n            config: Streaming configuration\n\n        Yields:\n            Records matching the query\n        \"\"\"",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.memory:[165:171]\n==dataknobs_data.database:[226:242]\n    async def stream_read(\n        self,\n        query: Optional[Query] = None,\n        config: Optional[StreamConfig] = None\n    ) -> AsyncIterator[Record]:\n        \"\"\"Stream records from database.\n\n        Yields records one at a time, fetching in batches internally.\n\n        Args:\n            query: Optional query to filter records\n            config: Streaming configuration\n\n        Yields:\n            Records matching the query\n        \"\"\"",
         "message-id": "R0801"
     },
     {
@@ -32587,7 +32587,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.elasticsearch:[490:497]\n==dataknobs_data.database:[459:475]\n    def stream_write(\n        self,\n        records: Iterator[Record],\n        config: Optional[StreamConfig] = None\n    ) -> StreamResult:\n        \"\"\"Stream records into database.\n\n        Accepts an iterator and writes in batches.\n\n        Args:\n            records: Iterator of records to write\n            config: Streaming configuration\n\n        Returns:\n            Result of the streaming operation\n        \"\"\"",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.elasticsearch:[490:497]\n==dataknobs_data.database:[467:483]\n    def stream_write(\n        self,\n        records: Iterator[Record],\n        config: Optional[StreamConfig] = None\n    ) -> StreamResult:\n        \"\"\"Stream records into Elasticsearch.\"\"\"\n        # Use the default implementation from mixin",
         "message-id": "R0801"
     },
     {
@@ -32600,7 +32600,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.elasticsearch:[470:476]\n==dataknobs_data.database:[440:456]\n    def stream_read(\n        self,\n        query: Optional[Query] = None,\n        config: Optional[StreamConfig] = None\n    ) -> Iterator[Record]:\n        \"\"\"Stream records from database.\n\n        Yields records one at a time, fetching in batches internally.\n\n        Args:\n            query: Optional query to filter records\n            config: Streaming configuration\n\n        Yields:\n            Records matching the query\n        \"\"\"",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.elasticsearch:[470:476]\n==dataknobs_data.database:[448:464]\n    def stream_read(\n        self,\n        query: Optional[Query] = None,\n        config: Optional[StreamConfig] = None\n    ) -> Iterator[Record]:\n        \"\"\"Stream records from Elasticsearch.\"\"\"",
         "message-id": "R0801"
     },
     {
@@ -32613,8 +32613,47 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "duplicate-code",
-        "message": "Similar lines in 2 files\n==dataknobs_data.backends.elasticsearch:[213:219]\n==dataknobs_data.database:[373:379]\n        records = []\n        for id in ids:\n            record = self.read(id)\n            records.append(record)\n        return records\n",
+        "message": "Similar lines in 2 files\n==dataknobs_data.backends.elasticsearch:[213:219]\n==dataknobs_data.database:[377:383]\n        records = []\n        for id in ids:\n            record = self.read(id)\n            records.append(record)\n        return records\n",
         "message-id": "R0801"
+    },
+    {
+        "type": "refactor",
+        "module": "dataknobs_xization.annotations",
+        "obj": "",
+        "line": 1,
+        "column": 0,
+        "endLine": null,
+        "endColumn": null,
+        "path": "packages/xization/src/dataknobs_xization/annotations.py",
+        "symbol": "cyclic-import",
+        "message": "Cyclic import (dataknobs_data.backends -> dataknobs_data.backends.s3 -> dataknobs_data.database)",
+        "message-id": "R0401"
+    },
+    {
+        "type": "refactor",
+        "module": "dataknobs_xization.annotations",
+        "obj": "",
+        "line": 1,
+        "column": 0,
+        "endLine": null,
+        "endColumn": null,
+        "path": "packages/xization/src/dataknobs_xization/annotations.py",
+        "symbol": "cyclic-import",
+        "message": "Cyclic import (dataknobs_data.backends -> dataknobs_data.backends.elasticsearch -> dataknobs_data.backends.elasticsearch_async -> dataknobs_data.database)",
+        "message-id": "R0401"
+    },
+    {
+        "type": "refactor",
+        "module": "dataknobs_xization.annotations",
+        "obj": "",
+        "line": 1,
+        "column": 0,
+        "endLine": null,
+        "endColumn": null,
+        "path": "packages/xization/src/dataknobs_xization/annotations.py",
+        "symbol": "cyclic-import",
+        "message": "Cyclic import (dataknobs_data.backends -> dataknobs_data.backends.memory -> dataknobs_data.database)",
+        "message-id": "R0401"
     },
     {
         "type": "refactor",
@@ -32652,46 +32691,7 @@
         "endColumn": null,
         "path": "packages/xization/src/dataknobs_xization/annotations.py",
         "symbol": "cyclic-import",
-        "message": "Cyclic import (dataknobs_data.backends -> dataknobs_data.backends.elasticsearch -> dataknobs_data.database)",
-        "message-id": "R0401"
-    },
-    {
-        "type": "refactor",
-        "module": "dataknobs_xization.annotations",
-        "obj": "",
-        "line": 1,
-        "column": 0,
-        "endLine": null,
-        "endColumn": null,
-        "path": "packages/xization/src/dataknobs_xization/annotations.py",
-        "symbol": "cyclic-import",
-        "message": "Cyclic import (dataknobs_data.backends -> dataknobs_data.backends.memory -> dataknobs_data.database)",
-        "message-id": "R0401"
-    },
-    {
-        "type": "refactor",
-        "module": "dataknobs_xization.annotations",
-        "obj": "",
-        "line": 1,
-        "column": 0,
-        "endLine": null,
-        "endColumn": null,
-        "path": "packages/xization/src/dataknobs_xization/annotations.py",
-        "symbol": "cyclic-import",
         "message": "Cyclic import (dataknobs_data.backends -> dataknobs_data.backends.s3 -> dataknobs_data.backends.s3_async -> dataknobs_data.database)",
-        "message-id": "R0401"
-    },
-    {
-        "type": "refactor",
-        "module": "dataknobs_xization.annotations",
-        "obj": "",
-        "line": 1,
-        "column": 0,
-        "endLine": null,
-        "endColumn": null,
-        "path": "packages/xization/src/dataknobs_xization/annotations.py",
-        "symbol": "cyclic-import",
-        "message": "Cyclic import (dataknobs_data.backends -> dataknobs_data.backends.elasticsearch -> dataknobs_data.backends.elasticsearch_async -> dataknobs_data.database)",
         "message-id": "R0401"
     }
 ]

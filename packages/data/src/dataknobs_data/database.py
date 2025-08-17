@@ -210,6 +210,10 @@ class AsyncDatabase(ABC):
         """Close the database connection."""
         pass
 
+    async def disconnect(self) -> None:
+        """Disconnect from the database (alias for close)."""
+        await self.close()
+
     async def __aenter__(self):
         """Async context manager entry."""
         await self.connect()
@@ -427,6 +431,10 @@ class SyncDatabase(ABC):
     def close(self) -> None:
         """Close the database connection."""
         pass
+
+    def disconnect(self) -> None:
+        """Disconnect from the database (alias for close)."""
+        self.close()
 
     def __enter__(self):
         """Context manager entry."""
