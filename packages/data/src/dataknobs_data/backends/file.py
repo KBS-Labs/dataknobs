@@ -59,12 +59,12 @@ class FileLock:
 
                 try:
                     msvcrt.locking(self.lock_handle.fileno(), msvcrt.LK_UNLCK, 1)
-                except:
+                except (OSError, IOError):
                     pass
             self.lock_handle.close()
             try:
                 os.remove(self.lockfile)
-            except:
+            except (OSError, FileNotFoundError):
                 pass
 
     def __enter__(self):
@@ -397,7 +397,7 @@ class AsyncFileDatabase(AsyncDatabase, ConfigurableBase):
                 self.handler.save(temp_path, raw_data)
                 # Atomic rename
                 os.replace(temp_path, self.filepath)
-        except:
+        except Exception:
             # Clean up temp file on error
             if os.path.exists(temp_path):
                 os.remove(temp_path)
@@ -407,7 +407,8 @@ class AsyncFileDatabase(AsyncDatabase, ConfigurableBase):
         """Create a new record in the file."""
         async with self._lock:
             data = await self._load_data()
-            record_id = self._generate_id()
+            # Use record's ID if it has one, otherwise generate a new one
+            record_id = record.id if record.id else self._generate_id()
             data[record_id] = record.copy(deep=True)
             await self._save_data(data)
             return record_id
@@ -701,18 +702,26 @@ class SyncFileDatabase(SyncDatabase, ConfigurableBase):
                 self.handler.save(temp_path, raw_data)
                 # Atomic rename
                 os.replace(temp_path, self.filepath)
-        except:
+        except Exception:
             # Clean up temp file on error
             if os.path.exists(temp_path):
                 os.remove(temp_path)
             raise
 
+    def _do_set_data(self, data: dict[str, Record], record: Record) -> str:
+        """Ensure record has an ID, set data[id]=record.copy() and return the ID"""
+        # Use record's ID if it has one, otherwise generate a new one
+        if not record.id:
+            record.id = self._generate_id()
+        data[record.id] = record.copy(deep=True)
+        return record.id
+
     def create(self, record: Record) -> str:
         """Create a new record in the file."""
         with self._lock:
             data = self._load_data()
-            record_id = self._generate_id()
-            data[record_id] = record.copy(deep=True)
+            # Use record's ID if it has one, otherwise generate a new one
+            record_id = self._do_set_data(data, record)
             self._save_data(data)
             return record_id
 
@@ -820,8 +829,7 @@ class SyncFileDatabase(SyncDatabase, ConfigurableBase):
             data = self._load_data()
             ids = []
             for record in records:
-                record_id = self._generate_id()
-                data[record_id] = record.copy(deep=True)
+                record_id = self._do_set_data(data, record)
                 ids.append(record_id)
             self._save_data(data)
             return ids
@@ -887,40 +895,51 @@ class SyncFileDatabase(SyncDatabase, ConfigurableBase):
         config = config or StreamConfig()
         result = StreamResult()
         start_time = time.time()
+        quitting = False
         
+        def do_write_batch(batch: list) -> bool:
+            """write batch with individual retries, return False to quit"""
+            retval = True
+            try:
+                ids = self.create_batch(batch)
+                result.successful += len(ids)
+                result.total_processed += len(batch)
+            except Exception as e:
+                # Try creating each item again and catch specific error items
+                for rec in batch:
+                    result.total_processed += 1
+                    try:
+                        self.create(rec)
+                        result.successful += 1
+                    except Exception as e:
+                        # This item failed again
+                        result.failed += 1
+                        result.add_error(None, e)
+                        if config.on_error:
+                            if not config.on_error(e, rec):
+                                retval = False
+                                break
+                        else:
+                            # Without "on_error", quit streaming
+                            retval = False
+                            break
+            return retval
+
         batch = []
         for record in records:
             batch.append(record)
             
             if len(batch) >= config.batch_size:
                 # Write batch
-                try:
-                    ids = self.create_batch(batch)
-                    result.successful += len(ids)
-                    result.total_processed += len(batch)
-                except Exception as e:
-                    result.failed += len(batch)
-                    result.total_processed += len(batch)
-                    if config.on_error:
-                        for rec in batch:
-                            if not config.on_error(e, rec):
-                                result.add_error(None, e)
-                                break
-                    else:
-                        result.add_error(None, e)
-                
+                quitting = not do_write_batch(batch)
+                if quitting:
+                    # Got signal to quit
+                    break
                 batch = []
         
         # Write remaining batch
-        if batch:
-            try:
-                ids = self.create_batch(batch)
-                result.successful += len(ids)
-                result.total_processed += len(batch)
-            except Exception as e:
-                result.failed += len(batch)
-                result.total_processed += len(batch)
-                result.add_error(None, e)
+        if batch and not quitting:
+            do_write_batch(batch)
         
         result.duration = time.time() - start_time
         return result

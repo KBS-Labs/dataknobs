@@ -168,7 +168,8 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
         """Create a new record in S3."""
         self._check_connection()
         
-        record_id = str(uuid4())
+        # Use record's ID if it has one, otherwise generate a new one
+        record_id = record.id if record.id else str(uuid4())
         key = self._get_object_key(record_id)
         
         # Set metadata

@@ -112,7 +112,8 @@ class AsyncS3Database(AsyncDatabase, ConfigurableBase):
         """Create a new record in S3."""
         self._check_connection()
         
-        id = str(uuid.uuid4())
+        # Use record's ID if it has one, otherwise generate a new one
+        id = record.id if record.id else str(uuid.uuid4())
         key = self._get_key(id)
         obj = self._record_to_s3_object(record)
         

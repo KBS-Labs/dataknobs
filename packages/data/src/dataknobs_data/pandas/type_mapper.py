@@ -340,10 +340,10 @@ class TypeMapper:
             try:
                 pd.to_datetime(non_null)
                 return "datetime64[ns]"
-            except:
+            except (ValueError, TypeError):
                 pass
             
             # Default to string
             return "string"
-        except:
+        except Exception:
             return "object"

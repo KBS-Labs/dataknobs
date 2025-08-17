@@ -132,12 +132,16 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
         self._check_connection()
         doc = self._record_to_doc(record)
         
-        # Create document
-        response = await self._client.index(
-            index=self.index_name,
-            document=doc,
-            refresh=self.refresh
-        )
+        # Create document with explicit ID if record has one
+        kwargs = {
+            "index": self.index_name,
+            "document": doc,
+            "refresh": self.refresh
+        }
+        if record.id:
+            kwargs["id"] = record.id
+        
+        response = await self._client.index(**kwargs)
         
         return response["_id"]
     

@@ -180,6 +180,36 @@ class TestRecord:
         assert record.get_value("name") == "Simple"
         assert record.get_value("count") == 5
 
+    def test_from_to_dict(self):
+        """Test converting record to dictionary and back."""        
+        record = Record({"name": "Test", "value": 42}, metadata={"version": 1})
+
+        # Full representation
+        full_dict = record.to_dict(include_metadata=True, flatten=False)
+        full_record = Record.from_dict(full_dict)
+        assert full_record.get_value("name") == "Test"
+        assert full_record.get_value("value") == 42
+        assert full_record.metadata == {"version": 1}
+        assert full_record.id == record.id
+
+        # Without metadata
+        no_meta_dict = record.to_dict(include_metadata=False, flatten=False)
+        no_meta_record = Record.from_dict(no_meta_dict)
+        assert no_meta_record.get_value("name") == "Test"
+        assert no_meta_record.get_value("value") == 42
+        assert no_meta_record.metadata == {}
+        assert "fields" in no_meta_dict
+        assert "metadata" not in no_meta_dict
+        assert no_meta_record.id == record.id
+
+        # Flattened
+        flat_dict = record.to_dict(flatten=True)
+        flat_record = Record.from_dict(flat_dict)
+        assert flat_record.get_value("name") == "Test"
+        assert flat_record.get_value("value") == 42
+        assert flat_record.metadata == {}
+        assert flat_record.id == record.id
+
     def test_copy(self):
         """Test copying a record."""
         original = Record({"name": "Original", "data": {"nested": "value"}}, metadata={"id": 1})

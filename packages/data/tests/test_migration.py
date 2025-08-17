@@ -635,7 +635,7 @@ class TestIntegrationScenarios:
             # Try to convert to int, default to 0
             try:
                 return int(value)
-            except:
+            except (ValueError, TypeError):
                 return 0
         
         def clean_name(value):

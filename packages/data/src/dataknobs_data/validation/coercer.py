@@ -102,7 +102,7 @@ class Coercer:
             for t in target_type:
                 try:
                     return self._coerce_value(value, t)
-                except:
+                except (ValueError, TypeError):
                     continue
             raise ValueError(f"Could not coerce to any of {target_type}")
         
@@ -190,7 +190,7 @@ class Coercer:
                 # Try parsing as ISO format
                 try:
                     return datetime.fromisoformat(value.replace('Z', '+00:00'))
-                except:
+                except (ValueError, AttributeError):
                     pass
                 
                 raise ValueError(f"Could not parse datetime from '{value}'")
@@ -223,7 +223,7 @@ class Coercer:
                     if not isinstance(result, list):
                         return [result]
                     return result
-                except:
+                except (json.JSONDecodeError, TypeError):
                     # Split comma-separated values
                     if ',' in value:
                         return [v.strip() for v in value.split(',')]

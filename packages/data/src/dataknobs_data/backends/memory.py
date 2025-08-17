@@ -39,7 +39,8 @@ class AsyncMemoryDatabase(AsyncDatabase, ConfigurableBase):
     async def create(self, record: Record) -> str:
         """Create a new record in memory."""
         async with self._lock:
-            id = self._generate_id()
+            # Use record's ID if it has one, otherwise generate a new one
+            id = record.id if record.id else self._generate_id()
             self._storage[id] = record.copy(deep=True)
             return id
 
@@ -135,7 +136,8 @@ class AsyncMemoryDatabase(AsyncDatabase, ConfigurableBase):
         async with self._lock:
             ids = []
             for record in records:
-                id = self._generate_id()
+                # Use record's ID if it has one, otherwise generate a new one
+                id = record.id if record.id else self._generate_id()
                 self._storage[id] = record.copy(deep=True)
                 ids.append(id)
             return ids
@@ -256,7 +258,8 @@ class SyncMemoryDatabase(SyncDatabase, ConfigurableBase):
     def create(self, record: Record) -> str:
         """Create a new record in memory."""
         with self._lock:
-            id = self._generate_id()
+            # Use record's ID if it has one, otherwise generate a new one
+            id = record.id if record.id else self._generate_id()
             self._storage[id] = record.copy(deep=True)
             return id
 
@@ -352,7 +355,8 @@ class SyncMemoryDatabase(SyncDatabase, ConfigurableBase):
         with self._lock:
             ids = []
             for record in records:
-                id = self._generate_id()
+                # Use record's ID if it has one, otherwise generate a new one
+                id = record.id if record.id else self._generate_id()
                 self._storage[id] = record.copy(deep=True)
                 ids.append(id)
             return ids

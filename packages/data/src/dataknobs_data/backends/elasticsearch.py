@@ -124,7 +124,8 @@ class SyncElasticsearchDatabase(SyncDatabase, ConfigurableBase):
 
     def create(self, record: Record) -> str:
         """Create a new record."""
-        id = str(uuid.uuid4())
+        # Use record's ID if it has one, otherwise generate a new one
+        id = record.id if record.id else str(uuid.uuid4())
         doc = self._record_to_doc(record, id)
 
         # Index the document

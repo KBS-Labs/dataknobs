@@ -43,6 +43,31 @@ if [ -f /.dockerenv ] || [ -n "${DOCKER_CONTAINER:-}" ]; then
     IN_DOCKER=true
 fi
 
+# Function to set environment variables for integration tests
+set_integration_env_vars() {
+    if [ "$IN_DOCKER" = true ]; then
+        # Use Docker network hostnames when inside container
+        export POSTGRES_HOST=postgres
+        export ELASTICSEARCH_HOST=elasticsearch
+        export AWS_ENDPOINT_URL=http://localstack:4566
+        export LOCALSTACK_ENDPOINT=http://localstack:4566
+    else
+        # Use localhost when running on host
+        export POSTGRES_HOST="${POSTGRES_HOST:-localhost}"
+        export ELASTICSEARCH_HOST="${ELASTICSEARCH_HOST:-localhost}"
+        export AWS_ENDPOINT_URL="${AWS_ENDPOINT_URL:-http://localhost:4566}"
+        export LOCALSTACK_ENDPOINT="${LOCALSTACK_ENDPOINT:-http://localhost:4566}"
+    fi
+    export POSTGRES_PORT="${POSTGRES_PORT:-5432}"
+    export POSTGRES_USER="${POSTGRES_USER:-postgres}"
+    export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-postgres}"
+    export POSTGRES_DB="${POSTGRES_DB:-dataknobs_test}"
+    export ELASTICSEARCH_PORT="${ELASTICSEARCH_PORT:-9200}"
+    export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-test}"
+    export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
+    export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
+}
+
 # Function to show usage
 show_usage() {
     cat << EOF
@@ -316,18 +341,7 @@ run_path_tests() {
         fi
         
         # Set environment variables for integration tests
-        export POSTGRES_HOST="${POSTGRES_HOST:-localhost}"
-        export POSTGRES_PORT="${POSTGRES_PORT:-5432}"
-        export POSTGRES_USER="${POSTGRES_USER:-postgres}"
-        export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-postgres}"
-        export POSTGRES_DB="${POSTGRES_DB:-dataknobs_test}"
-        export ELASTICSEARCH_HOST="${ELASTICSEARCH_HOST:-localhost}"
-        export ELASTICSEARCH_PORT="${ELASTICSEARCH_PORT:-9200}"
-        export AWS_ENDPOINT_URL="${AWS_ENDPOINT_URL:-http://localhost:4566}"
-        export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-test}"
-        export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
-        export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
-        export LOCALSTACK_ENDPOINT="${LOCALSTACK_ENDPOINT:-http://localhost:4566}"
+        set_integration_env_vars
     fi
     
     # Build coverage args if enabled
@@ -488,18 +502,7 @@ run_integration_tests() {
     fi
     
     # Set environment variables for tests
-    export POSTGRES_HOST="${POSTGRES_HOST:-localhost}"
-    export POSTGRES_PORT="${POSTGRES_PORT:-5432}"
-    export POSTGRES_USER="${POSTGRES_USER:-postgres}"
-    export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-postgres}"
-    export POSTGRES_DB="${POSTGRES_DB:-dataknobs_test}"
-    export ELASTICSEARCH_HOST="${ELASTICSEARCH_HOST:-localhost}"
-    export ELASTICSEARCH_PORT="${ELASTICSEARCH_PORT:-9200}"
-    export AWS_ENDPOINT_URL="${AWS_ENDPOINT_URL:-http://localhost:4566}"
-    export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-test}"
-    export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
-    export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
-    export LOCALSTACK_ENDPOINT="${LOCALSTACK_ENDPOINT:-http://localhost:4566}"
+    set_integration_env_vars
     
     # Build coverage args if enabled
     local cov_args=""
@@ -568,18 +571,7 @@ run_combined_tests() {
         fi
         
         # Set environment variables for integration tests
-        export POSTGRES_HOST="${POSTGRES_HOST:-localhost}"
-        export POSTGRES_PORT="${POSTGRES_PORT:-5432}"
-        export POSTGRES_USER="${POSTGRES_USER:-postgres}"
-        export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-postgres}"
-        export POSTGRES_DB="${POSTGRES_DB:-dataknobs_test}"
-        export ELASTICSEARCH_HOST="${ELASTICSEARCH_HOST:-localhost}"
-        export ELASTICSEARCH_PORT="${ELASTICSEARCH_PORT:-9200}"
-        export AWS_ENDPOINT_URL="${AWS_ENDPOINT_URL:-http://localhost:4566}"
-        export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-test}"
-        export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
-        export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
-        export LOCALSTACK_ENDPOINT="${LOCALSTACK_ENDPOINT:-http://localhost:4566}"
+        set_integration_env_vars
     fi
     
     # Build coverage args if enabled

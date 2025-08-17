@@ -59,13 +59,15 @@ class Migrator:
         for record in all_records:
             try:
                 # Apply transformation if provided
-                if transform:
+                if transform is not None:
                     if isinstance(transform, Transformer):
-                        record = transform.transform(record)
-                        if record is None:
+                        original_id = record.id  # Preserve ID before transformation
+                        transformed = transform.transform(record)
+                        if transformed is None:
                             # Record filtered out
-                            progress.record_skip("Filtered by transformer", record.id)
+                            progress.record_skip("Filtered by transformer", original_id)
                             continue
+                        record = transformed
                     elif isinstance(transform, Migration):
                         record = transform.apply(record)
                 
@@ -80,13 +82,15 @@ class Migrator:
                         on_progress(progress)
                         
             except Exception as e:
-                if on_error and on_error(e, record):
-                    # Continue processing
-                    progress.record_failure(str(e), record.id, e)
+                progress.record_failure(str(e), record.id if hasattr(record, 'id') else None, e)
+                if on_error:
+                    if not on_error(e, record):
+                        # Handler says stop - re-raise to stop processing immediately
+                        raise
+                    # Handler says continue - keep going
                 else:
-                    # Stop processing
-                    progress.record_failure(str(e), record.id, e)
-                    break
+                    # No handler - stop processing immediately
+                    raise
         
         # Process final batch
         if batch:
@@ -130,7 +134,7 @@ class Migrator:
         # Estimate total (if possible)
         try:
             progress.total = source.count(query)
-        except:
+        except Exception:
             # Count not available, will track as we go
             pass
         
@@ -138,24 +142,26 @@ class Migrator:
         def transform_stream(records: Iterator[Record]) -> Iterator[Record]:
             """Apply transformation to streaming records."""
             for record in records:
+                progress.processed += 1  # Track that we've processed this record
                 try:
-                    if transform:
+                    if transform is not None:
                         if isinstance(transform, Transformer):
+                            original_id = record.id  # Preserve ID before transformation
                             transformed = transform.transform(record)
                             if transformed:
                                 yield transformed
                             else:
-                                progress.record_skip("Filtered by transformer", record.id)
+                                progress.record_skip("Filtered by transformer", original_id)
                         elif isinstance(transform, Migration):
                             yield transform.apply(record)
                     else:
                         yield record
                 except Exception as e:
                     if config.on_error and config.on_error(e, record):
-                        progress.record_failure(str(e), record.id, e)
+                        progress.record_failure(str(e), record.id if hasattr(record, 'id') else None, e)
                         continue
                     else:
-                        progress.record_failure(str(e), record.id, e)
+                        progress.record_failure(str(e), record.id if hasattr(record, 'id') else None, e)
                         raise
         
         # Stream from source through transformation to target
@@ -166,9 +172,10 @@ class Migrator:
         result = target.stream_write(transformed_stream, config)
         
         # Update progress from result
-        progress.processed = result.total_processed
-        progress.succeeded = result.successful
-        progress.failed = result.failed
+        # Note: processed was already tracked in transform_stream
+        # Result contains only write successes/failures
+        progress.succeeded += result.successful
+        progress.failed += result.failed
         progress.errors.extend(result.errors)
         
         progress.finish()
@@ -255,31 +262,33 @@ class Migrator:
         # Estimate total (if possible)
         try:
             progress.total = await source.count(query)
-        except:
+        except Exception:
             pass
         
         # Create async streaming pipeline
         async def transform_stream(records):
             """Apply transformation to async streaming records."""
             async for record in records:
+                progress.processed += 1  # Track that we've processed this record
                 try:
-                    if transform:
+                    if transform is not None:
                         if isinstance(transform, Transformer):
+                            original_id = record.id  # Preserve ID before transformation
                             transformed = transform.transform(record)
                             if transformed:
                                 yield transformed
                             else:
-                                progress.record_skip("Filtered by transformer", record.id)
+                                progress.record_skip("Filtered by transformer", original_id)
                         elif isinstance(transform, Migration):
                             yield transform.apply(record)
                     else:
                         yield record
                 except Exception as e:
                     if config.on_error and config.on_error(e, record):
-                        progress.record_failure(str(e), record.id, e)
+                        progress.record_failure(str(e), record.id if hasattr(record, 'id') else None, e)
                         continue
                     else:
-                        progress.record_failure(str(e), record.id, e)
+                        progress.record_failure(str(e), record.id if hasattr(record, 'id') else None, e)
                         raise
         
         # Stream from source through transformation to target
@@ -290,9 +299,10 @@ class Migrator:
         result = await target.stream_write(transformed_stream, config)
         
         # Update progress from result
-        progress.processed = result.total_processed
-        progress.succeeded = result.successful
-        progress.failed = result.failed
+        # Note: processed was already tracked in transform_stream
+        # Result contains only write successes/failures
+        progress.succeeded += result.successful
+        progress.failed += result.failed
         progress.errors.extend(result.errors)
         
         progress.finish()
@@ -327,10 +337,14 @@ class Migrator:
                 target.create(record)
                 progress.record_success(record.id)
             except Exception as e:
-                if on_error and on_error(e, record):
-                    progress.record_failure(str(e), record.id, e)
+                progress.record_failure(str(e), record.id, e)
+                if on_error:
+                    if not on_error(e, record):
+                        # Handler says stop - re-raise to stop processing immediately
+                        raise
+                    # Handler says continue - keep going
                 else:
-                    progress.record_failure(str(e), record.id, e)
+                    # No handler - stop processing immediately
                     raise
     
     def validate_migration(

@@ -148,7 +148,8 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
     def create(self, record: Record) -> str:
         """Create a new record."""
         self._check_connection()
-        id = str(uuid.uuid4())
+        # Use record's ID if it has one, otherwise generate a new one
+        id = record.id if record.id else str(uuid.uuid4())
         row = self._record_to_row(record, id)
 
         sql = f"""
@@ -578,7 +579,8 @@ class AsyncPostgresDatabase(AsyncDatabase, ConfigurableBase):
     async def create(self, record: Record) -> str:
         """Create a new record."""
         self._check_connection()
-        id = str(uuid.uuid4())
+        # Use record's ID if it has one, otherwise generate a new one
+        id = record.id if record.id else str(uuid.uuid4())
         row = self._record_to_row(record, id)
         
         sql = f"""
