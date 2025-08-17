@@ -24,8 +24,6 @@ class SensorReading:
         return Record(
             id=f"{self.sensor_id}_{self.timestamp.isoformat()}",
             data={
-                # Store type as top-level field for querying (workaround for nested query limitation)
-                "_type": "sensor_reading",
                 "sensor_id": self.sensor_id,
                 "timestamp": self.timestamp.isoformat(),
                 "temperature": self.temperature,
@@ -67,8 +65,6 @@ class SensorInfo:
         return Record(
             id=self.sensor_id,
             data={
-                # Store type as top-level field for querying (workaround for nested query limitation)
-                "_type": "sensor_info",
                 "sensor_id": self.sensor_id,
                 "sensor_type": self.sensor_type,
                 "location": self.location,

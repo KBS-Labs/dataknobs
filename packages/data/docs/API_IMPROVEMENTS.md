@@ -2,36 +2,32 @@
 
 Based on implementing the Sensor Dashboard example, here are observations about the data package API and potential improvements:
 
-## 1. Nested Field Queries Don't Work ❌ CRITICAL
+## 1. Nested Field Queries ✅ FIXED
 
 **Issue**: The Query/Filter API appears to support nested field paths like `"metadata.type"` but the memory database implementation doesn't actually handle them. The `record.get_value()` method only looks for direct field names, not nested paths.
 
-**Impact**: Users cannot query by metadata fields or nested structures, forcing inefficient workarounds like fetching all records and filtering in memory.
+**Solution Implemented**:
+- Enhanced `Record.get_value()` to support dot-notation paths
+- Added `get_nested_value()` and `_traverse_dict()` helper methods
+- Full support for queries like `Filter("metadata.type", ...)` and `Filter("metrics.cpu", ...)`
+- Works with arbitrary nesting depth
 
-**Current Workaround**: Store queryable data as top-level fields in the Record.
-
-**Proposed Solutions**:
-1. Enhance `Record.get_value()` to support dot-notation paths
-2. Add a separate `get_nested_value()` method  
-3. Document this limitation clearly in the API docs
-
-## 2. Missing Range Operators (Generic)
+## 2. Generic Range Operators ✅ IMPLEMENTED
 
 **Issue**: No built-in operators for range comparisons across different data types:
-- **Temporal ranges**: No BETWEEN, DATE_GT, DATE_LT for timestamps/dates
+- **Temporal ranges**: No BETWEEN for timestamps/dates
 - **Numeric ranges**: No efficient way to query "price between 100 and 500"
 - **String ranges**: No lexicographic range queries (e.g., names starting with A-M)
-- **Version ranges**: No semantic version comparisons
 
-**Impact**: 
-- Time-series data requires custom filtering after fetching all records
-- Numeric range queries are inefficient
-- Cannot leverage database-native range optimizations
-
-**Proposed Solution**: 
-- Add generic BETWEEN operator that works with comparable types
-- Add type-aware comparison operators (GT_DATE, LT_DATE, GT_NUM, etc.)
-- Or implement type inference in the operator to handle ranges appropriately
+**Solution Implemented**:
+- Added `BETWEEN` and `NOT_BETWEEN` operators to Operator enum
+- Type-aware comparisons that handle:
+  - Numeric ranges (int, float)
+  - Datetime/date ranges (with ISO string parsing)
+  - String ranges (lexicographic)
+- Optimized SQL BETWEEN for PostgreSQL backend
+- Full test coverage for all data types and edge cases
+- Updated sensor dashboard to use `Filter("timestamp", Operator.BETWEEN, (start, end))`
 
 ## 3. Limited Boolean Logic in Queries
 
@@ -161,8 +157,8 @@ Based on implementing the Sensor Dashboard example, here are observations about 
 
 ## Recommendations (Prioritized)
 
-1. **Priority 1**: Fix nested field queries - this is a fundamental feature
-2. **Priority 2**: Add generic range operators for all comparable types
+1. **Priority 1**: ✅ Fix nested field queries - COMPLETED
+2. **Priority 2**: ✅ Add generic range operators - COMPLETED  
 3. **Priority 3**: Implement boolean logic operators (OR, NOT, groups)
 4. **Priority 4**: Unify and document batch processing APIs
 5. **Priority 5**: Improve field access ergonomics

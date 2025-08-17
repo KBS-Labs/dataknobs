@@ -143,9 +143,91 @@ class Record:
         return self.fields.get(name)
 
     def get_value(self, name: str, default: Any = None) -> Any:
-        """Get a field's value by name."""
+        """Get a field's value by name, supporting dot-notation for nested paths.
+        
+        Args:
+            name: Field name or dot-notation path (e.g., "metadata.type")
+            default: Default value if field not found
+            
+        Returns:
+            The field value or default
+        """
+        # Check if this is a nested path
+        if "." in name:
+            return self.get_nested_value(name, default)
+        
+        # Simple field lookup
         field = self.get_field(name)
         return field.value if field else default
+    
+    def get_nested_value(self, path: str, default: Any = None) -> Any:
+        """Get a value from a nested path using dot notation.
+        
+        Supports paths like:
+        - "metadata.type" - access metadata dict
+        - "fields.temperature" - access field values
+        - "metadata.config.timeout" - nested dict access
+        
+        Args:
+            path: Dot-notation path to the value
+            default: Default value if path not found
+            
+        Returns:
+            The value at the path or default
+        """
+        parts = path.split(".", 1)
+        if len(parts) == 1:
+            # No more nesting, get the value
+            return self.get_value(parts[0], default)
+        
+        root, remaining = parts
+        
+        # Handle special root paths
+        if root == "metadata":
+            # Navigate through metadata dict
+            if not self.metadata:
+                return default
+            return self._traverse_dict(self.metadata, remaining, default)
+        elif root == "fields":
+            # Get field value by name
+            if "." in remaining:
+                # Nested path within field value (if it's a dict)
+                field_name, field_path = remaining.split(".", 1)
+                field_value = self.get_value(field_name, None)
+                if isinstance(field_value, dict):
+                    return self._traverse_dict(field_value, field_path, default)
+                return default
+            else:
+                # Simple field access
+                return self.get_value(remaining, default)
+        else:
+            # Check if it's a field containing a dict
+            field_value = self.get_value(root, None)
+            if isinstance(field_value, dict):
+                return self._traverse_dict(field_value, remaining, default)
+            return default
+    
+    def _traverse_dict(self, data: dict, path: str, default: Any = None) -> Any:
+        """Traverse a dictionary using dot notation.
+        
+        Args:
+            data: Dictionary to traverse
+            path: Dot-notation path
+            default: Default value if path not found
+            
+        Returns:
+            Value at path or default
+        """
+        parts = path.split(".")
+        current = data
+        
+        for part in parts:
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            else:
+                return default
+        
+        return current
 
     def set_field(
         self,

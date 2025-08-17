@@ -18,6 +18,8 @@ class Operator(Enum):
     REGEX = "regex"  # Regular expression matching
     EXISTS = "exists"  # Field exists
     NOT_EXISTS = "not_exists"  # Field does not exist
+    BETWEEN = "between"  # Value between two bounds (inclusive)
+    NOT_BETWEEN = "not_between"  # Value not between two bounds
 
 
 class SortOrder(Enum):
@@ -36,7 +38,11 @@ class Filter:
     value: Any = None
 
     def matches(self, record_value: Any) -> bool:
-        """Check if a record value matches this filter."""
+        """Check if a record value matches this filter.
+        
+        Supports type-aware comparisons for ranges and special handling
+        for datetime/date objects.
+        """
         if self.operator == Operator.EXISTS:
             return record_value is not None
         elif self.operator == Operator.NOT_EXISTS:
@@ -49,17 +55,29 @@ class Filter:
         elif self.operator == Operator.NEQ:
             return record_value != self.value
         elif self.operator == Operator.GT:
-            return record_value > self.value
+            return self._compare_values(record_value, self.value, lambda a, b: a > b)
         elif self.operator == Operator.GTE:
-            return record_value >= self.value
+            return self._compare_values(record_value, self.value, lambda a, b: a >= b)
         elif self.operator == Operator.LT:
-            return record_value < self.value
+            return self._compare_values(record_value, self.value, lambda a, b: a < b)
         elif self.operator == Operator.LTE:
-            return record_value <= self.value
+            return self._compare_values(record_value, self.value, lambda a, b: a <= b)
         elif self.operator == Operator.IN:
             return record_value in self.value
         elif self.operator == Operator.NOT_IN:
             return record_value not in self.value
+        elif self.operator == Operator.BETWEEN:
+            if not isinstance(self.value, (list, tuple)) or len(self.value) != 2:
+                return False
+            lower, upper = self.value
+            return self._compare_values(record_value, lower, lambda a, b: a >= b) and \
+                   self._compare_values(record_value, upper, lambda a, b: a <= b)
+        elif self.operator == Operator.NOT_BETWEEN:
+            if not isinstance(self.value, (list, tuple)) or len(self.value) != 2:
+                return True
+            lower, upper = self.value
+            return not (self._compare_values(record_value, lower, lambda a, b: a >= b) and \
+                       self._compare_values(record_value, upper, lambda a, b: a <= b))
         elif self.operator == Operator.LIKE:
             if not isinstance(record_value, str):
                 return False
@@ -75,6 +93,47 @@ class Filter:
             return bool(re.search(self.value, record_value))
 
         return False
+    
+    def _compare_values(self, a: Any, b: Any, comparator) -> bool:
+        """Compare two values with type awareness.
+        
+        Handles special cases:
+        - Datetime strings are parsed for comparison
+        - Mixed numeric types are converted appropriately
+        - String comparisons are case-sensitive
+        """
+        from datetime import datetime, date
+        
+        # Handle datetime/date comparisons
+        if isinstance(a, str) and isinstance(b, (datetime, date)):
+            try:
+                a = datetime.fromisoformat(a.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                return False
+        elif isinstance(b, str) and isinstance(a, (datetime, date)):
+            try:
+                b = datetime.fromisoformat(b.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                return False
+        elif isinstance(a, str) and isinstance(b, str):
+            # Check if both look like dates
+            if "T" in a or "-" in a:
+                try:
+                    a = datetime.fromisoformat(a.replace("Z", "+00:00"))
+                    b = datetime.fromisoformat(b.replace("Z", "+00:00"))
+                except (ValueError, AttributeError):
+                    pass  # Keep as strings
+        
+        # Handle numeric comparisons
+        if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+            return comparator(a, b)
+        
+        # Try direct comparison
+        try:
+            return comparator(a, b)
+        except TypeError:
+            # Types not comparable
+            return False
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert filter to dictionary representation."""
@@ -159,6 +218,10 @@ class Query:
                 "regex": Operator.REGEX,
                 "exists": Operator.EXISTS,
                 "not_exists": Operator.NOT_EXISTS,
+                "between": Operator.BETWEEN,
+                "BETWEEN": Operator.BETWEEN,
+                "not_between": Operator.NOT_BETWEEN,
+                "NOT BETWEEN": Operator.NOT_BETWEEN,
             }
             operator = op_map.get(operator, Operator.EQ)
 

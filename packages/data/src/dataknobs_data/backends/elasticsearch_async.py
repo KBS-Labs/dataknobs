@@ -270,6 +270,31 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
             elif filter.operator == Operator.NOT_IN:
                 es_query["bool"]["must_not"] = es_query["bool"].get("must_not", [])
                 es_query["bool"]["must_not"].append({"terms": {field_path: filter.value}})
+            elif filter.operator == Operator.BETWEEN:
+                # Use Elasticsearch's native range query for efficient BETWEEN
+                if isinstance(filter.value, (list, tuple)) and len(filter.value) == 2:
+                    lower, upper = filter.value
+                    es_query["bool"]["must"].append({
+                        "range": {
+                            field_path: {
+                                "gte": lower,
+                                "lte": upper
+                            }
+                        }
+                    })
+            elif filter.operator == Operator.NOT_BETWEEN:
+                # NOT BETWEEN using must_not with range
+                if isinstance(filter.value, (list, tuple)) and len(filter.value) == 2:
+                    lower, upper = filter.value
+                    es_query["bool"]["must_not"] = es_query["bool"].get("must_not", [])
+                    es_query["bool"]["must_not"].append({
+                        "range": {
+                            field_path: {
+                                "gte": lower,
+                                "lte": upper
+                            }
+                        }
+                    })
         
         # If no filters, use match_all
         if not es_query["bool"]["must"] and "must_not" not in es_query["bool"]:

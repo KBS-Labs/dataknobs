@@ -6,6 +6,7 @@ import json
 import logging
 import time
 import uuid
+from datetime import datetime
 from typing import Any, AsyncIterator, Iterator, Optional
 
 from dataknobs_config import ConfigurableBase
@@ -284,6 +285,54 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
                 values = [str(v) for v in filter.value]
                 where_clauses.append(f"{field_path} != ALL(%({param_name})s)")
                 params[param_name] = values
+            elif filter.operator == Operator.BETWEEN:
+                # Optimize BETWEEN for different data types
+                if isinstance(filter.value, (list, tuple)) and len(filter.value) == 2:
+                    lower, upper = filter.value
+                    param_lower = f"{param_name}_lower"
+                    param_upper = f"{param_name}_upper"
+                    
+                    # Try to determine the type for proper casting
+                    if isinstance(lower, (int, float)) and isinstance(upper, (int, float)):
+                        where_clauses.append(
+                            f"({field_path})::numeric BETWEEN %({param_lower})s AND %({param_upper})s"
+                        )
+                    elif isinstance(lower, datetime) or isinstance(upper, datetime):
+                        where_clauses.append(
+                            f"({field_path})::timestamp BETWEEN %({param_lower})s AND %({param_upper})s"
+                        )
+                    else:
+                        # String or unknown type
+                        where_clauses.append(
+                            f"{field_path} BETWEEN %({param_lower})s AND %({param_upper})s"
+                        )
+                    
+                    params[param_lower] = lower
+                    params[param_upper] = upper
+            elif filter.operator == Operator.NOT_BETWEEN:
+                # Optimize NOT BETWEEN
+                if isinstance(filter.value, (list, tuple)) and len(filter.value) == 2:
+                    lower, upper = filter.value
+                    param_lower = f"{param_name}_lower"
+                    param_upper = f"{param_name}_upper"
+                    
+                    # Try to determine the type for proper casting
+                    if isinstance(lower, (int, float)) and isinstance(upper, (int, float)):
+                        where_clauses.append(
+                            f"({field_path})::numeric NOT BETWEEN %({param_lower})s AND %({param_upper})s"
+                        )
+                    elif isinstance(lower, datetime) or isinstance(upper, datetime):
+                        where_clauses.append(
+                            f"({field_path})::timestamp NOT BETWEEN %({param_lower})s AND %({param_upper})s"
+                        )
+                    else:
+                        # String or unknown type
+                        where_clauses.append(
+                            f"{field_path} NOT BETWEEN %({param_lower})s AND %({param_upper})s"
+                        )
+                    
+                    params[param_lower] = lower
+                    params[param_upper] = upper
 
         # Build SQL
         sql = f"SELECT id, data, metadata FROM {self.schema_name}.{self.table_name}"
@@ -728,6 +777,52 @@ class AsyncPostgresDatabase(AsyncDatabase, ConfigurableBase):
                 values = [str(v) for v in filter.value]
                 where_clauses.append(f"{field_path} != ALL(${param_count})")
                 params.append(values)
+            elif filter.operator == Operator.BETWEEN:
+                # Optimize BETWEEN for different data types
+                if isinstance(filter.value, (list, tuple)) and len(filter.value) == 2:
+                    lower, upper = filter.value
+                    
+                    # Try to determine the type for proper casting
+                    if isinstance(lower, (int, float)) and isinstance(upper, (int, float)):
+                        where_clauses.append(
+                            f"({field_path})::numeric BETWEEN ${param_count} AND ${param_count + 1}"
+                        )
+                    elif isinstance(lower, datetime) or isinstance(upper, datetime):
+                        where_clauses.append(
+                            f"({field_path})::timestamp BETWEEN ${param_count} AND ${param_count + 1}"
+                        )
+                    else:
+                        # String or unknown type
+                        where_clauses.append(
+                            f"{field_path} BETWEEN ${param_count} AND ${param_count + 1}"
+                        )
+                    
+                    params.append(lower)
+                    params.append(upper)
+                    param_count += 1  # We used two parameters
+            elif filter.operator == Operator.NOT_BETWEEN:
+                # Optimize NOT BETWEEN
+                if isinstance(filter.value, (list, tuple)) and len(filter.value) == 2:
+                    lower, upper = filter.value
+                    
+                    # Try to determine the type for proper casting
+                    if isinstance(lower, (int, float)) and isinstance(upper, (int, float)):
+                        where_clauses.append(
+                            f"({field_path})::numeric NOT BETWEEN ${param_count} AND ${param_count + 1}"
+                        )
+                    elif isinstance(lower, datetime) or isinstance(upper, datetime):
+                        where_clauses.append(
+                            f"({field_path})::timestamp NOT BETWEEN ${param_count} AND ${param_count + 1}"
+                        )
+                    else:
+                        # String or unknown type
+                        where_clauses.append(
+                            f"{field_path} NOT BETWEEN ${param_count} AND ${param_count + 1}"
+                        )
+                    
+                    params.append(lower)
+                    params.append(upper)
+                    param_count += 1  # We used two parameters
         
         # Build SQL
         sql = f"SELECT id, data, metadata FROM {self.schema_name}.{self.table_name}"

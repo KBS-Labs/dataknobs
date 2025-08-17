@@ -285,6 +285,34 @@ class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
                 es_query["bool"]["must"].append({"bool": {"must_not": {"exists": {"field": field_path}}}})
             elif filter_obj.operator == Operator.REGEX:
                 es_query["bool"]["must"].append({"regexp": {field_path: filter_obj.value}})
+            elif filter_obj.operator == Operator.BETWEEN:
+                # Use Elasticsearch's native range query for efficient BETWEEN
+                if isinstance(filter_obj.value, (list, tuple)) and len(filter_obj.value) == 2:
+                    lower, upper = filter_obj.value
+                    es_query["bool"]["must"].append({
+                        "range": {
+                            field_path: {
+                                "gte": lower,
+                                "lte": upper
+                            }
+                        }
+                    })
+            elif filter_obj.operator == Operator.NOT_BETWEEN:
+                # NOT BETWEEN using bool must_not with range
+                if isinstance(filter_obj.value, (list, tuple)) and len(filter_obj.value) == 2:
+                    lower, upper = filter_obj.value
+                    es_query["bool"]["must"].append({
+                        "bool": {
+                            "must_not": {
+                                "range": {
+                                    field_path: {
+                                        "gte": lower,
+                                        "lte": upper
+                                    }
+                                }
+                            }
+                        }
+                    })
 
         # If no filters, match all
         if not es_query["bool"]["must"]:

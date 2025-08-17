@@ -79,14 +79,13 @@ class SensorDashboard:
     
     def get_recent_readings(self, sensor_id: str, limit: int = 10) -> List[SensorReading]:
         """Get the most recent readings for a sensor."""
-        # Query for readings of this specific sensor
-        # Using top-level fields as workaround for nested query limitation
+        # Query for readings of this specific sensor using nested field queries
         query = Query(
             filters=[
-                Filter("_type", Operator.EQ, "sensor_reading"),
-                Filter("sensor_id", Operator.EQ, sensor_id)
+                Filter("metadata.type", Operator.EQ, "sensor_reading"),
+                Filter("metadata.sensor_id", Operator.EQ, sensor_id)
             ],
-            limit_value=limit * 2  # Get more in case we need to filter further
+            limit_value=limit * 2  # Get more to account for sorting
         )
         
         records = self.db.search(query)
@@ -98,26 +97,25 @@ class SensorDashboard:
     
     def get_readings_by_timerange(self, start: datetime, end: datetime) -> List[SensorReading]:
         """Get all readings within a time range."""
-        # Query for sensor readings using top-level type field
+        # Use the new BETWEEN operator for efficient time range queries
         query = Query(
-            filters=[Filter("_type", Operator.EQ, "sensor_reading")]
+            filters=[
+                Filter("metadata.type", Operator.EQ, "sensor_reading"),
+                Filter("timestamp", Operator.BETWEEN, (start.isoformat(), end.isoformat()))
+            ]
         )
         
-        all_records = self.db.search(query)
-        readings = []
+        records = self.db.search(query)
+        readings = [SensorReading.from_record(r) for r in records]
         
-        for record in all_records:
-            reading = SensorReading.from_record(record)
-            if start <= reading.timestamp <= end:
-                readings.append(reading)
-        
+        # Sort by timestamp
         readings.sort(key=lambda x: x.timestamp)
         return readings
     
     def get_all_sensors(self) -> List[SensorInfo]:
         """Get all registered sensors."""
         query = Query(
-            filters=[Filter("_type", Operator.EQ, "sensor_info")]
+            filters=[Filter("metadata.type", Operator.EQ, "sensor_info")]
         )
         
         records = self.db.search(query)
@@ -262,11 +260,11 @@ class AsyncSensorDashboard:
     
     async def get_recent_readings(self, sensor_id: str, limit: int = 10) -> List[SensorReading]:
         """Get the most recent readings for a sensor."""
-        # Query for readings of this specific sensor
+        # Query for readings of this specific sensor using nested field queries
         query = Query(
             filters=[
-                Filter("_type", Operator.EQ, "sensor_reading"),
-                Filter("sensor_id", Operator.EQ, sensor_id)
+                Filter("metadata.type", Operator.EQ, "sensor_reading"),
+                Filter("metadata.sensor_id", Operator.EQ, sensor_id)
             ],
             limit_value=limit * 2
         )
@@ -295,11 +293,10 @@ class AsyncSensorDashboard:
             await asyncio.gather(*tasks)
 
 
-# Observations and Workarounds for data package usage:
+# Observations on data package usage:
 # 
-# 1. CRITICAL BUG: Nested field queries don't work! Filter("metadata.type", ...) doesn't
-#    actually query metadata fields. Workaround: Store queryable data as top-level fields
-#    (see _type field in our models).
+# 1. ✅ FIXED: Nested field queries now work! Filter("metadata.type", ...) properly
+#    queries nested fields after our improvements.
 #
 # 2. No OR operator for filters - cannot query for "sensor_1 OR sensor_2" efficiently.
 #    Must query broader set and filter in memory.
@@ -308,15 +305,16 @@ class AsyncSensorDashboard:
 #    don't reliably work across all field types/backends.
 #
 # 4. Time-range queries are common but require custom filtering after fetch.
-#    Would benefit from DATE_BETWEEN, DATE_GT, DATE_LT operators.
+#    Would benefit from BETWEEN, DATE_GT, DATE_LT operators.
 #
 # 5. No simple database.list() or database.all() method - must use Query with filter.
 #
-# 6. Field value access is awkward - must use record.get_value() or navigate through
-#    record.fields[name].value instead of simple record[name] or record.name.
+# 6. Field value access could be improved - currently must use record.get_value() or 
+#    navigate through record.fields[name].value instead of simple record[name].
 #
-# Despite these limitations, the package provides good abstractions for:
+# The package provides good abstractions for:
 # - Database backend switching
 # - Batch operations with error handling  
 # - Streaming with configurable batch sizes
 # - Connection pooling
+# - ✅ Nested field queries (after our fix)

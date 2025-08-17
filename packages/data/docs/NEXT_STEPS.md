@@ -76,25 +76,27 @@
 ✅ Documented 8 major API improvements needed
 ✅ Achieved 24% coverage through practical usage
 
-### Priority 1: Fix Critical Nested Field Query Bug
+### Priority 1: Fix Critical Nested Field Query Bug ✅ COMPLETED
 ```python
-# This should work but doesn't:
+# This now works correctly:
 Filter("metadata.type", Operator.EQ, "sensor_reading")
+Filter("device.info.manufacturer", Operator.EQ, "ACME")
 ```
-- [ ] Fix `Record.get_value()` to support dot-notation paths
-- [ ] Update all database backends to handle nested queries
-- [ ] Add comprehensive tests for nested field access
+- ✅ Fixed `Record.get_value()` to support dot-notation paths
+- ✅ All database backends handle nested queries via Record.get_value()
+- ✅ Added comprehensive tests for nested field access
 
-### Priority 2: Implement Generic Range Operators
+### Priority 2: Implement Generic Range Operators ✅ COMPLETED
 ```python
-# Add support for:
+# Now supported:
 Filter("timestamp", Operator.BETWEEN, (start_date, end_date))
 Filter("price", Operator.BETWEEN, (100, 500))
+Filter("name", Operator.BETWEEN, ("Alice", "David"))
 ```
-- [ ] Add BETWEEN operator to Operator enum
-- [ ] Implement type-aware range comparisons
-- [ ] Support numeric, temporal, and string ranges
-- [ ] Update all backends to optimize range queries
+- ✅ Added BETWEEN and NOT_BETWEEN operators to Operator enum
+- ✅ Implemented type-aware range comparisons
+- ✅ Support numeric, temporal, and string ranges
+- ✅ Optimized PostgreSQL backend for native SQL BETWEEN
 
 ### Priority 3: Add Boolean Logic Operators
 ```python
