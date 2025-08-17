@@ -69,20 +69,20 @@ git remote add upstream https://github.com/original/dataknobs.git
 
 ### 2. Create Development Environment
 
-#### Using Poetry (Recommended)
+#### Using UV (Recommended)
 
 ```bash
-# Install poetry if you haven't already
-curl -sSL https://install.python-poetry.org | python3 -
+# Install UV if you haven't already
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install dependencies
-poetry install --with dev,docs,test
+# Install all packages
+uv sync --all-packages
 
-# Activate virtual environment
-poetry shell
+# Install the dk command for easy development
+./setup-dk.sh
 ```
 
-#### Using pip
+#### Using pip (Alternative)
 
 ```bash
 # Create virtual environment
@@ -102,15 +102,33 @@ pip install -e packages/xization
 ### 3. Verify Setup
 
 ```bash
-# Run tests to ensure everything works
-pytest
+# Using the dk command (recommended)
+dk test           # Run tests
+dk check          # Quick quality check
+dk diagnose       # If something fails
 
-# Check code style
-flake8 packages/
-
-# Run type checking
-mypy packages/
+# Or using traditional commands
+pytest            # Run tests
+ruff check packages/  # Check code style
+mypy packages/    # Run type checking
 ```
+
+### 4. Development Workflow with dk
+
+The `dk` command simplifies your development workflow:
+
+```bash
+# Quick development cycle
+dk check data     # Quick check while developing
+dk fix            # Auto-fix style issues
+dk test data      # Test your changes
+
+# Before submitting PR
+dk pr             # Full quality checks
+dk diagnose       # If checks fail
+```
+
+See the [dk Command Guide](dk-command.md) for full details.
 
 ## How to Contribute
 
@@ -486,18 +504,18 @@ Before submitting your pull request:
 ### Running Pre-commit Checks
 
 ```bash
-# Install pre-commit hooks
-pre-commit install
+# Using dk command (recommended)
+dk pr              # Run full PR quality checks
+dk diagnose        # If checks fail, see what went wrong
+dk fix             # Auto-fix style issues
+dk test --last     # Re-run only failed tests
 
-# Run all checks manually
-pre-commit run --all-files
-
-# Individual checks
-black packages/
-isort packages/
-flake8 packages/
-mypy packages/
-pytest
+# Or manually run individual checks
+uv run ruff check packages/    # Style check
+uv run ruff format packages/   # Format code
+uv run pylint packages/*/src   # Linting
+uv run mypy packages/          # Type checking
+uv run pytest                  # Run tests
 ```
 
 ### Commit Messages

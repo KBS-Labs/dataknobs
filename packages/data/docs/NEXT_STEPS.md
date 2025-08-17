@@ -39,7 +39,7 @@
   - Consolidated error handling across backends
   - Improved test reliability with real implementations
 
-## 📍 Current Position: Phase 9 - Testing & Quality (NEARLY COMPLETE)
+## 📍 Current Position: Phase 10 - API Improvements Based on Real-World Testing
 
 ### What We Fixed Today
 
@@ -68,32 +68,66 @@
 - **Solution**: Implemented all missing methods, fixed dtype detection, handled timezone compatibility
 - **Impact**: All pandas tests passing, ready for production use
 
-## 🎯 Remaining Work for Phase 9
+## 🎯 Current Work: API Improvements from Sensor Dashboard Example
 
-### Priority 1: Run Full Test Suite with Coverage
-```bash
-cd packages/data
-python -m pytest tests/ --cov=dataknobs_data --cov-report=term-missing
+### Completed: Sensor Dashboard Example Testing
+✅ Created comprehensive sensor monitoring example
+✅ 22 tests passing, exercising real-world scenarios  
+✅ Documented 8 major API improvements needed
+✅ Achieved 24% coverage through practical usage
+
+### Priority 1: Fix Critical Nested Field Query Bug
+```python
+# This should work but doesn't:
+Filter("metadata.type", Operator.EQ, "sensor_reading")
 ```
+- [ ] Fix `Record.get_value()` to support dot-notation paths
+- [ ] Update all database backends to handle nested queries
+- [ ] Add comprehensive tests for nested field access
 
-### Priority 2: Address Any Remaining Coverage Gaps
-- Check which modules are below 80%
-- Focus on untested error paths
-- Add edge case tests
-
-### Priority 3: Code Quality Checks
-```bash
-# Type checking
-uv run mypy src/dataknobs_data --ignore-missing-imports
-
-# Linting
-uv run ruff check src/dataknobs_data
-
-# Formatting
-uv run black src/dataknobs_data --check
+### Priority 2: Implement Generic Range Operators
+```python
+# Add support for:
+Filter("timestamp", Operator.BETWEEN, (start_date, end_date))
+Filter("price", Operator.BETWEEN, (100, 500))
 ```
+- [ ] Add BETWEEN operator to Operator enum
+- [ ] Implement type-aware range comparisons
+- [ ] Support numeric, temporal, and string ranges
+- [ ] Update all backends to optimize range queries
 
-## 📅 Phase 10: Package Release (After Phase 9)
+### Priority 3: Add Boolean Logic Operators
+```python
+# Enable complex queries:
+Query().or_(
+    Filter("sensor_id", Operator.EQ, "sensor_1"),
+    Filter("sensor_id", Operator.EQ, "sensor_2")
+)
+```
+- [ ] Add OR, NOT operators
+- [ ] Support grouped/nested conditions
+- [ ] Implement query builder pattern
+- [ ] Ensure backend compatibility
+
+### Priority 4: Unify Batch Processing APIs
+- [ ] Reconcile BatchConfig and StreamConfig interfaces
+- [ ] Add list→async iterable adapters for consistency
+- [ ] Document when to use each configuration
+- [ ] Add missing properties (total_batches, failed_indices)
+
+### Priority 5: Improve Field Access Ergonomics
+```python
+# Enable intuitive access:
+record["temperature"]  # Dict-like
+record.temperature     # Attribute (optional)
+record.to_dict()      # Simple values
+```
+- [ ] Add `__getitem__` for dict-like access
+- [ ] Implement `to_dict()` method
+- [ ] Consider `__getattr__` with careful design
+- [ ] Maintain Field object access for metadata
+
+## 📅 Phase 11: Package Release (After API Improvements)
 
 ### Ready for Release Checklist
 - ✅ Test coverage ≥ 85% overall
@@ -170,22 +204,26 @@ class FailingDatabase(SyncMemoryDatabase):
 # 1. Navigate to package
 cd ~/dev/kbs-labs/dataknobs/packages/data
 
-# 2. Run full test suite with coverage
-python -m pytest tests/ --cov=dataknobs_data --cov-report=term-missing
+# 2. Review API improvements needed
+cat docs/API_IMPROVEMENTS.md
 
-# 3. Check specific test files if needed
-python -m pytest tests/test_pandas_integration.py -xvs
-python -m pytest tests/test_pandas_batch_ops.py -xvs
+# 3. Run sensor dashboard example tests
+uv run pytest tests/test_sensor_dashboard_example.py -v
 
-# 4. Run quality checks
-uv run mypy src/dataknobs_data
-uv run ruff check src/dataknobs_data
-uv run black src/dataknobs_data --check
+# 4. Start with Priority 1: Fix nested field queries
+# Begin in src/dataknobs_data/records.py - enhance get_value()
+# Then update backends/memory.py search() method
 
-# 5. Generate coverage report
-python -m pytest tests/ --cov=dataknobs_data --cov-report=html
-open htmlcov/index.html
+# 5. Run tests to verify fixes
+uv run pytest tests/ --cov=dataknobs_data --cov-report=term-missing
 ```
+
+### Implementation Order
+1. **Nested field queries** - Critical bug blocking intuitive usage
+2. **Range operators** - Essential for time-series and numeric data
+3. **Boolean logic** - Enables efficient complex queries
+4. **Batch API unification** - Reduces developer confusion
+5. **Field access improvements** - Better developer experience
 
 ## 💡 Tips for Next Session
 

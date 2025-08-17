@@ -6,18 +6,26 @@ Welcome to the Dataknobs development documentation. This section provides compre
 
 Dataknobs is a modular Python ecosystem for AI knowledge base structures and text processing. The project is organized as a monorepo with multiple interconnected packages that work together to provide comprehensive data processing capabilities.
 
+## Quick Start with dk Command
+
+!!! tip "New Developer? Start Here!"
+    The `dk` command is your unified interface for all development tasks. Install it with `./setup-dk.sh` and use simple commands like `dk pr` to prepare for pull requests or `dk test` to run tests.
+    
+    **[→ Learn the dk Command](dk-command.md)**
+
 ## Getting Started
 
 If you're new to Dataknobs development:
 
-1. **[Contributing Guide](contributing.md)** - Start here to learn how to contribute
-2. **[Configuration System](configuration-system.md)** - Understand the DataKnobs configuration patterns
-3. **[UV Virtual Environment Guide](uv-environment.md)** - How to work with UV package manager
-4. **[Quality Checks Process](quality-checks.md)** - Developer-driven quality assurance
-5. **[Architecture Overview](architecture.md)** - Understand the system design
-6. **[Testing Guide](testing.md)** - Learn about our testing approach
-7. **[Integration Testing & CI](integration-testing-ci.md)** - Integration testing in CI/CD pipeline
-8. **[CI/CD Pipeline](ci-cd.md)** - Understand our deployment process
+1. **[Developer Workflow (dk)](dk-command.md)** - 🚀 **Start here** - The easy way to develop
+2. **[Contributing Guide](contributing.md)** - Learn how to contribute
+3. **[Configuration System](configuration-system.md)** - Understand the DataKnobs configuration patterns
+4. **[UV Virtual Environment Guide](uv-environment.md)** - How to work with UV package manager
+5. **[Quality Checks Process](quality-checks.md)** - Developer-driven quality assurance
+6. **[Architecture Overview](architecture.md)** - Understand the system design
+7. **[Testing Guide](testing.md)** - Learn about our testing approach
+8. **[Integration Testing & CI](integration-testing-ci.md)** - Integration testing in CI/CD pipeline
+9. **[CI/CD Pipeline](ci-cd.md)** - Understand our deployment process
 
 ## Development Topics
 

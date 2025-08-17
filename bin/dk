@@ -1,0 +1,367 @@
+#!/bin/bash
+set -e
+
+# DataKnobs Developer Tool (dk)
+# A unified interface for common development tasks with intuitive shortcuts
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Colors for output
+if [ -t 1 ] && [ -n "${TERM:-}" ] && [ "${TERM}" != "dumb" ]; then
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[1;33m'
+    BLUE='\033[0;34m'
+    CYAN='\033[0;36m'
+    MAGENTA='\033[0;35m'
+    BOLD='\033[1m'
+    DIM='\033[2m'
+    NC='\033[0m' # No Color
+else
+    RED=''
+    GREEN=''
+    YELLOW=''
+    BLUE=''
+    CYAN=''
+    MAGENTA=''
+    BOLD=''
+    DIM=''
+    NC=''
+fi
+
+# Function to show command help
+show_help() {
+    cat << EOF
+${BOLD}${CYAN}DataKnobs Developer Tool (dk)${NC}
+${DIM}The easy way to work with DataKnobs development${NC}
+
+${BOLD}Usage:${NC} dk <command> [options]
+
+${BOLD}${GREEN}Quick Commands:${NC}
+  ${CYAN}pr${NC}           Prepare for PR (full quality checks)
+  ${CYAN}check${NC}        Quick quality check (dev mode)
+  ${CYAN}test${NC}         Run tests (smart defaults)
+  ${CYAN}fix${NC}          Auto-fix what can be fixed
+  ${CYAN}diagnose${NC}     Diagnose last failure
+  ${CYAN}clean${NC}        Clean up artifacts and caches
+
+${BOLD}${YELLOW}Common Workflows:${NC}
+  ${BOLD}dk pr${NC}              Run full PR checks before push
+  ${BOLD}dk check data${NC}      Quick check the data package
+  ${BOLD}dk test --last${NC}     Re-run only failed tests
+  ${BOLD}dk fix${NC}             Auto-fix style issues
+  ${BOLD}dk diagnose${NC}        Find out what failed
+  
+${BOLD}${BLUE}Detailed Commands:${NC}
+  
+  ${BOLD}PR Preparation:${NC}
+    pr, prepare      Full quality checks for PR
+    prq, pr-quick    PR checks without slow linting
+    
+  ${BOLD}Quality Checks:${NC}
+    check [pkg]      Quick check (dev mode)
+    checkall         Check all packages
+    lint [pkg]       Run linting only
+    style [pkg]      Run style checks only
+    
+  ${BOLD}Testing:${NC}
+    test [pkg]       Run tests (smart mode)
+    unit [pkg]       Run unit tests only
+    int [pkg]        Run integration tests only
+    testlast         Re-run failed tests
+    testquick [pkg]  Tests without coverage
+    
+  ${BOLD}Fixing Issues:${NC}
+    fix              Auto-fix style issues
+    fixlint          Try to auto-fix some lint issues
+    format           Format code with black/ruff
+    
+  ${BOLD}Diagnostics:${NC}
+    diagnose, diag   Analyze last failure
+    why              Why did it fail? (alias for diagnose)
+    coverage, cov    Show coverage report
+    
+  ${BOLD}Documentation:${NC}
+    docs             Serve docs locally (live reload)
+    docs-build       Build documentation
+    docs-check       Check for doc issues
+    docs-open        Open docs in browser
+    
+  ${BOLD}Services:${NC}
+    up               Start dev services
+    down             Stop dev services
+    restart          Restart services
+    logs [service]   Show service logs
+    
+  ${BOLD}Cleanup:${NC}
+    clean            Clean artifacts and caches
+    cleanall         Deep clean (includes .venv)
+    reset            Reset to clean state
+
+${BOLD}${MAGENTA}Shortcuts & Aliases:${NC}
+  dk pr         = dk prepare-for-pr
+  dk q          = dk check (quick check)  
+  dk t          = dk test
+  dk tf         = dk test --last (test failures)
+  dk f          = dk fix
+  dk d          = dk diagnose
+  dk y          = dk why (why did it fail?)
+  
+${BOLD}Examples:${NC}
+  ${DIM}# Before creating a PR:${NC}
+  dk pr
+  
+  ${DIM}# Quick development cycle:${NC}
+  dk check data        # Quick check data package
+  dk test data         # Test data package
+  dk fix              # Auto-fix issues
+  
+  ${DIM}# After a failure:${NC}
+  dk diagnose         # See what failed
+  dk test --last      # Re-run failed tests
+  
+  ${DIM}# Service management:${NC}
+  dk up               # Start services
+  dk logs postgres    # Check postgres logs
+  dk down             # Stop services
+
+${BOLD}Tips:${NC}
+  • Use ${CYAN}dk pr${NC} before pushing for PR review
+  • Use ${CYAN}dk check <pkg>${NC} for quick iteration
+  • Use ${CYAN}dk fix${NC} to auto-fix style issues
+  • Use ${CYAN}dk diagnose${NC} when something fails
+
+EOF
+}
+
+# Function to run command with nice output
+run_command() {
+    local description="$1"
+    shift
+    echo -e "${BLUE}▶${NC} ${BOLD}$description${NC}"
+    echo -e "${DIM}  Running: $@${NC}"
+    echo ""
+    "$@"
+}
+
+# Main command dispatcher
+main() {
+    local cmd="${1:-help}"
+    shift || true
+    
+    case "$cmd" in
+        # Help
+        help|h|-h|--help|"")
+            show_help
+            ;;
+        cheat|cheatsheet|cs|ref|reference)
+            cat "$SCRIPT_DIR/dk-cheatsheet.txt"
+            ;;
+            
+        # PR Preparation
+        pr|prepare|prepare-for-pr|p4p)
+            run_command "Preparing for PR (full quality checks)" \
+                "$SCRIPT_DIR/run-quality-checks.sh" --pr "$@"
+            ;;
+        prq|pr-quick|prquick)
+            run_command "Quick PR check (skipping lint)" \
+                "$SCRIPT_DIR/run-quality-checks.sh" --pr --skip-lint "$@"
+            ;;
+            
+        # Quality Checks
+        check|c|q|quick)
+            run_command "Quick quality check (dev mode)" \
+                "$SCRIPT_DIR/run-quality-checks.sh" --dev "$@"
+            ;;
+        checkall|ca|qa)
+            run_command "Checking all packages (dev mode)" \
+                "$SCRIPT_DIR/run-quality-checks.sh" --dev
+            ;;
+        lint|l)
+            run_command "Running linting checks" \
+                uv run pylint packages/*/src --rcfile=.pylintrc "$@"
+            ;;
+        style|s)
+            run_command "Running style checks" \
+                uv run ruff check packages/*/src "$@"
+            ;;
+            
+        # Testing
+        test|t)
+            # Smart test mode - determines best approach
+            if [[ "$1" == "--last" ]] || [[ "$1" == "-l" ]]; then
+                shift
+                run_command "Re-running failed tests" \
+                    "$SCRIPT_DIR/test.sh" -- --lf "$@"
+            elif [[ "$1" == "--quick" ]] || [[ "$1" == "-q" ]]; then
+                shift
+                run_command "Running tests without coverage" \
+                    "$SCRIPT_DIR/test.sh" --no-cov "$@"
+            else
+                run_command "Running tests" \
+                    "$SCRIPT_DIR/test.sh" "$@"
+            fi
+            ;;
+        testlast|tf|test-failed)
+            run_command "Re-running failed tests" \
+                "$SCRIPT_DIR/test.sh" -- --lf "$@"
+            ;;
+        testquick|tq)
+            run_command "Running tests without coverage" \
+                "$SCRIPT_DIR/test.sh" --no-cov "$@"
+            ;;
+        unit|u)
+            run_command "Running unit tests" \
+                "$SCRIPT_DIR/test.sh" -t unit "$@"
+            ;;
+        int|i|integration)
+            run_command "Running integration tests" \
+                "$SCRIPT_DIR/test.sh" -t integration "$@"
+            ;;
+            
+        # Fixing Issues
+        fix|f)
+            run_command "Auto-fixing style issues" \
+                uv run ruff check --fix packages/*/src "$@"
+            echo ""
+            echo -e "${GREEN}✓${NC} Style issues fixed where possible"
+            echo -e "${YELLOW}Tip:${NC} Run ${CYAN}dk check${NC} to verify fixes"
+            ;;
+        fixlint|fl)
+            echo -e "${YELLOW}Note:${NC} Most lint issues require manual fixes"
+            echo -e "Opening lint report for review..."
+            run_command "Generating lint report" \
+                uv run pylint packages/*/src --rcfile=.pylintrc "$@"
+            ;;
+        format|fmt)
+            run_command "Formatting code" \
+                uv run ruff format packages/*/src "$@"
+            ;;
+            
+        # Diagnostics
+        diagnose|diag|d|why|y)
+            run_command "Diagnosing last failure" \
+                "$SCRIPT_DIR/diagnose-quality-failures.sh" "$@"
+            ;;
+        coverage|cov)
+            if [ -f ".quality-artifacts/htmlcov/index.html" ]; then
+                echo -e "${GREEN}Opening coverage report...${NC}"
+                open ".quality-artifacts/htmlcov/index.html" 2>/dev/null || \
+                    xdg-open ".quality-artifacts/htmlcov/index.html" 2>/dev/null || \
+                    echo "Coverage report: .quality-artifacts/htmlcov/index.html"
+            else
+                echo -e "${YELLOW}No coverage report found${NC}"
+                echo -e "Run ${CYAN}dk pr${NC} or ${CYAN}dk test${NC} first"
+            fi
+            ;;
+            
+        # Documentation
+        docs|doc|serve)
+            run_command "Serving documentation (live reload)" \
+                uv run mkdocs serve
+            ;;
+        docs-build|build-docs|docbuild)
+            run_command "Building documentation" \
+                uv run mkdocs build
+            echo -e "${GREEN}✓${NC} Documentation built in site/ directory"
+            ;;
+        docs-check|doccheck|check-docs)
+            echo -e "${BLUE}Checking documentation...${NC}"
+            if uv run mkdocs build --strict 2>&1 | grep -E "WARNING|ERROR"; then
+                echo -e "${YELLOW}⚠${NC} Documentation has warnings or errors"
+                echo -e "Run ${CYAN}dk docs${NC} to see them in context"
+            else
+                echo -e "${GREEN}✓${NC} Documentation builds cleanly"
+            fi
+            ;;
+        docs-open|open-docs|docopen)
+            if [ -f "site/index.html" ]; then
+                echo -e "${GREEN}Opening documentation...${NC}"
+                open "site/index.html" 2>/dev/null || \
+                    xdg-open "site/index.html" 2>/dev/null || \
+                    echo "Documentation: site/index.html"
+            else
+                echo -e "${YELLOW}Documentation not built yet${NC}"
+                echo -e "Run ${CYAN}dk docs-build${NC} first"
+            fi
+            ;;
+            
+        # Services
+        up|start)
+            run_command "Starting development services" \
+                "$SCRIPT_DIR/manage-services.sh" start "$@"
+            ;;
+        down|stop)
+            run_command "Stopping development services" \
+                "$SCRIPT_DIR/manage-services.sh" stop "$@"
+            ;;
+        restart)
+            run_command "Restarting development services" \
+                "$SCRIPT_DIR/manage-services.sh" restart "$@"
+            ;;
+        logs|log)
+            if [ -n "$1" ]; then
+                run_command "Showing logs for $1" \
+                    docker compose logs -f "$1"
+            else
+                run_command "Showing all service logs" \
+                    docker compose logs -f
+            fi
+            ;;
+            
+        # Cleanup
+        clean)
+            echo -e "${BLUE}Cleaning up...${NC}"
+            rm -rf .quality-artifacts .pytest_cache .coverage* htmlcov
+            find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+            find . -type d -name ".ruff_cache" -exec rm -rf {} + 2>/dev/null || true
+            echo -e "${GREEN}✓${NC} Cleaned artifacts and caches"
+            ;;
+        cleanall|clean-all)
+            echo -e "${YELLOW}Warning:${NC} This will remove .venv too!"
+            read -p "Continue? (y/N) " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                dk clean
+                rm -rf .venv
+                echo -e "${GREEN}✓${NC} Deep clean complete"
+                echo -e "${YELLOW}Run${NC} ${CYAN}uv sync --all-packages${NC} to reinstall"
+            fi
+            ;;
+        reset)
+            dk clean
+            run_command "Resetting to clean state" \
+                uv sync --all-packages
+            ;;
+            
+        # Shortcuts
+        p) dk pr "${@}" ;;
+        q) dk check "${@}" ;;
+        t) dk test "${@}" ;;
+        tf) dk testlast "${@}" ;;
+        u) dk unit "${@}" ;;
+        i) dk int "${@}" ;;
+        f) dk fix "${@}" ;;
+        d) dk diagnose "${@}" ;;
+        y) dk why "${@}" ;;
+        
+        # Unknown command
+        *)
+            echo -e "${RED}Unknown command:${NC} $cmd"
+            echo ""
+            echo "Run ${CYAN}dk help${NC} for available commands"
+            exit 1
+            ;;
+    esac
+}
+
+# Check if we're in the project root
+if [ ! -f "$PROJECT_ROOT/pyproject.toml" ]; then
+    echo -e "${RED}Error:${NC} Not in DataKnobs project directory"
+    echo "Please run from the project root"
+    exit 1
+fi
+
+# Run main command
+main "$@"

@@ -1,0 +1,33 @@
+╔════════════════════════════════════════════════════════════════╗
+║                  DataKnobs (dk) Quick Reference                   ║
+╠════════════════════════════════════════════════════════════════╣
+║                                                                    ║
+║  ESSENTIAL WORKFLOWS                                              ║
+║  ───────────────────                                              ║
+║  dk pr              Full PR checks before push                    ║
+║  dk check [pkg]     Quick quality check (dev mode)                ║
+║  dk test [pkg]      Run tests with smart defaults                 ║
+║  dk fix             Auto-fix style issues                         ║
+║  dk diagnose        Find out what failed                          ║
+║  dk docs            Serve docs with live reload                   ║
+║                                                                    ║
+║  SUPER SHORT                                                      ║
+║  ───────────                                                      ║
+║  dk p   = dk pr          (prepare for PR)                        ║
+║  dk q   = dk check       (quick check)                           ║
+║  dk t   = dk test        (test)                                  ║
+║  dk tf  = dk test --last (test failures)                         ║
+║  dk f   = dk fix         (fix issues)                            ║
+║  dk d   = dk diagnose    (diagnose failure)                      ║
+║  dk y   = dk why         (why did it fail?)                      ║
+║                                                                    ║
+║  COMMON PATTERNS                                                  ║
+║  ───────────────                                                  ║
+║  Before PR:      dk pr                                           ║
+║  After failure:  dk d → dk tf → dk f                             ║
+║  Quick dev:      dk q data → dk f → dk t data                    ║
+║  Services:       dk up → [work] → dk down                        ║
+║                                                                    ║
+╚════════════════════════════════════════════════════════════════╝
+
+Type 'dk help' for full command list
