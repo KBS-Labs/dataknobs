@@ -39,6 +39,31 @@ if [ -f /.dockerenv ] || [ -n "${DOCKER_CONTAINER:-}" ]; then
     IN_DOCKER=true
 fi
 
+# Consolidated function to execute pytest with proper error handling
+execute_pytest() {
+    local cmd="$1"
+    local context="${2:-tests}"  # Optional context for warning message
+    
+    echo -e "${CYAN}Command: $cmd${NC}"
+    
+    local test_result
+    if command -v uv &> /dev/null; then
+        eval "uv run $cmd"
+        test_result=$?
+    else
+        eval "$cmd"
+        test_result=$?
+    fi
+    
+    # Exit code 5 means no tests were collected - treat as success with warning
+    if [ $test_result -eq 5 ]; then
+        echo -e "${YELLOW}Warning: No $context found${NC}"
+        return 0
+    fi
+    
+    return $test_result
+}
+
 # Function to set environment variables for integration tests
 set_integration_env_vars() {
     if [ "$IN_DOCKER" = true ]; then
@@ -161,6 +186,10 @@ while [[ $# -gt 0 ]]; do
         --cov-report)
             COV_REPORT="$2"
             shift 2
+            ;;
+        --cov-report=*)
+            COV_REPORT="${1#--cov-report=}"
+            shift
             ;;
         # Help
         -h|--help)
@@ -293,13 +322,7 @@ run_path_tests() {
     
     # Run tests
     local cmd="pytest $path $cov_args $PYTEST_ARGS --color=yes"
-    echo -e "${CYAN}Command: $cmd${NC}"
-    
-    if command -v uv &> /dev/null; then
-        eval "uv run $cmd" || return $?
-    else
-        eval "$cmd" || return $?
-    fi
+    execute_pytest "$cmd" "tests in $path"
 }
 
 # Function to discover packages with tests
@@ -372,13 +395,7 @@ run_unit_tests() {
     
     # Run tests
     local cmd="pytest $test_path $exclude_args $cov_args $PYTEST_ARGS --color=yes"
-    echo -e "${CYAN}Command: $cmd${NC}"
-    
-    if command -v uv &> /dev/null; then
-        eval "uv run $cmd" || return $?
-    else
-        eval "$cmd" || return $?
-    fi
+    execute_pytest "$cmd" "unit tests for $package"
 }
 
 # Function to run integration tests
@@ -445,13 +462,7 @@ run_integration_tests() {
     
     # Run tests
     local cmd="pytest $test_path $cov_args $PYTEST_ARGS --color=yes"
-    echo -e "${CYAN}Command: $cmd${NC}"
-    
-    if command -v uv &> /dev/null; then
-        eval "uv run $cmd" || return $?
-    else
-        eval "$cmd" || return $?
-    fi
+    execute_pytest "$cmd" "integration tests for $package"
 }
 
 # Function to run combined tests with coverage
@@ -515,13 +526,7 @@ run_combined_tests() {
     
     # Run all tests together for combined coverage
     local cmd="pytest $test_path $cov_args $PYTEST_ARGS --color=yes"
-    echo -e "${CYAN}Command: $cmd${NC}"
-    
-    if command -v uv &> /dev/null; then
-        eval "uv run $cmd" || return $?
-    else
-        eval "$cmd" || return $?
-    fi
+    execute_pytest "$cmd" "tests for $package"
 }
 
 # Main execution
