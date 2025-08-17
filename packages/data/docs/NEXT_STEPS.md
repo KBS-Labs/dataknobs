@@ -98,18 +98,19 @@ Filter("name", Operator.BETWEEN, ("Alice", "David"))
 - ✅ Support numeric, temporal, and string ranges
 - ✅ Optimized PostgreSQL backend for native SQL BETWEEN
 
-### Priority 3: Add Boolean Logic Operators
+### Priority 3: Add Boolean Logic Operators ✅ COMPLETED
 ```python
-# Enable complex queries:
+# Now supported:
 Query().or_(
     Filter("sensor_id", Operator.EQ, "sensor_1"),
     Filter("sensor_id", Operator.EQ, "sensor_2")
 )
 ```
-- [ ] Add OR, NOT operators
-- [ ] Support grouped/nested conditions
-- [ ] Implement query builder pattern
-- [ ] Ensure backend compatibility
+- ✅ Added OR, AND, NOT operators
+- ✅ Support grouped/nested conditions via ComplexQuery
+- ✅ Implemented QueryBuilder fluent API pattern
+- ✅ Shared implementation with backend override capability
+- ✅ Added `disconnect()` alias for all database backends
 
 ### Priority 4: Unify Batch Processing APIs
 - [ ] Reconcile BatchConfig and StreamConfig interfaces

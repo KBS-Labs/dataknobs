@@ -21,6 +21,14 @@ from .factory import DatabaseFactory, database_factory, async_database_factory
 # Import core modules
 from .fields import Field, FieldType
 from .query import Filter, Operator, Query, SortOrder, SortSpec
+from .query_logic import (
+    ComplexQuery,
+    QueryBuilder,
+    LogicOperator,
+    Condition,
+    FilterCondition,
+    LogicCondition,
+)
 from .records import Record
 from .streaming import StreamConfig, StreamResult
 
@@ -42,6 +50,13 @@ __all__ = [
     "Operator",
     "SortOrder",
     "SortSpec",
+    # Boolean logic
+    "ComplexQuery",
+    "QueryBuilder",
+    "LogicOperator",
+    "Condition",
+    "FilterCondition",
+    "LogicCondition",
     # Streaming
     "StreamConfig",
     "StreamResult",

@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional, Union
 
 from .query import Query
+from .query_logic import ComplexQuery
 from .records import Record
 from .streaming import StreamConfig, StreamResult
 
@@ -72,16 +73,63 @@ class AsyncDatabase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def search(self, query: Query) -> List[Record]:
+    async def search(self, query: Union[Query, ComplexQuery]) -> List[Record]:
         """Search for records matching a query.
 
         Args:
-            query: The search query
+            query: The search query (simple or complex)
 
         Returns:
             List of matching records
         """
         raise NotImplementedError
+    
+    async def _search_with_complex_query(self, query: ComplexQuery) -> List[Record]:
+        """Default implementation for ComplexQuery using in-memory filtering.
+        
+        Backends can override this for native boolean logic support.
+        
+        Args:
+            query: Complex query with boolean logic
+            
+        Returns:
+            List of matching records
+        """
+        # Try to convert to simple query if possible
+        try:
+            simple_query = query.to_simple_query()
+            return await self.search(simple_query)
+        except ValueError:
+            # Can't convert - need to do in-memory filtering
+            # Get all records (or use a base filter if possible)
+            all_records = await self.search(Query())
+            
+            # Apply complex condition filtering
+            results = []
+            for record in all_records:
+                if query.matches(record):
+                    results.append(record)
+            
+            # Apply sorting
+            if query.sort_specs:
+                for sort_spec in reversed(query.sort_specs):
+                    reverse = sort_spec.order.value == "desc"
+                    results.sort(
+                        key=lambda r: r.get_value(sort_spec.field, ""),
+                        reverse=reverse
+                    )
+            
+            # Apply offset and limit
+            if query.offset_value:
+                results = results[query.offset_value:]
+            if query.limit_value:
+                results = results[:query.limit_value]
+            
+            # Apply field projection
+            if query.fields:
+                results = [r.project(query.fields) for r in results]
+            
+            return results
 
     @abstractmethod
     async def exists(self, id: str) -> bool:
@@ -348,9 +396,56 @@ class SyncDatabase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def search(self, query: Query) -> List[Record]:
-        """Search for records matching a query."""
+    def search(self, query: Union[Query, ComplexQuery]) -> List[Record]:
+        """Search for records matching a query (simple or complex)."""
         raise NotImplementedError
+    
+    def _search_with_complex_query(self, query: ComplexQuery) -> List[Record]:
+        """Default implementation for ComplexQuery using in-memory filtering.
+        
+        Backends can override this for native boolean logic support.
+        
+        Args:
+            query: Complex query with boolean logic
+            
+        Returns:
+            List of matching records
+        """
+        # Try to convert to simple query if possible
+        try:
+            simple_query = query.to_simple_query()
+            return self.search(simple_query)
+        except ValueError:
+            # Can't convert - need to do in-memory filtering
+            # Get all records (or use a base filter if possible)
+            all_records = self.search(Query())
+            
+            # Apply complex condition filtering
+            results = []
+            for record in all_records:
+                if query.matches(record):
+                    results.append(record)
+            
+            # Apply sorting
+            if query.sort_specs:
+                for sort_spec in reversed(query.sort_specs):
+                    reverse = sort_spec.order.value == "desc"
+                    results.sort(
+                        key=lambda r: r.get_value(sort_spec.field, ""),
+                        reverse=reverse
+                    )
+            
+            # Apply offset and limit
+            if query.offset_value:
+                results = results[query.offset_value:]
+            if query.limit_value:
+                results = results[:query.limit_value]
+            
+            # Apply field projection
+            if query.fields:
+                results = [r.project(query.fields) for r in results]
+            
+            return results
 
     @abstractmethod
     def exists(self, id: str) -> bool:

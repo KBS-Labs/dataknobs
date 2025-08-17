@@ -344,3 +344,134 @@ class Query:
             offset_value=self.offset_value,
             fields=self.fields.copy() if self.fields else None,
         )
+    
+    def or_(self, *filters: Union[Filter, "Query"]) -> "ComplexQuery":
+        """Create a ComplexQuery with OR logic.
+        
+        The current query's filters become an AND group, combined with OR conditions.
+        Example: Query with filters [A, B] calling or_(C, D) creates: (A AND B) AND (C OR D)
+        
+        Args:
+            filters: Filter objects or Query objects to OR together
+            
+        Returns:
+            ComplexQuery with OR logic
+        """
+        from .query_logic import ComplexQuery, FilterCondition, LogicCondition, LogicOperator
+        
+        # Build OR conditions from the arguments
+        or_conditions = []
+        for item in filters:
+            if isinstance(item, Filter):
+                or_conditions.append(FilterCondition(item))
+            elif isinstance(item, Query):
+                if len(item.filters) == 1:
+                    or_conditions.append(FilterCondition(item.filters[0]))
+                elif item.filters:
+                    and_cond = LogicCondition(operator=LogicOperator.AND)
+                    for f in item.filters:
+                        and_cond.conditions.append(FilterCondition(f))
+                    or_conditions.append(and_cond)
+        
+        # Create the OR condition group
+        or_group = None
+        if or_conditions:
+            if len(or_conditions) == 1:
+                or_group = or_conditions[0]
+            else:
+                or_group = LogicCondition(
+                    operator=LogicOperator.OR,
+                    conditions=or_conditions
+                )
+        
+        # Combine with existing filters (if any) using AND
+        if self.filters:
+            # Create AND condition for existing filters
+            if len(self.filters) == 1:
+                existing = FilterCondition(self.filters[0])
+            else:
+                existing = LogicCondition(operator=LogicOperator.AND)
+                for f in self.filters:
+                    existing.conditions.append(FilterCondition(f))
+            
+            # Combine existing AND new OR group with AND
+            if or_group:
+                root_condition = LogicCondition(
+                    operator=LogicOperator.AND,
+                    conditions=[existing, or_group]
+                )
+            else:
+                root_condition = existing
+        else:
+            # No existing filters, just use OR group
+            root_condition = or_group
+        
+        return ComplexQuery(
+            condition=root_condition,
+            sort_specs=self.sort_specs.copy(),
+            limit_value=self.limit_value,
+            offset_value=self.offset_value,
+            fields=self.fields.copy() if self.fields else None
+        )
+    
+    def and_(self, *filters: Union[Filter, "Query"]) -> "Query":
+        """Add more filters with AND logic (convenience method).
+        
+        Args:
+            filters: Filter objects or Query objects to AND together
+            
+        Returns:
+            Self for chaining
+        """
+        for item in filters:
+            if isinstance(item, Filter):
+                self.filters.append(item)
+            elif isinstance(item, Query):
+                self.filters.extend(item.filters)
+        return self
+    
+    def not_(self, filter: Filter) -> "ComplexQuery":
+        """Create a ComplexQuery with NOT logic.
+        
+        Args:
+            filter: Filter to negate
+            
+        Returns:
+            ComplexQuery with NOT logic
+        """
+        from .query_logic import ComplexQuery, FilterCondition, LogicCondition, LogicOperator
+        
+        # Current filters as AND
+        conditions = []
+        if self.filters:
+            if len(self.filters) == 1:
+                conditions.append(FilterCondition(self.filters[0]))
+            else:
+                and_cond = LogicCondition(operator=LogicOperator.AND)
+                for f in self.filters:
+                    and_cond.conditions.append(FilterCondition(f))
+                conditions.append(and_cond)
+        
+        # Add NOT condition
+        not_cond = LogicCondition(
+            operator=LogicOperator.NOT,
+            conditions=[FilterCondition(filter)]
+        )
+        conditions.append(not_cond)
+        
+        # Create root condition
+        if len(conditions) == 1:
+            root_condition = conditions[0]
+        else:
+            root_condition = LogicCondition(
+                operator=LogicOperator.AND,
+                conditions=conditions
+            )
+        
+        return ComplexQuery(
+            condition=root_condition,
+            sort_specs=self.sort_specs.copy(),
+            limit_value=self.limit_value,
+            offset_value=self.offset_value,
+            fields=self.fields.copy() if self.fields else None
+        )

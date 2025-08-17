@@ -11,6 +11,7 @@ from dataknobs_config import ConfigurableBase
 
 from ..database import AsyncDatabase, SyncDatabase
 from ..query import Query
+from ..query_logic import ComplexQuery
 from ..records import Record
 from ..streaming import AsyncStreamingMixin, StreamConfig, StreamResult, StreamingMixin
 
@@ -77,8 +78,12 @@ class AsyncMemoryDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
             self._storage[id] = record.copy(deep=True)
             return id
 
-    async def search(self, query: Query) -> list[Record]:
+    async def search(self, query: Query | ComplexQuery) -> list[Record]:
         """Search for records matching the query."""
+        # Handle ComplexQuery using base class implementation
+        if isinstance(query, ComplexQuery):
+            return await self._search_with_complex_query(query)
+        
         async with self._lock:
             results = []
 
@@ -258,8 +263,12 @@ class SyncMemoryDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
             self._storage[id] = record.copy(deep=True)
             return id
 
-    def search(self, query: Query) -> list[Record]:
+    def search(self, query: Query | ComplexQuery) -> list[Record]:
         """Search for records matching the query."""
+        # Handle ComplexQuery using base class implementation
+        if isinstance(query, ComplexQuery):
+            return self._search_with_complex_query(query)
+        
         with self._lock:
             results = []
 
