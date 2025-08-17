@@ -37,7 +37,7 @@ def sync_db(postgres_config):
     # Cleanup: drop the test table
     try:
         db.clear()
-    except:
+    except Exception:
         pass
     db.close()
 
@@ -50,7 +50,7 @@ async def async_db(postgres_config):
     # Cleanup
     try:
         await db.clear()
-    except:
+    except Exception:
         pass
     await db.close()
 

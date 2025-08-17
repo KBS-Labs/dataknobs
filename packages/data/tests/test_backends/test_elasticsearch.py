@@ -41,7 +41,7 @@ def sync_db(elasticsearch_config):
         db.clear()
         # Delete the index completely
         db.es_index.delete()
-    except:
+    except Exception:
         pass
     db.close()
 
@@ -56,7 +56,7 @@ async def async_db(elasticsearch_config):
         await db.clear()
         # Delete the index completely
         db._sync_db.es_index.delete()
-    except:
+    except Exception:
         pass
     await db.close()
 
