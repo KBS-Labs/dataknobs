@@ -318,7 +318,7 @@ class ParquetFormat(FileFormat):
             raise ImportError("Parquet support requires pandas and pyarrow packages")
 
 
-class AsyncFileDatabase(AsyncDatabase, ConfigurableBase):
+class AsyncFileDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
     """Async file-based database implementation."""
 
     FORMAT_HANDLERS = {
@@ -581,49 +581,10 @@ class AsyncFileDatabase(AsyncDatabase, ConfigurableBase):
     ) -> StreamResult:
         """Stream records into file."""
         # Use the default implementation from mixin
-        config = config or StreamConfig()
-        result = StreamResult()
-        start_time = time.time()
-        
-        batch = []
-        async for record in records:
-            batch.append(record)
-            
-            if len(batch) >= config.batch_size:
-                # Write batch
-                try:
-                    ids = await self.create_batch(batch)
-                    result.successful += len(ids)
-                    result.total_processed += len(batch)
-                except Exception as e:
-                    result.failed += len(batch)
-                    result.total_processed += len(batch)
-                    if config.on_error:
-                        for rec in batch:
-                            if not config.on_error(e, rec):
-                                result.add_error(None, e)
-                                break
-                    else:
-                        result.add_error(None, e)
-                
-                batch = []
-        
-        # Write remaining batch
-        if batch:
-            try:
-                ids = await self.create_batch(batch)
-                result.successful += len(ids)
-                result.total_processed += len(batch)
-            except Exception as e:
-                result.failed += len(batch)
-                result.total_processed += len(batch)
-                result.add_error(None, e)
-        
-        result.duration = time.time() - start_time
-        return result
+        return await self._default_stream_write(records, config)
 
 
-class SyncFileDatabase(SyncDatabase, ConfigurableBase):
+class SyncFileDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
     """Synchronous file-based database implementation."""
 
     FORMAT_HANDLERS = {

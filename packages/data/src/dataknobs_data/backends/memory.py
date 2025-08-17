@@ -15,7 +15,7 @@ from ..records import Record
 from ..streaming import AsyncStreamingMixin, StreamConfig, StreamResult, StreamingMixin
 
 
-class AsyncMemoryDatabase(AsyncDatabase, ConfigurableBase):
+class AsyncMemoryDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
     """Async in-memory database implementation."""
 
     def __init__(self, config: dict[str, Any] | None = None):
@@ -192,49 +192,11 @@ class AsyncMemoryDatabase(AsyncDatabase, ConfigurableBase):
         config: Optional[StreamConfig] = None
     ) -> StreamResult:
         """Stream records into memory."""
-        config = config or StreamConfig()
-        result = StreamResult()
-        start_time = time.time()
-        
-        batch = []
-        async for record in records:
-            batch.append(record)
-            
-            if len(batch) >= config.batch_size:
-                # Write batch
-                try:
-                    ids = await self.create_batch(batch)
-                    result.successful += len(ids)
-                    result.total_processed += len(batch)
-                except Exception as e:
-                    result.failed += len(batch)
-                    result.total_processed += len(batch)
-                    if config.on_error:
-                        for rec in batch:
-                            if not config.on_error(e, rec):
-                                result.add_error(None, e)
-                                break
-                    else:
-                        result.add_error(None, e)
-                
-                batch = []
-        
-        # Write remaining batch
-        if batch:
-            try:
-                ids = await self.create_batch(batch)
-                result.successful += len(ids)
-                result.total_processed += len(batch)
-            except Exception as e:
-                result.failed += len(batch)
-                result.total_processed += len(batch)
-                result.add_error(None, e)
-        
-        result.duration = time.time() - start_time
-        return result
+        # Use the default implementation from mixin
+        return await self._default_stream_write(records, config)
 
 
-class SyncMemoryDatabase(SyncDatabase, ConfigurableBase):
+class SyncMemoryDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
     """Synchronous in-memory database implementation."""
 
     def __init__(self, config: dict[str, Any] | None = None):
@@ -409,43 +371,5 @@ class SyncMemoryDatabase(SyncDatabase, ConfigurableBase):
         config: Optional[StreamConfig] = None
     ) -> StreamResult:
         """Stream records into memory."""
-        config = config or StreamConfig()
-        result = StreamResult()
-        start_time = time.time()
-        
-        batch = []
-        for record in records:
-            batch.append(record)
-            
-            if len(batch) >= config.batch_size:
-                # Write batch
-                try:
-                    ids = self.create_batch(batch)
-                    result.successful += len(ids)
-                    result.total_processed += len(batch)
-                except Exception as e:
-                    result.failed += len(batch)
-                    result.total_processed += len(batch)
-                    if config.on_error:
-                        for rec in batch:
-                            if not config.on_error(e, rec):
-                                result.add_error(None, e)
-                                break
-                    else:
-                        result.add_error(None, e)
-                
-                batch = []
-        
-        # Write remaining batch
-        if batch:
-            try:
-                ids = self.create_batch(batch)
-                result.successful += len(ids)
-                result.total_processed += len(batch)
-            except Exception as e:
-                result.failed += len(batch)
-                result.total_processed += len(batch)
-                result.add_error(None, e)
-        
-        result.duration = time.time() - start_time
-        return result
+        # Use the default implementation from mixin
+        return self._default_stream_write(records, config)

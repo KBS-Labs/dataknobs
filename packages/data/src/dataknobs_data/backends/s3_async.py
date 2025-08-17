@@ -21,6 +21,7 @@ from ..pooling.s3 import (
 from ..query import Operator, Query, SortOrder
 from ..records import Record
 from ..streaming import StreamConfig, StreamResult
+from ..streaming import async_process_batch_with_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -459,40 +460,45 @@ class AsyncS3Database(AsyncDatabase, ConfigurableBase):
         config = config or StreamConfig()
         result = StreamResult()
         start_time = time.time()
+        quitting = False
         
         batch = []
         async for record in records:
             batch.append(record)
             
             if len(batch) >= config.batch_size:
-                # Write batch
-                try:
-                    await self._write_batch(batch)
-                    result.successful += len(batch)
-                    result.total_processed += len(batch)
-                except Exception as e:
-                    result.failed += len(batch)
-                    result.total_processed += len(batch)
-                    if config.on_error:
-                        for rec in batch:
-                            if not config.on_error(e, rec):
-                                result.add_error(None, e)
-                                break
-                    else:
-                        result.add_error(None, e)
+                # Write batch with graceful fallback
+                async def batch_func(b):
+                    await self._write_batch(b)
+                    return [r.id for r in b]
                 
+                continue_processing = await async_process_batch_with_fallback(
+                    batch,
+                    batch_func,
+                    self.create,
+                    result,
+                    config
+                )
+                
+                if not continue_processing:
+                    quitting = True
+                    break
+                    
                 batch = []
         
         # Write remaining batch
-        if batch:
-            try:
-                await self._write_batch(batch)
-                result.successful += len(batch)
-                result.total_processed += len(batch)
-            except Exception as e:
-                result.failed += len(batch)
-                result.total_processed += len(batch)
-                result.add_error(None, e)
+        if batch and not quitting:
+            async def batch_func(b):
+                await self._write_batch(b)
+                return [r.id for r in b]
+            
+            await async_process_batch_with_fallback(
+                batch,
+                batch_func,
+                self.create,
+                result,
+                config
+            )
         
         result.duration = time.time() - start_time
         return result

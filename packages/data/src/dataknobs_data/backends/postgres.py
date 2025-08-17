@@ -16,6 +16,7 @@ from ..query import Operator, Query, SortOrder
 from ..records import Record
 from ..streaming import StreamConfig, StreamResult
 from ..pooling import ConnectionPoolManager
+from ..streaming import async_process_batch_with_fallback, process_batch_with_fallback
 from ..pooling.postgres import (
     PostgresPoolConfig,
     create_asyncpg_pool,
@@ -412,40 +413,38 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
         config = config or StreamConfig()
         result = StreamResult()
         start_time = time.time()
+        quitting = False
         
         batch = []
         for record in records:
             batch.append(record)
             
             if len(batch) >= config.batch_size:
-                # Write batch
-                try:
-                    self._write_batch(batch)
-                    result.successful += len(batch)
-                    result.total_processed += len(batch)
-                except Exception as e:
-                    result.failed += len(batch)
-                    result.total_processed += len(batch)
-                    if config.on_error:
-                        for rec in batch:
-                            if not config.on_error(e, rec):
-                                result.add_error(None, e)
-                                break
-                    else:
-                        result.add_error(None, e)
+                # Write batch with graceful fallback
+                # Use lambda wrapper for _write_batch
+                continue_processing = process_batch_with_fallback(
+                    batch,
+                    lambda b: self._write_batch(b) or [r.id for r in b],  # _write_batch returns None, we need IDs
+                    self.create,
+                    result,
+                    config
+                )
                 
+                if not continue_processing:
+                    quitting = True
+                    break
+                    
                 batch = []
         
         # Write remaining batch
-        if batch:
-            try:
-                self._write_batch(batch)
-                result.successful += len(batch)
-                result.total_processed += len(batch)
-            except Exception as e:
-                result.failed += len(batch)
-                result.total_processed += len(batch)
-                result.add_error(None, e)
+        if batch and not quitting:
+            process_batch_with_fallback(
+                batch,
+                lambda b: self._write_batch(b) or [r.id for r in b],
+                self.create,
+                result,
+                config
+            )
         
         result.duration = time.time() - start_time
         return result
@@ -860,40 +859,46 @@ class AsyncPostgresDatabase(AsyncDatabase, ConfigurableBase):
         config = config or StreamConfig()
         result = StreamResult()
         start_time = time.time()
+        quitting = False
         
         batch = []
         async for record in records:
             batch.append(record)
             
             if len(batch) >= config.batch_size:
-                # Write batch
-                try:
-                    await self._write_batch(batch)
-                    result.successful += len(batch)
-                    result.total_processed += len(batch)
-                except Exception as e:
-                    result.failed += len(batch)
-                    result.total_processed += len(batch)
-                    if config.on_error:
-                        for rec in batch:
-                            if not config.on_error(e, rec):
-                                result.add_error(None, e)
-                                break
-                    else:
-                        result.add_error(None, e)
+                # Write batch with graceful fallback
+                # Use lambda wrapper for _write_batch
+                async def batch_func(b):
+                    await self._write_batch(b)
+                    return [r.id for r in b]
                 
+                continue_processing = await async_process_batch_with_fallback(
+                    batch,
+                    batch_func,
+                    self.create,
+                    result,
+                    config
+                )
+                
+                if not continue_processing:
+                    quitting = True
+                    break
+                    
                 batch = []
         
         # Write remaining batch
-        if batch:
-            try:
-                await self._write_batch(batch)
-                result.successful += len(batch)
-                result.total_processed += len(batch)
-            except Exception as e:
-                result.failed += len(batch)
-                result.total_processed += len(batch)
-                result.add_error(None, e)
+        if batch and not quitting:
+            async def batch_func(b):
+                await self._write_batch(b)
+                return [r.id for r in b]
+            
+            await async_process_batch_with_fallback(
+                batch,
+                batch_func,
+                self.create,
+                result,
+                config
+            )
         
         result.duration = time.time() - start_time
         return result

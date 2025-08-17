@@ -31,11 +31,7 @@ TEST_PATH=""  # For direct file/directory paths
 START_SERVICES="auto"
 COVERAGE="yes"
 PYTEST_ARGS=""
-CUSTOM_PYTEST_ARGS=""
 COV_REPORT="term-missing"
-VERBOSE_LEVEL=""
-TB_STYLE=""
-MARKERS=""
 
 # Check if we're running in a Docker container
 IN_DOCKER=false
@@ -93,25 +89,23 @@ ${YELLOW}Options:${NC}
     --no-cov                Disable coverage reporting
     --cov-report TYPE       Coverage report type: term, term-missing, html, xml, or combinations
                            (default: term-missing, use comma to combine: term-missing,html,xml)
-    
-${YELLOW}Pytest Options:${NC}
-    -v, -vv, -vvv           Verbosity level (can stack for more verbosity)
-    -x                      Exit on first failure (--exitfirst)
-    -s                      No capture, show print statements (--capture=no)
-    --tb=STYLE              Traceback style: auto, short, line, no, native, long
-    -k EXPRESSION           Only run tests matching the expression
-    -m MARKERS              Only run tests with specified markers
-    --lf                    Rerun only failures from last run
-    --ff                    Run failures first, then other tests
-    --pdb                   Drop into debugger on failures
-    --pdbcls                Drop into debugger at start of test
-    --maxfail=N             Stop after N failures
-    
     -h, --help              Show this help message
 
 ${YELLOW}Advanced Usage:${NC}
     Any arguments after -- are passed directly to pytest:
     $0 data -- -xvs --tb=short --pdb
+    
+    Common pytest options you can pass after --:
+    -v, -vv, -vvv           Verbosity level
+    -x                      Exit on first failure
+    -s                      No capture, show print statements
+    --tb=STYLE              Traceback style (auto, short, line, no, native, long)
+    -k EXPRESSION           Only run tests matching expression
+    -m MARKERS              Only run tests with specified markers
+    --lf                    Rerun only failures from last run
+    --ff                    Run failures first, then other tests
+    --pdb                   Drop into debugger on failures
+    --maxfail=N             Stop after N failures
     
 ${YELLOW}Examples:${NC}
     $0                                    # Run all tests with default settings
@@ -119,12 +113,11 @@ ${YELLOW}Examples:${NC}
     $0 -t unit data                       # Unit tests only for data package
     $0 packages/data/tests/test_s3.py    # Run specific test file
     $0 packages/data/tests/integration/  # Run all integration tests for data
-    $0 data -xvs                          # Exit on first failure, verbose, no capture
-    $0 data -vv --tb=short                # Very verbose with short tracebacks
-    $0 data --tb=no                       # No tracebacks
-    $0 data -k "test_s3"                  # Run only tests matching "test_s3"
-    $0 data -m "slow"                     # Run only tests marked as slow
-    $0 data --lf                          # Rerun only last failures
+    $0 data -- -xvs                       # Exit on first failure, verbose, no capture
+    $0 data -- -vv --tb=short             # Very verbose with short tracebacks
+    $0 data -- -k "test_s3"               # Run only tests matching "test_s3"
+    $0 data -- -m "slow"                  # Run only tests marked as slow
+    $0 data -- --lf                       # Rerun only last failures
     $0 data -- --pdb --maxfail=3          # Custom pytest args
     $0 -n data                            # Run without starting services (Docker)
 
@@ -169,79 +162,14 @@ while [[ $# -gt 0 ]]; do
             COV_REPORT="$2"
             shift 2
             ;;
-        # Pytest verbosity options
-        -vvv)
-            VERBOSE_LEVEL="-vvv"
-            shift
-            ;;
-        -vv)
-            VERBOSE_LEVEL="-vv"
-            shift
-            ;;
-        -v|--verbose)
-            VERBOSE_LEVEL="-v"
-            shift
-            ;;
-        # Pytest capture options
-        -s)
-            PYTEST_ARGS="$PYTEST_ARGS --capture=no"
-            shift
-            ;;
-        # Pytest failure options
-        -x|--exitfirst)
-            PYTEST_ARGS="$PYTEST_ARGS --exitfirst"
-            shift
-            ;;
-        --maxfail)
-            PYTEST_ARGS="$PYTEST_ARGS --maxfail=$2"
-            shift 2
-            ;;
-        # Pytest traceback options
-        --tb=*)
-            TB_STYLE="${1#--tb=}"
-            PYTEST_ARGS="$PYTEST_ARGS --tb=$TB_STYLE"
-            shift
-            ;;
-        --tb)
-            PYTEST_ARGS="$PYTEST_ARGS --tb=$2"
-            shift 2
-            ;;
-        # Pytest selection options
-        -k)
-            PYTEST_ARGS="$PYTEST_ARGS -k '$2'"
-            shift 2
-            ;;
-        -m)
-            MARKERS="$2"
-            PYTEST_ARGS="$PYTEST_ARGS -m '$2'"
-            shift 2
-            ;;
-        # Pytest failure rerun options
-        --lf|--last-failed)
-            PYTEST_ARGS="$PYTEST_ARGS --lf"
-            shift
-            ;;
-        --ff|--failed-first)
-            PYTEST_ARGS="$PYTEST_ARGS --ff"
-            shift
-            ;;
-        # Pytest debugging options
-        --pdb)
-            PYTEST_ARGS="$PYTEST_ARGS --pdb"
-            shift
-            ;;
-        --pdbcls)
-            PYTEST_ARGS="$PYTEST_ARGS --pdbcls"
-            shift
-            ;;
         # Help
         -h|--help)
             show_usage
             ;;
-        # Separator for custom pytest args
+        # Separator for custom pytest args - everything after this goes to pytest
         --)
             shift
-            CUSTOM_PYTEST_ARGS="$@"
+            PYTEST_ARGS="$@"
             break
             ;;
         *)
@@ -255,23 +183,13 @@ while [[ $# -gt 0 ]]; do
                 fi
             else
                 echo -e "${RED}Unknown option: $1${NC}"
-                echo "Use -- to pass custom arguments to pytest"
+                echo "Use -- to pass arguments to pytest"
                 show_usage
             fi
             shift
             ;;
     esac
 done
-
-# Add verbose level to pytest args
-if [ -n "$VERBOSE_LEVEL" ]; then
-    PYTEST_ARGS="$VERBOSE_LEVEL $PYTEST_ARGS"
-fi
-
-# Append any custom pytest args
-if [ -n "$CUSTOM_PYTEST_ARGS" ]; then
-    PYTEST_ARGS="$PYTEST_ARGS $CUSTOM_PYTEST_ARGS"
-fi
 
 # Validate test type
 if [[ "$TEST_TYPE" != "unit" && "$TEST_TYPE" != "integration" && "$TEST_TYPE" != "both" ]]; then
@@ -636,8 +554,8 @@ else
     USE_PATH_MODE=false
 fi
 
-if [ -n "$PYTEST_ARGS" ] || [ -n "$CUSTOM_PYTEST_ARGS" ]; then
-    echo -e "Pytest args: ${CYAN}$PYTEST_ARGS $CUSTOM_PYTEST_ARGS${NC}"
+if [ -n "$PYTEST_ARGS" ]; then
+    echo -e "Pytest args: ${CYAN}$PYTEST_ARGS${NC}"
 fi
 echo ""
 

@@ -156,6 +156,24 @@ class AsyncDatabase(ABC):
             results.append(result)
         return results
 
+    async def update_batch(self, updates: List[tuple[str, Record]]) -> List[bool]:
+        """Update multiple records.
+
+        Default implementation calls update() for each ID/record pair.
+        Override for better performance.
+
+        Args:
+            updates: List of (id, record) tuples to update
+
+        Returns:
+            List of success flags for each update
+        """
+        results = []
+        for id, record in updates:
+            result = await self.update(id, record)
+            results.append(result)
+        return results
+
     async def count(self, query: Query | None = None) -> int:
         """Count records matching a query.
 
@@ -364,6 +382,24 @@ class SyncDatabase(ABC):
         results = []
         for id in ids:
             result = self.delete(id)
+            results.append(result)
+        return results
+
+    def update_batch(self, updates: List[tuple[str, Record]]) -> List[bool]:
+        """Update multiple records.
+
+        Default implementation calls update() for each ID/record pair.
+        Override for better performance.
+
+        Args:
+            updates: List of (id, record) tuples to update
+
+        Returns:
+            List of success flags for each update
+        """
+        results = []
+        for id, record in updates:
+            result = self.update(id, record)
             results.append(result)
         return results
 

@@ -24,6 +24,14 @@ class BatchConfig:
     progress_callback: Optional[Callable[[int, int], None]] = None
     error_handling: str = "raise"  # "raise", "skip", "log"
     memory_efficient: bool = True
+    
+    def __post_init__(self):
+        """Validate configuration parameters."""
+        if self.chunk_size <= 0:
+            raise ValueError("chunk_size must be greater than 0")
+        
+        if self.error_handling not in ("raise", "skip", "log"):
+            raise ValueError("error_handling must be one of: 'raise', 'skip', 'log'")
 
 
 class ChunkedProcessor:
@@ -225,37 +233,63 @@ class BatchOperations:
         if id_column not in df.columns:
             raise ValueError(f"ID column '{id_column}' not found in DataFrame")
         
-        # Convert DataFrame to records
-        conversion_options.index_column = id_column
+        # Convert DataFrame to records  
         records = self.converter.dataframe_to_records(df, conversion_options)
         
-        # Update each record
-        for record in records:
+        # Prepare updates as (id, record) tuples
+        updates = []
+        for i, record in enumerate(records):
+            record_id = str(df.iloc[i][id_column])
+            updates.append((record_id, record))
+        
+        # Process updates in chunks
+        for i in range(0, len(updates), config.chunk_size):
+            chunk = updates[i:i + config.chunk_size]
+            
             try:
+                # Use batch update for better performance
                 if self.is_async:
                     import asyncio
-                    success = asyncio.run(self.database.update(record))
+                    results = asyncio.run(self.database.update_batch(chunk))
                 else:
-                    success = self.database.update(record)
+                    results = self.database.update_batch(chunk)
                 
-                if success:
-                    stats["updated"] += 1
-                else:
-                    stats["not_found"] += 1
-                    
+                # Count successes and failures
+                for success in results:
+                    if success:
+                        stats["updated"] += 1
+                    else:
+                        stats["not_found"] += 1
+                        
             except Exception as e:
-                stats["failed"] += 1
+                # If batch fails, try individual updates
                 if config.error_handling == "raise":
                     raise
-                elif config.error_handling == "log":
-                    logger.error(f"Failed to update record {record.id}: {e}")
-                    stats["errors"].append(str(e))
-                # else "skip"
-                
+                    
+                for record_id, record in chunk:
+                    try:
+                        if self.is_async:
+                            import asyncio
+                            success = asyncio.run(self.database.update(record_id, record))
+                        else:
+                            success = self.database.update(record_id, record)
+                        
+                        if success:
+                            stats["updated"] += 1
+                        else:
+                            stats["not_found"] += 1
+                            
+                    except Exception as e:
+                        stats["failed"] += 1
+                        if config.error_handling == "log":
+                            logger.error(f"Failed to update record {record_id}: {e}")
+                            stats["errors"].append(str(e))
+                        # else "skip"
+            
             # Progress callback
             if config.progress_callback:
                 processed = stats["updated"] + stats["failed"] + stats["not_found"]
-                config.progress_callback(processed, len(records))
+                config.progress_callback(processed, len(updates))
         
         return stats
     
@@ -360,28 +394,68 @@ class BatchOperations:
         # Convert to records
         records = self.converter.dataframe_to_records(df, conversion_options)
         
-        # Insert records
-        for i, record in enumerate(records):
+        # Use batch creation for better performance with graceful fallback
+        if hasattr(self.database, 'create_batch'):
             try:
                 if self.is_async:
                     import asyncio
-                    asyncio.run(self.database.create(record))
+                    ids = asyncio.run(self.database.create_batch(records))
                 else:
-                    self.database.create(record)
-                stats["inserted"] += 1
+                    ids = self.database.create_batch(records)
+                stats["inserted"] = len(ids)
                 
-            except Exception as e:
-                stats["failed"] += 1
-                if config.error_handling == "raise":
-                    raise
-                elif config.error_handling == "log":
-                    logger.error(f"Failed to insert row {i}: {e}")
-                    stats["errors"].append(str(e))
-                # else "skip"
-            
-            # Progress callback
-            if config.progress_callback:
-                config.progress_callback(i + 1, len(records))
+                # Progress callback for successful batch
+                if config.progress_callback:
+                    config.progress_callback(len(records), len(records))
+                    
+            except Exception as batch_error:
+                # Batch failed, try individual records to identify failures
+                for i, record in enumerate(records):
+                    try:
+                        if self.is_async:
+                            import asyncio
+                            asyncio.run(self.database.create(record))
+                        else:
+                            self.database.create(record)
+                        stats["inserted"] += 1
+                        
+                    except Exception as record_error:
+                        stats["failed"] += 1
+                        
+                        # Handle error based on config
+                        if config.error_handling == "raise":
+                            raise
+                        elif config.error_handling == "log":
+                            logger.error(f"Failed to insert row {i}: {record_error}")
+                            stats["errors"].append(str(record_error))
+                        # else "skip" - just continue
+                    
+                    # Progress callback for each record
+                    if config.progress_callback:
+                        config.progress_callback(i + 1, len(records))
+        else:
+            # Fallback to individual inserts if create_batch not available
+            for i, record in enumerate(records):
+                try:
+                    if self.is_async:
+                        import asyncio
+                        asyncio.run(self.database.create(record))
+                    else:
+                        self.database.create(record)
+                    stats["inserted"] += 1
+                    
+                except Exception as e:
+                    stats["failed"] += 1
+                    if config.error_handling == "raise":
+                        raise
+                    elif config.error_handling == "log":
+                        logger.error(f"Failed to insert row {i}: {e}")
+                        stats["errors"].append(str(e))
+                    # else "skip"
+                
+                # Progress callback
+                if config.progress_callback:
+                    config.progress_callback(i + 1, len(records))
         
         return stats
     

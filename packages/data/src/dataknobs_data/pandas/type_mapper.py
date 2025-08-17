@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, date, time
 from typing import Any, Dict, Optional, Type, Union
 
 import numpy as np
@@ -307,6 +307,168 @@ class TypeMapper:
         # Convert other types to string representation
         return str(value)
     
+    def infer_field_type(self, series: pd.Series) -> str:
+        """Infer field type from a pandas Series.
+        
+        Args:
+            series: Series to analyze
+            
+        Returns:
+            Field type string
+        """
+        # Remove nulls for analysis
+        non_null = series.dropna()
+        
+        if len(non_null) == 0:
+            return "string"  # Default for empty
+        
+        # Check dtypes
+        if is_bool_dtype(non_null):
+            return "boolean"
+        elif is_datetime64_any_dtype(non_null):
+            return "datetime"
+        elif is_numeric_dtype(non_null):
+            # Check if all values are integers
+            if non_null.apply(lambda x: isinstance(x, (int, np.integer)) or (isinstance(x, float) and x.is_integer())).all():
+                return "integer"
+            else:
+                return "number"
+        else:
+            # Check values for special types
+            sample = non_null.iloc[0] if len(non_null) > 0 else None
+            if sample is not None:
+                if isinstance(sample, (datetime, pd.Timestamp)):
+                    return "datetime"
+                elif isinstance(sample, (pd.Timestamp, datetime)):
+                    return "datetime"
+                elif isinstance(sample, pd._libs.tslibs.timestamps.Timestamp):
+                    return "datetime"
+                elif isinstance(sample, (pd._libs.tslibs.nattype.NaTType)):
+                    return "datetime"
+                elif hasattr(sample, '__class__') and 'date' in sample.__class__.__name__.lower():
+                    return "date"
+                elif hasattr(sample, '__class__') and 'time' in sample.__class__.__name__.lower():
+                    return "time"
+        
+        return "string"  # Default
+    
+    def get_pandas_dtype(self, field_type: str) -> str:
+        """Get pandas dtype for a field type string.
+        
+        Args:
+            field_type: Field type string
+            
+        Returns:
+            Pandas dtype string
+        """
+        dtype_map = {
+            "string": "object",
+            "integer": "int64",
+            "number": "float64",
+            "float": "float64",
+            "boolean": "bool",
+            "datetime": "datetime64[ns]",
+            "date": "object",
+            "time": "object",
+            "json": "object",
+            "binary": "object",
+            "text": "object",
+        }
+        return dtype_map.get(field_type.lower(), "object")
+    
+    def convert_value(self, value: Any, target_type: str) -> Any:
+        """Convert a value to target type.
+        
+        Args:
+            value: Value to convert
+            target_type: Target type string
+            
+        Returns:
+            Converted value
+        """
+        if value is None or pd.isna(value):
+            return None
+        
+        target_type = target_type.lower()
+        
+        if target_type == "integer":
+            if isinstance(value, str):
+                return int(float(value))
+            return int(value)
+        elif target_type == "number" or target_type == "float":
+            return float(value)
+        elif target_type == "string":
+            return str(value)
+        elif target_type == "boolean":
+            if isinstance(value, str):
+                return value.lower() in ('true', '1', 'yes')
+            return bool(value)
+        elif target_type == "datetime":
+            if isinstance(value, str):
+                return pd.Timestamp(value)
+            return value
+        elif target_type == "date":
+            if isinstance(value, str):
+                return pd.Timestamp(value).date()
+            elif hasattr(value, 'date'):
+                return value.date()
+            return value
+        elif target_type == "time":
+            if isinstance(value, str):
+                return pd.Timestamp(value).time()
+            elif hasattr(value, 'time'):
+                return value.time()
+            return value
+        
+        return value
+    
+    def cast_dataframe_dtypes(self, df: pd.DataFrame, dtype_map: Dict[str, str]) -> pd.DataFrame:
+        """Cast DataFrame columns to specified dtypes.
+        
+        Args:
+            df: DataFrame to cast
+            dtype_map: Dictionary of column: dtype
+            
+        Returns:
+            DataFrame with casted dtypes
+        """
+        result_df = df.copy()
+        
+        for col, dtype in dtype_map.items():
+            if col in result_df.columns:
+                try:
+                    if dtype == "string":
+                        # Use string dtype for nullable strings
+                        result_df[col] = result_df[col].astype("string")
+                    else:
+                        result_df[col] = result_df[col].astype(dtype)
+                except (TypeError, ValueError):
+                    # If casting fails, leave as is
+                    pass
+        
+        return result_df
+    
+    def normalize_timezone(self, series: pd.Series, target_tz: str) -> pd.Series:
+        """Normalize timezone for datetime series.
+        
+        Args:
+            series: Datetime series
+            target_tz: Target timezone
+            
+        Returns:
+            Series with normalized timezone
+        """
+        if not is_datetime64_any_dtype(series):
+            # Try to convert to datetime first
+            series = pd.to_datetime(series, errors='coerce')
+        
+        # If series is timezone-naive, localize it
+        if series.dt.tz is None:
+            return series.dt.tz_localize(target_tz)
+        else:
+            # If timezone-aware, convert to target timezone
+            return series.dt.tz_convert(target_tz)
+    
     def get_optimal_dtype(self, series: pd.Series) -> str:
         """Determine optimal dtype for a Series based on its values.
         
@@ -326,15 +488,31 @@ class TypeMapper:
         try:
             # Check for boolean
             if non_null.apply(lambda x: isinstance(x, bool)).all():
-                return "boolean"
+                return "bool"
             
             # Check for integer
-            if non_null.apply(lambda x: isinstance(x, (int, np.integer))).all():
-                return "Int64"
+            if non_null.apply(lambda x: isinstance(x, (int, np.integer)) or (isinstance(x, float) and x.is_integer())).all():
+                # Determine the smallest int type that can hold the values
+                min_val = non_null.min()
+                max_val = non_null.max()
+                
+                if min_val >= -128 and max_val <= 127:
+                    return "int8"
+                elif min_val >= -32768 and max_val <= 32767:
+                    return "int16"
+                elif min_val >= -2147483648 and max_val <= 2147483647:
+                    return "int32"
+                else:
+                    return "int64"
             
             # Check for float
             if non_null.apply(lambda x: isinstance(x, (int, float, np.number))).all():
-                return "Float64"
+                # For floats, prefer float32 for small ranges
+                max_val = non_null.abs().max()
+                if max_val <= 3.4e38:
+                    return "float32"
+                else:
+                    return "float64"
             
             # Check for datetime
             try:
@@ -343,7 +521,7 @@ class TypeMapper:
             except (ValueError, TypeError):
                 pass
             
-            # Default to string
-            return "string"
+            # Default to object for strings and mixed types
+            return "object"
         except Exception:
             return "object"

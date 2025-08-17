@@ -15,6 +15,7 @@ from dataknobs_data.records import Record
 from dataknobs_data.query import Query
 from dataknobs_data.database import AsyncDatabase, SyncDatabase
 from dataknobs_data.streaming import StreamConfig, StreamResult
+from dataknobs_data.streaming import process_batch_with_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -474,40 +475,38 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
         config = config or StreamConfig()
         result = StreamResult()
         start_time = time.time()
+        quitting = False
         
         batch = []
         for record in records:
             batch.append(record)
             
             if len(batch) >= config.batch_size:
-                # Write batch
-                try:
-                    self._write_batch(batch)
-                    result.successful += len(batch)
-                    result.total_processed += len(batch)
-                except Exception as e:
-                    result.failed += len(batch)
-                    result.total_processed += len(batch)
-                    if config.on_error:
-                        for rec in batch:
-                            if not config.on_error(e, rec):
-                                result.add_error(None, e)
-                                break
-                    else:
-                        result.add_error(None, e)
+                # Write batch with graceful fallback
+                # Use lambda wrapper for _write_batch
+                continue_processing = process_batch_with_fallback(
+                    batch,
+                    lambda b: self._write_batch(b) or [r.id for r in b],  # _write_batch returns None, we need IDs
+                    self.create,
+                    result,
+                    config
+                )
                 
+                if not continue_processing:
+                    quitting = True
+                    break
+                    
                 batch = []
         
         # Write remaining batch
-        if batch:
-            try:
-                self._write_batch(batch)
-                result.successful += len(batch)
-                result.total_processed += len(batch)
-            except Exception as e:
-                result.failed += len(batch)
-                result.total_processed += len(batch)
-                result.add_error(None, e)
+        if batch and not quitting:
+            process_batch_with_fallback(
+                batch,
+                lambda b: self._write_batch(b) or [r.id for r in b],
+                self.create,
+                result,
+                config
+            )
         
         result.duration = time.time() - start_time
         return result

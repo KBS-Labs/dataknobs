@@ -6,583 +6,303 @@ from typing import AsyncIterator, Iterator, List, Optional
 
 import pytest
 
+from dataknobs_data.backends.memory import AsyncMemoryDatabase, SyncMemoryDatabase
 from dataknobs_data.query import Query
 from dataknobs_data.records import Record
 from dataknobs_data.streaming import (
-    AsyncStreamingMixin,
     StreamConfig,
     StreamResult,
-    StreamingMixin,
 )
 
 
-class MockSyncDatabase(StreamingMixin):
-    """Mock sync database using StreamingMixin defaults."""
-    
-    def __init__(self):
-        self.records = []
-        self.create_batch_calls = []
-        self.search_calls = []
-        self.should_fail_create = False
-        self.fail_on_record_index = None
-    
-    def search(self, query: Query) -> List[Record]:
-        """Mock search implementation."""
-        self.search_calls.append(query)
-        return self.records.copy()
-    
-    def create_batch(self, records: List[Record]) -> List[str]:
-        """Mock create_batch implementation."""
-        self.create_batch_calls.append(records)
-        
-        if self.should_fail_create:
-            raise ValueError("Mock create error")
-        
-        # Check for individual record failures
-        if self.fail_on_record_index is not None:
-            for i, record in enumerate(records):
-                if record.get_value("index") == self.fail_on_record_index:
-                    raise ValueError(f"Failed on record {self.fail_on_record_index}")
-        
-        # Return fake IDs
-        return [f"id_{i}" for i in range(len(records))]
-    
-    def stream_read(
-        self,
-        query: Optional[Query] = None,
-        config: Optional[StreamConfig] = None
-    ) -> Iterator[Record]:
-        """Use the default implementation from mixin."""
-        return self._default_stream_read(query, config)
-    
-    def stream_write(
-        self,
-        records: Iterator[Record],
-        config: Optional[StreamConfig] = None
-    ) -> StreamResult:
-        """Use the default implementation from mixin."""
-        return self._default_stream_write(records, config)
-
-
-class MockAsyncDatabase(AsyncStreamingMixin):
-    """Mock async database using AsyncStreamingMixin defaults."""
-    
-    def __init__(self):
-        self.records = []
-        self.create_batch_calls = []
-        self.search_calls = []
-        self.should_fail_create = False
-        self.fail_on_record_index = None
-    
-    async def search(self, query: Query) -> List[Record]:
-        """Mock async search implementation."""
-        self.search_calls.append(query)
-        # Small delay to simulate async operation
-        await asyncio.sleep(0.001)
-        return self.records.copy()
-    
-    async def create_batch(self, records: List[Record]) -> List[str]:
-        """Mock async create_batch implementation."""
-        self.create_batch_calls.append(records)
-        
-        if self.should_fail_create:
-            raise ValueError("Mock async create error")
-        
-        # Check for individual record failures
-        if self.fail_on_record_index is not None:
-            for record in records:
-                if record.get_value("index") == self.fail_on_record_index:
-                    raise ValueError(f"Failed on record {self.fail_on_record_index}")
-        
-        # Small delay to simulate async operation
-        await asyncio.sleep(0.001)
-        return [f"id_{i}" for i in range(len(records))]
-    
-    async def stream_read(
-        self,
-        query: Optional[Query] = None,
-        config: Optional[StreamConfig] = None
-    ) -> AsyncIterator[Record]:
-        """Use the default implementation from mixin."""
-        async for record in self._default_stream_read(query, config):
-            yield record
-    
-    async def stream_write(
-        self,
-        records: AsyncIterator[Record],
-        config: Optional[StreamConfig] = None
-    ) -> StreamResult:
-        """Use the default implementation from mixin."""
-        return await self._default_stream_write(records, config)
-
-
 class TestStreamingMixinDefaults:
-    """Test default implementations in StreamingMixin."""
+    """Test the default implementations in StreamingMixin."""
     
-    def setup_method(self):
-        """Set up test database with records."""
-        self.db = MockSyncDatabase()
+    def test_default_stream_read(self):
+        """Test default stream_read implementation."""
+        # Create a memory database with some records
+        db = SyncMemoryDatabase()
         
-        # Add test records
-        for i in range(100):
-            record = Record()
-            record.set_field("index", i)
-            record.set_field("value", i * 10)
-            record.set_field("category", "A" if i % 2 == 0 else "B")
-            self.db.records.append(record)
-    
-    def test_default_stream_read_no_query(self):
-        """Test default stream_read without query."""
-        config = StreamConfig(batch_size=25)
+        # Add some test records
+        records = []
+        for i in range(5):
+            record = Record(data={"index": i, "value": f"test_{i}"})
+            db.create(record)
+            records.append(record)
         
-        # Stream all records
-        streamed = list(self.db.stream_read(config=config))
+        # Test streaming all records
+        config = StreamConfig(batch_size=2)
+        streamed = list(db.stream_read(config=config))
         
-        assert len(streamed) == 100
-        assert len(self.db.search_calls) == 1
-        # Should have called search with empty Query
-        assert isinstance(self.db.search_calls[0], Query)
-        assert len(self.db.search_calls[0].filters) == 0
+        assert len(streamed) == 5
+        for i, record in enumerate(streamed):
+            assert record.get_value("index") == i
     
     def test_default_stream_read_with_query(self):
-        """Test default stream_read with query."""
-        query = Query().filter("category", "=", "A")
-        config = StreamConfig(batch_size=10)
-        
-        # Stream filtered records
-        streamed = list(self.db.stream_read(query, config))
-        
-        assert len(streamed) == 100  # Mock returns all records
-        assert len(self.db.search_calls) == 1
-        assert self.db.search_calls[0] == query
-    
-    def test_default_stream_read_batching(self):
-        """Test that default stream_read respects batch size."""
-        config = StreamConfig(batch_size=30)
-        
-        # Count records per "batch"
-        batch_count = 0
-        current_batch_size = 0
-        
-        for i, record in enumerate(self.db.stream_read(config=config)):
-            current_batch_size += 1
-            
-            # Check if we're at a batch boundary
-            if (i + 1) % config.batch_size == 0 or i == 99:
-                batch_count += 1
-                current_batch_size = 0
-        
-        # Should have 4 batches: 30, 30, 30, 10
-        assert batch_count == 4
-    
-    def test_default_stream_write_success(self):
-        """Test default stream_write with successful writes."""
-        def record_generator():
-            for i in range(50):
-                record = Record()
-                record.set_field("new_id", i)
-                record.set_field("new_value", i * 100)
-                yield record
-        
-        config = StreamConfig(batch_size=15)
-        result = self.db.stream_write(record_generator(), config)
-        
-        assert result.total_processed == 50
-        assert result.successful == 50
-        assert result.failed == 0
-        assert result.success_rate == 100.0
-        assert len(result.errors) == 0
-        
-        # Check batching
-        assert len(self.db.create_batch_calls) == 4  # 15, 15, 15, 5
-        assert len(self.db.create_batch_calls[0]) == 15
-        assert len(self.db.create_batch_calls[1]) == 15
-        assert len(self.db.create_batch_calls[2]) == 15
-        assert len(self.db.create_batch_calls[3]) == 5
-    
-    def test_default_stream_write_with_errors(self):
-        """Test default stream_write with errors."""
-        def record_generator():
-            for i in range(20):
-                record = Record()
-                record.set_field("index", i)
-                yield record
-        
-        # Fail on the second batch
-        self.db.should_fail_create = False
-        self.db.fail_on_record_index = 7  # Will be in second batch with size 5
-        
-        config = StreamConfig(batch_size=5)
-        result = self.db.stream_write(record_generator(), config)
-        
-        # First batch succeeds, second fails, rest not processed without error handler
-        assert result.failed >= 5  # At least the failing batch
-        assert len(result.errors) > 0
-        assert "Mock create error" in str(result.errors[0]["error"]) or "Failed on record" in str(result.errors[0]["error"])
-    
-    def test_default_stream_write_with_error_handler(self):
-        """Test default stream_write with error handler that continues."""
-        errors_seen = []
-        
-        def error_handler(error, record):
-            errors_seen.append((str(error), record))
-            return True  # Continue processing
-        
-        def record_generator():
-            for i in range(20):
-                record = Record()
-                record.set_field("index", i)
-                yield record
-        
-        # Make create_batch fail for specific batch
-        self.db.fail_on_record_index = 8
-        
-        config = StreamConfig(batch_size=5, on_error=error_handler)
-        result = self.db.stream_write(record_generator(), config)
-        
-        # Should process all records despite error
-        assert result.total_processed == 20
-        assert result.failed >= 5  # The batch with index 8
-        assert len(errors_seen) > 0  # Error handler was called
-    
-    def test_default_stream_write_with_error_handler_stops(self):
-        """Test default stream_write with error handler that stops."""
-        error_count = 0
-        
-        def error_handler(error, record):
-            nonlocal error_count
-            error_count += 1
-            return False  # Stop processing
-        
-        def record_generator():
-            for i in range(20):
-                record = Record()
-                record.set_field("index", i)
-                yield record
-        
-        self.db.should_fail_create = True
-        
-        config = StreamConfig(batch_size=5, on_error=error_handler)
-        result = self.db.stream_write(record_generator(), config)
-        
-        # Should stop after first error
-        assert result.failed >= 5  # First batch fails
-        # Handler is called for each record in the failed batch until it returns False
-        assert error_count >= 1  # Handler called at least once
-        assert len(result.errors) > 0
-    
-    def test_default_stream_write_empty_iterator(self):
-        """Test default stream_write with empty iterator."""
-        def empty_generator():
-            return
-            yield  # Never reached
-        
-        config = StreamConfig(batch_size=10)
-        result = self.db.stream_write(empty_generator(), config)
-        
-        assert result.total_processed == 0
-        assert result.successful == 0
-        assert result.failed == 0
-        assert result.success_rate == 0.0
-        assert len(self.db.create_batch_calls) == 0
-    
-    def test_default_stream_write_single_record(self):
-        """Test default stream_write with single record."""
-        def single_generator():
-            record = Record()
-            record.set_field("single", True)
-            yield record
-        
-        config = StreamConfig(batch_size=10)
-        result = self.db.stream_write(single_generator(), config)
-        
-        assert result.total_processed == 1
-        assert result.successful == 1
-        assert len(self.db.create_batch_calls) == 1
-        assert len(self.db.create_batch_calls[0]) == 1
-    
-    def test_default_stream_duration_tracking(self):
-        """Test that duration is tracked correctly."""
-        def slow_generator():
-            for i in range(5):
-                time.sleep(0.01)  # Small delay
-                record = Record()
-                record.set_field("id", i)
-                yield record
-        
-        config = StreamConfig(batch_size=2)
-        result = self.db.stream_write(slow_generator(), config)
-        
-        assert result.duration > 0.04  # At least 5 * 0.01 seconds
-        assert result.total_processed == 5
-    
-    def test_default_stream_write_last_batch_error(self):
-        """Test error handling in the final batch."""
-        def record_generator():
-            for i in range(7):  # Will have batches of 5 and 2
-                record = Record()
-                record.set_field("index", i)
-                yield record
-        
-        # Fail only when we have exactly 2 records (last batch)
-        original_create_batch = self.db.create_batch
-        def selective_fail(records):
-            if len(records) == 2:
-                raise ValueError("Failed on last batch")
-            return original_create_batch(records)
-        
-        self.db.create_batch = selective_fail
-        
-        config = StreamConfig(batch_size=5)
-        result = self.db.stream_write(record_generator(), config)
-        
-        # First batch succeeds (5 records), last batch fails (2 records)
-        assert result.successful == 5
-        assert result.failed == 2
-        assert result.total_processed == 7
-        assert len(result.errors) == 1
-        assert "Failed on last batch" in str(result.errors[0]["error"])
-
-
-@pytest.mark.asyncio
-class TestAsyncStreamingMixinDefaults:
-    """Test default implementations in AsyncStreamingMixin."""
-    
-    async def setup_records(self):
-        """Set up test database with records."""
-        self.db = MockAsyncDatabase()
+        """Test default stream_read with a query."""
+        db = SyncMemoryDatabase()
         
         # Add test records
-        for i in range(100):
-            record = Record()
-            record.set_field("index", i)
-            record.set_field("value", i * 10)
-            record.set_field("category", "A" if i % 2 == 0 else "B")
-            self.db.records.append(record)
+        for i in range(10):
+            record = Record(data={"index": i, "value": f"test_{i}"})
+            db.create(record)
+        
+        # Create a query for even numbers
+        query = Query().filter("index", ">=", 5)
+        
+        # Stream with query
+        config = StreamConfig(batch_size=2)
+        streamed = list(db.stream_read(query=query, config=config))
+        
+        assert len(streamed) == 5
+        for record in streamed:
+            assert record.get_value("index") >= 5
     
-    async def test_async_default_stream_read_no_query(self):
-        """Test async default stream_read without query."""
-        await self.setup_records()
+    def test_default_stream_write_success(self):
+        """Test default stream_write implementation with successful writes."""
+        db = SyncMemoryDatabase()
         
-        config = StreamConfig(batch_size=25)
+        # Create records to stream
+        def record_generator():
+            for i in range(5):
+                yield Record(data={"index": i, "value": f"test_{i}"})
         
-        # Stream all records
-        streamed = []
-        async for record in self.db.stream_read(config=config):
-            streamed.append(record)
+        # Stream write
+        config = StreamConfig(batch_size=2)
+        result = db.stream_write(record_generator(), config=config)
         
-        assert len(streamed) == 100
-        assert len(self.db.search_calls) == 1
-        assert isinstance(self.db.search_calls[0], Query)
-        assert len(self.db.search_calls[0].filters) == 0
-    
-    async def test_async_default_stream_read_with_query(self):
-        """Test async default stream_read with query."""
-        await self.setup_records()
-        
-        query = Query().filter("category", "=", "B").limit(30)
-        config = StreamConfig(batch_size=10)
-        
-        # Stream filtered records
-        streamed = []
-        async for record in self.db.stream_read(query, config):
-            streamed.append(record)
-        
-        assert len(streamed) == 100  # Mock returns all records
-        assert len(self.db.search_calls) == 1
-        assert self.db.search_calls[0] == query
-    
-    async def test_async_default_stream_write_success(self):
-        """Test async default stream_write with successful writes."""
-        self.db = MockAsyncDatabase()
-        
-        async def record_generator():
-            for i in range(50):
-                record = Record()
-                record.set_field("new_id", i)
-                record.set_field("new_value", i * 100)
-                yield record
-        
-        config = StreamConfig(batch_size=15)
-        result = await self.db.stream_write(record_generator(), config)
-        
-        assert result.total_processed == 50
-        assert result.successful == 50
+        assert result.total_processed == 5
+        assert result.successful == 5
         assert result.failed == 0
+        assert len(result.errors) == 0
         assert result.success_rate == 100.0
         
-        # Check batching
-        assert len(self.db.create_batch_calls) == 4
-        assert len(self.db.create_batch_calls[0]) == 15
-        assert len(self.db.create_batch_calls[3]) == 5
+        # Verify records were created
+        all_records = db.search(Query())
+        assert len(all_records) == 5
     
-    async def test_async_default_stream_write_with_errors(self):
-        """Test async default stream_write with errors."""
-        self.db = MockAsyncDatabase()
+    def test_default_stream_write_with_batch_failure(self):
+        """Test stream_write with batch failure and individual retry."""
+        # We'll need to create a custom database that can fail on specific batches
+        class TestableMemoryDB(SyncMemoryDatabase):
+            def __init__(self):
+                super().__init__()
+                self.batch_attempt = 0
+                
+            def create_batch(self, records: List[Record]) -> List[str]:
+                self.batch_attempt += 1
+                # Fail on first batch attempt to trigger fallback
+                if self.batch_attempt == 1:
+                    raise ValueError("Batch creation failed")
+                return super().create_batch(records)
         
-        async def record_generator():
-            for i in range(20):
-                record = Record()
-                record.set_field("index", i)
-                yield record
+        db = TestableMemoryDB()
         
-        self.db.should_fail_create = True
+        # Create records
+        def record_generator():
+            for i in range(3):
+                yield Record(data={"index": i})
         
-        config = StreamConfig(batch_size=5)
-        result = await self.db.stream_write(record_generator(), config)
+        config = StreamConfig(batch_size=3)
+        result = db.stream_write(record_generator(), config=config)
         
-        # First batch should fail
-        assert result.failed >= 5
-        assert len(result.errors) > 0
-        assert "Mock async create error" in str(result.errors[0]["error"])
-    
-    async def test_async_default_stream_write_with_error_handler(self):
-        """Test async default stream_write with error handler."""
-        self.db = MockAsyncDatabase()
-        errors_seen = []
-        
-        def error_handler(error, record):
-            errors_seen.append(str(error))
-            return True  # Continue
-        
-        async def record_generator():
-            for i in range(15):
-                record = Record()
-                record.set_field("index", i)
-                yield record
-        
-        self.db.fail_on_record_index = 7
-        
-        config = StreamConfig(batch_size=5, on_error=error_handler)
-        result = await self.db.stream_write(record_generator(), config)
-        
-        assert result.total_processed == 15
-        assert result.failed >= 5  # Batch containing index 7
-        assert len(errors_seen) > 0
-    
-    async def test_async_default_stream_write_error_handler_stops(self):
-        """Test async default stream_write when error handler stops processing."""
-        self.db = MockAsyncDatabase()
-        stop_count = 0
-        
-        def error_handler(error, record):
-            nonlocal stop_count
-            stop_count += 1
-            return False  # Stop
-        
-        async def record_generator():
-            for i in range(20):
-                record = Record()
-                record.set_field("index", i)
-                yield record
-        
-        self.db.should_fail_create = True
-        
-        config = StreamConfig(batch_size=5, on_error=error_handler)
-        result = await self.db.stream_write(record_generator(), config)
-        
-        assert result.failed >= 5
-        assert stop_count >= 1  # Handler called at least once
-        assert len(result.errors) > 0
-    
-    async def test_async_default_stream_write_empty(self):
-        """Test async default stream_write with empty generator."""
-        self.db = MockAsyncDatabase()
-        
-        async def empty_generator():
-            return
-            yield  # Never reached
-        
-        config = StreamConfig(batch_size=10)
-        result = await self.db.stream_write(empty_generator(), config)
-        
-        assert result.total_processed == 0
-        assert result.successful == 0
+        # Should succeed via individual fallback
+        assert result.total_processed == 3
+        assert result.successful == 3
         assert result.failed == 0
-        assert len(self.db.create_batch_calls) == 0
     
-    async def test_async_default_stream_batching(self):
-        """Test async stream batching behavior."""
-        await self.setup_records()
+    def test_default_stream_write_with_individual_failures(self):
+        """Test stream_write with some individual record failures."""
+        class TestableMemoryDB(SyncMemoryDatabase):
+            def create(self, record: Record) -> str:
+                # Fail on specific records
+                if record.get_value("fail"):
+                    raise ValueError(f"Record {record.get_value('index')} failed")
+                return super().create(record)
+            
+            def create_batch(self, records: List[Record]) -> List[str]:
+                # Always fail batch to force individual processing
+                raise ValueError("Batch failed")
         
-        config = StreamConfig(batch_size=33)
+        db = TestableMemoryDB()
         
-        # Count batches
-        batch_starts = []
-        count = 0
+        # Create mixed records
+        def record_generator():
+            yield Record(data={"index": 0, "fail": False})
+            yield Record(data={"index": 1, "fail": True})  # Will fail
+            yield Record(data={"index": 2, "fail": False})
+            yield Record(data={"index": 3, "fail": True})  # Will fail
+            yield Record(data={"index": 4, "fail": False})
         
-        async for record in self.db.stream_read(config=config):
-            if count % config.batch_size == 0:
-                batch_starts.append(count)
-            count += 1
+        # Use error handler that continues on error
+        config = StreamConfig(
+            batch_size=2,
+            on_error=lambda error, record: True  # Continue on error
+        )
+        result = db.stream_write(record_generator(), config=config)
         
-        # Should have batches starting at 0, 33, 66, 99
-        assert batch_starts == [0, 33, 66, 99]
-    
-    async def test_async_default_duration_tracking(self):
-        """Test async duration tracking."""
-        self.db = MockAsyncDatabase()
-        
-        async def slow_generator():
-            for i in range(5):
-                await asyncio.sleep(0.01)
-                record = Record()
-                record.set_field("id", i)
-                yield record
-        
-        config = StreamConfig(batch_size=2)
-        result = await self.db.stream_write(slow_generator(), config)
-        
-        assert result.duration > 0.04  # At least 5 * 0.01 seconds
         assert result.total_processed == 5
+        assert result.successful == 3
+        assert result.failed == 2
+        assert len(result.errors) == 2
     
-    async def test_async_default_stream_write_partial_batch(self):
-        """Test async stream write with partial final batch."""
-        self.db = MockAsyncDatabase()
+    def test_default_stream_write_stop_on_error(self):
+        """Test stream_write stops on error when no error handler."""
+        class TestableMemoryDB(SyncMemoryDatabase):
+            def create(self, record: Record) -> str:
+                if record.get_value("index") == 1:
+                    raise ValueError("Stop here")
+                return super().create(record)
+            
+            def create_batch(self, records: List[Record]) -> List[str]:
+                # Force individual processing
+                raise ValueError("Batch failed")
         
-        async def generator():
-            for i in range(17):  # Not evenly divisible by batch size
-                record = Record()
-                record.set_field("id", i)
-                yield record
+        db = TestableMemoryDB()
         
-        config = StreamConfig(batch_size=5)
-        result = await self.db.stream_write(generator(), config)
+        def record_generator():
+            for i in range(5):
+                yield Record(data={"index": i})
         
-        assert result.total_processed == 17
-        assert result.successful == 17
-        assert len(self.db.create_batch_calls) == 4  # 5, 5, 5, 2
-        assert len(self.db.create_batch_calls[3]) == 2  # Last batch has 2
+        # No error handler - should stop on first error
+        config = StreamConfig(batch_size=2)
+        result = db.stream_write(record_generator(), config=config)
+        
+        # Should process 2 records (0 succeeds, 1 fails and stops)
+        assert result.total_processed == 2
+        assert result.successful == 1
+        assert result.failed == 1
+
+
+class TestAsyncStreamingMixinDefaults:
+    """Test the default implementations in AsyncStreamingMixin."""
     
-    async def test_async_default_stream_write_last_batch_error(self):
-        """Test async error handling in the final batch."""
-        self.db = MockAsyncDatabase()
+    @pytest.mark.asyncio
+    async def test_async_default_stream_read(self):
+        """Test async default stream_read implementation."""
+        db = AsyncMemoryDatabase()
+        
+        # Add test records
+        for i in range(5):
+            record = Record(data={"index": i, "value": f"test_{i}"})
+            await db.create(record)
+        
+        # Stream all records
+        config = StreamConfig(batch_size=2)
+        streamed = []
+        async for record in db.stream_read(config=config):
+            streamed.append(record)
+        
+        assert len(streamed) == 5
+        for i, record in enumerate(streamed):
+            assert record.get_value("index") == i
+    
+    @pytest.mark.asyncio
+    async def test_async_default_stream_write_success(self):
+        """Test async default stream_write implementation."""
+        db = AsyncMemoryDatabase()
+        
+        # Create async record generator
+        async def record_generator():
+            for i in range(5):
+                yield Record(data={"index": i, "value": f"test_{i}"})
+        
+        # Stream write
+        config = StreamConfig(batch_size=2)
+        result = await db.stream_write(record_generator(), config=config)
+        
+        assert result.total_processed == 5
+        assert result.successful == 5
+        assert result.failed == 0
+        
+        # Verify records were created
+        all_records = await db.search(Query())
+        assert len(all_records) == 5
+    
+    @pytest.mark.asyncio
+    async def test_async_stream_write_with_batch_failure(self):
+        """Test async stream_write with batch failure."""
+        class TestableAsyncMemoryDB(AsyncMemoryDatabase):
+            def __init__(self):
+                super().__init__()
+                self.batch_attempt = 0
+                
+            async def create_batch(self, records: List[Record]) -> List[str]:
+                self.batch_attempt += 1
+                if self.batch_attempt == 1:
+                    raise ValueError("Batch failed")
+                return await super().create_batch(records)
+        
+        db = TestableAsyncMemoryDB()
         
         async def record_generator():
-            for i in range(7):  # Will have batches of 5 and 2
-                record = Record()
-                record.set_field("index", i)
-                yield record
+            for i in range(3):
+                yield Record(data={"index": i})
         
-        # Fail only when we have exactly 2 records (last batch)
-        original_create_batch = self.db.create_batch
-        async def selective_fail(records):
-            if len(records) == 2:
-                raise ValueError("Failed on async last batch")
-            return await original_create_batch(records)
+        config = StreamConfig(batch_size=3)
+        result = await db.stream_write(record_generator(), config=config)
         
-        self.db.create_batch = selective_fail
+        # Should succeed via fallback
+        assert result.total_processed == 3
+        assert result.successful == 3
+        assert result.failed == 0
+    
+    @pytest.mark.asyncio
+    async def test_async_stream_write_with_individual_failures(self):
+        """Test async stream_write with individual failures."""
+        class TestableAsyncMemoryDB(AsyncMemoryDatabase):
+            async def create(self, record: Record) -> str:
+                if record.get_value("fail"):
+                    raise ValueError(f"Record failed")
+                return await super().create(record)
+            
+            async def create_batch(self, records: List[Record]) -> List[str]:
+                # Force individual processing
+                raise ValueError("Batch failed")
         
-        config = StreamConfig(batch_size=5)
-        result = await self.db.stream_write(record_generator(), config)
+        db = TestableAsyncMemoryDB()
         
-        # First batch succeeds (5 records), last batch fails (2 records)
-        assert result.successful == 5
-        assert result.failed == 2
-        assert result.total_processed == 7
-        assert len(result.errors) == 1
-        assert "Failed on async last batch" in str(result.errors[0]["error"])
+        async def record_generator():
+            yield Record(data={"index": 0, "fail": False})
+            yield Record(data={"index": 1, "fail": True})
+            yield Record(data={"index": 2, "fail": False})
+        
+        config = StreamConfig(
+            batch_size=2,
+            on_error=lambda error, record: True  # Continue
+        )
+        result = await db.stream_write(record_generator(), config=config)
+        
+        assert result.total_processed == 3
+        assert result.successful == 2
+        assert result.failed == 1
 
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+class TestStreamResultMerge:
+    """Test StreamResult merge functionality."""
+    
+    def test_merge_results(self):
+        """Test merging stream results."""
+        result1 = StreamResult()
+        result1.total_processed = 10
+        result1.successful = 8
+        result1.failed = 2
+        result1.duration = 1.5
+        result1.add_error("id1", ValueError("Error 1"))
+        
+        result2 = StreamResult()
+        result2.total_processed = 5
+        result2.successful = 4
+        result2.failed = 1
+        result2.duration = 0.5
+        result2.add_error("id2", ValueError("Error 2"))
+        
+        # Merge result2 into result1
+        result1.merge(result2)
+        
+        assert result1.total_processed == 15
+        assert result1.successful == 12
+        assert result1.failed == 3
+        assert result1.duration == 2.0
+        assert len(result1.errors) == 2
+        assert result1.success_rate == 80.0

@@ -1,6 +1,7 @@
 {
-  "timestamp": "2025-08-16T14:58:27Z",
+  "timestamp": "2025-08-17T15:42:29Z",
   "overall_status": "PASS",
+  "environment": "docker-internal",
   "checks": {
     "lint": {
       "status": "warning",

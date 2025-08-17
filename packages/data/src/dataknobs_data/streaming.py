@@ -72,6 +72,124 @@ class StreamResult:
         )
 
 
+def process_batch_with_fallback(
+    batch: List[Record],
+    batch_create_func: Callable[[List[Record]], List[str]],
+    single_create_func: Callable[[Record], str],
+    result: StreamResult,
+    config: StreamConfig,
+    on_quit_signal: Optional[Callable[[], None]] = None
+) -> bool:
+    """Process a batch with graceful fallback to individual record creation.
+    
+    When a batch operation fails, this function will retry each record individually
+    to identify which specific records are causing the failure, allowing successful
+    records to be processed while only failing the problematic ones.
+    
+    Args:
+        batch: List of records to process
+        batch_create_func: Function to create a batch of records
+        single_create_func: Function to create a single record
+        result: StreamResult to update with statistics
+        config: Stream configuration
+        on_quit_signal: Optional callback when quitting is signaled
+        
+    Returns:
+        True to continue processing, False to quit streaming
+    """
+    try:
+        # Try batch creation first
+        ids = batch_create_func(batch)
+        result.successful += len(ids)
+        result.total_processed += len(batch)
+        return True
+    except Exception as batch_error:
+        # Batch failed, try individual records to identify failures
+        for record in batch:
+            result.total_processed += 1
+            try:
+                single_create_func(record)
+                result.successful += 1
+            except Exception as record_error:
+                # This specific record failed
+                result.failed += 1
+                result.add_error(None, record_error)
+                
+                if config.on_error:
+                    # Call error handler
+                    if not config.on_error(record_error, record):
+                        # Handler returned False, quit streaming
+                        if on_quit_signal:
+                            on_quit_signal()
+                        return False
+                else:
+                    # No error handler, quit on first error
+                    if on_quit_signal:
+                        on_quit_signal()
+                    return False
+    
+    return True
+
+
+async def async_process_batch_with_fallback(
+    batch: List[Record],
+    batch_create_func: Callable,  # Async callable
+    single_create_func: Callable,  # Async callable
+    result: StreamResult,
+    config: StreamConfig,
+    on_quit_signal: Optional[Callable[[], None]] = None
+) -> bool:
+    """Async version of process_batch_with_fallback.
+    
+    When a batch operation fails, this function will retry each record individually
+    to identify which specific records are causing the failure, allowing successful
+    records to be processed while only failing the problematic ones.
+    
+    Args:
+        batch: List of records to process
+        batch_create_func: Async function to create a batch of records
+        single_create_func: Async function to create a single record
+        result: StreamResult to update with statistics
+        config: Stream configuration
+        on_quit_signal: Optional callback when quitting is signaled
+        
+    Returns:
+        True to continue processing, False to quit streaming
+    """
+    try:
+        # Try batch creation first
+        ids = await batch_create_func(batch)
+        result.successful += len(ids)
+        result.total_processed += len(batch)
+        return True
+    except Exception as batch_error:
+        # Batch failed, try individual records to identify failures
+        for record in batch:
+            result.total_processed += 1
+            try:
+                await single_create_func(record)
+                result.successful += 1
+            except Exception as record_error:
+                # This specific record failed
+                result.failed += 1
+                result.add_error(None, record_error)
+                
+                if config.on_error:
+                    # Call error handler
+                    if not config.on_error(record_error, record):
+                        # Handler returned False, quit streaming
+                        if on_quit_signal:
+                            on_quit_signal()
+                        return False
+                else:
+                    # No error handler, quit on first error
+                    if on_quit_signal:
+                        on_quit_signal()
+                    return False
+    
+    return True
+
+
 class StreamProcessor:
     """Base class for stream processing utilities."""
     
@@ -186,46 +304,43 @@ class StreamingMixin:
         """
         Default implementation of stream_write using create_batch method.
         
-        This provides batch writing functionality that most backends
-        can use without modification.
+        This provides batch writing functionality with graceful fallback
+        to individual record creation when batches fail.
         """
         config = config or StreamConfig()
         result = StreamResult()
         start_time = time.time()
+        quitting = False
         
         batch = []
         for record in records:
             batch.append(record)
             
             if len(batch) >= config.batch_size:
-                # Write batch
-                try:
-                    ids = self.create_batch(batch)
-                    result.successful += len(ids)
-                    result.total_processed += len(batch)
-                except Exception as e:
-                    result.failed += len(batch)
-                    result.total_processed += len(batch)
-                    if config.on_error:
-                        for rec in batch:
-                            if not config.on_error(e, rec):
-                                result.add_error(None, e)
-                                break
-                    else:
-                        result.add_error(None, e)
+                # Write batch with graceful fallback
+                continue_processing = process_batch_with_fallback(
+                    batch,
+                    self.create_batch,
+                    self.create,
+                    result,
+                    config
+                )
                 
+                if not continue_processing:
+                    quitting = True
+                    break
+                    
                 batch = []
         
         # Write remaining batch
-        if batch:
-            try:
-                ids = self.create_batch(batch)
-                result.successful += len(ids)
-                result.total_processed += len(batch)
-            except Exception as e:
-                result.failed += len(batch)
-                result.total_processed += len(batch)
-                result.add_error(None, e)
+        if batch and not quitting:
+            process_batch_with_fallback(
+                batch,
+                self.create_batch,
+                self.create,
+                result,
+                config
+            )
         
         result.duration = time.time() - start_time
         return result
@@ -269,46 +384,43 @@ class AsyncStreamingMixin:
         """
         Default implementation of async stream_write using create_batch method.
         
-        This provides batch writing functionality that most backends
-        can use without modification.
+        This provides batch writing functionality with graceful fallback
+        to individual record creation when batches fail.
         """
         config = config or StreamConfig()
         result = StreamResult()
         start_time = time.time()
+        quitting = False
         
         batch = []
         async for record in records:
             batch.append(record)
             
             if len(batch) >= config.batch_size:
-                # Write batch
-                try:
-                    ids = await self.create_batch(batch)
-                    result.successful += len(ids)
-                    result.total_processed += len(batch)
-                except Exception as e:
-                    result.failed += len(batch)
-                    result.total_processed += len(batch)
-                    if config.on_error:
-                        for rec in batch:
-                            if not config.on_error(e, rec):
-                                result.add_error(None, e)
-                                break
-                    else:
-                        result.add_error(None, e)
+                # Write batch with graceful fallback
+                continue_processing = await async_process_batch_with_fallback(
+                    batch,
+                    self.create_batch,
+                    self.create,
+                    result,
+                    config
+                )
                 
+                if not continue_processing:
+                    quitting = True
+                    break
+                    
                 batch = []
         
         # Write remaining batch
-        if batch:
-            try:
-                ids = await self.create_batch(batch)
-                result.successful += len(ids)
-                result.total_processed += len(batch)
-            except Exception as e:
-                result.failed += len(batch)
-                result.total_processed += len(batch)
-                result.add_error(None, e)
+        if batch and not quitting:
+            await async_process_batch_with_fallback(
+                batch,
+                self.create_batch,
+                self.create,
+                result,
+                config
+            )
         
         result.duration = time.time() - start_time
         return result

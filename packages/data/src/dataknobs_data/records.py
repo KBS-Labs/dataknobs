@@ -38,10 +38,7 @@ class Record:
         self.fields = OrderedDict()
         self._id = id
         
-        # If id is provided in metadata but not as parameter, use it
-        if self._id is None and "id" in self.metadata:
-            self._id = str(self.metadata["id"])
-
+        # Process data first to populate fields
         if data:
             if isinstance(data, OrderedDict) and all(isinstance(v, Field) for v in data.values()):
                 self.fields = data
@@ -51,26 +48,85 @@ class Record:
                         self.fields[key] = value
                     else:
                         self.fields[key] = Field(name=key, value=value)
+        
+        # Now check for ID from various sources if not explicitly provided
+        if self._id is None:
+            # Check metadata
+            if "id" in self.metadata:
+                self._id = str(self.metadata["id"])
+            # Check fields for id
+            elif "id" in self.fields:
+                value = self.get_value("id")
+                if value is not None:
+                    self._id = str(value)
+                    # Sync to metadata
+                    self.metadata["id"] = self._id
+            # Check fields for record_id
+            elif "record_id" in self.fields:
+                value = self.get_value("record_id")
+                if value is not None:
+                    self._id = str(value)
+                    # Sync to metadata
+                    self.metadata["id"] = self._id
     
     @property
     def id(self) -> Optional[str]:
         """Get the record ID.
         
-        Returns the explicitly set ID, or falls back to metadata['id'] if present.
+        Checks for ID in the following priority order:
+        1. Explicitly set ID (_id)
+        2. ID in metadata
+        3. ID field in record fields
+        4. record_id field in record fields (common in DataFrames)
+        
+        Returns the first ID found, or None if no ID is present.
         """
+        # 1. Check explicitly set ID
         if self._id is not None:
             return self._id
-        return self.metadata.get("id")
+        
+        # 2. Check metadata
+        if "id" in self.metadata:
+            return str(self.metadata["id"])
+        
+        # 3. Check for 'id' field
+        if "id" in self.fields:
+            value = self.get_value("id")
+            if value is not None:
+                return str(value)
+        
+        # 4. Check for 'record_id' field (common in DataFrames)
+        if "record_id" in self.fields:
+            value = self.get_value("record_id")
+            if value is not None:
+                return str(value)
+        
+        return None
     
     @id.setter
     def id(self, value: Optional[str]) -> None:
-        """Set the record ID."""
+        """Set the record ID.
+        
+        Updates the ID in all locations for consistency:
+        - Internal _id attribute
+        - Metadata (for backward compatibility)
+        - ID field if it exists
+        """
         self._id = value
-        # Also update metadata for backward compatibility
+        
+        # Update metadata for backward compatibility
         if value is not None:
             self.metadata["id"] = value
         elif "id" in self.metadata:
             del self.metadata["id"]
+        
+        # Update ID field if it exists (don't create it if it doesn't)
+        if "id" in self.fields and value is not None:
+            self.fields["id"].value = value
+        
+        # Update record_id field if it exists (common in DataFrames)
+        if "record_id" in self.fields and value is not None:
+            self.fields["record_id"].value = value
     
     def generate_id(self) -> str:
         """Generate and set a new UUID for this record.

@@ -241,20 +241,36 @@ class TestBatchOperations:
     
     def test_bulk_insert_with_error_handling_raise(self):
         """Test bulk insert with error handling set to raise."""
-        db = Mock()
-        db.create = Mock(side_effect=[None, Exception("Test error")])
+        # Create a custom database that fails on certain values
+        class FailingDatabase(SyncMemoryDatabase):
+            def create(self, record):
+                # Fail on specific value
+                if record.get_value("value") == 2:
+                    raise ValueError("Test error on value 2")
+                return super().create(record)
+            
+            def create_batch(self, records):
+                # Force individual processing by always failing batch
+                raise ValueError("Batch creation disabled for testing")
         
+        db = FailingDatabase()
         batch_ops = BatchOperations(db)
         df = pd.DataFrame({"value": [1, 2, 3]})
         
         config = BatchConfig(error_handling="raise", memory_efficient=False)
         
-        with pytest.raises(Exception, match="Test error"):
+        with pytest.raises(ValueError, match="Test error on value 2"):
             batch_ops.bulk_insert_dataframe(df, config)
     
     def test_bulk_insert_with_progress_callback(self):
         """Test bulk insert with progress callback."""
-        db = SyncMemoryDatabase()
+        # Create a database that forces individual record processing
+        class IndividualProcessingDB(SyncMemoryDatabase):
+            def create_batch(self, records):
+                # Force fallback to individual processing
+                raise ValueError("Batch disabled to test progress callbacks")
+        
+        db = IndividualProcessingDB()
         batch_ops = BatchOperations(db)
         
         progress_calls = []
@@ -269,6 +285,7 @@ class TestBatchOperations:
         
         batch_ops.bulk_insert_dataframe(df, config)
         
+        # Should get progress callbacks for each individual record
         assert len(progress_calls) == 5
         assert progress_calls[-1] == (5, 5)
     

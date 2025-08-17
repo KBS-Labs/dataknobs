@@ -12,10 +12,10 @@ from ..database import AsyncDatabase, SyncDatabase
 from ..exceptions import DatabaseError
 from ..query import Operator, Query, SortOrder
 from ..records import Record
-from ..streaming import StreamConfig, StreamResult
+from ..streaming import StreamConfig, StreamResult, StreamingMixin
 
 
-class SyncElasticsearchDatabase(SyncDatabase, ConfigurableBase):
+class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
     """Synchronous Elasticsearch database backend."""
 
     def __init__(self, config: dict[str, Any] | None = None):
@@ -466,46 +466,8 @@ class SyncElasticsearchDatabase(SyncDatabase, ConfigurableBase):
         config: Optional[StreamConfig] = None
     ) -> StreamResult:
         """Stream records into Elasticsearch."""
-        config = config or StreamConfig()
-        result = StreamResult()
-        start_time = time.time()
-        
-        batch = []
-        for record in records:
-            batch.append(record)
-            
-            if len(batch) >= config.batch_size:
-                # Write batch
-                try:
-                    ids = self.create_batch(batch)
-                    result.successful += len(ids)
-                    result.total_processed += len(batch)
-                except Exception as e:
-                    result.failed += len(batch)
-                    result.total_processed += len(batch)
-                    if config.on_error:
-                        for rec in batch:
-                            if not config.on_error(e, rec):
-                                result.add_error(None, e)
-                                break
-                    else:
-                        result.add_error(None, e)
-                
-                batch = []
-        
-        # Write remaining batch
-        if batch:
-            try:
-                ids = self.create_batch(batch)
-                result.successful += len(ids)
-                result.total_processed += len(batch)
-            except Exception as e:
-                result.failed += len(batch)
-                result.total_processed += len(batch)
-                result.add_error(None, e)
-        
-        result.duration = time.time() - start_time
-        return result
+        # Use the default implementation from mixin
+        return self._default_stream_write(records, config)
 
 
 # Import the native async implementation

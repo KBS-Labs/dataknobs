@@ -16,13 +16,48 @@ from .metadata import MetadataHandler, MetadataConfig, MetadataStrategy
 class ConversionOptions:
     """Options for conversion between Records and DataFrames."""
     include_metadata: bool = False
-    preserve_types: bool = True
+    metadata_columns: List[str] = None  # Columns to treat as metadata
+    flatten_nested: bool = False  # Flatten nested structures
     preserve_index: bool = True
+    use_index_as_id: bool = False  # Use DataFrame index as record ID
+    type_mapping: Dict[str, str] = None  # Custom type mappings
+    null_handling: str = "preserve"  # "preserve", "drop", "fill"
+    datetime_format: Optional[str] = None  # Format for datetime conversion
+    timezone: Optional[str] = None  # Timezone for datetime conversion
+    
+    # Keep these for backward compatibility
+    preserve_types: bool = True
     index_column: Optional[str] = None  # Use specific field as index
     flatten_json: bool = False
     metadata_strategy: MetadataStrategy = MetadataStrategy.ATTRS
     handle_missing: str = "preserve"  # "preserve", "drop", "fill"
     fill_value: Any = None
+    
+    def __post_init__(self):
+        """Initialize default values for mutable parameters."""
+        if self.metadata_columns is None:
+            self.metadata_columns = []
+        if self.type_mapping is None:
+            self.type_mapping = {}
+    
+    def merge_metadata(self, meta1: Dict[str, Any], meta2: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge two metadata dictionaries.
+        
+        Args:
+            meta1: First metadata dict
+            meta2: Second metadata dict (overwrites meta1 on conflicts)
+            
+        Returns:
+            Merged metadata dictionary
+        """
+        result = meta1.copy()
+        for key, value in meta2.items():
+            if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                # Recursively merge nested dicts
+                result[key] = self.merge_metadata(result[key], value)
+            else:
+                result[key] = value
+        return result
 
 
 class DataFrameConverter:
@@ -55,35 +90,78 @@ class DataFrameConverter:
         if not records:
             return pd.DataFrame()
         
-        # Extract data
-        data_dict = self._records_to_dict(records, options)
+        # Extract data from records
+        data_rows = []
+        for record in records:
+            row = {}
+            
+            # Add field values
+            for field_name, field in record.fields.items():
+                if options.flatten_nested and isinstance(field.value, dict):
+                    # Flatten nested dictionaries
+                    for nested_key, nested_val in field.value.items():
+                        row[f"{field_name}.{nested_key}"] = nested_val
+                else:
+                    row[field_name] = field.value
+            
+            # Add metadata as a column if requested
+            if options.include_metadata and record.metadata:
+                row["_metadata"] = record.metadata
+            
+            data_rows.append(row)
         
         # Create DataFrame
-        df = pd.DataFrame(data_dict)
+        df = pd.DataFrame(data_rows)
+        
+        # Preserve column order from the first record for consistency
+        # This maintains the order fields were added to records
+        if not df.empty and records:
+            # Get column order from first record's fields
+            first_record = records[0]
+            column_order = []
+            
+            # Add field columns in the order they appear in the record
+            for field_name in first_record.fields.keys():
+                if options.flatten_nested and isinstance(first_record.fields[field_name].value, dict):
+                    # Add flattened columns
+                    for nested_key in first_record.fields[field_name].value.keys():
+                        col_name = f"{field_name}.{nested_key}"
+                        if col_name in df.columns:
+                            column_order.append(col_name)
+                elif field_name in df.columns:
+                    column_order.append(field_name)
+            
+            # Add any remaining columns (like _metadata) at the end
+            for col in df.columns:
+                if col not in column_order:
+                    column_order.append(col)
+            
+            # Reorder DataFrame columns
+            df = df[column_order]
         
         # Set index if specified
         if options.index_column and options.index_column in df.columns:
             df = df.set_index(options.index_column)
         elif options.preserve_index:
-            # Use record IDs as index
+            # Only use record IDs as index if:
+            # 1. They exist
+            # 2. They're not coming from a data field (id or record_id columns)
+            # 3. They don't look like auto-generated UUIDs
             record_ids = [r.id for r in records]
-            if any(record_ids):  # If at least some records have IDs
+            
+            # Check if the IDs are from data fields
+            ids_from_fields = any(
+                'id' in r.fields or 'record_id' in r.fields 
+                for r in records
+            )
+            
+            # Only set index if IDs exist, aren't from fields, and aren't UUIDs
+            if (any(record_ids) and not ids_from_fields and not all(
+                id and len(id) == 36 and id.count('-') == 4 
+                for id in record_ids if id
+            )):
                 df.index = record_ids
                 df.index.name = "record_id"
-        
-        # Apply type conversion if requested
-        if options.preserve_types:
-            df = self._apply_field_types(df, records)
-        
-        # Handle metadata
-        if options.include_metadata:
-            metadata_config = MetadataConfig(strategy=options.metadata_strategy)
-            metadata_handler = MetadataHandler(metadata_config)
-            metadata = metadata_handler.extract_metadata_from_records(records)
-            df = metadata_handler.apply_metadata_to_dataframe(df, metadata, records)
-        
-        # Handle missing values
-        df = self._handle_missing_values(df, options)
         
         return df
     
@@ -105,22 +183,38 @@ class DataFrameConverter:
         
         records = []
         
-        # Extract metadata if present
-        metadata = None
-        if options.include_metadata:
-            metadata_config = MetadataConfig(strategy=options.metadata_strategy)
-            metadata_handler = MetadataHandler(metadata_config)
-            metadata = metadata_handler.extract_metadata_from_dataframe(df)
-        
         # Convert each row to a Record
         for idx, row in df.iterrows():
-            record = self._series_to_record(row, idx, options)
+            # Extract metadata for this row from metadata columns
+            row_metadata = {}
+            if options.metadata_columns:
+                for col in options.metadata_columns:
+                    if col in row.index:
+                        col_value = row[col]
+                        # If the column value is a dict, merge it into metadata
+                        if isinstance(col_value, dict):
+                            row_metadata.update(col_value)
+                        else:
+                            # Otherwise store it with the column name (without leading underscore)
+                            row_metadata[col.lstrip('_')] = col_value
+            
+            # Prepare row data (excluding metadata columns)
+            row_data = {}
+            for col in row.index:
+                if col not in options.metadata_columns:
+                    row_data[col] = row[col]
+            
+            # Determine record ID
+            record_id = None
+            if options.use_index_as_id:
+                if isinstance(idx, str):
+                    record_id = idx
+                elif idx is not None and not pd.isna(idx):
+                    record_id = str(idx)
+            
+            # Create record
+            record = Record(data=row_data, metadata=row_metadata, id=record_id)
             records.append(record)
-        
-        # Apply metadata if extracted
-        if metadata:
-            metadata_handler = MetadataHandler(MetadataConfig(strategy=options.metadata_strategy))
-            records = metadata_handler.create_records_with_metadata(df, records, metadata)
         
         return records
     
@@ -181,46 +275,6 @@ class DataFrameConverter:
         
         return record
     
-    def _records_to_dict(
-        self,
-        records: List[Record],
-        options: ConversionOptions
-    ) -> Dict[str, List]:
-        """Convert records to dictionary format for DataFrame creation.
-        
-        Args:
-            records: List of records
-            options: Conversion options
-            
-        Returns:
-            Dictionary of columns
-        """
-        # Collect all field names
-        all_fields = set()
-        for record in records:
-            all_fields.update(record.fields.keys())
-        
-        # Initialize data dictionary
-        data_dict = {field: [] for field in all_fields}
-        
-        # Populate data
-        for record in records:
-            for field_name in all_fields:
-                if field_name in record.fields:
-                    field = record.fields[field_name]
-                    value = self.type_mapper.convert_value_to_pandas(field.value, field.type)
-                    
-                    # Handle JSON flattening if requested
-                    if options.flatten_json and field.type == FieldType.JSON:
-                        value = self._flatten_json_value(value)
-                    
-                    data_dict[field_name].append(value)
-                else:
-                    # Field not present in this record
-                    data_dict[field_name].append(pd.NA)
-        
-        return data_dict
-    
     def _series_to_record(
         self,
         row: pd.Series,
@@ -272,52 +326,6 @@ class DataFrameConverter:
         
         return record
     
-    def _apply_field_types(self, df: pd.DataFrame, records: List[Record]) -> pd.DataFrame:
-        """Apply field types from records to DataFrame columns.
-        
-        Args:
-            df: DataFrame to type
-            records: Source records with type information
-            
-        Returns:
-            DataFrame with proper types
-        """
-        # Collect field types from records
-        field_types = {}
-        for record in records:
-            for field_name, field in record.fields.items():
-                if field_name not in field_types and field.type:
-                    field_types[field_name] = field.type
-        
-        # Apply types to DataFrame columns
-        for column in df.columns:
-            if column in field_types:
-                field_type = field_types[column]
-                df[column] = self.type_mapper.cast_series(df[column], field_type)
-        
-        return df
-    
-    def _handle_missing_values(
-        self,
-        df: pd.DataFrame,
-        options: ConversionOptions
-    ) -> pd.DataFrame:
-        """Handle missing values based on options.
-        
-        Args:
-            df: DataFrame to process
-            options: Conversion options
-            
-        Returns:
-            Processed DataFrame
-        """
-        if options.handle_missing == "drop":
-            return df.dropna()
-        elif options.handle_missing == "fill":
-            return df.fillna(options.fill_value)
-        else:  # "preserve"
-            return df
-    
     def _flatten_json_value(self, value: Any) -> Any:
         """Flatten JSON value for DataFrame insertion.
         
@@ -327,8 +335,17 @@ class DataFrameConverter:
         Returns:
             Flattened value or string representation
         """
-        if pd.isna(value):
+        # Check for None explicitly first
+        if value is None:
             return value
+        
+        # Check for pandas NA types
+        try:
+            if pd.isna(value):
+                return value
+        except (TypeError, ValueError):
+            # pd.isna doesn't work with lists/dicts
+            pass
         
         if isinstance(value, dict):
             # For dict, could expand to multiple columns
