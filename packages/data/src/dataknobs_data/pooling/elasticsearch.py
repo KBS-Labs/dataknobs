@@ -1,7 +1,6 @@
 """Elasticsearch-specific connection pooling implementation."""
 
 from dataclasses import dataclass
-from typing import Optional, Any, List
 
 from .base import BasePoolConfig
 
@@ -9,29 +8,29 @@ from .base import BasePoolConfig
 @dataclass
 class ElasticsearchPoolConfig(BasePoolConfig):
     """Configuration for Elasticsearch connection pools."""
-    hosts: List[str] = None
+    hosts: list[str] = None
     index: str = "records"
-    api_key: Optional[str] = None
-    basic_auth: Optional[tuple] = None
+    api_key: str | None = None
+    basic_auth: tuple | None = None
     verify_certs: bool = True
-    ca_certs: Optional[str] = None
-    client_cert: Optional[str] = None
-    client_key: Optional[str] = None
+    ca_certs: str | None = None
+    client_cert: str | None = None
+    client_key: str | None = None
     ssl_show_warn: bool = True
-    
+
     def __post_init__(self):
         """Set default hosts if not provided."""
         if self.hosts is None:
             self.hosts = ["http://localhost:9200"]
-    
+
     def to_connection_string(self) -> str:
         """Convert to connection string (not used for ES, but required by base)."""
         return ";".join(self.hosts)
-    
+
     def to_hash_key(self) -> tuple:
         """Create a hashable key for this configuration."""
         return (tuple(self.hosts), self.index)
-    
+
     @classmethod
     def from_dict(cls, config: dict) -> "ElasticsearchPoolConfig":
         """Create from configuration dictionary."""
@@ -48,7 +47,7 @@ class ElasticsearchPoolConfig(BasePoolConfig):
                 hosts = [f"http://{host}:{port}"]
         else:
             hosts = ["http://localhost:9200"]
-        
+
         return cls(
             hosts=hosts,
             index=config.get("index", "records"),
@@ -65,18 +64,18 @@ class ElasticsearchPoolConfig(BasePoolConfig):
 async def create_async_elasticsearch_client(config: ElasticsearchPoolConfig):
     """Create an async Elasticsearch client."""
     from elasticsearch import AsyncElasticsearch
-    
+
     # Build client configuration
     client_config = {
         "hosts": config.hosts,
     }
-    
+
     # Add authentication if provided
     if config.api_key:
         client_config["api_key"] = config.api_key
     elif config.basic_auth:
         client_config["basic_auth"] = config.basic_auth
-    
+
     # Add SSL configuration
     if config.ca_certs:
         client_config["ca_certs"] = config.ca_certs
@@ -84,10 +83,10 @@ async def create_async_elasticsearch_client(config: ElasticsearchPoolConfig):
         client_config["client_cert"] = config.client_cert
     if config.client_key:
         client_config["client_key"] = config.client_key
-    
+
     client_config["verify_certs"] = config.verify_certs
     client_config["ssl_show_warn"] = config.ssl_show_warn
-    
+
     # Create and return the client
     return AsyncElasticsearch(**client_config)
 

@@ -255,11 +255,11 @@ class TestAsyncDatabaseFactory:
         """Test creating async elasticsearch backend."""
         factory = AsyncDatabaseFactory()
         
-        with patch('dataknobs_data.backends.elasticsearch.AsyncElasticsearchDatabase') as MockES:
+        with patch('dataknobs_data.backends.elasticsearch_async.AsyncElasticsearchDatabase') as MockES:
             mock_db = MagicMock()
             MockES.from_config.return_value = mock_db
             
-            with patch.dict('sys.modules', {'dataknobs_data.backends.elasticsearch': MagicMock(AsyncElasticsearchDatabase=MockES)}):
+            with patch.dict('sys.modules', {'dataknobs_data.backends.elasticsearch_async': MagicMock(AsyncElasticsearchDatabase=MockES)}):
                 db = factory.create(backend="elasticsearch", hosts=["localhost"])
                 assert db == mock_db
     
@@ -294,11 +294,11 @@ class TestAsyncDatabaseFactory:
         factory = AsyncDatabaseFactory()
         
         for alias in ["elasticsearch", "es"]:
-            with patch('dataknobs_data.backends.elasticsearch.AsyncElasticsearchDatabase') as MockES:
+            with patch('dataknobs_data.backends.elasticsearch_async.AsyncElasticsearchDatabase') as MockES:
                 mock_db = MagicMock()
                 MockES.from_config.return_value = mock_db
                 
-                with patch.dict('sys.modules', {'dataknobs_data.backends.elasticsearch': MagicMock(AsyncElasticsearchDatabase=MockES)}):
+                with patch.dict('sys.modules', {'dataknobs_data.backends.elasticsearch_async': MagicMock(AsyncElasticsearchDatabase=MockES)}):
                     db = factory.create(backend=alias, hosts=["localhost"])
                     assert db == mock_db
     
@@ -306,13 +306,13 @@ class TestAsyncDatabaseFactory:
         """Test S3 async backend creation with proper config."""
         factory = AsyncDatabaseFactory()
         
-        with patch('dataknobs_data.backends.s3.AsyncS3Database') as MockS3:
+        with patch('dataknobs_data.backends.s3_async.AsyncS3Database') as MockS3:
             mock_db = MagicMock()
             MockS3.from_config.return_value = mock_db
             
             # S3 requires bucket configuration
             config = {"backend": "s3", "bucket": "test-bucket"}
-            with patch.dict('sys.modules', {'dataknobs_data.backends.s3': MagicMock(AsyncS3Database=MockS3)}):
+            with patch.dict('sys.modules', {'dataknobs_data.backends.s3_async': MagicMock(AsyncS3Database=MockS3)}):
                 db = factory.create(**config)
                 assert db == mock_db
                 MockS3.from_config.assert_called_once_with({"bucket": "test-bucket"})

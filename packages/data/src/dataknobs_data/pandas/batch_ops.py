@@ -1,16 +1,16 @@
 """Batch operations for DataKnobs-Pandas integration."""
 
 import logging
+from collections.abc import Callable, Generator
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Generator, List, Optional, Union
+from typing import Any
 
 import pandas as pd
-import numpy as np
 
-from dataknobs_data.records import Record
-from dataknobs_data.query import Query
 from dataknobs_data.database import AsyncDatabase, SyncDatabase
-from .converter import DataFrameConverter, ConversionOptions
+from dataknobs_data.query import Query
+
+from .converter import ConversionOptions, DataFrameConverter
 
 logger = logging.getLogger(__name__)
 
@@ -21,22 +21,22 @@ class BatchConfig:
     chunk_size: int = 1000
     parallel: bool = False
     max_workers: int = 4
-    progress_callback: Optional[Callable[[int, int], None]] = None
+    progress_callback: Callable[[int, int], None] | None = None
     error_handling: str = "raise"  # "raise", "skip", "log"
     memory_efficient: bool = True
-    
+
     def __post_init__(self):
         """Validate configuration parameters."""
         if self.chunk_size <= 0:
             raise ValueError("chunk_size must be greater than 0")
-        
+
         if self.error_handling not in ("raise", "skip", "log"):
             raise ValueError("error_handling must be one of: 'raise', 'skip', 'log'")
 
 
 class ChunkedProcessor:
     """Process DataFrames in chunks for memory efficiency."""
-    
+
     def __init__(self, chunk_size: int = 1000):
         """Initialize chunked processor.
         
@@ -44,12 +44,12 @@ class ChunkedProcessor:
             chunk_size: Size of each chunk
         """
         self.chunk_size = chunk_size
-    
+
     def process_dataframe(
         self,
         df: pd.DataFrame,
         processor: Callable[[pd.DataFrame], Any],
-        combine: Optional[Callable[[List[Any]], Any]] = None
+        combine: Callable[[list[Any]], Any] | None = None
     ) -> Any:
         """Process DataFrame in chunks.
         
@@ -62,15 +62,15 @@ class ChunkedProcessor:
             Combined results or list of chunk results
         """
         results = []
-        
+
         for chunk in self.iter_chunks(df):
             result = processor(chunk)
             results.append(result)
-        
+
         if combine:
             return combine(results)
         return results
-    
+
     def iter_chunks(self, df: pd.DataFrame) -> Generator[pd.DataFrame, None, None]:
         """Iterate over DataFrame in chunks.
         
@@ -83,13 +83,13 @@ class ChunkedProcessor:
         for start_idx in range(0, len(df), self.chunk_size):
             end_idx = min(start_idx + self.chunk_size, len(df))
             yield df.iloc[start_idx:end_idx]
-    
+
     def read_csv_chunked(
         self,
         filepath: str,
         processor: Callable[[pd.DataFrame], Any],
         **read_kwargs
-    ) -> List[Any]:
+    ) -> list[Any]:
         """Read CSV file in chunks and process.
         
         Args:
@@ -101,21 +101,21 @@ class ChunkedProcessor:
             List of processed results
         """
         results = []
-        
+
         for chunk in pd.read_csv(filepath, chunksize=self.chunk_size, **read_kwargs):
             result = processor(chunk)
             results.append(result)
-        
+
         return results
 
 
 class BatchOperations:
     """Batch operations for DataKnobs databases using DataFrames."""
-    
+
     def __init__(
         self,
-        database: Union[AsyncDatabase, SyncDatabase],
-        converter: Optional[DataFrameConverter] = None
+        database: AsyncDatabase | SyncDatabase,
+        converter: DataFrameConverter | None = None
     ):
         """Initialize batch operations.
         
@@ -126,13 +126,13 @@ class BatchOperations:
         self.database = database
         self.converter = converter or DataFrameConverter()
         self.is_async = hasattr(database, 'create') and asyncio.iscoroutinefunction(database.create)
-    
+
     def bulk_insert_dataframe(
         self,
         df: pd.DataFrame,
-        config: Optional[BatchConfig] = None,
-        conversion_options: Optional[ConversionOptions] = None
-    ) -> Dict[str, Any]:
+        config: BatchConfig | None = None,
+        conversion_options: ConversionOptions | None = None
+    ) -> dict[str, Any]:
         """Bulk insert DataFrame rows into database.
         
         Args:
@@ -145,23 +145,23 @@ class BatchOperations:
         """
         config = config or BatchConfig()
         conversion_options = conversion_options or ConversionOptions()
-        
+
         stats = {
             "total_rows": len(df),
             "inserted": 0,
             "failed": 0,
             "errors": []
         }
-        
+
         # Process in chunks if memory efficient mode
         if config.memory_efficient and len(df) > config.chunk_size:
             processor = ChunkedProcessor(config.chunk_size)
-            
-            def process_chunk(chunk_df: pd.DataFrame) -> Dict[str, int]:
+
+            def process_chunk(chunk_df: pd.DataFrame) -> dict[str, int]:
                 return self._insert_chunk(chunk_df, config, conversion_options)
-            
+
             chunk_results = processor.process_dataframe(df, process_chunk)
-            
+
             # Aggregate results
             for result in chunk_results:
                 stats["inserted"] += result["inserted"]
@@ -171,13 +171,13 @@ class BatchOperations:
         else:
             # Process entire DataFrame at once
             stats = self._insert_chunk(df, config, conversion_options)
-        
+
         return stats
-    
+
     def query_as_dataframe(
         self,
         query: Query,
-        conversion_options: Optional[ConversionOptions] = None
+        conversion_options: ConversionOptions | None = None
     ) -> pd.DataFrame:
         """Execute query and return results as DataFrame.
         
@@ -189,24 +189,24 @@ class BatchOperations:
             Query results as DataFrame
         """
         conversion_options = conversion_options or ConversionOptions()
-        
+
         # Execute query
         if self.is_async:
             import asyncio
             records = asyncio.run(self.database.search(query))
         else:
             records = self.database.search(query)
-        
+
         # Convert to DataFrame
         return self.converter.records_to_dataframe(records, conversion_options)
-    
+
     def update_from_dataframe(
         self,
         df: pd.DataFrame,
         id_column: str,
-        config: Optional[BatchConfig] = None,
-        conversion_options: Optional[ConversionOptions] = None
-    ) -> Dict[str, Any]:
+        config: BatchConfig | None = None,
+        conversion_options: ConversionOptions | None = None
+    ) -> dict[str, Any]:
         """Update records from DataFrame using ID column.
         
         Args:
@@ -220,7 +220,7 @@ class BatchOperations:
         """
         config = config or BatchConfig()
         conversion_options = conversion_options or ConversionOptions()
-        
+
         stats = {
             "total_rows": len(df),
             "updated": 0,
@@ -228,24 +228,24 @@ class BatchOperations:
             "not_found": 0,
             "errors": []
         }
-        
+
         # Ensure ID column exists
         if id_column not in df.columns:
             raise ValueError(f"ID column '{id_column}' not found in DataFrame")
-        
-        # Convert DataFrame to records  
+
+        # Convert DataFrame to records
         records = self.converter.dataframe_to_records(df, conversion_options)
-        
+
         # Prepare updates as (id, record) tuples
         updates = []
         for i, record in enumerate(records):
             record_id = str(df.iloc[i][id_column])
             updates.append((record_id, record))
-        
+
         # Process updates in chunks
         for i in range(0, len(updates), config.chunk_size):
             chunk = updates[i:i + config.chunk_size]
-            
+
             try:
                 # Use batch update for better performance
                 if self.is_async:
@@ -253,19 +253,19 @@ class BatchOperations:
                     results = asyncio.run(self.database.update_batch(chunk))
                 else:
                     results = self.database.update_batch(chunk)
-                
+
                 # Count successes and failures
                 for success in results:
                     if success:
                         stats["updated"] += 1
                     else:
                         stats["not_found"] += 1
-                        
-            except Exception as e:
+
+            except Exception:
                 # If batch fails, try individual updates
                 if config.error_handling == "raise":
                     raise
-                    
+
                 for record_id, record in chunk:
                     try:
                         if self.is_async:
@@ -273,31 +273,31 @@ class BatchOperations:
                             success = asyncio.run(self.database.update(record_id, record))
                         else:
                             success = self.database.update(record_id, record)
-                        
+
                         if success:
                             stats["updated"] += 1
                         else:
                             stats["not_found"] += 1
-                            
+
                     except Exception as e:
                         stats["failed"] += 1
                         if config.error_handling == "log":
                             logger.error(f"Failed to update record {record_id}: {e}")
                             stats["errors"].append(str(e))
                         # else "skip"
-            
+
             # Progress callback
             if config.progress_callback:
                 processed = stats["updated"] + stats["failed"] + stats["not_found"]
                 config.progress_callback(processed, len(updates))
-        
+
         return stats
-    
+
     def aggregate(
         self,
         query: Query,
-        aggregations: Dict[str, Union[str, Callable]],
-        group_by: Optional[List[str]] = None
+        aggregations: dict[str, str | Callable],
+        group_by: list[str] | None = None
     ) -> pd.DataFrame:
         """Perform aggregations on query results.
         
@@ -311,10 +311,10 @@ class BatchOperations:
         """
         # Get data as DataFrame
         df = self.query_as_dataframe(query)
-        
+
         if df.empty:
             return pd.DataFrame()
-        
+
         # Perform aggregations
         if group_by:
             grouped = df.groupby(group_by)
@@ -329,13 +329,13 @@ class BatchOperations:
                     else:
                         result[f"{col}_agg"] = agg_func(df[col])
             return pd.DataFrame([result])
-    
+
     def transform_and_save(
         self,
         query: Query,
         transformer: Callable[[pd.DataFrame], pd.DataFrame],
-        config: Optional[BatchConfig] = None
-    ) -> Dict[str, Any]:
+        config: BatchConfig | None = None
+    ) -> dict[str, Any]:
         """Query, transform with pandas, and save back.
         
         Args:
@@ -347,16 +347,16 @@ class BatchOperations:
             Operation statistics
         """
         config = config or BatchConfig()
-        
+
         # Get data
         df = self.query_as_dataframe(query)
-        
+
         if df.empty:
             return {"total_rows": 0, "transformed": 0}
-        
+
         # Apply transformation
         transformed_df = transformer(df)
-        
+
         # Save back if index preserved (has record IDs)
         if df.index.name == "record_id" and transformed_df.index.name == "record_id":
             return self.update_from_dataframe(
@@ -367,13 +367,13 @@ class BatchOperations:
         else:
             # Insert as new records
             return self.bulk_insert_dataframe(transformed_df, config)
-    
+
     def _insert_chunk(
         self,
         df: pd.DataFrame,
         config: BatchConfig,
         conversion_options: ConversionOptions
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Insert a chunk of DataFrame rows.
         
         Args:
@@ -390,10 +390,10 @@ class BatchOperations:
             "failed": 0,
             "errors": []
         }
-        
+
         # Convert to records
         records = self.converter.dataframe_to_records(df, conversion_options)
-        
+
         # Use batch creation for better performance with graceful fallback
         if hasattr(self.database, 'create_batch'):
             try:
@@ -403,12 +403,12 @@ class BatchOperations:
                 else:
                     ids = self.database.create_batch(records)
                 stats["inserted"] = len(ids)
-                
+
                 # Progress callback for successful batch
                 if config.progress_callback:
                     config.progress_callback(len(records), len(records))
-                    
-            except Exception as batch_error:
+
+            except Exception:
                 # Batch failed, try individual records to identify failures
                 for i, record in enumerate(records):
                     try:
@@ -418,10 +418,10 @@ class BatchOperations:
                         else:
                             self.database.create(record)
                         stats["inserted"] += 1
-                        
+
                     except Exception as record_error:
                         stats["failed"] += 1
-                        
+
                         # Handle error based on config
                         if config.error_handling == "raise":
                             raise
@@ -429,7 +429,7 @@ class BatchOperations:
                             logger.error(f"Failed to insert row {i}: {record_error}")
                             stats["errors"].append(str(record_error))
                         # else "skip" - just continue
-                    
+
                     # Progress callback for each record
                     if config.progress_callback:
                         config.progress_callback(i + 1, len(records))
@@ -443,7 +443,7 @@ class BatchOperations:
                     else:
                         self.database.create(record)
                     stats["inserted"] += 1
-                    
+
                 except Exception as e:
                     stats["failed"] += 1
                     if config.error_handling == "raise":
@@ -452,18 +452,18 @@ class BatchOperations:
                         logger.error(f"Failed to insert row {i}: {e}")
                         stats["errors"].append(str(e))
                     # else "skip"
-                
+
                 # Progress callback
                 if config.progress_callback:
                     config.progress_callback(i + 1, len(records))
-        
+
         return stats
-    
+
     def export_to_csv(
         self,
         query: Query,
         filepath: str,
-        conversion_options: Optional[ConversionOptions] = None,
+        conversion_options: ConversionOptions | None = None,
         **to_csv_kwargs
     ) -> None:
         """Export query results to CSV file.
@@ -476,12 +476,12 @@ class BatchOperations:
         """
         df = self.query_as_dataframe(query, conversion_options)
         df.to_csv(filepath, **to_csv_kwargs)
-    
+
     def export_to_parquet(
         self,
         query: Query,
         filepath: str,
-        conversion_options: Optional[ConversionOptions] = None,
+        conversion_options: ConversionOptions | None = None,
         **to_parquet_kwargs
     ) -> None:
         """Export query results to Parquet file.

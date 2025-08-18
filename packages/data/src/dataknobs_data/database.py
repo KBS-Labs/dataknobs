@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional, Union
+from collections.abc import AsyncIterator, Callable, Iterator
+from typing import Any
 
 from .query import Query
 from .query_logic import ComplexQuery
@@ -10,7 +11,7 @@ from .streaming import StreamConfig, StreamResult
 class AsyncDatabase(ABC):
     """Abstract base class for async database implementations."""
 
-    def __init__(self, config: Dict[str, Any] | None = None):
+    def __init__(self, config: dict[str, Any] | None = None):
         """Initialize the database with optional configuration.
 
         Args:
@@ -73,7 +74,7 @@ class AsyncDatabase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def search(self, query: Union[Query, ComplexQuery]) -> List[Record]:
+    async def search(self, query: Query | ComplexQuery) -> list[Record]:
         """Search for records matching a query.
 
         Args:
@@ -83,8 +84,8 @@ class AsyncDatabase(ABC):
             List of matching records
         """
         raise NotImplementedError
-    
-    async def _search_with_complex_query(self, query: ComplexQuery) -> List[Record]:
+
+    async def _search_with_complex_query(self, query: ComplexQuery) -> list[Record]:
         """Default implementation for ComplexQuery using in-memory filtering.
         
         Backends can override this for native boolean logic support.
@@ -103,13 +104,13 @@ class AsyncDatabase(ABC):
             # Can't convert - need to do in-memory filtering
             # Get all records (or use a base filter if possible)
             all_records = await self.search(Query())
-            
+
             # Apply complex condition filtering
             results = []
             for record in all_records:
                 if query.matches(record):
                     results.append(record)
-            
+
             # Apply sorting
             if query.sort_specs:
                 for sort_spec in reversed(query.sort_specs):
@@ -118,17 +119,17 @@ class AsyncDatabase(ABC):
                         key=lambda r: r.get_value(sort_spec.field, ""),
                         reverse=reverse
                     )
-            
+
             # Apply offset and limit
             if query.offset_value:
                 results = results[query.offset_value:]
             if query.limit_value:
                 results = results[:query.limit_value]
-            
+
             # Apply field projection
             if query.fields:
                 results = [r.project(query.fields) for r in results]
-            
+
             return results
 
     @abstractmethod
@@ -159,7 +160,7 @@ class AsyncDatabase(ABC):
             return await self.create(record)
         return id
 
-    async def create_batch(self, records: List[Record]) -> List[str]:
+    async def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records in batch.
 
         Args:
@@ -174,7 +175,7 @@ class AsyncDatabase(ABC):
             ids.append(id)
         return ids
 
-    async def read_batch(self, ids: List[str]) -> List[Record | None]:
+    async def read_batch(self, ids: list[str]) -> list[Record | None]:
         """Read multiple records by ID.
 
         Args:
@@ -189,7 +190,7 @@ class AsyncDatabase(ABC):
             records.append(record)
         return records
 
-    async def delete_batch(self, ids: List[str]) -> List[bool]:
+    async def delete_batch(self, ids: list[str]) -> list[bool]:
         """Delete multiple records by ID.
 
         Args:
@@ -204,7 +205,7 @@ class AsyncDatabase(ABC):
             results.append(result)
         return results
 
-    async def update_batch(self, updates: List[tuple[str, Record]]) -> List[bool]:
+    async def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
         """Update multiple records.
 
         Default implementation calls update() for each ID/record pair.
@@ -274,8 +275,8 @@ class AsyncDatabase(ABC):
     @abstractmethod
     async def stream_read(
         self,
-        query: Optional[Query] = None,
-        config: Optional[StreamConfig] = None
+        query: Query | None = None,
+        config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
         """Stream records from database.
         
@@ -289,12 +290,12 @@ class AsyncDatabase(ABC):
             Records matching the query
         """
         raise NotImplementedError
-    
+
     @abstractmethod
     async def stream_write(
         self,
         records: AsyncIterator[Record],
-        config: Optional[StreamConfig] = None
+        config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into database.
         
@@ -308,12 +309,12 @@ class AsyncDatabase(ABC):
             Result of the streaming operation
         """
         raise NotImplementedError
-    
+
     async def stream_transform(
         self,
-        query: Optional[Query] = None,
-        transform: Optional[Callable[[Record], Optional[Record]]] = None,
-        config: Optional[StreamConfig] = None
+        query: Query | None = None,
+        transform: Callable[[Record], Record | None] | None = None,
+        config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
         """Stream records through a transformation.
         
@@ -336,7 +337,7 @@ class AsyncDatabase(ABC):
                 yield record
 
     @classmethod
-    async def create(cls, backend: str, config: Dict[str, Any] | None = None) -> "AsyncDatabase":
+    async def create(cls, backend: str, config: dict[str, Any] | None = None) -> "AsyncDatabase":
         """Factory method to create and connect a database instance.
 
         Args:
@@ -362,7 +363,7 @@ class AsyncDatabase(ABC):
 class SyncDatabase(ABC):
     """Synchronous variant of the Database abstract base class."""
 
-    def __init__(self, config: Dict[str, Any] | None = None):
+    def __init__(self, config: dict[str, Any] | None = None):
         """Initialize the database with optional configuration.
 
         Args:
@@ -396,11 +397,11 @@ class SyncDatabase(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def search(self, query: Union[Query, ComplexQuery]) -> List[Record]:
+    def search(self, query: Query | ComplexQuery) -> list[Record]:
         """Search for records matching a query (simple or complex)."""
         raise NotImplementedError
-    
-    def _search_with_complex_query(self, query: ComplexQuery) -> List[Record]:
+
+    def _search_with_complex_query(self, query: ComplexQuery) -> list[Record]:
         """Default implementation for ComplexQuery using in-memory filtering.
         
         Backends can override this for native boolean logic support.
@@ -419,13 +420,13 @@ class SyncDatabase(ABC):
             # Can't convert - need to do in-memory filtering
             # Get all records (or use a base filter if possible)
             all_records = self.search(Query())
-            
+
             # Apply complex condition filtering
             results = []
             for record in all_records:
                 if query.matches(record):
                     results.append(record)
-            
+
             # Apply sorting
             if query.sort_specs:
                 for sort_spec in reversed(query.sort_specs):
@@ -434,17 +435,17 @@ class SyncDatabase(ABC):
                         key=lambda r: r.get_value(sort_spec.field, ""),
                         reverse=reverse
                     )
-            
+
             # Apply offset and limit
             if query.offset_value:
                 results = results[query.offset_value:]
             if query.limit_value:
                 results = results[:query.limit_value]
-            
+
             # Apply field projection
             if query.fields:
                 results = [r.project(query.fields) for r in results]
-            
+
             return results
 
     @abstractmethod
@@ -460,7 +461,7 @@ class SyncDatabase(ABC):
             return self.create(record)
         return id
 
-    def create_batch(self, records: List[Record]) -> List[str]:
+    def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records in batch."""
         ids = []
         for record in records:
@@ -468,7 +469,7 @@ class SyncDatabase(ABC):
             ids.append(id)
         return ids
 
-    def read_batch(self, ids: List[str]) -> List[Record | None]:
+    def read_batch(self, ids: list[str]) -> list[Record | None]:
         """Read multiple records by ID."""
         records = []
         for id in ids:
@@ -476,7 +477,7 @@ class SyncDatabase(ABC):
             records.append(record)
         return records
 
-    def delete_batch(self, ids: List[str]) -> List[bool]:
+    def delete_batch(self, ids: list[str]) -> list[bool]:
         """Delete multiple records by ID."""
         results = []
         for id in ids:
@@ -484,7 +485,7 @@ class SyncDatabase(ABC):
             results.append(result)
         return results
 
-    def update_batch(self, updates: List[tuple[str, Record]]) -> List[bool]:
+    def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
         """Update multiple records.
 
         Default implementation calls update() for each ID/record pair.
@@ -543,8 +544,8 @@ class SyncDatabase(ABC):
     @abstractmethod
     def stream_read(
         self,
-        query: Optional[Query] = None,
-        config: Optional[StreamConfig] = None
+        query: Query | None = None,
+        config: StreamConfig | None = None
     ) -> Iterator[Record]:
         """Stream records from database.
         
@@ -558,12 +559,12 @@ class SyncDatabase(ABC):
             Records matching the query
         """
         raise NotImplementedError
-    
+
     @abstractmethod
     def stream_write(
         self,
         records: Iterator[Record],
-        config: Optional[StreamConfig] = None
+        config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into database.
         
@@ -577,12 +578,12 @@ class SyncDatabase(ABC):
             Result of the streaming operation
         """
         raise NotImplementedError
-    
+
     def stream_transform(
         self,
-        query: Optional[Query] = None,
-        transform: Optional[Callable[[Record], Optional[Record]]] = None,
-        config: Optional[StreamConfig] = None
+        query: Query | None = None,
+        transform: Callable[[Record], Record | None] | None = None,
+        config: StreamConfig | None = None
     ) -> Iterator[Record]:
         """Stream records through a transformation.
         
@@ -605,7 +606,7 @@ class SyncDatabase(ABC):
                 yield record
 
     @classmethod
-    def create(cls, backend: str, config: Dict[str, Any] | None = None) -> "SyncDatabase":
+    def create(cls, backend: str, config: dict[str, Any] | None = None) -> "SyncDatabase":
         """Factory method to create and connect a synchronous database instance.
 
         Args:

@@ -125,7 +125,7 @@ class ObjectBuilder:
             Object instance
         """
         factory_path = config.pop("factory")
-        
+
         # Remove metadata attributes
         config.pop("type", None)
         config.pop("name", None)

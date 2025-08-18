@@ -1,37 +1,35 @@
-"""
-Schema definition with fluent API for record validation.
+"""Schema definition with fluent API for record validation.
 """
 
-from dataclasses import dataclass, field as dataclass_field
-from typing import Any, Dict, List, Optional, Type, Union
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
+from typing import Any
 
+from dataknobs_data.fields import FieldType
 from dataknobs_data.records import Record
-from dataknobs_data.fields import Field as RecordField, FieldType
 
-from .result import ValidationResult, ValidationContext
-from .constraints import Constraint, Required
 from .coercer import Coercer
+from .constraints import Constraint, Required
+from .result import ValidationContext, ValidationResult
 
 
 @dataclass
 class Field:
-    """
-    Field definition for schema validation.
+    """Field definition for schema validation.
     
     Note: This is different from dataknobs_data.fields.Field - this defines
     the expected structure and validation rules for a field in a schema.
     """
-    
+
     name: str
     field_type: FieldType
     required: bool = False
     default: Any = None
-    constraints: List[Constraint] = dataclass_field(default_factory=list)
-    description: Optional[str] = None
-    
+    constraints: list[Constraint] = dataclass_field(default_factory=list)
+    description: str | None = None
+
     def add_constraint(self, constraint: Constraint) -> 'Field':
-        """
-        Add a constraint to this field (fluent API).
+        """Add a constraint to this field (fluent API).
         
         Args:
             constraint: Constraint to add
@@ -41,15 +39,14 @@ class Field:
         """
         self.constraints.append(constraint)
         return self
-    
+
     def validate(
         self,
         value: Any,
-        context: Optional[ValidationContext] = None,
+        context: ValidationContext | None = None,
         coerce: bool = False
     ) -> ValidationResult:
-        """
-        Validate a value against this field definition.
+        """Validate a value against this field definition.
         
         Args:
             value: Value to validate
@@ -67,7 +64,7 @@ class Field:
                 value = self.default
             else:
                 return ValidationResult.success(None)
-        
+
         # Type coercion if requested
         if coerce and not self._is_correct_type(value):
             coercer = Coercer()
@@ -75,14 +72,14 @@ class Field:
             if not coerce_result.valid:
                 return coerce_result
             value = coerce_result.value
-        
+
         # Type validation
         if not self._is_correct_type(value):
             return ValidationResult.failure(
                 value,
                 [f"Field '{self.name}' expects type {self.field_type.name}, got {type(value).__name__}"]
             )
-        
+
         # Apply constraints
         result = ValidationResult.success(value)
         for constraint in self.constraints:
@@ -93,14 +90,14 @@ class Field:
                     f"Field '{self.name}': {error}" for error in check_result.errors
                 ]
                 result = result.merge(check_result)
-        
+
         return result
-    
+
     def _is_correct_type(self, value: Any) -> bool:
         """Check if value matches expected field type."""
         if value is None:
             return True  # None is handled separately
-        
+
         type_map = {
             FieldType.STRING: str,
             FieldType.INTEGER: int,
@@ -110,7 +107,7 @@ class Field:
             FieldType.JSON: (dict, list),
             FieldType.BINARY: bytes,
         }
-        
+
         expected_type = type_map.get(self.field_type)
         if expected_type:
             return isinstance(value, expected_type)
@@ -118,16 +115,14 @@ class Field:
 
 
 class Schema:
-    """
-    Schema definition with fluent API for validation.
+    """Schema definition with fluent API for validation.
     
     Provides a clean, chainable interface for defining record schemas
     and validating records against them.
     """
-    
+
     def __init__(self, name: str, strict: bool = False):
-        """
-        Initialize schema.
+        """Initialize schema.
         
         Args:
             name: Schema name for identification
@@ -135,20 +130,19 @@ class Schema:
         """
         self.name = name
         self.strict = strict
-        self.fields: Dict[str, Field] = {}
-        self.description: Optional[str] = None
-    
+        self.fields: dict[str, Field] = {}
+        self.description: str | None = None
+
     def field(
         self,
         name: str,
-        field_type: Union[FieldType, str],
+        field_type: FieldType | str,
         required: bool = False,
         default: Any = None,
-        constraints: Optional[List[Constraint]] = None,
-        description: Optional[str] = None
+        constraints: list[Constraint] | None = None,
+        description: str | None = None
     ) -> 'Schema':
-        """
-        Add a field definition (fluent API).
+        """Add a field definition (fluent API).
         
         Args:
             name: Field name
@@ -167,12 +161,12 @@ class Schema:
                 field_type = FieldType[field_type.upper()]
             except KeyError:
                 raise ValueError(f"Invalid field type: {field_type}")
-        
+
         # Add Required constraint if field is required
         field_constraints = constraints or []
         if required and not any(isinstance(c, Required) for c in field_constraints):
             field_constraints.insert(0, Required())
-        
+
         self.fields[name] = Field(
             name=name,
             field_type=field_type,
@@ -182,10 +176,9 @@ class Schema:
             description=description
         )
         return self
-    
+
     def with_description(self, description: str) -> 'Schema':
-        """
-        Set schema description (fluent API).
+        """Set schema description (fluent API).
         
         Args:
             description: Schema description
@@ -195,15 +188,14 @@ class Schema:
         """
         self.description = description
         return self
-    
+
     def validate(
         self,
-        record: Union[Record, Dict[str, Any]],
+        record: Record | dict[str, Any],
         coerce: bool = False,
-        context: Optional[ValidationContext] = None
+        context: ValidationContext | None = None
     ) -> ValidationResult:
-        """
-        Validate a record against this schema.
+        """Validate a record against this schema.
         
         Args:
             record: Record or dict to validate
@@ -215,35 +207,35 @@ class Schema:
         """
         if context is None:
             context = ValidationContext()
-        
+
         # Convert dict to Record if needed
         if isinstance(record, dict):
             record = Record(data=record)
-        
+
         errors = []
         warnings = []
         validated_fields = {}
-        
+
         # Validate defined fields
         for field_name, field_def in self.fields.items():
             field_value = record.get_value(field_name)
-            
+
             # Validate field
             result = field_def.validate(field_value, context, coerce)
-            
+
             if not result.valid:
                 errors.extend(result.errors)
             else:
                 validated_fields[field_name] = result.value
-            
+
             warnings.extend(result.warnings)
-        
+
         # Check for unknown fields if strict mode
         if self.strict:
             unknown_fields = set(record.fields.keys()) - set(self.fields.keys())
             if unknown_fields:
                 errors.append(f"Unknown fields in strict mode: {', '.join(unknown_fields)}")
-        
+
         # Create validated record with coerced values
         if errors:
             return ValidationResult.failure(record, errors, warnings)
@@ -255,15 +247,14 @@ class Schema:
                 id=record.id
             )
             return ValidationResult.success(validated_record, warnings)
-    
+
     def validate_many(
         self,
-        records: List[Union[Record, Dict[str, Any]]],
+        records: list[Record | dict[str, Any]],
         coerce: bool = False,
         stop_on_error: bool = False
-    ) -> List[ValidationResult]:
-        """
-        Validate multiple records.
+    ) -> list[ValidationResult]:
+        """Validate multiple records.
         
         Args:
             records: List of records to validate
@@ -275,19 +266,18 @@ class Schema:
         """
         context = ValidationContext()  # Shared context for uniqueness checks
         results = []
-        
+
         for record in records:
             result = self.validate(record, coerce, context)
             results.append(result)
-            
+
             if not result.valid and stop_on_error:
                 break
-        
+
         return results
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """
-        Convert schema to dictionary representation.
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert schema to dictionary representation.
         
         Returns:
             Dictionary representation of schema
@@ -307,11 +297,10 @@ class Schema:
                 for name, field_def in self.fields.items()
             }
         }
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Schema':
-        """
-        Create schema from dictionary representation.
+    def from_dict(cls, data: dict[str, Any]) -> 'Schema':
+        """Create schema from dictionary representation.
         
         Args:
             data: Dictionary with schema definition
@@ -324,7 +313,7 @@ class Schema:
             strict=data.get("strict", False)
         )
         schema.description = data.get("description")
-        
+
         # Add fields
         fields = data.get("fields", {})
         for field_name, field_data in fields.items():
@@ -335,5 +324,5 @@ class Schema:
                 default=field_data.get("default"),
                 description=field_data.get("description")
             )
-        
+
         return schema

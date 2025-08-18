@@ -1,8 +1,6 @@
-"""
-Migration definition with reversible operations.
+"""Migration definition with reversible operations.
 """
 
-from typing import List, Optional
 
 from dataknobs_data.records import Record
 
@@ -10,16 +8,14 @@ from .operations import Operation
 
 
 class Migration:
-    """
-    Migration between data versions with reversible operations.
+    """Migration between data versions with reversible operations.
     
     Provides a clean API for defining and applying migrations with
     support for rollback via operation reversal.
     """
-    
-    def __init__(self, from_version: str, to_version: str, description: Optional[str] = None):
-        """
-        Initialize migration.
+
+    def __init__(self, from_version: str, to_version: str, description: str | None = None):
+        """Initialize migration.
         
         Args:
             from_version: Source version identifier
@@ -29,11 +25,10 @@ class Migration:
         self.from_version = from_version
         self.to_version = to_version
         self.description = description
-        self.operations: List[Operation] = []
-    
+        self.operations: list[Operation] = []
+
     def add(self, operation: Operation) -> 'Migration':
-        """
-        Add an operation to the migration (fluent API).
+        """Add an operation to the migration (fluent API).
         
         Args:
             operation: Operation to add
@@ -43,10 +38,9 @@ class Migration:
         """
         self.operations.append(operation)
         return self
-    
-    def add_many(self, operations: List[Operation]) -> 'Migration':
-        """
-        Add multiple operations (fluent API).
+
+    def add_many(self, operations: list[Operation]) -> 'Migration':
+        """Add multiple operations (fluent API).
         
         Args:
             operations: List of operations to add
@@ -56,10 +50,9 @@ class Migration:
         """
         self.operations.extend(operations)
         return self
-    
+
     def apply(self, record: Record, reverse: bool = False) -> Record:
-        """
-        Apply migration to a record.
+        """Apply migration to a record.
         
         Args:
             record: Record to migrate
@@ -69,7 +62,7 @@ class Migration:
             Migrated record
         """
         result = record
-        
+
         if reverse:
             # Apply operations in reverse order with reverse method
             for operation in reversed(self.operations):
@@ -78,18 +71,17 @@ class Migration:
             # Apply operations in forward order
             for operation in self.operations:
                 result = operation.apply(result)
-        
+
         # Update version metadata
         if reverse:
             result.metadata["version"] = self.from_version
         else:
             result.metadata["version"] = self.to_version
-        
+
         return result
-    
-    def apply_many(self, records: List[Record], reverse: bool = False) -> List[Record]:
-        """
-        Apply migration to multiple records.
+
+    def apply_many(self, records: list[Record], reverse: bool = False) -> list[Record]:
+        """Apply migration to multiple records.
         
         Args:
             records: List of records to migrate
@@ -99,10 +91,9 @@ class Migration:
             List of migrated records
         """
         return [self.apply(record, reverse) for record in records]
-    
+
     def can_reverse(self) -> bool:
-        """
-        Check if this migration can be reversed.
+        """Check if this migration can be reversed.
         
         All operations must support reversal for the migration to be reversible.
         
@@ -111,16 +102,15 @@ class Migration:
         """
         # All our operations support reversal by design
         return True
-    
+
     def get_affected_fields(self) -> set[str]:
-        """
-        Get set of field names affected by this migration.
+        """Get set of field names affected by this migration.
         
         Returns:
             Set of field names that will be modified
         """
         affected = set()
-        
+
         for operation in self.operations:
             # Extract field names based on operation type
             if hasattr(operation, 'field_name'):
@@ -138,12 +128,11 @@ class Migration:
                         affected.add(sub_op.old_name)
                         if hasattr(sub_op, 'new_name'):
                             affected.add(sub_op.new_name)
-        
+
         return affected
-    
-    def validate(self, record: Record) -> tuple[bool, List[str]]:
-        """
-        Validate if a record can be migrated.
+
+    def validate(self, record: Record) -> tuple[bool, list[str]]:
+        """Validate if a record can be migrated.
         
         Args:
             record: Record to validate
@@ -152,14 +141,14 @@ class Migration:
             Tuple of (is_valid, list_of_issues)
         """
         issues = []
-        
+
         # Check current version
         current_version = record.metadata.get("version")
         if current_version and current_version != self.from_version:
             issues.append(
                 f"Record version mismatch: expected {self.from_version}, got {current_version}"
             )
-        
+
         # Check for required fields for operations
         for operation in self.operations:
             if hasattr(operation, 'old_name'):
@@ -170,16 +159,16 @@ class Migration:
                 # TransformField operation
                 if operation.field_name not in record.fields:
                     issues.append(f"Field '{operation.field_name}' not found for transform operation")
-        
+
         return len(issues) == 0, issues
-    
+
     def __repr__(self) -> str:
         """String representation."""
         return (
             f"Migration(from='{self.from_version}', to='{self.to_version}', "
             f"operations={len(self.operations)})"
         )
-    
+
     def __str__(self) -> str:
         """Human-readable string."""
         desc = f"Migration from {self.from_version} to {self.to_version}"

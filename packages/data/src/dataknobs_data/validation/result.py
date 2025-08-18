@@ -1,32 +1,29 @@
-"""
-Validation result types with consistent, predictable behavior.
+"""Validation result types with consistent, predictable behavior.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, List, Optional, Dict, Set
+from typing import Any
 
 
 @dataclass
 class ValidationResult:
-    """
-    Unified result object for all validation operations.
+    """Unified result object for all validation operations.
     
     This class provides a consistent return type for all validation operations,
     making the API predictable and easy to use.
     """
-    
+
     valid: bool
     value: Any  # The (possibly coerced) value
-    errors: List[str] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
-    
+    errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
     def __bool__(self) -> bool:
         """Allow 'if result:' usage to check validity."""
         return self.valid
-    
+
     def merge(self, other: 'ValidationResult') -> 'ValidationResult':
-        """
-        Combine results for composite validation.
+        """Combine results for composite validation.
         
         Args:
             other: Another ValidationResult to merge with this one
@@ -40,10 +37,9 @@ class ValidationResult:
             errors=self.errors + other.errors,
             warnings=self.warnings + other.warnings
         )
-    
+
     def add_error(self, error: str) -> 'ValidationResult':
-        """
-        Add an error and mark as invalid (fluent API).
+        """Add an error and mark as invalid (fluent API).
         
         Args:
             error: Error message to add
@@ -54,10 +50,9 @@ class ValidationResult:
         self.errors.append(error)
         self.valid = False
         return self
-    
+
     def add_warning(self, warning: str) -> 'ValidationResult':
-        """
-        Add a warning without affecting validity (fluent API).
+        """Add a warning without affecting validity (fluent API).
         
         Args:
             warning: Warning message to add
@@ -67,11 +62,10 @@ class ValidationResult:
         """
         self.warnings.append(warning)
         return self
-    
+
     @classmethod
-    def success(cls, value: Any, warnings: Optional[List[str]] = None) -> 'ValidationResult':
-        """
-        Create a successful validation result.
+    def success(cls, value: Any, warnings: list[str] | None = None) -> 'ValidationResult':
+        """Create a successful validation result.
         
         Args:
             value: The validated value
@@ -86,11 +80,10 @@ class ValidationResult:
             errors=[],
             warnings=warnings or []
         )
-    
+
     @classmethod
-    def failure(cls, value: Any, errors: List[str], warnings: Optional[List[str]] = None) -> 'ValidationResult':
-        """
-        Create a failed validation result.
+    def failure(cls, value: Any, errors: list[str], warnings: list[str] | None = None) -> 'ValidationResult':
+        """Create a failed validation result.
         
         Args:
             value: The value that failed validation
@@ -110,19 +103,17 @@ class ValidationResult:
 
 @dataclass
 class ValidationContext:
-    """
-    Context for stateful validation operations.
+    """Context for stateful validation operations.
     
     Used by constraints like Unique that need to track state across
     multiple validations.
     """
-    
-    seen_values: Dict[str, Set[Any]] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
+    seen_values: dict[str, set[Any]] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
     def has_seen(self, field: str, value: Any) -> bool:
-        """
-        Check if a value has been seen for a field.
+        """Check if a value has been seen for a field.
         
         Args:
             field: Field name
@@ -132,10 +123,9 @@ class ValidationContext:
             True if value has been seen for this field
         """
         return field in self.seen_values and value in self.seen_values[field]
-    
+
     def mark_seen(self, field: str, value: Any) -> None:
-        """
-        Mark a value as seen for a field.
+        """Mark a value as seen for a field.
         
         Args:
             field: Field name
@@ -144,10 +134,9 @@ class ValidationContext:
         if field not in self.seen_values:
             self.seen_values[field] = set()
         self.seen_values[field].add(value)
-    
-    def clear(self, field: Optional[str] = None) -> None:
-        """
-        Clear seen values.
+
+    def clear(self, field: str | None = None) -> None:
+        """Clear seen values.
         
         Args:
             field: Optional field to clear. If None, clears all fields.
@@ -156,20 +145,18 @@ class ValidationContext:
             self.seen_values.pop(field, None)
         else:
             self.seen_values.clear()
-    
+
     def set_metadata(self, key: str, value: Any) -> None:
-        """
-        Store metadata in the context.
+        """Store metadata in the context.
         
         Args:
             key: Metadata key
             value: Metadata value
         """
         self.metadata[key] = value
-    
+
     def get_metadata(self, key: str, default: Any = None) -> Any:
-        """
-        Retrieve metadata from the context.
+        """Retrieve metadata from the context.
         
         Args:
             key: Metadata key

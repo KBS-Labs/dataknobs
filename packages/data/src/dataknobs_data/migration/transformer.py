@@ -1,22 +1,21 @@
-"""
-Data transformation with fluent API.
+"""Data transformation with fluent API.
 """
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional, Union
+from typing import Any
 
-from dataknobs_data.records import Record
 from dataknobs_data.fields import FieldType
+from dataknobs_data.records import Record
 
 
 class TransformRule(ABC):
     """Base class for transformation rules."""
-    
+
     @abstractmethod
     def apply(self, record: Record) -> Record:
-        """
-        Apply this transformation rule to a record.
+        """Apply this transformation rule to a record.
         
         Args:
             record: Record to transform
@@ -30,11 +29,11 @@ class TransformRule(ABC):
 @dataclass
 class MapRule(TransformRule):
     """Map a field to another field, optionally transforming the value."""
-    
+
     source: str
     target: str
-    transform: Optional[Callable[[Any], Any]] = None
-    
+    transform: Callable[[Any], Any] | None = None
+
     def apply(self, record: Record) -> Record:
         """Apply field mapping."""
         result = Record(
@@ -42,10 +41,10 @@ class MapRule(TransformRule):
             metadata=record.metadata.copy(),
             id=record.id
         )
-        
+
         if self.source in record.fields:
             value = record.fields[self.source].value
-            
+
             # Apply transformation if provided
             if self.transform:
                 try:
@@ -54,23 +53,23 @@ class MapRule(TransformRule):
                     # Store error in metadata and keep original value
                     result.metadata[f"_transform_error_{self.source}"] = str(e)
                     value = record.fields[self.source].value
-            
+
             # If target is different from source, remove source field
             if self.target != self.source:
                 del result.fields[self.source]
-            
+
             # Set target field
             result.set_field(self.target, value)
-        
+
         return result
 
 
 @dataclass
 class ExcludeRule(TransformRule):
     """Exclude specified fields from the record."""
-    
-    fields: List[str]
-    
+
+    fields: list[str]
+
     def apply(self, record: Record) -> Record:
         """Remove excluded fields."""
         result = Record(
@@ -78,23 +77,23 @@ class ExcludeRule(TransformRule):
             metadata=record.metadata.copy(),
             id=record.id
         )
-        
+
         # Copy all fields except excluded ones
         for field_name, field in record.fields.items():
             if field_name not in self.fields:
                 result.fields[field_name] = field
-        
+
         return result
 
 
 @dataclass
 class AddRule(TransformRule):
     """Add a new field with a computed or default value."""
-    
+
     field_name: str
-    value: Union[Any, Callable[[Record], Any]]
-    field_type: Optional[FieldType] = None
-    
+    value: Any | Callable[[Record], Any]
+    field_type: FieldType | None = None
+
     def apply(self, record: Record) -> Record:
         """Add new field."""
         result = Record(
@@ -102,7 +101,7 @@ class AddRule(TransformRule):
             metadata=record.metadata.copy(),
             id=record.id
         )
-        
+
         # Compute value if it's a callable
         if callable(self.value):
             try:
@@ -113,31 +112,29 @@ class AddRule(TransformRule):
                 computed_value = None
         else:
             computed_value = self.value
-        
+
         result.set_field(self.field_name, computed_value, field_type=self.field_type)
         return result
 
 
 class Transformer:
-    """
-    Stateless record transformer with fluent API.
+    """Stateless record transformer with fluent API.
     
     Provides a clean, chainable interface for defining record transformations
     that can be applied during migrations or data processing.
     """
-    
+
     def __init__(self):
         """Initialize transformer with empty rule set."""
-        self.rules: List[TransformRule] = []
-    
+        self.rules: list[TransformRule] = []
+
     def map(
         self,
         source: str,
-        target: Optional[str] = None,
-        transform: Optional[Callable[[Any], Any]] = None
+        target: str | None = None,
+        transform: Callable[[Any], Any] | None = None
     ) -> 'Transformer':
-        """
-        Map a field, optionally transforming its value (fluent API).
+        """Map a field, optionally transforming its value (fluent API).
         
         Args:
             source: Source field name
@@ -153,10 +150,9 @@ class Transformer:
             transform=transform
         ))
         return self
-    
+
     def rename(self, old_name: str, new_name: str) -> 'Transformer':
-        """
-        Rename a field (fluent API).
+        """Rename a field (fluent API).
         
         Args:
             old_name: Current field name
@@ -166,10 +162,9 @@ class Transformer:
             Self for chaining
         """
         return self.map(old_name, new_name)
-    
+
     def exclude(self, *fields: str) -> 'Transformer':
-        """
-        Exclude fields from the record (fluent API).
+        """Exclude fields from the record (fluent API).
         
         Args:
             *fields: Field names to exclude
@@ -179,15 +174,14 @@ class Transformer:
         """
         self.rules.append(ExcludeRule(list(fields)))
         return self
-    
+
     def add(
         self,
         field_name: str,
-        value: Union[Any, Callable[[Record], Any]],
-        field_type: Optional[FieldType] = None
+        value: Any | Callable[[Record], Any],
+        field_type: FieldType | None = None
     ) -> 'Transformer':
-        """
-        Add a new field (fluent API).
+        """Add a new field (fluent API).
         
         Args:
             field_name: Name of field to add
@@ -203,10 +197,9 @@ class Transformer:
             field_type=field_type
         ))
         return self
-    
+
     def add_rule(self, rule: TransformRule) -> 'Transformer':
-        """
-        Add a custom transformation rule (fluent API).
+        """Add a custom transformation rule (fluent API).
         
         Args:
             rule: Custom transformation rule
@@ -216,10 +209,9 @@ class Transformer:
         """
         self.rules.append(rule)
         return self
-    
-    def transform(self, record: Record) -> Optional[Record]:
-        """
-        Apply all transformation rules to a record.
+
+    def transform(self, record: Record) -> Record | None:
+        """Apply all transformation rules to a record.
         
         Args:
             record: Record to transform
@@ -229,19 +221,18 @@ class Transformer:
         """
         if record is None:
             return None
-        
+
         result = record
         for rule in self.rules:
             result = rule.apply(result)
             if result is None:
                 # Rule filtered out the record
                 return None
-        
+
         return result
-    
-    def transform_many(self, records: List[Record]) -> List[Record]:
-        """
-        Transform multiple records.
+
+    def transform_many(self, records: list[Record]) -> list[Record]:
+        """Transform multiple records.
         
         Args:
             records: List of records to transform
@@ -255,21 +246,20 @@ class Transformer:
             if transformed is not None:
                 results.append(transformed)
         return results
-    
+
     def clear(self) -> 'Transformer':
-        """
-        Clear all transformation rules (fluent API).
+        """Clear all transformation rules (fluent API).
         
         Returns:
             Self for chaining
         """
         self.rules.clear()
         return self
-    
+
     def __len__(self) -> int:
         """Get number of transformation rules."""
         return len(self.rules)
-    
+
     def __repr__(self) -> str:
         """String representation."""
         return f"Transformer(rules={len(self.rules)})"

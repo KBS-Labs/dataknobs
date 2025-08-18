@@ -2,10 +2,10 @@
 
 import asyncio
 import threading
-import time
 import uuid
 from collections import OrderedDict
-from typing import Any, AsyncIterator, Iterator, Optional
+from collections.abc import AsyncIterator, Iterator
+from typing import Any
 
 from dataknobs_config import ConfigurableBase
 
@@ -13,7 +13,7 @@ from ..database import AsyncDatabase, SyncDatabase
 from ..query import Query
 from ..query_logic import ComplexQuery
 from ..records import Record
-from ..streaming import AsyncStreamingMixin, StreamConfig, StreamResult, StreamingMixin
+from ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult
 
 
 class AsyncMemoryDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
@@ -23,7 +23,7 @@ class AsyncMemoryDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
         super().__init__(config)
         self._storage: OrderedDict[str, Record] = OrderedDict()
         self._lock = asyncio.Lock()
-    
+
     @classmethod
     def from_config(cls, config: dict) -> "AsyncMemoryDatabase":
         """Create from config dictionary."""
@@ -83,7 +83,7 @@ class AsyncMemoryDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
         # Handle ComplexQuery using base class implementation
         if isinstance(query, ComplexQuery):
             return await self._search_with_complex_query(query)
-        
+
         async with self._lock:
             results = []
 
@@ -170,19 +170,19 @@ class AsyncMemoryDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
 
     async def stream_read(
         self,
-        query: Optional[Query] = None,
-        config: Optional[StreamConfig] = None
+        query: Query | None = None,
+        config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
         """Stream records from memory."""
         config = config or StreamConfig()
-        
+
         # Get all matching records
         if query:
             records = await self.search(query)
         else:
             async with self._lock:
                 records = list(self._storage.values())
-        
+
         # Yield records in batches
         for i in range(0, len(records), config.batch_size):
             batch = records[i:i + config.batch_size]
@@ -190,11 +190,11 @@ class AsyncMemoryDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
                 yield record.copy(deep=True)
                 # Small yield to prevent blocking
                 await asyncio.sleep(0)
-    
+
     async def stream_write(
         self,
         records: AsyncIterator[Record],
-        config: Optional[StreamConfig] = None
+        config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into memory."""
         # Use the default implementation from mixin
@@ -208,7 +208,7 @@ class SyncMemoryDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
         super().__init__(config)
         self._storage: OrderedDict[str, Record] = OrderedDict()
         self._lock = threading.RLock()
-    
+
     @classmethod
     def from_config(cls, config: dict) -> "SyncMemoryDatabase":
         """Create from config dictionary."""
@@ -268,7 +268,7 @@ class SyncMemoryDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
         # Handle ComplexQuery using base class implementation
         if isinstance(query, ComplexQuery):
             return self._search_with_complex_query(query)
-        
+
         with self._lock:
             results = []
 
@@ -355,29 +355,29 @@ class SyncMemoryDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
 
     def stream_read(
         self,
-        query: Optional[Query] = None,
-        config: Optional[StreamConfig] = None
+        query: Query | None = None,
+        config: StreamConfig | None = None
     ) -> Iterator[Record]:
         """Stream records from memory."""
         config = config or StreamConfig()
-        
+
         # Get all matching records
         if query:
             records = self.search(query)
         else:
             with self._lock:
                 records = list(self._storage.values())
-        
+
         # Yield records in batches
         for i in range(0, len(records), config.batch_size):
             batch = records[i:i + config.batch_size]
             for record in batch:
                 yield record.copy(deep=True)
-    
+
     def stream_write(
         self,
         records: Iterator[Record],
-        config: Optional[StreamConfig] = None
+        config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into memory."""
         # Use the default implementation from mixin

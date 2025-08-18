@@ -1,5 +1,4 @@
-"""
-Migration Module v2 - Clean, streaming-based data migration API.
+"""Migration Module v2 - Clean, streaming-based data migration API.
 
 This module provides a complete rewrite of the migration system with:
 - Streaming support for memory-efficient operations
@@ -9,26 +8,26 @@ This module provides a complete rewrite of the migration system with:
 - Parallel migration support
 """
 
+from .factory import (
+    MigrationFactory,
+    MigratorFactory,
+    TransformerFactory,
+    migration_factory,
+    migrator_factory,
+    transformer_factory,
+)
+from .migration import Migration
+from .migrator import Migrator
 from .operations import (
-    Operation,
     AddField,
+    CompositeOperation,
+    Operation,
     RemoveField,
     RenameField,
     TransformField,
-    CompositeOperation,
 )
-from .migration import Migration
-from .transformer import Transformer, TransformRule, MapRule, ExcludeRule, AddRule
 from .progress import MigrationProgress
-from .migrator import Migrator
-from .factory import (
-    migration_factory,
-    transformer_factory,
-    migrator_factory,
-    MigrationFactory,
-    TransformerFactory,
-    MigratorFactory,
-)
+from .transformer import AddRule, ExcludeRule, MapRule, Transformer, TransformRule
 
 __all__ = [
     # Operations

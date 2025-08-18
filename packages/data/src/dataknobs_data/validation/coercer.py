@@ -1,10 +1,9 @@
-"""
-Type coercion with predictable, consistent behavior.
+"""Type coercion with predictable, consistent behavior.
 """
 
 import json
 from datetime import datetime
-from typing import Any, Type, Union, get_origin, get_args
+from typing import Any
 
 from dataknobs_data.fields import FieldType
 
@@ -12,20 +11,18 @@ from .result import ValidationResult
 
 
 class Coercer:
-    """
-    Type coercion with predictable results.
+    """Type coercion with predictable results.
     
     Always returns ValidationResult, never raises exceptions.
     Provides clear error messages when coercion fails.
     """
-    
+
     def coerce(
         self,
         value: Any,
-        target_type: Union[Type, FieldType]
+        target_type: type | FieldType
     ) -> ValidationResult:
-        """
-        Coerce a value to the target type.
+        """Coerce a value to the target type.
         
         Args:
             value: Value to coerce
@@ -40,15 +37,15 @@ class Coercer:
                 None,
                 [f"Cannot coerce None to {self._type_name(target_type)}"]
             )
-        
+
         # Convert FieldType to Python type
         if isinstance(target_type, FieldType):
             target_type = self._field_type_to_python(target_type)
-        
+
         # If already correct type, return as-is
         if isinstance(value, target_type):
             return ValidationResult.success(value)
-        
+
         # Attempt coercion
         try:
             coerced = self._coerce_value(value, target_type)
@@ -56,10 +53,10 @@ class Coercer:
         except Exception as e:
             return ValidationResult.failure(
                 value,
-                [f"Cannot coerce {type(value).__name__} to {self._type_name(target_type)}: {str(e)}"]
+                [f"Cannot coerce {type(value).__name__} to {self._type_name(target_type)}: {e!s}"]
             )
-    
-    def _field_type_to_python(self, field_type: FieldType) -> Type:
+
+    def _field_type_to_python(self, field_type: FieldType) -> type:
         """Convert FieldType enum to Python type."""
         type_map = {
             FieldType.STRING: str,
@@ -71,8 +68,8 @@ class Coercer:
             FieldType.BINARY: bytes,
         }
         return type_map.get(field_type, object)
-    
-    def _type_name(self, target_type: Union[Type, FieldType]) -> str:
+
+    def _type_name(self, target_type: type | FieldType) -> str:
         """Get readable name for type."""
         if isinstance(target_type, FieldType):
             return target_type.name
@@ -82,10 +79,9 @@ class Coercer:
             return f"Union[{', '.join(t.__name__ for t in target_type)}]"
         else:
             return str(target_type)
-    
-    def _coerce_value(self, value: Any, target_type: Type) -> Any:
-        """
-        Perform the actual coercion.
+
+    def _coerce_value(self, value: Any, target_type: type) -> Any:
+        """Perform the actual coercion.
         
         Args:
             value: Value to coerce
@@ -105,11 +101,11 @@ class Coercer:
                 except (ValueError, TypeError):
                     continue
             raise ValueError(f"Could not coerce to any of {target_type}")
-        
+
         # String coercion
         if target_type == str:
             return str(value)
-        
+
         # Integer coercion
         elif target_type == int:
             if isinstance(value, str):
@@ -134,7 +130,7 @@ class Coercer:
                 return 1 if value else 0
             else:
                 return int(value)
-        
+
         # Float coercion
         elif target_type == float:
             if isinstance(value, str):
@@ -146,7 +142,7 @@ class Coercer:
                 return 1.0 if value else 0.0
             else:
                 return float(value)
-        
+
         # Boolean coercion
         elif target_type == bool:
             if isinstance(value, str):
@@ -161,7 +157,7 @@ class Coercer:
                 return bool(value)
             else:
                 return bool(value)
-        
+
         # DateTime coercion
         elif target_type == datetime:
             if isinstance(value, str):
@@ -180,26 +176,26 @@ class Coercer:
                     '%m/%d/%Y',
                     '%m-%d-%Y',
                 ]
-                
+
                 for fmt in formats:
                     try:
                         return datetime.strptime(value, fmt)
                     except ValueError:
                         continue
-                
+
                 # Try parsing as ISO format
                 try:
                     return datetime.fromisoformat(value.replace('Z', '+00:00'))
                 except (ValueError, AttributeError):
                     pass
-                
+
                 raise ValueError(f"Could not parse datetime from '{value}'")
             elif isinstance(value, (int, float)):
                 # Assume Unix timestamp
                 return datetime.fromtimestamp(value)
             else:
                 raise ValueError(f"Cannot coerce {type(value).__name__} to datetime")
-        
+
         # Dict coercion (for JSON type)
         elif target_type == dict:
             if isinstance(value, str):
@@ -213,7 +209,7 @@ class Coercer:
                 raise ValueError("Cannot convert list to dict")
             else:
                 return dict(value)
-        
+
         # List coercion (for JSON type)
         elif target_type == list:
             if isinstance(value, str):
@@ -235,7 +231,7 @@ class Coercer:
                 return list(value)
             else:
                 return [value]
-        
+
         # Bytes coercion
         elif target_type == bytes:
             if isinstance(value, str):
@@ -247,18 +243,17 @@ class Coercer:
                 return bytes([value])
             else:
                 return bytes(value)
-        
+
         # Unknown type - attempt direct conversion
         else:
             return target_type(value)
-    
+
     def coerce_many(
         self,
         values: dict[str, Any],
-        types: dict[str, Union[Type, FieldType]]
+        types: dict[str, type | FieldType]
     ) -> dict[str, ValidationResult]:
-        """
-        Coerce multiple values.
+        """Coerce multiple values.
         
         Args:
             values: Dictionary of field names to values

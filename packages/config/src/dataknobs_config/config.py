@@ -157,7 +157,7 @@ class Config:
 
                 # Apply path resolution
                 config = self._resolve_paths(config, type_name)
-                
+
                 # Apply environment variable substitution
                 config = self._variable_substitution.substitute(config)
 
@@ -527,14 +527,14 @@ class Config:
 
         # Load and instantiate the factory
         factory_path = config["factory"]
-        
+
         # Check if it's a registered factory first
         if factory_path in self._registered_factories:
             factory = self._registered_factories[factory_path]
         else:
             # Try to load as a module path
             factory_cls = self._object_builder._load_class(factory_path)
-            
+
             # Create factory instance
             try:
                 factory = factory_cls()
@@ -546,7 +546,7 @@ class Config:
         self._object_builder._cache[factory_ref] = factory
 
         return factory
-    
+
     def register_factory(self, name: str, factory: Any) -> None:
         """Register a factory instance for use in configurations.
         
@@ -575,7 +575,7 @@ class Config:
         """
         self._registered_factories[name] = factory
         logger.debug(f"Registered factory '{name}': {factory}")
-    
+
     def unregister_factory(self, name: str) -> None:
         """Unregister a factory.
         
@@ -589,7 +589,7 @@ class Config:
             raise KeyError(f"Factory '{name}' is not registered")
         del self._registered_factories[name]
         logger.debug(f"Unregistered factory '{name}'")
-    
+
     def get_registered_factories(self) -> Dict[str, Any]:
         """Get all registered factories.
         

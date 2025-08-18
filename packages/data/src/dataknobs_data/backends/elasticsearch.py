@@ -1,18 +1,18 @@
 """Elasticsearch backend implementation for the data package."""
 
-import asyncio
-import time
 import uuid
-from typing import Any, AsyncIterator, Iterator, Optional
+from collections.abc import Iterator
+from typing import Any
 
 from dataknobs_config import ConfigurableBase
+
 from dataknobs_utils.elasticsearch_utils import SimplifiedElasticsearchIndex
 
-from ..database import AsyncDatabase, SyncDatabase
+from ..database import SyncDatabase
 from ..exceptions import DatabaseError
 from ..query import Operator, Query, SortOrder
 from ..records import Record
-from ..streaming import StreamConfig, StreamResult, StreamingMixin
+from ..streaming import StreamConfig, StreamingMixin, StreamResult
 
 
 class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
@@ -33,7 +33,7 @@ class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
         super().__init__(config)
         self.es_index = None  # Will be initialized in connect()
         self._connected = False
-    
+
     @classmethod
     def from_config(cls, config: dict) -> "SyncElasticsearchDatabase":
         """Create from config dictionary."""
@@ -43,7 +43,7 @@ class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
         """Connect to the Elasticsearch database."""
         if self._connected:
             return  # Already connected
-        
+
         # Initialize the Elasticsearch connection and index
         config = self.config.copy()
 
@@ -82,20 +82,20 @@ class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
         # Ensure index exists
         if not self.es_index.exists():
             self.es_index.create()
-        
+
         self._connected = True
-    
+
     def close(self) -> None:
         """Close the database connection."""
         if self.es_index:
             # ElasticsearchIndex manages its own connections
             self._connected = False
-    
+
     def _initialize(self) -> None:
         """Initialize method - connection setup moved to connect()."""
         # Configuration parsing stays here if needed
         pass
-    
+
     def _check_connection(self) -> None:
         """Check if database is connected."""
         if not self._connected or not self.es_index:
@@ -166,27 +166,27 @@ class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
     def delete(self, id: str) -> bool:
         """Delete a record by ID."""
         success = self.es_index.delete(doc_id=id)
-        
+
         # Refresh if needed
         if success and self.refresh:
             self.es_index.refresh()
-        
+
         return success
 
     def exists(self, id: str) -> bool:
         """Check if a record exists."""
         return self.es_index.exists(doc_id=id)
-    
+
     def upsert(self, id: str, record: Record) -> str:
         """Update or insert a record with a specific ID."""
         doc = self._record_to_doc(record, id)
         response = self.es_index.index(body=doc, doc_id=id, refresh=self.refresh)
-        
+
         if response.get("_id"):
             return id
         else:
             raise DatabaseError(f"Failed to upsert record {id}: {response}")
-    
+
     def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records in batch with a single refresh."""
         ids = []
@@ -194,21 +194,21 @@ class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
             # Generate ID
             id = str(uuid.uuid4())
             doc = self._record_to_doc(record, id)
-            
+
             # Index without refresh (we'll refresh once at the end)
             response = self.es_index.index(body=doc, doc_id=id, refresh=False)
-            
+
             if response.get("_id"):
                 ids.append(id)
             else:
                 ids.append(None)
-        
+
         # Single refresh after all documents are indexed
         if self.refresh and any(ids):
             self.es_index.refresh()
-        
+
         return ids
-    
+
     def read_batch(self, ids: list[str]) -> list[Record | None]:
         """Read multiple records in batch."""
         records = []
@@ -216,7 +216,7 @@ class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
             record = self.read(id)
             records.append(record)
         return records
-    
+
     def delete_batch(self, ids: list[str]) -> list[bool]:
         """Delete multiple records in batch with a single refresh."""
         results = []
@@ -224,11 +224,11 @@ class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
             # Delete without refresh (we'll refresh once at the end)
             success = self.es_index.delete(doc_id=id)
             results.append(success)
-        
+
         # Single refresh after all documents are deleted
         if self.refresh and any(results):
             self.es_index.refresh()
-        
+
         return results
 
     def search(self, query: Query) -> list[Record]:
@@ -239,13 +239,13 @@ class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
         # Apply filters
         for filter_obj in query.filters:
             field_path = f"data.{filter_obj.field}"
-            
+
             # For string fields in exact match queries, use .keyword suffix
             # LIKE and REGEX need to use the text field, not keyword
             if filter_obj.operator in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
                 if isinstance(filter_obj.value, str) or (
-                    isinstance(filter_obj.value, list) and 
-                    filter_obj.value and 
+                    isinstance(filter_obj.value, list) and
+                    filter_obj.value and
                     isinstance(filter_obj.value[0], str)
                 ):
                     field_path = f"{field_path}.keyword"
@@ -326,7 +326,7 @@ class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
                 # Don't add .keyword if user already specified it or for common numeric fields
                 # This is a heuristic - ideally we'd check the mapping
                 numeric_fields = ['age', 'salary', 'balance', 'count', 'score', 'amount', 'price', 'index', 'id', 'number', 'total', 'quantity']
-                if (not sort_spec.field.endswith('.keyword') and 
+                if (not sort_spec.field.endswith('.keyword') and
                     not sort_spec.field.endswith('.raw') and
                     sort_spec.field.lower() not in numeric_fields):
                     # Likely a text field, add .keyword for sorting
@@ -350,7 +350,7 @@ class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
         # An empty result set is still a valid response
         if not hasattr(response, 'json') or response.json is None:
             raise DatabaseError(f"Invalid search response: {response}")
-        
+
         # Check for actual errors in the response
         if 'error' in response.json:
             raise DatabaseError(f"Failed to search records: {response.json['error']}")
@@ -377,7 +377,7 @@ class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
         """Count all records in the database."""
         self._check_connection()
         return self.es_index.count()
-    
+
     def count(self, query: Query | None = None) -> int:
         """Count records matching a query using efficient Elasticsearch count.
         
@@ -389,19 +389,19 @@ class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
         """
         if not query or not query.filters:
             return self._count_all()
-        
+
         # Build Elasticsearch query from Query object (same as search)
         es_query = {"bool": {"must": []}}
-        
+
         for filter_obj in query.filters:
             field_path = f"data.{filter_obj.field}"
-            
+
             # For string fields in exact match queries, use .keyword suffix
             # LIKE and REGEX need different handling
             if filter_obj.operator in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
                 if isinstance(filter_obj.value, str) or (
-                    isinstance(filter_obj.value, list) and 
-                    filter_obj.value and 
+                    isinstance(filter_obj.value, list) and
+                    filter_obj.value and
                     isinstance(filter_obj.value[0], str)
                 ):
                     field_path = f"{field_path}.keyword"
@@ -409,7 +409,7 @@ class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
                 # Wildcard needs .keyword for proper matching
                 if isinstance(filter_obj.value, str):
                     field_path = f"{field_path}.keyword"
-            
+
             if filter_obj.operator == Operator.EQ:
                 # Handle boolean values correctly
                 value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
@@ -438,11 +438,11 @@ class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
                 es_query["bool"]["must"].append({"bool": {"must_not": {"exists": {"field": field_path}}}})
             elif filter_obj.operator == Operator.REGEX:
                 es_query["bool"]["must"].append({"regexp": {field_path: filter_obj.value}})
-        
+
         # If no filters were added, use match_all
         if not es_query["bool"]["must"]:
             es_query = {"match_all": {}}
-        
+
         # Count with the query
         return self.es_index.count(body={"query": es_query})
 
@@ -456,11 +456,11 @@ class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
         response = self.es_index.delete_by_query(
             body={"query": {"match_all": {}}}
         )
-        
+
         # Refresh if needed
         if self.refresh:
             self.es_index.refresh()
-        
+
         return response.get("deleted", count)
 
     def close(self) -> None:
@@ -470,28 +470,28 @@ class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
 
     def stream_read(
         self,
-        query: Optional[Query] = None,
-        config: Optional[StreamConfig] = None
+        query: Query | None = None,
+        config: StreamConfig | None = None
     ) -> Iterator[Record]:
         """Stream records from Elasticsearch."""
         config = config or StreamConfig()
-        
+
         # Use search to get all matching records
         if query:
             records = self.search(query)
         else:
             records = self.search(Query())
-        
+
         # Yield records in batches for consistency
         for i in range(0, len(records), config.batch_size):
             batch = records[i:i + config.batch_size]
             for record in batch:
                 yield record
-    
+
     def stream_write(
         self,
         records: Iterator[Record],
-        config: Optional[StreamConfig] = None
+        config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into Elasticsearch."""
         # Use the default implementation from mixin
@@ -499,4 +499,3 @@ class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
 
 
 # Import the native async implementation
-from .elasticsearch_async import AsyncElasticsearchDatabase

@@ -1,41 +1,37 @@
-"""
-Enhanced data migrator with streaming support.
+"""Enhanced data migrator with streaming support.
 """
 
-import asyncio
 import concurrent.futures
-from typing import Callable, Iterator, Optional, Union, List
+from collections.abc import Callable, Iterator
 
 from dataknobs_data.database import AsyncDatabase, SyncDatabase
 from dataknobs_data.query import Query
 from dataknobs_data.records import Record
-from dataknobs_data.streaming import StreamConfig, StreamResult
+from dataknobs_data.streaming import StreamConfig
 
-from .transformer import Transformer
 from .migration import Migration
 from .progress import MigrationProgress
+from .transformer import Transformer
 
 
 class Migrator:
-    """
-    Data migration orchestrator with streaming support.
+    """Data migration orchestrator with streaming support.
     
     Provides memory-efficient migration between databases using streaming,
     with support for transformations, progress tracking, and parallel processing.
     """
-    
+
     def migrate(
         self,
         source: SyncDatabase,
         target: SyncDatabase,
-        transform: Optional[Union[Transformer, Migration]] = None,
-        query: Optional[Query] = None,
+        transform: Transformer | Migration | None = None,
+        query: Query | None = None,
         batch_size: int = 1000,
-        on_progress: Optional[Callable[[MigrationProgress], None]] = None,
-        on_error: Optional[Callable[[Exception, Record], bool]] = None
+        on_progress: Callable[[MigrationProgress], None] | None = None,
+        on_error: Callable[[Exception, Record], bool] | None = None
     ) -> MigrationProgress:
-        """
-        Migrate data between databases with optional transformation.
+        """Migrate data between databases with optional transformation.
         
         Args:
             source: Source database
@@ -50,11 +46,11 @@ class Migrator:
             MigrationProgress with final statistics
         """
         progress = MigrationProgress().start()
-        
+
         # Get total count for progress tracking
         all_records = source.search(query or Query())
         progress.total = len(all_records)
-        
+
         batch = []
         for record in all_records:
             try:
@@ -70,17 +66,17 @@ class Migrator:
                         record = transformed
                     elif isinstance(transform, Migration):
                         record = transform.apply(record)
-                
+
                 batch.append(record)
-                
+
                 # Process batch when full
                 if len(batch) >= batch_size:
                     self._write_batch(target, batch, progress, on_error)
                     batch = []
-                    
+
                     if on_progress:
                         on_progress(progress)
-                        
+
             except Exception as e:
                 progress.record_failure(str(e), record.id if hasattr(record, 'id') else None, e)
                 if on_error:
@@ -91,29 +87,28 @@ class Migrator:
                 else:
                     # No handler - stop processing immediately
                     raise
-        
+
         # Process final batch
         if batch:
             self._write_batch(target, batch, progress, on_error)
-        
+
         progress.finish()
-        
+
         if on_progress:
             on_progress(progress)
-        
+
         return progress
-    
+
     def migrate_stream(
         self,
         source: SyncDatabase,
         target: SyncDatabase,
-        transform: Optional[Union[Transformer, Migration]] = None,
-        query: Optional[Query] = None,
-        config: Optional[StreamConfig] = None,
-        on_progress: Optional[Callable[[MigrationProgress], None]] = None
+        transform: Transformer | Migration | None = None,
+        query: Query | None = None,
+        config: StreamConfig | None = None,
+        on_progress: Callable[[MigrationProgress], None] | None = None
     ) -> MigrationProgress:
-        """
-        Stream-based migration for memory efficiency.
+        """Stream-based migration for memory efficiency.
         
         Never loads full dataset into memory.
         
@@ -130,14 +125,14 @@ class Migrator:
         """
         config = config or StreamConfig()
         progress = MigrationProgress().start()
-        
+
         # Estimate total (if possible)
         try:
             progress.total = source.count(query)
         except Exception:
             # Count not available, will track as we go
             pass
-        
+
         # Create streaming pipeline
         def transform_stream(records: Iterator[Record]) -> Iterator[Record]:
             """Apply transformation to streaming records."""
@@ -163,39 +158,38 @@ class Migrator:
                     else:
                         progress.record_failure(str(e), record.id if hasattr(record, 'id') else None, e)
                         raise
-        
+
         # Stream from source through transformation to target
         source_stream = source.stream_read(query, config)
         transformed_stream = transform_stream(source_stream)
-        
+
         # Write stream to target
         result = target.stream_write(transformed_stream, config)
-        
+
         # Update progress from result
         # Note: processed was already tracked in transform_stream
         # Result contains only write successes/failures
         progress.succeeded += result.successful
         progress.failed += result.failed
         progress.errors.extend(result.errors)
-        
+
         progress.finish()
-        
+
         if on_progress:
             on_progress(progress)
-        
+
         return progress
-    
+
     def migrate_parallel(
         self,
         source: SyncDatabase,
         target: SyncDatabase,
-        transform: Optional[Union[Transformer, Migration]] = None,
+        transform: Transformer | Migration | None = None,
         partitions: int = 4,
         partition_field: str = "partition_id",
-        on_progress: Optional[Callable[[MigrationProgress], None]] = None
+        on_progress: Callable[[MigrationProgress], None] | None = None
     ) -> MigrationProgress:
-        """
-        Parallel streaming migration.
+        """Parallel streaming migration.
         
         Partition data and migrate in parallel streams.
         
@@ -214,36 +208,35 @@ class Migrator:
             """Migrate a single partition."""
             query = Query().filter(partition_field, "=", partition_id)
             return self.migrate_stream(source, target, transform, query)
-        
+
         total_progress = MigrationProgress().start()
-        
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=partitions) as executor:
             futures = [
                 executor.submit(migrate_partition, i)
                 for i in range(partitions)
             ]
-            
+
             for future in concurrent.futures.as_completed(futures):
                 partition_progress = future.result()
                 total_progress.merge(partition_progress)
-                
+
                 if on_progress:
                     on_progress(total_progress)
-        
+
         total_progress.finish()
         return total_progress
-    
+
     async def migrate_async(
         self,
         source: AsyncDatabase,
         target: AsyncDatabase,
-        transform: Optional[Union[Transformer, Migration]] = None,
-        query: Optional[Query] = None,
-        config: Optional[StreamConfig] = None,
-        on_progress: Optional[Callable[[MigrationProgress], None]] = None
+        transform: Transformer | Migration | None = None,
+        query: Query | None = None,
+        config: StreamConfig | None = None,
+        on_progress: Callable[[MigrationProgress], None] | None = None
     ) -> MigrationProgress:
-        """
-        Async stream-based migration.
+        """Async stream-based migration.
         
         Args:
             source: Async source database
@@ -258,13 +251,13 @@ class Migrator:
         """
         config = config or StreamConfig()
         progress = MigrationProgress().start()
-        
+
         # Estimate total (if possible)
         try:
             progress.total = await source.count(query)
         except Exception:
             pass
-        
+
         # Create async streaming pipeline
         async def transform_stream(records):
             """Apply transformation to async streaming records."""
@@ -290,37 +283,36 @@ class Migrator:
                     else:
                         progress.record_failure(str(e), record.id if hasattr(record, 'id') else None, e)
                         raise
-        
+
         # Stream from source through transformation to target
         source_stream = source.stream_read(query, config)
         transformed_stream = transform_stream(source_stream)
-        
+
         # Write stream to target
         result = await target.stream_write(transformed_stream, config)
-        
+
         # Update progress from result
         # Note: processed was already tracked in transform_stream
         # Result contains only write successes/failures
         progress.succeeded += result.successful
         progress.failed += result.failed
         progress.errors.extend(result.errors)
-        
+
         progress.finish()
-        
+
         if on_progress:
             on_progress(progress)
-        
+
         return progress
-    
+
     def _write_batch(
         self,
         target: SyncDatabase,
-        batch: List[Record],
+        batch: list[Record],
         progress: MigrationProgress,
-        on_error: Optional[Callable[[Exception, Record], bool]] = None
+        on_error: Callable[[Exception, Record], bool] | None = None
     ) -> None:
-        """
-        Write a batch of records to target database.
+        """Write a batch of records to target database.
         
         Args:
             target: Target database
@@ -333,7 +325,7 @@ class Migrator:
                 # Ensure record has an ID
                 if not record.id:
                     record.generate_id()
-                
+
                 target.create(record)
                 progress.record_success(record.id)
             except Exception as e:
@@ -346,16 +338,15 @@ class Migrator:
                 else:
                     # No handler - stop processing immediately
                     raise
-    
+
     def validate_migration(
         self,
         source: SyncDatabase,
         target: SyncDatabase,
-        query: Optional[Query] = None,
-        sample_size: Optional[int] = None
-    ) -> tuple[bool, List[str]]:
-        """
-        Validate that migration was successful.
+        query: Query | None = None,
+        sample_size: int | None = None
+    ) -> tuple[bool, list[str]]:
+        """Validate that migration was successful.
         
         Args:
             source: Source database
@@ -367,29 +358,29 @@ class Migrator:
             Tuple of (is_valid, list_of_issues)
         """
         issues = []
-        
+
         # Get counts
         source_records = source.search(query or Query())
         target_records = target.search(Query())
-        
+
         source_count = len(source_records)
         target_count = len(target_records)
-        
+
         if source_count != target_count:
             issues.append(
                 f"Record count mismatch: source={source_count}, target={target_count}"
             )
-        
+
         # Sample validation
         if sample_size:
             sample = source_records[:sample_size]
         else:
             sample = source_records
-        
+
         for source_record in sample:
             if source_record.id:
                 target_record = target.read(source_record.id)
                 if not target_record:
                     issues.append(f"Record {source_record.id} not found in target")
-        
+
         return len(issues) == 0, issues

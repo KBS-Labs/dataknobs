@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Union
+from typing import Any, Union
 
 from .query import Filter, Operator
 
@@ -17,20 +17,20 @@ class LogicOperator(Enum):
 
 class Condition(ABC):
     """Abstract base class for query conditions."""
-    
+
     @abstractmethod
     def matches(self, record: Any) -> bool:
         """Check if a record matches this condition."""
         pass
-    
+
     @abstractmethod
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert condition to dictionary representation."""
         pass
-    
+
     @classmethod
     @abstractmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Condition":
+    def from_dict(cls, data: dict[str, Any]) -> "Condition":
         """Create condition from dictionary representation."""
         pass
 
@@ -39,11 +39,11 @@ class Condition(ABC):
 class FilterCondition(Condition):
     """A single filter condition."""
     filter: Filter
-    
+
     def matches(self, record: Any) -> bool:
         """Check if a record matches this filter."""
         from .records import Record
-        
+
         if isinstance(record, Record):
             value = record.get_value(self.filter.field)
         elif isinstance(record, dict):
@@ -57,18 +57,18 @@ class FilterCondition(Condition):
                     break
         else:
             value = getattr(record, self.filter.field, None)
-        
+
         return self.filter.matches(value)
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary representation."""
         return {
             "type": "filter",
             "filter": self.filter.to_dict()
         }
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "FilterCondition":
+    def from_dict(cls, data: dict[str, Any]) -> "FilterCondition":
         """Create from dictionary representation."""
         return cls(filter=Filter.from_dict(data["filter"]))
 
@@ -77,8 +77,8 @@ class FilterCondition(Condition):
 class LogicCondition(Condition):
     """A logical combination of conditions."""
     operator: LogicOperator
-    conditions: List[Condition] = field(default_factory=list)
-    
+    conditions: list[Condition] = field(default_factory=list)
+
     def matches(self, record: Any) -> bool:
         """Check if a record matches this logical condition."""
         if self.operator == LogicOperator.AND:
@@ -95,17 +95,17 @@ class LogicCondition(Condition):
                 # NOT with multiple conditions = none should match
                 return not any(cond.matches(record) for cond in self.conditions)
         return False
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary representation."""
         return {
             "type": "logic",
             "operator": self.operator.value,
             "conditions": [cond.to_dict() for cond in self.conditions]
         }
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "LogicCondition":
+    def from_dict(cls, data: dict[str, Any]) -> "LogicCondition":
         """Create from dictionary representation."""
         conditions = []
         for cond_data in data.get("conditions", []):
@@ -113,14 +113,14 @@ class LogicCondition(Condition):
                 conditions.append(FilterCondition.from_dict(cond_data))
             elif cond_data["type"] == "logic":
                 conditions.append(LogicCondition.from_dict(cond_data))
-        
+
         return cls(
             operator=LogicOperator(data["operator"]),
             conditions=conditions
         )
 
 
-def condition_from_dict(data: Dict[str, Any]) -> Condition:
+def condition_from_dict(data: dict[str, Any]) -> Condition:
     """Factory function to create condition from dictionary."""
     if data["type"] == "filter":
         return FilterCondition.from_dict(data)
@@ -132,7 +132,7 @@ def condition_from_dict(data: Dict[str, Any]) -> Condition:
 
 class QueryBuilder:
     """Builder for complex queries with boolean logic."""
-    
+
     def __init__(self):
         """Initialize empty query builder."""
         self.root_condition = None
@@ -140,11 +140,11 @@ class QueryBuilder:
         self.limit_value = None
         self.offset_value = None
         self.fields = None
-    
-    def where(self, field: str, operator: Union[str, Operator], value: Any = None) -> "QueryBuilder":
+
+    def where(self, field: str, operator: str | Operator, value: Any = None) -> "QueryBuilder":
         """Add a filter condition (defaults to AND with existing conditions)."""
         filter_cond = FilterCondition(Filter(field, operator, value))
-        
+
         if self.root_condition is None:
             self.root_condition = filter_cond
         elif isinstance(self.root_condition, LogicCondition) and self.root_condition.operator == LogicOperator.AND:
@@ -155,13 +155,13 @@ class QueryBuilder:
                 operator=LogicOperator.AND,
                 conditions=[self.root_condition, filter_cond]
             )
-        
+
         return self
-    
+
     def and_(self, *conditions: Union["QueryBuilder", Filter, Condition]) -> "QueryBuilder":
         """Add AND conditions."""
         logic_cond = LogicCondition(operator=LogicOperator.AND)
-        
+
         for cond in conditions:
             if isinstance(cond, QueryBuilder):
                 if cond.root_condition:
@@ -170,7 +170,7 @@ class QueryBuilder:
                 logic_cond.conditions.append(FilterCondition(cond))
             elif isinstance(cond, Condition):
                 logic_cond.conditions.append(cond)
-        
+
         if self.root_condition is None:
             self.root_condition = logic_cond
         elif isinstance(self.root_condition, LogicCondition) and self.root_condition.operator == LogicOperator.AND:
@@ -180,13 +180,13 @@ class QueryBuilder:
                 operator=LogicOperator.AND,
                 conditions=[self.root_condition, logic_cond]
             )
-        
+
         return self
-    
+
     def or_(self, *conditions: Union["QueryBuilder", Filter, Condition]) -> "QueryBuilder":
         """Add OR conditions."""
         logic_cond = LogicCondition(operator=LogicOperator.OR)
-        
+
         for cond in conditions:
             if isinstance(cond, QueryBuilder):
                 if cond.root_condition:
@@ -195,7 +195,7 @@ class QueryBuilder:
                 logic_cond.conditions.append(FilterCondition(cond))
             elif isinstance(cond, Condition):
                 logic_cond.conditions.append(cond)
-        
+
         if self.root_condition is None:
             self.root_condition = logic_cond
         else:
@@ -207,9 +207,9 @@ class QueryBuilder:
                     operator=LogicOperator.OR,
                     conditions=[self.root_condition] + logic_cond.conditions
                 )
-        
+
         return self
-    
+
     def not_(self, condition: Union["QueryBuilder", Filter, Condition]) -> "QueryBuilder":
         """Add NOT condition."""
         if isinstance(condition, QueryBuilder):
@@ -227,7 +227,7 @@ class QueryBuilder:
                 operator=LogicOperator.NOT,
                 conditions=[condition]
             )
-        
+
         if self.root_condition is None:
             self.root_condition = not_cond
         elif isinstance(self.root_condition, LogicCondition) and self.root_condition.operator == LogicOperator.AND:
@@ -237,32 +237,32 @@ class QueryBuilder:
                 operator=LogicOperator.AND,
                 conditions=[self.root_condition, not_cond]
             )
-        
+
         return self
-    
+
     def sort_by(self, field: str, order: str = "asc") -> "QueryBuilder":
         """Add sort specification."""
-        from .query import SortSpec, SortOrder
-        
+        from .query import SortOrder, SortSpec
+
         sort_order = SortOrder.ASC if order.lower() == "asc" else SortOrder.DESC
         self.sort_specs.append(SortSpec(field=field, order=sort_order))
         return self
-    
+
     def limit(self, value: int) -> "QueryBuilder":
         """Set result limit."""
         self.limit_value = value
         return self
-    
+
     def offset(self, value: int) -> "QueryBuilder":
         """Set result offset."""
         self.offset_value = value
         return self
-    
+
     def select(self, *fields: str) -> "QueryBuilder":
         """Set field projection."""
         self.fields = list(fields) if fields else None
         return self
-    
+
     def build(self) -> "ComplexQuery":
         """Build the final query."""
         return ComplexQuery(
@@ -277,25 +277,25 @@ class QueryBuilder:
 @dataclass
 class ComplexQuery:
     """A query with complex boolean logic support."""
-    
+
     condition: Condition | None = None
-    sort_specs: List = field(default_factory=list)
+    sort_specs: list = field(default_factory=list)
     limit_value: int | None = None
     offset_value: int | None = None
-    fields: List[str] | None = None
-    
+    fields: list[str] | None = None
+
     def matches(self, record: Any) -> bool:
         """Check if a record matches this query."""
         if self.condition is None:
             return True
         return self.condition.matches(record)
-    
+
     def to_simple_query(self) -> "Query":
         """Convert to simple Query if possible (AND filters only)."""
         from .query import Query
-        
+
         filters = []
-        
+
         # Try to extract simple filters if all are AND conditions
         if self.condition is None:
             pass
@@ -310,13 +310,13 @@ class ComplexQuery:
                 else:
                     all_filters = False
                     break
-            
+
             if not all_filters:
                 # Can't convert complex logic to simple query
                 raise ValueError("Cannot convert complex boolean logic to simple Query")
         else:
             raise ValueError("Cannot convert complex boolean logic to simple Query")
-        
+
         return Query(
             filters=filters,
             sort_specs=self.sort_specs,
@@ -324,41 +324,41 @@ class ComplexQuery:
             offset_value=self.offset_value,
             fields=self.fields
         )
-    
-    def to_dict(self) -> Dict[str, Any]:
+
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary representation."""
         result = {}
-        
+
         if self.condition:
             result["condition"] = self.condition.to_dict()
-        
+
         if self.sort_specs:
             result["sort"] = [s.to_dict() for s in self.sort_specs]
-        
+
         if self.limit_value is not None:
             result["limit"] = self.limit_value
-        
+
         if self.offset_value is not None:
             result["offset"] = self.offset_value
-        
+
         if self.fields is not None:
             result["fields"] = self.fields
-        
+
         return result
-    
+
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ComplexQuery":
+    def from_dict(cls, data: dict[str, Any]) -> "ComplexQuery":
         """Create from dictionary representation."""
         from .query import SortSpec
-        
+
         condition = None
         if "condition" in data:
             condition = condition_from_dict(data["condition"])
-        
+
         sort_specs = []
         for sort_data in data.get("sort", []):
             sort_specs.append(SortSpec.from_dict(sort_data))
-        
+
         return cls(
             condition=condition,
             sort_specs=sort_specs,

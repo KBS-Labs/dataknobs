@@ -10,15 +10,16 @@ import tempfile
 import threading
 import time
 import uuid
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
-from typing import Any, AsyncIterator, Iterator, Optional
+from typing import Any
 
 from dataknobs_config import ConfigurableBase
 
 from ..database import AsyncDatabase, SyncDatabase
 from ..query import Query
 from ..records import Record
-from ..streaming import AsyncStreamingMixin, StreamConfig, StreamResult, StreamingMixin
+from ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult
 
 
 class FileLock:
@@ -59,7 +60,7 @@ class FileLock:
 
                 try:
                     msvcrt.locking(self.lock_handle.fileno(), msvcrt.LK_UNLCK, 1)
-                except (OSError, IOError):
+                except OSError:
                     pass
             self.lock_handle.close()
             try:
@@ -228,7 +229,7 @@ class CSVFormat(FileFormat):
                         value = field_data["value"]
                     else:
                         value = field_data
-                    
+
                     # Serialize complex types as JSON strings
                     if isinstance(value, (dict, list)):
                         flat_fields[field_name] = json.dumps(value)
@@ -358,7 +359,7 @@ class AsyncFileDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
         # Get the appropriate format handler
         ext = f".{self.format}"
         self.handler = self.FORMAT_HANDLERS.get(ext, JSONFormat)
-    
+
     @classmethod
     def from_config(cls, config: dict) -> "AsyncFileDatabase":
         """Create from config dictionary."""
@@ -554,30 +555,30 @@ class AsyncFileDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
 
     async def stream_read(
         self,
-        query: Optional[Query] = None,
-        config: Optional[StreamConfig] = None
+        query: Query | None = None,
+        config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
         """Stream records from file."""
         # For file backend, we can use the default implementation
         # since we need to load all data anyway
         config = config or StreamConfig()
-        
+
         # Use search to get all matching records
         if query:
             records = await self.search(query)
         else:
             records = await self.search(Query())
-        
+
         # Yield records in batches for consistency
         for i in range(0, len(records), config.batch_size):
             batch = records[i:i + config.batch_size]
             for record in batch:
                 yield record
-    
+
     async def stream_write(
         self,
         records: AsyncIterator[Record],
-        config: Optional[StreamConfig] = None
+        config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into file."""
         # Use the default implementation from mixin
@@ -624,7 +625,7 @@ class SyncFileDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
         # Get the appropriate format handler
         ext = f".{self.format}"
         self.handler = self.FORMAT_HANDLERS.get(ext, JSONFormat)
-    
+
     @classmethod
     def from_config(cls, config: dict) -> "SyncFileDatabase":
         """Create from config dictionary."""
@@ -826,30 +827,30 @@ class SyncFileDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
 
     def stream_read(
         self,
-        query: Optional[Query] = None,
-        config: Optional[StreamConfig] = None
+        query: Query | None = None,
+        config: StreamConfig | None = None
     ) -> Iterator[Record]:
         """Stream records from file."""
         # For file backend, we can use the default implementation
         # since we need to load all data anyway
         config = config or StreamConfig()
-        
+
         # Use search to get all matching records
         if query:
             records = self.search(query)
         else:
             records = self.search(Query())
-        
+
         # Yield records in batches for consistency
         for i in range(0, len(records), config.batch_size):
             batch = records[i:i + config.batch_size]
             for record in batch:
                 yield record
-    
+
     def stream_write(
         self,
         records: Iterator[Record],
-        config: Optional[StreamConfig] = None
+        config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into file."""
         # Use the default implementation
@@ -857,15 +858,15 @@ class SyncFileDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
         result = StreamResult()
         start_time = time.time()
         quitting = False
-        
+
         def do_write_batch(batch: list) -> bool:
-            """write batch with individual retries, return False to quit"""
+            """Write batch with individual retries, return False to quit"""
             retval = True
             try:
                 ids = self.create_batch(batch)
                 result.successful += len(ids)
                 result.total_processed += len(batch)
-            except Exception as e:
+            except Exception:
                 # Try creating each item again and catch specific error items
                 for rec in batch:
                     result.total_processed += 1
@@ -889,7 +890,7 @@ class SyncFileDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
         batch = []
         for record in records:
             batch.append(record)
-            
+
             if len(batch) >= config.batch_size:
                 # Write batch
                 quitting = not do_write_batch(batch)
@@ -897,10 +898,10 @@ class SyncFileDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
                     # Got signal to quit
                     break
                 batch = []
-        
+
         # Write remaining batch
         if batch and not quitting:
             do_write_batch(batch)
-        
+
         result.duration = time.time() - start_time
         return result

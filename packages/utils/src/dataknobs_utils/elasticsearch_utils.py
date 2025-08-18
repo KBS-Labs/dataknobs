@@ -408,7 +408,7 @@ class SimplifiedElasticsearchIndex:
     This class provides a simpler API for working with a single Elasticsearch index,
     suitable for use as a database backend.
     """
-    
+
     def __init__(
         self,
         index_name: str,
@@ -431,10 +431,10 @@ class SimplifiedElasticsearchIndex:
         self.port = port
         self.settings = settings or {"number_of_shards": 1, "number_of_replicas": 0}
         self.mappings = mappings or {}
-        
+
         # Create RequestHelper for making requests
         self.request_helper = requests_utils.RequestHelper(host, port)
-    
+
     def _request(
         self,
         method: str,
@@ -445,18 +445,18 @@ class SimplifiedElasticsearchIndex:
         """Make a request to Elasticsearch."""
         # Build path without leading slash (RequestHelper will add it)
         full_path = f"{self.index_name}/{path}" if path else self.index_name
-        
+
         # Convert body to JSON if it's a dict
         if isinstance(body, dict):
             body = json.dumps(body)
-        
+
         return self.request_helper.request(
             method,
             full_path,
             payload=body,
             params=params,
         )
-    
+
     def exists(self, doc_id: str | None = None) -> bool:
         """Check if index or document exists.
         
@@ -474,7 +474,7 @@ class SimplifiedElasticsearchIndex:
             # Check if index exists
             response = self.request_helper.request("head", self.index_name)
             return response.succeeded
-    
+
     def create(self) -> bool:
         """Create the index with settings and mappings.
         
@@ -486,14 +486,14 @@ class SimplifiedElasticsearchIndex:
             body["settings"] = self.settings
         if self.mappings:
             body["mappings"] = self.mappings
-        
+
         response = self.request_helper.request(
             "put",
             self.index_name,
             payload=json.dumps(body) if body else None,
         )
         return response.succeeded
-    
+
     def delete(self, doc_id: str | None = None) -> bool:
         """Delete the index or a document.
         
@@ -511,7 +511,7 @@ class SimplifiedElasticsearchIndex:
             # Delete index
             response = self.request_helper.request("delete", self.index_name)
             return response.succeeded
-    
+
     def index(self, body: Dict[str, Any], doc_id: str | None = None, refresh: bool = False) -> Dict[str, Any]:
         """Index a document.
         
@@ -525,13 +525,13 @@ class SimplifiedElasticsearchIndex:
         """
         path = f"_doc/{doc_id}" if doc_id else "_doc"
         params = {"refresh": "true"} if refresh else None
-        
+
         response = self._request("put" if doc_id else "post", path, body, params)
-        
+
         if response.succeeded and response.json:
             return response.json
         return {"_id": None, "result": "error"}
-    
+
     def get(self, doc_id: str) -> Dict[str, Any] | None:
         """Get a document by ID.
         
@@ -542,11 +542,11 @@ class SimplifiedElasticsearchIndex:
             Document data or None if not found
         """
         response = self._request("get", f"_doc/{doc_id}")
-        
+
         if response.succeeded and response.json:
             return response.json
         return None
-    
+
     def update(self, doc_id: str, body: Dict[str, Any], refresh: bool = False) -> bool:
         """Update a document.
         
@@ -561,7 +561,7 @@ class SimplifiedElasticsearchIndex:
         params = {"refresh": "true"} if refresh else None
         response = self._request("post", f"_update/{doc_id}", body, params)
         return response.succeeded
-    
+
     def search(self, body: Dict[str, Any] | None = None) -> Any:
         """Search documents.
         
@@ -572,14 +572,14 @@ class SimplifiedElasticsearchIndex:
             ServerResponse object with search results
         """
         response = self._request("post", "_search", body or {})
-        
+
         # Return the ServerResponse object directly
         # If it failed, set a default response
         if not response.succeeded:
             response.result = {"hits": {"total": {"value": 0}, "hits": []}}
-        
+
         return response
-    
+
     def count(self, body: Dict[str, Any] | None = None) -> int:
         """Count documents.
         
@@ -590,11 +590,11 @@ class SimplifiedElasticsearchIndex:
             Number of documents
         """
         response = self._request("post", "_count", body or {})
-        
+
         if response.succeeded and response.json:
             return response.json.get("count", 0)
         return 0
-    
+
     def delete_by_query(self, body: Dict[str, Any]) -> Dict[str, Any]:
         """Delete documents matching a query.
         
@@ -605,11 +605,11 @@ class SimplifiedElasticsearchIndex:
             Response with deletion info
         """
         response = self._request("post", "_delete_by_query", body)
-        
+
         if response.succeeded and response.json:
             return response.json
         return {"deleted": 0}
-    
+
     def refresh(self) -> bool:
         """Refresh the index to make recent changes searchable.
         

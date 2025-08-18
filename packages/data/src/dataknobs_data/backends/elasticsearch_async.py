@@ -1,27 +1,23 @@
 """Native async Elasticsearch backend implementation with connection pooling."""
 
-import asyncio
-import json
 import logging
 import time
-import uuid
-from typing import Any, AsyncIterator, Optional
+from collections.abc import AsyncIterator
+from typing import Any
 
 from dataknobs_config import ConfigurableBase
 
 from ..database import AsyncDatabase
-from ..exceptions import DatabaseError
 from ..pooling import ConnectionPoolManager
 from ..pooling.elasticsearch import (
     ElasticsearchPoolConfig,
+    close_elasticsearch_client,
     create_async_elasticsearch_client,
     validate_elasticsearch_client,
-    close_elasticsearch_client
 )
 from ..query import Operator, Query, SortOrder
 from ..records import Record
-from ..streaming import StreamConfig, StreamResult
-from ..streaming import async_process_batch_with_fallback
+from ..streaming import StreamConfig, StreamResult, async_process_batch_with_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +27,7 @@ _client_manager = ConnectionPoolManager()
 
 class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
     """Native async Elasticsearch database backend with connection pooling."""
-    
+
     def __init__(self, config: dict[str, Any] | None = None):
         """Initialize async Elasticsearch database."""
         super().__init__(config)
@@ -41,17 +37,17 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
         self.refresh = config.get("refresh", True)
         self._client = None
         self._connected = False
-    
+
     @classmethod
     def from_config(cls, config: dict) -> "AsyncElasticsearchDatabase":
         """Create from config dictionary."""
         return cls(config)
-    
+
     async def connect(self) -> None:
         """Connect to the Elasticsearch database."""
         if self._connected:
             return
-        
+
         # Get or create client for current event loop
         self._client = await _client_manager.get_pool(
             self._pool_config,
@@ -59,11 +55,11 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
             validate_elasticsearch_client,
             close_elasticsearch_client
         )
-        
+
         # Ensure index exists
         await self._ensure_index()
         self._connected = True
-    
+
     async def close(self) -> None:
         """Close the database connection."""
         if self._connected:
@@ -71,16 +67,16 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
             # Just mark as disconnected
             self._client = None
             self._connected = False
-    
+
     def _initialize(self) -> None:
         """Initialize is handled in connect."""
         pass
-    
+
     async def _ensure_index(self) -> None:
         """Ensure the index exists with proper mappings."""
         if not self._client:
             raise RuntimeError("Database not connected. Call connect() first.")
-        
+
         # Check if index exists
         if not await self._client.indices.exists(index=self.index_name):
             # Create index with mappings
@@ -92,47 +88,47 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
                     "updated_at": {"type": "date"}
                 }
             }
-            
+
             await self._client.indices.create(
                 index=self.index_name,
                 mappings=mappings
             )
-    
+
     def _check_connection(self) -> None:
         """Check if database is connected."""
         if not self._connected or not self._client:
             raise RuntimeError("Database not connected. Call connect() first.")
-    
+
     def _record_to_doc(self, record: Record) -> dict[str, Any]:
         """Convert a Record to an Elasticsearch document."""
         doc = {
             "data": {},
             "metadata": record.metadata or {}
         }
-        
+
         for field_name, field_obj in record.fields.items():
             doc["data"][field_name] = field_obj.value
-        
+
         return doc
-    
+
     def _doc_to_record(self, doc: dict[str, Any]) -> Record:
         """Convert an Elasticsearch document to a Record."""
         data = doc.get("_source", {}).get("data", {})
         metadata = doc.get("_source", {}).get("metadata", {})
-        
+
         # Add document ID to metadata
         if "_id" in doc:
             metadata["id"] = doc["_id"]
         if "_score" in doc:
             metadata["_score"] = doc["_score"]
-        
+
         return Record(data=data, metadata=metadata)
-    
+
     async def create(self, record: Record) -> str:
         """Create a new record."""
         self._check_connection()
         doc = self._record_to_doc(record)
-        
+
         # Create document with explicit ID if record has one
         kwargs = {
             "index": self.index_name,
@@ -141,40 +137,40 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
         }
         if record.id:
             kwargs["id"] = record.id
-        
+
         response = await self._client.index(**kwargs)
-        
+
         return response["_id"]
-    
+
     async def create_batch(self, records: list[Record]) -> list[str]:
         """Create multiple records in batch."""
         self._check_connection()
-        
+
         ids = []
         operations = []
-        
+
         for record in records:
             doc = self._record_to_doc(record)
             operations.append({"index": {"_index": self.index_name}})
             operations.append(doc)
-        
+
         if operations:
             response = await self._client.bulk(
                 operations=operations,
                 refresh=self.refresh
             )
-            
+
             # Extract IDs from response
             for item in response.get("items", []):
                 if "index" in item and "_id" in item["index"]:
                     ids.append(item["index"]["_id"])
-        
+
         return ids
-    
+
     async def read(self, id: str) -> Record | None:
         """Read a record by ID."""
         self._check_connection()
-        
+
         try:
             response = await self._client.get(
                 index=self.index_name,
@@ -183,12 +179,12 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
             return self._doc_to_record(response)
         except Exception:
             return None
-    
+
     async def update(self, id: str, record: Record) -> bool:
         """Update an existing record."""
         self._check_connection()
         doc = self._record_to_doc(record)
-        
+
         try:
             await self._client.update(
                 index=self.index_name,
@@ -199,11 +195,11 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
             return True
         except Exception:
             return False
-    
+
     async def delete(self, id: str) -> bool:
         """Delete a record by ID."""
         self._check_connection()
-        
+
         try:
             await self._client.delete(
                 index=self.index_name,
@@ -213,40 +209,40 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
             return True
         except Exception:
             return False
-    
+
     async def exists(self, id: str) -> bool:
         """Check if a record exists."""
         self._check_connection()
-        
+
         return await self._client.exists(
             index=self.index_name,
             id=id
         )
-    
+
     async def upsert(self, id: str, record: Record) -> str:
         """Update or insert a record with a specific ID."""
         self._check_connection()
         doc = self._record_to_doc(record)
-        
+
         await self._client.index(
             index=self.index_name,
             id=id,
             document=doc,
             refresh=self.refresh
         )
-        
+
         return id
-    
+
     async def search(self, query: Query) -> list[Record]:
         """Search for records matching the query."""
         self._check_connection()
-        
+
         # Build Elasticsearch query
         es_query = {"bool": {"must": []}}
-        
+
         for filter in query.filters:
             field_path = f"data.{filter.field}"
-            
+
             if filter.operator == Operator.EQ:
                 # For string values, use keyword field for exact matching
                 if isinstance(filter.value, str):
@@ -295,27 +291,27 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
                             }
                         }
                     })
-        
+
         # If no filters, use match_all
         if not es_query["bool"]["must"] and "must_not" not in es_query["bool"]:
             es_query = {"match_all": {}}
-        
+
         # Build sort
         sort = []
         if query.sort_specs:
             for sort_spec in query.sort_specs:
                 direction = "desc" if sort_spec.order == SortOrder.DESC else "asc"
                 sort.append({f"data.{sort_spec.field}": {"order": direction}})
-        
+
         # Build request body
         body = {"query": es_query}
         if sort:
             body["sort"] = sort
-        
+
         # Add size and from for pagination
         size = query.limit_value if query.limit_value else 10000
         from_param = query.offset_value if query.offset_value else 0
-        
+
         # Execute search
         response = await self._client.search(
             index=self.index_name,
@@ -324,52 +320,52 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
             size=size,
             from_=from_param
         )
-        
+
         # Convert to records
         records = []
         for hit in response["hits"]["hits"]:
             record = self._doc_to_record(hit)
-            
+
             # Apply field projection if specified
             if query.fields:
                 record = record.project(query.fields)
-            
+
             records.append(record)
-        
+
         return records
-    
+
     async def _count_all(self) -> int:
         """Count all records in the database."""
         self._check_connection()
-        
+
         response = await self._client.count(index=self.index_name)
         return response["count"]
-    
+
     async def clear(self) -> int:
         """Clear all records from the database."""
         self._check_connection()
-        
+
         # Get count before deletion
         count = await self._count_all()
-        
+
         # Delete by query - delete all documents
         response = await self._client.delete_by_query(
             index=self.index_name,
             query={"match_all": {}},
             refresh=self.refresh
         )
-        
+
         return response.get("deleted", count)
-    
+
     async def stream_read(
         self,
-        query: Optional[Query] = None,
-        config: Optional[StreamConfig] = None
+        query: Query | None = None,
+        config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
         """Stream records from Elasticsearch using scroll API."""
         self._check_connection()
         config = config or StreamConfig()
-        
+
         # Build query
         es_query = {"match_all": {}}
         if query and query.filters:
@@ -378,7 +374,7 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
                 field_path = f"data.{filter.field}"
                 if filter.operator == Operator.EQ:
                     es_query["bool"]["must"].append({"term": {field_path: filter.value}})
-        
+
         # Initial search with scroll
         response = await self._client.search(
             index=self.index_name,
@@ -386,10 +382,10 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
             scroll="2m",
             size=config.batch_size
         )
-        
+
         scroll_id = response["_scroll_id"]
         hits = response["hits"]["hits"]
-        
+
         try:
             while hits:
                 for hit in hits:
@@ -397,7 +393,7 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
                     if query and query.fields:
                         record = record.project(query.fields)
                     yield record
-                
+
                 # Get next batch
                 response = await self._client.scroll(
                     scroll_id=scroll_id,
@@ -407,11 +403,11 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
         finally:
             # Clear scroll
             await self._client.clear_scroll(scroll_id=scroll_id)
-    
+
     async def stream_write(
         self,
         records: AsyncIterator[Record],
-        config: Optional[StreamConfig] = None
+        config: StreamConfig | None = None
     ) -> StreamResult:
         """Stream records into Elasticsearch using bulk API."""
         self._check_connection()
@@ -419,17 +415,17 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
         result = StreamResult()
         start_time = time.time()
         quitting = False
-        
+
         batch = []
         async for record in records:
             batch.append(record)
-            
+
             if len(batch) >= config.batch_size:
                 # Write batch with graceful fallback
                 async def batch_func(b):
                     await self._write_batch(b)
                     return [r.id for r in b]
-                
+
                 continue_processing = await async_process_batch_with_fallback(
                     batch,
                     batch_func,
@@ -437,19 +433,19 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
                     result,
                     config
                 )
-                
+
                 if not continue_processing:
                     quitting = True
                     break
-                    
+
                 batch = []
-        
+
         # Write remaining batch
         if batch and not quitting:
             async def batch_func(b):
                 await self._write_batch(b)
                 return [r.id for r in b]
-            
+
             await async_process_batch_with_fallback(
                 batch,
                 batch_func,
@@ -457,22 +453,22 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
                 result,
                 config
             )
-        
+
         result.duration = time.time() - start_time
         return result
-    
+
     async def _write_batch(self, records: list[Record]) -> None:
         """Write a batch of records using bulk API."""
         if not records:
             return
-        
+
         # Build bulk operations
         operations = []
         for record in records:
             doc = self._record_to_doc(record)
             operations.append({"index": {"_index": self.index_name}})
             operations.append(doc)
-        
+
         # Execute bulk
         await self._client.bulk(
             operations=operations,

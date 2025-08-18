@@ -2,7 +2,7 @@ import copy
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict
+from typing import Any
 
 
 class FieldType(Enum):
@@ -25,7 +25,7 @@ class Field:
     name: str
     value: Any
     type: FieldType | None = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
         """Auto-detect type if not provided."""
@@ -63,7 +63,7 @@ class Field:
             type=self.type,
             metadata=copy.deepcopy(self.metadata)
         )
-    
+
     def validate(self) -> bool:
         """Validate that the value matches the field type."""
         if self.value is None:
@@ -118,7 +118,7 @@ class Field:
         else:
             raise ValueError(f"No converter available from {self.type} to {target_type}")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert the field to a dictionary representation."""
         return {
             "name": self.name,
@@ -128,7 +128,7 @@ class Field:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Field":
+    def from_dict(cls, data: dict[str, Any]) -> "Field":
         """Create a field from a dictionary representation."""
         field_type = None
         if data.get("type"):

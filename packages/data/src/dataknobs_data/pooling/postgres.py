@@ -1,7 +1,7 @@
 """PostgreSQL-specific connection pooling implementation."""
 
 from dataclasses import dataclass
-from typing import Optional, Any
+from typing import Any
 
 from .base import BasePoolConfig
 
@@ -16,17 +16,17 @@ class PostgresPoolConfig(BasePoolConfig):
     password: str = ""
     min_size: int = 10
     max_size: int = 10
-    command_timeout: Optional[float] = None
-    ssl: Optional[Any] = None
-    
+    command_timeout: float | None = None
+    ssl: Any | None = None
+
     def to_connection_string(self) -> str:
         """Convert to PostgreSQL connection string."""
         return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
-    
+
     def to_hash_key(self) -> tuple:
         """Create a hashable key for this configuration."""
         return (self.host, self.port, self.database, self.user)
-    
+
     @classmethod
     def from_dict(cls, config: dict) -> "PostgresPoolConfig":
         """Create from configuration dictionary."""

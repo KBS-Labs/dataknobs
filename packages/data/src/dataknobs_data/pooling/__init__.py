@@ -1,9 +1,9 @@
 """Connection pooling utilities for database backends."""
 
-from .base import ConnectionPoolManager, BasePoolConfig, PoolProtocol
+from .base import BasePoolConfig, ConnectionPoolManager, PoolProtocol
 
 __all__ = [
+    "BasePoolConfig",
     "ConnectionPoolManager",
-    "BasePoolConfig", 
     "PoolProtocol",
 ]

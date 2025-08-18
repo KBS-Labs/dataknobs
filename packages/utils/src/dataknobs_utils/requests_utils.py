@@ -230,17 +230,17 @@ class ServerResponse:
     @property
     def status(self) -> int | None:
         return self.resp.status_code if self.resp is not None else None
-    
+
     @property
     def status_code(self) -> int | None:
         """Alias for status property for consistency with requests.Response."""
         return self.status
-    
+
     @property
     def json(self) -> Any:
         """Get the JSON response data (alias for result)."""
         return self.result
-    
+
     @property
     def text(self) -> str:
         """Get the response as text."""
@@ -381,7 +381,7 @@ class RequestHelper:
                 result = {}  # Empty dict for HEAD response
                 if response_handler:
                     resp, result = response_handler(resp)
-            except Exception as e:
+            except Exception:
                 resp = None
                 result = None
 
@@ -396,7 +396,7 @@ class RequestHelper:
                 print(rv, file=verbose)
 
         return rv
-    
+
     def get(
         self,
         path: str,
@@ -425,7 +425,7 @@ class RequestHelper:
             timeout=timeout,
             verbose=verbose,
         )
-    
+
     def post(
         self,
         path: str,
@@ -460,7 +460,7 @@ class RequestHelper:
             timeout=timeout,
             verbose=verbose,
         )
-    
+
     def put(
         self,
         path: str,
@@ -492,7 +492,7 @@ class RequestHelper:
             timeout=timeout,
             verbose=verbose,
         )
-    
+
     def delete(
         self,
         path: str,
@@ -521,7 +521,7 @@ class RequestHelper:
             timeout=timeout,
             verbose=verbose,
         )
-    
+
     def head(
         self,
         path: str,

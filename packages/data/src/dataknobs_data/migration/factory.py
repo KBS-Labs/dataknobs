@@ -1,21 +1,22 @@
 """Factory classes for migration v2 components."""
 
 import logging
-from typing import Any, Dict, List, Optional, Callable
+from collections.abc import Callable
+from typing import Any
 
 from dataknobs_config import FactoryBase
 
 from .migration import Migration
+from .migrator import Migrator
 from .operations import (
-    Operation,
     AddField,
+    CompositeOperation,
+    Operation,
     RemoveField,
     RenameField,
     TransformField,
-    CompositeOperation,
 )
 from .transformer import Transformer
-from .migrator import Migrator
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ class MigrationFactory(FactoryBase):
                 field_name: price
                 transform: "lambda x: x * 1.1"
     """
-    
+
     def create(self, **config) -> Migration:
         """Create a Migration instance from configuration.
         
@@ -67,21 +68,21 @@ class MigrationFactory(FactoryBase):
         from_version = config.get("from_version", "0.0")
         to_version = config.get("to_version", "1.0")
         description = config.get("description")
-        
+
         logger.info(f"Creating migration: {from_version} -> {to_version}")
-        
+
         migration = Migration(from_version, to_version, description)
-        
+
         # Add operations
         operations = config.get("operations", [])
         for op_config in operations:
             operation = self._create_operation(op_config)
             if operation:
                 migration.add(operation)
-        
+
         return migration
-    
-    def _create_operation(self, op_config: Dict[str, Any]) -> Optional[Operation]:
+
+    def _create_operation(self, op_config: dict[str, Any]) -> Operation | None:
         """Create an operation from configuration.
         
         Args:
@@ -91,38 +92,38 @@ class MigrationFactory(FactoryBase):
             Operation instance or None if invalid
         """
         op_type = op_config.get("type", "").lower()
-        
+
         if op_type == "add_field":
             return AddField(
                 field_name=op_config.get("field_name"),
                 default_value=op_config.get("default_value"),
                 field_type=self._parse_field_type(op_config.get("field_type"))
             )
-        
+
         elif op_type == "remove_field":
             return RemoveField(
                 field_name=op_config.get("field_name"),
                 store_removed=op_config.get("store_removed", False)
             )
-        
+
         elif op_type == "rename_field":
             return RenameField(
                 old_name=op_config.get("old_name"),
                 new_name=op_config.get("new_name")
             )
-        
+
         elif op_type == "transform_field":
             # Note: Transform functions from config strings require careful handling
             # For security, we don't eval arbitrary code. Instead, support predefined transforms.
             transform_fn = self._get_transform_function(op_config.get("transform"))
             reverse_fn = self._get_transform_function(op_config.get("reverse"))
-            
+
             return TransformField(
                 field_name=op_config.get("field_name"),
                 transform_fn=transform_fn,
                 reverse_fn=reverse_fn
             )
-        
+
         elif op_type == "composite":
             sub_operations = []
             for sub_config in op_config.get("operations", []):
@@ -130,12 +131,12 @@ class MigrationFactory(FactoryBase):
                 if sub_op:
                     sub_operations.append(sub_op)
             return CompositeOperation(sub_operations) if sub_operations else None
-        
+
         else:
             logger.warning(f"Unknown operation type: {op_type}")
             return None
-    
-    def _parse_field_type(self, type_str: Optional[str]):
+
+    def _parse_field_type(self, type_str: str | None):
         """Parse field type from string.
         
         Args:
@@ -146,16 +147,16 @@ class MigrationFactory(FactoryBase):
         """
         if not type_str:
             return None
-        
+
         from dataknobs_data.fields import FieldType
-        
+
         try:
             return FieldType[type_str.upper()]
         except KeyError:
             logger.warning(f"Unknown field type: {type_str}")
             return None
-    
-    def _get_transform_function(self, transform_spec: Any) -> Optional[Callable]:
+
+    def _get_transform_function(self, transform_spec: Any) -> Callable | None:
         """Get transform function from specification.
         
         For security, we don't eval arbitrary code. Instead, we support
@@ -169,7 +170,7 @@ class MigrationFactory(FactoryBase):
         """
         if not transform_spec:
             return None
-        
+
         # Support predefined transforms
         if transform_spec == "uppercase":
             return lambda x: x.upper() if isinstance(x, str) else x
@@ -185,7 +186,7 @@ class MigrationFactory(FactoryBase):
             elif "divide" in transform_spec:
                 factor = transform_spec["divide"]
                 return lambda x: x / factor if isinstance(x, (int, float)) else x
-        
+
         logger.warning(f"Unsupported transform specification: {transform_spec}")
         return None
 
@@ -216,7 +217,7 @@ class TransformerFactory(FactoryBase):
                 field_name: processed
                 value: true
     """
-    
+
     def create(self, **config) -> Transformer:
         """Create a Transformer instance from configuration.
         
@@ -227,17 +228,17 @@ class TransformerFactory(FactoryBase):
             Transformer instance
         """
         logger.info("Creating transformer")
-        
+
         transformer = Transformer()
-        
+
         # Add rules
         rules = config.get("rules", [])
         for rule_config in rules:
             self._add_rule(transformer, rule_config)
-        
+
         return transformer
-    
-    def _add_rule(self, transformer: Transformer, rule_config: Dict[str, Any]) -> None:
+
+    def _add_rule(self, transformer: Transformer, rule_config: dict[str, Any]) -> None:
         """Add a rule to the transformer.
         
         Args:
@@ -245,30 +246,30 @@ class TransformerFactory(FactoryBase):
             rule_config: Rule configuration
         """
         rule_type = rule_config.get("type", "").lower()
-        
+
         if rule_type == "map":
             source = rule_config.get("source")
             target = rule_config.get("target")
             if source:
                 transformer.map(source, target)
-        
+
         elif rule_type == "rename":
             old_name = rule_config.get("old_name")
             new_name = rule_config.get("new_name")
             if old_name and new_name:
                 transformer.rename(old_name, new_name)
-        
+
         elif rule_type == "exclude":
             fields = rule_config.get("fields", [])
             if fields:
                 transformer.exclude(*fields)
-        
+
         elif rule_type == "add":
             field_name = rule_config.get("field_name")
             value = rule_config.get("value")
             if field_name is not None:
                 transformer.add(field_name, value)
-        
+
         else:
             logger.warning(f"Unknown rule type: {rule_type}")
 
@@ -279,7 +280,7 @@ class MigratorFactory(FactoryBase):
     The Migrator doesn't require configuration, but this factory
     provides a consistent interface for the config system.
     """
-    
+
     def create(self, **config) -> Migrator:
         """Create a Migrator instance.
         

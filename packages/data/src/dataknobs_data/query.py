@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Union
+from typing import Any, Union
 
 
 class Operator(Enum):
@@ -93,7 +93,7 @@ class Filter:
             return bool(re.search(self.value, record_value))
 
         return False
-    
+
     def _compare_values(self, a: Any, b: Any, comparator) -> bool:
         """Compare two values with type awareness.
         
@@ -102,8 +102,8 @@ class Filter:
         - Mixed numeric types are converted appropriately
         - String comparisons are case-sensitive
         """
-        from datetime import datetime, date
-        
+        from datetime import date, datetime
+
         # Handle datetime/date comparisons
         if isinstance(a, str) and isinstance(b, (datetime, date)):
             try:
@@ -123,11 +123,11 @@ class Filter:
                     b = datetime.fromisoformat(b.replace("Z", "+00:00"))
                 except (ValueError, AttributeError):
                     pass  # Keep as strings
-        
+
         # Handle numeric comparisons
         if isinstance(a, (int, float)) and isinstance(b, (int, float)):
             return comparator(a, b)
-        
+
         # Try direct comparison
         try:
             return comparator(a, b)
@@ -135,12 +135,12 @@ class Filter:
             # Types not comparable
             return False
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert filter to dictionary representation."""
         return {"field": self.field, "operator": self.operator.value, "value": self.value}
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Filter":
+    def from_dict(cls, data: dict[str, Any]) -> "Filter":
         """Create filter from dictionary representation."""
         return cls(
             field=data["field"], operator=Operator(data["operator"]), value=data.get("value")
@@ -154,12 +154,12 @@ class SortSpec:
     field: str
     order: SortOrder = SortOrder.ASC
 
-    def to_dict(self) -> Dict[str, str]:
+    def to_dict(self) -> dict[str, str]:
         """Convert sort spec to dictionary representation."""
         return {"field": self.field, "order": self.order.value}
 
     @classmethod
-    def from_dict(cls, data: Dict[str, str]) -> "SortSpec":
+    def from_dict(cls, data: dict[str, str]) -> "SortSpec":
         """Create sort spec from dictionary representation."""
         return cls(field=data["field"], order=SortOrder(data.get("order", "asc")))
 
@@ -168,14 +168,14 @@ class SortSpec:
 class Query:
     """Represents a database query with filters, sorting, and pagination."""
 
-    filters: List[Filter] = field(default_factory=list)
-    sort_specs: List[SortSpec] = field(default_factory=list)
+    filters: list[Filter] = field(default_factory=list)
+    sort_specs: list[SortSpec] = field(default_factory=list)
     limit_value: int | None = None
     offset_value: int | None = None
-    fields: List[str] | None = None  # Field projection
+    fields: list[str] | None = None  # Field projection
 
     @property
-    def sort_property(self) -> List[SortSpec]:
+    def sort_property(self) -> list[SortSpec]:
         """Get sort specifications (backward compatibility)."""
         return self.sort_specs
 
@@ -189,7 +189,7 @@ class Query:
         """Get offset value (backward compatibility)."""
         return self.offset_value
 
-    def filter(self, field: str, operator: Union[str, Operator], value: Any = None) -> "Query":
+    def filter(self, field: str, operator: str | Operator, value: Any = None) -> "Query":
         """Add a filter to the query (fluent interface).
 
         Args:
@@ -228,7 +228,7 @@ class Query:
         self.filters.append(Filter(field=field, operator=operator, value=value))
         return self
 
-    def sort_by(self, field: str, order: Union[str, SortOrder] = "asc") -> "Query":
+    def sort_by(self, field: str, order: str | SortOrder = "asc") -> "Query":
         """Add a sort specification to the query (fluent interface).
 
         Args:
@@ -244,7 +244,7 @@ class Query:
         self.sort_specs.append(SortSpec(field=field, order=order))
         return self
 
-    def sort(self, field: str, order: Union[str, SortOrder] = "asc") -> "Query":
+    def sort(self, field: str, order: str | SortOrder = "asc") -> "Query":
         """Add sorting (fluent interface)."""
         return self.sort_by(field, order)
 
@@ -302,7 +302,7 @@ class Query:
         self.sort_specs = []
         return self
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert query to dictionary representation."""
         result = {
             "filters": [f.to_dict() for f in self.filters],
@@ -317,7 +317,7 @@ class Query:
         return result
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Query":
+    def from_dict(cls, data: dict[str, Any]) -> "Query":
         """Create query from dictionary representation."""
         query = cls()
 
@@ -344,7 +344,7 @@ class Query:
             offset_value=self.offset_value,
             fields=self.fields.copy() if self.fields else None,
         )
-    
+
     def or_(self, *filters: Union[Filter, "Query"]) -> "ComplexQuery":
         """Create a ComplexQuery with OR logic.
         
@@ -358,7 +358,7 @@ class Query:
             ComplexQuery with OR logic
         """
         from .query_logic import ComplexQuery, FilterCondition, LogicCondition, LogicOperator
-        
+
         # Build OR conditions from the arguments
         or_conditions = []
         for item in filters:
@@ -372,7 +372,7 @@ class Query:
                     for f in item.filters:
                         and_cond.conditions.append(FilterCondition(f))
                     or_conditions.append(and_cond)
-        
+
         # Create the OR condition group
         or_group = None
         if or_conditions:
@@ -383,7 +383,7 @@ class Query:
                     operator=LogicOperator.OR,
                     conditions=or_conditions
                 )
-        
+
         # Combine with existing filters (if any) using AND
         if self.filters:
             # Create AND condition for existing filters
@@ -393,7 +393,7 @@ class Query:
                 existing = LogicCondition(operator=LogicOperator.AND)
                 for f in self.filters:
                     existing.conditions.append(FilterCondition(f))
-            
+
             # Combine existing AND new OR group with AND
             if or_group:
                 root_condition = LogicCondition(
@@ -405,7 +405,7 @@ class Query:
         else:
             # No existing filters, just use OR group
             root_condition = or_group
-        
+
         return ComplexQuery(
             condition=root_condition,
             sort_specs=self.sort_specs.copy(),
@@ -413,7 +413,7 @@ class Query:
             offset_value=self.offset_value,
             fields=self.fields.copy() if self.fields else None
         )
-    
+
     def and_(self, *filters: Union[Filter, "Query"]) -> "Query":
         """Add more filters with AND logic (convenience method).
         
@@ -429,7 +429,7 @@ class Query:
             elif isinstance(item, Query):
                 self.filters.extend(item.filters)
         return self
-    
+
     def not_(self, filter: Filter) -> "ComplexQuery":
         """Create a ComplexQuery with NOT logic.
         
@@ -440,7 +440,7 @@ class Query:
             ComplexQuery with NOT logic
         """
         from .query_logic import ComplexQuery, FilterCondition, LogicCondition, LogicOperator
-        
+
         # Current filters as AND
         conditions = []
         if self.filters:
@@ -451,14 +451,14 @@ class Query:
                 for f in self.filters:
                     and_cond.conditions.append(FilterCondition(f))
                 conditions.append(and_cond)
-        
+
         # Add NOT condition
         not_cond = LogicCondition(
             operator=LogicOperator.NOT,
             conditions=[FilterCondition(filter)]
         )
         conditions.append(not_cond)
-        
+
         # Create root condition
         if len(conditions) == 1:
             root_condition = conditions[0]
@@ -467,7 +467,7 @@ class Query:
                 operator=LogicOperator.AND,
                 conditions=conditions
             )
-        
+
         return ComplexQuery(
             condition=root_condition,
             sort_specs=self.sort_specs.copy(),

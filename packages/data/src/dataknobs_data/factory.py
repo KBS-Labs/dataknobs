@@ -1,9 +1,10 @@
 """Backend factory for dynamic database creation."""
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 from dataknobs_config import FactoryBase
+
 from dataknobs_data.database import SyncDatabase
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,7 @@ class DatabaseFactory(FactoryBase):
             bucket: my-archive-bucket
             prefix: archives/
     """
-    
+
     def create(self, **config) -> SyncDatabase:
         """Create a database instance based on configuration.
         
@@ -51,54 +52,54 @@ class DatabaseFactory(FactoryBase):
             ValueError: If backend type is not recognized or not available
         """
         backend_type = config.pop("backend", "memory").lower()
-        
+
         logger.info(f"Creating database with backend: {backend_type}")
-        
+
         if backend_type in ("memory", "mem"):
             from dataknobs_data.backends.memory import SyncMemoryDatabase
             return SyncMemoryDatabase.from_config(config)
-            
+
         elif backend_type == "file":
             from dataknobs_data.backends.file import SyncFileDatabase
             return SyncFileDatabase.from_config(config)
-            
+
         elif backend_type in ("postgres", "postgresql", "pg"):
             try:
                 from dataknobs_data.backends.postgres import SyncPostgresDatabase
                 return SyncPostgresDatabase.from_config(config)
             except ImportError as e:
                 raise ValueError(
-                    f"PostgreSQL backend requires psycopg2. "
-                    f"Install with: pip install dataknobs-data[postgres]"
+                    "PostgreSQL backend requires psycopg2. "
+                    "Install with: pip install dataknobs-data[postgres]"
                 ) from e
-                
+
         elif backend_type in ("elasticsearch", "es"):
             try:
                 from dataknobs_data.backends.elasticsearch import SyncElasticsearchDatabase
                 return SyncElasticsearchDatabase.from_config(config)
             except ImportError as e:
                 raise ValueError(
-                    f"Elasticsearch backend requires elasticsearch package. "
-                    f"Install with: pip install dataknobs-data[elasticsearch]"
+                    "Elasticsearch backend requires elasticsearch package. "
+                    "Install with: pip install dataknobs-data[elasticsearch]"
                 ) from e
-                
+
         elif backend_type == "s3":
             try:
                 from dataknobs_data.backends.s3 import SyncS3Database
                 return SyncS3Database.from_config(config)
             except ImportError as e:
                 raise ValueError(
-                    f"S3 backend requires boto3. "
-                    f"Install with: pip install dataknobs-data[s3]"
+                    "S3 backend requires boto3. "
+                    "Install with: pip install dataknobs-data[s3]"
                 ) from e
-                
+
         else:
             raise ValueError(
                 f"Unknown backend type: {backend_type}. "
                 f"Available backends: memory, file, postgres, elasticsearch, s3"
             )
-    
-    def get_backend_info(self, backend_type: str) -> Dict[str, Any]:
+
+    def get_backend_info(self, backend_type: str) -> dict[str, Any]:
         """Get information about a specific backend.
         
         Args:
@@ -165,7 +166,7 @@ class DatabaseFactory(FactoryBase):
                 }
             }
         }
-        
+
         return info.get(backend_type.lower(), {
             "description": "Unknown backend",
             "error": f"Backend '{backend_type}' not recognized"
@@ -177,7 +178,7 @@ class AsyncDatabaseFactory(FactoryBase):
     
     Note: Currently only some backends support async operations.
     """
-    
+
     def create(self, **config) -> Any:
         """Create an async database instance.
         
@@ -191,25 +192,25 @@ class AsyncDatabaseFactory(FactoryBase):
             ValueError: If backend doesn't support async operations
         """
         backend_type = config.pop("backend", "memory").lower()
-        
+
         if backend_type in ("memory", "mem"):
             from dataknobs_data.backends.memory import AsyncMemoryDatabase
             return AsyncMemoryDatabase.from_config(config)
-            
+
         elif backend_type == "file":
             from dataknobs_data.backends.file import AsyncFileDatabase
             return AsyncFileDatabase.from_config(config)
-            
+
         elif backend_type in ("postgres", "postgresql", "pg"):
             from dataknobs_data.backends.postgres import AsyncPostgresDatabase
             return AsyncPostgresDatabase.from_config(config)
-            
+
         elif backend_type in ("elasticsearch", "es"):
-            from dataknobs_data.backends.elasticsearch import AsyncElasticsearchDatabase
+            from dataknobs_data.backends.elasticsearch_async import AsyncElasticsearchDatabase
             return AsyncElasticsearchDatabase.from_config(config)
-            
+
         elif backend_type == "s3":
-            from dataknobs_data.backends.s3 import AsyncS3Database
+            from dataknobs_data.backends.s3_async import AsyncS3Database
             return AsyncS3Database.from_config(config)
 
         else:

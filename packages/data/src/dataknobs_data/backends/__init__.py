@@ -40,7 +40,8 @@ except ImportError:
     pass
 
 try:
-    from .s3 import AsyncS3Database, SyncS3Database
+    from .s3 import SyncS3Database
+    from .s3_async import AsyncS3Database
 
     register_backend("s3", AsyncS3Database, SyncS3Database)
 except ImportError:
@@ -55,7 +56,8 @@ except ImportError:
     pass
 
 try:
-    from .elasticsearch import AsyncElasticsearchDatabase, SyncElasticsearchDatabase
+    from .elasticsearch import SyncElasticsearchDatabase
+    from .elasticsearch_async import AsyncElasticsearchDatabase
 
     register_backend("elasticsearch", AsyncElasticsearchDatabase, SyncElasticsearchDatabase)
     register_backend("es", AsyncElasticsearchDatabase, SyncElasticsearchDatabase)
