@@ -30,7 +30,7 @@ from .query_logic import (
     LogicCondition,
 )
 from .records import Record
-from .streaming import StreamConfig, StreamResult
+from .streaming import StreamConfig, StreamResult, StreamProcessor
 
 # Import validation and migration modules
 from . import validation
@@ -60,6 +60,7 @@ __all__ = [
     # Streaming
     "StreamConfig",
     "StreamResult",
+    "StreamProcessor",
     # Factory
     "DatabaseFactory",
     "database_factory",

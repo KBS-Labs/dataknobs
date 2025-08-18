@@ -6,7 +6,11 @@ Generates realistic sensor data with various edge cases for testing.
 import random
 from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
-from .models import SensorReading, SensorInfo
+try:
+    from .models import SensorReading, SensorInfo
+except ImportError:
+    # When run as script, use absolute import
+    from models import SensorReading, SensorInfo
 
 
 class SensorDataGenerator:

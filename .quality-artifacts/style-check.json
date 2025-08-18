@@ -2609,7 +2609,7 @@
       "applicability": "safe",
       "edits": [
         {
-          "content": "# Import validation and migration modules\nfrom . import migration, validation\nfrom .database import AsyncDatabase, SyncDatabase\nfrom .exceptions import (\n    BackendNotFoundError,\n    ConcurrencyError,\n    ConfigurationError,\n    DatabaseConnectionError,\n    DatabaseOperationError,\n    DataknobsDataError,\n    FieldTypeError,\n    MigrationError,\n    QueryError,\n    RecordNotFoundError,\n    RecordValidationError,\n    SerializationError,\n    TransactionError,\n)\nfrom .factory import DatabaseFactory, async_database_factory, database_factory\n\n# Import core modules\nfrom .fields import Field, FieldType\nfrom .query import Filter, Operator, Query, SortOrder, SortSpec\nfrom .query_logic import (\n    ComplexQuery,\n    Condition,\n    FilterCondition,\n    LogicCondition,\n    LogicOperator,\n    QueryBuilder,\n)\nfrom .records import Record\nfrom .streaming import StreamConfig, StreamResult\n\n",
+          "content": "# Import validation and migration modules\nfrom . import migration, validation\nfrom .database import AsyncDatabase, SyncDatabase\nfrom .exceptions import (\n    BackendNotFoundError,\n    ConcurrencyError,\n    ConfigurationError,\n    DatabaseConnectionError,\n    DatabaseOperationError,\n    DataknobsDataError,\n    FieldTypeError,\n    MigrationError,\n    QueryError,\n    RecordNotFoundError,\n    RecordValidationError,\n    SerializationError,\n    TransactionError,\n)\nfrom .factory import DatabaseFactory, async_database_factory, database_factory\n\n# Import core modules\nfrom .fields import Field, FieldType\nfrom .query import Filter, Operator, Query, SortOrder, SortSpec\nfrom .query_logic import (\n    ComplexQuery,\n    Condition,\n    FilterCondition,\n    LogicCondition,\n    LogicOperator,\n    QueryBuilder,\n)\nfrom .records import Record\nfrom .streaming import StreamConfig, StreamProcessor, StreamResult\n\n",
           "end_location": {
             "column": 1,
             "row": 39
@@ -2635,17 +2635,17 @@
     "code": "RUF022",
     "end_location": {
       "column": 2,
-      "row": 84
+      "row": 85
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/__init__.py",
     "fix": {
       "applicability": "unsafe",
       "edits": [
         {
-          "content": "[\n    # Core classes\n    \"AsyncDatabase\",\n    \"BackendNotFoundError\",\n    # Boolean logic\n    \"ComplexQuery\",\n    \"ConcurrencyError\",\n    \"Condition\",\n    \"ConfigurationError\",\n    \"DatabaseConnectionError\",\n    # Factory\n    \"DatabaseFactory\",\n    \"DatabaseOperationError\",\n    # Exceptions\n    \"DataknobsDataError\",\n    \"Field\",\n    \"FieldType\",\n    \"FieldTypeError\",\n    \"Filter\",\n    \"FilterCondition\",\n    \"LogicCondition\",\n    \"LogicOperator\",\n    \"MigrationError\",\n    \"Operator\",\n    \"Query\",\n    \"QueryBuilder\",\n    \"QueryError\",\n    \"Record\",\n    \"RecordNotFoundError\",\n    \"RecordValidationError\",\n    \"SerializationError\",\n    \"SortOrder\",\n    \"SortSpec\",\n    # Streaming\n    \"StreamConfig\",\n    \"StreamResult\",\n    \"SyncDatabase\",\n    \"TransactionError\",\n    \"async_database_factory\",\n    \"database_factory\",\n    \"migration\",\n    # Validation and Migration modules\n    \"validation\",\n]",
+          "content": "[\n    # Core classes\n    \"AsyncDatabase\",\n    \"BackendNotFoundError\",\n    # Boolean logic\n    \"ComplexQuery\",\n    \"ConcurrencyError\",\n    \"Condition\",\n    \"ConfigurationError\",\n    \"DatabaseConnectionError\",\n    # Factory\n    \"DatabaseFactory\",\n    \"DatabaseOperationError\",\n    # Exceptions\n    \"DataknobsDataError\",\n    \"Field\",\n    \"FieldType\",\n    \"FieldTypeError\",\n    \"Filter\",\n    \"FilterCondition\",\n    \"LogicCondition\",\n    \"LogicOperator\",\n    \"MigrationError\",\n    \"Operator\",\n    \"Query\",\n    \"QueryBuilder\",\n    \"QueryError\",\n    \"Record\",\n    \"RecordNotFoundError\",\n    \"RecordValidationError\",\n    \"SerializationError\",\n    \"SortOrder\",\n    \"SortSpec\",\n    # Streaming\n    \"StreamConfig\",\n    \"StreamProcessor\",\n    \"StreamResult\",\n    \"SyncDatabase\",\n    \"TransactionError\",\n    \"async_database_factory\",\n    \"database_factory\",\n    \"migration\",\n    # Validation and Migration modules\n    \"validation\",\n]",
           "end_location": {
             "column": 2,
-            "row": 84
+            "row": 85
           },
           "location": {
             "column": 11,
@@ -42277,7 +42277,7 @@
       "applicability": "safe",
       "edits": [
         {
-          "content": "from .batch_ops import BatchOperations, ChunkedProcessor\nfrom .converter import ConversionOptions, DataFrameConverter\nfrom .metadata import MetadataHandler, MetadataStrategy\nfrom .type_mapper import PandasTypeMapping, TypeMapper\n\n",
+          "content": "from .batch_ops import BatchConfig, BatchOperations, ChunkedProcessor\nfrom .converter import ConversionOptions, DataFrameConverter\nfrom .metadata import MetadataHandler, MetadataStrategy\nfrom .type_mapper import PandasTypeMapping, TypeMapper\n\n",
           "end_location": {
             "column": 1,
             "row": 12
@@ -42303,17 +42303,17 @@
     "code": "RUF022",
     "end_location": {
       "column": 2,
-      "row": 21
+      "row": 22
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/pandas/__init__.py",
     "fix": {
       "applicability": "safe",
       "edits": [
         {
-          "content": "[\n    \"BatchOperations\",\n    \"ChunkedProcessor\",\n    \"ConversionOptions\",\n    \"DataFrameConverter\",\n    \"MetadataHandler\",\n    \"MetadataStrategy\",\n    \"PandasTypeMapping\",\n    \"TypeMapper\",\n]",
+          "content": "[\n    \"BatchConfig\",\n    \"BatchOperations\",\n    \"ChunkedProcessor\",\n    \"ConversionOptions\",\n    \"DataFrameConverter\",\n    \"MetadataHandler\",\n    \"MetadataStrategy\",\n    \"PandasTypeMapping\",\n    \"TypeMapper\",\n]",
           "end_location": {
             "column": 2,
-            "row": 21
+            "row": 22
           },
           "location": {
             "column": 11,
@@ -42336,7 +42336,7 @@
     "code": "W292",
     "end_location": {
       "column": 2,
-      "row": 21
+      "row": 22
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/pandas/__init__.py",
     "fix": {
@@ -42346,11 +42346,11 @@
           "content": "\n",
           "end_location": {
             "column": 2,
-            "row": 21
+            "row": 22
           },
           "location": {
             "column": 2,
-            "row": 21
+            "row": 22
           }
         }
       ],
@@ -42358,10 +42358,10 @@
     },
     "location": {
       "column": 2,
-      "row": 21
+      "row": 22
     },
     "message": "No newline at end of file",
-    "noqa_row": 21,
+    "noqa_row": 22,
     "url": "https://docs.astral.sh/ruff/rules/missing-newline-at-end-of-file"
   },
   {
@@ -64120,10 +64120,43 @@
   },
   {
     "cell": null,
+    "code": "UP006",
+    "end_location": {
+      "column": 25,
+      "row": 42
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "list",
+          "end_location": {
+            "column": 25,
+            "row": 42
+          },
+          "location": {
+            "column": 21,
+            "row": 42
+          }
+        }
+      ],
+      "message": "Replace with `list`"
+    },
+    "location": {
+      "column": 21,
+      "row": 42
+    },
+    "message": "Use `list` instead of `List` for type annotation",
+    "noqa_row": 42,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
+  },
+  {
+    "cell": null,
     "code": "W293",
     "end_location": {
       "column": 5,
-      "row": 41
+      "row": 43
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64133,11 +64166,11 @@
           "content": "",
           "end_location": {
             "column": 5,
-            "row": 41
+            "row": 43
           },
           "location": {
             "column": 1,
-            "row": 41
+            "row": 43
           }
         }
       ],
@@ -64145,10 +64178,10 @@
     },
     "location": {
       "column": 1,
-      "row": 41
+      "row": 43
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 41,
+    "noqa_row": 43,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -64156,7 +64189,7 @@
     "code": "W293",
     "end_location": {
       "column": 5,
-      "row": 48
+      "row": 50
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64166,11 +64199,11 @@
           "content": "",
           "end_location": {
             "column": 5,
-            "row": 48
+            "row": 50
           },
           "location": {
             "column": 1,
-            "row": 48
+            "row": 50
           }
         }
       ],
@@ -64178,10 +64211,10 @@
     },
     "location": {
       "column": 1,
-      "row": 48
+      "row": 50
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 48,
+    "noqa_row": 50,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -64189,7 +64222,7 @@
     "code": "UP045",
     "end_location": {
       "column": 49,
-      "row": 49
+      "row": 51
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64199,11 +64232,11 @@
           "content": "str | None",
           "end_location": {
             "column": 49,
-            "row": 49
+            "row": 51
           },
           "location": {
             "column": 36,
-            "row": 49
+            "row": 51
           }
         }
       ],
@@ -64211,32 +64244,82 @@
     },
     "location": {
       "column": 36,
-      "row": 49
+      "row": 51
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 49,
+    "noqa_row": 51,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
     "cell": null,
-    "code": "W293",
+    "code": "UP045",
     "end_location": {
-      "column": 5,
-      "row": 56
+      "column": 89,
+      "row": 51
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
       "applicability": "safe",
       "edits": [
         {
+          "content": "int | None",
+          "end_location": {
+            "column": 89,
+            "row": 51
+          },
+          "location": {
+            "column": 76,
+            "row": 51
+          }
+        }
+      ],
+      "message": "Convert to `X | None`"
+    },
+    "location": {
+      "column": 76,
+      "row": 51
+    },
+    "message": "Use `X | None` for type annotations",
+    "noqa_row": 51,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
+  },
+  {
+    "cell": null,
+    "code": "E501",
+    "end_location": {
+      "column": 106,
+      "row": 51
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": null,
+    "location": {
+      "column": 101,
+      "row": 51
+    },
+    "message": "Line too long (105 > 100)",
+    "noqa_row": 51,
+    "url": "https://docs.astral.sh/ruff/rules/line-too-long"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 53
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
           "content": "",
           "end_location": {
-            "column": 5,
-            "row": 56
+            "column": 9,
+            "row": 53
           },
           "location": {
             "column": 1,
-            "row": 56
+            "row": 53
           }
         }
       ],
@@ -64244,10 +64327,10 @@
     },
     "location": {
       "column": 1,
-      "row": 56
+      "row": 53
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 56,
+    "noqa_row": 58,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -64255,7 +64338,7 @@
     "code": "W293",
     "end_location": {
       "column": 5,
-      "row": 64
+      "row": 67
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64265,11 +64348,11 @@
           "content": "",
           "end_location": {
             "column": 5,
-            "row": 64
+            "row": 67
           },
           "location": {
             "column": 1,
-            "row": 64
+            "row": 67
           }
         }
       ],
@@ -64277,18 +64360,68 @@
     },
     "location": {
       "column": 1,
-      "row": 64
+      "row": 67
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 64,
+    "noqa_row": 67,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 77
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 77
+          },
+          "location": {
+            "column": 1,
+            "row": 77
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 77
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 77,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "D417",
+    "end_location": {
+      "column": 32,
+      "row": 88
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": null,
+    "location": {
+      "column": 5,
+      "row": 88
+    },
+    "message": "Missing argument description in the docstring for `process_batch_with_fallback`: `batch_index`",
+    "noqa_row": 88,
+    "url": "https://docs.astral.sh/ruff/rules/undocumented-param"
   },
   {
     "cell": null,
     "code": "UP006",
     "end_location": {
       "column": 16,
-      "row": 76
+      "row": 89
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64298,11 +64431,11 @@
           "content": "list",
           "end_location": {
             "column": 16,
-            "row": 76
+            "row": 89
           },
           "location": {
             "column": 12,
-            "row": 76
+            "row": 89
           }
         }
       ],
@@ -64310,10 +64443,10 @@
     },
     "location": {
       "column": 12,
-      "row": 76
+      "row": 89
     },
     "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 76,
+    "noqa_row": 89,
     "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
   },
   {
@@ -64321,7 +64454,7 @@
     "code": "UP006",
     "end_location": {
       "column": 38,
-      "row": 77
+      "row": 90
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64331,11 +64464,11 @@
           "content": "list",
           "end_location": {
             "column": 38,
-            "row": 77
+            "row": 90
           },
           "location": {
             "column": 34,
-            "row": 77
+            "row": 90
           }
         }
       ],
@@ -64343,10 +64476,10 @@
     },
     "location": {
       "column": 34,
-      "row": 77
+      "row": 90
     },
     "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 77,
+    "noqa_row": 90,
     "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
   },
   {
@@ -64354,7 +64487,7 @@
     "code": "UP006",
     "end_location": {
       "column": 53,
-      "row": 77
+      "row": 90
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64364,11 +64497,11 @@
           "content": "list",
           "end_location": {
             "column": 53,
-            "row": 77
+            "row": 90
           },
           "location": {
             "column": 49,
-            "row": 77
+            "row": 90
           }
         }
       ],
@@ -64376,10 +64509,10 @@
     },
     "location": {
       "column": 49,
-      "row": 77
+      "row": 90
     },
     "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 77,
+    "noqa_row": 90,
     "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
   },
   {
@@ -64387,7 +64520,7 @@
     "code": "UP045",
     "end_location": {
       "column": 49,
-      "row": 81
+      "row": 94
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64397,11 +64530,11 @@
           "content": "Callable[[], None] | None",
           "end_location": {
             "column": 49,
-            "row": 81
+            "row": 94
           },
           "location": {
             "column": 21,
-            "row": 81
+            "row": 94
           }
         }
       ],
@@ -64409,10 +64542,10 @@
     },
     "location": {
       "column": 21,
-      "row": 81
+      "row": 94
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 81,
+    "noqa_row": 94,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -64420,7 +64553,7 @@
     "code": "W293",
     "end_location": {
       "column": 5,
-      "row": 84
+      "row": 98
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64430,11 +64563,11 @@
           "content": "",
           "end_location": {
             "column": 5,
-            "row": 84
+            "row": 98
           },
           "location": {
             "column": 1,
-            "row": 84
+            "row": 98
           }
         }
       ],
@@ -64442,10 +64575,10 @@
     },
     "location": {
       "column": 1,
-      "row": 84
+      "row": 98
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 99,
+    "noqa_row": 113,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -64453,7 +64586,7 @@
     "code": "W293",
     "end_location": {
       "column": 5,
-      "row": 88
+      "row": 102
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64463,11 +64596,11 @@
           "content": "",
           "end_location": {
             "column": 5,
-            "row": 88
+            "row": 102
           },
           "location": {
             "column": 1,
-            "row": 88
+            "row": 102
           }
         }
       ],
@@ -64475,10 +64608,10 @@
     },
     "location": {
       "column": 1,
-      "row": 88
+      "row": 102
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 99,
+    "noqa_row": 113,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -64486,7 +64619,7 @@
     "code": "W293",
     "end_location": {
       "column": 9,
-      "row": 96
+      "row": 110
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64496,11 +64629,11 @@
           "content": "",
           "end_location": {
             "column": 9,
-            "row": 96
+            "row": 110
           },
           "location": {
             "column": 1,
-            "row": 96
+            "row": 110
           }
         }
       ],
@@ -64508,10 +64641,10 @@
     },
     "location": {
       "column": 1,
-      "row": 96
+      "row": 110
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 99,
+    "noqa_row": 113,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -64519,7 +64652,7 @@
     "code": "F841",
     "end_location": {
       "column": 36,
-      "row": 106
+      "row": 121
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64529,11 +64662,11 @@
           "content": "",
           "end_location": {
             "column": 36,
-            "row": 106
+            "row": 121
           },
           "location": {
             "column": 21,
-            "row": 106
+            "row": 121
           }
         }
       ],
@@ -64541,10 +64674,10 @@
     },
     "location": {
       "column": 25,
-      "row": 106
+      "row": 121
     },
     "message": "Local variable `batch_error` is assigned to but never used",
-    "noqa_row": 106,
+    "noqa_row": 121,
     "url": "https://docs.astral.sh/ruff/rules/unused-variable"
   },
   {
@@ -64552,7 +64685,7 @@
     "code": "W293",
     "end_location": {
       "column": 17,
-      "row": 117
+      "row": 136
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64562,11 +64695,11 @@
           "content": "",
           "end_location": {
             "column": 17,
-            "row": 117
+            "row": 136
           },
           "location": {
             "column": 1,
-            "row": 117
+            "row": 136
           }
         }
       ],
@@ -64574,10 +64707,10 @@
     },
     "location": {
       "column": 1,
-      "row": 117
+      "row": 136
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 117,
+    "noqa_row": 136,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -64585,7 +64718,7 @@
     "code": "W293",
     "end_location": {
       "column": 5,
-      "row": 130
+      "row": 149
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64595,11 +64728,11 @@
           "content": "",
           "end_location": {
             "column": 5,
-            "row": 130
+            "row": 149
           },
           "location": {
             "column": 1,
-            "row": 130
+            "row": 149
           }
         }
       ],
@@ -64607,18 +64740,35 @@
     },
     "location": {
       "column": 1,
-      "row": 130
+      "row": 149
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 130,
+    "noqa_row": 149,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "D417",
+    "end_location": {
+      "column": 44,
+      "row": 153
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": null,
+    "location": {
+      "column": 11,
+      "row": 153
+    },
+    "message": "Missing argument description in the docstring for `async_process_batch_with_fallback`: `batch_index`",
+    "noqa_row": 153,
+    "url": "https://docs.astral.sh/ruff/rules/undocumented-param"
   },
   {
     "cell": null,
     "code": "UP006",
     "end_location": {
       "column": 16,
-      "row": 135
+      "row": 154
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64628,11 +64778,11 @@
           "content": "list",
           "end_location": {
             "column": 16,
-            "row": 135
+            "row": 154
           },
           "location": {
             "column": 12,
-            "row": 135
+            "row": 154
           }
         }
       ],
@@ -64640,10 +64790,10 @@
     },
     "location": {
       "column": 12,
-      "row": 135
+      "row": 154
     },
     "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 135,
+    "noqa_row": 154,
     "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
   },
   {
@@ -64651,7 +64801,7 @@
     "code": "UP045",
     "end_location": {
       "column": 49,
-      "row": 140
+      "row": 159
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64661,11 +64811,11 @@
           "content": "Callable[[], None] | None",
           "end_location": {
             "column": 49,
-            "row": 140
+            "row": 159
           },
           "location": {
             "column": 21,
-            "row": 140
+            "row": 159
           }
         }
       ],
@@ -64673,10 +64823,10 @@
     },
     "location": {
       "column": 21,
-      "row": 140
+      "row": 159
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 140,
+    "noqa_row": 159,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -64684,7 +64834,7 @@
     "code": "W293",
     "end_location": {
       "column": 5,
-      "row": 143
+      "row": 163
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64694,11 +64844,11 @@
           "content": "",
           "end_location": {
             "column": 5,
-            "row": 143
+            "row": 163
           },
           "location": {
             "column": 1,
-            "row": 143
+            "row": 163
           }
         }
       ],
@@ -64706,10 +64856,10 @@
     },
     "location": {
       "column": 1,
-      "row": 143
+      "row": 163
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 158,
+    "noqa_row": 178,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -64717,7 +64867,7 @@
     "code": "W293",
     "end_location": {
       "column": 5,
-      "row": 147
+      "row": 167
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64727,11 +64877,11 @@
           "content": "",
           "end_location": {
             "column": 5,
-            "row": 147
+            "row": 167
           },
           "location": {
             "column": 1,
-            "row": 147
+            "row": 167
           }
         }
       ],
@@ -64739,10 +64889,10 @@
     },
     "location": {
       "column": 1,
-      "row": 147
+      "row": 167
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 158,
+    "noqa_row": 178,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -64750,7 +64900,7 @@
     "code": "W293",
     "end_location": {
       "column": 9,
-      "row": 155
+      "row": 175
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64760,11 +64910,11 @@
           "content": "",
           "end_location": {
             "column": 9,
-            "row": 155
+            "row": 175
           },
           "location": {
             "column": 1,
-            "row": 155
+            "row": 175
           }
         }
       ],
@@ -64772,10 +64922,10 @@
     },
     "location": {
       "column": 1,
-      "row": 155
+      "row": 175
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 158,
+    "noqa_row": 178,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -64783,7 +64933,7 @@
     "code": "F841",
     "end_location": {
       "column": 36,
-      "row": 165
+      "row": 186
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64793,11 +64943,11 @@
           "content": "",
           "end_location": {
             "column": 36,
-            "row": 165
+            "row": 186
           },
           "location": {
             "column": 21,
-            "row": 165
+            "row": 186
           }
         }
       ],
@@ -64805,10 +64955,10 @@
     },
     "location": {
       "column": 25,
-      "row": 165
+      "row": 186
     },
     "message": "Local variable `batch_error` is assigned to but never used",
-    "noqa_row": 165,
+    "noqa_row": 186,
     "url": "https://docs.astral.sh/ruff/rules/unused-variable"
   },
   {
@@ -64816,7 +64966,7 @@
     "code": "W293",
     "end_location": {
       "column": 17,
-      "row": 176
+      "row": 201
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64826,11 +64976,11 @@
           "content": "",
           "end_location": {
             "column": 17,
-            "row": 176
+            "row": 201
           },
           "location": {
             "column": 1,
-            "row": 176
+            "row": 201
           }
         }
       ],
@@ -64838,10 +64988,10 @@
     },
     "location": {
       "column": 1,
-      "row": 176
+      "row": 201
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 176,
+    "noqa_row": 201,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -64849,7 +64999,7 @@
     "code": "W293",
     "end_location": {
       "column": 5,
-      "row": 189
+      "row": 214
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64859,11 +65009,11 @@
           "content": "",
           "end_location": {
             "column": 5,
-            "row": 189
+            "row": 214
           },
           "location": {
             "column": 1,
-            "row": 189
+            "row": 214
           }
         }
       ],
@@ -64871,10 +65021,10 @@
     },
     "location": {
       "column": 1,
-      "row": 189
+      "row": 214
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 189,
+    "noqa_row": 214,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -64882,7 +65032,7 @@
     "code": "W293",
     "end_location": {
       "column": 5,
-      "row": 195
+      "row": 220
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64892,11 +65042,11 @@
           "content": "",
           "end_location": {
             "column": 5,
-            "row": 195
+            "row": 220
           },
           "location": {
             "column": 1,
-            "row": 195
+            "row": 220
           }
         }
       ],
@@ -64904,10 +65054,10 @@
     },
     "location": {
       "column": 1,
-      "row": 195
+      "row": 220
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 195,
+    "noqa_row": 220,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -64915,7 +65065,7 @@
     "code": "UP006",
     "end_location": {
       "column": 23,
-      "row": 200
+      "row": 225
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -64925,11 +65075,11 @@
           "content": "list",
           "end_location": {
             "column": 23,
-            "row": 200
+            "row": 225
           },
           "location": {
             "column": 19,
-            "row": 200
+            "row": 225
           }
         }
       ],
@@ -64937,110 +65087,11 @@
     },
     "location": {
       "column": 19,
-      "row": 200
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 200,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "W293",
-    "end_location": {
-      "column": 5,
-      "row": 210
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "",
-          "end_location": {
-            "column": 5,
-            "row": 210
-          },
-          "location": {
-            "column": 1,
-            "row": 210
-          }
-        }
-      ],
-      "message": "Remove whitespace from blank line"
-    },
-    "location": {
-      "column": 1,
-      "row": 210
-    },
-    "message": "Blank line contains whitespace",
-    "noqa_row": 210,
-    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
-  },
-  {
-    "cell": null,
-    "code": "UP006",
-    "end_location": {
-      "column": 28,
-      "row": 215
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "list",
-          "end_location": {
-            "column": 28,
-            "row": 215
-          },
-          "location": {
-            "column": 24,
-            "row": 215
-          }
-        }
-      ],
-      "message": "Replace with `list`"
-    },
-    "location": {
-      "column": 24,
-      "row": 215
-    },
-    "message": "Use `list` instead of `List` for type annotation",
-    "noqa_row": 215,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
-  },
-  {
-    "cell": null,
-    "code": "W293",
-    "end_location": {
-      "column": 5,
       "row": 225
     },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "",
-          "end_location": {
-            "column": 5,
-            "row": 225
-          },
-          "location": {
-            "column": 1,
-            "row": 225
-          }
-        }
-      ],
-      "message": "Remove whitespace from blank line"
-    },
-    "location": {
-      "column": 1,
-      "row": 225
-    },
-    "message": "Blank line contains whitespace",
+    "message": "Use `list` instead of `List` for type annotation",
     "noqa_row": 225,
-    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
   },
   {
     "cell": null,
@@ -65077,241 +65128,43 @@
   },
   {
     "cell": null,
-    "code": "W293",
-    "end_location": {
-      "column": 5,
-      "row": 245
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "",
-          "end_location": {
-            "column": 5,
-            "row": 245
-          },
-          "location": {
-            "column": 1,
-            "row": 245
-          }
-        }
-      ],
-      "message": "Remove whitespace from blank line"
-    },
-    "location": {
-      "column": 1,
-      "row": 245
-    },
-    "message": "Blank line contains whitespace",
-    "noqa_row": 245,
-    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
-  },
-  {
-    "cell": null,
-    "code": "UP045",
-    "end_location": {
-      "column": 55,
-      "row": 249
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "Record | None",
-          "end_location": {
-            "column": 55,
-            "row": 249
-          },
-          "location": {
-            "column": 39,
-            "row": 249
-          }
-        }
-      ],
-      "message": "Convert to `X | None`"
-    },
-    "location": {
-      "column": 39,
-      "row": 249
-    },
-    "message": "Use `X | None` for type annotations",
-    "noqa_row": 249,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
-  },
-  {
-    "cell": null,
-    "code": "W293",
-    "end_location": {
-      "column": 5,
-      "row": 256
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "",
-          "end_location": {
-            "column": 5,
-            "row": 256
-          },
-          "location": {
-            "column": 1,
-            "row": 256
-          }
-        }
-      ],
-      "message": "Remove whitespace from blank line"
-    },
-    "location": {
-      "column": 1,
-      "row": 256
-    },
-    "message": "Blank line contains whitespace",
-    "noqa_row": 256,
-    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
-  },
-  {
-    "cell": null,
-    "code": "UP045",
-    "end_location": {
-      "column": 55,
-      "row": 260
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "Record | None",
-          "end_location": {
-            "column": 55,
-            "row": 260
-          },
-          "location": {
-            "column": 39,
-            "row": 260
-          }
-        }
-      ],
-      "message": "Convert to `X | None`"
-    },
-    "location": {
-      "column": 39,
-      "row": 260
-    },
-    "message": "Use `X | None` for type annotations",
-    "noqa_row": 260,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
-  },
-  {
-    "cell": null,
-    "code": "W293",
-    "end_location": {
-      "column": 5,
-      "row": 271
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "",
-          "end_location": {
-            "column": 5,
-            "row": 271
-          },
-          "location": {
-            "column": 1,
-            "row": 271
-          }
-        }
-      ],
-      "message": "Remove whitespace from blank line"
-    },
-    "location": {
-      "column": 1,
-      "row": 271
-    },
-    "message": "Blank line contains whitespace",
-    "noqa_row": 271,
-    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
-  },
-  {
-    "cell": null,
-    "code": "UP045",
+    "code": "UP006",
     "end_location": {
       "column": 39,
-      "row": 275
+      "row": 237
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
       "applicability": "safe",
       "edits": [
         {
-          "content": "StreamConfig | None",
+          "content": "list",
           "end_location": {
             "column": 39,
-            "row": 275
+            "row": 237
           },
           "location": {
-            "column": 17,
-            "row": 275
+            "column": 35,
+            "row": 237
           }
         }
       ],
-      "message": "Convert to `X | None`"
+      "message": "Replace with `list`"
     },
     "location": {
-      "column": 17,
-      "row": 275
+      "column": 35,
+      "row": 237
     },
-    "message": "Use `X | None` for type annotations",
-    "noqa_row": 275,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
-  },
-  {
-    "cell": null,
-    "code": "D212",
-    "end_location": {
-      "column": 12,
-      "row": 282
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "",
-          "end_location": {
-            "column": 9,
-            "row": 278
-          },
-          "location": {
-            "column": 12,
-            "row": 277
-          }
-        }
-      ],
-      "message": "Remove whitespace after opening quotes"
-    },
-    "location": {
-      "column": 9,
-      "row": 277
-    },
-    "message": "Multi-line docstring summary should start at the first line",
-    "noqa_row": 282,
-    "url": "https://docs.astral.sh/ruff/rules/multi-line-summary-first-line"
+    "message": "Use `list` instead of `List` for type annotation",
+    "noqa_row": 237,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
   },
   {
     "cell": null,
     "code": "W293",
     "end_location": {
       "column": 9,
-      "row": 279
+      "row": 239
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -65321,11 +65174,11 @@
           "content": "",
           "end_location": {
             "column": 9,
-            "row": 279
+            "row": 239
           },
           "location": {
             "column": 1,
-            "row": 279
+            "row": 239
           }
         }
       ],
@@ -65333,10 +65186,175 @@
     },
     "location": {
       "column": 1,
-      "row": 279
+      "row": 239
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 282,
+    "noqa_row": 245,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 242
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 242
+          },
+          "location": {
+            "column": 1,
+            "row": 242
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 242
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 245,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "UP028",
+    "end_location": {
+      "column": 25,
+      "row": 247
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "yield from records",
+          "end_location": {
+            "column": 25,
+            "row": 247
+          },
+          "location": {
+            "column": 9,
+            "row": 246
+          }
+        }
+      ],
+      "message": "Replace with `yield from`"
+    },
+    "location": {
+      "column": 9,
+      "row": 246
+    },
+    "message": "Replace `yield` over `for` loop with `yield from`",
+    "noqa_row": 246,
+    "url": "https://docs.astral.sh/ruff/rules/yield-in-for-loop"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 248
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 248
+          },
+          "location": {
+            "column": 1,
+            "row": 248
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 248
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 248,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "UP006",
+    "end_location": {
+      "column": 51,
+      "row": 250
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "list",
+          "end_location": {
+            "column": 51,
+            "row": 250
+          },
+          "location": {
+            "column": 47,
+            "row": 250
+          }
+        }
+      ],
+      "message": "Replace with `list`"
+    },
+    "location": {
+      "column": 47,
+      "row": 250
+    },
+    "message": "Use `list` instead of `List` for type annotation",
+    "noqa_row": 250,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 252
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 252
+          },
+          "location": {
+            "column": 1,
+            "row": 252
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 252
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 260,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -65344,7 +65362,535 @@
     "code": "W293",
     "end_location": {
       "column": 9,
-      "row": 284
+      "row": 254
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 254
+          },
+          "location": {
+            "column": 1,
+            "row": 254
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 254
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 260,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 257
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 257
+          },
+          "location": {
+            "column": 1,
+            "row": 257
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 257
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 260,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 263
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 263
+          },
+          "location": {
+            "column": 1,
+            "row": 263
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 263
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 263,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 267
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 267
+          },
+          "location": {
+            "column": 1,
+            "row": 267
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 267
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 275,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 269
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 269
+          },
+          "location": {
+            "column": 1,
+            "row": 269
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 269
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 275,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 272
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 272
+          },
+          "location": {
+            "column": 1,
+            "row": 272
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 272
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 275,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 278
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 278
+          },
+          "location": {
+            "column": 1,
+            "row": 278
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 278
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 278,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "UP006",
+    "end_location": {
+      "column": 28,
+      "row": 283
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "list",
+          "end_location": {
+            "column": 28,
+            "row": 283
+          },
+          "location": {
+            "column": 24,
+            "row": 283
+          }
+        }
+      ],
+      "message": "Replace with `list`"
+    },
+    "location": {
+      "column": 24,
+      "row": 283
+    },
+    "message": "Use `list` instead of `List` for type annotation",
+    "noqa_row": 283,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep585-annotation"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 293
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 293
+          },
+          "location": {
+            "column": 1,
+            "row": 293
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 293
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 293,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 303
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 303
+          },
+          "location": {
+            "column": 1,
+            "row": 303
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 303
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 303,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 313
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 313
+          },
+          "location": {
+            "column": 1,
+            "row": 313
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 313
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 313,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "UP045",
+    "end_location": {
+      "column": 55,
+      "row": 317
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "Record | None",
+          "end_location": {
+            "column": 55,
+            "row": 317
+          },
+          "location": {
+            "column": 39,
+            "row": 317
+          }
+        }
+      ],
+      "message": "Convert to `X | None`"
+    },
+    "location": {
+      "column": 39,
+      "row": 317
+    },
+    "message": "Use `X | None` for type annotations",
+    "noqa_row": 317,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 324
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 324
+          },
+          "location": {
+            "column": 1,
+            "row": 324
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 324
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 324,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "UP045",
+    "end_location": {
+      "column": 55,
+      "row": 328
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "Record | None",
+          "end_location": {
+            "column": 55,
+            "row": 328
+          },
+          "location": {
+            "column": 39,
+            "row": 328
+          }
+        }
+      ],
+      "message": "Convert to `X | None`"
+    },
+    "location": {
+      "column": 39,
+      "row": 328
+    },
+    "message": "Use `X | None` for type annotations",
+    "noqa_row": 328,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 339
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 339
+          },
+          "location": {
+            "column": 1,
+            "row": 339
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 339
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 339,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "UP045",
+    "end_location": {
+      "column": 39,
+      "row": 343
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "StreamConfig | None",
+          "end_location": {
+            "column": 39,
+            "row": 343
+          },
+          "location": {
+            "column": 17,
+            "row": 343
+          }
+        }
+      ],
+      "message": "Convert to `X | None`"
+    },
+    "location": {
+      "column": 17,
+      "row": 343
+    },
+    "message": "Use `X | None` for type annotations",
+    "noqa_row": 343,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
+  },
+  {
+    "cell": null,
+    "code": "D212",
+    "end_location": {
+      "column": 12,
+      "row": 350
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -65354,11 +65900,44 @@
           "content": "",
           "end_location": {
             "column": 9,
-            "row": 284
+            "row": 346
+          },
+          "location": {
+            "column": 12,
+            "row": 345
+          }
+        }
+      ],
+      "message": "Remove whitespace after opening quotes"
+    },
+    "location": {
+      "column": 9,
+      "row": 345
+    },
+    "message": "Multi-line docstring summary should start at the first line",
+    "noqa_row": 350,
+    "url": "https://docs.astral.sh/ruff/rules/multi-line-summary-first-line"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 347
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 347
           },
           "location": {
             "column": 1,
-            "row": 284
+            "row": 347
           }
         }
       ],
@@ -65366,10 +65945,10 @@
     },
     "location": {
       "column": 1,
-      "row": 284
+      "row": 347
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 284,
+    "noqa_row": 350,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -65377,7 +65956,7 @@
     "code": "W293",
     "end_location": {
       "column": 9,
-      "row": 292
+      "row": 352
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -65387,11 +65966,11 @@
           "content": "",
           "end_location": {
             "column": 9,
-            "row": 292
+            "row": 352
           },
           "location": {
             "column": 1,
-            "row": 292
+            "row": 352
           }
         }
       ],
@@ -65399,10 +65978,43 @@
     },
     "location": {
       "column": 1,
-      "row": 292
+      "row": 352
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 292,
+    "noqa_row": 352,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 360
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 360
+          },
+          "location": {
+            "column": 1,
+            "row": 360
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 360
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 360,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -65410,7 +66022,7 @@
     "code": "UP028",
     "end_location": {
       "column": 29,
-      "row": 297
+      "row": 365
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -65420,11 +66032,11 @@
           "content": "yield from batch",
           "end_location": {
             "column": 29,
-            "row": 297
+            "row": 365
           },
           "location": {
             "column": 13,
-            "row": 296
+            "row": 364
           }
         }
       ],
@@ -65432,10 +66044,10 @@
     },
     "location": {
       "column": 13,
-      "row": 296
+      "row": 364
     },
     "message": "Replace `yield` over `for` loop with `yield from`",
-    "noqa_row": 296,
+    "noqa_row": 364,
     "url": "https://docs.astral.sh/ruff/rules/yield-in-for-loop"
   },
   {
@@ -65443,7 +66055,7 @@
     "code": "W293",
     "end_location": {
       "column": 5,
-      "row": 298
+      "row": 366
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -65453,11 +66065,11 @@
           "content": "",
           "end_location": {
             "column": 5,
-            "row": 298
+            "row": 366
           },
           "location": {
             "column": 1,
-            "row": 298
+            "row": 366
           }
         }
       ],
@@ -65465,10 +66077,10 @@
     },
     "location": {
       "column": 1,
-      "row": 298
+      "row": 366
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 298,
+    "noqa_row": 366,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -65476,7 +66088,7 @@
     "code": "UP045",
     "end_location": {
       "column": 39,
-      "row": 302
+      "row": 370
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -65486,11 +66098,11 @@
           "content": "StreamConfig | None",
           "end_location": {
             "column": 39,
-            "row": 302
+            "row": 370
           },
           "location": {
             "column": 17,
-            "row": 302
+            "row": 370
           }
         }
       ],
@@ -65498,10 +66110,10 @@
     },
     "location": {
       "column": 17,
-      "row": 302
+      "row": 370
     },
     "message": "Use `X | None` for type annotations",
-    "noqa_row": 302,
+    "noqa_row": 370,
     "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
   },
   {
@@ -65509,7 +66121,7 @@
     "code": "D212",
     "end_location": {
       "column": 12,
-      "row": 309
+      "row": 377
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -65519,11 +66131,11 @@
           "content": "",
           "end_location": {
             "column": 9,
-            "row": 305
+            "row": 373
           },
           "location": {
             "column": 12,
-            "row": 304
+            "row": 372
           }
         }
       ],
@@ -65531,10 +66143,10 @@
     },
     "location": {
       "column": 9,
-      "row": 304
+      "row": 372
     },
     "message": "Multi-line docstring summary should start at the first line",
-    "noqa_row": 309,
+    "noqa_row": 377,
     "url": "https://docs.astral.sh/ruff/rules/multi-line-summary-first-line"
   },
   {
@@ -65542,7 +66154,7 @@
     "code": "W293",
     "end_location": {
       "column": 9,
-      "row": 306
+      "row": 374
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -65552,11 +66164,11 @@
           "content": "",
           "end_location": {
             "column": 9,
-            "row": 306
+            "row": 374
           },
           "location": {
             "column": 1,
-            "row": 306
+            "row": 374
           }
         }
       ],
@@ -65564,10 +66176,10 @@
     },
     "location": {
       "column": 1,
-      "row": 306
+      "row": 374
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 309,
+    "noqa_row": 377,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -65575,7 +66187,7 @@
     "code": "W293",
     "end_location": {
       "column": 9,
-      "row": 314
+      "row": 383
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -65585,11 +66197,11 @@
           "content": "",
           "end_location": {
             "column": 9,
-            "row": 314
+            "row": 383
           },
           "location": {
             "column": 1,
-            "row": 314
+            "row": 383
           }
         }
       ],
@@ -65597,10 +66209,10 @@
     },
     "location": {
       "column": 1,
-      "row": 314
+      "row": 383
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 314,
+    "noqa_row": 383,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -65608,7 +66220,7 @@
     "code": "W293",
     "end_location": {
       "column": 13,
-      "row": 318
+      "row": 387
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -65618,11 +66230,11 @@
           "content": "",
           "end_location": {
             "column": 13,
-            "row": 318
+            "row": 387
           },
           "location": {
             "column": 1,
-            "row": 318
+            "row": 387
           }
         }
       ],
@@ -65630,10 +66242,10 @@
     },
     "location": {
       "column": 1,
-      "row": 318
+      "row": 387
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 318,
+    "noqa_row": 387,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -65641,501 +66253,6 @@
     "code": "W293",
     "end_location": {
       "column": 17,
-      "row": 328
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "",
-          "end_location": {
-            "column": 17,
-            "row": 328
-          },
-          "location": {
-            "column": 1,
-            "row": 328
-          }
-        }
-      ],
-      "message": "Remove whitespace from blank line"
-    },
-    "location": {
-      "column": 1,
-      "row": 328
-    },
-    "message": "Blank line contains whitespace",
-    "noqa_row": 328,
-    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
-  },
-  {
-    "cell": null,
-    "code": "W293",
-    "end_location": {
-      "column": 21,
-      "row": 332
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "",
-          "end_location": {
-            "column": 21,
-            "row": 332
-          },
-          "location": {
-            "column": 1,
-            "row": 332
-          }
-        }
-      ],
-      "message": "Remove whitespace from blank line"
-    },
-    "location": {
-      "column": 1,
-      "row": 332
-    },
-    "message": "Blank line contains whitespace",
-    "noqa_row": 332,
-    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
-  },
-  {
-    "cell": null,
-    "code": "W293",
-    "end_location": {
-      "column": 9,
-      "row": 334
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "",
-          "end_location": {
-            "column": 9,
-            "row": 334
-          },
-          "location": {
-            "column": 1,
-            "row": 334
-          }
-        }
-      ],
-      "message": "Remove whitespace from blank line"
-    },
-    "location": {
-      "column": 1,
-      "row": 334
-    },
-    "message": "Blank line contains whitespace",
-    "noqa_row": 334,
-    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
-  },
-  {
-    "cell": null,
-    "code": "W293",
-    "end_location": {
-      "column": 9,
-      "row": 344
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "",
-          "end_location": {
-            "column": 9,
-            "row": 344
-          },
-          "location": {
-            "column": 1,
-            "row": 344
-          }
-        }
-      ],
-      "message": "Remove whitespace from blank line"
-    },
-    "location": {
-      "column": 1,
-      "row": 344
-    },
-    "message": "Blank line contains whitespace",
-    "noqa_row": 344,
-    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
-  },
-  {
-    "cell": null,
-    "code": "W293",
-    "end_location": {
-      "column": 5,
-      "row": 351
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "",
-          "end_location": {
-            "column": 5,
-            "row": 351
-          },
-          "location": {
-            "column": 1,
-            "row": 351
-          }
-        }
-      ],
-      "message": "Remove whitespace from blank line"
-    },
-    "location": {
-      "column": 1,
-      "row": 351
-    },
-    "message": "Blank line contains whitespace",
-    "noqa_row": 351,
-    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
-  },
-  {
-    "cell": null,
-    "code": "UP045",
-    "end_location": {
-      "column": 39,
-      "row": 355
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "StreamConfig | None",
-          "end_location": {
-            "column": 39,
-            "row": 355
-          },
-          "location": {
-            "column": 17,
-            "row": 355
-          }
-        }
-      ],
-      "message": "Convert to `X | None`"
-    },
-    "location": {
-      "column": 17,
-      "row": 355
-    },
-    "message": "Use `X | None` for type annotations",
-    "noqa_row": 355,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
-  },
-  {
-    "cell": null,
-    "code": "D212",
-    "end_location": {
-      "column": 12,
-      "row": 362
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "",
-          "end_location": {
-            "column": 9,
-            "row": 358
-          },
-          "location": {
-            "column": 12,
-            "row": 357
-          }
-        }
-      ],
-      "message": "Remove whitespace after opening quotes"
-    },
-    "location": {
-      "column": 9,
-      "row": 357
-    },
-    "message": "Multi-line docstring summary should start at the first line",
-    "noqa_row": 362,
-    "url": "https://docs.astral.sh/ruff/rules/multi-line-summary-first-line"
-  },
-  {
-    "cell": null,
-    "code": "W293",
-    "end_location": {
-      "column": 9,
-      "row": 359
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "unsafe",
-      "edits": [
-        {
-          "content": "",
-          "end_location": {
-            "column": 9,
-            "row": 359
-          },
-          "location": {
-            "column": 1,
-            "row": 359
-          }
-        }
-      ],
-      "message": "Remove whitespace from blank line"
-    },
-    "location": {
-      "column": 1,
-      "row": 359
-    },
-    "message": "Blank line contains whitespace",
-    "noqa_row": 362,
-    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
-  },
-  {
-    "cell": null,
-    "code": "W293",
-    "end_location": {
-      "column": 9,
-      "row": 364
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "",
-          "end_location": {
-            "column": 9,
-            "row": 364
-          },
-          "location": {
-            "column": 1,
-            "row": 364
-          }
-        }
-      ],
-      "message": "Remove whitespace from blank line"
-    },
-    "location": {
-      "column": 1,
-      "row": 364
-    },
-    "message": "Blank line contains whitespace",
-    "noqa_row": 364,
-    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
-  },
-  {
-    "cell": null,
-    "code": "W293",
-    "end_location": {
-      "column": 9,
-      "row": 372
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "",
-          "end_location": {
-            "column": 9,
-            "row": 372
-          },
-          "location": {
-            "column": 1,
-            "row": 372
-          }
-        }
-      ],
-      "message": "Remove whitespace from blank line"
-    },
-    "location": {
-      "column": 1,
-      "row": 372
-    },
-    "message": "Blank line contains whitespace",
-    "noqa_row": 372,
-    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
-  },
-  {
-    "cell": null,
-    "code": "W293",
-    "end_location": {
-      "column": 5,
-      "row": 378
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "",
-          "end_location": {
-            "column": 5,
-            "row": 378
-          },
-          "location": {
-            "column": 1,
-            "row": 378
-          }
-        }
-      ],
-      "message": "Remove whitespace from blank line"
-    },
-    "location": {
-      "column": 1,
-      "row": 378
-    },
-    "message": "Blank line contains whitespace",
-    "noqa_row": 378,
-    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
-  },
-  {
-    "cell": null,
-    "code": "UP045",
-    "end_location": {
-      "column": 39,
-      "row": 382
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "StreamConfig | None",
-          "end_location": {
-            "column": 39,
-            "row": 382
-          },
-          "location": {
-            "column": 17,
-            "row": 382
-          }
-        }
-      ],
-      "message": "Convert to `X | None`"
-    },
-    "location": {
-      "column": 17,
-      "row": 382
-    },
-    "message": "Use `X | None` for type annotations",
-    "noqa_row": 382,
-    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
-  },
-  {
-    "cell": null,
-    "code": "D212",
-    "end_location": {
-      "column": 12,
-      "row": 389
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "",
-          "end_location": {
-            "column": 9,
-            "row": 385
-          },
-          "location": {
-            "column": 12,
-            "row": 384
-          }
-        }
-      ],
-      "message": "Remove whitespace after opening quotes"
-    },
-    "location": {
-      "column": 9,
-      "row": 384
-    },
-    "message": "Multi-line docstring summary should start at the first line",
-    "noqa_row": 389,
-    "url": "https://docs.astral.sh/ruff/rules/multi-line-summary-first-line"
-  },
-  {
-    "cell": null,
-    "code": "W293",
-    "end_location": {
-      "column": 9,
-      "row": 386
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "unsafe",
-      "edits": [
-        {
-          "content": "",
-          "end_location": {
-            "column": 9,
-            "row": 386
-          },
-          "location": {
-            "column": 1,
-            "row": 386
-          }
-        }
-      ],
-      "message": "Remove whitespace from blank line"
-    },
-    "location": {
-      "column": 1,
-      "row": 386
-    },
-    "message": "Blank line contains whitespace",
-    "noqa_row": 389,
-    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
-  },
-  {
-    "cell": null,
-    "code": "W293",
-    "end_location": {
-      "column": 9,
-      "row": 394
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "",
-          "end_location": {
-            "column": 9,
-            "row": 394
-          },
-          "location": {
-            "column": 1,
-            "row": 394
-          }
-        }
-      ],
-      "message": "Remove whitespace from blank line"
-    },
-    "location": {
-      "column": 1,
-      "row": 394
-    },
-    "message": "Blank line contains whitespace",
-    "noqa_row": 394,
-    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
-  },
-  {
-    "cell": null,
-    "code": "W293",
-    "end_location": {
-      "column": 13,
       "row": 398
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
@@ -66145,7 +66262,7 @@
         {
           "content": "",
           "end_location": {
-            "column": 13,
+            "column": 17,
             "row": 398
           },
           "location": {
@@ -66168,41 +66285,8 @@
     "cell": null,
     "code": "W293",
     "end_location": {
-      "column": 17,
-      "row": 408
-    },
-    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
-    "fix": {
-      "applicability": "safe",
-      "edits": [
-        {
-          "content": "",
-          "end_location": {
-            "column": 17,
-            "row": 408
-          },
-          "location": {
-            "column": 1,
-            "row": 408
-          }
-        }
-      ],
-      "message": "Remove whitespace from blank line"
-    },
-    "location": {
-      "column": 1,
-      "row": 408
-    },
-    "message": "Blank line contains whitespace",
-    "noqa_row": 408,
-    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
-  },
-  {
-    "cell": null,
-    "code": "W293",
-    "end_location": {
       "column": 21,
-      "row": 412
+      "row": 402
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -66212,11 +66296,11 @@
           "content": "",
           "end_location": {
             "column": 21,
-            "row": 412
+            "row": 402
           },
           "location": {
             "column": 1,
-            "row": 412
+            "row": 402
           }
         }
       ],
@@ -66224,10 +66308,10 @@
     },
     "location": {
       "column": 1,
-      "row": 412
+      "row": 402
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 412,
+    "noqa_row": 402,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -66235,7 +66319,7 @@
     "code": "W293",
     "end_location": {
       "column": 9,
-      "row": 414
+      "row": 405
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -66245,11 +66329,11 @@
           "content": "",
           "end_location": {
             "column": 9,
-            "row": 414
+            "row": 405
           },
           "location": {
             "column": 1,
-            "row": 414
+            "row": 405
           }
         }
       ],
@@ -66257,10 +66341,10 @@
     },
     "location": {
       "column": 1,
-      "row": 414
+      "row": 405
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 414,
+    "noqa_row": 405,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -66268,7 +66352,7 @@
     "code": "W293",
     "end_location": {
       "column": 9,
-      "row": 424
+      "row": 416
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -66278,11 +66362,11 @@
           "content": "",
           "end_location": {
             "column": 9,
-            "row": 424
+            "row": 416
           },
           "location": {
             "column": 1,
-            "row": 424
+            "row": 416
           }
         }
       ],
@@ -66290,10 +66374,538 @@
     },
     "location": {
       "column": 1,
-      "row": 424
+      "row": 416
     },
     "message": "Blank line contains whitespace",
-    "noqa_row": 424,
+    "noqa_row": 416,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 423
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 423
+          },
+          "location": {
+            "column": 1,
+            "row": 423
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 423
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 423,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "UP045",
+    "end_location": {
+      "column": 39,
+      "row": 427
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "StreamConfig | None",
+          "end_location": {
+            "column": 39,
+            "row": 427
+          },
+          "location": {
+            "column": 17,
+            "row": 427
+          }
+        }
+      ],
+      "message": "Convert to `X | None`"
+    },
+    "location": {
+      "column": 17,
+      "row": 427
+    },
+    "message": "Use `X | None` for type annotations",
+    "noqa_row": 427,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
+  },
+  {
+    "cell": null,
+    "code": "D212",
+    "end_location": {
+      "column": 12,
+      "row": 434
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 430
+          },
+          "location": {
+            "column": 12,
+            "row": 429
+          }
+        }
+      ],
+      "message": "Remove whitespace after opening quotes"
+    },
+    "location": {
+      "column": 9,
+      "row": 429
+    },
+    "message": "Multi-line docstring summary should start at the first line",
+    "noqa_row": 434,
+    "url": "https://docs.astral.sh/ruff/rules/multi-line-summary-first-line"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 431
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 431
+          },
+          "location": {
+            "column": 1,
+            "row": 431
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 431
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 434,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 436
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 436
+          },
+          "location": {
+            "column": 1,
+            "row": 436
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 436
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 436,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 444
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 444
+          },
+          "location": {
+            "column": 1,
+            "row": 444
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 444
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 444,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 5,
+      "row": 450
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 5,
+            "row": 450
+          },
+          "location": {
+            "column": 1,
+            "row": 450
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 450
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 450,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "UP045",
+    "end_location": {
+      "column": 39,
+      "row": 454
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "StreamConfig | None",
+          "end_location": {
+            "column": 39,
+            "row": 454
+          },
+          "location": {
+            "column": 17,
+            "row": 454
+          }
+        }
+      ],
+      "message": "Convert to `X | None`"
+    },
+    "location": {
+      "column": 17,
+      "row": 454
+    },
+    "message": "Use `X | None` for type annotations",
+    "noqa_row": 454,
+    "url": "https://docs.astral.sh/ruff/rules/non-pep604-annotation-optional"
+  },
+  {
+    "cell": null,
+    "code": "D212",
+    "end_location": {
+      "column": 12,
+      "row": 461
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 457
+          },
+          "location": {
+            "column": 12,
+            "row": 456
+          }
+        }
+      ],
+      "message": "Remove whitespace after opening quotes"
+    },
+    "location": {
+      "column": 9,
+      "row": 456
+    },
+    "message": "Multi-line docstring summary should start at the first line",
+    "noqa_row": 461,
+    "url": "https://docs.astral.sh/ruff/rules/multi-line-summary-first-line"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 458
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "unsafe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 458
+          },
+          "location": {
+            "column": 1,
+            "row": 458
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 458
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 461,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 467
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 467
+          },
+          "location": {
+            "column": 1,
+            "row": 467
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 467
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 467,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 13,
+      "row": 471
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 13,
+            "row": 471
+          },
+          "location": {
+            "column": 1,
+            "row": 471
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 471
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 471,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 17,
+      "row": 482
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 17,
+            "row": 482
+          },
+          "location": {
+            "column": 1,
+            "row": 482
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 482
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 482,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 21,
+      "row": 486
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 21,
+            "row": 486
+          },
+          "location": {
+            "column": 1,
+            "row": 486
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 486
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 486,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 489
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 489
+          },
+          "location": {
+            "column": 1,
+            "row": 489
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 489
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 489,
+    "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
+  },
+  {
+    "cell": null,
+    "code": "W293",
+    "end_location": {
+      "column": 9,
+      "row": 500
+    },
+    "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
+    "fix": {
+      "applicability": "safe",
+      "edits": [
+        {
+          "content": "",
+          "end_location": {
+            "column": 9,
+            "row": 500
+          },
+          "location": {
+            "column": 1,
+            "row": 500
+          }
+        }
+      ],
+      "message": "Remove whitespace from blank line"
+    },
+    "location": {
+      "column": 1,
+      "row": 500
+    },
+    "message": "Blank line contains whitespace",
+    "noqa_row": 500,
     "url": "https://docs.astral.sh/ruff/rules/blank-line-with-whitespace"
   },
   {
@@ -66301,7 +66913,7 @@
     "code": "W292",
     "end_location": {
       "column": 22,
-      "row": 426
+      "row": 502
     },
     "filename": "/Users/spencer.koehler/dev/kbs-labs/dataknobs/packages/data/src/dataknobs_data/streaming.py",
     "fix": {
@@ -66311,11 +66923,11 @@
           "content": "\n",
           "end_location": {
             "column": 22,
-            "row": 426
+            "row": 502
           },
           "location": {
             "column": 22,
-            "row": 426
+            "row": 502
           }
         }
       ],
@@ -66323,10 +66935,10 @@
     },
     "location": {
       "column": 22,
-      "row": 426
+      "row": 502
     },
     "message": "No newline at end of file",
-    "noqa_row": 426,
+    "noqa_row": 502,
     "url": "https://docs.astral.sh/ruff/rules/missing-newline-at-end-of-file"
   },
   {

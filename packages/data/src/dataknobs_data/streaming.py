@@ -38,6 +38,8 @@ class StreamResult:
     failed: int = 0
     errors: List[Dict[str, Any]] = field(default_factory=list)
     duration: float = 0.0
+    total_batches: int = 0  # Number of batches processed
+    failed_indices: List[int] = field(default_factory=list)  # Indices of failed records
     
     @property
     def success_rate(self) -> float:
@@ -46,13 +48,22 @@ class StreamResult:
             return 0.0
         return (self.successful / self.total_processed) * 100
     
-    def add_error(self, record_id: Optional[str], error: Exception) -> None:
-        """Add an error to the result."""
+    def add_error(self, record_id: Optional[str], error: Exception, index: Optional[int] = None) -> None:
+        """Add an error to the result.
+        
+        Args:
+            record_id: ID of the record that failed
+            error: The exception that occurred
+            index: Optional index of the failed record in the original batch
+        """
         self.errors.append({
             "record_id": record_id,
             "error": str(error),
-            "type": type(error).__name__
+            "type": type(error).__name__,
+            "index": index
         })
+        if index is not None:
+            self.failed_indices.append(index)
     
     def merge(self, other: "StreamResult") -> None:
         """Merge another result into this one."""
@@ -61,6 +72,8 @@ class StreamResult:
         self.failed += other.failed
         self.errors.extend(other.errors)
         self.duration += other.duration
+        self.total_batches += other.total_batches
+        self.failed_indices.extend(other.failed_indices)
     
     def __str__(self) -> str:
         """Human-readable representation."""
@@ -78,7 +91,8 @@ def process_batch_with_fallback(
     single_create_func: Callable[[Record], str],
     result: StreamResult,
     config: StreamConfig,
-    on_quit_signal: Optional[Callable[[], None]] = None
+    on_quit_signal: Optional[Callable[[], None]] = None,
+    batch_index: int = 0
 ) -> bool:
     """Process a batch with graceful fallback to individual record creation.
     
@@ -102,18 +116,23 @@ def process_batch_with_fallback(
         ids = batch_create_func(batch)
         result.successful += len(ids)
         result.total_processed += len(batch)
+        result.total_batches += 1
         return True
     except Exception as batch_error:
         # Batch failed, try individual records to identify failures
-        for record in batch:
+        result.total_batches += 1
+        for i, record in enumerate(batch):
             result.total_processed += 1
+            record_index = batch_index * config.batch_size + i
             try:
                 single_create_func(record)
                 result.successful += 1
             except Exception as record_error:
                 # This specific record failed
                 result.failed += 1
-                result.add_error(None, record_error)
+                # Safely get record ID if available
+                record_id = record.id if record and hasattr(record, 'id') else None
+                result.add_error(record_id, record_error, record_index)
                 
                 if config.on_error:
                     # Call error handler
@@ -137,7 +156,8 @@ async def async_process_batch_with_fallback(
     single_create_func: Callable,  # Async callable
     result: StreamResult,
     config: StreamConfig,
-    on_quit_signal: Optional[Callable[[], None]] = None
+    on_quit_signal: Optional[Callable[[], None]] = None,
+    batch_index: int = 0
 ) -> bool:
     """Async version of process_batch_with_fallback.
     
@@ -161,18 +181,23 @@ async def async_process_batch_with_fallback(
         ids = await batch_create_func(batch)
         result.successful += len(ids)
         result.total_processed += len(batch)
+        result.total_batches += 1
         return True
     except Exception as batch_error:
         # Batch failed, try individual records to identify failures
-        for record in batch:
+        result.total_batches += 1
+        for i, record in enumerate(batch):
             result.total_processed += 1
+            record_index = batch_index * config.batch_size + i
             try:
                 await single_create_func(record)
                 result.successful += 1
             except Exception as record_error:
                 # This specific record failed
                 result.failed += 1
-                result.add_error(None, record_error)
+                # Safely get record ID if available
+                record_id = record.id if record and hasattr(record, 'id') else None
+                result.add_error(record_id, record_error, record_index)
                 
                 if config.on_error:
                     # Call error handler
@@ -207,6 +232,49 @@ class StreamProcessor:
                 batch = []
         if batch:
             yield batch
+    
+    @staticmethod
+    def list_to_iterator(records: List[Record]) -> Iterator[Record]:
+        """Convert a list of records to an iterator.
+        
+        Args:
+            records: List of records
+            
+        Yields:
+            Individual records from the list
+        """
+        for record in records:
+            yield record
+    
+    @staticmethod
+    async def list_to_async_iterator(records: List[Record]) -> AsyncIterator[Record]:
+        """Convert a list of records to an async iterator.
+        
+        This adapter allows synchronous lists to be used with async streaming APIs.
+        
+        Args:
+            records: List of records
+            
+        Yields:
+            Individual records from the list
+        """
+        for record in records:
+            yield record
+    
+    @staticmethod
+    async def iterator_to_async_iterator(iterator: Iterator[Record]) -> AsyncIterator[Record]:
+        """Convert a synchronous iterator to an async iterator.
+        
+        This adapter allows synchronous iterators to be used with async streaming APIs.
+        
+        Args:
+            iterator: Synchronous iterator of records
+            
+        Yields:
+            Individual records from the iterator
+        """
+        for record in iterator:
+            yield record
     
     @staticmethod
     async def async_batch_iterator(
@@ -311,6 +379,7 @@ class StreamingMixin:
         result = StreamResult()
         start_time = time.time()
         quitting = False
+        batch_index = 0
         
         batch = []
         for record in records:
@@ -323,7 +392,8 @@ class StreamingMixin:
                     self.create_batch,
                     self.create,
                     result,
-                    config
+                    config,
+                    batch_index=batch_index
                 )
                 
                 if not continue_processing:
@@ -331,6 +401,7 @@ class StreamingMixin:
                     break
                     
                 batch = []
+                batch_index += 1
         
         # Write remaining batch
         if batch and not quitting:
@@ -339,7 +410,8 @@ class StreamingMixin:
                 self.create_batch,
                 self.create,
                 result,
-                config
+                config,
+                batch_index=batch_index
             )
         
         result.duration = time.time() - start_time
@@ -391,6 +463,7 @@ class AsyncStreamingMixin:
         result = StreamResult()
         start_time = time.time()
         quitting = False
+        batch_index = 0
         
         batch = []
         async for record in records:
@@ -403,7 +476,8 @@ class AsyncStreamingMixin:
                     self.create_batch,
                     self.create,
                     result,
-                    config
+                    config,
+                    batch_index=batch_index
                 )
                 
                 if not continue_processing:
@@ -411,6 +485,7 @@ class AsyncStreamingMixin:
                     break
                     
                 batch = []
+                batch_index += 1
         
         # Write remaining batch
         if batch and not quitting:
@@ -419,7 +494,8 @@ class AsyncStreamingMixin:
                 self.create_batch,
                 self.create,
                 result,
-                config
+                config,
+                batch_index=batch_index
             )
         
         result.duration = time.time() - start_time

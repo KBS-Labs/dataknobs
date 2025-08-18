@@ -12,12 +12,16 @@ from pathlib import Path
 
 from dataknobs_data import (
     Record, Query, Filter, Operator, SortSpec, SortOrder,
-    ComplexQuery, QueryBuilder
+    ComplexQuery, QueryBuilder, StreamProcessor
 )
 from dataknobs_data.database import SyncDatabase, AsyncDatabase
 from dataknobs_data.streaming import StreamConfig, StreamResult
 
-from .models import SensorReading, SensorInfo
+try:
+    from .models import SensorReading, SensorInfo
+except ImportError:
+    # When run as script, use absolute import
+    from models import SensorReading, SensorInfo
 
 
 class SensorDashboard:
@@ -64,7 +68,10 @@ class SensorDashboard:
     
     def stream_readings(self, readings: List[SensorReading], 
                        batch_size: int = 10) -> StreamResult:
-        """Stream readings with configurable batch size."""
+        """Stream readings with configurable batch size.
+        
+        Demonstrates basic streaming with error handling.
+        """
         records = [reading.to_record() for reading in readings]
         
         # Define error handler that continues on error
@@ -78,6 +85,106 @@ class SensorDashboard:
         )
         
         result = self.db.stream_write(records, config)
+        return result
+    
+    def stream_readings_with_tracking(self, readings: List[SensorReading],
+                                     batch_size: int = 10,
+                                     track_failures: bool = True) -> StreamResult:
+        """Stream readings with enhanced tracking of batches and failures.
+        
+        Demonstrates new StreamResult features:
+        - total_batches: Number of batches processed
+        - failed_indices: Indices of failed records
+        """
+        records = [reading.to_record() for reading in readings]
+        
+        # Track errors for analysis
+        error_details = []
+        
+        def error_handler(exc: Exception, record: Record) -> bool:
+            if track_failures:
+                error_details.append({
+                    'error': str(exc),
+                    'record_id': record.id if record and hasattr(record, 'id') else None
+                })
+            return True  # Continue processing
+        
+        config = StreamConfig(
+            batch_size=batch_size,
+            on_error=error_handler if track_failures else None
+        )
+        
+        # Convert list to iterator using StreamProcessor
+        record_iter = StreamProcessor.list_to_iterator(records)
+        result = self.db.stream_write(record_iter, config)
+        
+        # Enhanced result information
+        if result.total_batches > 0:
+            print(f"Processed {result.total_batches} batches")
+        if result.failed_indices:
+            print(f"Failed at indices: {result.failed_indices}")
+        
+        return result
+    
+    def stream_with_validation(self, readings: List[SensorReading],
+                              temp_range: tuple = (-50, 100),
+                              humidity_range: tuple = (0, 100)) -> StreamResult:
+        """Stream readings with validation, demonstrating error handling.
+        
+        Readings outside valid ranges will fail, demonstrating:
+        - Graceful batch fallback
+        - Individual error tracking
+        - Failed indices collection
+        """
+        validated_records = []
+        
+        for i, reading in enumerate(readings):
+            record = reading.to_record()
+            
+            # Add validation that might fail
+            if not (temp_range[0] <= reading.temperature <= temp_range[1]):
+                # This will cause an error during processing
+                record.set_field("_invalid", f"Temperature {reading.temperature} out of range")
+            if not (humidity_range[0] <= reading.humidity <= humidity_range[1]):
+                record.set_field("_invalid", f"Humidity {reading.humidity} out of range")
+            
+            validated_records.append(record)
+        
+        # Monkey-patch the database methods to validate
+        original_create = self.db.create
+        original_create_batch = self.db.create_batch
+        
+        def validating_create(record):
+            if record.get_value("_invalid"):
+                raise ValueError(record.get_value("_invalid"))
+            return original_create(record)
+        
+        def validating_create_batch(records):
+            # Check if any record is invalid - this forces fallback
+            for r in records:
+                if r.get_value("_invalid"):
+                    raise ValueError("Batch contains invalid records")
+            return original_create_batch(records)
+        
+        # Temporarily replace methods
+        self.db.create = validating_create
+        self.db.create_batch = validating_create_batch
+        
+        config = StreamConfig(
+            batch_size=10,
+            on_error=lambda exc, rec: True  # Continue on error
+        )
+        
+        # This will demonstrate batch fallback behavior
+        record_iter = StreamProcessor.list_to_iterator(validated_records)
+        
+        try:
+            result = self.db.stream_write(record_iter, config)
+        finally:
+            # Restore original methods
+            self.db.create = original_create
+            self.db.create_batch = original_create_batch
+        
         return result
     
     def get_recent_readings(self, sensor_id: str, limit: int = 10) -> List[SensorReading]:
@@ -378,12 +485,30 @@ class AsyncSensorDashboard:
             on_error=continue_on_error  # Continue on error
         )
         
-        # Create async generator from list for async streaming
-        async def async_record_generator():
-            for record in records:
-                yield record
+        # Use StreamProcessor adapter for cleaner code
+        async_iter = StreamProcessor.list_to_async_iterator(records)
         
-        result = await self.db.stream_write(async_record_generator(), config)
+        result = await self.db.stream_write(async_iter, config)
+        return result
+    
+    async def stream_readings_with_tracking(self, readings: List[SensorReading],
+                                           batch_size: int = 10) -> StreamResult:
+        """Stream readings with enhanced tracking (async version).
+        
+        Demonstrates StreamProcessor adapters and enhanced StreamResult.
+        """
+        records = [reading.to_record() for reading in readings]
+        
+        config = StreamConfig(
+            batch_size=batch_size,
+            on_error=lambda exc, rec: True  # Continue on error
+        )
+        
+        # Use StreamProcessor to convert list to async iterator
+        async_iter = StreamProcessor.list_to_async_iterator(records)
+        result = await self.db.stream_write(async_iter, config)
+        
+        # Enhanced result provides detailed batch information
         return result
     
     async def get_recent_readings(self, sensor_id: str, limit: int = 10) -> List[SensorReading]:
