@@ -38,10 +38,11 @@ jobs:
       with:
         script: |
           if (context.issue && context.issue.number) {
+            const [owner, repo] = context.payload.repository.full_name.split('/');
             github.rest.issues.createComment({
               issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.name,
+              owner: owner,
+              repo: repo,
             body: `## ❌ Quality Check Validation Failed
             
             The quality check artifacts are either missing, outdated, or show failing tests.
@@ -73,12 +74,13 @@ jobs:
             : 'Quality checks need to be run locally';
           
           if (context.payload.pull_request && context.payload.pull_request.head) {
+            const [owner, repo] = context.payload.repository.full_name.split('/');
             github.rest.repos.createCommitStatus({
-              owner: context.repo.owner,
-              repo: context.repo.name,
+              owner: owner,
+              repo: repo,
               sha: context.payload.pull_request.head.sha,
               state: status,
-              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.name}/actions/runs/${context.runId}`,
+              target_url: `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
               description: description,
               context: 'quality-checks/validation'
             })
@@ -123,10 +125,11 @@ jobs:
           
           // Only comment if tests failed, to reduce noise
           if (testResult === '⚠️' && context.issue && context.issue.number) {
+            const [owner, repo] = context.payload.repository.full_name.split('/');
             github.rest.issues.createComment({
               issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.name,
+              owner: owner,
+              repo: repo,
               body: `## ${testResult} CI Unit Tests (Optional)
               
               ${message}

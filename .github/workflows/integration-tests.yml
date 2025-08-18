@@ -139,10 +139,6 @@ jobs:
           sleep 1
         done
     
-    - name: Create test database
-      run: |
-        PGPASSWORD=postgres psql -h localhost -U postgres -c "CREATE DATABASE IF NOT EXISTS dataknobs_test;"
-    
     - name: Run PostgreSQL integration tests
       env:
         POSTGRES_HOST: localhost
