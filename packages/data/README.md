@@ -2,25 +2,42 @@
 
 A unified data abstraction layer that provides consistent database operations across multiple storage technologies.
 
+**Version**: 0.1.0  
+**Status**: Released ([PyPI](https://pypi.org/project/dataknobs-data/))  
+**Python**: 3.10+  
+**License**: MIT  
+
 ## Overview
 
 The `dataknobs-data` package enables seamless data management regardless of the underlying storage mechanism, from in-memory structures to cloud storage and databases. It provides a simple, consistent API for CRUD operations, searching, and data manipulation across diverse backends.
 
 ## Features
 
+### Core Capabilities
 - **Unified Interface**: Same API regardless of storage backend
 - **Multiple Backends**: Memory, File (JSON/CSV/Parquet), PostgreSQL, Elasticsearch, S3
 - **Record-Based**: Data represented as structured records with metadata and first-class ID support
+- **Type Safety**: Strong typing with field validation and automatic type conversion
+- **Async Support**: Both synchronous and asynchronous APIs
+
+### Advanced Query Features (v0.1.0)
+- **Boolean Logic**: Complex queries with AND, OR, NOT operators
+- **Range Operators**: BETWEEN, IN, NOT_IN for efficient range queries
+- **Ergonomic Field Access**: Both dict-like (`record["field"]`) and attribute (`record.field`) access
+- **Query Builder**: Fluent API for complex query construction
+- **Null Handling**: IS_NULL, NOT_NULL operators
+
+### Data Processing
 - **Pandas Integration**: Seamless bidirectional conversion to/from DataFrames with type preservation
 - **Migration Utilities**: Backend-to-backend migration, schema evolution, and data transformation
 - **Schema Validation**: Comprehensive validation system with constraints and type coercion
 - **Streaming Support**: Efficient streaming APIs for large datasets
-- **Type Safety**: Strong typing with field validation and automatic type conversion
-- **Async Support**: Both synchronous and asynchronous APIs
-- **Query System**: Powerful, backend-agnostic query capabilities
-- **Configuration Support**: Full integration with DataKnobs configuration system
 - **Batch Operations**: Efficient bulk insert, update, and upsert operations
-- **Connection Management**: Automatic connection lifecycle management
+
+### Infrastructure
+- **Configuration Support**: Full integration with DataKnobs configuration system
+- **Connection Management**: Automatic connection lifecycle management with pooling
+- **Quality Assurance**: Comprehensive test suite with quality artifacts pattern
 - **Extensible**: Easy to add custom storage backends, validators, and transformers
 
 ## Installation
