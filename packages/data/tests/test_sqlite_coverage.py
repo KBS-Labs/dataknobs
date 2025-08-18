@@ -657,12 +657,11 @@ class TestAsyncSQLiteCoverage:
         try:
             # Mock an error during batch creation
             original_execute = db.db.execute
-            call_count = [0]
             
             async def mock_execute(query, params=None):
-                call_count[0] += 1
-                if call_count[0] == 3:  # Fail on third insert
-                    raise Exception("Simulated error")
+                # Fail during the actual INSERT statement (not BEGIN TRANSACTION)
+                if query and "INSERT INTO" in query and params and len(params) > 0:
+                    raise Exception("Simulated error during batch insert")
                 return await original_execute(query, params)
             
             db.db.execute = mock_execute
@@ -672,7 +671,7 @@ class TestAsyncSQLiteCoverage:
                 for i in range(5)
             ]
             
-            with pytest.raises(Exception, match="Simulated error"):
+            with pytest.raises(Exception, match="Simulated error during batch insert"):
                 await db.create_batch(records)
             
             # Verify rollback happened - no records should exist

@@ -222,63 +222,105 @@ class AsyncSQLiteDatabase(AsyncDatabase, ConfigurableBase):
             return result[0] if result else 0
     
     async def create_batch(self, records: list[Record]) -> list[str]:
-        """Create multiple records in a batch."""
+        """Create multiple records efficiently using a single query.
+        
+        Uses multi-value INSERT for better performance.
+        """
+        if not records:
+            return []
+            
         self._check_connection()
         
-        ids = []
+        # Use the shared batch create query builder
+        query, params, ids = self.query_builder.build_batch_create_query(records)
         
-        # Use a transaction for better performance
+        # Execute the batch insert in a transaction
         await self.db.execute("BEGIN TRANSACTION")
         
         try:
-            for record in records:
-                query, params = self.query_builder.build_create_query(record)
-                await self.db.execute(query, params)
-                ids.append(params[0])  # ID is the first parameter
-            
+            await self.db.execute(query, params)
             await self.db.commit()
+            
+            # Return the generated IDs
             return ids
         except Exception:
             await self.db.rollback()
             raise
     
     async def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
-        """Update multiple records in a batch."""
+        """Update multiple records efficiently using a single query.
+        
+        Uses CASE expressions for batch updates, similar to PostgreSQL.
+        """
+        if not updates:
+            return []
+            
         self._check_connection()
         
-        results = []
+        # Use the shared batch update query builder
+        query, params = self.query_builder.build_batch_update_query(updates)
         
-        # Use a transaction for better performance
+        # Execute the batch update in a transaction
         await self.db.execute("BEGIN TRANSACTION")
         
         try:
-            for id, record in updates:
-                query, params = self.query_builder.build_update_query(id, record)
-                cursor = await self.db.execute(query, params)
-                results.append(cursor.rowcount > 0)
-            
+            cursor = await self.db.execute(query, params)
+            rows_affected = cursor.rowcount
             await self.db.commit()
+            
+            # Check which records were actually updated
+            # SQLite doesn't have RETURNING, so we need to verify each ID
+            update_ids = [record_id for record_id, _ in updates]
+            placeholders = ", ".join(["?" for _ in update_ids])
+            check_query = f"SELECT id FROM {self.table_name} WHERE id IN ({placeholders})"
+            
+            async with self.db.execute(check_query, update_ids) as cursor:
+                rows = await cursor.fetchall()
+                existing_ids = {row[0] for row in rows}
+            
+            # Return results for each update
+            results = []
+            for record_id, _ in updates:
+                results.append(record_id in existing_ids)
+            
             return results
         except Exception:
             await self.db.rollback()
             raise
     
     async def delete_batch(self, ids: list[str]) -> list[bool]:
-        """Delete multiple records in a batch."""
+        """Delete multiple records efficiently using a single query.
+        
+        Uses single DELETE with IN clause for better performance.
+        """
+        if not ids:
+            return []
+            
         self._check_connection()
         
-        results = []
+        # Check which IDs exist before deletion
+        placeholders = ", ".join(["?" for _ in ids])
+        check_query = f"SELECT id FROM {self.table_name} WHERE id IN ({placeholders})"
         
-        # Use a transaction for better performance
+        async with self.db.execute(check_query, ids) as cursor:
+            rows = await cursor.fetchall()
+            existing_ids = {row[0] for row in rows}
+        
+        # Use the shared batch delete query builder
+        query, params = self.query_builder.build_batch_delete_query(ids)
+        
+        # Execute the batch delete in a transaction
         await self.db.execute("BEGIN TRANSACTION")
         
         try:
-            for id in ids:
-                query, params = self.query_builder.build_delete_query(id)
-                cursor = await self.db.execute(query, params)
-                results.append(cursor.rowcount > 0)
-            
+            await self.db.execute(query, params)
             await self.db.commit()
+            
+            # Return results based on which IDs existed
+            results = []
+            for id in ids:
+                results.append(id in existing_ids)
+            
             return results
         except Exception:
             await self.db.rollback()

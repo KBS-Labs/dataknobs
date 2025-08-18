@@ -277,6 +277,148 @@ class SQLQueryBuilder:
         
         return " ".join(sql_parts), params
     
+    def build_batch_update_query(self, updates: list[tuple[str, Record]]) -> tuple[str, list[Any]]:
+        """Build a batch UPDATE query using CASE expressions.
+        
+        This provides efficient batch updates for both PostgreSQL and SQLite.
+        
+        Args:
+            updates: List of (id, record) tuples to update
+            
+        Returns:
+            Tuple of (SQL query, parameters)
+        """
+        if not updates:
+            return "", []
+        
+        update_ids = []
+        data_cases = []
+        metadata_cases = []
+        params = []
+        
+        # Build CASE expressions
+        for i, (record_id, record) in enumerate(updates):
+            update_ids.append(record_id)
+            data_json = self._record_to_json(record)
+            metadata_json = json.dumps(record.metadata) if record.metadata else None
+            
+            if self.dialect == "postgres":
+                # PostgreSQL uses numbered placeholders
+                param_idx = i * 3 + 1
+                data_cases.append(f"WHEN id = ${param_idx} THEN ${param_idx + 1}")
+                metadata_cases.append(f"WHEN id = ${param_idx} THEN ${param_idx + 2}")
+                params.extend([record_id, data_json, metadata_json])
+            else:  # sqlite, standard
+                # SQLite uses ? placeholders
+                data_cases.append(f"WHEN id = ? THEN ?")
+                metadata_cases.append(f"WHEN id = ? THEN ?")
+                params.extend([record_id, data_json, record_id, metadata_json])
+        
+        # Build WHERE IN clause
+        if self.dialect == "postgres":
+            # Add IDs for WHERE IN clause
+            id_param_start = len(updates) * 3 + 1
+            id_placeholders = [f"${i}" for i in range(id_param_start, id_param_start + len(update_ids))]
+            params.extend(update_ids)
+        else:  # sqlite, standard
+            # SQLite: add IDs for WHERE IN clause
+            id_placeholders = ["?" for _ in update_ids]
+            params.extend(update_ids)
+        
+        # Build the UPDATE query
+        # Add ELSE to preserve original value when no CASE matches
+        query = f"""
+        UPDATE {self.qualified_table}
+        SET 
+            data = CASE {' '.join(data_cases)} ELSE data END,
+            metadata = CASE {' '.join(metadata_cases)} ELSE metadata END,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id IN ({', '.join(id_placeholders)})
+        """
+        
+        return query, params
+    
+    def build_batch_create_query(self, records: list[Record]) -> tuple[str, list[Any], list[str]]:
+        """Build a batch INSERT query for multiple records.
+        
+        Generates efficient multi-value INSERT statements.
+        
+        Args:
+            records: List of records to insert
+            
+        Returns:
+            Tuple of (SQL query, parameters, generated IDs)
+        """
+        if not records:
+            return "", [], []
+        
+        import uuid
+        
+        # Generate IDs and prepare values
+        ids = []
+        values_clauses = []
+        params = []
+        
+        for i, record in enumerate(records):
+            record_id = str(uuid.uuid4())
+            ids.append(record_id)
+            data_json = self._record_to_json(record)
+            metadata_json = json.dumps(record.metadata) if record.metadata else None
+            
+            if self.dialect == "postgres":
+                # PostgreSQL uses numbered placeholders
+                param_idx = i * 3 + 1
+                values_clauses.append(f"(${param_idx}, ${param_idx + 1}, ${param_idx + 2}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
+                params.extend([record_id, data_json, metadata_json])
+            else:  # sqlite, standard
+                # SQLite uses ? placeholders
+                values_clauses.append("(?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
+                params.extend([record_id, data_json, metadata_json])
+        
+        # Build the INSERT query
+        query = f"""
+        INSERT INTO {self.qualified_table} (id, data, metadata, created_at, updated_at)
+        VALUES {', '.join(values_clauses)}
+        """
+        
+        # PostgreSQL can use RETURNING
+        if self.dialect == "postgres":
+            query += " RETURNING id"
+        
+        return query, params, ids
+    
+    def build_batch_delete_query(self, ids: list[str]) -> tuple[str, list[Any]]:
+        """Build a batch DELETE query for multiple records.
+        
+        Deletes multiple records in a single query.
+        
+        Args:
+            ids: List of record IDs to delete
+            
+        Returns:
+            Tuple of (SQL query, parameters)
+        """
+        if not ids:
+            return "", []
+        
+        if self.dialect == "postgres":
+            # PostgreSQL uses numbered placeholders
+            placeholders = [f"${i}" for i in range(1, len(ids) + 1)]
+        else:  # sqlite, standard
+            # SQLite uses ? placeholders
+            placeholders = ["?" for _ in ids]
+        
+        query = f"""
+        DELETE FROM {self.qualified_table}
+        WHERE id IN ({', '.join(placeholders)})
+        """
+        
+        # PostgreSQL can use RETURNING
+        if self.dialect == "postgres":
+            query += " RETURNING id"
+        
+        return query, ids
+    
     def build_count_query(self, query: Query | None = None) -> tuple[str, list[Any]]:
         """Build a COUNT query.
         

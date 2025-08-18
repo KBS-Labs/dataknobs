@@ -401,6 +401,156 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
 
         return count
 
+    def create_batch(self, records: list[Record]) -> list[str]:
+        """Create multiple records efficiently using a single query.
+        
+        Uses multi-value INSERT for better performance.
+        
+        Args:
+            records: List of records to create
+            
+        Returns:
+            List of created record IDs
+        """
+        if not records:
+            return []
+            
+        self._check_connection()
+        
+        # Create a query builder for PostgreSQL
+        from .sql_base import SQLQueryBuilder
+        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
+        
+        # Use the shared batch create query builder
+        query, params_list, ids = query_builder.build_batch_create_query(records)
+        
+        # Convert positional parameters to named parameters for PostgresDB
+        # Replace in reverse order to avoid $10 being replaced as $1 + 0
+        params_dict = {}
+        for i, param in enumerate(params_list, 1):
+            param_name = f"p{i}"
+            params_dict[param_name] = param
+        
+        # Replace placeholders in reverse order to avoid conflicts
+        for i in range(len(params_list), 0, -1):
+            param_name = f"p{i}"
+            query = query.replace(f"${i}", f"%({param_name})s")
+        
+        # Execute the batch insert
+        result = self.db.execute(query, params_dict)
+        
+        # PostgreSQL RETURNING clause gives us the actual inserted IDs
+        # But our PostgresDB wrapper doesn't return them directly
+        # So we'll use the generated IDs
+        return ids
+
+    def delete_batch(self, ids: list[str]) -> list[bool]:
+        """Delete multiple records efficiently using a single query.
+        
+        Uses single DELETE with IN clause for better performance.
+        
+        Args:
+            ids: List of record IDs to delete
+            
+        Returns:
+            List of success flags for each deletion
+        """
+        if not ids:
+            return []
+            
+        self._check_connection()
+        
+        # Check which IDs exist before deletion
+        check_sql = f"""
+        SELECT id FROM {self.schema_name}.{self.table_name}
+        WHERE id = ANY(%(ids)s)
+        """
+        existing_df = self.db.query(check_sql, {"ids": ids})
+        existing_ids = set(existing_df["id"].tolist()) if not existing_df.empty else set()
+        
+        # Create a query builder for PostgreSQL
+        from .sql_base import SQLQueryBuilder
+        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
+        
+        # Use the shared batch delete query builder
+        query, params_list = query_builder.build_batch_delete_query(ids)
+        
+        # Convert positional parameters to named parameters for PostgresDB
+        # Replace in reverse order to avoid $10 being replaced as $1 + 0
+        params_dict = {}
+        for i, param in enumerate(params_list, 1):
+            param_name = f"p{i}"
+            params_dict[param_name] = param
+        
+        # Replace placeholders in reverse order to avoid conflicts
+        for i in range(len(params_list), 0, -1):
+            param_name = f"p{i}"
+            query = query.replace(f"${i}", f"%({param_name})s")
+        
+        # Execute the batch delete
+        result = self.db.execute(query, params_dict)
+        
+        # Return results based on which IDs existed
+        results = []
+        for id in ids:
+            results.append(id in existing_ids)
+        
+        return results
+
+    def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
+        """Update multiple records efficiently using a single query.
+        
+        Uses PostgreSQL's CASE expressions for batch updates via shared SQL builder.
+        
+        Args:
+            updates: List of (id, record) tuples to update
+            
+        Returns:
+            List of success flags for each update
+        """
+        if not updates:
+            return []
+            
+        self._check_connection()
+        
+        # Create a query builder for PostgreSQL
+        from .sql_base import SQLQueryBuilder
+        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
+        
+        # Note: The shared builder uses positional params ($1, $2) for postgres
+        # but our PostgresDB uses named params. We need to convert.
+        query, params_list = query_builder.build_batch_update_query(updates)
+        
+        # Convert positional parameters to named parameters for PostgresDB
+        # Replace in reverse order to avoid $10 being replaced as $1 + 0
+        params_dict = {}
+        for i, param in enumerate(params_list, 1):
+            param_name = f"p{i}"
+            params_dict[param_name] = param
+        
+        # Replace placeholders in reverse order to avoid conflicts
+        for i in range(len(params_list), 0, -1):
+            param_name = f"p{i}"
+            query = query.replace(f"${i}", f"%({param_name})s")
+        
+        # Execute the batch update
+        result = self.db.execute(query, params_dict)
+        
+        # Check which records were actually updated
+        update_ids = [record_id for record_id, _ in updates]
+        check_sql = f"""
+        SELECT id FROM {self.schema_name}.{self.table_name}
+        WHERE id = ANY(%(ids)s)
+        """
+        existing_df = self.db.query(check_sql, {"ids": update_ids})
+        existing_ids = set(existing_df["id"].tolist()) if not existing_df.empty else set()
+        
+        results = []
+        for record_id, _ in updates:
+            results.append(record_id in existing_ids)
+        
+        return results
+
     def stream_read(
         self,
         query: Query | None = None,
@@ -894,6 +1044,116 @@ class AsyncPostgresDatabase(AsyncDatabase, ConfigurableBase):
             await conn.execute(sql)
 
         return count
+
+    async def create_batch(self, records: list[Record]) -> list[str]:
+        """Create multiple records efficiently using a single query.
+        
+        Uses multi-value INSERT with RETURNING for better performance.
+        
+        Args:
+            records: List of records to create
+            
+        Returns:
+            List of created record IDs
+        """
+        if not records:
+            return []
+            
+        self._check_connection()
+        
+        # Create a query builder for PostgreSQL
+        from .sql_base import SQLQueryBuilder
+        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
+        
+        # Use the shared batch create query builder
+        query, params, ids = query_builder.build_batch_create_query(records)
+        
+        # Execute the batch insert with RETURNING
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+        
+        # Return the actual inserted IDs from RETURNING clause
+        if rows:
+            return [row["id"] for row in rows]
+        return ids  # Fallback to generated IDs
+
+    async def delete_batch(self, ids: list[str]) -> list[bool]:
+        """Delete multiple records efficiently using a single query.
+        
+        Uses single DELETE with IN clause and RETURNING for verification.
+        
+        Args:
+            ids: List of record IDs to delete
+            
+        Returns:
+            List of success flags for each deletion
+        """
+        if not ids:
+            return []
+            
+        self._check_connection()
+        
+        # Create a query builder for PostgreSQL
+        from .sql_base import SQLQueryBuilder
+        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
+        
+        # Use the shared batch delete query builder
+        query, params = query_builder.build_batch_delete_query(ids)
+        
+        # Execute the batch delete with RETURNING
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+        
+        # Convert returned rows to set of deleted IDs
+        deleted_ids = {row["id"] for row in rows}
+        
+        # Return results for each deletion
+        results = []
+        for id in ids:
+            results.append(id in deleted_ids)
+        
+        return results
+
+    async def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
+        """Update multiple records efficiently using a single query.
+        
+        Uses PostgreSQL's CASE expressions for batch updates with native asyncpg.
+        
+        Args:
+            updates: List of (id, record) tuples to update
+            
+        Returns:
+            List of success flags for each update
+        """
+        if not updates:
+            return []
+            
+        self._check_connection()
+        
+        # Create a query builder for PostgreSQL
+        from .sql_base import SQLQueryBuilder
+        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
+        
+        # Use the shared batch update query builder
+        # It already produces positional parameters ($1, $2) for PostgreSQL
+        query, params = query_builder.build_batch_update_query(updates)
+        
+        # Add RETURNING clause for PostgreSQL to get updated IDs
+        query = query.rstrip() + " RETURNING id"
+        
+        # Execute the batch update
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(query, *params)
+        
+        # Convert returned rows to set of updated IDs
+        updated_ids = {row["id"] for row in rows}
+        
+        # Return results for each update
+        results = []
+        for record_id, _ in updates:
+            results.append(record_id in updated_ids)
+        
+        return results
 
     async def stream_read(
         self,

@@ -252,22 +252,26 @@ class SyncSQLiteDatabase(SyncDatabase, ConfigurableBase):
             cursor.close()
     
     def create_batch(self, records: list[Record]) -> list[str]:
-        """Create multiple records in a batch."""
+        """Create multiple records efficiently using a single query.
+        
+        Uses multi-value INSERT for better performance.
+        """
+        if not records:
+            return []
+            
         self._check_connection()
         
-        ids = []
-        cursor = self.conn.cursor()
+        # Use the shared batch create query builder
+        query, params, ids = self.query_builder.build_batch_create_query(records)
         
+        cursor = self.conn.cursor()
         try:
-            # Use a transaction for better performance
+            # Execute the batch insert in a transaction
             cursor.execute("BEGIN TRANSACTION")
-            
-            for record in records:
-                query, params = self.query_builder.build_create_query(record)
-                cursor.execute(query, params)
-                ids.append(params[0])  # ID is the first parameter
-            
+            cursor.execute(query, params)
             self.conn.commit()
+            
+            # Return the generated IDs
             return ids
         except Exception:
             self.conn.rollback()
@@ -276,22 +280,39 @@ class SyncSQLiteDatabase(SyncDatabase, ConfigurableBase):
             cursor.close()
     
     def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
-        """Update multiple records in a batch."""
+        """Update multiple records efficiently using a single query.
+        
+        Uses CASE expressions for batch updates, similar to PostgreSQL.
+        """
+        if not updates:
+            return []
+            
         self._check_connection()
         
-        results = []
-        cursor = self.conn.cursor()
+        # Use the shared batch update query builder
+        query, params = self.query_builder.build_batch_update_query(updates)
         
+        cursor = self.conn.cursor()
         try:
-            # Use a transaction for better performance
+            # Execute the batch update in a transaction
             cursor.execute("BEGIN TRANSACTION")
-            
-            for id, record in updates:
-                query, params = self.query_builder.build_update_query(id, record)
-                cursor.execute(query, params)
-                results.append(cursor.rowcount > 0)
-            
+            cursor.execute(query, params)
+            rows_affected = cursor.rowcount
             self.conn.commit()
+            
+            # Check which records were actually updated
+            # SQLite doesn't have RETURNING, so we need to verify each ID
+            update_ids = [record_id for record_id, _ in updates]
+            placeholders = ", ".join(["?" for _ in update_ids])
+            check_query = f"SELECT id FROM {self.table_name} WHERE id IN ({placeholders})"
+            cursor.execute(check_query, update_ids)
+            existing_ids = {row[0] for row in cursor.fetchall()}
+            
+            # Return results for each update
+            results = []
+            for record_id, _ in updates:
+                results.append(record_id in existing_ids)
+            
             return results
         except Exception:
             self.conn.rollback()
@@ -300,22 +321,37 @@ class SyncSQLiteDatabase(SyncDatabase, ConfigurableBase):
             cursor.close()
     
     def delete_batch(self, ids: list[str]) -> list[bool]:
-        """Delete multiple records in a batch."""
+        """Delete multiple records efficiently using a single query.
+        
+        Uses single DELETE with IN clause for better performance.
+        """
+        if not ids:
+            return []
+            
         self._check_connection()
         
-        results = []
-        cursor = self.conn.cursor()
+        # Check which IDs exist before deletion
+        placeholders = ", ".join(["?" for _ in ids])
+        check_query = f"SELECT id FROM {self.table_name} WHERE id IN ({placeholders})"
         
+        cursor = self.conn.cursor()
         try:
-            # Use a transaction for better performance
+            cursor.execute(check_query, ids)
+            existing_ids = {row[0] for row in cursor.fetchall()}
+            
+            # Use the shared batch delete query builder
+            query, params = self.query_builder.build_batch_delete_query(ids)
+            
+            # Execute the batch delete in a transaction
             cursor.execute("BEGIN TRANSACTION")
-            
-            for id in ids:
-                query, params = self.query_builder.build_delete_query(id)
-                cursor.execute(query, params)
-                results.append(cursor.rowcount > 0)
-            
+            cursor.execute(query, params)
             self.conn.commit()
+            
+            # Return results based on which IDs existed
+            results = []
+            for id in ids:
+                results.append(id in existing_ids)
+            
             return results
         except Exception:
             self.conn.rollback()
