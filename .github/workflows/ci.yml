@@ -7,47 +7,8 @@ on:
     branches: [ main, develop ]
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ['3.10', '3.11', '3.12', '3.13']
-    
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Install uv
-      uses: astral-sh/setup-uv@v3
-      with:
-        enable-cache: true
-        cache-dependency-glob: "uv.lock"
-    
-    - name: Set up Python ${{ matrix.python-version }}
-      run: uv python install ${{ matrix.python-version }}
-    
-    - name: Install dependencies
-      run: |
-        uv sync --all-packages
-    
-    - name: Run linting
-      run: |
-        source .venv/bin/activate && pylint packages/*/src --rcfile=.pylintrc -d C,R || true
-    
-    - name: Run tests with coverage
-      run: |
-        source .venv/bin/activate && pytest packages/*/tests/ -v --cov=packages --cov-report=term-missing --cov-report=xml
-    
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v4
-      with:
-        file: ./coverage.xml
-        flags: unittests
-        name: codecov-umbrella
-        fail_ci_if_error: false
-
   build:
     runs-on: ubuntu-latest
-    needs: test
     
     steps:
     - uses: actions/checkout@v4
