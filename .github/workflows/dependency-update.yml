@@ -26,7 +26,7 @@ jobs:
     - name: Run tests
       run: |
         uv sync --all-packages
-        uv run pytest packages/*/tests/ -v
+        source .venv/bin/activate && pytest packages/*/tests/ -v
     
     - name: Create Pull Request
       uses: peter-evans/create-pull-request@v6

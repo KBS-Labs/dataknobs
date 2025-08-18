@@ -46,7 +46,12 @@ get_packages_in_order() {
             # Check if this package depends on any dataknobs packages not yet added
             if [[ -f "$pyproject" ]]; then
                 # Extract dependencies (simplified - just looking for dataknobs- packages)
-                local deps=$(grep -E "dataknobs-" "$pyproject" 2>/dev/null | grep -v "^name = " || true)
+                # Exclude self-references (package referring to itself with extras like dataknobs-foo[extra])
+                local deps=$(grep -E "dataknobs-" "$pyproject" 2>/dev/null | \
+                            grep -v "^name = " | \
+                            grep -v "dataknobs-$package\[" | \
+                            grep -v "dataknobs-$package\"" | \
+                            grep -v "dataknobs-$package " || true)
                 
                 if [[ ${#ordered_packages[@]} -gt 0 ]]; then
                     for ordered in "${ordered_packages[@]}"; do

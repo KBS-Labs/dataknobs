@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import pandas as pd
 
@@ -12,8 +12,8 @@ class RecordStore:
 
     def __init__(
         self,
-        tsv_fpath: Optional[str],
-        df: Optional[pd.DataFrame] = None,
+        tsv_fpath: str | None,
+        df: pd.DataFrame | None = None,
         sep: str = "\t",
     ):
         """:param tsv_fpath: The path to the tsv file on disk. If None or
@@ -24,11 +24,11 @@ class RecordStore:
         self.tsv_fpath = tsv_fpath
         self.init_df = df
         self.sep = sep
-        self._df: Optional[pd.DataFrame] = None
+        self._df: pd.DataFrame | None = None
         self._recs: List[Dict[str, Any]] = []  # Initialize as empty list, not None
         self._init_data(df)
 
-    def _init_data(self, df: Optional[pd.DataFrame] = None) -> None:
+    def _init_data(self, df: pd.DataFrame | None = None) -> None:
         """Initialize store data from the tsv file."""
         if self.tsv_fpath is not None and os.path.exists(self.tsv_fpath):
             self._df = pd.read_csv(self.tsv_fpath, sep=self.sep)
@@ -48,7 +48,7 @@ class RecordStore:
         return recs
 
     @property
-    def df(self) -> Optional[pd.DataFrame]:
+    def df(self) -> pd.DataFrame | None:
         """Get the records as a dataframe"""
         if self._df is None and self._recs is not None:
             self._df = pd.DataFrame(self._recs)
@@ -74,7 +74,7 @@ class RecordStore:
         if self.tsv_fpath is not None and self.df is not None:
             self.df.to_csv(self.tsv_fpath, sep=self.sep, index=False)
 
-    def restore(self, df: Optional[pd.DataFrame] = None) -> None:
+    def restore(self, df: pd.DataFrame | None = None) -> None:
         """Restore records from the version on disk, discarding any changes.
         NOTE: If there is no backing file (e.g., tsv_fpath is None), then
         restore will discard all data and restart with the given df (if not

@@ -8,6 +8,10 @@ RUN chmod 1777 /tmp \
       gfortran cmake libopenblas-dev \
       graphviz nmap emacs-nox \
       nodejs npm \
+      # Add utilities for service health checks
+      jq netcat-openbsd postgresql-client \
+      # Add ping for network connectivity tests
+      iputils-ping \
   && apt-get clean \
   && rm -rf /var/tmp /tmp /var/lib/apt/lists/* \
   && mkdir -p /var/tmp /tmp

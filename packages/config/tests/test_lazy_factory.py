@@ -2,35 +2,12 @@
 
 import pytest
 
-from dataknobs_config import Config, ConfigError, FactoryBase
-
-
-# Mock factory classes for testing
-class MockDatabaseFactory(FactoryBase):
-    """Mock database factory for testing."""
-
-    def __init__(self):
-        self.created_count = 0
-
-    def create(self, **config):
-        self.created_count += 1
-        return {"id": self.created_count, "config": config}
-
-
-class MockCacheFactory:
-    """Mock cache factory using callable pattern."""
-
-    def __init__(self):
-        self.created_count = 0
-
-    def __call__(self, **config):
-        self.created_count += 1
-        return {"id": self.created_count, "type": "cache", "config": config}
-
-
-def mock_function_factory(**config):
-    """Mock function factory (module-level)."""
-    return {"type": "function", "config": config}
+from dataknobs_config import Config, ConfigError
+from dataknobs_config.examples import (
+    CacheFactory,
+    Database,
+    DatabaseFactory,
+)
 
 
 class TestLazyFactoryAccess:
@@ -43,7 +20,7 @@ class TestLazyFactoryAccess:
                 "database": [
                     {
                         "name": "primary",
-                        "factory": "test_lazy_factory.MockDatabaseFactory",
+                        "factory": "dataknobs_config.examples.DatabaseFactory",
                         "host": "localhost",
                         "port": 5432,
                     }
@@ -54,16 +31,16 @@ class TestLazyFactoryAccess:
         # Get the factory instance
         factory = config.get_factory("database", "primary")
 
-        assert isinstance(factory, MockDatabaseFactory)
+        assert isinstance(factory, DatabaseFactory)
         assert factory.created_count == 0  # Factory created but not used yet
 
         # Use the factory
         db1 = factory.create(host="db1.example.com", port=5432)
-        assert db1["id"] == 1
+        assert isinstance(db1, Database)
         assert factory.created_count == 1
 
         db2 = factory.create(host="db2.example.com", port=5433)
-        assert db2["id"] == 2
+        assert isinstance(db2, Database)
         assert factory.created_count == 2
 
     def test_factory_instance_cached(self):
@@ -73,7 +50,7 @@ class TestLazyFactoryAccess:
                 "database": [
                     {
                         "name": "primary",
-                        "factory": "test_lazy_factory.MockDatabaseFactory",
+                        "factory": "dataknobs_config.examples.DatabaseFactory",
                     }
                 ]
             }
@@ -87,7 +64,7 @@ class TestLazyFactoryAccess:
         assert factory1 is factory2
 
         # Verify by using the factory
-        factory1.create()
+        factory1.create(host="test", port=5432)
         assert factory1.created_count == 1
         assert factory2.created_count == 1  # Same instance
 
@@ -113,8 +90,8 @@ class TestLazyFactoryAccess:
         config = Config(
             {
                 "cache": [
-                    {"name": "redis1", "factory": "test_lazy_factory.MockCacheFactory"},
-                    {"name": "redis2", "factory": "test_lazy_factory.MockDatabaseFactory"},
+                    {"name": "redis1", "factory": "dataknobs_config.examples.CacheFactory"},
+                    {"name": "redis2", "factory": "dataknobs_config.examples.DatabaseFactory"},
                 ]
             }
         )
@@ -123,8 +100,8 @@ class TestLazyFactoryAccess:
         factory0 = config.get_factory("cache", 0)
         factory1 = config.get_factory("cache", 1)
 
-        assert isinstance(factory0, MockCacheFactory)
-        assert isinstance(factory1, MockDatabaseFactory)
+        assert isinstance(factory0, CacheFactory)
+        assert isinstance(factory1, DatabaseFactory)
 
     def test_get_instance_with_factory(self):
         """Test get_instance with factory configuration."""
@@ -133,7 +110,7 @@ class TestLazyFactoryAccess:
                 "database": [
                     {
                         "name": "primary",
-                        "factory": "test_lazy_factory.MockDatabaseFactory",
+                        "factory": "dataknobs_config.examples.DatabaseFactory",
                         "host": "localhost",
                         "port": 5432,
                     }
@@ -144,30 +121,18 @@ class TestLazyFactoryAccess:
         # get_instance should build an object using the factory
         instance = config.get_instance("database", "primary")
 
-        assert instance["id"] == 1
-        assert instance["config"]["host"] == "localhost"
-        assert instance["config"]["port"] == 5432
+        assert isinstance(instance, Database)
+        assert instance.host == "localhost"
+        assert instance.port == 5432
 
     def test_get_instance_with_class(self):
         """Test get_instance with class configuration."""
-
-        class MockDatabase:
-            def __init__(self, host, port, **kwargs):
-                self.host = host
-                self.port = port
-                self.extra = kwargs
-
-        # Store the class in the module for import
-        import sys
-
-        sys.modules[__name__].MockDatabase = MockDatabase
-
         config = Config(
             {
                 "database": [
                     {
                         "name": "primary",
-                        "class": "test_lazy_factory.MockDatabase",
+                        "class": "dataknobs_config.examples.Database",
                         "host": "localhost",
                         "port": 5432,
                     }
@@ -178,7 +143,7 @@ class TestLazyFactoryAccess:
         # get_instance should build an object using the class
         instance = config.get_instance("database", "primary")
 
-        assert isinstance(instance, MockDatabase)
+        assert isinstance(instance, Database)
         assert instance.host == "localhost"
         assert instance.port == 5432
 
@@ -201,7 +166,7 @@ class TestLazyFactoryAccess:
                 "database": [
                     {
                         "name": "primary",
-                        "factory": "test_lazy_factory.MockDatabaseFactory",
+                        "factory": "dataknobs_config.examples.DatabaseFactory",
                         "host": "localhost",
                     }
                 ]
@@ -211,17 +176,17 @@ class TestLazyFactoryAccess:
         # Pass additional kwargs
         instance = config.get_instance("database", "primary", port=5433, ssl=True)
 
-        assert instance["config"]["host"] == "localhost"
-        assert instance["config"]["port"] == 5433
-        assert instance["config"]["ssl"] is True
+        assert instance.host == "localhost"
+        assert instance.port == 5433
+        assert instance.extra.get("ssl") is True
 
     def test_multiple_factory_types(self):
         """Test different types of factories."""
         config = Config(
             {
                 "services": [
-                    {"name": "db", "factory": "test_lazy_factory.MockDatabaseFactory"},
-                    {"name": "cache", "factory": "test_lazy_factory.MockCacheFactory"},
+                    {"name": "db", "factory": "dataknobs_config.examples.DatabaseFactory"},
+                    {"name": "cache", "factory": "dataknobs_config.examples.CacheFactory"},
                 ]
             }
         )
@@ -230,25 +195,29 @@ class TestLazyFactoryAccess:
         db_factory = config.get_factory("services", "db")
         cache_factory = config.get_factory("services", "cache")
 
-        assert isinstance(db_factory, MockDatabaseFactory)
-        assert isinstance(cache_factory, MockCacheFactory)
+        assert isinstance(db_factory, DatabaseFactory)
+        assert isinstance(cache_factory, CacheFactory)
 
         # Use them
-        db = db_factory.create(host="dbhost")
-        cache = cache_factory(host="cachehost")
+        db = db_factory.create(host="dbhost", port=5432)
+        cache = cache_factory(host="cachehost", port=6379)
 
-        assert db["id"] == 1
-        assert cache["type"] == "cache"
+        assert isinstance(db, Database)
+        assert hasattr(cache, "host")
 
     def test_factory_cache_clearing(self):
         """Test that factory cache can be cleared."""
         config = Config(
-            {"database": [{"name": "primary", "factory": "test_lazy_factory.MockDatabaseFactory"}]}
+            {
+                "database": [
+                    {"name": "primary", "factory": "dataknobs_config.examples.DatabaseFactory"}
+                ]
+            }
         )
 
         # Get factory and use it
         factory1 = config.get_factory("database", "primary")
-        factory1.create()
+        factory1.create(host="test", port=5432)
         assert factory1.created_count == 1
 
         # Clear cache

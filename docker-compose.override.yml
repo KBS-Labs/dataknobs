@@ -1,0 +1,57 @@
+services:
+  dataknobs-dev:
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/dataknobs
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+      - S3_BUCKET=dataknobs-local
+    depends_on:
+      - postgres
+      - elasticsearch
+      - localstack
+
+  postgres:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=dataknobs
+    ports:
+      - "5432:5432"
+    volumes:
+      - ~/data:/data
+      - ~/.dataknobs/data/postgres:/var/lib/postgresql/data
+    networks:
+      - devnet
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    volumes:
+      - ~/data:/data
+      - ~/.dataknobs/data/elasticsearch:/usr/share/elasticsearch/data
+    networks:
+      - devnet
+
+  localstack:
+    image: localstack/localstack:3.0
+    environment:
+      - SERVICES=s3
+      - DEBUG=0
+    ports:
+      - "4566:4566"
+    volumes:
+      - ~/data:/data
+      - ~/.dataknobs/data/localstack:/var/lib/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - devnet 

@@ -1,6 +1,6 @@
 import itertools
 import json
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Set, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -9,7 +9,7 @@ import pandas as pd
 def dicts2df(
     dicts: Union[List[Dict], List[List[Dict]]],
     rename: Dict[str, str] | None = None,
-    item_id: Optional[str] = "item_id",
+    item_id: str | None = "item_id",
 ) -> pd.DataFrame:
     """Create a dataframe from a list of or list of lists of dictionaries.
     :param dicts: A list of dictionaries
@@ -47,20 +47,20 @@ def get_loc_range(bool_ser: pd.Series) -> Tuple[int, int]:
     """
     # Find all True positions
     true_positions = bool_ser[bool_ser].index
-    
+
     if len(true_positions) == 0:
         # No True values, return (0, 0) or raise an error
         return (0, 0)
-    
+
     # Get first and last True positions
     first_loc = true_positions[0]
     last_loc = true_positions[-1]
-    
+
     # Convert to int (handling both integer indices and other types)
     # Use tolist() to convert index values to Python types
     first_result = int(true_positions.tolist()[0])
     last_result = int(true_positions.tolist()[-1])
-    
+
     return (first_result, last_result)
 
 

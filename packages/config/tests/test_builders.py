@@ -2,42 +2,11 @@
 
 import pytest
 
-from dataknobs_config import Config, ConfigError, ConfigurableBase, FactoryBase
-
-
-# Test classes for object construction
-class MockDatabase(ConfigurableBase):
-    """Mock database class for testing."""
-
-    def __init__(self, host, port, **kwargs):
-        self.host = host
-        self.port = port
-        self.extra = kwargs
-
-
-class MockCache:
-    """Mock cache class without ConfigurableBase."""
-
-    def __init__(self, host, port, ttl=3600):
-        self.host = host
-        self.port = port
-        self.ttl = ttl
-
-
-class MockDatabaseFactory(FactoryBase):
-    """Mock factory for databases."""
-
-    def create(self, **config):
-        # Add some factory logic
-        config.setdefault("pool_size", 10)
-        return MockDatabase(**config)
-
-
-class MockCallableFactory:
-    """Mock callable factory."""
-
-    def __call__(self, **config):
-        return MockCache(**config)
+from dataknobs_config import Config, ConfigError
+from dataknobs_config.examples import (
+    Cache,
+    Database,
+)
 
 
 class TestObjectConstruction:
@@ -50,7 +19,7 @@ class TestObjectConstruction:
                 "database": [
                     {
                         "name": "primary",
-                        "class": "test_builders.MockDatabase",
+                        "class": "dataknobs_config.examples.Database",
                         "host": "localhost",
                         "port": 5432,
                     }
@@ -60,7 +29,7 @@ class TestObjectConstruction:
 
         obj = config.build_object("xref:database[primary]")
 
-        assert isinstance(obj, MockDatabase)
+        assert isinstance(obj, Database)
         assert obj.host == "localhost"
         assert obj.port == 5432
 
@@ -71,7 +40,7 @@ class TestObjectConstruction:
                 "database": [
                     {
                         "name": "test",
-                        "class": "test_builders.MockDatabase",
+                        "class": "dataknobs_config.examples.Database",
                         "host": "testhost",
                         "port": 3306,
                         "extra_param": "value",
@@ -82,7 +51,7 @@ class TestObjectConstruction:
 
         obj = config.build_object("xref:database[test]")
 
-        assert isinstance(obj, MockDatabase)
+        assert isinstance(obj, Database)
         assert obj.host == "testhost"
         assert obj.extra["extra_param"] == "value"
 
@@ -93,7 +62,7 @@ class TestObjectConstruction:
                 "database": [
                     {
                         "name": "primary",
-                        "factory": "test_builders.MockDatabaseFactory",
+                        "factory": "dataknobs_config.examples.DatabaseFactory",
                         "host": "localhost",
                         "port": 5432,
                     }
@@ -103,10 +72,10 @@ class TestObjectConstruction:
 
         obj = config.build_object("xref:database[primary]")
 
-        assert isinstance(obj, MockDatabase)
+        assert isinstance(obj, Database)
         assert obj.host == "localhost"
         assert obj.port == 5432
-        assert obj.extra.get("pool_size") == 10  # Added by factory
+        assert obj.pool_size == 10  # Added by factory
 
     def test_build_with_callable_factory(self):
         """Test building with callable factory."""
@@ -115,7 +84,7 @@ class TestObjectConstruction:
                 "cache": [
                     {
                         "name": "redis",
-                        "factory": "test_builders.MockCallableFactory",
+                        "factory": "dataknobs_config.examples.CacheFactory",
                         "host": "localhost",
                         "port": 6379,
                         "ttl": 7200,
@@ -126,7 +95,7 @@ class TestObjectConstruction:
 
         obj = config.build_object("xref:cache[redis]")
 
-        assert isinstance(obj, MockCache)
+        assert isinstance(obj, Cache)
         assert obj.host == "localhost"
         assert obj.ttl == 7200
 
@@ -149,7 +118,11 @@ class TestObjectConstruction:
         config = Config(
             {
                 "database": [
-                    {"name": "test", "class": "test_builders.MockDatabase", "host": "localhost"}
+                    {
+                        "name": "test",
+                        "class": "dataknobs_config.examples.Database",
+                        "host": "localhost",
+                    }
                 ]
             }
         )
@@ -171,7 +144,7 @@ class TestObjectCaching:
                 "cache": [
                     {
                         "name": "redis",
-                        "class": "test_builders.MockCache",
+                        "class": "dataknobs_config.examples.Cache",
                         "host": "localhost",
                         "port": 6379,
                     }
@@ -191,7 +164,7 @@ class TestObjectCaching:
                 "cache": [
                     {
                         "name": "redis",
-                        "class": "test_builders.MockCache",
+                        "class": "dataknobs_config.examples.Cache",
                         "host": "localhost",
                         "port": 6379,
                     }
@@ -212,7 +185,7 @@ class TestObjectCaching:
                 "cache": [
                     {
                         "name": "redis",
-                        "class": "test_builders.MockCache",
+                        "class": "dataknobs_config.examples.Cache",
                         "host": "localhost",
                         "port": 6379,
                     }
@@ -233,13 +206,13 @@ class TestObjectCaching:
                 "cache": [
                     {
                         "name": "redis1",
-                        "class": "test_builders.MockCache",
+                        "class": "dataknobs_config.examples.Cache",
                         "host": "host1",
                         "port": 6379,
                     },
                     {
                         "name": "redis2",
-                        "class": "test_builders.MockCache",
+                        "class": "dataknobs_config.examples.Cache",
                         "host": "host2",
                         "port": 6380,
                     },

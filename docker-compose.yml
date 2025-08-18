@@ -1,13 +1,18 @@
-version: '3.8'
-
 services:
   dataknobs-dev:
     build:
       context: .
       dockerfile: docker/Dockerfile.dev
+      args:
+        - DOCKER_BUILDKIT=1
+    image: dataknobs.dev:latest
+    container_name: dataknobs.dev-${USER:-user}-${TIMESTAMP:-dev}
+    init: true
+    stdin_open: true
+    tty: true
     volumes:
       - .:/workdir
-      - ./data:/data
+      - ~/data:/data
     ports:
       - "5000:5000"
       - "8888:8888"  # Jupyter
@@ -15,7 +20,10 @@ services:
     environment:
       - ENV=dev
       - FLASK_PORT=5000
-    command: uv run python -m dataknobs.flask_api
+    networks:
+      - devnet
+    #command: uv run python -m dataknobs.flask_api
+    entrypoint: /bin/bash
 
   dataknobs-prod:
     build:
@@ -35,7 +43,14 @@ services:
       dockerfile: docker/Dockerfile.dev
     volumes:
       - .:/workdir
-      - ./data:/data
+      - ~/data:/data
     ports:
       - "8888:8888"
+    networks:
+      - devnet
     command: uv run jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root
+
+networks:
+  devnet:
+    name: devnet
+    external: true

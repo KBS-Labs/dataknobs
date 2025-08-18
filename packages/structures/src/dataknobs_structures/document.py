@@ -10,8 +10,7 @@ class MetaData:
     """Container for managing and providing access to meta-data."""
 
     def __init__(self, key_data: dict[str, Any], **kwargs: Any) -> None:
-        """
-        Initialize with the mandatory or "key" data and any additional optional
+        """Initialize with the mandatory or "key" data and any additional optional
         values.
         """
         self._data = key_data.copy() if key_data is not None else {}
@@ -24,8 +23,7 @@ class MetaData:
         return self._data
 
     def get_value(self, attribute: str, missing: str | None = None) -> Any:
-        """
-        Get the value for the given attribute, or the "missing" value.
+        """Get the value for the given attribute, or the "missing" value.
 
         :param attribute: The meta-data attribute whose value to get
         :param missing: The missing value

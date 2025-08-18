@@ -68,7 +68,42 @@ nav:
       - packages/common/api.md
     - Config:
       - packages/config/index.md
+      # TODO: Add these config docs when created:
+      # - packages/config/configuration-system.md
+      # - packages/config/environment-variables.md
+      # - packages/config/factory-registration.md
       - packages/config/api.md
+    - Data:
+      - packages/data/index.md
+      - Core Concepts:
+        - packages/data/record-model.md
+        - packages/data/field-types.md
+        - packages/data/query.md
+      - Backends:
+        - packages/data/backends.md
+        - packages/data/memory-backend.md
+        - packages/data/file-backend.md
+        - packages/data/postgres-backend.md
+        - packages/data/elasticsearch-backend.md
+        - packages/data/s3-backend.md
+      - Advanced Features:
+        - packages/data/async-pooling-quickstart.md
+        - packages/data/async-pooling.md
+        - packages/data/performance-tuning.md
+        - packages/data/migration.md
+        - packages/data/validation.md
+        - packages/data/pandas-integration.md
+      - Configuration:
+        - packages/data/factory-pattern.md
+        - packages/data/configuration.md
+      # TODO: Add these tutorials when created:
+      # - Tutorials:
+      #   - packages/data/tutorials/migration-tutorial.md
+      #   - packages/data/tutorials/validation-tutorial.md
+      #   - packages/data/tutorials/pandas-tutorial.md
+      - packages/data/examples.md
+      - packages/data/api.md
+      - API Reference: packages/data/api-reference.md
     - Structures:
       - packages/structures/index.md
       - packages/structures/tree.md
@@ -96,27 +131,44 @@ nav:
   - API Reference:
     - api/index.md
     - api/dataknobs-config.md
+    - api/dataknobs-data.md
     - api/dataknobs-structures.md
     - api/dataknobs-utils.md
     - api/dataknobs-xization.md
     - api/dataknobs-common.md
   
   - Development:
-    - development/index.md
-    - development/contributing.md
-    - development/testing.md
-    - development/documentation-guide.md
-    - development/ci-cd.md
-    - development/release-process.md
-    - development/architecture.md
+    - Overview: development/index.md
+    - Developer Workflow (dk): development/dk-command.md
+    - Contributing: development/contributing.md
+    - Configuration System: development/configuration-system.md
+    - Adding Config Support: development/adding-config-support.md
+    - UV Environment: development/uv-environment.md
+    - Quality Checks: development/quality-checks.md
+    - Testing: development/testing.md
+    - Testing Guide: development/testing-guide.md
+    - Integration Testing & CI: development/integration-testing-ci.md
+    - Documentation Guide: development/documentation-guide.md
+    - CI/CD: development/ci-cd.md
+    - Release Process: development/release-process.md
+    - Architecture: development/architecture.md
     - Deprecation Timeline: DEPRECATION_TIMELINE.md
   
   - Examples:
     - examples/index.md
+    - examples/sensor-dashboard.md
     - examples/basic-tree.md
     - examples/document-processing.md
     - examples/text-normalization.md
     - examples/elasticsearch-integration.md
+    - examples/data-backends.md
+    - examples/s3-storage.md
+    # TODO: Add these example docs when created:
+    # - examples/data-migration.md
+    # - examples/data-validation.md
+    # - examples/pandas-workflow.md
+    - examples/factory-pattern.md
+    - examples/configuration.md
   
   - Changelog: changelog.md
   - License: license.md
@@ -136,6 +188,8 @@ plugins:
           paths: [
             packages/common/src,
             packages/config/src,
+            packages/data/src,
+            packages/kv/src,
             packages/structures/src,
             packages/utils/src,
             packages/xization/src,

@@ -2,7 +2,7 @@ import json
 import socket
 import sys
 from collections.abc import Callable
-from typing import Any, Dict, Tuple, Optional, Union
+from typing import Any, Dict, Tuple, Union
 
 import requests
 
@@ -13,19 +13,42 @@ DBG_HEADERS = {"Content-Type": "application/json", "error_trace": "true"}
 
 def get_current_ip() -> str:
     """Get the running machine's IPv4 address.
+
+    This function attempts to get the machine's IP address by connecting to
+    an external service (Google DNS) to determine the local IP used for
+    outbound connections. If that fails, it falls back to trying hostname
+    resolution, and finally returns localhost as a last resort.
+
     :return: The IP address
     """
-    return socket.gethostbyname(socket.gethostname())
+    try:
+        # Create a socket and connect to an external service to get the local IP
+        # We use Google's DNS server (8.8.8.8) as it's widely available
+        # Note: This doesn't actually send any DNS queries, just establishes a connection
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        # Fallback to hostname resolution
+        try:
+            return socket.gethostbyname(socket.gethostname())
+        except socket.gaierror:
+            # If hostname doesn't resolve (common on macOS), return localhost
+            return "127.0.0.1"
 
 
-def json_api_response_handler(resp: requests.models.Response) -> Tuple[requests.models.Response, Optional[Dict[str, Any]]]:
+def json_api_response_handler(
+    resp: requests.models.Response,
+) -> Tuple[requests.models.Response, Dict[str, Any] | None]:
     result = None
     if resp.text:
         result = json.loads(resp.text)
     return (resp, result)
 
 
-def plain_api_response_handler(resp: requests.models.Response) -> Tuple[requests.models.Response, str]:
+def plain_api_response_handler(
+    resp: requests.models.Response,
+) -> Tuple[requests.models.Response, str]:
     return (resp, resp.text)
 
 
@@ -34,8 +57,8 @@ default_api_response_handler = json_api_response_handler
 
 def get_request(
     api_request: str,
-    params: Optional[Dict[str, Any]] = None,
-    headers: Optional[Dict[str, Any]] = None,
+    params: Dict[str, Any] | None = None,
+    headers: Dict[str, Any] | None = None,
     timeout: int = DEFAULT_TIMEOUT,
     api_response_handler: Callable[
         [requests.models.Response], Tuple[requests.models.Response, Any]
@@ -61,8 +84,8 @@ def get_request(
 def post_request(
     api_request: str,
     payload: Dict[str, Any],
-    params: Optional[Dict[str, Any]] = None,
-    headers: Optional[Dict[str, Any]] = None,
+    params: Dict[str, Any] | None = None,
+    headers: Dict[str, Any] | None = None,
     timeout: int = DEFAULT_TIMEOUT,
     api_response_handler: Callable[
         [requests.models.Response], Tuple[requests.models.Response, Any]
@@ -94,7 +117,7 @@ def post_request(
 def post_files_request(
     api_request: str,
     files: Dict[str, Any],
-    headers: Optional[Dict[str, Any]] = None,
+    headers: Dict[str, Any] | None = None,
     timeout: int = DEFAULT_TIMEOUT,
     api_response_handler: Callable[
         [requests.models.Response], Tuple[requests.models.Response, Any]
@@ -128,8 +151,8 @@ def post_files_request(
 def put_request(
     api_request: str,
     payload: Dict[str, Any],
-    params: Optional[Dict[str, Any]] = None,
-    headers: Optional[Dict[str, Any]] = None,
+    params: Dict[str, Any] | None = None,
+    headers: Dict[str, Any] | None = None,
     timeout: int = DEFAULT_TIMEOUT,
     api_response_handler: Callable[
         [requests.models.Response], Tuple[requests.models.Response, Any]
@@ -160,8 +183,8 @@ def put_request(
 
 def delete_request(
     api_request: str,
-    params: Optional[Dict[str, Any]] = None,
-    headers: Optional[Dict[str, Any]] = None,
+    params: Dict[str, Any] | None = None,
+    headers: Dict[str, Any] | None = None,
     timeout: int = DEFAULT_TIMEOUT,
     api_response_handler: Callable[
         [requests.models.Response], Tuple[requests.models.Response, Any]
@@ -187,10 +210,10 @@ def delete_request(
 class ServerResponse:
     """Class to encapsulate request response data from the elasticsearch server."""
 
-    def __init__(self, resp: Optional[requests.models.Response], result: Any) -> None:
+    def __init__(self, resp: requests.models.Response | None, result: Any) -> None:
         self.resp = resp
         self.result = result
-        self._extra: Optional[Dict[str, Any]] = None
+        self._extra: Dict[str, Any] | None = None
 
     def __repr__(self) -> str:
         rv = ""
@@ -205,8 +228,28 @@ class ServerResponse:
         return self.resp.status_code in {200, 201} if self.resp is not None else False
 
     @property
-    def status(self) -> Optional[int]:
+    def status(self) -> int | None:
         return self.resp.status_code if self.resp is not None else None
+
+    @property
+    def status_code(self) -> int | None:
+        """Alias for status property for consistency with requests.Response."""
+        return self.status
+
+    @property
+    def json(self) -> Any:
+        """Get the JSON response data (alias for result)."""
+        return self.result
+
+    @property
+    def text(self) -> str:
+        """Get the response as text."""
+        if self.result:
+            if isinstance(self.result, str):
+                return self.result
+            else:
+                return json.dumps(self.result)
+        return ""
 
     @property
     def extra(self) -> Dict[str, Any]:
@@ -229,9 +272,9 @@ class RequestHelper:
         server_ip: str,
         server_port: Union[str, int],
         api_response_handler: Callable = json_api_response_handler,
-        headers: Optional[Dict[str, Any]] = None,
+        headers: Dict[str, Any] | None = None,
         timeout: int = DEFAULT_TIMEOUT,
-        mock_requests: Optional[Any] = None,
+        mock_requests: Any | None = None,
     ) -> None:
         self.ip = server_ip
         self.port = server_port
@@ -247,11 +290,11 @@ class RequestHelper:
         self,
         rtype: str,
         path: str,
-        payload: Optional[Dict[str, Any]] = None,
-        params: Optional[Dict[str, Any]] = None,
-        files: Optional[Dict[str, Any]] = None,
-        response_handler: Optional[Callable] = None,
-        headers: Optional[Dict[str, Any]] = None,
+        payload: Dict[str, Any] | None = None,
+        params: Dict[str, Any] | None = None,
+        files: Dict[str, Any] | None = None,
+        response_handler: Callable | None = None,
+        headers: Dict[str, Any] | None = None,
         timeout: int = 0,
         verbose: Union[bool, Any] = True,
     ) -> ServerResponse:
@@ -325,6 +368,22 @@ class RequestHelper:
                 api_response_handler=response_handler,
                 requests=self.requests,
             )
+        elif rtype == "head":
+            # HEAD requests are like GET but without body
+            try:
+                resp = self.requests.head(
+                    url,
+                    params=params,
+                    headers=headers,
+                    timeout=timeout,
+                )
+                # HEAD requests don't have a body, but we still need to process the response
+                result = {}  # Empty dict for HEAD response
+                if response_handler:
+                    resp, result = response_handler(resp)
+            except Exception:
+                resp = None
+                result = None
 
         rv = ServerResponse(resp, result)
 
@@ -337,6 +396,160 @@ class RequestHelper:
                 print(rv, file=verbose)
 
         return rv
+
+    def get(
+        self,
+        path: str,
+        params: Dict[str, Any] | None = None,
+        headers: Dict[str, Any] | None = None,
+        timeout: int | None = None,
+        verbose: bool = False,
+    ) -> Any:
+        """Convenience method for GET requests.
+        
+        Args:
+            path: API path
+            params: Optional query parameters
+            headers: Optional headers
+            timeout: Optional timeout
+            verbose: Whether to print debug info
+            
+        Returns:
+            ServerResponse object
+        """
+        return self.request(
+            "get",
+            path,
+            params=params,
+            headers=headers,
+            timeout=timeout,
+            verbose=verbose,
+        )
+
+    def post(
+        self,
+        path: str,
+        payload: Dict[str, Any] | None = None,
+        params: Dict[str, Any] | None = None,
+        files: Dict[str, Any] | None = None,
+        headers: Dict[str, Any] | None = None,
+        timeout: int | None = None,
+        verbose: bool = False,
+    ) -> Any:
+        """Convenience method for POST requests.
+        
+        Args:
+            path: API path
+            payload: Optional request body
+            params: Optional query parameters
+            files: Optional files to upload
+            headers: Optional headers
+            timeout: Optional timeout
+            verbose: Whether to print debug info
+            
+        Returns:
+            ServerResponse object
+        """
+        return self.request(
+            "post",
+            path,
+            payload=payload,
+            params=params,
+            files=files,
+            headers=headers,
+            timeout=timeout,
+            verbose=verbose,
+        )
+
+    def put(
+        self,
+        path: str,
+        payload: Dict[str, Any] | None = None,
+        params: Dict[str, Any] | None = None,
+        headers: Dict[str, Any] | None = None,
+        timeout: int | None = None,
+        verbose: bool = False,
+    ) -> Any:
+        """Convenience method for PUT requests.
+        
+        Args:
+            path: API path
+            payload: Optional request body
+            params: Optional query parameters
+            headers: Optional headers
+            timeout: Optional timeout
+            verbose: Whether to print debug info
+            
+        Returns:
+            ServerResponse object
+        """
+        return self.request(
+            "put",
+            path,
+            payload=payload,
+            params=params,
+            headers=headers,
+            timeout=timeout,
+            verbose=verbose,
+        )
+
+    def delete(
+        self,
+        path: str,
+        params: Dict[str, Any] | None = None,
+        headers: Dict[str, Any] | None = None,
+        timeout: int | None = None,
+        verbose: bool = False,
+    ) -> Any:
+        """Convenience method for DELETE requests.
+        
+        Args:
+            path: API path
+            params: Optional query parameters
+            headers: Optional headers
+            timeout: Optional timeout
+            verbose: Whether to print debug info
+            
+        Returns:
+            ServerResponse object
+        """
+        return self.request(
+            "delete",
+            path,
+            params=params,
+            headers=headers,
+            timeout=timeout,
+            verbose=verbose,
+        )
+
+    def head(
+        self,
+        path: str,
+        params: Dict[str, Any] | None = None,
+        headers: Dict[str, Any] | None = None,
+        timeout: int | None = None,
+        verbose: bool = False,
+    ) -> Any:
+        """Convenience method for HEAD requests.
+        
+        Args:
+            path: API path
+            params: Optional query parameters
+            headers: Optional headers
+            timeout: Optional timeout
+            verbose: Whether to print debug info
+            
+        Returns:
+            ServerResponse object
+        """
+        return self.request(
+            "head",
+            path,
+            params=params,
+            headers=headers,
+            timeout=timeout,
+            verbose=verbose,
+        )
 
 
 class MockResponse:
@@ -364,10 +577,10 @@ class MockRequests:
         response: MockResponse,
         api: str,
         api_request: str,
-        data: Optional[Any] = None,
-        files: Optional[Any] = None,
-        headers: Optional[Dict[str, Any]] = None,
-        params: Optional[Dict[str, Any]] = None,
+        data: Any | None = None,
+        files: Any | None = None,
+        headers: Dict[str, Any] | None = None,
+        params: Dict[str, Any] | None = None,
         timeout: int = DEFAULT_TIMEOUT,
     ) -> None:
         key = self._make_key(
@@ -385,11 +598,11 @@ class MockRequests:
         self,
         api: str,
         api_request: str,
-        data: Optional[Any],
-        files: Optional[Any],
-        headers: Optional[Dict[str, Any]],
-        params: Optional[Dict[str, Any]],
-        timeout: Optional[int],
+        data: Any | None,
+        files: Any | None,
+        headers: Dict[str, Any] | None,
+        params: Dict[str, Any] | None,
+        timeout: int | None,
     ) -> str:
         return json.dumps(
             {
@@ -403,18 +616,45 @@ class MockRequests:
             }
         )
 
-    def get(self, api_request: str, headers: Optional[Dict[str, Any]] = None, params: Optional[Dict[str, Any]] = None, timeout: Optional[int] = None) -> MockResponse:
+    def get(
+        self,
+        api_request: str,
+        headers: Dict[str, Any] | None = None,
+        params: Dict[str, Any] | None = None,
+        timeout: int | None = None,
+    ) -> MockResponse:
         key = self._make_key("get", api_request, None, None, headers, params, timeout)
         return self.responses.get(key, self.r404)
 
-    def post(self, api_request: str, data: Optional[Any] = None, files: Optional[Any] = None, headers: Optional[Dict[str, Any]] = None, params: Optional[Dict[str, Any]] = None, timeout: Optional[int] = None) -> MockResponse:
+    def post(
+        self,
+        api_request: str,
+        data: Any | None = None,
+        files: Any | None = None,
+        headers: Dict[str, Any] | None = None,
+        params: Dict[str, Any] | None = None,
+        timeout: int | None = None,
+    ) -> MockResponse:
         key = self._make_key("post", api_request, data, files, headers, params, timeout)
         return self.responses.get(key, self.r404)
 
-    def put(self, api_request: str, data: Optional[Any] = None, headers: Optional[Dict[str, Any]] = None, params: Optional[Dict[str, Any]] = None, timeout: Optional[int] = None) -> MockResponse:
+    def put(
+        self,
+        api_request: str,
+        data: Any | None = None,
+        headers: Dict[str, Any] | None = None,
+        params: Dict[str, Any] | None = None,
+        timeout: int | None = None,
+    ) -> MockResponse:
         key = self._make_key("put", api_request, data, None, headers, params, timeout)
         return self.responses.get(key, self.r404)
 
-    def delete(self, api_request: str, headers: Optional[Dict[str, Any]] = None, params: Optional[Dict[str, Any]] = None, timeout: Optional[int] = None) -> MockResponse:
+    def delete(
+        self,
+        api_request: str,
+        headers: Dict[str, Any] | None = None,
+        params: Dict[str, Any] | None = None,
+        timeout: int | None = None,
+    ) -> MockResponse:
         key = self._make_key("delete", api_request, None, None, headers, params, timeout)
         return self.responses.get(key, self.r404)

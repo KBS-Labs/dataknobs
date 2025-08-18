@@ -7,6 +7,14 @@ import pytest
 from dataknobs_config import Config
 
 
+def assert_paths_equal(path1, path2):
+    """Assert two paths are equal, resolving symlinks."""
+    # Resolve symlinks to handle macOS /var -> /private/var
+    p1 = Path(path1).resolve()
+    p2 = Path(path2).resolve()
+    assert p1 == p2, f"{p1} != {p2}"
+
+
 class TestPathResolution:
     """Test path resolution in configurations."""
 
@@ -28,10 +36,10 @@ class TestPathResolution:
 
         # Paths should be resolved to absolute
         assert Path(db["data_dir"]).is_absolute()
-        assert db["data_dir"] == str(temp_dir / "data")
+        assert_paths_equal(db["data_dir"], temp_dir / "data")
 
         assert Path(db["config_path"]).is_absolute()
-        assert db["config_path"] == str(temp_dir.parent / "configs" / "db.conf")
+        assert_paths_equal(db["config_path"], temp_dir.parent / "configs" / "db.conf")
 
     def test_type_specific_path_attributes(self, temp_dir):
         """Test type-specific path resolution attributes."""
@@ -58,7 +66,7 @@ class TestPathResolution:
         assert Path(db["data_dir"]).is_absolute()
 
         # Cache data_dir should NOT be resolved (not in attributes)
-        assert db["data_dir"] == str(temp_dir / "db_data")
+        assert_paths_equal(db["data_dir"], temp_dir / "db_data")
         assert cache["data_dir"] == "./cache_data"
 
         # Log files should be resolved for both
@@ -85,8 +93,8 @@ class TestPathResolution:
         server = config.get("server", "web")
 
         # Should use global_root for resolution
-        assert server["static_dir"] == str(global_root / "static")
-        assert server["template_dir"] == str(global_root / "templates")
+        assert_paths_equal(server["static_dir"], global_root / "static")
+        assert_paths_equal(server["template_dir"], global_root / "templates")
 
     def test_type_specific_root(self, temp_dir):
         """Test type-specific root directories."""
@@ -111,8 +119,8 @@ class TestPathResolution:
         cache = config.get("cache", "redis")
 
         # Each should use its type-specific root
-        assert db["data_dir"] == str(db_root / "data")
-        assert cache["data_dir"] == str(cache_root / "data")
+        assert_paths_equal(db["data_dir"], db_root / "data")
+        assert_paths_equal(cache["data_dir"], cache_root / "data")
 
     def test_root_precedence(self, temp_dir):
         """Test precedence of root directories."""
@@ -139,15 +147,15 @@ class TestPathResolution:
 
         # Database should use type-specific root (highest precedence)
         db = config.get("database", "db1")
-        assert db["path"] == str(type_root / "file")
+        assert_paths_equal(db["path"], type_root / "file")
 
         # Cache should use global_root (no type-specific)
         cache = config.get("cache", "c1")
-        assert cache["path"] == str(global_root / "file")
+        assert_paths_equal(cache["path"], global_root / "file")
 
         # Server should also use global_root
         server = config.get("server", "s1")
-        assert server["path"] == str(global_root / "file")
+        assert_paths_equal(server["path"], global_root / "file")
 
     def test_absolute_paths_unchanged(self, temp_dir):
         """Test that absolute paths are not modified."""
@@ -169,7 +177,7 @@ class TestPathResolution:
         assert db["data_dir"] == abs_path
 
         # Relative path should be resolved
-        assert db["relative_dir"] == str(temp_dir / "relative")
+        assert_paths_equal(db["relative_dir"], temp_dir / "relative")
 
     def test_non_string_values_unchanged(self, temp_dir):
         """Test that non-string values are not affected by path resolution."""
@@ -204,7 +212,7 @@ class TestPathResolution:
         assert isinstance(db["options"], dict)
 
         # Only string path should be resolved
-        assert db["data_dir"] == str(temp_dir / "data")
+        assert_paths_equal(db["data_dir"], temp_dir / "data")
 
     def test_no_global_root_raises_for_relative_paths(self):
         """Test that relative paths raise an error when no global_root is set."""
@@ -260,5 +268,5 @@ settings:
 
         # Paths should be resolved relative to global_root
         assert Path(db["data_dir"]).is_absolute()
-        assert db["data_dir"] == str(temp_dir / "data")
-        assert db["backup_dir"] == str(temp_dir.parent / "backups")
+        assert_paths_equal(db["data_dir"], temp_dir / "data")
+        assert_paths_equal(db["backup_dir"], temp_dir.parent / "backups")

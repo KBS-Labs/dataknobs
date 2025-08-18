@@ -11,7 +11,8 @@ This monorepo contains modular packages for development, experimentation, and te
 
 The project is organized as a monorepo with the following packages:
 
-- **[dataknobs-config](packages/config/)**: Modular configuration system with environment overrides and cross-references
+- **[dataknobs-config](packages/config/)**: Modular configuration system with environment variable substitution, factory registration, and cross-references
+- **[dataknobs-data](packages/data/)**: Unified data abstraction layer supporting Memory, File, PostgreSQL, Elasticsearch, and S3 backends
 - **[dataknobs-structures](packages/structures/)**: Data structures for AI knowledge bases (trees, documents, record stores)
 - **[dataknobs-utils](packages/utils/)**: Utility functions (file I/O, JSON processing, pandas helpers, web requests)
 - **[dataknobs-xization](packages/xization/)**: Text normalization and tokenization tools
@@ -52,13 +53,29 @@ pip install dataknobs
 ```python
 # Import from specific packages
 from dataknobs_config import Config
+from dataknobs_data import Record, Query, database_factory
 from dataknobs_structures import Tree, Document
 from dataknobs_utils import json_utils, file_utils
 from dataknobs_xization import MaskingTokenizer
 
-# Use the configuration system
+# Configuration with environment variables and factories
 config = Config("config.yaml")
-db_config = config.get("database", "production")
+config.register_factory("database", database_factory)
+
+# Create database from configuration
+# Supports: ${ENV_VAR:default} substitution
+database = config.get_instance("databases", "primary")
+
+# Work with unified data abstraction
+record = Record({"name": "example", "value": 42})
+record_id = database.create(record)
+results = database.search(Query().filter("name", "=", "example"))
+
+# Use factory directly for dynamic backend selection
+from dataknobs_data import DatabaseFactory
+factory = DatabaseFactory()
+s3_db = factory.create(backend="s3", bucket="my-bucket")
+memory_db = factory.create(backend="memory")
 
 # Create a tree structure
 tree = Tree("root")

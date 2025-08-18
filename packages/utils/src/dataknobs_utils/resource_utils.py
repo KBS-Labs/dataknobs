@@ -1,7 +1,8 @@
 """General data utilities for working with 3rd party resources"""
 
 import os
-from typing import Optional, Dict, Any, Callable
+from collections.abc import Callable
+from typing import Any, Dict
 
 import nltk
 
@@ -20,7 +21,7 @@ _NLTK_RESOURCES_DIR = None
 _NLTK_WN = None
 
 
-def active_datadir() -> Optional[str]:
+def active_datadir() -> str | None:
     """Get the active data directory as the first that exists from:
         * the DATADIR environment variable
         * the HOME/data directory
@@ -38,7 +39,12 @@ def active_datadir() -> Optional[str]:
     return _DATADIR
 
 
-def download_nltk_resources(resources: Optional[Dict[str, str]], resources_dir: Optional[str] = None, verbose: bool = False, downloader: Callable = nltk.download) -> None:
+def download_nltk_resources(
+    resources: Dict[str, str] | None,
+    resources_dir: str | None = None,
+    verbose: bool = False,
+    downloader: Callable = nltk.download,
+) -> None:
     """Download the nltk resources that don't yet exist.
     :resources_dir: The resources (root) directory to download to, or
         the default if None.
@@ -59,7 +65,11 @@ def download_nltk_resources(resources: Optional[Dict[str, str]], resources_dir: 
                 downloader(resource, download_dir=resources_dir)
 
 
-def get_nltk_resources_dir(resources: Optional[Dict[str, str]] = None, verbose: bool = False, downloader: Callable = nltk.download) -> Optional[str]:
+def get_nltk_resources_dir(
+    resources: Dict[str, str] | None = None,
+    verbose: bool = False,
+    downloader: Callable = nltk.download,
+) -> str | None:
     """Get the NLTK resources directory, optionally downloading resources, from:
         * the NLTK_DATA environment variable
         * the active_datadir()/NLTK_RESOURCES_PATH

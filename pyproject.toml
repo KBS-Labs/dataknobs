@@ -4,11 +4,22 @@ version = "1.0.0"
 description = "Dataknobs monorepo workspace"
 readme = "README.md"
 requires-python = ">=3.10"
+dependencies = [
+    "dataknobs-common",
+    "dataknobs-config",
+    "dataknobs-data",
+    "dataknobs-kv",
+    "dataknobs-structures",
+    "dataknobs-utils",
+    "dataknobs-xization",
+    "dataknobs",
+]
 
 [tool.uv]
 dev-dependencies = [
     "pytest>=8.3.5",
     "pytest-cov>=6.0.0",
+    "pytest-asyncio>=0.21.0",
     "pylint>=3.3.6",
     "black>=24.0.0",
     "isort>=5.13.0",
@@ -25,14 +36,17 @@ dev-dependencies = [
 ]
 
 [tool.uv.workspace]
-members = [
-    "packages/common",
-    "packages/config",
-    "packages/structures", 
-    "packages/utils",
-    "packages/xization",
-    "packages/legacy",
-]
+members = ["packages/*"]
+
+[tool.uv.sources]
+dataknobs-common = { workspace = true }
+dataknobs-config = { workspace = true }
+dataknobs-data = { workspace = true }
+dataknobs-kv = { workspace = true }
+dataknobs-structures = { workspace = true }
+dataknobs-utils = { workspace = true }
+dataknobs-xization = { workspace = true }
+dataknobs = { workspace = true }
 
 [tool.mypy]
 python_version = "3.10"
@@ -50,7 +64,7 @@ warn_unreachable = true
 strict_equality = true
 namespace_packages = true
 explicit_package_bases = true
-mypy_path = "packages/common/src:packages/config/src:packages/structures/src:packages/utils/src:packages/xization/src"
+mypy_path = "packages/common/src:packages/config/src:packages/data/src:packages/kv/src:packages/structures/src:packages/utils/src:packages/xization/src"
 cache_dir = ".mypy_cache"
 incremental = true
 #plugins = ["numpy.typing.mypy_plugin"] -- DEPRECATED
@@ -141,7 +155,7 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 # Configure import sorting
 combine-as-imports = true
 force-wrap-aliases = true
-known-first-party = ["dataknobs", "dataknobs_common", "dataknobs_config", "dataknobs_structures", "dataknobs_utils", "dataknobs_xization"]
+known-first-party = ["dataknobs", "dataknobs_common", "dataknobs_config", "dataknobs_data", "dataknobs_kv", "dataknobs_structures", "dataknobs_utils", "dataknobs_xization"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"  # Use Google docstring convention

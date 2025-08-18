@@ -45,3 +45,20 @@ test-env/
 
 # MkDocs documentation
 site/
+
+# Non-essential test coverage reports
+coverage.xml
+packages/data/coverage.xml
+
+# Quality check artifacts
+.quality-artifacts/*
+!.quality-artifacts/quality-summary.json
+!.quality-artifacts/environment.json
+!.quality-artifacts/unit-test-results.xml
+!.quality-artifacts/integration-test-results.xml
+!.quality-artifacts/coverage.xml
+!.quality-artifacts/coverage-unit.xml
+!.quality-artifacts/coverage-integration.xml
+!.quality-artifacts/lint-report.json
+!.quality-artifacts/style-check.json
+!.quality-artifacts/signature.sha256

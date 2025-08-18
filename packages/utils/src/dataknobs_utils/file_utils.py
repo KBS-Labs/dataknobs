@@ -1,12 +1,13 @@
 import gzip
 import os
-from typing import Set, Optional, Generator, List, Any, IO, Union
+from collections.abc import Generator
+from typing import List, Set
 
 
 def filepath_generator(
     rootpath: str,
     descend: bool = True,
-    seen: Optional[Set[str]] = None,
+    seen: Set[str] | None = None,
     files_only: bool = True,
 ) -> Generator[str, None, None]:
     """Generate all filepaths under the root path.
@@ -37,7 +38,7 @@ def filepath_generator(
                     yield next_root
 
 
-def fileline_generator(filename: str, rootdir: Optional[str] = None) -> Generator[str, None, None]:
+def fileline_generator(filename: str, rootdir: str | None = None) -> Generator[str, None, None]:
     """Generate lines from the file.
     :param filename: The name of the file.
     :param rootdir: (optional) The directory of the file.
@@ -50,12 +51,12 @@ def fileline_generator(filename: str, rootdir: Optional[str] = None) -> Generato
             for line in f:
                 yield line.strip()
     else:
-        with open(filename, mode="r", encoding="utf-8") as f:
+        with open(filename, encoding="utf-8") as f:
             for line in f:
                 yield line.strip()
 
 
-def write_lines(outfile: str, lines: List[str], rootdir: Optional[str] = None) -> None:
+def write_lines(outfile: str, lines: List[str], rootdir: str | None = None) -> None:
     """Write the lines to the file.
     :param outfile: The name of the file.
     :param rootdir: (optional) The directory of the file.

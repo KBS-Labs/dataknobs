@@ -1,9 +1,11 @@
 import subprocess
 from collections.abc import Callable
-from typing import List, Optional, Union
+from typing import List, Union
 
 
-def run_command(handle_line_fn: Callable[[str], bool], command: str, args: Optional[List[str]] = None) -> int:
+def run_command(
+    handle_line_fn: Callable[[str], bool], command: str, args: List[str] | None = None
+) -> int:
     """Run a system command and do something with each line. Stop early by
     returning False from the handle_line_fn.
 

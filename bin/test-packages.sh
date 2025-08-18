@@ -92,8 +92,9 @@ fi
 echo -e "${YELLOW}Running tests for dataknobs packages...${NC}"
 echo -e "${YELLOW}Testing packages: ${PACKAGES[*]}${NC}"
 
-# Keep track of results
-declare -A TEST_RESULTS
+# Keep track of results (using parallel arrays for bash 3.2 compatibility)
+TEST_PACKAGES=()
+TEST_STATUSES=()
 TOTAL_TESTS=0
 FAILED_PACKAGES=()
 
@@ -103,8 +104,8 @@ for package in "${PACKAGES[@]}"; do
     
     cd "packages/$package"
     
-    # Build pytest command
-    PYTEST_CMD="pytest"
+    # Build pytest command (use uv run for virtual environment)
+    PYTEST_CMD="uv run pytest"
     if [[ "$VERBOSE" == true ]]; then
         PYTEST_CMD="$PYTEST_CMD -v"
     fi
@@ -125,10 +126,12 @@ for package in "${PACKAGES[@]}"; do
     # Run tests and capture result
     if $PYTEST_CMD; then
         echo -e "${GREEN}✓ Tests passed for dataknobs-$package${NC}"
-        TEST_RESULTS[$package]="PASSED"
+        TEST_PACKAGES+=("$package")
+        TEST_STATUSES+=("PASSED")
     else
         echo -e "${RED}✗ Tests failed for dataknobs-$package${NC}"
-        TEST_RESULTS[$package]="FAILED"
+        TEST_PACKAGES+=("$package")
+        TEST_STATUSES+=("FAILED")
         FAILED_PACKAGES+=("$package")
     fi
     
@@ -139,8 +142,11 @@ done
 echo -e "\n${YELLOW}Test Summary:${NC}"
 echo -e "${YELLOW}=============${NC}"
 
-for package in "${PACKAGES[@]}"; do
-    if [[ "${TEST_RESULTS[$package]}" == "PASSED" ]]; then
+# Display results using parallel arrays
+for i in "${!TEST_PACKAGES[@]}"; do
+    package="${TEST_PACKAGES[$i]}"
+    status="${TEST_STATUSES[$i]}"
+    if [[ "$status" == "PASSED" ]]; then
         echo -e "${GREEN}✓ dataknobs-$package: PASSED${NC}"
     else
         echo -e "${RED}✗ dataknobs-$package: FAILED${NC}"

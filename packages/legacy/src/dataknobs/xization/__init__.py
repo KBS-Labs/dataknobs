@@ -15,12 +15,12 @@ from dataknobs_xization.normalize import basic_normalization_fn
 
 # Make submodules available as attributes
 __all__ = [
-    'annotations',
-    'authorities',
-    'lexicon',
-    'masking_tokenizer',
-    'normalize',
-    'CharacterFeatures',
-    'TextFeatures',
-    'basic_normalization_fn',
+    "CharacterFeatures",
+    "TextFeatures",
+    "annotations",
+    "authorities",
+    "basic_normalization_fn",
+    "lexicon",
+    "masking_tokenizer",
+    "normalize",
 ]

@@ -18,7 +18,13 @@ class StatsAccumulator:
     summary statistics.
     """
 
-    def __init__(self, label: str = "", other: Optional["StatsAccumulator"] = None, as_dict: Optional[Dict[str, Any]] = None, values: Optional[Union[float, List[float]]] = None) -> None:
+    def __init__(
+        self,
+        label: str = "",
+        other: Optional["StatsAccumulator"] = None,
+        as_dict: Dict[str, Any] | None = None,
+        values: Union[float, List[float]] | None = None,
+    ) -> None:
         """:param label: A label or name for this instance.
         :param other: An other instance for copying into this
         :param as_dict: An "as_dict" form of stats to start with
@@ -117,7 +123,16 @@ class StatsAccumulator:
         finally:
             self._modlock.release()
 
-    def initialize(self, label: str = "", n: int = 0, min: float = 0, max: float = 0, mean: float = 0, std: float = 0, as_dict: Optional[Dict[str, Any]] = None) -> None:
+    def initialize(
+        self,
+        label: str = "",
+        n: int = 0,
+        min: float = 0,
+        max: float = 0,
+        mean: float = 0,
+        std: float = 0,
+        as_dict: Dict[str, Any] | None = None,
+    ) -> None:
         """Initialize with the given values, preferring existing values from the dictionary."""
         if as_dict is not None:
             if "label" in as_dict:
@@ -237,8 +252,8 @@ class LinearRegression:
         self._xx_sum = 0.0
         self._yy_sum = 0.0
 
-        self._m: Optional[float] = None
-        self._b: Optional[float] = None
+        self._m: float | None = None
+        self._b: float | None = None
 
     @property
     def n(self) -> int:
@@ -468,7 +483,7 @@ class RollingStats:
             info["status"] = "inactive"
 
     @staticmethod
-    def get_millis_per_item(stats: Optional[StatsAccumulator]) -> Optional[float]:
+    def get_millis_per_item(stats: StatsAccumulator | None) -> float | None:
         """Extract the (average) number of milliseconds per item from the stats."""
         result = None
 
@@ -479,7 +494,7 @@ class RollingStats:
         return result
 
     @staticmethod
-    def get_items_per_milli(stats: Optional[StatsAccumulator]) -> Optional[float]:
+    def get_items_per_milli(stats: StatsAccumulator | None) -> float | None:
         """Extract the (average) number of items per millisecond from the stats."""
         result = None
 
@@ -495,9 +510,9 @@ class Monitor:
 
     def __init__(
         self,
-        description: Optional[str] = None,
-        access_times: Optional[RollingStats] = None,
-        processing_times: Optional[RollingStats] = None,
+        description: str | None = None,
+        access_times: RollingStats | None = None,
+        processing_times: RollingStats | None = None,
         default_window_width: int = 300000,
         default_segment_width: int = 5000,
     ) -> None:
@@ -505,7 +520,7 @@ class Monitor:
         self._modlock = Lock()
         self._alive_since = datetime.now()
         self._description = description
-        self._last_start_time: Optional[datetime] = None
+        self._last_start_time: datetime | None = None
         self._access_times = access_times
         self._processing_times = processing_times
 
@@ -518,50 +533,50 @@ class Monitor:
         return self._alive_since
 
     @property
-    def description(self) -> Optional[str]:
+    def description(self) -> str | None:
         return self._description
 
     @description.setter
-    def description(self, val: Optional[str]) -> None:
+    def description(self, val: str | None) -> None:
         self._description = val
 
     @property
-    def last_access_time(self) -> Optional[datetime]:
+    def last_access_time(self) -> datetime | None:
         """Get the time at which access was last recorded."""
         return self._last_start_time
 
     @property
-    def access_times(self) -> Optional[RollingStats]:
+    def access_times(self) -> RollingStats | None:
         """Get the access_times (RollingStats)."""
         return self._access_times
 
     @property
-    def processing_times(self) -> Optional[RollingStats]:
+    def processing_times(self) -> RollingStats | None:
         """Get the processing_times (RollingStats)."""
         return self._processing_times
 
     @property
-    def access_cumulative_stats(self) -> Optional[StatsAccumulator]:
+    def access_cumulative_stats(self) -> StatsAccumulator | None:
         return None if self._access_times is None else self._access_times.cumulative_stats
 
     @property
-    def access_window_stats(self) -> Optional[StatsAccumulator]:
+    def access_window_stats(self) -> StatsAccumulator | None:
         return None if self._access_times is None else self._access_times.window_stats
 
     @property
-    def access_window_width(self) -> Optional[int]:
+    def access_window_width(self) -> int | None:
         return None if self._access_times is None else self._access_times.window_width
 
     @property
-    def processing_cumulative_stats(self) -> Optional[StatsAccumulator]:
+    def processing_cumulative_stats(self) -> StatsAccumulator | None:
         return None if self._processing_times is None else self._processing_times.cumulative_stats
 
     @property
-    def processing_window_stats(self) -> Optional[StatsAccumulator]:
+    def processing_window_stats(self) -> StatsAccumulator | None:
         return None if self._processing_times is None else self._processing_times.window_stats
 
     @property
-    def processing_window_width(self) -> Optional[int]:
+    def processing_window_width(self) -> int | None:
         return None if self._processing_times is None else self._processing_times.window_width
 
     @property
@@ -599,7 +614,7 @@ class Monitor:
     def __str__(self) -> str:
         return json.dumps(self.as_dict(), sort_keys=True)
 
-    def get_stats(self, access: bool = False, window: bool = False) -> Optional[StatsAccumulator]:
+    def get_stats(self, access: bool = False, window: bool = False) -> StatsAccumulator | None:
         """Get window/cumulative access/processing stats."""
         result = None
 
@@ -609,7 +624,7 @@ class Monitor:
 
         return result
 
-    def mark(self, starttime: datetime, endtime: Optional[datetime] = None) -> None:
+    def mark(self, starttime: datetime, endtime: datetime | None = None) -> None:
         """Mark another access time, and processing time if endtime is not None."""
         self._modlock.acquire()
         try:
@@ -643,7 +658,9 @@ class Monitor:
 class MonitorManager:
     """Class to manage a set of monitors by label, providing rollup views across."""
 
-    def __init__(self, default_window_width: int = 300000, default_segment_width: int = 5000) -> None:
+    def __init__(
+        self, default_window_width: int = 300000, default_segment_width: int = 5000
+    ) -> None:
         self._monitors: Dict[str, Monitor] = {}
         self._key_manager = KeyManager()
 
@@ -670,7 +687,9 @@ class MonitorManager:
     def get_monitors(self) -> Dict[str, Monitor]:
         return self._monitors
 
-    def get_monitor(self, label: str, create_if_missing: bool = False, description: Optional[str] = None) -> Optional[Monitor]:
+    def get_monitor(
+        self, label: str, create_if_missing: bool = False, description: str | None = None
+    ) -> Monitor | None:
         result = None
 
         if label in self._monitors:
@@ -695,7 +714,9 @@ class MonitorManager:
     def set_monitor(self, label: str, monitor: Monitor) -> None:
         self._monitors[label] = monitor
 
-    def get_stats(self, label: Optional[str] = None, access: bool = False, window: bool = False) -> Optional[StatsAccumulator]:
+    def get_stats(
+        self, label: str | None = None, access: bool = False, window: bool = False
+    ) -> StatsAccumulator | None:
         """Get window/cumulative access/processing stats for label or all."""
         result = None
 

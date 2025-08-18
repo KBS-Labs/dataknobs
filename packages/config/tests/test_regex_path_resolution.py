@@ -1,6 +1,16 @@
 """Tests for regex pattern support in path resolution."""
 
+from pathlib import Path
+
 from dataknobs_config import Config
+
+
+def assert_paths_equal(path1, path2):
+    """Assert two paths are equal, resolving symlinks."""
+    # Resolve symlinks to handle macOS /var -> /private/var
+    p1 = Path(path1).resolve()
+    p2 = Path(path2).resolve()
+    assert p1 == p2, f"{p1} != {p2}"
 
 
 class TestRegexPathResolution:
@@ -31,9 +41,9 @@ class TestRegexPathResolution:
         db = config.get("database", "db1")
 
         # All *_path attributes should be resolved
-        assert db["data_path"] == str(temp_dir / "data")
-        assert db["log_path"] == str(temp_dir / "logs")
-        assert db["backup_path"] == str(temp_dir / "backups")
+        assert_paths_equal(db["data_path"], temp_dir / "data")
+        assert_paths_equal(db["log_path"], temp_dir / "logs")
+        assert_paths_equal(db["backup_path"], temp_dir / "backups")
 
         # Non-path attribute should remain unchanged
         assert db["port"] == 5432
@@ -78,14 +88,14 @@ class TestRegexPathResolution:
         cache = config.get("cache", "redis")
 
         # Database: only *_dir should be resolved
-        assert db["data_dir"] == str(db_root / "data")
-        assert db["log_dir"] == str(db_root / "logs")
+        assert_paths_equal(db["data_dir"], db_root / "data")
+        assert_paths_equal(db["log_dir"], db_root / "logs")
         assert db["config_file"] == "./config.yaml"  # Not resolved
 
         # Cache: only *_file should be resolved
         assert cache["data_dir"] == "./data"  # Not resolved
         assert cache["log_dir"] == "./logs"  # Not resolved
-        assert cache["pid_file"] == str(cache_root / "redis.pid")
+        assert_paths_equal(cache["pid_file"], cache_root / "redis.pid")
 
     def test_mixed_exact_and_regex_patterns(self, temp_dir):
         """Test mixing exact attribute names with regex patterns."""
@@ -114,11 +124,11 @@ class TestRegexPathResolution:
         server = config.get("server", "web")
 
         # Exact match
-        assert server["config_path"] == str(temp_dir / "config")
+        assert_paths_equal(server["config_path"], temp_dir / "config")
 
         # Regex matches
-        assert server["static_dir"] == str(temp_dir / "static")
-        assert server["upload_dir"] == str(temp_dir / "uploads")
+        assert_paths_equal(server["static_dir"], temp_dir / "static")
+        assert_paths_equal(server["upload_dir"], temp_dir / "uploads")
 
         # Not matched by either
         assert server["template_path"] == "./templates"
@@ -149,9 +159,9 @@ class TestRegexPathResolution:
         app = config.get("app", "myapp")
 
         # Matched by regex
-        assert app["path_to_data"] == str(temp_dir / "data")
-        assert app["path_to_logs"] == str(temp_dir / "logs")
-        assert app["path_to_cache"] == str(temp_dir / "cache")
+        assert_paths_equal(app["path_to_data"], temp_dir / "data")
+        assert_paths_equal(app["path_to_logs"], temp_dir / "logs")
+        assert_paths_equal(app["path_to_cache"], temp_dir / "cache")
 
         # Not matched (starts with url_to_)
         assert app["url_to_api"] == "http://api.example.com"
@@ -174,7 +184,7 @@ class TestRegexPathResolution:
         db = config.get("database", "db1")
 
         # Invalid regex is ignored, but valid exact match works
-        assert db["data_dir"] == str(temp_dir / "data")
+        assert_paths_equal(db["data_dir"], temp_dir / "data")
         assert db["log_file"] == "./app.log"
 
     def test_regex_case_sensitive(self, temp_dir):
@@ -202,7 +212,7 @@ class TestRegexPathResolution:
 
         # Only exact case match
         assert server["data_Path"] == "./data1"  # Not matched
-        assert server["data_path"] == str(temp_dir / "data2")  # Matched
+        assert_paths_equal(server["data_path"], temp_dir / "data2")  # Matched
         assert server["DATA_PATH"] == "./data3"  # Not matched
 
     def test_regex_with_special_characters(self, temp_dir):
@@ -230,8 +240,8 @@ class TestRegexPathResolution:
         service = config.get("service", "api")
 
         # Matched by regex (contain - or .)
-        assert service["base.path"] == str(temp_dir / "base")
-        assert service["config-dir"] == str(temp_dir / "config")
+        assert_paths_equal(service["base.path"], temp_dir / "base")
+        assert_paths_equal(service["config-dir"], temp_dir / "config")
 
         # Not matched
         assert service["data_dir"] == "./data"

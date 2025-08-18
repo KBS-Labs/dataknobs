@@ -126,19 +126,23 @@ class ObjectBuilder:
         """
         factory_path = config.pop("factory")
 
-        # Load the factory class
-        factory_cls = self._load_class(factory_path)
-
         # Remove metadata attributes
         config.pop("type", None)
         config.pop("name", None)
 
-        # Create factory instance
-        try:
-            factory = factory_cls()
-        except TypeError:
-            # Factory might be a module-level function
-            factory = factory_cls
+        # Check registered factories first (if they exist)
+        if hasattr(self._config, '_registered_factories') and factory_path in self._config._registered_factories:
+            factory = self._config._registered_factories[factory_path]
+        else:
+            # Fall back to loading as a module path
+            factory_cls = self._load_class(factory_path)
+
+            # Create factory instance
+            try:
+                factory = factory_cls()
+            except TypeError:
+                # Factory might be a module-level function
+                factory = factory_cls
 
         # Check for standard factory methods
         if hasattr(factory, "create"):

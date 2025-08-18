@@ -6,22 +6,42 @@ Welcome to the Dataknobs development documentation. This section provides compre
 
 Dataknobs is a modular Python ecosystem for AI knowledge base structures and text processing. The project is organized as a monorepo with multiple interconnected packages that work together to provide comprehensive data processing capabilities.
 
+## Quick Start with dk Command
+
+!!! tip "New Developer? Start Here!"
+    The `dk` command is your unified interface for all development tasks. Install it with `./setup-dk.sh` and use simple commands like `dk pr` to prepare for pull requests or `dk test` to run tests.
+    
+    **[→ Learn the dk Command](dk-command.md)**
+
 ## Getting Started
 
 If you're new to Dataknobs development:
 
-1. **[Contributing Guide](contributing.md)** - Start here to learn how to contribute
-2. **[Architecture Overview](architecture.md)** - Understand the system design
-3. **[Testing Guide](testing.md)** - Learn about our testing approach
-4. **[CI/CD Pipeline](ci-cd.md)** - Understand our deployment process
+1. **[Developer Workflow (dk)](dk-command.md)** - 🚀 **Start here** - The easy way to develop
+2. **[Contributing Guide](contributing.md)** - Learn how to contribute
+3. **[Configuration System](configuration-system.md)** - Understand the DataKnobs configuration patterns
+4. **[UV Virtual Environment Guide](uv-environment.md)** - How to work with UV package manager
+5. **[Quality Checks Process](quality-checks.md)** - Developer-driven quality assurance
+6. **[Architecture Overview](architecture.md)** - Understand the system design
+7. **[Testing Guide](testing.md)** - Learn about our testing approach
+8. **[Integration Testing & CI](integration-testing-ci.md)** - Integration testing in CI/CD pipeline
+9. **[CI/CD Pipeline](ci-cd.md)** - Understand our deployment process
 
 ## Development Topics
 
 ### Core Development
 - **[Contributing Guide](contributing.md)** - How to contribute code, documentation, and report issues
+- **[Configuration System](configuration-system.md)** - DataKnobs configuration patterns and best practices
+- **[Adding Config Support](adding-config-support.md)** - Step-by-step guide to add configuration support to packages
+- **[UV Virtual Environment Guide](uv-environment.md)** - Working with UV package manager and virtual environments
+- **[Quality Checks Process](quality-checks.md)** - Running quality checks locally before PRs
 - **[Architecture Overview](architecture.md)** - System architecture and design principles
-- **[Testing Guide](testing.md)** - Testing strategies, frameworks, and best practices
 - **[Documentation Guide](documentation-guide.md)** - How to write and maintain documentation
+
+### Testing
+- **[Testing Guide](testing.md)** - Testing strategies, frameworks, and best practices
+- **[Testing Commands](testing-guide.md)** - Practical guide to running tests with the new test infrastructure
+- **[Integration Testing & CI](integration-testing-ci.md)** - Integration testing with real services and CI/CD quality gates
 
 ### Operations
 - **[CI/CD Pipeline](ci-cd.md)** - Continuous integration and deployment processes
@@ -48,46 +68,53 @@ dataknobs/
 
 ### Prerequisites
 
-- **Python**: 3.8 or higher
-- **Package Manager**: pip or poetry
+- **Python**: 3.10 or higher
+- **Package Manager**: UV (fast Python package manager)
 - **Version Control**: Git
-- **Optional**: Docker for containerized development
+- **Docker**: For running PostgreSQL, Elasticsearch, and LocalStack services
 
-### Quick Setup
+### Quick Setup with UV
 
 ```bash
 # Clone the repository
 git clone https://github.com/yourusername/dataknobs.git
 cd dataknobs
 
-# Install dependencies
-pip install -r requirements-dev.txt
-
-# Install packages in development mode
-pip install -e packages/common
-pip install -e packages/structures
-pip install -e packages/utils
-pip install -e packages/xization
-
-# Run tests to verify setup
-pytest tests/
-```
-
-### Using Poetry (Recommended)
-
-```bash
-# Install poetry if you haven't already
-pip install poetry
-
-# Install dependencies
-poetry install
+# Install all dependencies
+uv sync --all-packages
 
 # Activate virtual environment
-poetry shell
+source .venv/bin/activate  # On Linux/macOS
+# or
+.venv\Scripts\activate  # On Windows
 
-# Run tests
-poetry run pytest
+# Run quality checks before PRs (includes integration tests)
+./bin/run-quality-checks.sh
+
+# Or run specific test types with the new test infrastructure
+./bin/test.sh                          # Run all tests (unit + integration)
+./bin/test.sh -t unit                  # Unit tests only
+./bin/test.sh -t integration           # Integration tests with services
+./bin/test.sh data                     # Test specific package
+./bin/run-integration-tests.sh -s      # Start services for manual testing
 ```
+
+### Docker Services
+
+The project uses Docker containers for development services:
+
+```bash
+# Start all services
+docker-compose up -d postgres elasticsearch localstack
+
+# Check service status
+docker-compose ps
+
+# Stop services
+docker-compose down
+```
+
+For more details, see the [UV Virtual Environment Guide](uv-environment.md) and [Quality Checks Process](quality-checks.md).
 
 ## Package Overview
 
@@ -152,9 +179,10 @@ poetry run pytest
 
 ### 4. Testing
 - Write unit tests for all new functionality
-- Ensure integration tests pass
-- Achieve minimum code coverage targets
-- Test across supported Python versions
+- Run integration tests with real services (PostgreSQL, Elasticsearch)
+- Ensure all tests pass with `./bin/run-quality-checks.sh`
+- Achieve minimum code coverage targets (70% overall, 90% for new code)
+- Test across supported Python versions (3.10+)
 
 ### 5. Review Process
 - Create pull request with detailed description
@@ -209,17 +237,38 @@ bandit -r packages/
 
 ### Testing
 ```bash
-# Run all tests
-pytest
+# Run all tests (unit + integration) with new infrastructure
+./bin/test.sh
 
-# Run with coverage
-pytest --cov=packages/
+# Run unit tests only
+./bin/test.sh -t unit
 
-# Run specific package tests
-pytest packages/structures/tests/
+# Run integration tests with services
+./bin/test.sh -t integration
 
-# Run integration tests
-pytest tests/integration/
+# Test specific package
+./bin/test.sh data                     # All tests for data package
+./bin/test.sh -t unit config          # Unit tests for config package
+./bin/test.sh -t integration data      # Integration tests for data package
+
+# Advanced options
+./bin/test.sh -v                      # Verbose output
+./bin/test.sh -k test_s3              # Run tests matching pattern
+./bin/test.sh -x                      # Stop on first failure
+./bin/test.sh -n -t integration       # Run integration tests without starting services
+
+# Service management
+./bin/run-integration-tests.sh -s     # Start services only
+./bin/run-integration-tests.sh -k     # Keep services running after tests
+
+# Legacy pytest commands (still available)
+pytest                                 # Run all tests
+pytest -m "not integration"            # Unit tests only
+pytest --cov=packages/                # Run with coverage
+pytest packages/structures/tests/     # Run specific package tests
+
+# Run quality checks (linting + tests + coverage)
+./bin/run-quality-checks.sh
 ```
 
 ### Documentation
