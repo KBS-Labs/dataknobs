@@ -103,9 +103,11 @@ jobs:
     - name: Install dependencies
       run: |
         uv venv --python ${{ env.PYTHON_VERSION }}
-        uv pip install -e packages/utils
-        uv pip install -e packages/data
-        uv pip install pytest pytest-asyncio pytest-cov pytest-html
+        source .venv/bin/activate
+        pip install -e packages/utils
+        pip install -e packages/config
+        pip install -e "packages/data[postgres,elasticsearch,s3]"
+        pip install pytest pytest-asyncio pytest-cov pytest-html
     
     - name: Wait for services to be ready
       run: |
@@ -301,10 +303,12 @@ jobs:
     
     - name: Install dependencies
       run: |
-        uv venv --python ${{ env.PYTHON_VERSION }}
-        uv pip install -e packages/utils
-        uv pip install -e packages/data
-        uv pip install pytest pytest-asyncio pytest-cov
+        uv venv --python ${{ matrix.python-version }}
+        source .venv/bin/activate
+        pip install -e packages/utils
+        pip install -e packages/config
+        pip install -e "packages/data[postgres,elasticsearch]"
+        pip install pytest pytest-asyncio pytest-cov
     
     - name: Run integration tests
       env:

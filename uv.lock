@@ -963,7 +963,7 @@ wheels = [
 
 [[package]]
 name = "dataknobs"
-version = "0.0.15"
+version = "0.0.16"
 source = { editable = "packages/legacy" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1002,7 +1002,7 @@ requires-dist = [
 
 [[package]]
 name = "dataknobs-config"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/config" }
 dependencies = [
     { name = "pyyaml" },
@@ -1202,7 +1202,7 @@ requires-dist = [
 
 [[package]]
 name = "dataknobs-utils"
-version = "1.0.0"
+version = "1.1.0"
 source = { editable = "packages/utils" }
 dependencies = [
     { name = "beautifulsoup4" },
