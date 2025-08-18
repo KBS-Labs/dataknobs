@@ -355,10 +355,10 @@ class SQLQueryBuilder:
                 return f"{field_expr} BETWEEN ${param_start} AND ${param_start + 1}", list(value)
             else:
                 return f"{field_expr} BETWEEN ? AND ?", list(value)
-        elif op == Operator.IS_NULL:
-            return f"{field_expr} IS NULL", []
-        elif op == Operator.NOT_NULL:
+        elif op == Operator.EXISTS:
             return f"{field_expr} IS NOT NULL", []
+        elif op == Operator.NOT_EXISTS:
+            return f"{field_expr} IS NULL", []
         else:
             raise ValueError(f"Unsupported operator: {op}")
     

@@ -15,7 +15,7 @@ The `dataknobs-data` package enables seamless data management regardless of the 
 
 ### Core Capabilities
 - **Unified Interface**: Same API regardless of storage backend
-- **Multiple Backends**: Memory, File (JSON/CSV/Parquet), PostgreSQL, Elasticsearch, S3
+- **Multiple Backends**: Memory, File (JSON/CSV/Parquet), SQLite, PostgreSQL, Elasticsearch, S3
 - **Record-Based**: Data represented as structured records with metadata and first-class ID support
 - **Type Safety**: Strong typing with field validation and automatic type conversion
 - **Async Support**: Both synchronous and asynchronous APIs
@@ -109,6 +109,15 @@ db = await Database.create("file", {
     "path": "/data/records.json",
     "pretty": True,
     "backup": True
+})
+```
+
+### SQLite Backend
+```python
+db = await Database.create("sqlite", {
+    "path": "app.db",  # or ":memory:" for in-memory
+    "journal_mode": "WAL",
+    "synchronous": "NORMAL"
 })
 ```
 
