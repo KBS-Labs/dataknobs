@@ -7,9 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- Comprehensive documentation site with MkDocs
-- Integration tests for package interoperability
+## New Releases - 2025-08-18
+
+### dataknobs-data [0.1.0] - Initial Release 🎉
+
+#### Added
+- **Multiple Storage Backends**: Memory, File, PostgreSQL, Elasticsearch, and S3 support
+- **Async-First Architecture**: Native async/await support with connection pooling
+- **Advanced Query System**: Rich operators with boolean logic (AND/OR/NOT)
+- **Pandas Integration**: Seamless DataFrame conversion and batch operations
+- **Ergonomic Field Access**: Dictionary-style (`record["field"]`) and attribute-style (`record.field`) access
+- **Schema Validation**: Built-in validation and migration utilities
+- **Streaming Operations**: Efficient read/write streaming for large datasets
+- **Factory Pattern**: Dynamic backend selection via configuration
+- **Example Projects**: Complete sensor dashboard demonstration app
+- **Connection Pooling**: Automatic pool management for PostgreSQL and Elasticsearch
+
+### dataknobs-config [0.2.0]
+
+#### Added
+- **Factory Registration System**: Register and manage factories at runtime
+  - `register_factory()` - Register custom factory instances
+  - `unregister_factory()` - Remove registered factories  
+  - `get_registered_factories()` - List all registered factories
+- **Cleaner Configurations**: Reference factories by name instead of module paths
+- **Runtime Substitution**: Swap factories at runtime (useful for testing)
+
+### dataknobs-utils [1.1.0]
+
+#### Added
+- **PostgreSQL Enhancements**:
+  - `port` parameter for `PostgresDB` class
+  - Parameterized query support in `execute()` method
+- **Improved Security**: SQL injection protection via parameter binding
+
+### dataknobs-legacy [0.0.16]
+
+#### Changed
+- Updated imports to use new modular package structure
+- Improved compatibility layer for smooth migration
+
+### Developer Experience Improvements
+
+#### Added
+- **`dk` Developer Tool**: Unified command-line interface for development
+  - `dk test` - Run tests with automatic service orchestration
+  - `dk quality-checks` - Run comprehensive quality checks
+  - `dk docs` - Build and serve documentation
+  - `dk build` - Build distribution packages
+- **Enhanced Testing Infrastructure**:
+  - Automatic Docker service management for integration tests
+  - Parallel test execution support
+  - Improved coverage reporting
+  - Test debugging utilities
+- **Documentation Improvements**:
+  - Comprehensive package documentation
+  - Real-world example projects
+  - Migration guides
 
 ## Modular Packages [1.0.0] - 2024-01-XX
 
