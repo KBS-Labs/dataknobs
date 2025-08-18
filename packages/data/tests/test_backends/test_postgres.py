@@ -4,6 +4,8 @@ import os
 import uuid
 
 import pytest
+import psycopg2
+from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
 from dataknobs_data import AsyncDatabase, Query, Record, SyncDatabase
 from dataknobs_data.query import Filter, Operator, SortOrder, SortSpec
@@ -15,8 +17,51 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(scope="session")
+def ensure_test_database():
+    """Ensure the test database exists."""
+    if not os.environ.get("TEST_POSTGRES", "").lower() == "true":
+        return
+    
+    host = os.environ.get("POSTGRES_HOST", "localhost")
+    port = int(os.environ.get("POSTGRES_PORT", 5432))
+    user = os.environ.get("POSTGRES_USER", "postgres")
+    password = os.environ.get("POSTGRES_PASSWORD", "postgres")
+    db_name = os.environ.get("POSTGRES_DB", "test_dataknobs")
+    
+    # Connect to postgres database to create test database
+    try:
+        conn = psycopg2.connect(
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            database="postgres"
+        )
+        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+        cur = conn.cursor()
+        
+        # Check if database exists
+        cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (db_name,))
+        exists = cur.fetchone()
+        
+        if not exists:
+            # Create the database
+            cur.execute(f"CREATE DATABASE {db_name}")
+        
+        cur.close()
+        conn.close()
+    except Exception as e:
+        # If we can't create the database, the tests will fail anyway
+        print(f"Warning: Could not ensure test database exists: {e}")
+    
+    yield
+    
+    # Cleanup is optional - we can leave the test database for future runs
+
+
 @pytest.fixture
-def postgres_config():
+def postgres_config(ensure_test_database):
     """PostgreSQL configuration for testing."""
     return {
         "host": os.environ.get("POSTGRES_HOST", "localhost"),

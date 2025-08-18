@@ -17,7 +17,9 @@ from ..database import AsyncDatabase, SyncDatabase
 from ..pooling import ConnectionPoolManager
 from ..pooling.postgres import PostgresPoolConfig, create_asyncpg_pool, validate_asyncpg_pool
 from ..query import Operator, Query, SortOrder
+from ..query_logic import ComplexQuery
 from ..records import Record
+from .sql_base import SQLQueryBuilder
 from ..streaming import (
     StreamConfig,
     StreamResult,
@@ -47,6 +49,7 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
         super().__init__(config)
         self.db = None  # Will be initialized in connect()
         self._connected = False
+        self.query_builder = None  # Will be initialized in connect()
 
     @classmethod
     def from_config(cls, config: dict) -> "SyncPostgresDatabase":
@@ -63,6 +66,9 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
         # Extract table configuration
         self.table_name = config.pop("table", "records")
         self.schema_name = config.pop("schema", "public")
+        
+        # Initialize query builder
+        self.query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
 
         # Create connection using existing utilities
         if not any(key in config for key in ["host", "database", "user"]):
@@ -228,146 +234,27 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
             self.db.execute(sql, row)
         return id
 
-    def search(self, query: Query) -> list[Record]:
+    def search(self, query: Query | ComplexQuery) -> list[Record]:
         """Search for records matching the query."""
         self._check_connection()
-        # Build SQL query from Query object
-        where_clauses = []
-        params = {}
 
-        # Build WHERE clauses for filters
-        for i, filter in enumerate(query.filters):
-            field_path = f"data->>'{filter.field}'"
-            param_name = f"param_{i}"
+        # Handle ComplexQuery with native SQL support
+        if isinstance(query, ComplexQuery):
+            sql_query, params_list = self.query_builder.build_complex_search_query(query)
+        else:
+            sql_query, params_list = self.query_builder.build_search_query(query)
 
-            if filter.operator == Operator.EQ:
-                # Handle different types appropriately
-                if isinstance(filter.value, bool):
-                    where_clauses.append(f"({field_path})::boolean = %({param_name})s")
-                    params[param_name] = filter.value
-                elif isinstance(filter.value, (int, float)):
-                    where_clauses.append(f"({field_path})::numeric = %({param_name})s")
-                    params[param_name] = filter.value
-                else:
-                    where_clauses.append(f"{field_path} = %({param_name})s")
-                    params[param_name] = str(filter.value)
-            elif filter.operator == Operator.NEQ:
-                if isinstance(filter.value, bool):
-                    where_clauses.append(f"({field_path})::boolean != %({param_name})s")
-                    params[param_name] = filter.value
-                elif isinstance(filter.value, (int, float)):
-                    where_clauses.append(f"({field_path})::numeric != %({param_name})s")
-                    params[param_name] = filter.value
-                else:
-                    where_clauses.append(f"{field_path} != %({param_name})s")
-                    params[param_name] = str(filter.value)
-            elif filter.operator == Operator.GT:
-                where_clauses.append(f"({field_path})::numeric > %({param_name})s")
-                params[param_name] = filter.value
-            elif filter.operator == Operator.LT:
-                where_clauses.append(f"({field_path})::numeric < %({param_name})s")
-                params[param_name] = filter.value
-            elif filter.operator == Operator.GTE:
-                where_clauses.append(f"({field_path})::numeric >= %({param_name})s")
-                params[param_name] = filter.value
-            elif filter.operator == Operator.LTE:
-                where_clauses.append(f"({field_path})::numeric <= %({param_name})s")
-                params[param_name] = filter.value
-            elif filter.operator == Operator.LIKE:
-                where_clauses.append(f"{field_path} LIKE %({param_name})s")
-                params[param_name] = f"%{filter.value}%"
-            elif filter.operator == Operator.IN:
-                # Convert values to strings for comparison with JSONB text fields
-                values = [str(v) for v in filter.value]
-                where_clauses.append(f"{field_path} = ANY(%({param_name})s)")
-                params[param_name] = values
-            elif filter.operator == Operator.NOT_IN:
-                # Convert values to strings for comparison with JSONB text fields
-                values = [str(v) for v in filter.value]
-                where_clauses.append(f"{field_path} != ALL(%({param_name})s)")
-                params[param_name] = values
-            elif filter.operator == Operator.BETWEEN:
-                # Optimize BETWEEN for different data types
-                if isinstance(filter.value, (list, tuple)) and len(filter.value) == 2:
-                    lower, upper = filter.value
-                    param_lower = f"{param_name}_lower"
-                    param_upper = f"{param_name}_upper"
-
-                    # Try to determine the type for proper casting
-                    if isinstance(lower, (int, float)) and isinstance(upper, (int, float)):
-                        where_clauses.append(
-                            f"({field_path})::numeric BETWEEN %({param_lower})s AND %({param_upper})s"
-                        )
-                    elif isinstance(lower, datetime) or isinstance(upper, datetime):
-                        where_clauses.append(
-                            f"({field_path})::timestamp BETWEEN %({param_lower})s AND %({param_upper})s"
-                        )
-                    else:
-                        # String or unknown type
-                        where_clauses.append(
-                            f"{field_path} BETWEEN %({param_lower})s AND %({param_upper})s"
-                        )
-
-                    params[param_lower] = lower
-                    params[param_upper] = upper
-            elif filter.operator == Operator.NOT_BETWEEN:
-                # Optimize NOT BETWEEN
-                if isinstance(filter.value, (list, tuple)) and len(filter.value) == 2:
-                    lower, upper = filter.value
-                    param_lower = f"{param_name}_lower"
-                    param_upper = f"{param_name}_upper"
-
-                    # Try to determine the type for proper casting
-                    if isinstance(lower, (int, float)) and isinstance(upper, (int, float)):
-                        where_clauses.append(
-                            f"({field_path})::numeric NOT BETWEEN %({param_lower})s AND %({param_upper})s"
-                        )
-                    elif isinstance(lower, datetime) or isinstance(upper, datetime):
-                        where_clauses.append(
-                            f"({field_path})::timestamp NOT BETWEEN %({param_lower})s AND %({param_upper})s"
-                        )
-                    else:
-                        # String or unknown type
-                        where_clauses.append(
-                            f"{field_path} NOT BETWEEN %({param_lower})s AND %({param_upper})s"
-                        )
-
-                    params[param_lower] = lower
-                    params[param_upper] = upper
-
-        # Build SQL
-        sql = f"SELECT id, data, metadata FROM {self.schema_name}.{self.table_name}"
-        if where_clauses:
-            sql += " WHERE " + " AND ".join(where_clauses)
-
-        # Add ORDER BY
-        if query.sort_specs:
-            order_clauses = []
-            for sort_spec in query.sort_specs:
-                # Try to cast to numeric for proper sorting
-                # This will sort numbers correctly while still working for strings
-                field_path = f"data->>'{sort_spec.field}'"
-                direction = "DESC" if sort_spec.order == SortOrder.DESC else "ASC"
-                # Use a CASE statement to handle both numeric and string sorting
-                order_clause = f"""
-                    CASE 
-                        WHEN {field_path} ~ '^[0-9]+(\\.[0-9]+)?$' 
-                        THEN ({field_path})::numeric 
-                        ELSE NULL 
-                    END {direction} NULLS LAST,
-                    {field_path} {direction}
-                """
-                order_clauses.append(order_clause)
-            sql += " ORDER BY " + ", ".join(order_clauses)
-
-        # Add LIMIT and OFFSET
-        if query.limit_value:
-            sql += f" LIMIT {query.limit_value}"
-        if query.offset_value:
-            sql += f" OFFSET {query.offset_value}"
+        # Convert numbered parameters to named parameters for psycopg2
+        params_dict = {}
+        if params_list:
+            # Replace placeholders in reverse order to avoid conflicts like $10 being replaced as $1 + "0"
+            for i in range(len(params_list), 0, -1):
+                param_name = f"p{i}"
+                sql_query = sql_query.replace(f"${i}", f"%({param_name})s")
+                params_dict[param_name] = params_list[i - 1]
 
         # Execute query
-        df = self.db.query(sql, params)
+        df = self.db.query(sql_query, params_dict)
 
         # Convert to records
         records = []
@@ -705,6 +592,9 @@ class AsyncPostgresDatabase(AsyncDatabase, ConfigurableBase):
             validate_asyncpg_pool
         )
 
+        # Initialize query builder
+        self.query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
+
         # Ensure table exists
         await self._ensure_table()
         self._connected = True
@@ -871,140 +761,23 @@ class AsyncPostgresDatabase(AsyncDatabase, ConfigurableBase):
 
         return id
 
-    async def search(self, query: Query) -> list[Record]:
+    async def search(self, query: Query | ComplexQuery) -> list[Record]:
         """Search for records matching the query."""
         self._check_connection()
 
-        # Build SQL query from Query object
-        where_clauses = []
-        params = []
-        param_count = 0
+        # Initialize query builder if not already done
+        if not hasattr(self, 'query_builder'):
+            self.query_builder = SQLQueryBuilder(
+                self.table_name, self.schema_name, dialect="postgres"
+            )
 
-        # Build WHERE clauses for filters
-        for filter in query.filters:
-            param_count += 1
-            field_path = f"data->>'{filter.field}'"
+        # Handle ComplexQuery with native SQL support
+        if isinstance(query, ComplexQuery):
+            sql, params = self.query_builder.build_complex_search_query(query)
+        else:
+            sql, params = self.query_builder.build_search_query(query)
 
-            if filter.operator == Operator.EQ:
-                if isinstance(filter.value, bool):
-                    where_clauses.append(f"({field_path})::boolean = ${param_count}")
-                    params.append(filter.value)
-                elif isinstance(filter.value, (int, float)):
-                    where_clauses.append(f"({field_path})::numeric = ${param_count}")
-                    params.append(filter.value)
-                else:
-                    where_clauses.append(f"{field_path} = ${param_count}")
-                    params.append(str(filter.value))
-            elif filter.operator == Operator.NEQ:
-                if isinstance(filter.value, bool):
-                    where_clauses.append(f"({field_path})::boolean != ${param_count}")
-                    params.append(filter.value)
-                elif isinstance(filter.value, (int, float)):
-                    where_clauses.append(f"({field_path})::numeric != ${param_count}")
-                    params.append(filter.value)
-                else:
-                    where_clauses.append(f"{field_path} != ${param_count}")
-                    params.append(str(filter.value))
-            elif filter.operator == Operator.GT:
-                where_clauses.append(f"({field_path})::numeric > ${param_count}")
-                params.append(filter.value)
-            elif filter.operator == Operator.LT:
-                where_clauses.append(f"({field_path})::numeric < ${param_count}")
-                params.append(filter.value)
-            elif filter.operator == Operator.GTE:
-                where_clauses.append(f"({field_path})::numeric >= ${param_count}")
-                params.append(filter.value)
-            elif filter.operator == Operator.LTE:
-                where_clauses.append(f"({field_path})::numeric <= ${param_count}")
-                params.append(filter.value)
-            elif filter.operator == Operator.LIKE:
-                where_clauses.append(f"{field_path} LIKE ${param_count}")
-                params.append(f"%{filter.value}%")
-            elif filter.operator == Operator.IN:
-                values = [str(v) for v in filter.value]
-                where_clauses.append(f"{field_path} = ANY(${param_count})")
-                params.append(values)
-            elif filter.operator == Operator.NOT_IN:
-                values = [str(v) for v in filter.value]
-                where_clauses.append(f"{field_path} != ALL(${param_count})")
-                params.append(values)
-            elif filter.operator == Operator.BETWEEN:
-                # Optimize BETWEEN for different data types
-                if isinstance(filter.value, (list, tuple)) and len(filter.value) == 2:
-                    lower, upper = filter.value
-
-                    # Try to determine the type for proper casting
-                    if isinstance(lower, (int, float)) and isinstance(upper, (int, float)):
-                        where_clauses.append(
-                            f"({field_path})::numeric BETWEEN ${param_count} AND ${param_count + 1}"
-                        )
-                    elif isinstance(lower, datetime) or isinstance(upper, datetime):
-                        where_clauses.append(
-                            f"({field_path})::timestamp BETWEEN ${param_count} AND ${param_count + 1}"
-                        )
-                    else:
-                        # String or unknown type
-                        where_clauses.append(
-                            f"{field_path} BETWEEN ${param_count} AND ${param_count + 1}"
-                        )
-
-                    params.append(lower)
-                    params.append(upper)
-                    param_count += 1  # We used two parameters
-            elif filter.operator == Operator.NOT_BETWEEN:
-                # Optimize NOT BETWEEN
-                if isinstance(filter.value, (list, tuple)) and len(filter.value) == 2:
-                    lower, upper = filter.value
-
-                    # Try to determine the type for proper casting
-                    if isinstance(lower, (int, float)) and isinstance(upper, (int, float)):
-                        where_clauses.append(
-                            f"({field_path})::numeric NOT BETWEEN ${param_count} AND ${param_count + 1}"
-                        )
-                    elif isinstance(lower, datetime) or isinstance(upper, datetime):
-                        where_clauses.append(
-                            f"({field_path})::timestamp NOT BETWEEN ${param_count} AND ${param_count + 1}"
-                        )
-                    else:
-                        # String or unknown type
-                        where_clauses.append(
-                            f"{field_path} NOT BETWEEN ${param_count} AND ${param_count + 1}"
-                        )
-
-                    params.append(lower)
-                    params.append(upper)
-                    param_count += 1  # We used two parameters
-
-        # Build SQL
-        sql = f"SELECT id, data, metadata FROM {self.schema_name}.{self.table_name}"
-        if where_clauses:
-            sql += " WHERE " + " AND ".join(where_clauses)
-
-        # Add ORDER BY
-        if query.sort_specs:
-            order_clauses = []
-            for sort_spec in query.sort_specs:
-                field_path = f"data->>'{sort_spec.field}'"
-                direction = "DESC" if sort_spec.order == SortOrder.DESC else "ASC"
-                # Handle numeric sorting
-                order_clause = f"""
-                    CASE 
-                        WHEN {field_path} ~ '^[0-9]+(\\.[0-9]+)?$' 
-                        THEN ({field_path})::numeric 
-                        ELSE NULL 
-                    END {direction} NULLS LAST,
-                    {field_path} {direction}
-                """
-                order_clauses.append(order_clause)
-            sql += " ORDER BY " + ", ".join(order_clauses)
-
-        # Add LIMIT and OFFSET
-        if query.limit_value:
-            sql += f" LIMIT {query.limit_value}"
-        if query.offset_value:
-            sql += f" OFFSET {query.offset_value}"
-
-        # Execute query
+        # Execute query with asyncpg (already uses positional parameters)
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(sql, *params)
 

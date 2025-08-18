@@ -454,9 +454,34 @@ class SQLQueryBuilder:
         op = filter_spec.operator
         value = filter_spec.value
         
-        # JSON field extraction
+        # JSON field extraction with type casting for PostgreSQL
         if self.dialect == "postgres":
-            field_expr = f"data->>'{field}'"
+            # For PostgreSQL, we need to cast JSONB text to appropriate types for comparisons
+            base_field_expr = f"data->>'{field}'"
+            
+            # Determine if we need type casting based on operator and value type
+            if op in [Operator.GT, Operator.GTE, Operator.LT, Operator.LTE, Operator.BETWEEN, Operator.NOT_BETWEEN]:
+                # These operators need numeric comparison
+                if isinstance(value, (int, float)) or (isinstance(value, (list, tuple)) and len(value) > 0 and isinstance(value[0], (int, float))):
+                    field_expr = f"({base_field_expr})::numeric"
+                elif isinstance(value, datetime) or (isinstance(value, (list, tuple)) and len(value) > 0 and isinstance(value[0], datetime)):
+                    field_expr = f"({base_field_expr})::timestamp"
+                else:
+                    field_expr = base_field_expr
+            elif op in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
+                # For equality and IN operations, cast based on value type
+                if isinstance(value, bool):
+                    field_expr = f"({base_field_expr})::boolean"
+                elif isinstance(value, (int, float)):
+                    field_expr = f"({base_field_expr})::numeric"
+                elif isinstance(value, list) and value and isinstance(value[0], (int, float)):
+                    # IN/NOT_IN with numeric values
+                    field_expr = f"({base_field_expr})::numeric"
+                else:
+                    field_expr = base_field_expr
+            else:
+                field_expr = base_field_expr
+                
             param_placeholder = f"${param_start}"
         elif self.dialect == "sqlite":
             field_expr = f"json_extract(data, '$.{field}')"
@@ -497,10 +522,21 @@ class SQLQueryBuilder:
                 return f"{field_expr} BETWEEN ${param_start} AND ${param_start + 1}", list(value)
             else:
                 return f"{field_expr} BETWEEN ? AND ?", list(value)
+        elif op == Operator.NOT_BETWEEN:
+            if self.dialect == "postgres":
+                return f"{field_expr} NOT BETWEEN ${param_start} AND ${param_start + 1}", list(value)
+            else:
+                return f"{field_expr} NOT BETWEEN ? AND ?", list(value)
         elif op == Operator.EXISTS:
             return f"{field_expr} IS NOT NULL", []
         elif op == Operator.NOT_EXISTS:
             return f"{field_expr} IS NULL", []
+        elif op == Operator.REGEX:
+            # PostgreSQL uses ~ for regex, SQLite would use REGEXP
+            if self.dialect == "postgres":
+                return f"{field_expr} ~ {param_placeholder}", [value]
+            else:
+                return f"{field_expr} REGEXP {param_placeholder}", [value]
         else:
             raise ValueError(f"Unsupported operator: {op}")
     
