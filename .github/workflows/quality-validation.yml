@@ -33,14 +33,15 @@ jobs:
         retention-days: 7
     
     - name: Comment on PR
-      if: failure()
+      if: failure() && github.event_name == 'pull_request'
       uses: actions/github-script@v7
       with:
         script: |
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.name,
+          if (context.issue && context.issue.number) {
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.name,
             body: `## ❌ Quality Check Validation Failed
             
             The quality check artifacts are either missing, outdated, or show failing tests.
@@ -58,10 +59,11 @@ jobs:
             5. Create artifacts in \`.quality-artifacts/\` that must be committed
             
             For more information, see [Quality Checks Guide](../blob/main/docs/development/quality-checks.md)`
-          })
+            })
+          }
     
     - name: Set PR status check
-      if: always()
+      if: always() && github.event_name == 'pull_request'
       uses: actions/github-script@v7
       with:
         script: |
@@ -70,15 +72,19 @@ jobs:
             ? 'Quality checks passed locally' 
             : 'Quality checks need to be run locally';
           
-          github.rest.repos.createCommitStatus({
-            owner: context.repo.owner,
-            repo: context.repo.name,
-            sha: context.payload.pull_request.head.sha,
-            state: status,
-            target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.name}/actions/runs/${context.runId}`,
-            description: description,
-            context: 'quality-checks/validation'
-          })
+          if (context.payload.pull_request && context.payload.pull_request.head) {
+            github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.name,
+              sha: context.payload.pull_request.head.sha,
+              state: status,
+              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.name}/actions/runs/${context.runId}`,
+              description: description,
+              context: 'quality-checks/validation'
+            })
+          } else {
+            console.log('Skipping status check - not a pull request event or PR data not available');
+          }
 
   quick-unit-tests:
     runs-on: ubuntu-latest
@@ -106,7 +112,7 @@ jobs:
         uv run pytest packages/*/tests/ -v -m "not integration" --maxfail=3 || true
     
     - name: Add PR comment with test status
-      if: always()
+      if: always() && github.event_name == 'pull_request'
       uses: actions/github-script@v7
       with:
         script: |
@@ -116,7 +122,7 @@ jobs:
             : 'Quick unit tests had issues (non-blocking)';
           
           // Only comment if tests failed, to reduce noise
-          if (testResult === '⚠️') {
+          if (testResult === '⚠️' && context.issue && context.issue.number) {
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,

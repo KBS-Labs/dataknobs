@@ -102,7 +102,7 @@ jobs:
     
     - name: Install dependencies
       run: |
-        uv venv
+        uv venv --python ${{ env.PYTHON_VERSION }}
         uv pip install -e packages/utils
         uv pip install -e packages/data
         uv pip install pytest pytest-asyncio pytest-cov pytest-html
@@ -305,7 +305,7 @@ jobs:
     
     - name: Install dependencies
       run: |
-        uv venv
+        uv venv --python ${{ env.PYTHON_VERSION }}
         uv pip install -e packages/utils
         uv pip install -e packages/data
         uv pip install pytest pytest-asyncio pytest-cov
