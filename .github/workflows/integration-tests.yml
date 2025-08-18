@@ -147,7 +147,7 @@ jobs:
         POSTGRES_PASSWORD: postgres
         POSTGRES_DB: dataknobs_test
       run: |
-        uv run pytest packages/data/tests/integration/test_postgres_integration.py \
+        source .venv/bin/activate && pytest packages/data/tests/integration/test_postgres_integration.py \
           -v \
           --tb=short \
           --junit-xml=junit-postgres.xml \
@@ -160,7 +160,7 @@ jobs:
         ELASTICSEARCH_HOST: localhost
         ELASTICSEARCH_PORT: 9200
       run: |
-        uv run pytest packages/data/tests/integration/test_elasticsearch_integration.py \
+        source .venv/bin/activate && pytest packages/data/tests/integration/test_elasticsearch_integration.py \
           -v \
           --tb=short \
           --junit-xml=junit-elasticsearch.xml \
@@ -182,7 +182,7 @@ jobs:
         AWS_SECRET_ACCESS_KEY: test
         AWS_DEFAULT_REGION: us-east-1
       run: |
-        uv run pytest packages/data/tests/integration/ \
+        source .venv/bin/activate && pytest packages/data/tests/integration/ \
           -v \
           --tb=short \
           --junit-xml=junit-integration.xml \
@@ -316,7 +316,7 @@ jobs:
         ELASTICSEARCH_HOST: localhost
         ELASTICSEARCH_PORT: 9200
       run: |
-        uv run pytest packages/data/tests/integration/ \
+        source .venv/bin/activate && pytest packages/data/tests/integration/ \
           -v \
           --tb=short \
           --junit-xml=junit-${{ matrix.os }}-${{ matrix.python-version }}.xml
