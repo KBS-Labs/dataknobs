@@ -125,20 +125,65 @@ Available field types and their Python equivalents:
 
 ## Field Operations
 
-### CRUD Operations on Fields
+### Ergonomic Field Access (New in Priority 5)
+
+The Record class now provides multiple convenient ways to access and manipulate field values:
+
+```python
+# Create a record with data
+record = Record({
+    "name": "Alice",
+    "age": 30,
+    "email": "alice@example.com",
+    "temperature": 25.5
+})
+
+# 1. Dict-like access (NEW) - returns values directly
+print(record["name"])         # "Alice"
+record["age"] = 31            # Update value
+print(record["age"])          # 31
+
+# 2. Attribute access (NEW) - most convenient
+print(record.name)            # "Alice"
+record.email = "alice@new.com"  # Update via attribute
+print(record.email)           # "alice@new.com"
+
+# 3. Add new fields dynamically
+record.country = "USA"        # Creates new field via attribute
+record["city"] = "NYC"        # Creates new field via dict access
+
+# 4. Simplified to_dict() (NEW default behavior)
+data = record.to_dict()       # Returns flat dict by default
+print(data)
+# {'name': 'Alice', 'age': 31, 'email': 'alice@new.com', 
+#  'temperature': 25.5, 'country': 'USA', 'city': 'NYC'}
+
+# 5. Access Field objects when needed (for metadata)
+temp_field = record.get_field_object("temperature")
+print(temp_field.type)        # FieldType.FLOAT
+print(temp_field.metadata)    # Field metadata if any
+
+# 6. Check field existence
+if "temperature" in record:
+    print(f"Temperature: {record.temperature}°C")
+```
+
+### Traditional Field Access (Still Supported)
+
+For backward compatibility and when you need access to Field objects:
 
 ```python
 # Create a record
 record = Record()
 
-# Add fields
+# Add fields with Field objects
 record.fields["username"] = Field(
     name="username",
     type=FieldType.STRING,
     value="user123"
 )
 
-# Read field values
+# Access field values through Field objects
 username = record.fields["username"].value
 print(f"Username: {username}")
 
@@ -350,12 +395,35 @@ def track_changes(old_record, new_record):
 
 ## Serialization
 
-### Dictionary Conversion
+### Dictionary Conversion (Enhanced in Priority 5)
+
+The `to_dict()` method now has improved ergonomics with sensible defaults:
 
 ```python
-# Convert to dictionary
-record_dict = record.to_dict()
-print(record_dict)
+# Simple flat dictionary (NEW DEFAULT)
+simple_dict = record.to_dict()  # flatten=True by default
+print(simple_dict)
+# {
+#     "name": "John",
+#     "age": 30,
+#     "email": "john@example.com",
+#     "_id": "550e8400-e29b-41d4-a716-446655440000"
+# }
+
+# Include metadata in flat format
+with_meta = record.to_dict(include_metadata=True)
+print(with_meta)
+# {
+#     "name": "John",
+#     "age": 30,
+#     "email": "john@example.com",
+#     "_id": "550e8400-e29b-41d4-a716-446655440000",
+#     "_metadata": {"source": "api", "version": "1.0"}
+# }
+
+# Structured format for serialization (backward compatible)
+structured = record.to_dict(flatten=False, include_metadata=True)
+print(structured)
 # {
 #     "id": "550e8400-e29b-41d4-a716-446655440000",
 #     "fields": {
@@ -365,10 +433,13 @@ print(record_dict)
 #     "metadata": {"source": "api", "version": "1.0"}
 # }
 
-# Create from dictionary
-new_record = Record.from_dict(record_dict)
-print(new_record.id)  # Same ID preserved
-print(new_record.fields["name"].value)  # "John"
+# Create from dictionary (works with both formats)
+new_record = Record.from_dict(simple_dict)
+print(new_record["name"])  # "John" - using new dict-like access
+
+structured_record = Record.from_dict(structured)
+print(structured_record.id)  # Same ID preserved
+print(structured_record.name)  # "John" - using new attribute access
 ```
 
 ### JSON Serialization

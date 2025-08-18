@@ -6,6 +6,7 @@ Dataknobs is organized as a collection of modular packages, each serving a speci
 
 | Package | Purpose | Key Features |
 |---------|---------|--------------|
+| [dataknobs-data](data/index.md) | Data abstraction layer | Records, Fields, Multiple backends, Async support |
 | [dataknobs-config](config/index.md) | Configuration management | Modular configs, Environment overrides, Cross-references |
 | [dataknobs-structures](structures/index.md) | Core data structures | Tree, Document, RecordStore, ConditionalDict |
 | [dataknobs-utils](utils/index.md) | Utility functions | JSON, File, Elasticsearch, LLM utilities |
@@ -19,9 +20,10 @@ Install the packages you need:
 
 ```bash
 # Install all main packages
-pip install dataknobs-config dataknobs-structures dataknobs-utils dataknobs-xization
+pip install dataknobs-data dataknobs-config dataknobs-structures dataknobs-utils dataknobs-xization
 
 # Or install individually
+pip install dataknobs-data
 pip install dataknobs-config
 pip install dataknobs-structures
 ```
@@ -30,19 +32,22 @@ pip install dataknobs-structures
 
 ```mermaid
 graph TD
-    A[dataknobs-common] --> B[dataknobs-structures]
-    A --> C[dataknobs-utils]
+    A[dataknobs-common] --> B[dataknobs-data]
+    A --> C[dataknobs-structures]
+    A --> D[dataknobs-utils]
     B --> C
-    A --> D[dataknobs-xization]
-    B --> D
     C --> D
-    B --> E[dataknobs-legacy]
+    A --> E[dataknobs-xization]
     C --> E
     D --> E
+    C --> F[dataknobs-legacy]
+    D --> F
+    E --> F
 ```
 
 ## Choosing Packages
 
+- **dataknobs-data**: For data abstraction with multiple backend support (memory, file, PostgreSQL, Elasticsearch, S3)
 - **dataknobs-config**: For configuration management with environment overrides
 - **dataknobs-structures**: If you need tree structures, documents, or record storage
 - **dataknobs-utils**: For JSON processing, file operations, or integrations

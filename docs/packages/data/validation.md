@@ -762,4 +762,6 @@ if not result.is_valid:
 - [Migration Utilities](migration.md) - Schema evolution and data migration
 - [Record Model](record-model.md) - Understanding the Record structure
 - [Field Types](field-types.md) - Available field types
+<!-- TODO: Add when tutorial is created:
 - [Validation Tutorial](tutorials/validation-tutorial.md) - Step-by-step validation guide
+-->

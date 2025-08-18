@@ -671,4 +671,6 @@ class RealTimeAnalytics:
 - [Batch Operations](backends.md#batch-operations) - Batch operations in backends
 - [Migration Utilities](migration.md) - Data migration tools
 - [Query System](query.md) - Query construction and execution
+<!-- TODO: Add when tutorial is created:
 - [Pandas Tutorial](tutorials/pandas-tutorial.md) - Step-by-step pandas guide
+-->

@@ -476,7 +476,7 @@ config.load({
 
 ## Further Reading
 
-- [dataknobs-config Package Documentation](../packages/config/README.md)
-- [Data Package Configuration Examples](../packages/data/README.md#configuration)
+- [dataknobs-config Package Documentation](../packages/config/index.md)
+- [Data Package Configuration Examples](../packages/data/configuration.md)
 - [Environment Variables Guide](./environment-variables.md)
 - [Testing Configured Objects](./testing.md#configuration-testing)
