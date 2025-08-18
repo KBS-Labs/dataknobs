@@ -39,8 +39,12 @@ class SensorReading:
     
     @classmethod
     def from_record(cls, record: Record) -> "SensorReading":
-        """Create from a dataknobs Record."""
-        data = {f.name: f.value for f in record.fields.values()}
+        """Create from a dataknobs Record.
+        
+        Now uses the new ergonomic field access methods.
+        """
+        # Use the new to_dict() method for simple value extraction
+        data = record.to_dict()
         return cls(
             sensor_id=data["sensor_id"],
             timestamp=datetime.fromisoformat(data["timestamp"]),
@@ -78,12 +82,15 @@ class SensorInfo:
     
     @classmethod
     def from_record(cls, record: Record) -> "SensorInfo":
-        """Create from a dataknobs Record."""
-        data = {f.name: f.value for f in record.fields.values()}
+        """Create from a dataknobs Record.
+        
+        Now uses the new ergonomic field access methods.
+        """
+        # Can use direct field access now
         return cls(
-            sensor_id=data["sensor_id"],
-            sensor_type=data["sensor_type"],
-            location=data["location"],
-            installed=datetime.fromisoformat(data["installed"]),
-            status=data.get("status", "active")
+            sensor_id=record["sensor_id"],
+            sensor_type=record["sensor_type"],
+            location=record["location"],
+            installed=datetime.fromisoformat(record["installed"]),
+            status=record.get_value("status", "active")  # Using get_value for default
         )

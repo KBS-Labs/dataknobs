@@ -150,6 +150,9 @@ main() {
     local cmd="${1:-help}"
     shift || true
     
+    # Note: TEST_ELASTICSEARCH=true and TEST_POSTGRES=true are set for test commands
+    # to ensure integration tests are not skipped when services are available
+    
     case "$cmd" in
         # Help
         help|h|-h|--help|"")
@@ -161,20 +164,28 @@ main() {
             
         # PR Preparation
         pr|prepare|prepare-for-pr|p4p)
+            export TEST_ELASTICSEARCH=true
+            export TEST_POSTGRES=true
             run_command "Preparing for PR (full quality checks)" \
                 "$SCRIPT_DIR/run-quality-checks.sh" --pr "$@"
             ;;
         prq|pr-quick|prquick)
+            export TEST_ELASTICSEARCH=true
+            export TEST_POSTGRES=true
             run_command "Quick PR check (skipping lint)" \
                 "$SCRIPT_DIR/run-quality-checks.sh" --pr --skip-lint "$@"
             ;;
             
         # Quality Checks
         check|c|q|quick)
+            export TEST_ELASTICSEARCH=true
+            export TEST_POSTGRES=true
             run_command "Quick quality check (dev mode)" \
                 "$SCRIPT_DIR/run-quality-checks.sh" --dev "$@"
             ;;
         checkall|ca|qa)
+            export TEST_ELASTICSEARCH=true
+            export TEST_POSTGRES=true
             run_command "Checking all packages (dev mode)" \
                 "$SCRIPT_DIR/run-quality-checks.sh" --dev
             ;;
@@ -189,6 +200,9 @@ main() {
             
         # Testing
         test|t)
+            # Set environment variables for integration tests
+            export TEST_ELASTICSEARCH=true
+            export TEST_POSTGRES=true
             # Smart test mode - determines best approach
             if [[ "$1" == "--last" ]] || [[ "$1" == "-l" ]]; then
                 shift
@@ -204,18 +218,25 @@ main() {
             fi
             ;;
         testlast|tf|test-failed)
+            export TEST_ELASTICSEARCH=true
+            export TEST_POSTGRES=true
             run_command "Re-running failed tests" \
                 "$SCRIPT_DIR/test.sh" -- --lf "$@"
             ;;
         testquick|tq)
+            export TEST_ELASTICSEARCH=true
+            export TEST_POSTGRES=true
             run_command "Running tests without coverage" \
                 "$SCRIPT_DIR/test.sh" --no-cov "$@"
             ;;
         unit|u)
+            # Unit tests don't need integration services
             run_command "Running unit tests" \
                 "$SCRIPT_DIR/test.sh" -t unit "$@"
             ;;
         int|i|integration)
+            export TEST_ELASTICSEARCH=true
+            export TEST_POSTGRES=true
             run_command "Running integration tests" \
                 "$SCRIPT_DIR/test.sh" -t integration "$@"
             ;;
@@ -336,12 +357,32 @@ main() {
             ;;
             
         # Shortcuts
-        p) dk pr "${@}" ;;
-        q) dk check "${@}" ;;
-        t) dk test "${@}" ;;
-        tf) dk testlast "${@}" ;;
+        p) 
+            export TEST_ELASTICSEARCH=true
+            export TEST_POSTGRES=true
+            dk pr "${@}" 
+            ;;
+        q) 
+            export TEST_ELASTICSEARCH=true
+            export TEST_POSTGRES=true
+            dk check "${@}" 
+            ;;
+        t) 
+            export TEST_ELASTICSEARCH=true
+            export TEST_POSTGRES=true
+            dk test "${@}" 
+            ;;
+        tf) 
+            export TEST_ELASTICSEARCH=true
+            export TEST_POSTGRES=true
+            dk testlast "${@}" 
+            ;;
         u) dk unit "${@}" ;;
-        i) dk int "${@}" ;;
+        i) 
+            export TEST_ELASTICSEARCH=true
+            export TEST_POSTGRES=true
+            dk int "${@}" 
+            ;;
         f) dk fix "${@}" ;;
         d) dk diagnose "${@}" ;;
         y) dk why "${@}" ;;

@@ -90,11 +90,11 @@ class TestRecord:
         """Test dictionary-like access methods."""
         record = Record({"name": "Test", "value": 42})
 
-        # Get by key
-        assert record["name"].value == "Test"
-        assert record["value"].value == 42
+        # Get by key (now returns value directly)
+        assert record["name"] == "Test"
+        assert record["value"] == 42
 
-        # Get by index
+        # Get by index (still returns Field object for backward compatibility)
         assert record[0].value == "Test"
         assert record[1].value == 42
 
@@ -260,3 +260,94 @@ class TestRecord:
         assert merged.get_value("b") == 2  # Not overwritten
         assert merged.get_value("c") == 4
         assert merged.metadata["v"] == 1
+
+    def test_enhanced_field_access(self):
+        """Test new ergonomic field access methods."""
+        record = Record({"name": "Alice", "age": 30, "city": "NYC"})
+        
+        # Dict-like access (returns values directly)
+        assert record["name"] == "Alice"
+        assert record["age"] == 30
+        assert record["city"] == "NYC"
+        
+        # Attribute access
+        assert record.name == "Alice"
+        assert record.age == 30
+        assert record.city == "NYC"
+        
+        # Setting via attribute access
+        record.name = "Bob"
+        assert record["name"] == "Bob"
+        assert record.name == "Bob"
+        
+        # Setting via dict access
+        record["age"] = 35
+        assert record.age == 35
+        assert record["age"] == 35
+        
+        # Adding new field via attribute
+        record.country = "USA"
+        assert record["country"] == "USA"
+        assert record.country == "USA"
+        
+        # to_dict() with default flatten=True
+        simple_dict = record.to_dict()
+        assert simple_dict == {"name": "Bob", "age": 35, "city": "NYC", "country": "USA"}
+        
+        # to_dict() with flatten=False for structured format (includes field objects by default)
+        structured = record.to_dict(flatten=False)
+        assert "fields" in structured
+        assert structured["fields"]["name"]["value"] == "Bob"
+        
+        # to_dict() with flatten=False and include_field_objects=False for simple values
+        structured_simple = record.to_dict(flatten=False, include_field_objects=False)
+        assert "fields" in structured_simple
+        assert structured_simple["fields"]["name"] == "Bob"
+        
+        # to_dict() with metadata
+        record.metadata["source"] = "test"
+        dict_with_meta = record.to_dict(include_metadata=True)
+        assert dict_with_meta["_metadata"]["source"] == "test"
+        
+    def test_get_field_object_method(self):
+        """Test the get_field_object method for accessing Field objects."""
+        from dataknobs_data.fields import Field, FieldType
+        
+        record = Record()
+        record.set_field("temperature", 25.5, FieldType.FLOAT, {"unit": "celsius"})
+        
+        # Access field object when needed
+        field_obj = record.get_field_object("temperature")
+        assert isinstance(field_obj, Field)
+        assert field_obj.value == 25.5
+        assert field_obj.type == FieldType.FLOAT
+        assert field_obj.metadata["unit"] == "celsius"
+        
+        # Dict access returns value
+        assert record["temperature"] == 25.5
+        
+        # Attribute access returns value
+        assert record.temperature == 25.5
+        
+        # Error handling
+        with pytest.raises(KeyError):
+            record.get_field_object("nonexistent")
+            
+    def test_attribute_access_edge_cases(self):
+        """Test edge cases for attribute access."""
+        record = Record({"name": "Test"})
+        
+        # Special attributes should not interfere
+        assert hasattr(record, "fields")
+        assert hasattr(record, "metadata")
+        assert hasattr(record, "id")
+        
+        # Non-existent field raises AttributeError
+        with pytest.raises(AttributeError):
+            _ = record.nonexistent
+            
+        # Fields with underscore prefix are not accessible via attribute
+        record["_private"] = "secret"
+        assert record["_private"] == "secret"
+        with pytest.raises(AttributeError):
+            _ = record._private

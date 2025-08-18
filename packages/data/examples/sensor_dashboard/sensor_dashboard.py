@@ -70,21 +70,74 @@ class SensorDashboard:
                        batch_size: int = 10) -> StreamResult:
         """Stream readings with configurable batch size.
         
-        Demonstrates basic streaming with error handling.
+        Demonstrates basic streaming with error handling and validation.
         """
-        records = [reading.to_record() for reading in readings]
+        import math
+        
+        # Convert all readings to records - validate BEFORE creating
+        records = []
+        for i, reading in enumerate(readings):
+            try:
+                # Check for invalid data BEFORE creating the record
+                if not reading.sensor_id:
+                    # Empty sensor_id - create a dummy record that will fail
+                    record = Record(data={"error": "Empty sensor_id"})
+                    record._invalid = True
+                    record._invalid_reason = "Empty sensor_id"
+                elif math.isnan(reading.temperature) or math.isnan(reading.humidity):
+                    # NaN values - create a dummy record that will fail
+                    record = Record(data={"error": "NaN values"})
+                    record._invalid = True
+                    record._invalid_reason = "NaN values detected"
+                else:
+                    # Valid reading - create the actual record
+                    record = reading.to_record()
+                    
+                records.append(record)
+            except Exception as e:
+                # If anything fails, create a dummy record that will be rejected
+                record = Record(data={"error": str(e)})
+                record._invalid = True
+                record._invalid_reason = str(e)
+                records.append(record)
         
         # Define error handler that continues on error
         def continue_on_error(exc: Exception, record: Record) -> bool:
             # Log the error and continue processing
             return True  # Continue processing
         
-        config = StreamConfig(
-            batch_size=batch_size,
-            on_error=continue_on_error  # Continue on error
-        )
+        # Monkey-patch create methods to reject invalid records
+        original_create = self.db.create
+        original_create_batch = self.db.create_batch
         
-        result = self.db.stream_write(records, config)
+        def validating_create(record):
+            if hasattr(record, '_invalid') and record._invalid:
+                raise ValueError("Invalid record")
+            return original_create(record)
+        
+        def validating_create_batch(batch_records):
+            # Check if any record is invalid
+            for r in batch_records:
+                if hasattr(r, '_invalid') and r._invalid:
+                    # Batch fails, will fall back to individual processing
+                    raise ValueError("Batch contains invalid records")
+            return original_create_batch(batch_records)
+        
+        self.db.create = validating_create
+        self.db.create_batch = validating_create_batch
+        
+        try:
+            config = StreamConfig(
+                batch_size=batch_size,
+                on_error=continue_on_error  # Continue on error
+            )
+            
+            result = self.db.stream_write(records, config)
+        finally:
+            # Restore original methods
+            self.db.create = original_create
+            self.db.create_batch = original_create_batch
+        
         return result
     
     def stream_readings_with_tracking(self, readings: List[SensorReading],
@@ -162,7 +215,8 @@ class SensorDashboard:
         def validating_create_batch(records):
             # Check if any record is invalid - this forces fallback
             for r in records:
-                if r.get_value("_invalid"):
+                # Using new dict-like access
+                if "_invalid" in r and r["_invalid"]:
                     raise ValueError("Batch contains invalid records")
             return original_create_batch(records)
         
@@ -375,6 +429,69 @@ class SensorDashboard:
         
         records = self.db.search(query)
         return [SensorReading.from_record(r) for r in records]
+    
+    def demonstrate_ergonomic_field_access(self) -> None:
+        """Demonstrate the new ergonomic field access features.
+        
+        Shows off:
+        - Dict-like access with record["field"]
+        - Attribute access with record.field
+        - Simplified to_dict() method
+        - get_field_object() for accessing Field metadata
+        """
+        # Get a sample reading
+        query = Query(filters=[Filter("metadata.type", Operator.EQ, "sensor_reading")])
+        records = self.db.search(query, limit=1)
+        
+        if not records:
+            print("No sensor readings found")
+            return
+        
+        record = records[0]
+        
+        print("=== Demonstrating Ergonomic Field Access ===\n")
+        
+        # 1. Dict-like access (NEW)
+        print("1. Dict-like access:")
+        print(f"   Temperature: {record['temperature']}°C")
+        print(f"   Humidity: {record['humidity']}%")
+        if "battery" in record:
+            print(f"   Battery: {record['battery']}%")
+        print()
+        
+        # 2. Attribute access (NEW)
+        print("2. Attribute access:")
+        print(f"   Sensor ID: {record.sensor_id}")
+        print(f"   Temperature: {record.temperature}°C")
+        print(f"   Humidity: {record.humidity}%")
+        print()
+        
+        # 3. Simplified to_dict() (NEW default behavior)
+        print("3. Simplified to_dict():")
+        simple_dict = record.to_dict()  # Now returns flat dict by default
+        print(f"   {simple_dict}")
+        print()
+        
+        # 4. Setting values is also easier
+        print("4. Setting field values:")
+        # Can set via dict-like access
+        record["temperature"] = 25.5
+        print(f"   Set via dict: record['temperature'] = 25.5")
+        
+        # Or via attribute access
+        record.humidity = 55.0
+        print(f"   Set via attr: record.humidity = 55.0")
+        print(f"   New values: temp={record.temperature}, humidity={record.humidity}")
+        print()
+        
+        # 5. Access Field object when needed for metadata
+        print("5. Accessing Field metadata when needed:")
+        if "temperature" in record.fields:
+            temp_field = record.get_field_object("temperature")
+            print(f"   Temperature field type: {temp_field.type}")
+            print(f"   Temperature field metadata: {temp_field.metadata}")
+        
+        print("\n=== End of Demonstration ===")
     
     def search_maintenance_needed(self) -> List[SensorReading]:
         """Find sensors needing maintenance using complex logic.

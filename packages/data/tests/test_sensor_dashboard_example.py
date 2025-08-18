@@ -300,7 +300,6 @@ class TestSensorDashboardSync:
             # Should have same shape
             assert interpolated.shape == df.shape
     
-    @pytest.mark.skip(reason="StreamConfig doesn't support return_failed_indices yet")
     def test_batch_failure_recovery(self):
         """Test graceful handling of batch operation failures."""
         sensor = self.sensors[0]
@@ -322,11 +321,24 @@ class TestSensorDashboardSync:
         assert result.failed == len(expected_failures)
         
         # Verify partial success
-        stored_count = len(self.dashboard.get_readings_by_timerange(
+        # Note: We expect 24 successful records (30 - 6 failures)
+        # 30 readings * 5 minutes = 150 minutes = 2.5 hours
+        stored_readings = self.dashboard.get_readings_by_timerange(
             self.start_time - timedelta(hours=1),
-            self.start_time + timedelta(hours=2)
-        ))
-        assert stored_count == result.successful
+            self.start_time + timedelta(hours=3)  # Extended to cover all readings
+        )
+        stored_count = len(stored_readings)
+        
+        # Debug: Check what's in the database
+        all_records = self.db.search(Query())
+        sensor_readings = [r for r in all_records if r.metadata.get("type") == "sensor_reading"]
+        sensor_infos = [r for r in all_records if r.metadata.get("type") == "sensor_info"]
+        
+        # We should have:
+        # - 1 sensor_info record (from register_sensor)
+        # - 24 sensor_reading records (30 - 6 failures)
+        assert len(sensor_infos) == 1, f"Expected 1 sensor_info, got {len(sensor_infos)}"
+        assert stored_count == 24, f"Expected 24 readings, got {stored_count}. Total sensor_readings: {len(sensor_readings)}"
     
     def test_file_database_integration(self):
         """Test using file-based database backend."""
