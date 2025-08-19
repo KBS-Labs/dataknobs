@@ -184,6 +184,18 @@ wheels = [
 ]
 
 [[package]]
+name = "aiosqlite"
+version = "0.21.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/13/7d/8bca2bf9a247c2c5dfeec1d7a5f40db6518f88d314b8bca9da29670d2671/aiosqlite-0.21.0.tar.gz", hash = "sha256:131bb8056daa3bc875608c631c678cda73922a2d4ba8aec373b19f18c17e7aa3", size = 13454, upload-time = "2025-02-03T07:30:16.235Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f5/10/6c25ed6de94c49f88a91fa5018cb4c0f3625f31d5be9f771ebe5cc7cd506/aiosqlite-0.21.0-py3-none-any.whl", hash = "sha256:2549cf4057f95f53dcba16f2b64e8e2791d7e1adedb13197dd8ed77bb226d7d0", size = 15792, upload-time = "2025-02-03T07:30:13.6Z" },
+]
+
+[[package]]
 name = "annotated-types"
 version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1047,6 +1059,7 @@ dependencies = [
 [package.optional-dependencies]
 all = [
     { name = "aioboto3" },
+    { name = "aiosqlite" },
     { name = "asyncpg" },
     { name = "boto3" },
     { name = "elasticsearch", extra = ["async"] },
@@ -1080,10 +1093,14 @@ s3 = [
     { name = "aioboto3" },
     { name = "boto3" },
 ]
+sqlite = [
+    { name = "aiosqlite" },
+]
 
 [package.dev-dependencies]
 dev = [
     { name = "aioboto3" },
+    { name = "aiosqlite" },
     { name = "asyncpg" },
     { name = "elasticsearch", extra = ["async"] },
     { name = "pytest-asyncio" },
@@ -1095,12 +1112,13 @@ dev = [
 requires-dist = [
     { name = "aioboto3", marker = "extra == 's3'", specifier = ">=12.0.0" },
     { name = "aiofiles", specifier = ">=23.0.0" },
+    { name = "aiosqlite", marker = "extra == 'sqlite'", specifier = ">=0.19.0" },
     { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.29.0" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=24.0.0" },
     { name = "boto3", specifier = ">=1.38.27" },
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.26.0" },
     { name = "dataknobs-config", editable = "packages/config" },
-    { name = "dataknobs-data", extras = ["postgres", "s3", "elasticsearch", "parquet"], marker = "extra == 'all'", editable = "packages/data" },
+    { name = "dataknobs-data", extras = ["postgres", "sqlite", "s3", "elasticsearch", "parquet"], marker = "extra == 'all'", editable = "packages/data" },
     { name = "dataknobs-utils", editable = "packages/utils" },
     { name = "elasticsearch", extras = ["async"], marker = "extra == 'elasticsearch'", specifier = ">=8.0.0,<9.0.0" },
     { name = "moto", specifier = ">=5.1.10" },
@@ -1118,11 +1136,12 @@ requires-dist = [
     { name = "sqlalchemy", marker = "extra == 'postgres'", specifier = ">=2.0.0" },
     { name = "testcontainers", marker = "extra == 'dev'", specifier = ">=3.7.0" },
 ]
-provides-extras = ["postgres", "s3", "elasticsearch", "parquet", "all", "dev"]
+provides-extras = ["postgres", "sqlite", "s3", "elasticsearch", "parquet", "all", "dev"]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "aioboto3", specifier = ">=15.0.0" },
+    { name = "aiosqlite", specifier = ">=0.19.0" },
     { name = "asyncpg", specifier = ">=0.30.0" },
     { name = "elasticsearch", extras = ["async"], specifier = ">=8.11.0,<9.0.0" },
     { name = "pytest-asyncio", specifier = ">=1.1.0" },

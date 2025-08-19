@@ -11,6 +11,7 @@ from dataknobs_utils.elasticsearch_utils import SimplifiedElasticsearchIndex
 from ..database import SyncDatabase
 from ..exceptions import DatabaseError
 from ..query import Operator, Query, SortOrder
+from ..query_logic import ComplexQuery
 from ..records import Record
 from ..streaming import StreamConfig, StreamingMixin, StreamResult
 
@@ -82,6 +83,10 @@ class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
         # Ensure index exists
         if not self.es_index.exists():
             self.es_index.create()
+
+        # Create an Elasticsearch client for bulk operations
+        from elasticsearch import Elasticsearch
+        self.es_client = Elasticsearch([f"http://{self.host}:{self.port}"])
 
         self._connected = True
 
@@ -188,26 +193,88 @@ class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
             raise DatabaseError(f"Failed to upsert record {id}: {response}")
 
     def create_batch(self, records: list[Record]) -> list[str]:
-        """Create multiple records in batch with a single refresh."""
+        """Create multiple records efficiently using the bulk API.
+        
+        Uses Elasticsearch's bulk API for efficient batch creation.
+        
+        Args:
+            records: List of records to create
+            
+        Returns:
+            List of created record IDs
+        """
+        if not records:
+            return []
+        
+        # Build bulk operations
+        bulk_operations = []
         ids = []
+        
         for record in records:
             # Generate ID
-            id = str(uuid.uuid4())
-            doc = self._record_to_doc(record, id)
-
-            # Index without refresh (we'll refresh once at the end)
-            response = self.es_index.index(body=doc, doc_id=id, refresh=False)
-
-            if response.get("_id"):
-                ids.append(id)
+            record_id = str(uuid.uuid4())
+            ids.append(record_id)
+            
+            # Create action dict for bulk operation
+            doc = self._record_to_doc(record, record_id)
+            action = {
+                "_op_type": "index",
+                "_index": self.es_index.index_name,
+                "_id": record_id,
+                "_source": doc
+            }
+            bulk_operations.append(action)
+        
+        # Execute bulk create
+        from elasticsearch import helpers
+        
+        try:
+            # Use the bulk helper for creation
+            # Note: helpers.BulkIndexError may be raised if raise_on_error=True
+            success_count, errors = helpers.bulk(
+                self.es_client,
+                bulk_operations,
+                refresh=self.refresh,
+                raise_on_error=False,
+                stats_only=False
+            )
+            # Process results to return actual IDs
+            if errors:
+                # Some operations failed - need to check which ones
+                error_dict = {}
+                for err in errors:
+                    # Error dict can have 'index', 'create', 'update', or 'delete' keys
+                    for op_type in ['index', 'create']:
+                        if op_type in err:
+                            error_dict[err[op_type].get('_id')] = err
+                            break
+                
+                result_ids = []
+                for record_id in ids:
+                    if record_id not in error_dict:
+                        result_ids.append(record_id)
+                    else:
+                        result_ids.append(None)  # Failed to create
+                return result_ids
             else:
-                ids.append(None)
-
-        # Single refresh after all documents are indexed
-        if self.refresh and any(ids):
-            self.es_index.refresh()
-
-        return ids
+                # All succeeded
+                return ids
+                
+        except Exception as e:
+            # Check if this is a BulkIndexError from the helpers module
+            if hasattr(e, 'errors'):
+                # Extract which operations succeeded
+                failed_ids = {err.get('index', {}).get('_id') for err in e.errors}
+                result_ids = []
+                for record_id in ids:
+                    if record_id not in failed_ids:
+                        result_ids.append(record_id)
+                    else:
+                        result_ids.append(None)
+                return result_ids
+            else:
+                # Complete failure
+                return [None] * len(records)
 
     def read_batch(self, ids: list[str]) -> list[Record | None]:
         """Read multiple records in batch."""
@@ -218,102 +285,368 @@ class SyncElasticsearchDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
         return records
 
     def delete_batch(self, ids: list[str]) -> list[bool]:
-        """Delete multiple records in batch with a single refresh."""
-        results = []
-        for id in ids:
-            # Delete without refresh (we'll refresh once at the end)
-            success = self.es_index.delete(doc_id=id)
-            results.append(success)
+        """Delete multiple records efficiently using the bulk API.
+        
+        Uses Elasticsearch's bulk API for efficient batch deletion.
+        
+        Args:
+            ids: List of record IDs to delete
+            
+        Returns:
+            List of success flags for each deletion
+        """
+        if not ids:
+            return []
+        
+        # Build bulk operations
+        bulk_operations = []
+        for record_id in ids:
+            # Create action dict for bulk delete
+            action = {
+                "_op_type": "delete",
+                "_index": self.es_index.index_name,
+                "_id": record_id
+            }
+            bulk_operations.append(action)
+        
+        # Execute bulk delete
+        from elasticsearch import helpers
+        
+        try:
+            # Use the bulk helper for deletion
+            success_count, errors = helpers.bulk(
+                self.es_client,
+                bulk_operations,
+                refresh=self.refresh,
+                raise_on_error=False,
+                stats_only=False
+            )
+            
+            # Process results to determine which deletes succeeded
+            results = []
+            if errors:
+                error_dict = {}
+                for err in errors:
+                    if 'delete' in err:
+                        error_dict[err['delete'].get('_id')] = err
+                
+                for record_id in ids:
+                    if record_id in error_dict:
+                        # Check if error was "not found" (404) - that's still a successful delete
+                        error = error_dict[record_id]
+                        status = error.get('delete', {}).get('status')
+                        results.append(status == 200 or status == 404)
+                    else:
+                        results.append(True)
+            else:
+                # All operations completed (either deleted or not found)
+                results = [True] * len(ids)
+            
+            return results
+            
+        except Exception as e:
+            # Check if this is a BulkIndexError from the helpers module
+            if hasattr(e, 'errors'):
+                # Extract which operations failed
+                results = []
+                failed_ids = {err.get('delete', {}).get('_id') for err in e.errors}
+                
+                for record_id in ids:
+                    results.append(record_id not in failed_ids)
+                
+                return results
+            else:
+                # If bulk operation completely fails, mark all as failed
+                return [False] * len(ids)
 
-        # Single refresh after all documents are deleted
-        if self.refresh and any(results):
-            self.es_index.refresh()
+    def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
+        """Update multiple records efficiently using the bulk API.
+        
+        Uses Elasticsearch's bulk API for efficient batch updates.
+        
+        Args:
+            updates: List of (id, record) tuples to update
+            
+        Returns:
+            List of success flags for each update
+        """
+        if not updates:
+            return []
+        
+        # Build bulk operations
+        bulk_operations = []
+        for record_id, record in updates:
+            # Create action dict for bulk update
+            doc = self._record_to_doc(record, record_id)
+            action = {
+                "_op_type": "update",
+                "_index": self.es_index.index_name,
+                "_id": record_id,
+                "doc": doc,
+                "doc_as_upsert": False  # Don't create if doesn't exist
+            }
+            bulk_operations.append(action)
+        
+        # Execute bulk update
+        from elasticsearch import helpers
+        
+        try:
+            # Use the bulk helper for the update
+            success_count, errors = helpers.bulk(
+                self.es_client,
+                bulk_operations,
+                refresh=self.refresh,
+                raise_on_error=False,
+                stats_only=False
+            )
+            
+            # Process results to determine which updates succeeded
+            results = []
+            error_dict = {}
+            if errors:
+                for err in errors:
+                    if 'update' in err:
+                        error_dict[err['update']['_id']] = err
+            
+            for record_id, _ in updates:
+                # Check if this ID had an error
+                if record_id in error_dict:
+                    error = error_dict[record_id]
+                    # If error is 404 (not found), mark as failed
+                    status = error.get('update', {}).get('status')
+                    results.append(status == 200)  # Only 200 is success for update
+                else:
+                    results.append(True)
+            
+            return results
+            
+        except Exception as e:
+            # Check if this is a BulkIndexError from the helpers module
+            if hasattr(e, 'errors'):
+                # Extract which operations failed
+                results = []
+                failed_ids = {err['update']['_id'] for err in e.errors}
+                
+                for record_id, _ in updates:
+                    results.append(record_id not in failed_ids)
+                
+                return results
+            else:
+                # If bulk operation completely fails, mark all as failed
+                return [False] * len(updates)
 
-        return results
+    def _build_complex_es_query(self, condition: Any) -> dict[str, Any]:
+        """Build Elasticsearch query from complex boolean logic conditions.
+        
+        Args:
+            condition: The Condition object (LogicCondition or FilterCondition)
+            
+        Returns:
+            Elasticsearch query dict
+        """
+        from ..query_logic import FilterCondition, LogicCondition, LogicOperator
 
-    def search(self, query: Query) -> list[Record]:
+        # Handle FilterCondition (leaf node)
+        if isinstance(condition, FilterCondition):
+            return self._build_filter_es_query(condition.filter)
+
+        # Handle LogicCondition (branch node)
+        elif isinstance(condition, LogicCondition):
+            if condition.operator == LogicOperator.AND:
+                # Build AND query with must clauses
+                must_clauses = []
+                for sub_condition in condition.conditions:
+                    sub_query = self._build_complex_es_query(sub_condition)
+                    if sub_query:
+                        must_clauses.append(sub_query)
+
+                if not must_clauses:
+                    return {"match_all": {}}
+                elif len(must_clauses) == 1:
+                    return must_clauses[0]
+                else:
+                    return {"bool": {"must": must_clauses}}
+
+            elif condition.operator == LogicOperator.OR:
+                # Build OR query with should clauses
+                should_clauses = []
+                for sub_condition in condition.conditions:
+                    sub_query = self._build_complex_es_query(sub_condition)
+                    if sub_query:
+                        should_clauses.append(sub_query)
+
+                if not should_clauses:
+                    return {"match_all": {}}
+                elif len(should_clauses) == 1:
+                    return should_clauses[0]
+                else:
+                    return {"bool": {"should": should_clauses, "minimum_should_match": 1}}
+
+            elif condition.operator == LogicOperator.NOT:
+                # Build NOT query with must_not
+                if condition.conditions:
+                    sub_query = self._build_complex_es_query(condition.conditions[0])
+                    if sub_query:
+                        return {"bool": {"must_not": sub_query}}
+
+                return {"match_all": {}}
+
+        return {"match_all": {}}
+
+    def _build_filter_es_query(self, filter_obj: Any) -> dict[str, Any]:
+        """Build Elasticsearch query for a single filter.
+        
+        Args:
+            filter_obj: The Filter object
+            
+        Returns:
+            Elasticsearch query dict for the filter
+        """
+        field_path = f"data.{filter_obj.field}"
+
+        # For string fields in exact match queries, use .keyword suffix
+        if filter_obj.operator in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
+            if isinstance(filter_obj.value, str) or (
+                isinstance(filter_obj.value, list) and
+                filter_obj.value and
+                isinstance(filter_obj.value[0], str)
+            ):
+                field_path = f"{field_path}.keyword"
+        elif filter_obj.operator == Operator.LIKE:
+            # Wildcard needs .keyword for proper matching
+            if isinstance(filter_obj.value, str):
+                field_path = f"{field_path}.keyword"
+
+        if filter_obj.operator == Operator.EQ:
+            value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
+            return {"term": {field_path: value}}
+        elif filter_obj.operator == Operator.NEQ:
+            value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
+            return {"bool": {"must_not": {"term": {field_path: value}}}}
+        elif filter_obj.operator == Operator.GT:
+            return {"range": {field_path: {"gt": filter_obj.value}}}
+        elif filter_obj.operator == Operator.GTE:
+            return {"range": {field_path: {"gte": filter_obj.value}}}
+        elif filter_obj.operator == Operator.LT:
+            return {"range": {field_path: {"lt": filter_obj.value}}}
+        elif filter_obj.operator == Operator.LTE:
+            return {"range": {field_path: {"lte": filter_obj.value}}}
+        elif filter_obj.operator == Operator.LIKE:
+            pattern = filter_obj.value.replace("%", "*").replace("_", "?")
+            return {"wildcard": {field_path: pattern}}
+        elif filter_obj.operator == Operator.IN:
+            return {"terms": {field_path: filter_obj.value}}
+        elif filter_obj.operator == Operator.NOT_IN:
+            return {"bool": {"must_not": {"terms": {field_path: filter_obj.value}}}}
+        elif filter_obj.operator == Operator.EXISTS:
+            return {"exists": {"field": field_path}}
+        elif filter_obj.operator == Operator.NOT_EXISTS:
+            return {"bool": {"must_not": {"exists": {"field": field_path}}}}
+        elif filter_obj.operator == Operator.REGEX:
+            return {"regexp": {field_path: filter_obj.value}}
+        elif filter_obj.operator == Operator.BETWEEN:
+            if isinstance(filter_obj.value, (list, tuple)) and len(filter_obj.value) == 2:
+                lower, upper = filter_obj.value
+                return {"range": {field_path: {"gte": lower, "lte": upper}}}
+        elif filter_obj.operator == Operator.NOT_BETWEEN:
+            if isinstance(filter_obj.value, (list, tuple)) and len(filter_obj.value) == 2:
+                lower, upper = filter_obj.value
+                return {"bool": {"must_not": {"range": {field_path: {"gte": lower, "lte":
+upper}}}}}
+
+        return {"match_all": {}}
+
+
+    def search(self, query: Query | ComplexQuery) -> list[Record]:
         """Search for records matching a query."""
-        # Build Elasticsearch query from Query object
-        es_query = {"bool": {"must": []}}
+        # Handle ComplexQuery with native Elasticsearch bool queries
+        if isinstance(query, ComplexQuery):
+            if query.condition:
+                es_query = self._build_complex_es_query(query.condition)
+            else:
+                es_query = {"match_all": {}}
+        else:
+            # Build Elasticsearch query from simple Query object
+            es_query = {"bool": {"must": []}}
+            
+            # Apply filters
+            for filter_obj in query.filters:
+                field_path = f"data.{filter_obj.field}"
 
-        # Apply filters
-        for filter_obj in query.filters:
-            field_path = f"data.{filter_obj.field}"
+                # For string fields in exact match queries, use .keyword suffix
+                # LIKE and REGEX need to use the text field, not keyword
+                if filter_obj.operator in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
+                    if isinstance(filter_obj.value, str) or (
+                        isinstance(filter_obj.value, list) and
+                        filter_obj.value and
+                        isinstance(filter_obj.value[0], str)
+                    ):
+                        field_path = f"{field_path}.keyword"
+                elif filter_obj.operator == Operator.LIKE:
+                    # Wildcard needs .keyword for proper matching
+                    if isinstance(filter_obj.value, str):
+                        field_path = f"{field_path}.keyword"
 
-            # For string fields in exact match queries, use .keyword suffix
-            # LIKE and REGEX need to use the text field, not keyword
-            if filter_obj.operator in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
-                if isinstance(filter_obj.value, str) or (
-                    isinstance(filter_obj.value, list) and
-                    filter_obj.value and
-                    isinstance(filter_obj.value[0], str)
-                ):
-                    field_path = f"{field_path}.keyword"
-            elif filter_obj.operator == Operator.LIKE:
-                # Wildcard needs .keyword for proper matching
-                if isinstance(filter_obj.value, str):
-                    field_path = f"{field_path}.keyword"
-
-            if filter_obj.operator == Operator.EQ:
-                # Handle boolean values correctly
-                value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
-                es_query["bool"]["must"].append({"term": {field_path: value}})
-            elif filter_obj.operator == Operator.NEQ:
-                value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
-                es_query["bool"]["must"].append({"bool": {"must_not": {"term": {field_path: value}}}})
-            elif filter_obj.operator == Operator.GT:
-                es_query["bool"]["must"].append({"range": {field_path: {"gt": filter_obj.value}}})
-            elif filter_obj.operator == Operator.GTE:
-                es_query["bool"]["must"].append({"range": {field_path: {"gte": filter_obj.value}}})
-            elif filter_obj.operator == Operator.LT:
-                es_query["bool"]["must"].append({"range": {field_path: {"lt": filter_obj.value}}})
-            elif filter_obj.operator == Operator.LTE:
-                es_query["bool"]["must"].append({"range": {field_path: {"lte": filter_obj.value}}})
-            elif filter_obj.operator == Operator.LIKE:
-                # Convert SQL LIKE pattern to Elasticsearch wildcard
-                # Wildcard queries should use the keyword field for exact matching
-                pattern = filter_obj.value.replace("%", "*").replace("_", "?")
-                # Use the base field path for LIKE (already has .keyword added above if string)
-                es_query["bool"]["must"].append({"wildcard": {field_path: pattern}})
-            elif filter_obj.operator == Operator.IN:
-                es_query["bool"]["must"].append({"terms": {field_path: filter_obj.value}})
-            elif filter_obj.operator == Operator.NOT_IN:
-                es_query["bool"]["must"].append({"bool": {"must_not": {"terms": {field_path: filter_obj.value}}}})
-            elif filter_obj.operator == Operator.EXISTS:
-                es_query["bool"]["must"].append({"exists": {"field": field_path}})
-            elif filter_obj.operator == Operator.NOT_EXISTS:
-                es_query["bool"]["must"].append({"bool": {"must_not": {"exists": {"field": field_path}}}})
-            elif filter_obj.operator == Operator.REGEX:
-                es_query["bool"]["must"].append({"regexp": {field_path: filter_obj.value}})
-            elif filter_obj.operator == Operator.BETWEEN:
-                # Use Elasticsearch's native range query for efficient BETWEEN
-                if isinstance(filter_obj.value, (list, tuple)) and len(filter_obj.value) == 2:
-                    lower, upper = filter_obj.value
-                    es_query["bool"]["must"].append({
-                        "range": {
-                            field_path: {
-                                "gte": lower,
-                                "lte": upper
+                if filter_obj.operator == Operator.EQ:
+                    # Handle boolean values correctly
+                    value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
+                    es_query["bool"]["must"].append({"term": {field_path: value}})
+                elif filter_obj.operator == Operator.NEQ:
+                    value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
+                    es_query["bool"]["must"].append({"bool": {"must_not": {"term": {field_path: value}}}})
+                elif filter_obj.operator == Operator.GT:
+                    es_query["bool"]["must"].append({"range": {field_path: {"gt": filter_obj.value}}})
+                elif filter_obj.operator == Operator.GTE:
+                    es_query["bool"]["must"].append({"range": {field_path: {"gte": filter_obj.value}}})
+                elif filter_obj.operator == Operator.LT:
+                    es_query["bool"]["must"].append({"range": {field_path: {"lt": filter_obj.value}}})
+                elif filter_obj.operator == Operator.LTE:
+                    es_query["bool"]["must"].append({"range": {field_path: {"lte": filter_obj.value}}})
+                elif filter_obj.operator == Operator.LIKE:
+                    # Convert SQL LIKE pattern to Elasticsearch wildcard
+                    # Wildcard queries should use the keyword field for exact matching
+                    pattern = filter_obj.value.replace("%", "*").replace("_", "?")
+                    # Use the base field path for LIKE (already has .keyword added above if string)
+                    es_query["bool"]["must"].append({"wildcard": {field_path: pattern}})
+                elif filter_obj.operator == Operator.IN:
+                    es_query["bool"]["must"].append({"terms": {field_path: filter_obj.value}})
+                elif filter_obj.operator == Operator.NOT_IN:
+                    es_query["bool"]["must"].append({"bool": {"must_not": {"terms": {field_path: filter_obj.value}}}})
+                elif filter_obj.operator == Operator.EXISTS:
+                    es_query["bool"]["must"].append({"exists": {"field": field_path}})
+                elif filter_obj.operator == Operator.NOT_EXISTS:
+                    es_query["bool"]["must"].append({"bool": {"must_not": {"exists": {"field": field_path}}}})
+                elif filter_obj.operator == Operator.REGEX:
+                    es_query["bool"]["must"].append({"regexp": {field_path: filter_obj.value}})
+                elif filter_obj.operator == Operator.BETWEEN:
+                    # Use Elasticsearch's native range query for efficient BETWEEN
+                    if isinstance(filter_obj.value, (list, tuple)) and len(filter_obj.value) == 2:
+                        lower, upper = filter_obj.value
+                        es_query["bool"]["must"].append({
+                            "range": {
+                                field_path: {
+                                    "gte": lower,
+                                    "lte": upper
+                                }
                             }
-                        }
-                    })
-            elif filter_obj.operator == Operator.NOT_BETWEEN:
-                # NOT BETWEEN using bool must_not with range
-                if isinstance(filter_obj.value, (list, tuple)) and len(filter_obj.value) == 2:
-                    lower, upper = filter_obj.value
-                    es_query["bool"]["must"].append({
-                        "bool": {
-                            "must_not": {
-                                "range": {
-                                    field_path: {
-                                        "gte": lower,
-                                        "lte": upper
+                        })
+                elif filter_obj.operator == Operator.NOT_BETWEEN:
+                    # NOT BETWEEN using bool must_not with range
+                    if isinstance(filter_obj.value, (list, tuple)) and len(filter_obj.value) == 2:
+                        lower, upper = filter_obj.value
+                        es_query["bool"]["must"].append({
+                            "bool": {
+                                "must_not": {
+                                    "range": {
+                                        field_path: {
+                                            "gte": lower,
+                                            "lte": upper
+                                        }
                                     }
                                 }
                             }
-                        }
-                    })
-
+                        })
+    
         # If no filters, match all
         if not es_query["bool"]["must"]:
             es_query = {"match_all": {}}

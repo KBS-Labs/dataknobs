@@ -5,7 +5,7 @@ The `dataknobs-data` package provides a unified data abstraction layer that work
 ## Key Features
 
 - **Unified Interface**: Same API works with all backends
-- **Multiple Backends**: Memory, File, PostgreSQL, Elasticsearch, S3
+- **Multiple Backends**: Memory, File, SQLite, PostgreSQL, Elasticsearch, S3
 - **Async Connection Pooling**: Event loop-aware pooling for 5-10x performance
 - **Native Async Support**: Uses asyncpg, AsyncElasticsearch, and aioboto3
 - **Configuration Support**: Full integration with dataknobs-config
@@ -100,7 +100,8 @@ archive_db = config.get_instance("databases", "archive")
 |---------|-------------|------------|----------|
 | Memory | In-memory storage | No | Caching, testing |
 | File | JSON/CSV/Parquet files | Yes | Small datasets, prototyping |
-| PostgreSQL | SQL database | Yes | Production applications |
+| SQLite | Embedded SQL database | Yes | Desktop apps, testing, prototyping |
+| PostgreSQL | SQL database server | Yes | Production applications |
 | Elasticsearch | Search engine | Yes | Full-text search, analytics |
 | S3 | Object storage | Yes | Large files, archival |
 
@@ -121,6 +122,8 @@ With the new async connection pooling system:
 - [Async Connection Pooling](async-pooling.md) - High-performance async operations
 - [Performance Tuning](performance-tuning.md) - Optimization strategies
 - [Backends Overview](backends.md) - Learn about all available backends
+- [SQLite Backend](sqlite-backend.md) - Embedded SQL database
+- [PostgreSQL Backend](postgres-backend.md) - Full-featured SQL server
 - [S3 Backend](s3-backend.md) - Cloud storage with AWS S3
 - [Factory Pattern](factory-pattern.md) - Dynamic backend selection
 - [Configuration](configuration.md) - Advanced configuration options

@@ -1,6 +1,8 @@
 """Integration tests for range operators with real backends."""
 import os
 import pytest
+import psycopg2
+from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from datetime import datetime, timedelta
 from dataknobs_data import Record, Query, Filter, Operator
 
@@ -9,15 +11,54 @@ from dataknobs_data import Record, Query, Filter, Operator
 pytestmark = pytest.mark.integration
 
 
+@pytest.fixture(scope="session")
+def ensure_postgres_test_db():
+    """Ensure the test database exists for integration tests."""
+    if not os.environ.get("TEST_POSTGRES", "").lower() == "true":
+        return
+    
+    host = os.environ.get("POSTGRES_HOST", "localhost")
+    port = int(os.environ.get("POSTGRES_PORT", 5432))
+    user = os.environ.get("POSTGRES_USER", "postgres")
+    password = os.environ.get("POSTGRES_PASSWORD", "postgres")
+    db_name = os.environ.get("POSTGRES_DB", "test_dataknobs")
+    
+    # Connect to postgres database to create test database
+    try:
+        conn = psycopg2.connect(
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            database="postgres"
+        )
+        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+        cur = conn.cursor()
+        
+        # Check if database exists
+        cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (db_name,))
+        exists = cur.fetchone()
+        
+        if not exists:
+            # Create the database
+            cur.execute(f"CREATE DATABASE {db_name}")
+        
+        cur.close()
+        conn.close()
+    except Exception as e:
+        # If we can't create the database, the tests will fail anyway
+        print(f"Warning: Could not ensure test database exists: {e}")
+
+
 @pytest.mark.skipif(
-    not os.getenv("POSTGRES_HOST"),
-    reason="PostgreSQL not configured"
+    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
+    reason="PostgreSQL tests require TEST_POSTGRES=true"
 )
 class TestPostgresRangeOperators:
     """Test BETWEEN operators with real PostgreSQL backend."""
     
     @pytest.fixture
-    def postgres_db(self):
+    def postgres_db(self, ensure_postgres_test_db):
         """Create a PostgreSQL database connection."""
         from dataknobs_data.backends.postgres import SyncPostgresDatabase
         
@@ -28,7 +69,7 @@ class TestPostgresRangeOperators:
         db = SyncPostgresDatabase(config={
             "host": os.getenv("POSTGRES_HOST", "localhost"),
             "port": int(os.getenv("POSTGRES_PORT", 5432)),
-            "database": os.getenv("POSTGRES_DB", "test_db"),
+            "database": os.getenv("POSTGRES_DB", "test_dataknobs"),
             "user": os.getenv("POSTGRES_USER", "postgres"),
             "password": os.getenv("POSTGRES_PASSWORD", "postgres"),
             "schema": "public",  # Use public schema which always exists
@@ -133,7 +174,7 @@ class TestPostgresRangeOperators:
         assert all("AB000" <= c <= "AC999" for c in codes)
     
     @pytest.mark.asyncio
-    async def test_async_postgres_between(self):
+    async def test_async_postgres_between(self, ensure_postgres_test_db):
         """Test BETWEEN with async PostgreSQL backend."""
         from dataknobs_data.backends.postgres import AsyncPostgresDatabase
         
@@ -144,7 +185,7 @@ class TestPostgresRangeOperators:
         db = AsyncPostgresDatabase(config={
             "host": os.getenv("POSTGRES_HOST", "localhost"),
             "port": int(os.getenv("POSTGRES_PORT", 5432)),
-            "database": os.getenv("POSTGRES_DB", "test_db"),
+            "database": os.getenv("POSTGRES_DB", "test_dataknobs"),
             "user": os.getenv("POSTGRES_USER", "postgres"),
             "password": os.getenv("POSTGRES_PASSWORD", "postgres"),
             "schema": "public",  # Use public schema which always exists

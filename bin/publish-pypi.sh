@@ -162,33 +162,33 @@ publish_package() {
     fi
     
     # Publish the specific artifacts with authentication
+    # Capture output to check for "already exists" error
     if [ -n "${UV_PUBLISH_TOKEN:-}" ]; then
         # Use token authentication
         echo -e "${BLUE}  Using token authentication (token starts with: ${UV_PUBLISH_TOKEN:0:10}...)${NC}"
-        uv publish $PUBLISH_ARGS --token "${UV_PUBLISH_TOKEN}" "$wheel_file" "$tar_file"
+        OUTPUT=$(uv publish $PUBLISH_ARGS --token "${UV_PUBLISH_TOKEN}" "$wheel_file" "$tar_file" 2>&1)
+        RESULT=$?
     elif [ -n "${UV_PUBLISH_PASSWORD:-}" ]; then
         # Use username/password authentication
-        uv publish $PUBLISH_ARGS --username "${UV_PUBLISH_USERNAME:-__token__}" --password "${UV_PUBLISH_PASSWORD}" "$wheel_file" "$tar_file"
+        OUTPUT=$(uv publish $PUBLISH_ARGS --username "${UV_PUBLISH_USERNAME:-__token__}" --password "${UV_PUBLISH_PASSWORD}" "$wheel_file" "$tar_file" 2>&1)
+        RESULT=$?
     else
         # No credentials in environment, uv will prompt
-        uv publish $PUBLISH_ARGS "$wheel_file" "$tar_file"
+        OUTPUT=$(uv publish $PUBLISH_ARGS "$wheel_file" "$tar_file" 2>&1)
+        RESULT=$?
     fi
     
-    if [ $? -eq 0 ]; then
+    if [ $RESULT -eq 0 ]; then
         echo -e "${GREEN}✓ Published $package_name v$version${NC}"
         return 0
     else
         # Check if it failed because package already exists
-        if [ -n "${UV_PUBLISH_TOKEN:-}" ]; then
-            uv publish $PUBLISH_ARGS --token "${UV_PUBLISH_TOKEN}" "$wheel_file" "$tar_file" 2>&1 | grep -q "already exists"
-        else
-            uv publish $PUBLISH_ARGS "$wheel_file" "$tar_file" 2>&1 | grep -q "already exists"
-        fi
-        if [ $? -eq 0 ]; then
-            echo -e "${YELLOW}⚠ $package_name v$version already exists, skipping${NC}"
+        if echo "$OUTPUT" | grep -q "already exists\|File already exists"; then
+            echo -e "${YELLOW}⚠ $package_name v$version already exists on PyPI, skipping${NC}"
             return 0
         else
             echo -e "${RED}✗ Failed to publish $package_name${NC}"
+            echo "$OUTPUT"
             return 1
         fi
     fi
@@ -231,9 +231,17 @@ case "$choice" in
     1)
         # Publish only (already built)
         echo -e "\n${CYAN}Publishing all packages...${NC}"
+        FAILED_PACKAGES=()
         for package_dir in "${PACKAGES[@]}"; do
-            publish_package "$package_dir" || exit 1
+            if ! publish_package "$package_dir"; then
+                FAILED_PACKAGES+=("$(basename "$package_dir")")
+            fi
         done
+        
+        if [ ${#FAILED_PACKAGES[@]} -gt 0 ]; then
+            echo -e "\n${RED}Failed to publish: ${FAILED_PACKAGES[*]}${NC}"
+            exit 1
+        fi
         ;;
     
     2)
@@ -244,9 +252,17 @@ case "$choice" in
         done
         
         echo -e "\n${CYAN}Publishing all packages...${NC}"
+        FAILED_PACKAGES=()
         for package_dir in "${PACKAGES[@]}"; do
-            publish_package "$package_dir" || exit 1
+            if ! publish_package "$package_dir"; then
+                FAILED_PACKAGES+=("$(basename "$package_dir")")
+            fi
         done
+        
+        if [ ${#FAILED_PACKAGES[@]} -gt 0 ]; then
+            echo -e "\n${RED}Failed to publish: ${FAILED_PACKAGES[*]}${NC}"
+            exit 1
+        fi
         ;;
     
     3)

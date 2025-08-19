@@ -4,15 +4,17 @@ The dataknobs-data package supports multiple storage backends, each optimized fo
 
 ## Backend Comparison
 
-| Feature | Memory | File | PostgreSQL | Elasticsearch | S3 |
-|---------|--------|------|------------|---------------|-----|
-| **Persistence** | ❌ | ✅ | ✅ | ✅ | ✅ |
-| **Query Performance** | ⚡ Instant | 🚶 Slow | ⚡ Fast | ⚡ Fast | 🐌 Very Slow |
-| **Scalability** | 📦 Limited | 📦 Limited | 🌐 High | 🌐 High | ♾️ Unlimited |
-| **Full-text Search** | ❌ | ❌ | 🔍 Basic | 🔍 Advanced | ❌ |
-| **ACID Compliance** | ❌ | ❌ | ✅ | ❌ | ❌ |
-| **Cost** | Free | Free | 💰 Low | 💰 Medium | 💰 Per GB |
-| **Setup Complexity** | None | None | 🔧 Medium | 🔧 High | 🔧 Medium |
+| Feature | Memory | File | SQLite | PostgreSQL | Elasticsearch | S3 |
+|---------|--------|------|--------|------------|---------------|-----|
+| **Persistence** | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Query Performance** | ⚡ Instant | 🚶 Slow | ⚡ Fast | ⚡ Fast | ⚡ Fast | 🐌 Very Slow |
+| **Scalability** | 📦 Limited | 📦 Limited | 📦 Limited | 🌐 High | 🌐 High | ♾️ Unlimited |
+| **Full-text Search** | ❌ | ❌ | 🔍 Basic | 🔍 Basic | 🔍 Advanced | ❌ |
+| **ACID Compliance** | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ |
+| **Cost** | Free | Free | Free | 💰 Low | 💰 Medium | 💰 Per GB |
+| **Setup Complexity** | None | None | None | 🔧 Medium | 🔧 High | 🔧 Medium |
+| **Concurrent Access** | ✅ | ❌ | 🔄 Limited | ✅ | ✅ | ✅ |
+| **Embedded** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
 
 ## Memory Backend
 
@@ -73,6 +75,68 @@ db = FileDatabase.from_config({
 - Poor query performance (full scan)
 - No concurrent writes
 - Limited to single machine
+
+## SQLite Backend
+
+Lightweight, embedded SQL database with full ACID compliance and zero configuration.
+
+```python
+from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
+from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
+
+# Synchronous in-memory database
+db = SyncSQLiteDatabase({"path": ":memory:"})
+db.connect()
+
+# Synchronous file-based database
+db = SyncSQLiteDatabase({
+    "path": "/data/app.db",
+    "journal_mode": "WAL",  # Better concurrency
+    "synchronous": "NORMAL"  # Balance safety/speed
+})
+db.connect()
+
+# Asynchronous database
+async_db = AsyncSQLiteDatabase({
+    "path": "/data/app.db",
+    "pool_size": 5  # Connection pool for async
+})
+await async_db.connect()
+```
+
+**Best for:**
+- Embedded applications
+- Desktop applications
+- Mobile apps
+- Development and testing
+- Small to medium datasets
+- Applications requiring SQL without server setup
+
+**Features:**
+- Zero configuration - no server required
+- ACID transactions
+- SQL query support with JSON functions
+- Small footprint (~1MB)
+- Cross-platform
+- WAL mode for better concurrency
+- In-memory option for testing
+
+**Limitations:**
+- Single-writer, multiple-reader concurrency
+- Limited to single machine
+- Database size limited by disk space
+- No built-in replication
+
+**Configuration Options:**
+```python
+db = SyncSQLiteDatabase({
+    "path": "/path/to/database.db",  # or ":memory:"
+    "table": "records",  # Table name (default: "records")
+    "timeout": 5.0,  # Connection timeout in seconds
+    "journal_mode": "WAL",  # WAL, DELETE, TRUNCATE, PERSIST, MEMORY, OFF
+    "synchronous": "NORMAL",  # FULL, NORMAL, OFF
+})
+```
 
 ## PostgreSQL Backend
 
@@ -184,8 +248,11 @@ pip install dataknobs-data[s3]
 # Development: Use memory for speed
 dev_db = factory.create(backend="memory")
 
-# Testing: Use file for persistence
-test_db = factory.create(backend="file", path="/tmp/test.json")
+# Testing: Use SQLite for persistence with SQL support
+test_db = factory.create(backend="sqlite", path=":memory:")
+
+# Staging: Use SQLite with file persistence
+staging_db = factory.create(backend="sqlite", path="/tmp/staging.db")
 
 # Production: Use PostgreSQL or Elasticsearch
 prod_db = factory.create(backend="postgres", **db_config)
@@ -239,10 +306,15 @@ def migrate_data(source_db, dest_db):
     
     print(f"Migrated {len(all_records)} records")
 
-# Example: Migrate from file to PostgreSQL
-file_db = factory.create(backend="file", path="data.json")
+# Example: Migrate from SQLite to PostgreSQL
+sqlite_db = factory.create(backend="sqlite", path="local.db")
 pg_db = factory.create(backend="postgres", **pg_config)
-migrate_data(file_db, pg_db)
+migrate_data(sqlite_db, pg_db)
+
+# Example: Migrate from file to SQLite
+file_db = factory.create(backend="file", path="data.json")
+sqlite_db = factory.create(backend="sqlite", path="app.db")
+migrate_data(file_db, sqlite_db)
 ```
 
 ## Performance Tips
@@ -256,6 +328,13 @@ migrate_data(file_db, pg_db)
 - Use Parquet for better performance
 - Compress large JSON files
 - Consider splitting into multiple files
+
+### SQLite Backend
+- Use WAL mode for better concurrency
+- Enable memory-mapped I/O for read-heavy workloads
+- Use transactions for batch operations
+- Consider PRAGMA optimizations for your use case
+- Use in-memory databases for temporary data
 
 ### PostgreSQL Backend
 - Create indexes on frequently queried fields

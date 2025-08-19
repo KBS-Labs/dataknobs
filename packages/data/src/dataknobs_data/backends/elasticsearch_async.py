@@ -233,6 +233,69 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
 
         return id
 
+    async def update_batch(self, updates: list[tuple[str, Record]]) -> list[bool]:
+        """Update multiple records efficiently using the bulk API.
+        
+        Uses AsyncElasticsearch's bulk API for efficient batch updates.
+        
+        Args:
+            updates: List of (id, record) tuples to update
+            
+        Returns:
+            List of success flags for each update
+        """
+        if not updates:
+            return []
+        
+        self._check_connection()
+        
+        # Build bulk operations for AsyncElasticsearch
+        operations = []
+        for record_id, record in updates:
+            # Add update operation
+            operations.append({
+                "update": {
+                    "_index": self.index_name,
+                    "_id": record_id
+                }
+            })
+            # Add document data
+            doc = self._record_to_doc(record)
+            operations.append({
+                "doc": doc,
+                "doc_as_upsert": False  # Don't create if doesn't exist
+            })
+        
+        try:
+            # Execute bulk update using AsyncElasticsearch
+            from elasticsearch import AsyncElasticsearch
+            response = await self._client.bulk(
+                operations=operations,
+                refresh=self.refresh
+            )
+            
+            # Process the response to determine which updates succeeded
+            results = []
+            if response.get("items"):
+                for item in response["items"]:
+                    if "update" in item:
+                        update_result = item["update"]
+                        # Check if update was successful (status 200) or not found (404)
+                        results.append(update_result.get("status") == 200)
+                    else:
+                        results.append(False)
+            else:
+                # If no items in response, mark all as failed
+                results = [False] * len(updates)
+            
+            return results
+            
+        except Exception as e:
+            # If bulk operation fails, mark all as failed
+            import logging
+            logging.error(f"Bulk update failed: {e}")
+            return [False] * len(updates)
+
     async def search(self, query: Query) -> list[Record]:
         """Search for records matching the query."""
         self._check_connection()

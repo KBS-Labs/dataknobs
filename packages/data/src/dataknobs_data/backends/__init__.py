@@ -64,6 +64,15 @@ try:
 except ImportError:
     pass
 
+try:
+    from .sqlite import SyncSQLiteDatabase
+    from .sqlite_async import AsyncSQLiteDatabase
+
+    register_backend("sqlite", AsyncSQLiteDatabase, SyncSQLiteDatabase)
+    register_backend("sqlite3", AsyncSQLiteDatabase, SyncSQLiteDatabase)
+except ImportError:
+    pass
+
 
 __all__ = [
     "BACKEND_REGISTRY",
