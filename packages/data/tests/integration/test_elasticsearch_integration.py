@@ -2,6 +2,7 @@
 
 import asyncio
 import concurrent.futures
+import os
 import time
 import uuid
 
@@ -10,7 +11,13 @@ import pytest
 from dataknobs_data import AsyncDatabase, Query, Record, SyncDatabase
 from dataknobs_data.query import Filter, Operator, SortOrder
 
-pytestmark = pytest.mark.integration
+#pytestmark = pytest.mark.integration
+
+# Skip all tests if Elasticsearch is not available
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("TEST_ELASTICSEARCH", "").lower() == "true",
+    reason="Elasticsearch tests require TEST_ELASTICSEARCH=true and a running Elasticsearch instance"
+)
 
 
 class TestElasticsearchIntegration:

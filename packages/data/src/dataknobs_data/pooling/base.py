@@ -45,9 +45,6 @@ class ConnectionPoolManager(Generic[PoolType]):
     
     This class ensures that each event loop gets its own connection pool,
     preventing cross-loop usage errors that can occur with async connections.
-    
-    Type Parameters:
-        PoolType: The type of pool being managed (e.g., asyncpg.Pool)
     """
 
     def __init__(self):

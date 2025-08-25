@@ -2,6 +2,7 @@
 
 import asyncio
 import concurrent.futures
+import os
 import uuid
 
 import pytest
@@ -9,7 +10,13 @@ import pytest
 from dataknobs_data import AsyncDatabase, Query, Record, SyncDatabase
 from dataknobs_data.query import Filter, Operator, SortOrder
 
-pytestmark = pytest.mark.integration
+# pytestmark = pytest.mark.integration
+
+# Skip all tests if PostgreSQL is not available
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
+    reason="PostgreSQL tests require TEST_POSTGRES=true and a running PostgreSQL instance"
+)
 
 
 class TestPostgresIntegration:
