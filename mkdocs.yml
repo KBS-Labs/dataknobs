@@ -101,7 +101,6 @@ nav:
         - packages/data/tutorials/validation-tutorial.md
         - packages/data/tutorials/pandas-tutorial.md
       - packages/data/examples.md
-      - packages/data/api.md
       - API Reference: packages/data/api-reference.md
     - Structures:
       - packages/structures/index.md
