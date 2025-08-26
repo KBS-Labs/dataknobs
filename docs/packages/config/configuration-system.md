@@ -303,6 +303,6 @@ json_str = config.to_json()
 ## Examples
 
 For practical examples, see:
-- [Database Configuration Example](../examples/database-config.md)
-- [Service Configuration Example](../examples/service-config.md)
-- [Multi-Environment Setup](../examples/multi-environment.md)
+- [Database Configuration Example](../../examples/database-config.md)
+- [Service Configuration Example](../../examples/service-config.md)
+- [Multi-Environment Setup](../../examples/multi-environment.md)
