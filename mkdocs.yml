@@ -68,10 +68,9 @@ nav:
       - packages/common/api.md
     - Config:
       - packages/config/index.md
-      # TODO: Add these config docs when created:
-      # - packages/config/configuration-system.md
-      # - packages/config/environment-variables.md
-      # - packages/config/factory-registration.md
+      - packages/config/configuration-system.md
+      - packages/config/environment-variables.md
+      - packages/config/factory-registration.md
       - packages/config/api.md
     - Data:
       - packages/data/index.md
@@ -97,11 +96,10 @@ nav:
       - Configuration:
         - packages/data/factory-pattern.md
         - packages/data/configuration.md
-      # TODO: Add these tutorials when created:
-      # - Tutorials:
-      #   - packages/data/tutorials/migration-tutorial.md
-      #   - packages/data/tutorials/validation-tutorial.md
-      #   - packages/data/tutorials/pandas-tutorial.md
+      - Tutorials:
+        - packages/data/tutorials/migration-tutorial.md
+        - packages/data/tutorials/validation-tutorial.md
+        - packages/data/tutorials/pandas-tutorial.md
       - packages/data/examples.md
       - packages/data/api.md
       - API Reference: packages/data/api-reference.md
@@ -164,10 +162,13 @@ nav:
     - examples/elasticsearch-integration.md
     - examples/data-backends.md
     - examples/s3-storage.md
-    # TODO: Add these example docs when created:
-    # - examples/data-migration.md
-    # - examples/data-validation.md
-    # - examples/pandas-workflow.md
+    - examples/data-migration.md
+    - examples/data-validation.md
+    - examples/pandas-workflow.md
+    - Config Examples:
+      - examples/database-config.md
+      - examples/service-config.md
+      - examples/multi-environment.md
     - examples/factory-pattern.md
     - examples/configuration.md
   
