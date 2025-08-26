@@ -668,7 +668,7 @@ class RealTimeAnalytics:
 
 ## See Also
 
-- [Batch Operations](backends.md#batch-operations) - Batch operations in backends
+- [Database Backends](backends.md) - Backend implementations and batch operations
 - [Migration Utilities](migration.md) - Data migration tools
 - [Query System](query.md) - Query construction and execution
 <!-- TODO: Add when tutorial is created:

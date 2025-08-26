@@ -141,6 +141,7 @@ nav:
     - Contributing: development/contributing.md
     - Configuration System: development/configuration-system.md
     - Adding Config Support: development/adding-config-support.md
+    - Environment Variables: development/environment-variables.md
     - UV Environment: development/uv-environment.md
     - Quality Checks: development/quality-checks.md
     - Testing: development/testing.md

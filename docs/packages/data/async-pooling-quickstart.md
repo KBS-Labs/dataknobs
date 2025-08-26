@@ -250,8 +250,8 @@ config["pool"]["timeout"] = 60  # Increase to 60 seconds
 
 - [Full Documentation](async-pooling.md) - Comprehensive pooling documentation
 - [Performance Tuning](performance-tuning.md) - Optimization strategies
-- [API Reference](api-reference.md#connection-pooling) - Complete API documentation
-- [Examples](examples.md#async-pooling) - More code examples
+- [API Reference](api-reference.md) - Complete API documentation
+- [Examples](examples.md) - More code examples
 
 ## Support
 
