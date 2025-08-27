@@ -68,9 +68,10 @@ nav:
       - packages/common/api.md
     - Config:
       - packages/config/index.md
-      - packages/config/configuration-system.md
-      - packages/config/environment-variables.md
-      - packages/config/factory-registration.md
+      # TODO: Add these config docs when created:
+      # - packages/config/configuration-system.md
+      # - packages/config/environment-variables.md
+      # - packages/config/factory-registration.md
       - packages/config/api.md
     - Data:
       - packages/data/index.md
@@ -96,11 +97,13 @@ nav:
       - Configuration:
         - packages/data/factory-pattern.md
         - packages/data/configuration.md
-      - Tutorials:
-        - packages/data/tutorials/migration-tutorial.md
-        - packages/data/tutorials/validation-tutorial.md
-        - packages/data/tutorials/pandas-tutorial.md
+      # TODO: Add these tutorials when created:
+      # - Tutorials:
+      #   - packages/data/tutorials/migration-tutorial.md
+      #   - packages/data/tutorials/validation-tutorial.md
+      #   - packages/data/tutorials/pandas-tutorial.md
       - packages/data/examples.md
+      - packages/data/api.md
       - API Reference: packages/data/api-reference.md
     - Structures:
       - packages/structures/index.md
@@ -141,7 +144,6 @@ nav:
     - Contributing: development/contributing.md
     - Configuration System: development/configuration-system.md
     - Adding Config Support: development/adding-config-support.md
-    - Environment Variables: development/environment-variables.md
     - UV Environment: development/uv-environment.md
     - Quality Checks: development/quality-checks.md
     - Testing: development/testing.md
@@ -162,13 +164,10 @@ nav:
     - examples/elasticsearch-integration.md
     - examples/data-backends.md
     - examples/s3-storage.md
-    - examples/data-migration.md
-    - examples/data-validation.md
-    - examples/pandas-workflow.md
-    - Config Examples:
-      - examples/database-config.md
-      - examples/service-config.md
-      - examples/multi-environment.md
+    # TODO: Add these example docs when created:
+    # - examples/data-migration.md
+    # - examples/data-validation.md
+    # - examples/pandas-workflow.md
     - examples/factory-pattern.md
     - examples/configuration.md
   
@@ -258,7 +257,7 @@ extra:
     provider: mike
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/kbs-labs/dataknobs
+      link: https://github.com/yourusername/dataknobs  # Update
     - icon: fontawesome/brands/python
       link: https://pypi.org/project/dataknobs/
   analytics:
