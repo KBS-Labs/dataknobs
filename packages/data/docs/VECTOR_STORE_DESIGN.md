@@ -559,7 +559,7 @@ from ..database import AsyncDatabase
 from .operations import VectorOperations
 from ..records import Record
 
-class HybridVectorDatabase:
+class AsyncHybridVectorDatabase:
     """Bridge between structured data and vector operations."""
     
     def __init__(self, 
