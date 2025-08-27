@@ -282,7 +282,7 @@ class TestPostgresVectorUtilities:
         )
         assert "CREATE INDEX" in sql
         assert "USING ivfflat" in sql
-        assert "<=>" in sql  # Cosine operator
+        assert "vector_cosine_ops" in sql  # Cosine operator class
         assert "lists = 100" in sql
         
         # HNSW index
@@ -292,6 +292,6 @@ class TestPostgresVectorUtilities:
             index_params={"m": 16, "ef_construction": 200}
         )
         assert "USING hnsw" in sql
-        assert "<->" in sql  # L2 operator
+        assert "vector_l2_ops" in sql  # L2 operator class
         assert "m = 16" in sql
         assert "ef_construction = 200" in sql

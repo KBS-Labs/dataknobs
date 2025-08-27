@@ -50,7 +50,7 @@ pytest-mock>=3.10.0
 
 ## Implementation Phases
 
-### Phase 1: Core Infrastructure (Days 1-3)
+### Phase 1: Core Infrastructure (Days 1-3) ✅ COMPLETED
 
 #### Context
 Start with minimal changes to existing codebase, adding new types and protocols without modifying existing backends.
@@ -64,141 +64,179 @@ Start with minimal changes to existing codebase, adding new types and protocols 
 
 #### Implementation Checklist
 
-- [ ] **1.1 Add Vector Field Type**
+- [x] **1.1 Add Vector Field Type**
   ```python
   # src/dataknobs_data/fields.py
-  - [ ] Add VECTOR to FieldType enum
-  - [ ] Add SPARSE_VECTOR to FieldType enum
-  - [ ] Create VectorField class
-  - [ ] Add vector validation logic
-  - [ ] Add dimension validation
-  - [ ] Add source_field tracking
-  - [ ] Add model metadata support
-  - [ ] Update Field.from_dict() for vectors
-  - [ ] Update Field.to_dict() for vectors
+  - [x] Add VECTOR to FieldType enum
+  - [x] Add SPARSE_VECTOR to FieldType enum
+  - [x] Create VectorField class
+  - [x] Add vector validation logic
+  - [x] Add dimension validation
+  - [x] Add source_field tracking
+  - [x] Add model metadata support
+  - [x] Update Field.from_dict() for vectors
+  - [x] Update Field.to_dict() for vectors
   ```
 
-- [ ] **1.2 Create Vector Module Structure**
+- [x] **1.2 Create Vector Module Structure**
   ```
   src/dataknobs_data/vector/
-  - [ ] __init__.py (exports)
-  - [ ] types.py (DistanceMetric, VectorSearchResult)
-  - [ ] mixins.py (VectorCapable, VectorOperationsMixin)
-  - [ ] operations.py (base vector operations)
-  - [ ] exceptions.py (vector-specific exceptions)
+  - [x] __init__.py (exports)
+  - [x] types.py (DistanceMetric, VectorSearchResult)
+  - [x] mixins.py (VectorCapable, VectorOperationsMixin)
+  - [x] operations.py (base vector operations)
+  - [x] exceptions.py (vector-specific exceptions)
   ```
 
-- [ ] **1.3 Define Core Types**
+- [x] **1.3 Define Core Types**
   ```python
   # src/dataknobs_data/vector/types.py
-  - [ ] DistanceMetric enum (COSINE, EUCLIDEAN, DOT_PRODUCT)
-  - [ ] VectorSearchResult dataclass
-  - [ ] VectorConfig dataclass
-  - [ ] VectorIndexConfig dataclass
-  - [ ] VectorMetadata dataclass
+  - [x] DistanceMetric enum (COSINE, EUCLIDEAN, DOT_PRODUCT, L1, L2)
+  - [x] VectorSearchResult dataclass
+  - [x] VectorConfig dataclass
+  - [x] VectorIndexConfig dataclass
+  - [x] VectorMetadata dataclass
   ```
 
-- [ ] **1.4 Create Vector Mixins**
+- [x] **1.4 Create Vector Mixins**
   ```python
   # src/dataknobs_data/vector/mixins.py
-  - [ ] VectorCapable protocol
-    - [ ] has_vector_support()
-    - [ ] enable_vector_support()
-    - [ ] detect_vector_fields()
-  - [ ] VectorOperationsMixin abstract class
-    - [ ] vector_search()
-    - [ ] bulk_embed_and_store()
-    - [ ] update_vector()
-    - [ ] delete_from_index()
+  - [x] VectorCapable protocol
+    - [x] has_vector_support()
+    - [x] enable_vector_support()
+    - [x] detect_vector_fields()
+  - [x] VectorOperationsMixin abstract class
+    - [x] vector_search()
+    - [x] bulk_embed_and_store()
+    - [x] update_vector()
+    - [x] delete_from_index()
   ```
 
-- [ ] **1.5 Unit Tests for Core Components**
+- [x] **1.5 Unit Tests for Core Components**
   ```python
   # tests/test_vector_fields.py
-  - [ ] Test VectorField creation
-  - [ ] Test dimension validation
-  - [ ] Test numpy array conversion
-  - [ ] Test metadata preservation
-  - [ ] Test serialization/deserialization
+  - [x] Test VectorField creation
+  - [x] Test dimension validation
+  - [x] Test numpy array conversion
+  - [x] Test metadata preservation
+  - [x] Test serialization/deserialization
+  - [x] Test cosine similarity and euclidean distance methods
+  - [x] Fixed floating-point precision issues with np.allclose()
   ```
 
-### Phase 2: PostgreSQL Integration (Days 4-6)
+### Phase 2: PostgreSQL Integration (Days 4-6) ✅ COMPLETED
 
 #### Context
-Enhance PostgreSQL backend with automatic vector detection while maintaining backward compatibility.
+Enhanced PostgreSQL backend with automatic vector detection while maintaining backward compatibility.
 
 #### Files to Modify
 1. `src/dataknobs_data/backends/postgres.py`
-2. `src/dataknobs_data/vector/postgres_utils.py` (new)
-3. `tests/test_backends/test_postgres_vector.py` (new)
+2. `src/dataknobs_data/backends/postgres_vector.py` (new)
+3. `tests/test_postgres_vector.py` (new)
+4. `tests/integration/test_postgres_vector_integration.py` (new)
 
 #### Implementation Checklist
 
-- [ ] **2.1 Enhance PostgreSQL Backend**
+- [x] **2.1 Enhance PostgreSQL Backend**
   ```python
   # src/dataknobs_data/backends/postgres.py
-  - [ ] Add VectorOperationsMixin to class inheritance
-  - [ ] Add vector_enabled flag
-  - [ ] Add vector_dimensions tracking dict
-  - [ ] Modify connect() to check for vectors
-  - [ ] Add _needs_vector_support() method
-  - [ ] Add enable_vector_support() method
-  - [ ] Add _ensure_vector_column() method
-  - [ ] Override create() to handle vectors
-  - [ ] Override update() to handle vectors
-  - [ ] Implement vector_search() method
+  - [x] Add VectorOperationsMixin to class inheritance
+  - [x] Add vector_enabled flag
+  - [x] Add vector_dimensions tracking dict
+  - [x] Modify connect() to check for vectors (_detect_vector_support)
+  - [x] Add _detect_vector_support() method
+  - [x] Add has_vector_support() method (from VectorCapable)
+  - [x] Add enable_vector_support() method
+  - [x] Override _record_to_row() to handle VectorField serialization
+  - [x] Implement vector_search() method
+  - [x] Implement bulk_embed_and_store() stub (abstract requirement)
   ```
 
-- [ ] **2.2 PostgreSQL Vector Utilities**
+- [x] **2.2 PostgreSQL Vector Utilities**
   ```python
-  # src/dataknobs_data/vector/postgres_utils.py
-  - [ ] pgvector installation checker
-  - [ ] Index type selector (based on size)
-  - [ ] Index creation functions
-  - [ ] Vector column DDL generator
-  - [ ] Distance operator mapper
-  - [ ] Query builder for vector search
-  - [ ] Bulk vector insert optimizer
+  # src/dataknobs_data/backends/postgres_vector.py
+  - [x] pgvector installation checker (check_pgvector_extension)
+  - [x] Auto-install pgvector (install_pgvector_extension)
+  - [x] Index type selector (get_optimal_index_type)
+  - [x] Index creation SQL builder (build_vector_index_sql)
+  - [x] Vector column DDL generator (get_vector_column_ddl)
+  - [x] Distance operator mapper (get_vector_operator)
+  - [x] Vector formatting for PostgreSQL (format_vector_for_postgres)
+  - [x] Vector parsing from PostgreSQL (parse_postgres_vector)
   ```
 
-- [ ] **2.3 PostgreSQL Vector Operations**
+- [x] **2.3 PostgreSQL Vector Operations**
   ```python
   # Enhanced methods in postgres.py
-  - [ ] vector_search() with filters
-  - [ ] bulk_embed_and_store()
-  - [ ] create_vector_index()
+  - [x] vector_search() with filters
+  - [x] bulk_embed_and_store() full implementation
+  - [x] create_vector_index()
   - [ ] drop_vector_index()
   - [ ] optimize_vector_index()
   - [ ] get_vector_index_stats()
   ```
 
-- [ ] **2.4 Auto-Detection Logic**
+- [x] **2.4 Auto-Detection Logic**
   ```python
-  - [ ] Check config for enable_vectors flag
-  - [ ] Query information_schema for vector columns
-  - [ ] Check pg_extension for pgvector
-  - [ ] Auto-install pgvector if needed
-  - [ ] Handle permission errors gracefully
-  - [ ] Log vector support status
+  - [x] Check pg_extension for pgvector
+  - [x] Auto-install pgvector if needed and permissions allow
+  - [x] Handle permission errors gracefully
+  - [x] Log vector support status
+  - [x] Query information_schema for existing vector columns
+  - [x] Check config for enable_vectors flag
   ```
 
-- [ ] **2.5 PostgreSQL Vector Tests**
+- [x] **2.5 PostgreSQL Vector Tests**
   ```python
-  # tests/test_backends/test_postgres_vector.py
-  - [ ] Test auto-detection of vector fields
-  - [ ] Test pgvector extension installation
-  - [ ] Test vector column creation
-  - [ ] Test vector search (all metrics)
-  - [ ] Test filtered vector search
-  - [ ] Test bulk vector operations
-  - [ ] Test index creation/optimization
-  - [ ] Test backward compatibility
+  # tests/test_postgres_vector.py & test_postgres_vector_integration.py
+  - [x] Test pgvector extension detection (PASSING)
+  - [x] Test vector field storage and retrieval (PASSING)
+  - [x] Test VectorField JSON serialization fix
+  - [x] Test vector search (all metrics) - PASSING
+  - [x] Test filtered vector search - PASSING
+  - [x] Test bulk vector operations - PASSING
+  - [x] Test index creation/optimization - PASSING
+  - [x] Test backward compatibility (no breaking changes)
+  ```
+
+- [x] **2.6 Additional Infrastructure**
+  ```bash
+  # Docker and scripts
+  - [x] Updated docker-compose.override.yml to use pgvector/pgvector:pg15
+  - [x] Created bin/ensure-pgvector.sh script for extension verification
+  - [x] Script works with docker-compose exec (no psql needed on host)
+  - [x] Integration with existing test infrastructure (TEST_POSTGRES=true)
+  ```
+
+- [x] **2.7 Code Quality Improvements**
+  ```python
+  # Refactoring completed 2025-08-28
+  - [x] Created shared mixins to eliminate ~150-200 lines of duplicated code
+  - [x] PostgresBaseConfig: Centralized configuration parsing
+  - [x] PostgresTableManager: Shared table management SQL
+  - [x] PostgresVectorSupport: Vector field detection and tracking
+  - [x] PostgresConnectionValidator: Connection validation logic
+  - [x] PostgresErrorHandler: Consistent error handling
+  - [x] SQLRecordSerializer: Centralized vector field JSON serialization
+  - [x] Fixed connection pool cleanup and resource leaks
+  - [x] Fixed all metadata handling test failures
+  - [x] Reduced default pool sizes for better test stability
   ```
 
 ### Phase 3: Elasticsearch Integration (Days 7-9)
 
 #### Context
 Enhance Elasticsearch backend with dense_vector support and KNN search.
+
+#### Lessons from PostgreSQL Implementation to Apply
+1. **Use Shared Mixins**: Create elasticsearch_mixins.py for common code between any ES variants
+2. **Centralize Serialization**: Extend SQLRecordSerializer or create ESRecordSerializer for vector handling
+3. **Vector Field Detection**: Implement early detection of vector fields in records
+4. **Connection Management**: Ensure proper cleanup of ES clients and connection pools
+5. **Test with Real Backend**: Use actual Elasticsearch with docker-compose, not mocks
+6. **Operator/Query Mapping**: Create centralized mapping for distance metrics to ES query types
+7. **Bulk Operations**: Implement efficient batch processing from the start
+8. **Error Handling**: Create consistent error handling patterns like PostgresErrorHandler
 
 #### Files to Modify
 1. `src/dataknobs_data/backends/elasticsearch_async.py`
@@ -211,22 +249,27 @@ Enhance Elasticsearch backend with dense_vector support and KNN search.
   ```python
   # src/dataknobs_data/backends/elasticsearch_async.py
   - [ ] Add VectorOperationsMixin
-  - [ ] Add vector field detection
+  - [ ] Add vector field detection (like _has_vector_fields in postgres)
   - [ ] Modify mapping creation for dense_vector
+  - [ ] Override _record_to_doc() for vector serialization (like _record_to_row)
+  - [ ] Override _doc_to_record() for vector deserialization (like _row_to_record)
   - [ ] Implement vector_search() with KNN
   - [ ] Add hybrid search support
   - [ ] Handle index refresh for vectors
+  - [ ] Ensure proper client cleanup in close()
   ```
 
 - [ ] **3.2 Elasticsearch Vector Utilities**
   ```python
   # src/dataknobs_data/vector/elasticsearch_utils.py
   - [ ] Mapping generator for dense_vector
-  - [ ] KNN query builder
+  - [ ] KNN query builder with distance metric mapping
   - [ ] Hybrid query combiner
   - [ ] Index settings optimizer
-  - [ ] Similarity metric converter
+  - [ ] Similarity metric converter (cosine -> cosine, euclidean -> l2_norm, etc.)
   - [ ] Bulk indexing for vectors
+  - [ ] Vector formatting functions (like format_vector_for_postgres)
+  - [ ] Vector parsing utilities (like parse_postgres_vector)
   ```
 
 - [ ] **3.3 Elasticsearch Vector Operations**
@@ -249,6 +292,19 @@ Enhance Elasticsearch backend with dense_vector support and KNN search.
   - [ ] Test similarity metrics
   - [ ] Test bulk vector indexing
   - [ ] Test index refresh behavior
+  - [ ] Test with real ES backend (docker-compose)
+  - [ ] Test vector field metadata persistence
+  - [ ] Test backward compatibility
+  ```
+
+- [ ] **3.5 Shared Elasticsearch Infrastructure (NEW - from PostgreSQL learnings)**
+  ```python
+  # src/dataknobs_data/backends/elasticsearch_mixins.py (new)
+  - [ ] ElasticsearchBaseConfig: Centralized config parsing
+  - [ ] ElasticsearchIndexManager: Shared index management
+  - [ ] ElasticsearchVectorSupport: Vector field detection and tracking
+  - [ ] ElasticsearchErrorHandler: Consistent error handling
+  - [ ] ElasticsearchRecordSerializer: Vector field JSON handling
   ```
 
 ### Phase 4: Synchronization & Migration (Days 10-12)

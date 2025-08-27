@@ -10,6 +10,111 @@ from ..query_logic import ComplexQuery
 from ..records import Record
 
 
+class SQLRecordSerializer:
+    """Mixin for SQL record serialization/deserialization with vector support."""
+    
+    @staticmethod
+    def record_to_json(record: Record) -> str:
+        """Convert a Record to JSON string for storage.
+        
+        Handles VectorField serialization to preserve metadata.
+        """
+        from ..fields import VectorField
+        
+        data = {}
+        for field_name, field_obj in record.fields.items():
+            # Handle VectorField - preserve full metadata
+            if isinstance(field_obj, VectorField):
+                data[field_name] = field_obj.to_dict()
+            # Handle other special fields that have to_list
+            elif hasattr(field_obj, 'to_list') and callable(field_obj.to_list):
+                data[field_name] = field_obj.to_list()
+            else:
+                data[field_name] = field_obj.value
+        return json.dumps(data)
+    
+    @staticmethod
+    def get_vector_extraction_sql(field_name: str, dialect: str = "postgres") -> str:
+        """Get SQL expression to extract vector from JSON field.
+        
+        Handles both raw arrays and VectorField dict formats.
+        
+        Args:
+            field_name: Name of the vector field
+            dialect: SQL dialect (postgres, sqlite, etc.)
+            
+        Returns:
+            SQL expression to extract vector value
+        """
+        if dialect == "postgres":
+            # PostgreSQL: Handle both formats - raw array or VectorField dict
+            return f"""CASE 
+                WHEN jsonb_typeof(data->'{field_name}') = 'object' 
+                THEN (data->'{field_name}'->>'value')::vector
+                ELSE (data->>'{field_name}')::vector
+            END"""
+        elif dialect == "sqlite":
+            # SQLite doesn't have native vector type, return JSON string
+            return f"""CASE 
+                WHEN json_type(json_extract(data, '$.{field_name}')) = 'object'
+                THEN json_extract(data, '$.{field_name}.value')
+                ELSE json_extract(data, '$.{field_name}')
+            END"""
+        else:
+            # Generic fallback
+            return f"data->'{field_name}'"
+    
+    @staticmethod
+    def json_to_record(data_json: str, metadata_json: str | None = None) -> Record:
+        """Convert JSON strings to a Record.
+        
+        Reconstructs VectorField objects from serialized format.
+        """
+        from ..fields import Field, VectorField
+        
+        data = json.loads(data_json) if data_json else {}
+        metadata = json.loads(metadata_json) if metadata_json and metadata_json != 'null' else {}
+        
+        # Reconstruct fields properly, especially VectorFields
+        fields = {}
+        for field_name, field_value in data.items():
+            # Check if this is a serialized VectorField
+            if isinstance(field_value, dict) and field_value.get("type") == "vector":
+                # Ensure the field has a 'name' key for from_dict (in case it's missing)
+                if "name" not in field_value:
+                    field_value["name"] = field_name
+                # Reconstruct VectorField from dict
+                fields[field_name] = VectorField.from_dict(field_value)
+            else:
+                # Regular field
+                fields[field_name] = Field(name=field_name, value=field_value)
+        
+        # Create Record with properly typed fields
+        record = Record(metadata=metadata)
+        record.fields.update(fields)
+        return record
+    
+    @staticmethod
+    def row_to_record(row: dict[str, Any]) -> Record:
+        """Convert a database row to a Record.
+        
+        Args:
+            row: Database row as dictionary with 'data' and optional 'metadata' fields
+            
+        Returns:
+            Reconstructed Record object
+        """
+        data_json = row.get("data", {})
+        if not isinstance(data_json, str):
+            data_json = json.dumps(data_json)
+        
+        metadata_json = row.get("metadata")
+        if metadata_json and not isinstance(metadata_json, str):
+            metadata_json = json.dumps(metadata_json)
+        
+        return SQLRecordSerializer.json_to_record(data_json, metadata_json)
+
+
 class SQLQueryBuilder:
     """Builds SQL queries from Query objects."""
     
@@ -43,7 +148,7 @@ class SQLQueryBuilder:
             Tuple of (SQL query, parameters)
         """
         record_id = record_id or str(uuid.uuid4())
-        data = self._record_to_json(record)
+        data = SQLRecordSerializer.record_to_json(record)
         metadata = json.dumps(record.metadata) if record.metadata else None
         
         if self.dialect == "postgres":
@@ -542,10 +647,7 @@ class SQLQueryBuilder:
     
     def _record_to_json(self, record: Record) -> str:
         """Convert a Record to JSON string for storage."""
-        data = {}
-        for field_name, field_obj in record.fields.items():
-            data[field_name] = field_obj.value
-        return json.dumps(data)
+        return SQLRecordSerializer.record_to_json(record)
     
     @staticmethod
     def row_to_record(row: dict[str, Any]) -> Record:
@@ -557,17 +659,7 @@ class SQLQueryBuilder:
         Returns:
             Record object
         """
-        data = row.get("data", {})
-        if isinstance(data, str):
-            data = json.loads(data)
-        
-        metadata = row.get("metadata", {})
-        if isinstance(metadata, str) and metadata:
-            metadata = json.loads(metadata)
-        elif not metadata:
-            metadata = {}
-        
-        return Record(data=data, metadata=metadata)
+        return SQLRecordSerializer.row_to_record(row)
 
 
 class SQLTableManager:

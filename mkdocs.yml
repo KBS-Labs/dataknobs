@@ -1,8 +1,8 @@
 site_name: Dataknobs Documentation
 site_description: Comprehensive documentation for Dataknobs - AI Knowledge Base Structures
-site_author: Your Team
-site_url: https://your-domain.com/dataknobs  # Update with your actual URL
-repo_url: https://github.com/yourusername/dataknobs  # Update with your repo
+site_author: KBS Labs
+site_url: https://kbs-labs.github.io/dataknobs
+repo_url: https://github.com/kbs-labs/dataknobs
 repo_name: dataknobs
 edit_uri: edit/main/docs/
 
@@ -258,7 +258,7 @@ extra:
     provider: mike
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/yourusername/dataknobs  # Update
+      link: https://github.com/kbs-labs/dataknobs
     - icon: fontawesome/brands/python
       link: https://pypi.org/project/dataknobs/
   analytics:

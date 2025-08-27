@@ -19,7 +19,7 @@ from ..pooling.postgres import PostgresPoolConfig, create_asyncpg_pool, validate
 from ..query import Operator, Query, SortOrder
 from ..query_logic import ComplexQuery
 from ..records import Record
-from .sql_base import SQLQueryBuilder
+from .sql_base import SQLQueryBuilder, SQLRecordSerializer
 from ..streaming import (
     StreamConfig,
     StreamResult,
@@ -27,6 +27,13 @@ from ..streaming import (
     process_batch_with_fallback,
 )
 from ..vector.mixins import VectorCapable, VectorOperationsMixin
+from .postgres_mixins import (
+    PostgresBaseConfig, 
+    PostgresConnectionValidator,
+    PostgresErrorHandler,
+    PostgresTableManager,
+    PostgresVectorSupport,
+)
 
 if TYPE_CHECKING:
     import numpy as np
@@ -36,7 +43,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
+class SyncPostgresDatabase(
+    SyncDatabase, 
+    ConfigurableBase, 
+    VectorOperationsMixin, 
+    SQLRecordSerializer,
+    PostgresBaseConfig,
+    PostgresTableManager,
+    PostgresVectorSupport,
+    PostgresConnectionValidator,
+    PostgresErrorHandler,
+):
     """Synchronous PostgreSQL database backend with proper connection management."""
 
     def __init__(self, config: dict[str, Any] | None = None):
@@ -51,10 +68,17 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
                 - password: Password (default: from env)
                 - table: Table name (default: "records")
                 - schema: Schema name (default: "public")
+                - enable_vector: Enable vector support (default: False)
         """
         super().__init__(config)
+        
+        # Parse configuration using mixin
+        table_name, schema_name, conn_config = self._parse_postgres_config(config or {})
+        self._init_postgres_attributes(table_name, schema_name)
+        
+        # Store connection config for later use
+        self._conn_config = conn_config
         self.db = None  # Will be initialized in connect()
-        self._connected = False
         self.query_builder = None  # Will be initialized in connect()
 
     @classmethod
@@ -66,34 +90,34 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
         """Connect to the PostgreSQL database."""
         if self._connected:
             return  # Already connected
-
-        config = self.config.copy()
-
-        # Extract table configuration
-        self.table_name = config.pop("table", "records")
-        self.schema_name = config.pop("schema", "public")
         
         # Initialize query builder
         self.query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
 
         # Create connection using existing utilities
-        if not any(key in config for key in ["host", "database", "user"]):
+        if not any(key in self._conn_config for key in ["host", "database", "user"]):
             # Use dotenv connector for environment-based config
             connector = DotenvPostgresConnector()
             self.db = PostgresDB(connector)
         else:
             # Direct configuration - map 'database' to 'db' for PostgresDB
             self.db = PostgresDB(
-                host=config.get("host", "localhost"),
-                db=config.get("database", "postgres"),  # Note: PostgresDB expects 'db' not 'database'
-                user=config.get("user", "postgres"),
-                pwd=config.get("password"),  # Note: PostgresDB expects 'pwd' not 'password'
-                port=config.get("port", 5432),
+                host=self._conn_config.get("host", "localhost"),
+                db=self._conn_config.get("database", "postgres"),  # Note: PostgresDB expects 'db' not 'database'
+                user=self._conn_config.get("user", "postgres"),
+                pwd=self._conn_config.get("password"),  # Note: PostgresDB expects 'pwd' not 'password'
+                port=self._conn_config.get("port", 5432),
             )
 
         # Create table if it doesn't exist
         self._ensure_table()
+        
+        # Detect and enable vector support if requested
+        if self._enable_vector:
+            self._detect_vector_support()
+        
         self._connected = True
+        self.log_operation("connect", f"Connected to table: {self.schema_name}.{self.table_name}")
 
     def close(self) -> None:
         """Close the database connection."""
@@ -106,59 +130,47 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
         """Initialize method - connection setup moved to connect()."""
         # Configuration parsing stays here, actual connection in connect()
         pass
+    
+    def _detect_vector_support(self) -> None:
+        """Detect and enable vector support if pgvector is available."""
+        from .postgres_vector import check_pgvector_extension_sync, install_pgvector_extension_sync
+        
+        try:
+            # Check if pgvector is installed
+            if check_pgvector_extension_sync(self.db):
+                self._vector_enabled = True
+                logger.info("pgvector extension detected and enabled")
+            else:
+                # Try to install it
+                if install_pgvector_extension_sync(self.db):
+                    self._vector_enabled = True
+                    logger.info("pgvector extension installed and enabled")
+                else:
+                    logger.debug("pgvector extension not available")
+        except Exception as e:
+            logger.debug(f"Could not enable vector support: {e}")
+            self._vector_enabled = False
 
     def _ensure_table(self) -> None:
         """Ensure the records table exists."""
         if not self.db:
             raise RuntimeError("Database not connected. Call connect() first.")
 
-        create_table_sql = f"""
-        CREATE TABLE IF NOT EXISTS {self.schema_name}.{self.table_name} (
-            id VARCHAR(255) PRIMARY KEY,
-            data JSONB NOT NULL,
-            metadata JSONB,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        
-        CREATE INDEX IF NOT EXISTS idx_{self.table_name}_data 
-        ON {self.schema_name}.{self.table_name} USING GIN (data);
-        
-        CREATE INDEX IF NOT EXISTS idx_{self.table_name}_metadata
-        ON {self.schema_name}.{self.table_name} USING GIN (metadata);
-        """
+        create_table_sql = self.get_create_table_sql(self.schema_name, self.table_name)
         self.db.execute(create_table_sql)
 
-    def _check_connection(self) -> None:
-        """Check if database is connected."""
-        if not self._connected or not self.db:
-            raise RuntimeError("Database not connected. Call connect() first.")
 
     def _record_to_row(self, record: Record, id: str | None = None) -> dict[str, Any]:
         """Convert a Record to a database row."""
-        data = {}
-        for field_name, field_obj in record.fields.items():
-            data[field_name] = field_obj.value
-
         return {
             "id": id or str(uuid.uuid4()),
-            "data": json.dumps(data),
+            "data": self.record_to_json(record),
             "metadata": json.dumps(record.metadata) if record.metadata else None,
         }
 
     def _row_to_record(self, row: dict[str, Any]) -> Record:
         """Convert a database row to a Record."""
-        data = row.get("data", {})
-        if isinstance(data, str):
-            data = json.loads(data)
-
-        metadata = row.get("metadata", {})
-        if isinstance(metadata, str) and metadata:
-            metadata = json.loads(metadata)
-        elif not metadata:
-            metadata = {}
-
-        return Record(data=data, metadata=metadata)
+        return self.row_to_record(row)
 
     def create(self, record: Record) -> str:
         """Create a new record."""
@@ -311,7 +323,7 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
         self._check_connection()
         
         # Create a query builder for PostgreSQL
-        from .sql_base import SQLQueryBuilder
+        from .sql_base import SQLQueryBuilder, SQLRecordSerializer
         query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
         
         # Use the shared batch create query builder
@@ -362,7 +374,7 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
         existing_ids = set(existing_df["id"].tolist()) if not existing_df.empty else set()
         
         # Create a query builder for PostgreSQL
-        from .sql_base import SQLQueryBuilder
+        from .sql_base import SQLQueryBuilder, SQLRecordSerializer
         query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
         
         # Use the shared batch delete query builder
@@ -407,7 +419,7 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
         self._check_connection()
         
         # Create a query builder for PostgreSQL
-        from .sql_base import SQLQueryBuilder
+        from .sql_base import SQLQueryBuilder, SQLRecordSerializer
         query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
         
         # Note: The shared builder uses positional params ($1, $2) for postgres
@@ -561,27 +573,190 @@ class SyncPostgresDatabase(SyncDatabase, ConfigurableBase):
         VALUES {', '.join(values)}
         """
         self.db.execute(sql, params)
+    
+    def vector_search(
+        self,
+        query_vector: "np.ndarray | list[float] | VectorField",
+        field_name: str,
+        limit: int = 10,
+        filters: list[Any] | None = None,
+        metric: "DistanceMetric | str" = "cosine"
+    ) -> list["VectorSearchResult"]:
+        """Search for similar vectors using PostgreSQL pgvector.
+        
+        Args:
+            query_vector: Query vector (numpy array, list, or VectorField)
+            field_name: Name of vector field to search (must be in data JSON)
+            limit: Maximum number of results
+            filters: Optional filters to apply
+            metric: Distance metric to use (cosine, euclidean, l2, inner_product)
+            
+        Returns:
+            List of VectorSearchResult objects ordered by similarity
+        """
+        if not self._vector_enabled:
+            raise RuntimeError("Vector search not available - pgvector not installed")
+            
+        self._check_connection()
+        
+        from ..fields import VectorField
+        from ..vector.types import DistanceMetric, VectorSearchResult
+        from .postgres_vector import format_vector_for_postgres, get_vector_operator
+        
+        # Convert query vector to proper format
+        if isinstance(query_vector, VectorField):
+            vector_str = format_vector_for_postgres(query_vector.value)
+        else:
+            vector_str = format_vector_for_postgres(query_vector)
+        
+        # Get the appropriate operator
+        if isinstance(metric, DistanceMetric):
+            metric_str = metric.value
+        else:
+            metric_str = str(metric).lower()
+        
+        operator = get_vector_operator(metric_str)
+        
+        # Build the query - vectors are stored in JSON data field
+        # Use centralized vector extraction logic
+        vector_expr = self.get_vector_extraction_sql(field_name, dialect="postgres")
+        sql = f"""
+        SELECT 
+            id, 
+            data,
+            metadata,
+            {vector_expr} {operator} %s::vector AS distance
+        FROM {self.schema_name}.{self.table_name}
+        WHERE data ? %s  -- Check field exists
+        """
+        
+        params = [vector_str, field_name]
+        
+        # Add filters if provided
+        if filters:
+            from ..query import Filter, Operator
+            for filter_obj in filters:
+                if isinstance(filter_obj, Filter):
+                    field_path = f"data->>'{filter_obj.field}'"
+                    
+                    if filter_obj.operator == Operator.EQ:
+                        sql += f" AND {field_path} = %s"
+                        params.append(str(filter_obj.value))
+                    elif filter_obj.operator == Operator.NE:
+                        sql += f" AND {field_path} != %s"
+                        params.append(str(filter_obj.value))
+                    elif filter_obj.operator == Operator.GT:
+                        sql += f" AND ({field_path})::float > %s"
+                        params.append(filter_obj.value)
+                    elif filter_obj.operator == Operator.LT:
+                        sql += f" AND ({field_path})::float < %s"
+                        params.append(filter_obj.value)
+        
+        # Order by distance and limit
+        sql += f" ORDER BY distance LIMIT %s"
+        params.append(limit)
+        
+        # Execute query - convert positional params to named for PostgresDB
+        param_dict = {}
+        for i, param in enumerate(params):
+            param_dict[f"p{i}"] = param
+        
+        # Replace %s with named params
+        for i in range(len(params)):
+            sql = sql.replace("%s", f"%(p{i})s", 1)
+        
+        df = self.db.query(sql, param_dict)
+        
+        # Convert results
+        results = []
+        for _, row in df.iterrows():
+            record = self._row_to_record(row)
+            
+            # Calculate similarity score from distance
+            distance = row["distance"]
+            if metric_str in ["cosine", "cosine_similarity"]:
+                score = 1.0 - distance  # Cosine distance to similarity
+            elif metric_str in ["euclidean", "l2"]:
+                score = 1.0 / (1.0 + distance)  # Convert distance to similarity
+            elif metric_str in ["inner_product", "dot_product"]:
+                score = -distance  # Negative because pgvector uses negative for descending
+            else:
+                score = -distance  # Default: lower distance = better
+            
+            result = VectorSearchResult(
+                record=record,
+                score=float(score),
+                vector_field=field_name
+            )
+            results.append(result)
+        
+        return results
+    
+    def has_vector_support(self) -> bool:
+        """Check if this database has vector support enabled.
+        
+        Returns:
+            True if vector operations are supported
+        """
+        return self._vector_enabled
+    
+    def enable_vector_support(self) -> bool:
+        """Enable vector support for this database if possible.
+        
+        Returns:
+            True if vector support is now enabled
+        """
+        if self._vector_enabled:
+            return True
+            
+        self._detect_vector_support()
+        return self._vector_enabled
+    
+    def bulk_embed_and_store(
+        self,
+        records: list[Record],
+        text_field: str | list[str],
+        vector_field: str = "embedding",
+        embedding_fn: Any = None,
+        batch_size: int = 100,
+        model_name: str | None = None,
+        model_version: str | None = None,
+    ) -> list[str]:
+        """Embed text fields and store vectors with records (stub for abstract requirement).
+        
+        This is a placeholder implementation to satisfy the abstract method requirement.
+        Full implementation would require actual embedding function.
+        """
+        raise NotImplementedError("bulk_embed_and_store requires an embedding function")
 
 
 # Global pool manager instance for async PostgreSQL connections
 _pool_manager = ConnectionPoolManager[asyncpg.Pool]()
 
 
-class AsyncPostgresDatabase(AsyncDatabase, VectorOperationsMixin, ConfigurableBase):
+class AsyncPostgresDatabase(
+    AsyncDatabase, 
+    VectorOperationsMixin, 
+    ConfigurableBase,
+    PostgresBaseConfig,
+    PostgresTableManager,
+    PostgresVectorSupport,
+    PostgresConnectionValidator,
+    PostgresErrorHandler,
+):
     """Native async PostgreSQL database backend with vector support and event loop-aware connection pooling."""
 
     def __init__(self, config: dict[str, Any] | None = None):
         """Initialize async PostgreSQL database."""
         super().__init__(config)
-        config = config or {}
-        self._pool_config = PostgresPoolConfig.from_dict(config)
-        # Add table and schema to pool config from regular config
-        self.table_name = config.get("table", "records")
-        self.schema_name = config.get("schema", "public")
+        
+        # Parse configuration using mixin
+        table_name, schema_name, conn_config = self._parse_postgres_config(config or {})
+        self._init_postgres_attributes(table_name, schema_name)
+        
+        # Extract pool configuration
+        self._pool_config = PostgresPoolConfig.from_dict(conn_config)
         self._pool: asyncpg.Pool | None = None
-        self._connected = False
-        self._vector_enabled = False
-        self._vector_dimensions: dict[str, int] = {}  # Track dimensions per vector field
 
     @classmethod
     def from_config(cls, config: dict) -> "AsyncPostgresDatabase":
@@ -606,15 +781,22 @@ class AsyncPostgresDatabase(AsyncDatabase, VectorOperationsMixin, ConfigurableBa
         # Ensure table exists
         await self._ensure_table()
         
-        # Check and enable vector support if available
-        await self._detect_vector_support()
+        # Check and enable vector support if requested
+        if self._enable_vector:
+            await self._detect_vector_support()
         
         self._connected = True
+        self.log_operation("connect", f"Connected to table: {self.schema_name}.{self.table_name}")
 
     async def close(self) -> None:
-        """Close the database connection."""
+        """Close the database connection and properly close the pool."""
         if self._connected:
-            # Pool manager handles cleanup
+            # Properly close the pool if we have one
+            if self._pool:
+                try:
+                    await self._pool.close()
+                except Exception as e:
+                    logger.warning(f"Error closing connection pool: {e}")
             self._pool = None
             self._connected = False
 
@@ -627,21 +809,7 @@ class AsyncPostgresDatabase(AsyncDatabase, VectorOperationsMixin, ConfigurableBa
         if not self._pool:
             raise RuntimeError("Database not connected. Call connect() first.")
 
-        create_table_sql = f"""
-        CREATE TABLE IF NOT EXISTS {self.schema_name}.{self.table_name} (
-            id VARCHAR(255) PRIMARY KEY,
-            data JSONB NOT NULL,
-            metadata JSONB,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        
-        CREATE INDEX IF NOT EXISTS idx_{self.table_name}_data 
-        ON {self.schema_name}.{self.table_name} USING GIN (data);
-        
-        CREATE INDEX IF NOT EXISTS idx_{self.table_name}_metadata
-        ON {self.schema_name}.{self.table_name} USING GIN (metadata);
-        """
+        create_table_sql = self.get_create_table_sql(self.schema_name, self.table_name)
 
         async with self._pool.acquire() as conn:
             await conn.execute(create_table_sql)
@@ -724,80 +892,34 @@ class AsyncPostgresDatabase(AsyncDatabase, VectorOperationsMixin, ConfigurableBa
                 self._vector_dimensions[field_name] = dimensions
 
     def _check_connection(self) -> None:
-        """Check if database is connected."""
-        if not self._connected or not self._pool:
-            raise RuntimeError("Database not connected. Call connect() first.")
+        """Check if async database is connected."""
+        self._check_async_connection()
 
     def _record_to_row(self, record: Record, id: str | None = None) -> dict[str, Any]:
-        """Convert a Record to a database row, extracting vector fields."""
-        from ..fields import VectorField
-        from .postgres_vector import format_vector_for_postgres
+        """Convert a Record to a database row using common serializer."""
+        from .sql_base import SQLRecordSerializer
         
-        data = {}
-        vectors = {}
-        
-        for field_name, field_obj in record.fields.items():
-            if isinstance(field_obj, VectorField) and self._vector_enabled:
-                # Store vector in separate column
-                if field_obj.value is not None:
-                    vectors[f"vector_{field_name}"] = format_vector_for_postgres(field_obj.value)
-                # Store vector metadata in JSON
-                data[field_name] = {
-                    "type": "vector",
-                    "dimensions": field_obj.dimensions,
-                    "source_field": field_obj.source_field,
-                    "model_name": field_obj.model_name,
-                    "model_version": field_obj.model_version,
-                }
-            else:
-                data[field_name] = field_obj.value
-
-        result = {
+        return {
             "id": id or str(uuid.uuid4()),
-            "data": json.dumps(data),
+            "data": SQLRecordSerializer.record_to_json(record),
             "metadata": json.dumps(record.metadata) if record.metadata else None,
         }
-        
-        # Add vector columns
-        result.update(vectors)
-        
-        return result
 
     def _row_to_record(self, row: asyncpg.Record) -> Record:
-        """Convert a database row to a Record, reconstructing vector fields."""
-        from ..fields import VectorField
-        from .postgres_vector import parse_postgres_vector
+        """Convert a database row to a Record using the common serializer."""
+        from .sql_base import SQLRecordSerializer
         
-        data = row.get("data", {})
-        if isinstance(data, str):
-            data = json.loads(data)
-
-        metadata = row.get("metadata", {})
-        if isinstance(metadata, str) and metadata:
-            metadata = json.loads(metadata)
-        elif not metadata:
-            metadata = {}
-
-        # Check for vector fields in data
-        if self._vector_enabled:
-            for field_name, field_value in list(data.items()):
-                if isinstance(field_value, dict) and field_value.get("type") == "vector":
-                    # Check if we have the vector data
-                    vector_column = f"vector_{field_name}"
-                    if vector_column in row:
-                        vector_data = row[vector_column]
-                        if vector_data:
-                            # Parse PostgreSQL vector format
-                            vector_list = parse_postgres_vector(str(vector_data))
-                            # Reconstruct VectorField
-                            data[field_name] = vector_list
-                        else:
-                            # No vector data stored
-                            data[field_name] = None
-                    else:
-                        data[field_name] = None
-
-        return Record(data=data, metadata=metadata)
+        # Convert asyncpg.Record to dict format expected by SQLRecordSerializer
+        data_json = row.get("data", {})
+        if not isinstance(data_json, str):
+            data_json = json.dumps(data_json)
+        
+        metadata_json = row.get("metadata")
+        if metadata_json and not isinstance(metadata_json, str):
+            metadata_json = json.dumps(metadata_json)
+        
+        # Use the common serializer to reconstruct the record
+        return SQLRecordSerializer.json_to_record(data_json, metadata_json)
 
     async def create(self, record: Record) -> str:
         """Create a new record with vector support."""
@@ -990,7 +1112,7 @@ class AsyncPostgresDatabase(AsyncDatabase, VectorOperationsMixin, ConfigurableBa
         self._check_connection()
         
         # Create a query builder for PostgreSQL
-        from .sql_base import SQLQueryBuilder
+        from .sql_base import SQLQueryBuilder, SQLRecordSerializer
         query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
         
         # Use the shared batch create query builder
@@ -1022,7 +1144,7 @@ class AsyncPostgresDatabase(AsyncDatabase, VectorOperationsMixin, ConfigurableBa
         self._check_connection()
         
         # Create a query builder for PostgreSQL
-        from .sql_base import SQLQueryBuilder
+        from .sql_base import SQLQueryBuilder, SQLRecordSerializer
         query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
         
         # Use the shared batch delete query builder
@@ -1059,7 +1181,7 @@ class AsyncPostgresDatabase(AsyncDatabase, VectorOperationsMixin, ConfigurableBa
         self._check_connection()
         
         # Create a query builder for PostgreSQL
-        from .sql_base import SQLQueryBuilder
+        from .sql_base import SQLQueryBuilder, SQLRecordSerializer
         query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
         
         # Use the shared batch update query builder
@@ -1262,7 +1384,7 @@ class AsyncPostgresDatabase(AsyncDatabase, VectorOperationsMixin, ConfigurableBa
             
             # Generate embeddings
             if texts:
-                embeddings = embedding_fn(texts)
+                embeddings = await embedding_fn(texts)
                 
                 # Store vectors with records
                 for j, record in enumerate(batch):
@@ -1273,6 +1395,7 @@ class AsyncPostgresDatabase(AsyncDatabase, VectorOperationsMixin, ConfigurableBa
                         record.fields[vector_field] = VectorField(
                             name=vector_field,
                             value=vector,
+                            dimensions=len(vector) if hasattr(vector, '__len__') else None,
                             source_field=text_field if isinstance(text_field, str) else ",".join(text_field),
                             model_name=model_name,
                             model_version=model_version,
@@ -1288,6 +1411,136 @@ class AsyncPostgresDatabase(AsyncDatabase, VectorOperationsMixin, ConfigurableBa
                         processed_ids.append(record.id)
         
         return processed_ids
+    
+    async def create_vector_index(
+        self,
+        vector_field: str,
+        dimensions: int,
+        metric: "DistanceMetric | str" = "cosine",
+        index_type: str = "ivfflat",
+        lists: int | None = None,
+    ) -> bool:
+        """Create a vector index for efficient similarity search.
+        
+        Args:
+            vector_field: Name of the vector field to index
+            dimensions: Number of dimensions in the vectors
+            metric: Distance metric for the index
+            index_type: Type of index (ivfflat, hnsw)
+            lists: Number of lists for IVFFlat index
+            
+        Returns:
+            True if index was created successfully
+        """
+        from .postgres_vector import (
+            build_vector_index_sql, 
+            get_optimal_index_type,
+            build_vector_column_expression,
+            get_vector_count_sql
+        )
+        
+        self._check_connection()
+        
+        if not self._vector_enabled:
+            return False
+        
+        # Determine optimal parameters if not provided
+        if not lists and index_type == "ivfflat":
+            # Count vectors to determine optimal lists
+            count_sql = get_vector_count_sql(self.schema_name, self.table_name, vector_field)
+            async with self._pool.acquire() as conn:
+                count = await conn.fetchval(count_sql) or 0
+                _, params = get_optimal_index_type(count)
+                lists = params.get("lists", 100)
+        
+        # Convert metric enum to string if needed
+        if hasattr(metric, 'value'):
+            metric_str = metric.value
+        else:
+            metric_str = str(metric).lower()
+        
+        # Build vector column expression for index
+        column_expr = build_vector_column_expression(vector_field, dimensions, for_index=True)
+        
+        # Build index SQL - pass field_name for proper index naming
+        index_sql = build_vector_index_sql(
+            table_name=self.table_name,
+            schema_name=self.schema_name,
+            column_name=column_expr,
+            dimensions=dimensions,
+            metric=metric_str,
+            index_type=index_type,
+            index_params={"lists": lists} if lists else None,
+            field_name=vector_field
+        )
+        
+        # Create the index
+        try:
+            logger.debug(f"Creating vector index with SQL: {index_sql}")
+            async with self._pool.acquire() as conn:
+                await conn.execute(index_sql)
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to create vector index: {e}")
+            logger.debug(f"Index SQL was: {index_sql}")
+            return False
+    
+    async def drop_vector_index(self, vector_field: str, metric: str = "cosine") -> bool:
+        """Drop a vector index.
+        
+        Args:
+            vector_field: Name of the vector field
+            metric: Distance metric used in the index
+            
+        Returns:
+            True if index was dropped successfully
+        """
+        from .postgres_vector import get_vector_index_name
+        
+        self._check_connection()
+        
+        index_name = get_vector_index_name(self.table_name, vector_field, metric)
+        
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(f"DROP INDEX IF EXISTS {self.schema_name}.{index_name}")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to drop vector index: {e}")
+            return False
+    
+    async def get_vector_index_stats(self, vector_field: str) -> dict[str, Any]:
+        """Get statistics about a vector field and its index.
+        
+        Args:
+            vector_field: Name of the vector field
+            
+        Returns:
+            Dictionary with index statistics
+        """
+        from .postgres_vector import get_vector_count_sql, get_index_check_sql
+        
+        self._check_connection()
+        
+        stats = {
+            "field": vector_field,
+            "indexed": False,
+            "vector_count": 0,
+        }
+        
+        try:
+            async with self._pool.acquire() as conn:
+                # Count vectors
+                count_sql = get_vector_count_sql(self.schema_name, self.table_name, vector_field)
+                stats["vector_count"] = await conn.fetchval(count_sql) or 0
+                
+                # Check for index
+                index_sql, params = get_index_check_sql(self.schema_name, self.table_name, vector_field)
+                stats["indexed"] = await conn.fetchval(index_sql, *params) or False
+        except Exception as e:
+            logger.warning(f"Failed to get vector index stats: {e}")
+        
+        return stats
 
     async def stream_read(
         self,
