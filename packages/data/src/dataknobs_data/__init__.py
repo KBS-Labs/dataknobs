@@ -21,7 +21,7 @@ from .exceptions import (
 from .factory import DatabaseFactory, async_database_factory, database_factory
 
 # Import core modules
-from .fields import Field, FieldType
+from .fields import Field, FieldType, VectorField
 from .query import Filter, Operator, Query, SortOrder, SortSpec
 from .query_logic import (
     ComplexQuery,
@@ -43,6 +43,7 @@ __all__ = [
     "Record",
     "Field",
     "FieldType",
+    "VectorField",
     "Query",
     "Filter",
     "Operator",

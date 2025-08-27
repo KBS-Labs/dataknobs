@@ -2,7 +2,10 @@ import copy
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 class FieldType(Enum):
@@ -16,6 +19,8 @@ class FieldType(Enum):
     JSON = "json"
     BINARY = "binary"
     TEXT = "text"
+    VECTOR = "vector"
+    SPARSE_VECTOR = "sparse_vector"
 
 
 @dataclass
@@ -133,10 +138,184 @@ class Field:
         field_type = None
         if data.get("type"):
             field_type = FieldType(data["type"])
+        
+        # Handle vector fields specially
+        if field_type in (FieldType.VECTOR, FieldType.SPARSE_VECTOR):
+            return VectorField.from_dict(data)
 
         return cls(
             name=data["name"],
             value=data["value"],
             type=field_type,
             metadata=data.get("metadata", {}),
+        )
+
+
+class VectorField(Field):
+    """Represents a vector field with embeddings and metadata."""
+
+    def __init__(
+        self,
+        name: str,
+        value: "np.ndarray | list[float]",
+        dimensions: int | None = None,
+        source_field: str | None = None,
+        model_name: str | None = None,
+        model_version: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ):
+        """Initialize a vector field.
+
+        Args:
+            name: Field name
+            value: Vector data as numpy array or list of floats
+            dimensions: Expected dimensions (will be validated)
+            source_field: Name of the text field this vector was generated from
+            model_name: Name of the embedding model used
+            model_version: Version of the embedding model
+            metadata: Additional metadata
+        """
+        # Import numpy lazily to avoid hard dependency
+        try:
+            import numpy as np
+        except ImportError:
+            raise ImportError(
+                "numpy is required for vector fields. Install with: pip install numpy"
+            )
+        
+        # Convert to numpy array if needed
+        if isinstance(value, list):
+            value = np.array(value, dtype=np.float32)
+        elif isinstance(value, np.ndarray):
+            # Ensure float32 dtype for consistency
+            if value.dtype != np.float32:
+                value = value.astype(np.float32)
+        else:
+            raise TypeError(
+                f"Vector value must be numpy array or list, got {type(value)}"
+            )
+        
+        # Validate dimensions
+        actual_dims = len(value) if value.ndim == 1 else value.shape[-1]
+        if dimensions is None:
+            dimensions = actual_dims
+        elif dimensions != actual_dims:
+            raise ValueError(
+                f"Vector dimension mismatch for field '{name}': "
+                f"expected {dimensions}, got {actual_dims}"
+            )
+        
+        # Store vector metadata
+        vector_metadata = metadata or {}
+        vector_metadata.update({
+            "dimensions": dimensions,
+            "source_field": source_field,
+            "model": {
+                "name": model_name,
+                "version": model_version,
+            } if model_name else None,
+        })
+        
+        super().__init__(
+            name=name,
+            value=value,
+            type=FieldType.VECTOR,
+            metadata=vector_metadata,
+        )
+        
+        self.dimensions = dimensions
+        self.source_field = source_field
+        self.model_name = model_name
+        self.model_version = model_version
+    
+    def validate(self) -> bool:
+        """Validate the vector field."""
+        if self.value is None:
+            return True
+        
+        try:
+            import numpy as np
+            
+            if not isinstance(self.value, np.ndarray):
+                return False
+            
+            if self.value.ndim not in (1, 2):
+                return False
+            
+            # Check dimensions match metadata
+            actual_dims = len(self.value) if self.value.ndim == 1 else self.value.shape[-1]
+            expected_dims = self.metadata.get("dimensions")
+            if expected_dims and actual_dims != expected_dims:
+                return False
+            
+            return True
+        except ImportError:
+            return False
+    
+    def to_list(self) -> list[float]:
+        """Convert vector to a list of floats."""
+        import numpy as np
+        
+        if isinstance(self.value, np.ndarray):
+            return self.value.tolist()
+        return list(self.value)
+    
+    def cosine_similarity(self, other: "VectorField | np.ndarray | list[float]") -> float:
+        """Compute cosine similarity with another vector."""
+        import numpy as np
+        
+        if isinstance(other, VectorField):
+            other_vec = other.value
+        elif isinstance(other, list):
+            other_vec = np.array(other, dtype=np.float32)
+        else:
+            other_vec = other
+        
+        # Compute cosine similarity
+        dot_product = np.dot(self.value, other_vec)
+        norm_a = np.linalg.norm(self.value)
+        norm_b = np.linalg.norm(other_vec)
+        
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        
+        return float(dot_product / (norm_a * norm_b))
+    
+    def euclidean_distance(self, other: "VectorField | np.ndarray | list[float]") -> float:
+        """Compute Euclidean distance to another vector."""
+        import numpy as np
+        
+        if isinstance(other, VectorField):
+            other_vec = other.value
+        elif isinstance(other, list):
+            other_vec = np.array(other, dtype=np.float32)
+        else:
+            other_vec = other
+        
+        return float(np.linalg.norm(self.value - other_vec))
+    
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary representation."""
+        return {
+            "name": self.name,
+            "value": self.to_list(),
+            "type": self.type.value,
+            "metadata": self.metadata,
+            "dimensions": self.dimensions,
+        }
+    
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "VectorField":
+        """Create from dictionary representation."""
+        metadata = data.get("metadata", {})
+        model_info = metadata.get("model", {})
+        
+        return cls(
+            name=data["name"],
+            value=data["value"],
+            dimensions=data.get("dimensions") or metadata.get("dimensions"),
+            source_field=metadata.get("source_field"),
+            model_name=model_info.get("name") if model_info else None,
+            model_version=model_info.get("version") if model_info else None,
+            metadata=metadata,
         )
