@@ -3,9 +3,13 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Union
+from typing import TYPE_CHECKING, Any, Union
 
-from .query import Filter, Operator
+from .query import Filter, Operator, VectorQuery
+
+if TYPE_CHECKING:
+    import numpy as np
+    from .vector.types import DistanceMetric
 
 
 class LogicOperator(Enum):
@@ -140,6 +144,7 @@ class QueryBuilder:
         self.limit_value = None
         self.offset_value = None
         self.fields = None
+        self.vector_query = None
 
     def where(self, field: str, operator: str | Operator, value: Any = None) -> "QueryBuilder":
         """Add a filter condition (defaults to AND with existing conditions)."""
@@ -262,6 +267,29 @@ class QueryBuilder:
         """Set field projection."""
         self.fields = list(fields) if fields else None
         return self
+    
+    def similar_to(
+        self,
+        vector: "np.ndarray | list[float]",
+        field: str = "embedding",
+        k: int = 10,
+        metric: "DistanceMetric | str" = "cosine",
+        include_source: bool = True,
+        score_threshold: float | None = None,
+    ) -> "QueryBuilder":
+        """Add vector similarity search."""
+        self.vector_query = VectorQuery(
+            vector=vector,
+            field_name=field,
+            k=k,
+            metric=metric,
+            include_source=include_source,
+            score_threshold=score_threshold,
+        )
+        # If limit is not set, use k as the limit
+        if self.limit_value is None:
+            self.limit_value = k
+        return self
 
     def build(self) -> "ComplexQuery":
         """Build the final query."""
@@ -270,7 +298,8 @@ class QueryBuilder:
             sort_specs=self.sort_specs,
             limit_value=self.limit_value,
             offset_value=self.offset_value,
-            fields=self.fields
+            fields=self.fields,
+            vector_query=self.vector_query
         )
 
 
@@ -283,6 +312,7 @@ class ComplexQuery:
     limit_value: int | None = None
     offset_value: int | None = None
     fields: list[str] | None = None
+    vector_query: VectorQuery | None = None  # Vector similarity search
 
     def matches(self, record: Any) -> bool:
         """Check if a record matches this query."""
@@ -322,7 +352,8 @@ class ComplexQuery:
             sort_specs=self.sort_specs,
             limit_value=self.limit_value,
             offset_value=self.offset_value,
-            fields=self.fields
+            fields=self.fields,
+            vector_query=self.vector_query
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -343,6 +374,9 @@ class ComplexQuery:
 
         if self.fields is not None:
             result["fields"] = self.fields
+        
+        if self.vector_query is not None:
+            result["vector_query"] = self.vector_query.to_dict()
 
         return result
 
@@ -358,11 +392,16 @@ class ComplexQuery:
         sort_specs = []
         for sort_data in data.get("sort", []):
             sort_specs.append(SortSpec.from_dict(sort_data))
+        
+        vector_query = None
+        if "vector_query" in data:
+            vector_query = VectorQuery.from_dict(data["vector_query"])
 
         return cls(
             condition=condition,
             sort_specs=sort_specs,
             limit_value=data.get("limit"),
             offset_value=data.get("offset"),
-            fields=data.get("fields")
+            fields=data.get("fields"),
+            vector_query=vector_query
         )
