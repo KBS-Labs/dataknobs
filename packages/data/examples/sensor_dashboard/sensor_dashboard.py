@@ -314,11 +314,11 @@ class SensorDashboard:
             return df
         
         # Resample to hourly frequency and calculate mean
-        hourly = df.groupby("sensor_id").resample("1H")[["temperature", "humidity"]].mean()
+        hourly = df.groupby("sensor_id").resample("1h")[["temperature", "humidity"]].mean()
         hourly = hourly.round(2)
         
         # Add count of readings per hour
-        counts = df.groupby("sensor_id").resample("1H").size()
+        counts = df.groupby("sensor_id").resample("1h", include_groups=False).size()
         hourly["reading_count"] = counts
         
         return hourly
@@ -540,15 +540,24 @@ class SensorDashboard:
     
     def interpolate_missing_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """Interpolate missing sensor data in DataFrame."""
+        # Infer object types to proper dtypes before interpolating
+        df = df.infer_objects(copy=False)
+        
+        # Get numeric columns for interpolation
+        numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
+        
         # Check if we have sensor_id column
         if 'sensor_id' in df.columns:
-            # Group by sensor and interpolate
+            # Group by sensor and interpolate only numeric columns
             for sensor_id in df['sensor_id'].unique():
                 mask = df['sensor_id'] == sensor_id
-                df.loc[mask] = df.loc[mask].interpolate(method="time")
+                # Only interpolate numeric columns to avoid object dtype warning
+                if numeric_cols:
+                    df.loc[mask, numeric_cols] = df.loc[mask, numeric_cols].interpolate(method="time")
         else:
-            # Single sensor, just interpolate
-            df = df.interpolate(method="time")
+            # Single sensor, interpolate only numeric columns
+            if numeric_cols:
+                df[numeric_cols] = df[numeric_cols].interpolate(method="time")
         
         return df
     

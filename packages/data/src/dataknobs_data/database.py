@@ -2,27 +2,98 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any
 
+from .database_utils import ensure_record_id, process_search_results
 from .query import Query
 from .query_logic import ComplexQuery
 from .records import Record
+from .schema import DatabaseSchema, FieldSchema
 from .streaming import StreamConfig, StreamResult
 
 
 class AsyncDatabase(ABC):
     """Abstract base class for async database implementations."""
 
-    def __init__(self, config: dict[str, Any] | None = None):
+    def __init__(self, config: dict[str, Any] | None = None, schema: DatabaseSchema | None = None):
         """Initialize the database with optional configuration.
 
         Args:
-            config: Backend-specific configuration parameters
+            config: Backend-specific configuration parameters (may include 'schema' key)
+            schema: Optional database schema (overrides config schema)
         """
-        self.config = config or {}
+        config = config or {}
+        
+        # Extract schema from config if present and no explicit schema provided
+        if schema is None and "schema" in config:
+            schema = self._extract_schema_from_config(config["schema"])
+            # Remove schema from config so backends don't see it
+            config = {k: v for k, v in config.items() if k != "schema"}
+        
+        self.config = config
+        self.schema = schema or DatabaseSchema()
         self._initialize()
+    
+    @staticmethod
+    def _extract_schema_from_config(schema_config: Any) -> DatabaseSchema | None:
+        """Extract schema from configuration.
+        
+        Args:
+            schema_config: Can be a DatabaseSchema, dict, or None
+            
+        Returns:
+            DatabaseSchema instance or None
+        """
+        if isinstance(schema_config, DatabaseSchema):
+            return schema_config
+        elif isinstance(schema_config, dict):
+            return DatabaseSchema.from_dict(schema_config)
+        return None
 
     def _initialize(self) -> None:
         """Initialize the database backend. Override in subclasses."""
         pass
+    
+    def _ensure_record_id(self, record: Record, record_id: str) -> Record:
+        """Ensure a record has its ID set (delegates to utility function)."""
+        return ensure_record_id(record, record_id)
+    
+    def _process_search_results(
+        self, 
+        results: list[tuple[str, Record]],
+        query: Query,
+        deep_copy: bool = True
+    ) -> list[Record]:
+        """Process search results (delegates to utility function)."""
+        return process_search_results(results, query, deep_copy)
+    
+    def set_schema(self, schema: DatabaseSchema) -> None:
+        """Set the database schema.
+        
+        Args:
+            schema: The database schema to use
+        """
+        self.schema = schema
+    
+    def add_field_schema(self, field_schema: FieldSchema) -> None:
+        """Add a field to the database schema.
+        
+        Args:
+            field_schema: The field schema to add
+        """
+        self.schema.add_field(field_schema)
+    
+    def with_schema(self, **field_definitions) -> "AsyncDatabase":
+        """Set schema using field definitions.
+        
+        Returns self for chaining.
+        
+        Examples:
+            db = AsyncMemoryDatabase().with_schema(
+                content=FieldType.TEXT,
+                embedding=(FieldType.VECTOR, {"dimensions": 384, "source_field": "content"})
+            )
+        """
+        self.schema = DatabaseSchema.create(**field_definitions)
+        return self
 
     @abstractmethod
     async def create(self, record: Record) -> str:
@@ -84,6 +155,16 @@ class AsyncDatabase(ABC):
             List of matching records
         """
         raise NotImplementedError
+    
+    async def all(self) -> list[Record]:
+        """Get all records from the database.
+        
+        Returns:
+            List of all records
+        """
+        # Default implementation using search with empty query
+        from .query import Query
+        return await self.search(Query())
 
     async def _search_with_complex_query(self, query: ComplexQuery) -> list[Record]:
         """Default implementation for ComplexQuery using in-memory filtering.
@@ -363,18 +444,71 @@ class AsyncDatabase(ABC):
 class SyncDatabase(ABC):
     """Synchronous variant of the Database abstract base class."""
 
-    def __init__(self, config: dict[str, Any] | None = None):
+    def __init__(self, config: dict[str, Any] | None = None, schema: DatabaseSchema | None = None):
         """Initialize the database with optional configuration.
 
         Args:
-            config: Backend-specific configuration parameters
+            config: Backend-specific configuration parameters (may include 'schema' key)
+            schema: Optional database schema (overrides config schema)
         """
-        self.config = config or {}
+        config = config or {}
+        
+        # Extract schema from config if present and no explicit schema provided
+        if schema is None and "schema" in config:
+            schema = AsyncDatabase._extract_schema_from_config(config["schema"])
+            # Remove schema from config so backends don't see it
+            config = {k: v for k, v in config.items() if k != "schema"}
+        
+        self.config = config
+        self.schema = schema or DatabaseSchema()
         self._initialize()
 
     def _initialize(self) -> None:
         """Initialize the database backend. Override in subclasses."""
         pass
+    
+    def _ensure_record_id(self, record: Record, record_id: str) -> Record:
+        """Ensure a record has its ID set (delegates to utility function)."""
+        return ensure_record_id(record, record_id)
+    
+    def _process_search_results(
+        self, 
+        results: list[tuple[str, Record]],
+        query: Query,
+        deep_copy: bool = True
+    ) -> list[Record]:
+        """Process search results (delegates to utility function)."""
+        return process_search_results(results, query, deep_copy)
+    
+    def set_schema(self, schema: DatabaseSchema) -> None:
+        """Set the database schema.
+        
+        Args:
+            schema: The database schema to use
+        """
+        self.schema = schema
+    
+    def add_field_schema(self, field_schema: FieldSchema) -> None:
+        """Add a field to the database schema.
+        
+        Args:
+            field_schema: The field schema to add
+        """
+        self.schema.add_field(field_schema)
+    
+    def with_schema(self, **field_definitions) -> "SyncDatabase":
+        """Set schema using field definitions.
+        
+        Returns self for chaining.
+        
+        Examples:
+            db = SyncMemoryDatabase().with_schema(
+                content=FieldType.TEXT,
+                embedding=(FieldType.VECTOR, {"dimensions": 384, "source_field": "content"})
+            )
+        """
+        self.schema = DatabaseSchema.create(**field_definitions)
+        return self
 
     @abstractmethod
     def create(self, record: Record) -> str:
@@ -400,6 +534,16 @@ class SyncDatabase(ABC):
     def search(self, query: Query | ComplexQuery) -> list[Record]:
         """Search for records matching a query (simple or complex)."""
         raise NotImplementedError
+    
+    def all(self) -> list[Record]:
+        """Get all records from the database.
+        
+        Returns:
+            List of all records
+        """
+        # Default implementation using search with empty query
+        from .query import Query
+        return self.search(Query())
 
     def _search_with_complex_query(self, query: ComplexQuery) -> list[Record]:
         """Default implementation for ComplexQuery using in-memory filtering.

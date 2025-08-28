@@ -99,30 +99,8 @@ class AsyncMemoryDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
                 if matches:
                     results.append((id, record))
 
-            # Apply sorting
-            if query.sort_specs:
-                for sort_spec in reversed(query.sort_specs):
-                    reverse = sort_spec.order.value == "desc"
-                    results.sort(key=lambda x: x[1].get_value(sort_spec.field, ""), reverse=reverse)
-
-            # Extract records
-            records = [record for _, record in results]
-
-            # Apply offset and limit
-            if query.offset_value:
-                records = records[query.offset_value :]
-            if query.limit_value:
-                records = records[: query.limit_value]
-
-            # Apply field projection
-            if query.fields:
-                projected_records = []
-                for record in records:
-                    projected_records.append(record.project(query.fields))
-                records = projected_records
-
-            # Return deep copies
-            return [record.copy(deep=True) for record in records]
+            # Use the helper method from base class
+            return self._process_search_results(results, query, deep_copy=True)
 
     async def _count_all(self) -> int:
         """Count all records in memory."""
@@ -181,7 +159,11 @@ class AsyncMemoryDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
             records = await self.search(query)
         else:
             async with self._lock:
-                records = list(self._storage.values())
+                # Ensure records have IDs when getting directly from storage
+                records = []
+                for record_id, record in self._storage.items():
+                    record_copy = self._ensure_record_id(record, record_id)
+                    records.append(record_copy)
 
         # Yield records in batches
         for i in range(0, len(records), config.batch_size):
@@ -284,30 +266,8 @@ class SyncMemoryDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
                 if matches:
                     results.append((id, record))
 
-            # Apply sorting
-            if query.sort_specs:
-                for sort_spec in reversed(query.sort_specs):
-                    reverse = sort_spec.order.value == "desc"
-                    results.sort(key=lambda x: x[1].get_value(sort_spec.field, ""), reverse=reverse)
-
-            # Extract records
-            records = [record for _, record in results]
-
-            # Apply offset and limit
-            if query.offset_value:
-                records = records[query.offset_value :]
-            if query.limit_value:
-                records = records[: query.limit_value]
-
-            # Apply field projection
-            if query.fields:
-                projected_records = []
-                for record in records:
-                    projected_records.append(record.project(query.fields))
-                records = projected_records
-
-            # Return deep copies
-            return [record.copy(deep=True) for record in records]
+            # Use the helper method from base class
+            return self._process_search_results(results, query, deep_copy=True)
 
     def _count_all(self) -> int:
         """Count all records in memory."""
@@ -366,7 +326,11 @@ class SyncMemoryDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
             records = self.search(query)
         else:
             with self._lock:
-                records = list(self._storage.values())
+                # Ensure records have IDs when getting directly from storage
+                records = []
+                for record_id, record in self._storage.items():
+                    record_copy = self._ensure_record_id(record, record_id)
+                    records.append(record_copy)
 
         # Yield records in batches
         for i in range(0, len(records), config.batch_size):

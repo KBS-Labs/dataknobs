@@ -162,7 +162,8 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
         """Convert S3 object data to a Record."""
         data = obj_data.get("data", {})
         metadata = obj_data.get("metadata", {})
-        return Record(data=data, metadata=metadata)
+        record_id = metadata.get("id")
+        return Record(data=data, metadata=metadata, id=record_id)
 
     def create(self, record: Record) -> str:
         """Create a new record in S3."""

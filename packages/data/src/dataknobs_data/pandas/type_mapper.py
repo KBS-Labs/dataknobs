@@ -506,7 +506,8 @@ class TypeMapper:
 
             # Check for datetime
             try:
-                pd.to_datetime(non_null)
+                # Use infer_datetime_format to suppress the warning
+                pd.to_datetime(non_null, format='mixed')
                 return "datetime64[ns]"
             except (ValueError, TypeError):
                 pass

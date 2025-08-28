@@ -243,6 +243,24 @@ class Record:
             name=name, value=value, type=field_type, metadata=field_metadata or {}
         )
 
+    def set_value(self, name: str, value: Any) -> None:
+        """Set a field's value by name.
+        
+        Convenience method that creates the field if it doesn't exist.
+        """
+        if name in self.fields:
+            self.fields[name].value = value
+        else:
+            self.set_field(name, value)
+    
+    @property
+    def data(self) -> dict[str, Any]:
+        """Get all field values as a dictionary.
+        
+        Provides a simple dict-like view of the record's data.
+        """
+        return {name: field.value for name, field in self.fields.items()}
+    
     def remove_field(self, name: str) -> bool:
         """Remove a field by name. Returns True if field was removed."""
         if name in self.fields:
