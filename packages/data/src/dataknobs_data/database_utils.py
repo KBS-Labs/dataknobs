@@ -4,6 +4,7 @@ from typing import Any
 
 from .query import Query
 from .records import Record
+from .fields import VectorField
 
 
 def ensure_record_id(record: Record, record_id: str) -> Record:

@@ -54,6 +54,15 @@ class DatabaseFactory(FactoryBase):
         backend_type = config.pop("backend", "memory").lower()
 
         logger.info(f"Creating database with backend: {backend_type}")
+        
+        # Check if vector_enabled is set (for future database backend integration)
+        if config.get("vector_enabled", False):
+            # Currently, vector support for database backends is not yet implemented
+            # This will be added when database backends integrate VectorOperationsMixin
+            raise ValueError(
+                f"Vector-enabled mode for database backend '{backend_type}' is not yet implemented. "
+                f"Use dedicated vector stores instead: faiss, chroma, memory_vector"
+            )
 
         if backend_type in ("memory", "mem"):
             from dataknobs_data.backends.memory import SyncMemoryDatabase
@@ -92,12 +101,39 @@ class DatabaseFactory(FactoryBase):
                     "S3 backend requires boto3. "
                     "Install with: pip install dataknobs-data[s3]"
                 ) from e
+                
+        # Vector store backends
+        elif backend_type == "faiss":
+            try:
+                from dataknobs_data.vector.stores.faiss import FaissVectorStore
+                return FaissVectorStore(config)
+            except ImportError as e:
+                raise ValueError(
+                    "Faiss backend requires faiss-cpu. "
+                    "Install with: pip install faiss-cpu"
+                ) from e
+                
+        elif backend_type in ("chroma", "chromadb"):
+            try:
+                from dataknobs_data.vector.stores.chroma import ChromaVectorStore
+                return ChromaVectorStore(config)
+            except ImportError as e:
+                raise ValueError(
+                    "Chroma backend requires chromadb. "
+                    "Install with: pip install chromadb"
+                ) from e
+                
+        elif backend_type == "memory_vector":
+            from dataknobs_data.vector.stores.memory import MemoryVectorStore
+            return MemoryVectorStore(config)
 
         else:
             raise ValueError(
                 f"Unknown backend type: {backend_type}. "
-                f"Available backends: memory, file, postgres, elasticsearch, s3"
+                f"Available backends: memory, file, postgres, elasticsearch, s3, "
+                f"faiss, chroma, memory_vector"
             )
+    
 
     def get_backend_info(self, backend_type: str) -> dict[str, Any]:
         """Get information about a specific backend.
@@ -164,8 +200,50 @@ class DatabaseFactory(FactoryBase):
                     "access_key_id": "AWS access key (or use IAM role)",
                     "secret_access_key": "AWS secret key (or use IAM role)"
                 }
+            },
+            "faiss": {
+                "description": "Facebook AI Similarity Search vector store",
+                "persistent": False,
+                "requires_install": "pip install faiss-cpu",
+                "config_options": {
+                    "dimensions": "Vector dimensions (required)",
+                    "metric": "Distance metric: cosine, euclidean, dot_product (default: cosine)",
+                    "index_type": "Index type: flat, ivfflat, hnsw (default: auto)",
+                    "nlist": "Number of clusters for IVF index",
+                    "m": "Number of connections for HNSW"
+                }
+            },
+            "chroma": {
+                "description": "ChromaDB vector database",
+                "persistent": True,
+                "requires_install": "pip install chromadb",
+                "config_options": {
+                    "collection_name": "Collection name (default: vectors)",
+                    "persist_directory": "Directory for persistence (optional)",
+                    "dimensions": "Vector dimensions (required)",
+                    "metric": "Distance metric: cosine, euclidean, dot_product (default: cosine)"
+                }
+            },
+            "memory_vector": {
+                "description": "In-memory vector store for testing",
+                "persistent": False,
+                "requires_install": False,
+                "config_options": {
+                    "dimensions": "Vector dimensions (required)",
+                    "metric": "Distance metric: cosine, euclidean, dot_product (default: cosine)"
+                }
             }
         }
+        
+        # Note about future vector support for database backends
+        if backend_type.lower() in ["postgres", "elasticsearch"]:
+            base_info = info.get(backend_type.lower(), {})
+            base_info["vector_support_planned"] = True
+            base_info["vector_note"] = (
+                "Vector support for this backend is planned but not yet implemented. "
+                "Use dedicated vector stores (faiss, chroma, memory_vector) for now."
+            )
+            return base_info
 
         return info.get(backend_type.lower(), {
             "description": "Unknown backend",

@@ -4,10 +4,12 @@ import json
 import logging
 import sqlite3
 import time
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
+import numpy as np
 from dataknobs_config import ConfigurableBase
 
 from ..database import SyncDatabase
@@ -15,12 +17,26 @@ from ..query import Query
 from ..query_logic import ComplexQuery
 from ..records import Record
 from ..streaming import StreamConfig, StreamResult
-from .sql_base import SQLQueryBuilder, SQLTableManager
+from ..vector.mixins import VectorCapable, VectorOperationsMixin
+from ..vector.types import DistanceMetric, VectorSearchResult
+from ..vector.bulk_embed_mixin import BulkEmbedMixin
+from .sql_base import SQLQueryBuilder, SQLTableManager, SQLRecordSerializer
+from .sqlite_mixins import SQLiteVectorSupport
+
+if TYPE_CHECKING:
+    import numpy as np
 
 logger = logging.getLogger(__name__)
 
 
-class SyncSQLiteDatabase(SyncDatabase, ConfigurableBase):
+class SyncSQLiteDatabase(
+    SyncDatabase, 
+    ConfigurableBase, 
+    BulkEmbedMixin,  # Must come before VectorOperationsMixin to override bulk_embed_and_store
+    VectorOperationsMixin,
+    SQLiteVectorSupport,
+    SQLRecordSerializer,  # Use the standard SQL serializer
+):
     """Synchronous SQLite database backend."""
     
     def __init__(self, config: dict[str, Any] | None = None):
@@ -34,14 +50,22 @@ class SyncSQLiteDatabase(SyncDatabase, ConfigurableBase):
                 - check_same_thread: Allow sharing across threads (default: False)
                 - journal_mode: Journal mode (WAL, DELETE, etc.) (default: None)
                 - synchronous: Synchronous mode (NORMAL, FULL, OFF) (default: None)
+                - vector_enabled: Enable vector support (default: False)
+                - vector_metric: Distance metric for vector search (default: "cosine")
         """
         super().__init__(config)
+        SQLiteVectorSupport.__init__(self)
+        
         self.db_path = self.config.get("path", ":memory:")
         self.table_name = self.config.get("table", "records")
         self.timeout = self.config.get("timeout", 5.0)
         self.check_same_thread = self.config.get("check_same_thread", False)
         self.journal_mode = self.config.get("journal_mode")
         self.synchronous = self.config.get("synchronous")
+        
+        # Vector configuration
+        self.vector_enabled = self.config.get("vector_enabled", False)
+        self.vector_metric = DistanceMetric(self.config.get("vector_metric", "cosine"))
         
         self.query_builder = SQLQueryBuilder(self.table_name, dialect="sqlite")
         self.table_manager = SQLTableManager(self.table_name, dialect="sqlite")
@@ -136,19 +160,31 @@ class SyncSQLiteDatabase(SyncDatabase, ConfigurableBase):
         """Create a new record."""
         self._check_connection()
         
-        query, params = self.query_builder.build_create_query(record)
+        # Update vector dimensions tracking if needed
+        if self._has_vector_fields(record):
+            self._update_vector_dimensions(record)
+        
+        # Generate ID if not present
+        if not record.id:
+            record.id = str(uuid.uuid4())
+        
+        # Use the standard SQL serializer
+        data_json = self.record_to_json(record)
+        metadata_json = json.dumps(record.metadata) if record.metadata else None
+        
+        # Build insert query for SQLite's standard table structure
+        query = f"INSERT INTO {self.table_name} (id, data, metadata) VALUES (?, ?, ?)"
+        params = [record.id, data_json, metadata_json]
+        
         cursor = self.conn.cursor()
         
         try:
             cursor.execute(query, params)
             self.conn.commit()
-            
-            # SQLite doesn't support RETURNING, so we use the ID we generated
-            record_id = params[0]  # ID is the first parameter
-            return record_id
+            return record.id
         except sqlite3.IntegrityError:
             self.conn.rollback()
-            raise ValueError(f"Record with ID {params[0]} already exists")
+            raise ValueError(f"Record with ID {record.id} already exists")
         finally:
             cursor.close()
     
@@ -164,7 +200,10 @@ class SyncSQLiteDatabase(SyncDatabase, ConfigurableBase):
             row = cursor.fetchone()
             
             if row:
-                return SQLQueryBuilder.row_to_record(dict(row))
+                # Use the standard SQL serializer
+                record = self.row_to_record(dict(row))
+                record.id = id
+                return record
             return None
         finally:
             cursor.close()
@@ -173,7 +212,18 @@ class SyncSQLiteDatabase(SyncDatabase, ConfigurableBase):
         """Update an existing record."""
         self._check_connection()
         
-        query, params = self.query_builder.build_update_query(id, record)
+        # Update vector dimensions tracking if needed
+        if self._has_vector_fields(record):
+            self._update_vector_dimensions(record)
+        
+        # Use the standard SQL serializer
+        data_json = self.record_to_json(record)
+        metadata_json = json.dumps(record.metadata) if record.metadata else None
+        
+        # Build update query
+        query = f"UPDATE {self.table_name} SET data = ?, metadata = ? WHERE id = ?"
+        params = [data_json, metadata_json, id]
+        
         cursor = self.conn.cursor()
         
         try:
@@ -227,7 +277,7 @@ class SyncSQLiteDatabase(SyncDatabase, ConfigurableBase):
             cursor.execute(sql_query, params)
             rows = cursor.fetchall()
             
-            records = [SQLQueryBuilder.row_to_record(dict(row)) for row in rows]
+            records = [self.row_to_record(dict(row)) for row in rows]
             
             # Apply field projection if specified
             if query.fields:
@@ -448,3 +498,157 @@ class SyncSQLiteDatabase(SyncDatabase, ConfigurableBase):
                 "elapsed_seconds": elapsed
             }
         )
+    
+    # Vector support methods
+    def has_vector_support(self) -> bool:
+        """Check if this backend has vector support.
+        
+        Returns:
+            False - SQLite has no native vector support, uses Python-based similarity
+        """
+        return False  # No native vector support
+    
+    def enable_vector_support(self) -> bool:
+        """Enable vector support for this backend.
+        
+        Returns:
+            True - Vector support is always available (Python-based)
+        """
+        # SQLite doesn't need any special setup for vector support
+        # We handle vectors as JSON strings
+        self.vector_enabled = True
+        return True
+    
+    def vector_search(
+        self,
+        query_vector: np.ndarray,
+        field_name: str = "embedding",
+        k: int = 10,
+        filter: dict[str, Any] | None = None,
+        metric: DistanceMetric | None = None,
+    ) -> list[VectorSearchResult]:
+        """Perform vector similarity search using Python-based calculations.
+        
+        Args:
+            query_vector: Query vector
+            field_name: Name of the vector field to search
+            k: Number of results to return
+            filter: Optional filter conditions
+            metric: Distance metric (uses instance default if not specified)
+            
+        Returns:
+            List of search results with scores
+        """
+        self._check_connection()
+        
+        if metric is None:
+            metric = self.vector_metric
+        
+        # Build query to fetch all records (with optional filter)
+        # For SQLite, we need to filter on JSON fields
+        if filter:
+            where_clauses = []
+            params = []
+            for key, value in filter.items():
+                # Filter on JSON fields in the data column
+                where_clauses.append(f"json_extract(data, '$.{key}') = ?")
+                params.append(value)
+            
+            if where_clauses:
+                query = f"SELECT * FROM {self.table_name} WHERE {' AND '.join(where_clauses)}"
+            else:
+                query = f"SELECT * FROM {self.table_name}"
+        else:
+            query = f"SELECT * FROM {self.table_name}"
+            params = []
+        
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            
+            # Calculate similarities for all records
+            results = []
+            for row in rows:
+                row_dict = dict(row)
+                
+                # Convert row to record to access vector fields
+                record = self.row_to_record(row_dict)
+                record.id = row_dict.get("id")
+                
+                # Check if the record has the vector field
+                if field_name in record.fields:
+                    vector_field = record.fields[field_name]
+                    if hasattr(vector_field, 'value') and vector_field.value is not None:
+                        stored_vector = vector_field.value
+                        
+                        # Ensure it's a numpy array
+                        if not isinstance(stored_vector, np.ndarray):
+                            stored_vector = np.array(stored_vector, dtype=np.float32)
+                        
+                        # Calculate similarity
+                        score = self._compute_similarity(
+                            query_vector, stored_vector, metric
+                        )
+                        
+                        results.append(VectorSearchResult(
+                            record=record,
+                            score=score,
+                            metadata=record.metadata
+                        ))
+            
+            # Sort by score (descending for similarity)
+            results.sort(key=lambda x: x.score, reverse=True)
+            
+            # Return top k results
+            return results[:k]
+            
+        finally:
+            cursor.close()
+    
+    def add_vectors(
+        self,
+        vectors: list[np.ndarray],
+        ids: list[str] | None = None,
+        metadata: list[dict[str, Any]] | None = None,
+        field_name: str = "embedding",
+    ) -> list[str]:
+        """Add vectors to the database.
+        
+        Args:
+            vectors: List of vectors to add
+            ids: Optional list of IDs
+            metadata: Optional list of metadata dicts
+            field_name: Name of the vector field
+            
+        Returns:
+            List of created record IDs
+        """
+        from ..fields import VectorField
+        from collections import OrderedDict
+        
+        # Generate IDs if not provided
+        if ids is None:
+            ids = [str(uuid.uuid4()) for _ in vectors]
+        
+        # Create records with vector fields
+        records = []
+        for i, vector in enumerate(vectors):
+            # Create vector field
+            vector_field = VectorField(
+                name=field_name,
+                value=vector,
+                dimensions=len(vector) if isinstance(vector, (list, np.ndarray)) else None
+            )
+            
+            # Create record
+            record_metadata = metadata[i] if metadata and i < len(metadata) else {}
+            record = Record(
+                data=OrderedDict({field_name: vector_field}),
+                metadata=record_metadata
+            )
+            record.id = ids[i]
+            records.append(record)
+        
+        # Use batch create for efficiency
+        return self.create_batch(records)
