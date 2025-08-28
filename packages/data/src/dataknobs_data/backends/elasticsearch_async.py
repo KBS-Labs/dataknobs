@@ -3,7 +3,7 @@
 import logging
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from dataknobs_config import ConfigurableBase
 
@@ -18,6 +18,19 @@ from ..pooling.elasticsearch import (
 from ..query import Operator, Query, SortOrder
 from ..records import Record
 from ..streaming import StreamConfig, StreamResult, async_process_batch_with_fallback
+from ..vector.mixins import VectorOperationsMixin
+from ..vector.types import DistanceMetric, VectorSearchResult
+from .elasticsearch_mixins import (
+    ElasticsearchBaseConfig,
+    ElasticsearchIndexManager,
+    ElasticsearchVectorSupport,
+    ElasticsearchErrorHandler,
+    ElasticsearchRecordSerializer,
+    ElasticsearchQueryBuilder,
+)
+
+if TYPE_CHECKING:
+    import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -25,12 +38,27 @@ logger = logging.getLogger(__name__)
 _client_manager = ConnectionPoolManager()
 
 
-class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
+class AsyncElasticsearchDatabase(
+    AsyncDatabase,
+    ConfigurableBase,
+    VectorOperationsMixin,
+    ElasticsearchBaseConfig,
+    ElasticsearchIndexManager,
+    ElasticsearchVectorSupport,
+    ElasticsearchErrorHandler,
+    ElasticsearchRecordSerializer,
+    ElasticsearchQueryBuilder,
+):
     """Native async Elasticsearch database backend with connection pooling."""
 
     def __init__(self, config: dict[str, Any] | None = None):
         """Initialize async Elasticsearch database."""
         super().__init__(config)
+        
+        # Initialize vector support
+        self.vector_fields = {}  # field_name -> dimensions
+        self.vector_enabled = False
+        
         config = config or {}
         self._pool_config = ElasticsearchPoolConfig.from_dict(config)
         self.index_name = self._pool_config.index
@@ -79,20 +107,24 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
 
         # Check if index exists
         if not await self._client.indices.exists(index=self.index_name):
-            # Create index with mappings
-            mappings = {
-                "properties": {
-                    "data": {"type": "object", "enabled": True},
-                    "metadata": {"type": "object", "enabled": True},
-                    "created_at": {"type": "date"},
-                    "updated_at": {"type": "date"}
-                }
+            # Get mappings with vector field support
+            mappings = self.get_index_mappings(self.vector_fields)
+            
+            # Get settings optimized for KNN if we have vector fields
+            settings = self.get_knn_index_settings() if self.vector_fields else {
+                "number_of_shards": 1,
+                "number_of_replicas": 0,
             }
 
             await self._client.indices.create(
                 index=self.index_name,
-                mappings=mappings
+                mappings=mappings,
+                settings=settings
             )
+            
+            if self.vector_fields:
+                self.vector_enabled = True
+                logger.info(f"Created index '{self.index_name}' with vector support")
 
     def _check_connection(self) -> None:
         """Check if database is connected."""
@@ -101,28 +133,38 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
 
     def _record_to_doc(self, record: Record) -> dict[str, Any]:
         """Convert a Record to an Elasticsearch document."""
-        doc = {
-            "data": {},
-            "metadata": record.metadata or {}
-        }
-
-        for field_name, field_obj in record.fields.items():
-            doc["data"][field_name] = field_obj.value
-
-        return doc
+        # Update vector tracking if needed
+        if self._has_vector_fields(record):
+            self._update_vector_tracking(record)
+            
+            # Add vector field metadata to record metadata
+            if "vector_fields" not in record.metadata:
+                record.metadata["vector_fields"] = {}
+            
+            for field_name in self.vector_fields:
+                if field_name in record.fields:
+                    field = record.fields[field_name]
+                    if hasattr(field, "source_field"):
+                        record.metadata["vector_fields"][field_name] = {
+                            "type": "vector",
+                            "dimensions": self.vector_fields[field_name],
+                            "source_field": field.source_field,
+                            "model": getattr(field, "model_name", None),
+                            "model_version": getattr(field, "model_version", None),
+                        }
+        
+        return self._record_to_document(record)
 
     def _doc_to_record(self, doc: dict[str, Any]) -> Record:
         """Convert an Elasticsearch document to a Record."""
-        data = doc.get("_source", {}).get("data", {})
-        metadata = doc.get("_source", {}).get("metadata", {})
-
-        # Add document ID to metadata
-        if "_id" in doc:
-            metadata["id"] = doc["_id"]
+        doc_id = doc.get("_id")
+        record = self._document_to_record(doc, doc_id)
+        
+        # Add score if present
         if "_score" in doc:
-            metadata["_score"] = doc["_score"]
-
-        return Record(data=data, metadata=metadata)
+            record.metadata["_score"] = doc["_score"]
+        
+        return record
 
     async def create(self, record: Record) -> str:
         """Create a new record."""
@@ -177,7 +219,9 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
                 id=id
             )
             return self._doc_to_record(response)
-        except Exception:
+        except Exception as e:
+            # Log the error for debugging
+            logger.debug(f"Error reading document {id}: {e}")
             return None
 
     async def update(self, id: str, record: Record) -> bool:
@@ -537,3 +581,177 @@ class AsyncElasticsearchDatabase(AsyncDatabase, ConfigurableBase):
             operations=operations,
             refresh=self.refresh
         )
+    
+    async def vector_search(
+        self,
+        query_vector: "np.ndarray | list[float]",
+        vector_field: str = "embedding",
+        k: int = 10,
+        metric: DistanceMetric = DistanceMetric.COSINE,
+        filter: Query | None = None,
+        include_source: bool = True,
+        score_threshold: float | None = None,
+    ) -> list[VectorSearchResult]:
+        """Search for similar vectors using Elasticsearch KNN.
+        
+        Args:
+            query_vector: The vector to search for
+            vector_field: Name of the vector field to search
+            k: Number of results to return
+            metric: Distance metric to use
+            filter: Optional query filter to apply before vector search
+            include_source: Whether to include source document in results
+            score_threshold: Optional minimum similarity score
+            
+        Returns:
+            List of search results ordered by similarity
+        """
+        self._check_connection()
+        
+        # Import vector utilities
+        from ..vector.elasticsearch_utils import (
+            build_knn_query,
+            get_similarity_for_metric,
+        )
+        
+        # Build filter query if provided
+        filter_query = self._build_filter_query(filter) if filter else None
+        
+        # Build KNN query
+        query = build_knn_query(
+            query_vector=query_vector,
+            field_name=vector_field,
+            k=k,
+            filter_query=filter_query,
+        )
+        
+        # Execute search
+        try:
+            response = await self._client.search(
+                index=self.index_name,
+                **query,  # Unpack the query dict directly
+                size=k,
+                _source=include_source,
+            )
+        except Exception as e:
+            self._handle_elasticsearch_error(e, "vector search")
+            return []
+        
+        # Process results
+        results = []
+        for hit in response.get("hits", {}).get("hits", []):
+            score = hit.get("_score", 0.0)
+            
+            # Apply score threshold if specified
+            if score_threshold is not None and score < score_threshold:
+                continue
+            
+            # Convert document to record if source included
+            record = None
+            if include_source:
+                record = self._doc_to_record(hit)
+            
+            # Set the ID on the record if we have one
+            if record and not record.id:
+                record.id = hit["_id"]
+            
+            results.append(VectorSearchResult(
+                record=record,
+                score=score,
+                vector_field=vector_field,
+                metadata={
+                    "index": self.index_name,
+                    "metric": metric.value,
+                    "doc_id": hit["_id"],
+                },
+            ))
+        
+        return results
+    
+    async def bulk_embed_and_store(
+        self,
+        records: list[Record],
+        text_field: str | list[str],
+        vector_field: str = "embedding",
+        embedding_fn: Any | None = None,
+        batch_size: int = 100,
+        model_name: str | None = None,
+        model_version: str | None = None,
+    ) -> list[str]:
+        """Embed text fields and store vectors with records.
+        
+        Args:
+            records: Records to process
+            text_field: Field name(s) containing text to embed
+            vector_field: Field name to store vectors in
+            embedding_fn: Function to generate embeddings
+            batch_size: Number of records to process at once
+            model_name: Name of the embedding model
+            model_version: Version of the embedding model
+            
+        Returns:
+            List of record IDs that were processed
+        """
+        # This is a stub implementation
+        # Full implementation would require an actual embedding function
+        logger.warning("bulk_embed_and_store is not fully implemented for Elasticsearch")
+        return []
+    
+    async def create_vector_index(
+        self,
+        vector_field: str = "embedding",
+        dimensions: int | None = None,
+        metric: DistanceMetric = DistanceMetric.COSINE,
+        index_type: str = "auto",
+        **kwargs: Any,
+    ) -> bool:
+        """Create or update index mapping for vector field.
+        
+        Args:
+            vector_field: Name of the vector field to index
+            dimensions: Number of dimensions
+            metric: Distance metric for the index
+            index_type: Type of index (ignored for ES, always uses HNSW)
+            **kwargs: Additional index parameters
+            
+        Returns:
+            True if index was created/updated successfully
+        """
+        self._check_connection()
+        
+        if not dimensions:
+            if vector_field not in self.vector_fields:
+                raise ValueError(f"Unknown dimensions for field '{vector_field}'")
+            dimensions = self.vector_fields[vector_field]
+        
+        # Import vector utilities
+        from ..vector.elasticsearch_utils import (
+            get_similarity_for_metric,
+            get_vector_mapping,
+        )
+        
+        # Get similarity function for metric
+        similarity = get_similarity_for_metric(metric)
+        
+        # Build mapping for the vector field
+        mapping = get_vector_mapping(dimensions, similarity)
+        
+        # Update index mapping
+        try:
+            await self._client.indices.put_mapping(
+                index=self.index_name,
+                properties={
+                    f"data.{vector_field}": mapping
+                }
+            )
+            
+            # Track the vector field
+            self.vector_fields[vector_field] = dimensions
+            self.vector_enabled = True
+            
+            logger.info(f"Created vector mapping for field '{vector_field}' with {dimensions} dimensions")
+            return True
+            
+        except Exception as e:
+            self._handle_elasticsearch_error(e, "create vector index")
+            return False
