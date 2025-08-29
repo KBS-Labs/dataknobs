@@ -29,10 +29,10 @@ class TestVectorIntegration:
     
     def test_vector_enabled_database(self, factory):
         """Test creating a vector-enabled database."""
-        # Vector-enabled mode for database backends is not yet implemented
-        with pytest.raises(ValueError, match="not yet implemented"):
+        # Test that unsupported backends raise an error
+        with pytest.raises(ValueError, match="Vector-enabled mode is not supported"):
             factory.create(
-                backend="postgres",
+                backend="memory",  # Memory backend doesn't support vector mode
                 vector_enabled=True,
                 vector_dimensions=256
             )
@@ -124,10 +124,9 @@ class TestVectorIntegration:
         
         # Test vector-enabled database info
         postgres_info = factory.get_backend_info("postgres")
-        assert "vector_support_planned" in postgres_info
-        assert postgres_info["vector_support_planned"] is True
-        assert "vector_note" in postgres_info
-        assert "not yet implemented" in postgres_info["vector_note"]
+        assert "vector_support" in postgres_info
+        assert postgres_info["vector_support"] is True
+        assert "pgvector" in postgres_info["description"]
     
     @pytest.mark.asyncio
     async def test_vector_query_integration(self, factory):

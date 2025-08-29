@@ -99,10 +99,10 @@ class SQLRecordSerializer:
         """Convert a database row to a Record.
         
         Args:
-            row: Database row as dictionary with 'data' and optional 'metadata' fields
+            row: Database row as dictionary with 'id', 'data' and optional 'metadata' fields
             
         Returns:
-            Reconstructed Record object
+            Reconstructed Record object with ID set
         """
         data_json = row.get("data", {})
         if not isinstance(data_json, str):
@@ -112,23 +112,32 @@ class SQLRecordSerializer:
         if metadata_json and not isinstance(metadata_json, str):
             metadata_json = json.dumps(metadata_json)
         
-        return SQLRecordSerializer.json_to_record(data_json, metadata_json)
+        record = SQLRecordSerializer.json_to_record(data_json, metadata_json)
+        
+        # Ensure the record has its ID set from the row
+        from ..database_utils import ensure_record_id
+        if "id" in row:
+            record = ensure_record_id(record, row["id"])
+        
+        return record
 
 
 class SQLQueryBuilder:
     """Builds SQL queries from Query objects."""
     
-    def __init__(self, table_name: str, schema_name: str | None = None, dialect: str = "standard"):
+    def __init__(self, table_name: str, schema_name: str | None = None, dialect: str = "standard", param_style: str = "numeric"):
         """Initialize the SQL query builder.
         
         Args:
             table_name: Name of the database table
             schema_name: Optional schema name
             dialect: SQL dialect ('postgres', 'sqlite', 'standard')
+            param_style: Parameter style ('numeric' for $1, 'qmark' for ?, 'pyformat' for %(name)s)
         """
         self.table_name = table_name
         self.schema_name = schema_name
         self.dialect = dialect
+        self.param_style = param_style
         self.qualified_table = self._get_qualified_table_name()
     
     def _get_qualified_table_name(self) -> str:
@@ -136,6 +145,30 @@ class SQLQueryBuilder:
         if self.schema_name:
             return f"{self.schema_name}.{self.table_name}"
         return self.table_name
+    
+    def _get_param_placeholder(self, param_num: int, param_name: str | None = None) -> str:
+        """Get the appropriate parameter placeholder based on param_style.
+        
+        Args:
+            param_num: Parameter number (1-based)
+            param_name: Optional parameter name for pyformat style
+            
+        Returns:
+            Parameter placeholder string
+        """
+        if self.param_style == "numeric":
+            return f"${param_num}"
+        elif self.param_style == "qmark":
+            return "?"
+        elif self.param_style == "pyformat":
+            name = param_name or f"p{param_num - 1}"  # 0-based for pyformat
+            return f"%({name})s"
+        else:
+            # Default to numeric for postgres dialect, qmark for others
+            if self.dialect == "postgres":
+                return f"${param_num}"
+            else:
+                return "?"
     
     def build_create_query(self, record: Record, record_id: str | None = None) -> tuple[str, list[Any]]:
         """Build an INSERT query for creating a record.
@@ -151,19 +184,18 @@ class SQLQueryBuilder:
         data = SQLRecordSerializer.record_to_json(record)
         metadata = json.dumps(record.metadata) if record.metadata else None
         
+        p1 = self._get_param_placeholder(1)
+        p2 = self._get_param_placeholder(2)
+        p3 = self._get_param_placeholder(3)
+        
+        query = f"""
+            INSERT INTO {self.qualified_table} (id, data, metadata, created_at, updated_at)
+            VALUES ({p1}, {p2}, {p3}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """
         if self.dialect == "postgres":
-            query = f"""
-                INSERT INTO {self.qualified_table} (id, data, metadata, created_at, updated_at)
-                VALUES ($1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                RETURNING id
-            """
-            params = [record_id, data, metadata]
-        else:  # sqlite, standard
-            query = f"""
-                INSERT INTO {self.qualified_table} (id, data, metadata, created_at, updated_at)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            """
-            params = [record_id, data, metadata]
+            query += " RETURNING id"
+        
+        params = [record_id, data, metadata]
         
         return query, params
     
@@ -176,10 +208,8 @@ class SQLQueryBuilder:
         Returns:
             Tuple of (SQL query, parameters)
         """
-        if self.dialect == "postgres":
-            query = f"SELECT * FROM {self.qualified_table} WHERE id = $1"
-        else:  # sqlite, standard
-            query = f"SELECT * FROM {self.qualified_table} WHERE id = ?"
+        p1 = self._get_param_placeholder(1)
+        query = f"SELECT * FROM {self.qualified_table} WHERE id = {p1}"
         
         return query, [record_id]
     
@@ -196,20 +226,25 @@ class SQLQueryBuilder:
         data = self._record_to_json(record)
         metadata = json.dumps(record.metadata) if record.metadata else None
         
-        if self.dialect == "postgres":
-            query = f"""
-                UPDATE {self.qualified_table}
-                SET data = $2, metadata = $3, updated_at = CURRENT_TIMESTAMP
-                WHERE id = $1
-            """
-            params = [record_id, data, metadata]
-        else:  # sqlite, standard
+        if self.param_style == "qmark":
+            # SQLite: data, metadata, then id
             query = f"""
                 UPDATE {self.qualified_table}
                 SET data = ?, metadata = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
             """
             params = [data, metadata, record_id]
+        else:
+            # PostgreSQL: id first, then data, metadata
+            p1 = self._get_param_placeholder(1)
+            p2 = self._get_param_placeholder(2)
+            p3 = self._get_param_placeholder(3)
+            query = f"""
+                UPDATE {self.qualified_table}
+                SET data = {p2}, metadata = {p3}, updated_at = CURRENT_TIMESTAMP
+                WHERE id = {p1}
+            """
+            params = [record_id, data, metadata]
         
         return query, params
     
@@ -222,10 +257,8 @@ class SQLQueryBuilder:
         Returns:
             Tuple of (SQL query, parameters)
         """
-        if self.dialect == "postgres":
-            query = f"DELETE FROM {self.qualified_table} WHERE id = $1"
-        else:  # sqlite, standard
-            query = f"DELETE FROM {self.qualified_table} WHERE id = ?"
+        p1 = self._get_param_placeholder(1)
+        query = f"DELETE FROM {self.qualified_table} WHERE id = {p1}"
         
         return query, [record_id]
     
@@ -238,10 +271,8 @@ class SQLQueryBuilder:
         Returns:
             Tuple of (SQL query, parameters)
         """
-        if self.dialect == "postgres":
-            query = f"SELECT 1 FROM {self.qualified_table} WHERE id = $1 LIMIT 1"
-        else:  # sqlite, standard
-            query = f"SELECT 1 FROM {self.qualified_table} WHERE id = ? LIMIT 1"
+        p1 = self._get_param_placeholder(1)
+        query = f"SELECT 1 FROM {self.qualified_table} WHERE id = {p1} LIMIT 1"
         
         return query, [record_id]
     
@@ -335,6 +366,35 @@ class SQLQueryBuilder:
         
         return ("", [])
     
+    def build_where_clause(self, query: Query | None, param_start: int = 1) -> tuple[str, list[Any]]:
+        """Build just the WHERE clause from a Query object.
+        
+        Args:
+            query: The Query object (can be None)
+            param_start: Starting parameter number for placeholders
+            
+        Returns:
+            Tuple of (WHERE clause SQL, parameters)
+            Returns empty string and empty list if no filters
+        """
+        if not query or not query.filters:
+            return "", []
+        
+        where_clauses = []
+        params = []
+        param_count = param_start - 1
+        
+        for filter_spec in query.filters:
+            param_count += 1
+            clause, new_params = self._build_filter_clause(filter_spec, param_count)
+            where_clauses.append(clause)
+            params.extend(new_params)
+            param_count += len(new_params) - 1  # Adjust for multiple params
+        
+        if where_clauses:
+            return " AND " + " AND ".join(where_clauses), params
+        return "", []
+    
     def build_search_query(self, query: Query) -> tuple[str, list[Any]]:
         """Build a SELECT query from a Query object.
         
@@ -407,28 +467,31 @@ class SQLQueryBuilder:
             data_json = self._record_to_json(record)
             metadata_json = json.dumps(record.metadata) if record.metadata else None
             
-            if self.dialect == "postgres":
-                # PostgreSQL uses numbered placeholders
-                param_idx = i * 3 + 1
-                data_cases.append(f"WHEN id = ${param_idx} THEN ${param_idx + 1}")
-                metadata_cases.append(f"WHEN id = ${param_idx} THEN ${param_idx + 2}")
-                params.extend([record_id, data_json, metadata_json])
-            else:  # sqlite, standard
-                # SQLite uses ? placeholders
+            # Generate placeholders for this update
+            if self.param_style == "qmark":
+                # SQLite uses ? placeholders and needs repeated IDs
                 data_cases.append(f"WHEN id = ? THEN ?")
                 metadata_cases.append(f"WHEN id = ? THEN ?")
                 params.extend([record_id, data_json, record_id, metadata_json])
+            else:
+                # PostgreSQL uses numbered/named placeholders
+                param_idx = i * 3 + 1
+                p1 = self._get_param_placeholder(param_idx)
+                p2 = self._get_param_placeholder(param_idx + 1)
+                p3 = self._get_param_placeholder(param_idx + 2)
+                data_cases.append(f"WHEN id = {p1} THEN {p2}")
+                metadata_cases.append(f"WHEN id = {p1} THEN {p3}")
+                params.extend([record_id, data_json, metadata_json])
         
         # Build WHERE IN clause
-        if self.dialect == "postgres":
-            # Add IDs for WHERE IN clause
-            id_param_start = len(updates) * 3 + 1
-            id_placeholders = [f"${i}" for i in range(id_param_start, id_param_start + len(update_ids))]
-            params.extend(update_ids)
-        else:  # sqlite, standard
+        id_param_start = len(updates) * 3 + 1 if self.param_style != "qmark" else 0
+        if self.param_style == "qmark":
             # SQLite: add IDs for WHERE IN clause
             id_placeholders = ["?" for _ in update_ids]
-            params.extend(update_ids)
+        else:
+            # PostgreSQL with numbered/named placeholders
+            id_placeholders = [self._get_param_placeholder(i) for i in range(id_param_start, id_param_start + len(update_ids))]
+        params.extend(update_ids)
         
         # Build the UPDATE query
         # Add ELSE to preserve original value when no CASE matches
@@ -470,15 +533,13 @@ class SQLQueryBuilder:
             data_json = self._record_to_json(record)
             metadata_json = json.dumps(record.metadata) if record.metadata else None
             
-            if self.dialect == "postgres":
-                # PostgreSQL uses numbered placeholders
-                param_idx = i * 3 + 1
-                values_clauses.append(f"(${param_idx}, ${param_idx + 1}, ${param_idx + 2}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
-                params.extend([record_id, data_json, metadata_json])
-            else:  # sqlite, standard
-                # SQLite uses ? placeholders
-                values_clauses.append("(?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
-                params.extend([record_id, data_json, metadata_json])
+            # Generate placeholders for this row
+            param_idx = i * 3 + 1
+            p1 = self._get_param_placeholder(param_idx)
+            p2 = self._get_param_placeholder(param_idx + 1)
+            p3 = self._get_param_placeholder(param_idx + 2)
+            values_clauses.append(f"({p1}, {p2}, {p3}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
+            params.extend([record_id, data_json, metadata_json])
         
         # Build the INSERT query
         query = f"""
@@ -506,12 +567,8 @@ class SQLQueryBuilder:
         if not ids:
             return "", []
         
-        if self.dialect == "postgres":
-            # PostgreSQL uses numbered placeholders
-            placeholders = [f"${i}" for i in range(1, len(ids) + 1)]
-        else:  # sqlite, standard
-            # SQLite uses ? placeholders
-            placeholders = ["?" for _ in ids]
+        # Generate placeholders for IDs
+        placeholders = [self._get_param_placeholder(i) for i in range(1, len(ids) + 1)]
         
         query = f"""
         DELETE FROM {self.qualified_table}
@@ -587,13 +644,13 @@ class SQLQueryBuilder:
             else:
                 field_expr = base_field_expr
                 
-            param_placeholder = f"${param_start}"
+            param_placeholder = self._get_param_placeholder(param_start)
         elif self.dialect == "sqlite":
             field_expr = f"json_extract(data, '$.{field}')"
-            param_placeholder = "?"
+            param_placeholder = self._get_param_placeholder(param_start)
         else:
             field_expr = field
-            param_placeholder = "?"
+            param_placeholder = self._get_param_placeholder(param_start)
         
         # Build clause based on operator
         if op == Operator.EQ:
@@ -611,27 +668,19 @@ class SQLQueryBuilder:
         elif op == Operator.LIKE:
             return f"{field_expr} LIKE {param_placeholder}", [value]
         elif op == Operator.IN:
-            if self.dialect == "postgres":
-                placeholders = ", ".join([f"${i}" for i in range(param_start, param_start + len(value))])
-            else:
-                placeholders = ", ".join(["?" for _ in value])
+            placeholders = ", ".join([self._get_param_placeholder(i) for i in range(param_start, param_start + len(value))])
             return f"{field_expr} IN ({placeholders})", list(value)
         elif op == Operator.NOT_IN:
-            if self.dialect == "postgres":
-                placeholders = ", ".join([f"${i}" for i in range(param_start, param_start + len(value))])
-            else:
-                placeholders = ", ".join(["?" for _ in value])
+            placeholders = ", ".join([self._get_param_placeholder(i) for i in range(param_start, param_start + len(value))])
             return f"{field_expr} NOT IN ({placeholders})", list(value)
         elif op == Operator.BETWEEN:
-            if self.dialect == "postgres":
-                return f"{field_expr} BETWEEN ${param_start} AND ${param_start + 1}", list(value)
-            else:
-                return f"{field_expr} BETWEEN ? AND ?", list(value)
+            placeholder1 = self._get_param_placeholder(param_start)
+            placeholder2 = self._get_param_placeholder(param_start + 1)
+            return f"{field_expr} BETWEEN {placeholder1} AND {placeholder2}", list(value)
         elif op == Operator.NOT_BETWEEN:
-            if self.dialect == "postgres":
-                return f"{field_expr} NOT BETWEEN ${param_start} AND ${param_start + 1}", list(value)
-            else:
-                return f"{field_expr} NOT BETWEEN ? AND ?", list(value)
+            placeholder1 = self._get_param_placeholder(param_start)
+            placeholder2 = self._get_param_placeholder(param_start + 1)
+            return f"{field_expr} NOT BETWEEN {placeholder1} AND {placeholder2}", list(value)
         elif op == Operator.EXISTS:
             return f"{field_expr} IS NOT NULL", []
         elif op == Operator.NOT_EXISTS:

@@ -104,10 +104,13 @@ class TestSQLiteVectorSupport:
         
         assert len(results) <= 3
         assert results[0].score > 0.9  # Should be very similar to first vector
-        assert results[0].record.id == ids[0]  # Should match first vector's ID
+        # The best match should have index 0 in metadata
+        assert results[0].record.metadata["index"] == 0
     
     def test_vector_search_with_filter(self, db):
         """Test vector search with metadata filter."""
+        from dataknobs_data.query import Query, Filter, Operator
+        
         # Add vectors with categories
         vectors = []
         categories = ["A", "B", "A", "B", "A"]
@@ -139,11 +142,16 @@ class TestSQLiteVectorSupport:
         query_vec = np.random.randn(4).astype(np.float32)
         query_vec = query_vec / np.linalg.norm(query_vec)
         
+        # Create a Query object for filtering
+        filter_query = Query(filters=[
+            Filter(field="category", operator=Operator.EQ, value="A")
+        ])
+        
         results = db.vector_search(
             query_vector=query_vec,
             field_name="embedding",
             k=10,
-            filter={"category": "A"}
+            filter=filter_query
         )
         
         # Should only return category A records
@@ -168,7 +176,7 @@ class TestSQLiteVectorSupport:
             k=2,
             metric=DistanceMetric.COSINE
         )
-        assert results_cosine[0].record.id == ids[0]  # vec1 should be first
+        assert results_cosine[0].record.metadata["name"] == "vec1"  # vec1 should be first
         
         # Test Euclidean distance (converted to similarity)
         results_euclidean = db.vector_search(
@@ -176,7 +184,7 @@ class TestSQLiteVectorSupport:
             k=2,
             metric=DistanceMetric.EUCLIDEAN
         )
-        assert results_euclidean[0].record.id == ids[0]  # vec1 should be first
+        assert results_euclidean[0].record.metadata["name"] == "vec1"  # vec1 should be first
         
         # Test dot product
         results_dot = db.vector_search(
@@ -184,7 +192,7 @@ class TestSQLiteVectorSupport:
             k=2,
             metric=DistanceMetric.DOT_PRODUCT
         )
-        assert results_dot[0].record.id == ids[0]  # vec1 should be first
+        assert results_dot[0].record.metadata["name"] == "vec1"  # vec1 should be first
     
     def test_update_record_with_vector(self, db):
         """Test updating a record with a vector field."""

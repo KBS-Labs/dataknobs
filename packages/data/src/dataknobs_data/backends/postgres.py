@@ -91,8 +91,8 @@ class SyncPostgresDatabase(
         if self._connected:
             return  # Already connected
         
-        # Initialize query builder
-        self.query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
+        # Initialize query builder with pyformat style for psycopg2
+        self.query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres", param_style="pyformat")
 
         # Create connection using existing utilities
         if not any(key in self._conn_config for key in ["host", "database", "user"]):
@@ -113,7 +113,7 @@ class SyncPostgresDatabase(
         self._ensure_table()
         
         # Detect and enable vector support if requested
-        if self._enable_vector:
+        if self.vector_enabled:
             self._detect_vector_support()
         
         self._connected = True
@@ -262,14 +262,12 @@ class SyncPostgresDatabase(
         else:
             sql_query, params_list = self.query_builder.build_search_query(query)
 
-        # Convert numbered parameters to named parameters for psycopg2
+        # Build params dict for psycopg2
+        # The query builder now generates %(p0)s style placeholders directly
         params_dict = {}
         if params_list:
-            # Replace placeholders in reverse order to avoid conflicts like $10 being replaced as $1 + "0"
-            for i in range(len(params_list), 0, -1):
-                param_name = f"p{i}"
-                sql_query = sql_query.replace(f"${i}", f"%({param_name})s")
-                params_dict[param_name] = params_list[i - 1]
+            for i, param in enumerate(params_list):
+                params_dict[f"p{i}"] = param
 
         # Execute query
         df = self.db.query(sql_query, params_dict)
@@ -322,24 +320,17 @@ class SyncPostgresDatabase(
             
         self._check_connection()
         
-        # Create a query builder for PostgreSQL
+        # Create a query builder for PostgreSQL with pyformat style
         from .sql_base import SQLQueryBuilder, SQLRecordSerializer
-        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
+        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres", param_style="pyformat")
         
         # Use the shared batch create query builder
         query, params_list, ids = query_builder.build_batch_create_query(records)
         
-        # Convert positional parameters to named parameters for PostgresDB
-        # Replace in reverse order to avoid $10 being replaced as $1 + 0
+        # Build params dict for psycopg2
         params_dict = {}
-        for i, param in enumerate(params_list, 1):
-            param_name = f"p{i}"
-            params_dict[param_name] = param
-        
-        # Replace placeholders in reverse order to avoid conflicts
-        for i in range(len(params_list), 0, -1):
-            param_name = f"p{i}"
-            query = query.replace(f"${i}", f"%({param_name})s")
+        for i, param in enumerate(params_list):
+            params_dict[f"p{i}"] = param
         
         # Execute the batch insert
         result = self.db.execute(query, params_dict)
@@ -373,24 +364,17 @@ class SyncPostgresDatabase(
         existing_df = self.db.query(check_sql, {"ids": ids})
         existing_ids = set(existing_df["id"].tolist()) if not existing_df.empty else set()
         
-        # Create a query builder for PostgreSQL
+        # Create a query builder for PostgreSQL with pyformat style
         from .sql_base import SQLQueryBuilder, SQLRecordSerializer
-        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
+        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres", param_style="pyformat")
         
         # Use the shared batch delete query builder
         query, params_list = query_builder.build_batch_delete_query(ids)
         
-        # Convert positional parameters to named parameters for PostgresDB
-        # Replace in reverse order to avoid $10 being replaced as $1 + 0
+        # Build params dict for psycopg2
         params_dict = {}
-        for i, param in enumerate(params_list, 1):
-            param_name = f"p{i}"
-            params_dict[param_name] = param
-        
-        # Replace placeholders in reverse order to avoid conflicts
-        for i in range(len(params_list), 0, -1):
-            param_name = f"p{i}"
-            query = query.replace(f"${i}", f"%({param_name})s")
+        for i, param in enumerate(params_list):
+            params_dict[f"p{i}"] = param
         
         # Execute the batch delete
         result = self.db.execute(query, params_dict)
@@ -418,25 +402,17 @@ class SyncPostgresDatabase(
             
         self._check_connection()
         
-        # Create a query builder for PostgreSQL
+        # Create a query builder for PostgreSQL with pyformat style
         from .sql_base import SQLQueryBuilder, SQLRecordSerializer
-        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
+        query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres", param_style="pyformat")
         
-        # Note: The shared builder uses positional params ($1, $2) for postgres
-        # but our PostgresDB uses named params. We need to convert.
+        # Use the shared batch update query builder
         query, params_list = query_builder.build_batch_update_query(updates)
         
-        # Convert positional parameters to named parameters for PostgresDB
-        # Replace in reverse order to avoid $10 being replaced as $1 + 0
+        # Build params dict for psycopg2
         params_dict = {}
-        for i, param in enumerate(params_list, 1):
-            param_name = f"p{i}"
-            params_dict[param_name] = param
-        
-        # Replace placeholders in reverse order to avoid conflicts
-        for i in range(len(params_list), 0, -1):
-            param_name = f"p{i}"
-            query = query.replace(f"${i}", f"%({param_name})s")
+        for i, param in enumerate(params_list):
+            params_dict[f"p{i}"] = param
         
         # Execute the batch update
         result = self.db.execute(query, params_dict)
@@ -578,8 +554,8 @@ class SyncPostgresDatabase(
         self,
         query_vector: "np.ndarray | list[float] | VectorField",
         field_name: str,
-        limit: int = 10,
-        filters: list[Any] | None = None,
+        k: int = 10,
+        filter: Query | None = None,
         metric: "DistanceMetric | str" = "cosine"
     ) -> list["VectorSearchResult"]:
         """Search for similar vectors using PostgreSQL pgvector.
@@ -620,50 +596,37 @@ class SyncPostgresDatabase(
         # Build the query - vectors are stored in JSON data field
         # Use centralized vector extraction logic
         vector_expr = self.get_vector_extraction_sql(field_name, dialect="postgres")
+        
+        # Build the base SQL with pyformat placeholders
         sql = f"""
         SELECT 
             id, 
             data,
             metadata,
-            {vector_expr} {operator} %s::vector AS distance
+            {vector_expr} {operator} %(p0)s::vector AS distance
         FROM {self.schema_name}.{self.table_name}
-        WHERE data ? %s  -- Check field exists
+        WHERE data ? %(p1)s  -- Check field exists
         """
         
         params = [vector_str, field_name]
         
-        # Add filters if provided
-        if filters:
-            from ..query import Filter, Operator
-            for filter_obj in filters:
-                if isinstance(filter_obj, Filter):
-                    field_path = f"data->>'{filter_obj.field}'"
-                    
-                    if filter_obj.operator == Operator.EQ:
-                        sql += f" AND {field_path} = %s"
-                        params.append(str(filter_obj.value))
-                    elif filter_obj.operator == Operator.NE:
-                        sql += f" AND {field_path} != %s"
-                        params.append(str(filter_obj.value))
-                    elif filter_obj.operator == Operator.GT:
-                        sql += f" AND ({field_path})::float > %s"
-                        params.append(filter_obj.value)
-                    elif filter_obj.operator == Operator.LT:
-                        sql += f" AND ({field_path})::float < %s"
-                        params.append(filter_obj.value)
+        # Add filters if provided using the query builder
+        if filter:
+            # Query builder will generate pyformat placeholders since we configured it that way
+            where_clause, filter_params = self.query_builder.build_where_clause(filter, len(params) + 1)
+            if where_clause:
+                sql += where_clause
+                params.extend(filter_params)
         
         # Order by distance and limit
-        sql += f" ORDER BY distance LIMIT %s"
-        params.append(limit)
+        next_param = len(params)
+        sql += f" ORDER BY distance LIMIT %(p{next_param})s"
+        params.append(k)
         
-        # Execute query - convert positional params to named for PostgresDB
+        # Build param dict for psycopg2
         param_dict = {}
         for i, param in enumerate(params):
             param_dict[f"p{i}"] = param
-        
-        # Replace %s with named params
-        for i in range(len(params)):
-            sql = sql.replace("%s", f"%(p{i})s", 1)
         
         df = self.db.query(sql, param_dict)
         
@@ -782,7 +745,7 @@ class AsyncPostgresDatabase(
         await self._ensure_table()
         
         # Check and enable vector support if requested
-        if self._enable_vector:
+        if self.vector_enabled:
             await self._detect_vector_support()
         
         self._connected = True
@@ -1209,8 +1172,8 @@ class AsyncPostgresDatabase(
         self,
         query_vector: "np.ndarray | list[float] | VectorField",
         field_name: str,
-        limit: int = 10,
-        filters: list[Any] | None = None,
+        k: int = 10,
+        filter: Query | None = None,
         metric: "DistanceMetric | str" = "cosine"
     ) -> list["VectorSearchResult"]:
         """Search for similar vectors using PostgreSQL pgvector.
@@ -1260,29 +1223,22 @@ class AsyncPostgresDatabase(
         params = [vector_str]
         param_num = 2
         
-        # Add filters if provided
-        if filters:
-            for filter_obj in filters:
-                if hasattr(filter_obj, 'field') and hasattr(filter_obj, 'operator') and hasattr(filter_obj, 'value'):
-                    field_path = f"data->>'{filter_obj.field}'"
-                    
-                    if filter_obj.operator == Operator.EQ:
-                        sql += f" AND {field_path} = ${param_num}"
-                        params.append(str(filter_obj.value))
-                        param_num += 1
-                    elif filter_obj.operator == Operator.GT:
-                        sql += f" AND ({field_path})::numeric > ${param_num}"
-                        params.append(filter_obj.value)
-                        param_num += 1
-                    elif filter_obj.operator == Operator.LT:
-                        sql += f" AND ({field_path})::numeric < ${param_num}"
-                        params.append(filter_obj.value)
-                        param_num += 1
+        # Add filters if provided using the query builder
+        if filter:
+            # First get the where clause from query builder
+            where_clause, filter_params = self.query_builder.build_where_clause(filter, param_num)
+            if where_clause:
+                # Convert %s placeholders to $N for asyncpg
+                for i, param in enumerate(filter_params):
+                    where_clause = where_clause.replace("%s", f"${param_num}", 1)
+                    params.append(param)
+                    param_num += 1
+                sql += where_clause
         
         # Order by distance and limit
         sql += f"""
         ORDER BY distance
-        LIMIT {limit}
+        LIMIT {k}
         """
         
         # Execute query

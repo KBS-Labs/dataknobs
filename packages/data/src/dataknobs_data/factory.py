@@ -55,14 +55,16 @@ class DatabaseFactory(FactoryBase):
 
         logger.info(f"Creating database with backend: {backend_type}")
         
-        # Check if vector_enabled is set (for future database backend integration)
-        if config.get("vector_enabled", False):
-            # Currently, vector support for database backends is not yet implemented
-            # This will be added when database backends integrate VectorOperationsMixin
-            raise ValueError(
-                f"Vector-enabled mode for database backend '{backend_type}' is not yet implemented. "
-                f"Use dedicated vector stores instead: faiss, chroma, memory_vector"
-            )
+        # Check if vector_enabled is set
+        vector_enabled = config.get("vector_enabled", False)
+        if vector_enabled:
+            # PostgreSQL, Elasticsearch, and SQLite now have vector support
+            if backend_type not in ("postgres", "postgresql", "pg", "elasticsearch", "es", "sqlite"):
+                raise ValueError(
+                    f"Vector-enabled mode is not supported for backend '{backend_type}'. "
+                    f"Supported backends: postgres, elasticsearch, sqlite, "
+                    f"or use dedicated vector stores: faiss, chroma, memory_vector"
+                )
 
         if backend_type in ("memory", "mem"):
             from dataknobs_data.backends.memory import SyncMemoryDatabase
@@ -91,6 +93,10 @@ class DatabaseFactory(FactoryBase):
                     "Elasticsearch backend requires elasticsearch package. "
                     "Install with: pip install dataknobs-data[elasticsearch]"
                 ) from e
+
+        elif backend_type == "sqlite":
+            from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
+            return SyncSQLiteDatabase.from_config(config)
 
         elif backend_type == "s3":
             try:
@@ -130,7 +136,7 @@ class DatabaseFactory(FactoryBase):
         else:
             raise ValueError(
                 f"Unknown backend type: {backend_type}. "
-                f"Available backends: memory, file, postgres, elasticsearch, s3, "
+                f"Available backends: memory, file, postgres, elasticsearch, sqlite, s3, "
                 f"faiss, chroma, memory_vector"
             )
     
@@ -164,28 +170,46 @@ class DatabaseFactory(FactoryBase):
                 }
             },
             "postgres": {
-                "description": "PostgreSQL database backend",
+                "description": "PostgreSQL database backend with native vector support (pgvector)",
                 "persistent": True,
                 "requires_install": "pip install dataknobs-data[postgres]",
+                "vector_support": True,
                 "config_options": {
                     "host": "Database host (required)",
                     "port": "Database port (default: 5432)",
                     "database": "Database name (required)",
                     "user": "Username (required)",
                     "password": "Password (required)",
-                    "table": "Table name (default: records)"
+                    "table": "Table name (default: records)",
+                    "vector_enabled": "Enable vector support (default: False)",
+                    "vector_metric": "Distance metric for vectors: cosine, euclidean, dot_product (default: cosine)"
                 }
             },
             "elasticsearch": {
-                "description": "Elasticsearch search engine backend",
+                "description": "Elasticsearch search engine backend with native KNN vector support",
                 "persistent": True,
                 "requires_install": "pip install dataknobs-data[elasticsearch]",
+                "vector_support": True,
                 "config_options": {
                     "hosts": "List of host URLs (required)",
                     "index": "Index name (required)",
                     "doc_type": "Document type (default: _doc)",
                     "username": "Optional username",
-                    "password": "Optional password"
+                    "password": "Optional password",
+                    "vector_enabled": "Enable vector support (default: False)",
+                    "vector_metric": "Distance metric for vectors: cosine, euclidean, dot_product (default: cosine)"
+                }
+            },
+            "sqlite": {
+                "description": "SQLite database backend with Python-based vector support",
+                "persistent": True,
+                "requires_install": False,
+                "vector_support": True,
+                "config_options": {
+                    "path": "Path to database file (required)",
+                    "table": "Table name (default: records)",
+                    "vector_enabled": "Enable vector support (default: False)",
+                    "vector_metric": "Distance metric for vectors: cosine, euclidean, dot_product (default: cosine)"
                 }
             },
             "s3": {
@@ -234,16 +258,6 @@ class DatabaseFactory(FactoryBase):
                 }
             }
         }
-        
-        # Note about future vector support for database backends
-        if backend_type.lower() in ["postgres", "elasticsearch"]:
-            base_info = info.get(backend_type.lower(), {})
-            base_info["vector_support_planned"] = True
-            base_info["vector_note"] = (
-                "Vector support for this backend is planned but not yet implemented. "
-                "Use dedicated vector stores (faiss, chroma, memory_vector) for now."
-            )
-            return base_info
 
         return info.get(backend_type.lower(), {
             "description": "Unknown backend",

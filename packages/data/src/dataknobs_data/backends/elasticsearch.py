@@ -25,6 +25,7 @@ from .elasticsearch_mixins import (
     ElasticsearchRecordSerializer,
     ElasticsearchQueryBuilder,
 )
+from .vector_config_mixin import VectorConfigMixin
 
 if TYPE_CHECKING:
     import numpy as np
@@ -36,6 +37,7 @@ class SyncElasticsearchDatabase(
     SyncDatabase,
     StreamingMixin,
     ConfigurableBase,
+    VectorConfigMixin,
     ElasticsearchBaseConfig,
     ElasticsearchIndexManager,
     ElasticsearchVectorSupport,
@@ -59,9 +61,11 @@ class SyncElasticsearchDatabase(
         """
         super().__init__(config)
         
+        # Parse vector configuration using the mixin
+        self._parse_vector_config(config)
+        
         # Initialize vector support
         self.vector_fields = {}  # field_name -> dimensions
-        self.vector_enabled = False
         
         self.es_index = None  # Will be initialized in connect()
         self._connected = False
@@ -85,6 +89,13 @@ class SyncElasticsearchDatabase(
         self.index_name = config.pop("index", "records")
         self.refresh = config.pop("refresh", True)
 
+        # If vector is enabled but no vector fields defined yet, set up default
+        if self._vector_enabled and not self.vector_fields:
+            # Set a default embedding field with configurable dimensions
+            default_dimensions = config.pop("vector_dimensions", 1536)  # Common default
+            default_field = config.pop("default_vector_field", "embedding")
+            self.vector_fields[default_field] = default_dimensions
+        
         # Get mappings with vector field support
         base_mappings = self.get_index_mappings(self.vector_fields)
         
@@ -98,7 +109,7 @@ class SyncElasticsearchDatabase(
         # Get settings optimized for KNN if we have vector fields
         settings = config.pop("settings", None)
         if not settings:
-            settings = self.get_knn_index_settings() if self.vector_fields else {
+            settings = self.get_knn_index_settings() if (self.vector_fields or self._vector_enabled) else {
                 "number_of_shards": 1,
                 "number_of_replicas": 0,
             }
@@ -890,7 +901,7 @@ upper}}}}}
     def vector_search(
         self,
         query_vector: "np.ndarray | list[float]",
-        vector_field: str = "embedding",
+        field_name: str = "embedding",
         k: int = 10,
         metric: DistanceMetric = DistanceMetric.COSINE,
         filter: Query | None = None,
@@ -928,7 +939,7 @@ upper}}}}}
         # Build KNN query
         query = build_knn_query(
             query_vector=query_vector,
-            field_name=vector_field,
+            field_name=field_name,
             k=k,
             filter_query=filter_query,
         )
@@ -965,7 +976,7 @@ upper}}}}}
             results.append(VectorSearchResult(
                 record=record,
                 score=score,
-                vector_field=vector_field,
+                vector_field=field_name,
                 metadata={
                     "index": self.index_name,
                     "metric": metric.value,
@@ -1025,7 +1036,7 @@ upper}}}}}
             
             # Track the vector field
             self.vector_fields[vector_field] = dimensions
-            self.vector_enabled = True
+            self._vector_enabled = True
             
             logger.info(f"Created vector mapping for field '{vector_field}' with {dimensions} dimensions")
             return True

@@ -27,7 +27,7 @@ class TestPostgresVectorIntegration:
         """Enhanced test database configuration with vector support."""
         # Add vector-specific configuration
         config = postgres_test_db.copy()
-        config["enable_vector"] = True
+        config["vector_enabled"] = True
         return config
 
     def test_pgvector_extension_detection(self, vector_test_db):
@@ -146,7 +146,7 @@ class TestPostgresVectorIntegration:
             results = db.vector_search(
                 query_vector=query_vector,
                 field_name="embedding",
-                limit=3,
+                k=3,
                 metric="cosine"
             )
             
@@ -166,11 +166,13 @@ class TestPostgresVectorIntegration:
                 assert "cat" in text.lower() or "dog" in text.lower()
             
             # Test with filters
+            from dataknobs_data.query import Query
+            filter_query = Query(filters=[Filter(field="type", operator=Operator.EQ, value="document")])
             filtered_results = db.vector_search(
                 query_vector=query_vector,
                 field_name="embedding",
-                limit=5,
-                filters=[Filter(field="type", operator=Operator.EQ, value="document")],
+                k=5,
+                filter=filter_query,
                 metric="cosine"
             )
             
@@ -180,7 +182,7 @@ class TestPostgresVectorIntegration:
             euclidean_results = db.vector_search(
                 query_vector=query_vector,
                 field_name="embedding",
-                limit=3,
+                k=3,
                 metric="euclidean"
             )
             
@@ -290,7 +292,7 @@ class TestAsyncPostgresVectorIntegration:
     def vector_test_db(self, postgres_test_db):
         """Enhanced test database configuration with vector support."""
         config = postgres_test_db.copy()
-        config["enable_vector"] = True
+        config["vector_enabled"] = True
         return config
 
     async def test_async_vector_operations(self, vector_test_db):
@@ -324,7 +326,7 @@ class TestAsyncPostgresVectorIntegration:
             results = await db.vector_search(
                 query_vector=query,
                 field_name="vector",
-                limit=2,
+                k=2,
                 metric="cosine"
             )
             

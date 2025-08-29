@@ -22,6 +22,7 @@ from ..vector.types import DistanceMetric, VectorSearchResult
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from .sql_base import SQLQueryBuilder, SQLTableManager, SQLRecordSerializer
 from .sqlite_mixins import SQLiteVectorSupport
+from .vector_config_mixin import VectorConfigMixin
 
 if TYPE_CHECKING:
     import numpy as np
@@ -32,6 +33,7 @@ logger = logging.getLogger(__name__)
 class SyncSQLiteDatabase(
     SyncDatabase, 
     ConfigurableBase, 
+    VectorConfigMixin,
     BulkEmbedMixin,  # Must come before VectorOperationsMixin to override bulk_embed_and_store
     VectorOperationsMixin,
     SQLiteVectorSupport,
@@ -56,6 +58,9 @@ class SyncSQLiteDatabase(
         super().__init__(config)
         SQLiteVectorSupport.__init__(self)
         
+        # Parse vector configuration using the mixin
+        self._parse_vector_config(config)
+        
         self.db_path = self.config.get("path", ":memory:")
         self.table_name = self.config.get("table", "records")
         self.timeout = self.config.get("timeout", 5.0)
@@ -63,11 +68,7 @@ class SyncSQLiteDatabase(
         self.journal_mode = self.config.get("journal_mode")
         self.synchronous = self.config.get("synchronous")
         
-        # Vector configuration
-        self.vector_enabled = self.config.get("vector_enabled", False)
-        self.vector_metric = DistanceMetric(self.config.get("vector_metric", "cosine"))
-        
-        self.query_builder = SQLQueryBuilder(self.table_name, dialect="sqlite")
+        self.query_builder = SQLQueryBuilder(self.table_name, dialect="sqlite", param_style="qmark")
         self.table_manager = SQLTableManager(self.table_name, dialect="sqlite")
         
         self.conn: sqlite3.Connection | None = None
@@ -524,7 +525,7 @@ class SyncSQLiteDatabase(
         query_vector: np.ndarray,
         field_name: str = "embedding",
         k: int = 10,
-        filter: dict[str, Any] | None = None,
+        filter: Query | None = None,
         metric: DistanceMetric | None = None,
     ) -> list[VectorSearchResult]:
         """Perform vector similarity search using Python-based calculations.
@@ -545,22 +546,14 @@ class SyncSQLiteDatabase(
             metric = self.vector_metric
         
         # Build query to fetch all records (with optional filter)
-        # For SQLite, we need to filter on JSON fields
-        if filter:
-            where_clauses = []
-            params = []
-            for key, value in filter.items():
-                # Filter on JSON fields in the data column
-                where_clauses.append(f"json_extract(data, '$.{key}') = ?")
-                params.append(value)
-            
-            if where_clauses:
-                query = f"SELECT * FROM {self.table_name} WHERE {' AND '.join(where_clauses)}"
-            else:
-                query = f"SELECT * FROM {self.table_name}"
+        # Use the query builder to handle filters properly
+        base_query = f"SELECT * FROM {self.table_name}"
+        where_clause, params = self.query_builder.build_where_clause(filter)
+        
+        if where_clause:
+            query = base_query + " WHERE " + where_clause.lstrip(" AND ")
         else:
-            query = f"SELECT * FROM {self.table_name}"
-            params = []
+            query = base_query
         
         cursor = self.conn.cursor()
         try:

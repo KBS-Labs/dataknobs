@@ -47,7 +47,7 @@ class AsyncSQLiteDatabase(AsyncDatabase, ConfigurableBase):
         self.synchronous = config.get("synchronous", "NORMAL")
         self.pool_size = config.get("pool_size", 5)
         
-        self.query_builder = SQLQueryBuilder(self.table_name, dialect="sqlite")
+        self.query_builder = SQLQueryBuilder(self.table_name, dialect="sqlite", param_style="qmark")
         self.table_manager = SQLTableManager(self.table_name, dialect="sqlite")
         
         self.db: aiosqlite.Connection | None = None

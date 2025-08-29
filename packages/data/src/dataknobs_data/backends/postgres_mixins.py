@@ -8,11 +8,12 @@ import logging
 from typing import Any
 
 from ..records import Record
+from .vector_config_mixin import VectorConfigMixin
 
 logger = logging.getLogger(__name__)
 
 
-class PostgresBaseConfig:
+class PostgresBaseConfig(VectorConfigMixin):
     """Shared configuration logic for PostgreSQL backends."""
     
     def _parse_postgres_config(self, config: dict[str, Any]) -> tuple[str, str, dict]:
@@ -25,18 +26,19 @@ class PostgresBaseConfig:
             Tuple of (table_name, schema_name, connection_config)
         """
         config = config.copy() if config else {}
+        
+        # Parse vector configuration using the mixin
+        self._parse_vector_config(config)
+        
+        # Extract PostgreSQL-specific configuration
         table_name = config.pop("table", config.pop("table_name", "records"))
         schema_name = config.pop("schema", config.pop("schema_name", "public"))
         
-        # Handle vector support configuration
-        self._enable_vector = config.pop("enable_vector", False)
+        # Remove vector config parameters since they've been processed
+        config.pop("vector_enabled", None)
+        config.pop("vector_metric", None)
         
         return table_name, schema_name, config
-    
-    def _init_vector_support(self) -> None:
-        """Initialize vector support attributes."""
-        self._vector_enabled = False
-        self._vector_dimensions: dict[str, int] = {}
     
     def _init_postgres_attributes(self, table_name: str, schema_name: str) -> None:
         """Initialize common PostgreSQL attributes.
@@ -48,7 +50,9 @@ class PostgresBaseConfig:
         self.table_name = table_name
         self.schema_name = schema_name
         self._connected = False
-        self._init_vector_support()
+        
+        # Initialize vector state using the mixin
+        self._init_vector_state()
 
 
 class PostgresTableManager:

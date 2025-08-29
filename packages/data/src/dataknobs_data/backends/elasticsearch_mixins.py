@@ -60,7 +60,10 @@ class ElasticsearchIndexManager:
         mappings = {
             "properties": {
                 "id": {"type": "keyword"},
-                "data": {"type": "object", "enabled": True},
+                "data": {
+                    "type": "object", 
+                    "properties": {}
+                },
                 "metadata": {"type": "object", "enabled": True},
                 "created_at": {"type": "date"},
                 "updated_at": {"type": "date"},
@@ -70,8 +73,8 @@ class ElasticsearchIndexManager:
         # Add vector field mappings if specified
         if vector_fields:
             for field_name, dimensions in vector_fields.items():
-                # Use dense_vector type for vector fields
-                mappings["properties"][f"data.{field_name}"] = {
+                # Use dense_vector type for vector fields nested under data
+                mappings["properties"]["data"]["properties"][field_name] = {
                     "type": "dense_vector",
                     "dims": dimensions,
                     "index": True,
@@ -90,7 +93,8 @@ class ElasticsearchIndexManager:
         return {
             "number_of_shards": 1,
             "number_of_replicas": 0,
-            "knn": True,  # Enable KNN for the index
+            # Note: "knn" setting is not needed for standard Elasticsearch
+            # KNN is enabled by having dense_vector fields with index=true
         }
 
 
