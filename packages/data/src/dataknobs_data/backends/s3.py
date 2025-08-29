@@ -15,11 +15,24 @@ from dataknobs_data.database import SyncDatabase
 from dataknobs_data.query import Query
 from dataknobs_data.records import Record
 from dataknobs_data.streaming import StreamConfig, StreamResult, process_batch_with_fallback
+from ..vector import VectorOperationsMixin
+from ..vector.bulk_embed_mixin import BulkEmbedMixin
+from ..vector.python_vector_search import PythonVectorSearchMixin
+from .sqlite_mixins import SQLiteVectorSupport
+from .vector_config_mixin import VectorConfigMixin
 
 logger = logging.getLogger(__name__)
 
 
-class SyncS3Database(SyncDatabase, ConfigurableBase):
+class SyncS3Database(
+    SyncDatabase,
+    ConfigurableBase,
+    VectorConfigMixin,
+    SQLiteVectorSupport,
+    PythonVectorSearchMixin,
+    BulkEmbedMixin,
+    VectorOperationsMixin
+):
     """S3-based database backend with proper connection management.
     
     Stores records as JSON objects in S3 with metadata as tags.
@@ -59,6 +72,10 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
         self.aws_access_key_id = self.config.get("access_key_id")
         self.aws_secret_access_key = self.config.get("secret_access_key")
         self.aws_session_token = self.config.get("session_token")
+        
+        # Initialize vector support
+        self._parse_vector_config(config or {})
+        self._init_vector_state()
 
     @classmethod
     def from_config(cls, config: dict) -> "SyncS3Database":
@@ -149,21 +166,16 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
 
     def _record_to_s3_object(self, record: Record) -> dict[str, Any]:
         """Convert a Record to S3 object data."""
-        data = {}
-        for field_name, field_obj in record.fields.items():
-            data[field_name] = field_obj.value
-
-        return {
-            "data": data,
-            "metadata": record.metadata or {}
-        }
+        # Use Record's built-in serialization which handles VectorFields
+        # Use non-flattened format to preserve field metadata
+        record_dict = record.to_dict(include_metadata=True, flatten=False)
+        
+        return record_dict
 
     def _s3_object_to_record(self, obj_data: dict[str, Any]) -> Record:
         """Convert S3 object data to a Record."""
-        data = obj_data.get("data", {})
-        metadata = obj_data.get("metadata", {})
-        record_id = metadata.get("id")
-        return Record(data=data, metadata=metadata, id=record_id)
+        # Use Record's built-in deserialization
+        return Record.from_dict(obj_data)
 
     def create(self, record: Record) -> str:
         """Create a new record in S3."""
@@ -542,6 +554,32 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
             Key=key,
             Body=body,
             ContentType='application/json'
+        )
+
+    def vector_search(
+        self,
+        query_vector,
+        vector_field: str = "embedding",
+        k: int = 10,
+        filter=None,
+        metric=None,
+        **kwargs
+    ):
+        """
+        Perform vector similarity search using Python calculations.
+        
+        WARNING: This implementation downloads all records from S3 to perform
+        the search locally. This is inefficient for large datasets. Consider
+        using a vector-enabled backend like PostgreSQL or Elasticsearch for
+        production use with large datasets.
+        """
+        return self.python_vector_search_sync(
+            query_vector=query_vector,
+            vector_field=vector_field,
+            k=k,
+            filter=filter,
+            metric=metric,
+            **kwargs
         )
 
 

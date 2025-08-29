@@ -15,7 +15,12 @@ from ..query import Query
 from ..query_logic import ComplexQuery
 from ..records import Record
 from ..streaming import StreamConfig, StreamResult
+from ..vector import VectorOperationsMixin
+from ..vector.bulk_embed_mixin import BulkEmbedMixin
+from ..vector.python_vector_search import PythonVectorSearchMixin
 from .sql_base import SQLQueryBuilder, SQLTableManager
+from .sqlite_mixins import SQLiteVectorSupport
+from .vector_config_mixin import VectorConfigMixin
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +28,15 @@ logger = logging.getLogger(__name__)
 _pool_manager = ConnectionPoolManager()
 
 
-class AsyncSQLiteDatabase(AsyncDatabase, ConfigurableBase):
+class AsyncSQLiteDatabase(
+    AsyncDatabase, 
+    ConfigurableBase,
+    VectorConfigMixin,
+    SQLiteVectorSupport,
+    PythonVectorSearchMixin,  # Provides python_vector_search_async
+    BulkEmbedMixin,  # Must come before VectorOperationsMixin to override bulk_embed_and_store
+    VectorOperationsMixin
+):
     """Asynchronous SQLite database backend using aiosqlite."""
     
     def __init__(self, config: dict[str, Any] | None = None):
@@ -52,6 +65,10 @@ class AsyncSQLiteDatabase(AsyncDatabase, ConfigurableBase):
         
         self.db: aiosqlite.Connection | None = None
         self._connected = False
+        
+        # Initialize vector support
+        self._parse_vector_config(config)
+        self._init_vector_state()
     
     @classmethod
     def from_config(cls, config: dict) -> "AsyncSQLiteDatabase":
@@ -411,4 +428,40 @@ class AsyncSQLiteDatabase(AsyncDatabase, ConfigurableBase):
                 "total_written": total_written,
                 "elapsed_seconds": elapsed
             }
+        )
+    
+    async def vector_search(
+        self,
+        query_vector,
+        vector_field: str = "embedding",
+        k: int = 10,
+        filter=None,
+        metric=None,
+        **kwargs
+    ):
+        """Perform async vector similarity search using Python-based calculations.
+        
+        Delegates to PythonVectorSearchMixin for the implementation.
+        
+        Args:
+            query_vector: Query vector
+            vector_field: Name of the vector field to search
+            k: Number of results to return  
+            filter: Optional filter conditions
+            metric: Distance metric (uses instance default if not specified)
+            **kwargs: Additional arguments for compatibility
+            
+        Returns:
+            List of VectorSearchResult objects with scores
+        """
+        self._check_connection()
+        
+        # Delegate to the mixin's implementation
+        return await self.python_vector_search_async(
+            query_vector=query_vector,
+            vector_field=vector_field,
+            k=k,
+            filter=filter,
+            metric=metric,
+            **kwargs
         )

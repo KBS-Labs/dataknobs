@@ -18,7 +18,7 @@ from .exceptions import (
     SerializationError,
     TransactionError,
 )
-from .factory import DatabaseFactory, async_database_factory, database_factory
+from .factory import AsyncDatabaseFactory, DatabaseFactory, async_database_factory, database_factory
 
 # Import core modules
 from .fields import Field, FieldType, VectorField
@@ -62,6 +62,7 @@ __all__ = [
     "StreamProcessor",
     # Factory
     "DatabaseFactory",
+    "AsyncDatabaseFactory",
     "database_factory",
     "async_database_factory",
     # Validation and Migration modules

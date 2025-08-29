@@ -13,6 +13,7 @@ from .exceptions import (
     VectorNotSupportedError,
     VectorValidationError,
 )
+from .migration import IncrementalVectorizer, VectorMigration
 from .mixins import VectorCapable, VectorOperationsMixin, VectorSyncMixin
 from .operations import (
     batch_compute_distances,
@@ -23,6 +24,8 @@ from .operations import (
     normalize_vector,
     validate_vector_dimensions,
 )
+from .sync import VectorTextSynchronizer
+from .tracker import ChangeTracker
 from .types import (
     DistanceMetric,
     VectorConfig,
@@ -52,6 +55,12 @@ __all__ = [
     "estimate_memory_usage",
     "normalize_vector",
     "validate_vector_dimensions",
+    # Synchronization
+    "VectorTextSynchronizer",
+    "ChangeTracker",
+    # Migration
+    "VectorMigration",
+    "IncrementalVectorizer",
     # Exceptions
     "VectorBackendError",
     "VectorDimensionError",

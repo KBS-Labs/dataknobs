@@ -57,14 +57,12 @@ class DatabaseFactory(FactoryBase):
         
         # Check if vector_enabled is set
         vector_enabled = config.get("vector_enabled", False)
+        vector_dimensions = config.get("vector_dimensions")
+        vector_metric = config.get("vector_metric", "cosine")
+        
         if vector_enabled:
-            # PostgreSQL, Elasticsearch, and SQLite now have vector support
-            if backend_type not in ("postgres", "postgresql", "pg", "elasticsearch", "es", "sqlite"):
-                raise ValueError(
-                    f"Vector-enabled mode is not supported for backend '{backend_type}'. "
-                    f"Supported backends: postgres, elasticsearch, sqlite, "
-                    f"or use dedicated vector stores: faiss, chroma, memory_vector"
-                )
+            # All backends now have vector support (some native, some via Python)
+            logger.debug(f"Vector support enabled for backend: {backend_type}")
 
         if backend_type in ("memory", "mem"):
             from dataknobs_data.backends.memory import SyncMemoryDatabase
@@ -284,6 +282,15 @@ class AsyncDatabaseFactory(FactoryBase):
             ValueError: If backend doesn't support async operations
         """
         backend_type = config.pop("backend", "memory").lower()
+        
+        # Check if vector_enabled is set
+        vector_enabled = config.get("vector_enabled", False)
+        vector_dimensions = config.get("vector_dimensions")
+        vector_metric = config.get("vector_metric", "cosine")
+        
+        if vector_enabled:
+            # All backends now have vector support (some native, some via Python)
+            logger.debug(f"Vector support enabled for async backend: {backend_type}")
 
         if backend_type in ("memory", "mem"):
             from dataknobs_data.backends.memory import AsyncMemoryDatabase
@@ -305,10 +312,14 @@ class AsyncDatabaseFactory(FactoryBase):
             from dataknobs_data.backends.s3_async import AsyncS3Database
             return AsyncS3Database.from_config(config)
 
+        elif backend_type == "sqlite":
+            from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
+            return AsyncSQLiteDatabase.from_config(config)
+
         else:
             raise ValueError(
                 f"Backend '{backend_type}' does not support async operations yet. "
-                f"Available async backends: memory, file, postgres, elasticsearch, s3"
+                f"Available async backends: memory, file, postgres, elasticsearch, s3, sqlite"
             )
 
 

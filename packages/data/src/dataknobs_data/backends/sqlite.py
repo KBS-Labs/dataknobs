@@ -20,6 +20,7 @@ from ..streaming import StreamConfig, StreamResult
 from ..vector.mixins import VectorCapable, VectorOperationsMixin
 from ..vector.types import DistanceMetric, VectorSearchResult
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
+from ..vector.python_vector_search import PythonVectorSearchMixin
 from .sql_base import SQLQueryBuilder, SQLTableManager, SQLRecordSerializer
 from .sqlite_mixins import SQLiteVectorSupport
 from .vector_config_mixin import VectorConfigMixin
@@ -34,6 +35,7 @@ class SyncSQLiteDatabase(
     SyncDatabase, 
     ConfigurableBase, 
     VectorConfigMixin,
+    PythonVectorSearchMixin,  # Provides python_vector_search_sync
     BulkEmbedMixin,  # Must come before VectorOperationsMixin to override bulk_embed_and_store
     VectorOperationsMixin,
     SQLiteVectorSupport,
@@ -527,8 +529,11 @@ class SyncSQLiteDatabase(
         k: int = 10,
         filter: Query | None = None,
         metric: DistanceMetric | None = None,
+        **kwargs
     ) -> list[VectorSearchResult]:
         """Perform vector similarity search using Python-based calculations.
+        
+        Delegates to PythonVectorSearchMixin for the implementation.
         
         Args:
             query_vector: Query vector
@@ -536,68 +541,22 @@ class SyncSQLiteDatabase(
             k: Number of results to return
             filter: Optional filter conditions
             metric: Distance metric (uses instance default if not specified)
+            **kwargs: Additional arguments for compatibility
             
         Returns:
             List of search results with scores
         """
         self._check_connection()
         
-        if metric is None:
-            metric = self.vector_metric
-        
-        # Build query to fetch all records (with optional filter)
-        # Use the query builder to handle filters properly
-        base_query = f"SELECT * FROM {self.table_name}"
-        where_clause, params = self.query_builder.build_where_clause(filter)
-        
-        if where_clause:
-            query = base_query + " WHERE " + where_clause.lstrip(" AND ")
-        else:
-            query = base_query
-        
-        cursor = self.conn.cursor()
-        try:
-            cursor.execute(query, params)
-            rows = cursor.fetchall()
-            
-            # Calculate similarities for all records
-            results = []
-            for row in rows:
-                row_dict = dict(row)
-                
-                # Convert row to record to access vector fields
-                record = self.row_to_record(row_dict)
-                record.id = row_dict.get("id")
-                
-                # Check if the record has the vector field
-                if field_name in record.fields:
-                    vector_field = record.fields[field_name]
-                    if hasattr(vector_field, 'value') and vector_field.value is not None:
-                        stored_vector = vector_field.value
-                        
-                        # Ensure it's a numpy array
-                        if not isinstance(stored_vector, np.ndarray):
-                            stored_vector = np.array(stored_vector, dtype=np.float32)
-                        
-                        # Calculate similarity
-                        score = self._compute_similarity(
-                            query_vector, stored_vector, metric
-                        )
-                        
-                        results.append(VectorSearchResult(
-                            record=record,
-                            score=score,
-                            metadata=record.metadata
-                        ))
-            
-            # Sort by score (descending for similarity)
-            results.sort(key=lambda x: x.score, reverse=True)
-            
-            # Return top k results
-            return results[:k]
-            
-        finally:
-            cursor.close()
+        # Delegate to the mixin's implementation
+        return self.python_vector_search_sync(
+            query_vector=query_vector,
+            vector_field=field_name,
+            k=k,
+            filter=filter,
+            metric=metric,
+            **kwargs
+        )
     
     def add_vectors(
         self,

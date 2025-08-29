@@ -14,15 +14,33 @@ from ..query import Query
 from ..query_logic import ComplexQuery
 from ..records import Record
 from ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult
+from ..vector import VectorOperationsMixin
+from ..vector.bulk_embed_mixin import BulkEmbedMixin
+from ..vector.python_vector_search import PythonVectorSearchMixin
+from .sqlite_mixins import SQLiteVectorSupport
+from .vector_config_mixin import VectorConfigMixin
 
 
-class AsyncMemoryDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
+class AsyncMemoryDatabase(
+    AsyncDatabase,
+    AsyncStreamingMixin,
+    ConfigurableBase,
+    VectorConfigMixin,           # Parse vector config
+    SQLiteVectorSupport,          # Provides _compute_similarity
+    PythonVectorSearchMixin,      # Provides python_vector_search_async
+    BulkEmbedMixin,              # Bulk embedding operations
+    VectorOperationsMixin        # Standard vector interface
+):
     """Async in-memory database implementation."""
 
     def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config)
         self._storage: OrderedDict[str, Record] = OrderedDict()
         self._lock = asyncio.Lock()
+        
+        # Initialize vector support
+        self._parse_vector_config(config or {})
+        self._init_vector_state()  # From SQLiteVectorSupport
 
     @classmethod
     def from_config(cls, config: dict) -> "AsyncMemoryDatabase":
@@ -182,14 +200,46 @@ class AsyncMemoryDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
         # Use the default implementation from mixin
         return await self._default_stream_write(records, config)
 
+    async def vector_search(
+        self,
+        query_vector,
+        vector_field: str = "embedding",
+        k: int = 10,
+        filter=None,
+        metric=None,
+        **kwargs
+    ):
+        """Perform vector similarity search using Python calculations."""
+        return await self.python_vector_search_async(
+            query_vector=query_vector,
+            vector_field=vector_field,
+            k=k,
+            filter=filter,
+            metric=metric,
+            **kwargs
+        )
 
-class SyncMemoryDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
+
+class SyncMemoryDatabase(
+    SyncDatabase,
+    StreamingMixin,
+    ConfigurableBase,
+    VectorConfigMixin,
+    SQLiteVectorSupport,
+    PythonVectorSearchMixin,
+    BulkEmbedMixin,
+    VectorOperationsMixin
+):
     """Synchronous in-memory database implementation."""
 
     def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config)
         self._storage: OrderedDict[str, Record] = OrderedDict()
         self._lock = threading.RLock()
+        
+        # Initialize vector support
+        self._parse_vector_config(config or {})
+        self._init_vector_state()
 
     @classmethod
     def from_config(cls, config: dict) -> "SyncMemoryDatabase":
@@ -346,3 +396,22 @@ class SyncMemoryDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
         """Stream records into memory."""
         # Use the default implementation from mixin
         return self._default_stream_write(records, config)
+
+    def vector_search(
+        self,
+        query_vector,
+        vector_field: str = "embedding",
+        k: int = 10,
+        filter=None,
+        metric=None,
+        **kwargs
+    ):
+        """Perform vector similarity search using Python calculations."""
+        return self.python_vector_search_sync(
+            query_vector=query_vector,
+            vector_field=vector_field,
+            k=k,
+            filter=filter,
+            metric=metric,
+            **kwargs
+        )

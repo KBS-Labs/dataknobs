@@ -20,6 +20,11 @@ from ..database import AsyncDatabase, SyncDatabase
 from ..query import Query
 from ..records import Record
 from ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult
+from ..vector import VectorOperationsMixin
+from ..vector.bulk_embed_mixin import BulkEmbedMixin
+from ..vector.python_vector_search import PythonVectorSearchMixin
+from .sqlite_mixins import SQLiteVectorSupport
+from .vector_config_mixin import VectorConfigMixin
 
 
 class FileLock:
@@ -319,7 +324,16 @@ class ParquetFormat(FileFormat):
             raise ImportError("Parquet support requires pandas and pyarrow packages")
 
 
-class AsyncFileDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
+class AsyncFileDatabase(
+    AsyncDatabase,
+    AsyncStreamingMixin,
+    ConfigurableBase,
+    VectorConfigMixin,
+    SQLiteVectorSupport,
+    PythonVectorSearchMixin,
+    BulkEmbedMixin,
+    VectorOperationsMixin
+):
     """Async file-based database implementation."""
 
     FORMAT_HANDLERS = {
@@ -359,6 +373,10 @@ class AsyncFileDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
         # Get the appropriate format handler
         ext = f".{self.format}"
         self.handler = self.FORMAT_HANDLERS.get(ext, JSONFormat)
+        
+        # Initialize vector support
+        self._parse_vector_config(config or {})
+        self._init_vector_state()
 
     @classmethod
     def from_config(cls, config: dict) -> "AsyncFileDatabase":
@@ -562,8 +580,42 @@ class AsyncFileDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
         # Use the default implementation from mixin
         return await self._default_stream_write(records, config)
 
+    async def vector_search(
+        self,
+        query_vector,
+        vector_field: str = "embedding",
+        k: int = 10,
+        filter=None,
+        metric=None,
+        **kwargs
+    ):
+        """
+        Perform vector similarity search using Python calculations.
+        
+        Note: This implementation reads all records from disk to perform
+        the search locally. For better performance with large datasets,
+        consider using SQLite or a dedicated vector database.
+        """
+        return await self.python_vector_search_async(
+            query_vector=query_vector,
+            vector_field=vector_field,
+            k=k,
+            filter=filter,
+            metric=metric,
+            **kwargs
+        )
 
-class SyncFileDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
+
+class SyncFileDatabase(
+    SyncDatabase,
+    StreamingMixin,
+    ConfigurableBase,
+    VectorConfigMixin,
+    SQLiteVectorSupport,
+    PythonVectorSearchMixin,
+    BulkEmbedMixin,
+    VectorOperationsMixin
+):
     """Synchronous file-based database implementation."""
 
     FORMAT_HANDLERS = {
@@ -603,6 +655,10 @@ class SyncFileDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
         # Get the appropriate format handler
         ext = f".{self.format}"
         self.handler = self.FORMAT_HANDLERS.get(ext, JSONFormat)
+        
+        # Initialize vector support
+        self._parse_vector_config(config or {})
+        self._init_vector_state()
 
     @classmethod
     def from_config(cls, config: dict) -> "SyncFileDatabase":
@@ -861,3 +917,28 @@ class SyncFileDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
 
         result.duration = time.time() - start_time
         return result
+
+    def vector_search(
+        self,
+        query_vector,
+        vector_field: str = "embedding",
+        k: int = 10,
+        filter=None,
+        metric=None,
+        **kwargs
+    ):
+        """
+        Perform vector similarity search using Python calculations.
+        
+        Note: This implementation reads all records from disk to perform
+        the search locally. For better performance with large datasets,
+        consider using SQLite or a dedicated vector database.
+        """
+        return self.python_vector_search_sync(
+            query_vector=query_vector,
+            vector_field=vector_field,
+            k=k,
+            filter=filter,
+            metric=metric,
+            **kwargs
+        )

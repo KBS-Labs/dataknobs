@@ -416,7 +416,14 @@ class Record:
         """
         if flatten:
             # Simple dict with just values (default behavior for ergonomics)
-            result = {name: field.value for name, field in self.fields.items()}
+            result = {}
+            for name, field in self.fields.items():
+                # Handle VectorField specially to ensure JSON serialization
+                if hasattr(field, 'to_list') and callable(field.to_list):
+                    # VectorField has a to_list() method for serialization
+                    result[name] = field.to_list()
+                else:
+                    result[name] = field.value
             if self.id:
                 result["_id"] = self.id
             if include_metadata and self.metadata:
@@ -468,12 +475,37 @@ class Record:
 
             new_fields = OrderedDict()
             for name, field in self.fields.items():
-                new_fields[name] = Field(
-                    name=field.name,
-                    value=copy.deepcopy(field.value),
-                    type=field.type,
-                    metadata=copy.deepcopy(field.metadata),
-                )
+                # Preserve the actual field type (Field or VectorField)
+                if hasattr(field, '__class__'):
+                    # Use the actual class of the field
+                    field_class = field.__class__
+                    if field_class.__name__ == 'VectorField':
+                        # Import VectorField if needed
+                        from dataknobs_data.fields import VectorField
+                        new_fields[name] = VectorField(
+                            name=field.name,
+                            value=copy.deepcopy(field.value),
+                            dimensions=getattr(field, 'dimensions', None),
+                            source_field=getattr(field, 'source_field', None),
+                            model_name=getattr(field, 'model_name', None),
+                            model_version=getattr(field, 'model_version', None),
+                            metadata=copy.deepcopy(field.metadata),
+                        )
+                    else:
+                        new_fields[name] = Field(
+                            name=field.name,
+                            value=copy.deepcopy(field.value),
+                            type=field.type,
+                            metadata=copy.deepcopy(field.metadata),
+                        )
+                else:
+                    # Fallback to regular Field
+                    new_fields[name] = Field(
+                        name=field.name,
+                        value=copy.deepcopy(field.value),
+                        type=field.type,
+                        metadata=copy.deepcopy(field.metadata),
+                    )
             new_metadata = copy.deepcopy(self.metadata)
         else:
             new_fields = OrderedDict(self.fields)

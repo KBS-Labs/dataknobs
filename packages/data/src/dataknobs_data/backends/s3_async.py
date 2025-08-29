@@ -17,6 +17,11 @@ from ..pooling.s3 import S3PoolConfig, create_aioboto3_session, validate_s3_sess
 from ..query import Operator, Query, SortOrder
 from ..records import Record
 from ..streaming import StreamConfig, StreamResult, async_process_batch_with_fallback
+from ..vector import VectorOperationsMixin
+from ..vector.bulk_embed_mixin import BulkEmbedMixin
+from ..vector.python_vector_search import PythonVectorSearchMixin
+from .sqlite_mixins import SQLiteVectorSupport
+from .vector_config_mixin import VectorConfigMixin
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +29,15 @@ logger = logging.getLogger(__name__)
 _session_manager = ConnectionPoolManager()
 
 
-class AsyncS3Database(AsyncDatabase, ConfigurableBase):
+class AsyncS3Database(
+    AsyncDatabase,
+    ConfigurableBase,
+    VectorConfigMixin,
+    SQLiteVectorSupport,
+    PythonVectorSearchMixin,
+    BulkEmbedMixin,
+    VectorOperationsMixin
+):
     """Native async S3 database backend with aioboto3 and session pooling."""
 
     def __init__(self, config: dict[str, Any] | None = None):
@@ -37,6 +50,10 @@ class AsyncS3Database(AsyncDatabase, ConfigurableBase):
         self._pool_config = S3PoolConfig.from_dict(config)
         self._session = None
         self._connected = False
+        
+        # Initialize vector support
+        self._parse_vector_config(config or {})
+        self._init_vector_state()  # From SQLiteVectorSupport
 
     @classmethod
     def from_config(cls, config: dict) -> "AsyncS3Database":
@@ -80,29 +97,22 @@ class AsyncS3Database(AsyncDatabase, ConfigurableBase):
 
     def _record_to_s3_object(self, record: Record) -> dict[str, Any]:
         """Convert a Record to an S3 object."""
-        data = {}
-        for field_name, field_obj in record.fields.items():
-            data[field_name] = field_obj.value
-
-        return {
-            "data": data,
-            "metadata": record.metadata or {},
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat()
-        }
+        # Use Record's built-in serialization which handles VectorFields
+        record_dict = record.to_dict(include_metadata=True, flatten=False)
+        
+        # Add timestamps
+        now = datetime.utcnow().isoformat()
+        if "metadata" not in record_dict:
+            record_dict["metadata"] = {}
+        record_dict["metadata"]["created_at"] = record_dict["metadata"].get("created_at", now)
+        record_dict["metadata"]["updated_at"] = now
+        
+        return record_dict
 
     def _s3_object_to_record(self, obj: dict[str, Any]) -> Record:
         """Convert an S3 object to a Record."""
-        data = obj.get("data", {})
-        metadata = obj.get("metadata", {})
-
-        # Add timestamps to metadata
-        if "created_at" in obj:
-            metadata["created_at"] = obj["created_at"]
-        if "updated_at" in obj:
-            metadata["updated_at"] = obj["updated_at"]
-
-        return Record(data=data, metadata=metadata)
+        # Use Record's built-in deserialization
+        return Record.from_dict(obj)
 
     async def create(self, record: Record) -> str:
         """Create a new record in S3."""
@@ -550,3 +560,32 @@ class AsyncS3Database(AsyncDatabase, ConfigurableBase):
                         ids.append(id)
 
         return ids
+
+    async def vector_search(
+        self,
+        query_vector,
+        vector_field: str = "embedding",
+        k: int = 10,
+        filter=None,
+        metric=None,
+        **kwargs
+    ):
+        """
+        Perform vector similarity search using Python calculations.
+        
+        WARNING: This implementation downloads all records from S3 to perform
+        the search locally. This is inefficient for large datasets. Consider
+        using a vector-enabled backend like PostgreSQL or Elasticsearch for
+        production use with large datasets.
+        
+        Future optimization: Override this method to use AWS OpenSearch or
+        similar vector-enabled service when available.
+        """
+        return await self.python_vector_search_async(
+            query_vector=query_vector,
+            vector_field=vector_field,
+            k=k,
+            filter=filter,
+            metric=metric,
+            **kwargs
+        )
