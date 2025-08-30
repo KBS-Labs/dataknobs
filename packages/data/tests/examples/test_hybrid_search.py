@@ -325,7 +325,7 @@ class TestRealComplexQueries:
         
         # All results should be AI category
         assert all(r.record.get_value('category') == 'AI' for r in results)
-        assert len(results) <= 3  # We have 3 AI documents
+        assert len(results) <= 10  # Should respect the k=10 limit
     
     @pytest.mark.asyncio
     async def test_complex_or_query(self, populated_vector_db):

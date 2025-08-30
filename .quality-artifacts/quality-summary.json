@@ -1,5 +1,5 @@
 {
-  "timestamp": "2025-08-29T19:42:43Z",
+  "timestamp": "2025-08-30T00:36:13Z",
   "overall_status": "FAIL",
   "environment": "host",
   "packages": "all",
@@ -20,8 +20,8 @@
       "skipped": false
     },
     "integration_tests": {
-      "status": "fail",
-      "exit_code": 1,
+      "status": "pass",
+      "exit_code": 0,
       "skipped": false
     }
   }
