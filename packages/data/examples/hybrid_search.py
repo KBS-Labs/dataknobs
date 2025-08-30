@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from sentence_transformers import SentenceTransformer
 import time
 
-from dataknobs_data import DatabaseFactory, Record, VectorField, Query, ComplexQuery
+from dataknobs_data import AsyncDatabaseFactory, Record, VectorField, Query
 
 
 # Initialize embedding model
@@ -199,14 +199,15 @@ async def create_sample_database():
     
     print("\n1. Creating sample database...")
     
-    db = await DatabaseFactory.create_async(
+    factory = AsyncDatabaseFactory()
+    db = factory.create(
         backend="sqlite",
         database=":memory:",
         vector_enabled=True,
         vector_metric="cosine"
     )
     
-    await db.initialize()
+    await db.connect()
     
     # Sample documents covering different topics
     documents = [
@@ -289,7 +290,7 @@ async def create_sample_database():
         
         record = Record({
             **doc,
-            "embedding": VectorField(embedding, dimensions=384)
+            "embedding": VectorField(embedding)  # Simplified - dimensions auto-detected
         })
         
         await db.create(record)

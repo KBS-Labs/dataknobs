@@ -209,6 +209,11 @@ set_environment_vars() {
     export AWS_SECRET_ACCESS_KEY="test"
     export AWS_DEFAULT_REGION="us-east-1"
     export S3_BUCKET="dataknobs-local"
+    
+    # Enable test flags for integration tests
+    export TEST_S3="true"
+    export TEST_ELASTICSEARCH="true"
+    export TEST_POSTGRES="true"
 }
 
 # Function to cleanup resources

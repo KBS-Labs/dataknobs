@@ -74,20 +74,29 @@ class TestFactoryVectorIntegration:
             finally:
                 db.close()
     
-    def test_vector_enabled_unsupported_backend(self, factory):
-        """Test that vector_enabled raises error for unsupported backends."""
-        with pytest.raises(ValueError, match="Vector-enabled mode is not supported"):
-            factory.create(
-                backend="memory",
-                vector_enabled=True
-            )
+    def test_vector_enabled_all_backends(self, factory):
+        """Test that vector_enabled works for all backends now."""
+        # Memory backend should work with vectors
+        db = factory.create(
+            backend="memory",
+            vector_enabled=True
+        )
+        assert db is not None
+        db.connect()
         
-        with pytest.raises(ValueError, match="Vector-enabled mode is not supported"):
-            factory.create(
+        # File backend should work with vectors (using temp file)
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+            db2 = factory.create(
                 backend="file",
-                path="test.json",
+                path=tmp.name,
                 vector_enabled=True
             )
+            assert db2 is not None
+            db2.connect()
+            db2.close()
+            import os
+            os.unlink(tmp.name)
     
     def test_sqlite_without_vector_enabled(self, factory):
         """Test SQLite works normally without vector_enabled."""

@@ -1358,13 +1358,13 @@ class AsyncPostgresDatabase(
                         )
                         
                         # Create or update record
-                        if record.id:
-                            await self.update(record.id, record)
+                        if record.has_storage_id():
+                            await self.update(record.storage_id, record)
                         else:
                             record_id = await self.create(record)
-                            record.id = record_id
+                            record.storage_id = record_id
                         
-                        processed_ids.append(record.id)
+                        processed_ids.append(record.storage_id)
         
         return processed_ids
     

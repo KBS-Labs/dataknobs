@@ -426,18 +426,19 @@ class AsyncFileDatabase(
         """Create a new record in the file."""
         async with self._lock:
             data = await self._load_data()
-            # Use record's ID if it has one, otherwise generate a new one
-            record_id = record.id if record.id else self._generate_id()
-            data[record_id] = record.copy(deep=True)
+            # Use centralized method to prepare record
+            record_copy, storage_id = self._prepare_record_for_storage(record)
+            data[storage_id] = record_copy
             await self._save_data(data)
-            return record_id
+            return storage_id
 
     async def read(self, id: str) -> Record | None:
         """Read a record from the file."""
         async with self._lock:
             data = await self._load_data()
             record = data.get(id)
-            return record.copy(deep=True) if record else None
+            # Use centralized method to prepare record
+            return self._prepare_record_from_storage(record, id)
 
     async def update(self, id: str, record: Record) -> bool:
         """Update a record in the file."""
@@ -705,12 +706,13 @@ class SyncFileDatabase(
             raise
 
     def _do_set_data(self, data: dict[str, Record], record: Record) -> str:
-        """Ensure record has an ID, set data[id]=record.copy() and return the ID"""
-        # Use record's ID if it has one, otherwise generate a new one
-        if not record.id:
-            record.id = self._generate_id()
-        data[record.id] = record.copy(deep=True)
-        return record.id
+        """Ensure record has a storage ID, set data[id]=record.copy() and return the ID"""
+        # Use centralized method to prepare record
+        record_copy, storage_id = self._prepare_record_for_storage(record)
+        
+        # Store the record
+        data[storage_id] = record_copy
+        return storage_id
 
     def create(self, record: Record) -> str:
         """Create a new record in the file."""
@@ -726,7 +728,8 @@ class SyncFileDatabase(
         with self._lock:
             data = self._load_data()
             record = data.get(id)
-            return record.copy(deep=True) if record else None
+            # Use centralized method to prepare record
+            return self._prepare_record_from_storage(record, id)
 
     def update(self, id: str, record: Record) -> bool:
         """Update a record in the file."""

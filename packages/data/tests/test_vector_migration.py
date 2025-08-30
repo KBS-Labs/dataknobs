@@ -21,12 +21,15 @@ from dataknobs_data.vector.migration import (
 @pytest.fixture
 async def source_database():
     """Create source database with existing data."""
-    db = AsyncMemoryDatabase().with_schema(
-        content=FieldType.TEXT,
-        title=FieldType.TEXT,
-        category=FieldType.TEXT,
-        metadata=FieldType.JSON,
-    )
+    # Create schema
+    schema = DatabaseSchema()
+    schema.add_field(FieldSchema(name="content", type=FieldType.TEXT))
+    schema.add_field(FieldSchema(name="title", type=FieldType.TEXT))
+    schema.add_field(FieldSchema(name="category", type=FieldType.TEXT))
+    schema.add_field(FieldSchema(name="metadata", type=FieldType.JSON))
+    
+    db = AsyncMemoryDatabase()
+    db.schema = schema
     await db.connect()
     
     # Add some test data
@@ -45,14 +48,26 @@ async def source_database():
 @pytest.fixture
 async def target_database():
     """Create target database with vector fields."""
-    db = AsyncMemoryDatabase().with_schema(
-        content=FieldType.TEXT,
-        title=FieldType.TEXT,
-        category=FieldType.TEXT,
-        metadata=FieldType.JSON,
-        content_embedding=(FieldType.VECTOR, {"dimensions": 384, "source_field": "content"}),
-        title_embedding=(FieldType.VECTOR, {"dimensions": 384, "source_field": "title"}),
-    )
+    # Create schema with vector fields
+    schema = DatabaseSchema()
+    schema.add_field(FieldSchema(name="content", type=FieldType.TEXT))
+    schema.add_field(FieldSchema(name="title", type=FieldType.TEXT))
+    
+    schema.add_field(FieldSchema(name="category", type=FieldType.TEXT))
+    schema.add_field(FieldSchema(name="metadata", type=FieldType.JSON))
+    schema.add_field(FieldSchema(
+        name="content_embedding",
+        type=FieldType.VECTOR,
+        metadata={"dimensions": 384, "source_field": "content"}
+    ))
+    schema.add_field(FieldSchema(
+        name="title_embedding",
+        type=FieldType.VECTOR,
+        metadata={"dimensions": 384, "source_field": "title"}
+    ))
+    
+    db = AsyncMemoryDatabase(config={"vector_enabled": True})
+    db.schema = schema
     await db.connect()
     yield db
     await db.close()
@@ -404,7 +419,7 @@ class TestIncrementalVectorizer:
             database=source_database,
             embedding_fn=simple_embedding_fn,
             vector_field="content_embedding",
-            source_field="content",
+            text_fields="content",
             batch_size=5,
             max_workers=2,
             model_name="test-model",
@@ -413,7 +428,7 @@ class TestIncrementalVectorizer:
         
         assert vectorizer.database == source_database
         assert vectorizer.vector_field == "content_embedding"
-        assert vectorizer.source_field == "content"
+        assert vectorizer.text_fields == ["content"]
         assert vectorizer.batch_size == 5
         assert vectorizer.max_workers == 2
         assert vectorizer.model_name == "test-model"
@@ -432,7 +447,7 @@ class TestIncrementalVectorizer:
             database=source_database,
             embedding_fn=simple_embedding_fn,
             vector_field="content_embedding",
-            source_field="content",
+            text_fields="content",
             model_name="test-model",
             model_version="v1.0",
         )
@@ -463,7 +478,7 @@ class TestIncrementalVectorizer:
             database=source_database,
             embedding_fn=async_embedding_fn,
             vector_field="content_embedding",
-            source_field="content",
+            text_fields="content",
         )
         
         # Add records to queue
@@ -497,7 +512,7 @@ class TestIncrementalVectorizer:
             database=source_database,
             embedding_fn=simple_embedding_fn,
             vector_field="content_embedding",
-            source_field="content",
+            text_fields="content",
             max_workers=2,
         )
         
@@ -521,7 +536,7 @@ class TestIncrementalVectorizer:
             database=source_database,
             embedding_fn=simple_embedding_fn,
             vector_field="content_embedding",
-            source_field="content",
+            text_fields="content",
         )
         
         stats = vectorizer.get_stats()
@@ -553,7 +568,7 @@ class TestIncrementalVectorizer:
             database=source_database,
             embedding_fn=simple_embedding_fn,
             vector_field="content_embedding",
-            source_field="content",
+            text_fields="content",
         )
         
         # Process the record
@@ -577,7 +592,7 @@ class TestIncrementalVectorizer:
             database=source_database,
             embedding_fn=async_embedding_fn,
             vector_field="content_embedding",
-            source_field="content",
+            text_fields="content",
             max_workers=1,
         )
         

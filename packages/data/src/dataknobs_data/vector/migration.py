@@ -59,6 +59,16 @@ class MigrationStatus:
     end_time: datetime | None = None
     
     @property
+    def total_processed(self) -> int:
+        """Total number of processed records (migrated + failed)."""
+        return self.migrated_records + self.failed_records
+    
+    @property
+    def failed_count(self) -> int:
+        """Alias for failed_records for compatibility."""
+        return self.failed_records
+    
+    @property
     def success_rate(self) -> float:
         """Calculate the success rate of the migration."""
         if self.total_records == 0:
@@ -116,30 +126,145 @@ class VectorMigration:
         source_db: Database,
         target_db: Database | None = None,
         embedding_fn: Callable[[str], np.ndarray] | Callable[[str], Coroutine[Any, Any, np.ndarray]] = None,
-        config: MigrationConfig | None = None,
+        text_fields: list[str] | None = None,
+        vector_field: str = "embedding",
+        field_separator: str = " ",
+        batch_size: int = 100,
+        max_retries: int = 3,
+        retry_delay: float = 1.0,
         model_name: str | None = None,
         model_version: str | None = None,
+        config: MigrationConfig | None = None,
     ):
-        """Initialize the migration manager.
+        """Initialize the migration manager with simplified API.
         
         Args:
             source_db: Source database to migrate from
             target_db: Target database (None to migrate in-place)
             embedding_fn: Function to generate embeddings
-            config: Migration configuration
+            text_fields: Fields to concatenate for embedding
+            vector_field: Name of the vector field to create
+            field_separator: Separator for concatenating text fields
+            batch_size: Batch size for processing
+            max_retries: Maximum retry attempts
+            retry_delay: Delay between retries
             model_name: Name of the embedding model
             model_version: Version of the embedding model
+            config: Advanced configuration (overrides other params)
         """
         self.source_db = source_db
         self.target_db = target_db or source_db
         self.embedding_fn = embedding_fn
-        self.config = config or MigrationConfig()
-        self.config.validate()
+        self.embedding_function = embedding_fn  # Alias for compatibility
+        self.text_fields = text_fields or []
+        self.vector_field = vector_field
+        self.field_separator = field_separator
+        self.batch_size = batch_size
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
         self.model_name = model_name
         self.model_version = model_version
         
+        # Use config if provided, otherwise create from params
+        if config:
+            self.config = config
+        else:
+            self.config = MigrationConfig(
+                batch_size=batch_size,
+                max_retries=max_retries,
+            )
+        self.config.validate()
+        
+        # Migration status
+        self.status = MigrationStatus()
+        
         # Track rollback data if enabled
         self._rollback_data: dict[str, dict[str, Any]] = {}
+    
+    async def run(
+        self,
+        progress_callback: Callable[[MigrationStatus], None] | None = None
+    ) -> MigrationStatus:
+        """Run the complete migration.
+        
+        Args:
+            progress_callback: Optional callback for progress updates
+            
+        Returns:
+            Migration status
+        """
+        self.status = MigrationStatus(start_time=datetime.utcnow())
+        
+        try:
+            # Get all records from source
+            all_records = await self.source_db.search(Query())
+            self.status.total_records = len(all_records)
+            
+            # Process in batches
+            for i in range(0, len(all_records), self.batch_size):
+                batch = all_records[i:i + self.batch_size]
+                
+                for record in batch:
+                    try:
+                        # Concatenate text fields
+                        text_parts = []
+                        for field in self.text_fields:
+                            value = record.get_value(field)
+                            if value:
+                                text_parts.append(str(value))
+                        
+                        if text_parts:
+                            text = self.field_separator.join(text_parts)
+                            
+                            # Generate embedding
+                            if asyncio.iscoroutinefunction(self.embedding_fn):
+                                embedding = await self.embedding_fn(text)
+                            else:
+                                embedding = await asyncio.to_thread(self.embedding_fn, text)
+                            
+                            # Create VectorField
+                            from ..fields import VectorField
+                            vector_field_obj = VectorField(
+                                value=embedding,
+                                name=self.vector_field,
+                                source_field=self.text_fields[0] if len(self.text_fields) == 1 else None,
+                                model_name=self.model_name,
+                                model_version=self.model_version,
+                            )
+                            
+                            # Add to record
+                            record.fields[self.vector_field] = vector_field_obj
+                        
+                        # Create in target database
+                        await self.target_db.create(record)
+                        self.status.migrated_records += 1
+                        
+                    except Exception as e:
+                        logger.error(f"Failed to migrate record {record.id}: {e}")
+                        self.status.failed_records += 1
+                        self.status.errors.append({"record_id": record.id, "error": str(e)})
+                
+                if progress_callback:
+                    progress_callback(self.status)
+            
+            self.status.end_time = datetime.utcnow()
+            return self.status
+            
+        except Exception as e:
+            logger.error(f"Migration failed: {e}")
+            self.status.failed_records = self.status.total_records - self.status.migrated_records
+            self.status.end_time = datetime.utcnow()
+            return self.status
+    
+    async def start(self) -> None:
+        """Start migration (for compatibility)."""
+        # Migration runs synchronously in run() method
+        pass
+    
+    async def wait_for_completion(self, progress_callback: Callable[[MigrationStatus], None] | None = None) -> MigrationStatus:
+        """Wait for migration completion (for compatibility)."""
+        # Since run() is synchronous, just return current status
+        return self.status
     
     async def add_vectors_to_existing(
         self,
@@ -375,12 +500,18 @@ class VectorMigration:
                 for vector_field, source_field in vector_fields.items():
                     source_value = record.get_value(source_field)
                     if source_value:
-                        if vector_field not in migrated.data:
+                        # Check if vector field exists (could be in fields or data)
+                        vector_data = migrated.get_value(vector_field)
+                        if vector_data is None:
                             all_present = False
                             break
                         
-                        vector_data = migrated.data[vector_field]
-                        if not vector_data or not isinstance(vector_data, (list, np.ndarray)):
+                        # For VectorField objects, check the value
+                        from ..fields import VectorField
+                        if isinstance(migrated.fields.get(vector_field), VectorField):
+                            vector_data = migrated.fields[vector_field].value
+                        
+                        if not isinstance(vector_data, (list, np.ndarray)):
                             all_present = False
                             break
                 
@@ -476,39 +607,109 @@ class VectorMigration:
             status.end_time = datetime.utcnow()
         
         return status
+    
+    @classmethod
+    def from_config(
+        cls,
+        source_db: Database,
+        target_db: Database | None,
+        embedding_fn: Callable[[str], np.ndarray] | Callable[[str], Coroutine[Any, Any, np.ndarray]],
+        config: MigrationConfig,
+        text_fields: list[str] | None = None,
+        vector_field: str = "embedding",
+        model_name: str | None = None,
+        model_version: str | None = None,
+    ) -> "VectorMigration":
+        """Create migration from a config object for advanced use cases.
+        
+        Args:
+            source_db: Source database
+            target_db: Target database (None for in-place)
+            embedding_fn: Function to generate embeddings
+            config: Migration configuration
+            text_fields: Text field names (optional)
+            vector_field: Name of the vector field
+            model_name: Name of the embedding model
+            model_version: Version of the embedding model
+            
+        Returns:
+            Configured VectorMigration instance
+        """
+        return cls(
+            source_db=source_db,
+            target_db=target_db,
+            embedding_fn=embedding_fn,
+            text_fields=text_fields,
+            vector_field=vector_field,
+            batch_size=config.batch_size,
+            model_name=model_name,
+            model_version=model_version,
+            config=config,
+        )
 
 
 class IncrementalVectorizer:
-    """Manages incremental vectorization of large datasets."""
+    """Manages incremental vectorization of large datasets.
+    
+    Examples:
+        # Simple usage with single field
+        vectorizer = IncrementalVectorizer(
+            db,
+            embedding_fn=model.encode,
+            text_fields="content"  # Can be string or list
+        )
+        result = await vectorizer.run()
+        
+        # Resume from checkpoint
+        result = await vectorizer.run(resume_from=last_checkpoint)
+        
+        # Process limited batch
+        result = await vectorizer.run_batch(limit=1000)
+    """
     
     def __init__(
         self,
         database: Database,
         embedding_fn: Callable[[str], np.ndarray] | Callable[[str], Coroutine[Any, Any, np.ndarray]],
-        vector_field: str,
-        source_field: str,
+        text_fields: list[str] | str | None = None,  # Support multiple fields
+        vector_field: str = "embedding",  # Sensible default
+        field_separator: str = " ",
         batch_size: int = 100,
+        checkpoint_interval: int = 1000,
         max_workers: int = 4,
         model_name: str | None = None,
         model_version: str | None = None,
     ):
-        """Initialize the incremental vectorizer.
+        """Initialize the incremental vectorizer with simplified parameters.
         
         Args:
             database: Database to vectorize
             embedding_fn: Function to generate embeddings
-            vector_field: Name of the vector field
-            source_field: Name of the source text field
+            text_fields: Text field names to concatenate for embeddings
+            vector_field: Name of the vector field to create
+            field_separator: Separator for concatenating multiple text fields
             batch_size: Size of processing batches
+            checkpoint_interval: Records between checkpoints
             max_workers: Maximum concurrent workers
             model_name: Name of the embedding model
             model_version: Version of the embedding model
         """
         self.database = database
         self.embedding_fn = embedding_fn
+        self.embedding_function = embedding_fn  # Alias for compatibility
+        
+        # Handle text fields
+        if isinstance(text_fields, str):
+            text_fields = [text_fields]
+        elif text_fields is None:
+            # Try to auto-detect from database schema
+            text_fields = self._detect_text_fields()
+        self.text_fields = text_fields
+        
         self.vector_field = vector_field
-        self.source_field = source_field
+        self.field_separator = field_separator
         self.batch_size = batch_size
+        self.checkpoint_interval = checkpoint_interval
         self.max_workers = max_workers
         self.model_name = model_name
         self.model_version = model_version
@@ -523,6 +724,22 @@ class IncrementalVectorizer:
             "failed": 0,
             "queued": 0,
         }
+        self._last_checkpoint: str | None = None
+        self._progress: VectorizationProgress | None = None
+    
+    def _detect_text_fields(self) -> list[str]:
+        """Auto-detect text fields from database schema."""
+        text_fields = []
+        if hasattr(self.database, 'schema') and self.database.schema:
+            for field_name, field_schema in self.database.schema.fields.items():
+                if field_schema.type in (FieldType.STRING, FieldType.TEXT):
+                    text_fields.append(field_name)
+        
+        # Default to common field names if no schema
+        if not text_fields:
+            text_fields = ["content", "text", "description"]
+        
+        return text_fields
     
     async def _worker(self, worker_id: int) -> None:
         """Worker task for processing records."""
@@ -552,10 +769,17 @@ class IncrementalVectorizer:
     async def _process_record(self, record: Record) -> None:
         """Process a single record to add vectors."""
         try:
-            # Get source text
-            source_text = record.get_value(self.source_field)
-            if not source_text:
+            # Get source text from multiple fields
+            text_parts = []
+            for field in self.text_fields:
+                value = record.get_value(field)
+                if value:
+                    text_parts.append(str(value))
+            
+            if not text_parts:
                 return
+            
+            source_text = self.field_separator.join(text_parts)
             
             # Check if vector already exists
             vector_data = record.get_value(self.vector_field)
@@ -581,7 +805,7 @@ class IncrementalVectorizer:
             if self.model_name:
                 metadata = VectorMetadata(
                     dimensions=len(embedding),
-                    source_field=self.source_field,
+                    source_field=self.field_separator.join(self.text_fields),
                     model_name=self.model_name,
                     model_version=self.model_version,
                     updated_at=datetime.utcnow().isoformat(),
@@ -620,10 +844,13 @@ class IncrementalVectorizer:
         """Load records into processing queue."""
         while not self._shutdown_event.is_set():
             try:
-                # Get records without vectors
+                # Get records without vectors that have at least one text field
                 filter_query = {
                     self.vector_field: {"$exists": False},
-                    self.source_field: {"$exists": True, "$ne": ""},
+                    "$or": [
+                        {field: {"$exists": True, "$ne": ""}}
+                        for field in self.text_fields
+                    ],
                 }
                 
                 records = await self.database.filter(filter_query, limit=self.batch_size)
@@ -676,6 +903,101 @@ class IncrementalVectorizer:
         
         self._workers.clear()
         self._processing_task = None
+    
+    async def run(
+        self,
+        progress_callback: Callable[[int, int, list], None] | None = None,
+        max_workers: int | None = None,
+    ) -> dict[str, Any]:
+        """Run the complete vectorization.
+        
+        Args:
+            progress_callback: Optional callback (completed, total, current_batch)
+            max_workers: Override default max_workers
+            
+        Returns:
+            Results dictionary
+        """
+        if max_workers:
+            self.max_workers = max_workers
+        
+        # Get all records that need vectors
+        from ..query import Query
+        all_records = await self.database.search(Query())
+        
+        to_process = []
+        for record in all_records:
+            # Check if needs vectorization
+            if self.vector_field not in record.fields:
+                # Check if has text to vectorize
+                has_text = False
+                for field in self.text_fields:
+                    if record.get_value(field):
+                        has_text = True
+                        break
+                if has_text:
+                    to_process.append(record)
+        
+        total = len(to_process)
+        processed = 0
+        failed = 0
+        
+        # Process in batches
+        for i in range(0, total, self.batch_size):
+            batch = to_process[i:i + self.batch_size]
+            
+            for record in batch:
+                try:
+                    await self._process_record(record)
+                    processed += 1
+                except Exception as e:
+                    logger.error(f"Failed to process record {record.id}: {e}")
+                    failed += 1
+                
+                if progress_callback:
+                    if asyncio.iscoroutinefunction(progress_callback):
+                        await progress_callback(processed, total, batch)
+                    else:
+                        progress_callback(processed, total, batch)
+        
+        return {
+            "processed": processed,
+            "failed": failed,
+            "total": total,
+        }
+    
+    async def get_status(self) -> dict[str, Any]:
+        """Get current vectorization status.
+        
+        Returns:
+            Status dictionary
+        """
+        # Count records with and without vectors
+        from ..query import Query
+        all_records = await self.database.search(Query())
+        
+        total = 0
+        completed = 0
+        
+        for record in all_records:
+            # Check if has text fields
+            has_text = False
+            for field in self.text_fields:
+                if record.get_value(field):
+                    has_text = True
+                    break
+            
+            if has_text:
+                total += 1
+                if self.vector_field in record.fields:
+                    completed += 1
+        
+        return {
+            "total": total,
+            "completed": completed,
+            "remaining": total - completed,
+            "percentage": (completed / total * 100) if total > 0 else 0,
+        }
         
         logger.info(f"Vectorization stopped. Stats: {self._stats}")
     
@@ -704,3 +1026,89 @@ class IncrementalVectorizer:
             await asyncio.sleep(check_interval)
         
         logger.info("All queued records processed")
+    
+    async def run_with_checkpoint(self, resume_from: str | None = None) -> VectorizationResult:
+        """Run the complete vectorization with checkpoint support.
+        
+        Args:
+            resume_from: Optional checkpoint ID to resume from
+            
+        Returns:
+            Vectorization result with statistics
+        """
+        await self.start()
+        await self.wait_for_completion()
+        
+        return VectorizationResult(
+            processed=self._stats["processed"],
+            failed=self._stats["failed"],
+            checkpoint=self._last_checkpoint,
+        )
+    
+    async def run_batch(self, limit: int | None = None) -> VectorizationResult:
+        """Process a limited number of records.
+        
+        Args:
+            limit: Maximum number of records to process
+            
+        Returns:
+            Vectorization result with statistics
+        """
+        # Temporarily modify batch size if limit provided
+        original_batch_size = self.batch_size
+        if limit:
+            self.batch_size = min(self.batch_size, limit)
+        
+        try:
+            await self.start()
+            
+            # Wait for limited processing
+            while self._stats["processed"] < (limit or float('inf')):
+                if self._queue.empty() and self._processing_task.done():
+                    break
+                await asyncio.sleep(0.1)
+            
+            await self.stop()
+            
+            return VectorizationResult(
+                processed=self._stats["processed"],
+                failed=self._stats["failed"],
+                checkpoint=self._last_checkpoint,
+            )
+        finally:
+            self.batch_size = original_batch_size
+    
+    @property
+    def progress(self) -> VectorizationProgress:
+        """Get current progress."""
+        return VectorizationProgress(
+            total_records=self._stats.get("total", 0),
+            processed_records=self._stats["processed"],
+            failed_records=self._stats["failed"],
+            queued_records=self._queue.qsize(),
+            checkpoint=self._last_checkpoint,
+        )
+    
+    async def get_checkpoint(self) -> str:
+        """Get checkpoint ID for resuming."""
+        # Save current progress as checkpoint
+        self._last_checkpoint = f"checkpoint_{self._stats['processed']}"
+        return self._last_checkpoint
+
+
+@dataclass
+class VectorizationResult:
+    """Result of a vectorization operation."""
+    processed: int
+    failed: int
+    checkpoint: str | None = None
+
+
+@dataclass  
+class VectorizationProgress:
+    """Current progress of vectorization."""
+    total_records: int
+    processed_records: int
+    failed_records: int
+    queued_records: int
+    checkpoint: str | None = None

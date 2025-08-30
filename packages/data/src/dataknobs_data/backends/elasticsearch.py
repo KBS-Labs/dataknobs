@@ -151,19 +151,22 @@ class SyncElasticsearchDatabase(
 
     def _record_to_doc(self, record: Record, id: str | None = None) -> dict[str, Any]:
         """Convert a Record to an Elasticsearch document."""
+        # Create a copy of the record to avoid modifying the original
+        record_copy = record.copy(deep=True)
+        
         # Update vector tracking if needed
-        if self._has_vector_fields(record):
-            self._update_vector_tracking(record)
+        if self._has_vector_fields(record_copy):
+            self._update_vector_tracking(record_copy)
             
-            # Add vector field metadata to record metadata
-            if "vector_fields" not in record.metadata:
-                record.metadata["vector_fields"] = {}
+            # Add vector field metadata to copied record metadata
+            if "vector_fields" not in record_copy.metadata:
+                record_copy.metadata["vector_fields"] = {}
             
             for field_name in self.vector_fields:
-                if field_name in record.fields:
-                    field = record.fields[field_name]
+                if field_name in record_copy.fields:
+                    field = record_copy.fields[field_name]
                     if hasattr(field, "source_field"):
-                        record.metadata["vector_fields"][field_name] = {
+                        record_copy.metadata["vector_fields"][field_name] = {
                             "type": "vector",
                             "dimensions": self.vector_fields[field_name],
                             "source_field": field.source_field,
@@ -171,7 +174,7 @@ class SyncElasticsearchDatabase(
                             "model_version": getattr(field, "model_version", None),
                         }
         
-        doc = self._record_to_document(record)
+        doc = self._record_to_document(record_copy)
         if id:
             doc["id"] = id
         elif not doc.get("id"):
@@ -969,9 +972,9 @@ upper}}}}}
             record = None
             if include_source:
                 record = self._doc_to_record(hit)
-                # Set the ID on the record if we have one
-                if not record.id:
-                    record.id = hit["_id"]
+                # Set the storage ID on the record if we have one
+                if not record.has_storage_id():
+                    record.storage_id = hit["_id"]
             
             results.append(VectorSearchResult(
                 record=record,

@@ -29,13 +29,15 @@ class TestVectorIntegration:
     
     def test_vector_enabled_database(self, factory):
         """Test creating a vector-enabled database."""
-        # Test that unsupported backends raise an error
-        with pytest.raises(ValueError, match="Vector-enabled mode is not supported"):
-            factory.create(
-                backend="memory",  # Memory backend doesn't support vector mode
-                vector_enabled=True,
-                vector_dimensions=256
-            )
+        # Test that all backends now support vector mode
+        db = factory.create(
+            backend="memory",  # Memory backend now supports vector mode via Python-based search
+            vector_enabled=True,
+            vector_dimensions=256
+        )
+        assert db is not None
+        # Verify it has vector operations
+        assert hasattr(db, 'vector_search')
     
     def test_faiss_backend_missing_dependency(self, factory):
         """Test Faiss backend with missing dependency."""

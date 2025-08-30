@@ -651,9 +651,9 @@ class AsyncElasticsearchDatabase(
             if include_source:
                 record = self._doc_to_record(hit)
             
-            # Set the ID on the record if we have one
-            if record and not record.id:
-                record.id = hit["_id"]
+            # Set the storage ID on the record if we have one
+            if record and not record.has_storage_id():
+                record.storage_id = hit["_id"]
             
             results.append(VectorSearchResult(
                 record=record,

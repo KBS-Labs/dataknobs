@@ -27,8 +27,8 @@ class TestVectorField:
         """Test creating a vector field from a list."""
         vector_data = [0.1, 0.2, 0.3, 0.4]
         field = VectorField(
-            name="embedding",
             value=vector_data,
+            name="embedding",
             dimensions=4,
             source_field="text",
             model_name="test-model",
@@ -49,8 +49,8 @@ class TestVectorField:
         """Test creating a vector field from numpy array."""
         vector_data = np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float64)
         field = VectorField(
-            name="embedding",
             value=vector_data,
+            name="embedding",
         )
         
         assert field.dimensions == 4
@@ -63,8 +63,8 @@ class TestVectorField:
         
         # Should succeed with matching dimensions
         field = VectorField(
-            name="embedding",
             value=vector_data,
+            name="embedding",
             dimensions=4,
         )
         assert field.dimensions == 4
@@ -72,8 +72,8 @@ class TestVectorField:
         # Should fail with mismatched dimensions
         with pytest.raises(ValueError, match="dimension mismatch"):
             VectorField(
-                name="embedding",
                 value=vector_data,
+                name="embedding",
                 dimensions=5,
             )
     
@@ -81,8 +81,8 @@ class TestVectorField:
         """Test automatic dimension detection."""
         vector_data = [0.1, 0.2, 0.3, 0.4, 0.5]
         field = VectorField(
-            name="embedding",
             value=vector_data,
+            name="embedding",
         )
         assert field.dimensions == 5
     
@@ -90,15 +90,15 @@ class TestVectorField:
         """Test error handling for invalid vector types."""
         with pytest.raises(TypeError, match="must be numpy array or list"):
             VectorField(
-                name="embedding",
                 value="not a vector",
+                name="embedding",
             )
     
     def test_vector_field_metadata(self):
         """Test vector field metadata handling."""
         field = VectorField(
-            name="embedding",
             value=[0.1, 0.2],
+            name="embedding",
             source_field="text",
             model_name="test-model",
             model_version="1.0",
@@ -118,8 +118,8 @@ class TestVectorField:
         """Test vector field validation."""
         # Valid vector
         field = VectorField(
-            name="embedding",
             value=[0.1, 0.2, 0.3],
+            name="embedding",
         )
         assert field.validate() is True
         
@@ -135,8 +135,8 @@ class TestVectorField:
         """Test converting vector to list."""
         vector_data = [0.1, 0.2, 0.3]
         field = VectorField(
-            name="embedding",
             value=vector_data,
+            name="embedding",
         )
         
         result = field.to_list()
@@ -146,10 +146,10 @@ class TestVectorField:
     
     def test_vector_field_cosine_similarity(self):
         """Test cosine similarity computation."""
-        vec1 = VectorField("v1", [1.0, 0.0, 0.0])
-        vec2 = VectorField("v2", [1.0, 0.0, 0.0])
-        vec3 = VectorField("v3", [0.0, 1.0, 0.0])
-        vec4 = VectorField("v4", [0.5, 0.5, 0.0])
+        vec1 = VectorField([1.0, 0.0, 0.0], name="v1")
+        vec2 = VectorField([1.0, 0.0, 0.0], name="v2")
+        vec3 = VectorField([0.0, 1.0, 0.0], name="v3")
+        vec4 = VectorField([0.5, 0.5, 0.0], name="v4")
         
         # Same vectors should have similarity 1
         assert np.isclose(vec1.cosine_similarity(vec2), 1.0)
@@ -167,8 +167,8 @@ class TestVectorField:
     
     def test_vector_field_euclidean_distance(self):
         """Test Euclidean distance computation."""
-        vec1 = VectorField("v1", [0.0, 0.0])
-        vec2 = VectorField("v2", [3.0, 4.0])
+        vec1 = VectorField([0.0, 0.0], name="v1")
+        vec2 = VectorField([3.0, 4.0], name="v2")
         
         # Distance should be 5 (3-4-5 triangle)
         assert np.isclose(vec1.euclidean_distance(vec2), 5.0)
@@ -183,8 +183,8 @@ class TestVectorField:
     def test_vector_field_serialization(self):
         """Test vector field serialization and deserialization."""
         original = VectorField(
-            name="embedding",
             value=[0.1, 0.2, 0.3],
+            name="embedding",
             source_field="text",
             model_name="test-model",
             model_version="1.0",
@@ -218,8 +218,8 @@ class TestVectorField:
         
         # Add vector field
         vector_field = VectorField(
-            name="embedding",
             value=[0.1, 0.2, 0.3],
+            name="embedding",
             source_field="text",
         )
         record.fields["embedding"] = vector_field

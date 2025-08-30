@@ -122,7 +122,12 @@ class TestElasticsearchIntegration:
             original = sample_records[i]
             assert record.get_value("name") == original.get_value("name")
             assert record.get_value("age") == original.get_value("age")
-            assert record.metadata == original.metadata
+            
+            # Compare metadata, but ignore Elasticsearch-specific metadata
+            expected_metadata = original.metadata
+            actual_metadata = {k: v for k, v in record.metadata.items() 
+                             if k in expected_metadata}
+            assert actual_metadata == expected_metadata
         
         # Delete batch
         results = db.delete_batch(ids)
@@ -329,7 +334,12 @@ class TestElasticsearchIntegration:
         
         # Retrieve and verify metadata
         retrieved = db.read(id)
-        assert retrieved.metadata == record.metadata
+        
+        # Compare metadata, but ignore Elasticsearch-specific metadata
+        expected_metadata = record.metadata
+        actual_metadata = {k: v for k, v in retrieved.metadata.items() 
+                         if k in expected_metadata}
+        assert actual_metadata == expected_metadata
         assert retrieved.metadata["created_by"] == "integration_test"
         assert retrieved.metadata["version"] == 2
         assert retrieved.metadata["tags"] == ["test", "elasticsearch"]

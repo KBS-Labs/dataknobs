@@ -167,9 +167,8 @@ class SyncSQLiteDatabase(
         if self._has_vector_fields(record):
             self._update_vector_dimensions(record)
         
-        # Generate ID if not present
-        if not record.id:
-            record.id = str(uuid.uuid4())
+        # Use centralized method to prepare record
+        record, storage_id = self._prepare_record_for_storage(record)
         
         # Use the standard SQL serializer
         data_json = self.record_to_json(record)
@@ -177,7 +176,7 @@ class SyncSQLiteDatabase(
         
         # Build insert query for SQLite's standard table structure
         query = f"INSERT INTO {self.table_name} (id, data, metadata) VALUES (?, ?, ?)"
-        params = [record.id, data_json, metadata_json]
+        params = [storage_id, data_json, metadata_json]
         
         cursor = self.conn.cursor()
         
@@ -205,8 +204,8 @@ class SyncSQLiteDatabase(
             if row:
                 # Use the standard SQL serializer
                 record = self.row_to_record(dict(row))
-                record.id = id
-                return record
+                # Use centralized method to prepare record
+                return self._prepare_record_from_storage(record, id)
             return None
         finally:
             cursor.close()
@@ -597,9 +596,9 @@ class SyncSQLiteDatabase(
             record_metadata = metadata[i] if metadata and i < len(metadata) else {}
             record = Record(
                 data=OrderedDict({field_name: vector_field}),
-                metadata=record_metadata
+                metadata=record_metadata,
+                storage_id=ids[i]
             )
-            record.id = ids[i]
             records.append(record)
         
         # Use batch create for efficiency

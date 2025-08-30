@@ -44,8 +44,8 @@ class TestElasticsearchVectorIntegration:
             
             # Add vector field
             record.fields["embedding"] = VectorField(
-                name="embedding",
                 value=vector,
+                name="embedding",
                 source_field="content",
                 model_name="test-model",
                 model_version="1.0"
@@ -105,15 +105,15 @@ class TestElasticsearchVectorIntegration:
             records = [
                 Record({
                     "title": "Similar Document",
-                    "embedding": VectorField("embedding", similar_vector)
+                    "embedding": VectorField(similar_vector, name="embedding")
                 }),
                 Record({
                     "title": "Different Document", 
-                    "embedding": VectorField("embedding", different_vector)
+                    "embedding": VectorField(different_vector, name="embedding")
                 }),
                 Record({
                     "title": "Base Document",
-                    "embedding": VectorField("embedding", base_vector)
+                    "embedding": VectorField(base_vector, name="embedding")
                 }),
             ]
             
@@ -171,7 +171,7 @@ class TestElasticsearchVectorIntegration:
                 record = Record({
                     "title": f"Document {i}",
                     "category": cat,
-                    "embedding": VectorField("embedding", vec)
+                    "embedding": VectorField(vec, name="embedding")
                 })
                 record_id = await db.create(record)
                 ids.append(record_id)
@@ -218,7 +218,7 @@ class TestElasticsearchVectorIntegration:
             for i, vec in enumerate([vec1, vec2, vec3]):
                 record = Record({
                     "id": f"vec_{i}",
-                    "embedding_cosine": VectorField("embedding_cosine", vec)
+                    "embedding_cosine": VectorField(vec, name="embedding_cosine")
                 })
                 await db.create(record)
             
@@ -264,7 +264,7 @@ class TestElasticsearchVectorIntegration:
                 record = Record({
                     "batch_id": i,
                     "text": f"Batch document {i}",
-                    "embedding": VectorField("embedding", vec)
+                    "embedding": VectorField(vec, name="embedding")
                 })
                 records.append(record)
             
@@ -301,8 +301,8 @@ class TestElasticsearchVectorIntegration:
             })
             
             record.fields["embedding"] = VectorField(
-                name="embedding",
                 value=vec,
+                name="embedding",
                 source_field="document",
                 model_name="sentence-transformers/all-MiniLM-L6-v2",
                 model_version="2.0.0"

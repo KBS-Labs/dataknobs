@@ -95,25 +95,55 @@ class VectorTextSynchronizer:
         self,
         database: Database,
         embedding_fn: Callable[[str], np.ndarray] | Callable[[str], Coroutine[Any, Any, np.ndarray]],
-        config: SyncConfig | None = None,
+        text_fields: list[str] | str | None = None,
+        vector_field: str = "embedding",
+        field_separator: str = " ",
+        auto_sync: bool = True,
+        batch_size: int = 100,
         model_name: str | None = None,
         model_version: str | None = None,
+        config: SyncConfig | None = None,
     ):
-        """Initialize the synchronizer.
+        """Initialize the synchronizer with simplified API.
         
         Args:
             database: The database to synchronize
             embedding_fn: Function to generate embeddings from text
-            config: Synchronization configuration
+            text_fields: Fields to concatenate for embedding (if None, uses all text fields)
+            vector_field: Name of the vector field to store embeddings
+            field_separator: Separator for concatenating text fields
+            auto_sync: Whether to auto-sync on create/update
+            batch_size: Batch size for bulk operations
             model_name: Name of the embedding model
             model_version: Version of the embedding model
+            config: Advanced configuration object (overrides other params)
         """
         self.database = database
         self.embedding_fn = embedding_fn
-        self.config = config or SyncConfig()
-        self.config.validate()
+        self.embedding_function = embedding_fn  # Alias for compatibility
+        
+        # Handle text_fields
+        if isinstance(text_fields, str):
+            text_fields = [text_fields]
+        self.text_fields = text_fields or []
+        
+        self.vector_field = vector_field
+        self.field_separator = field_separator
+        self.auto_sync = auto_sync
+        self.batch_size = batch_size
         self.model_name = model_name
         self.model_version = model_version
+        
+        # Use config if provided, otherwise create from params
+        if config:
+            self.config = config
+        else:
+            self.config = SyncConfig(
+                auto_embed_on_create=auto_sync,
+                auto_update_on_text_change=auto_sync,
+                batch_size=batch_size,
+            )
+        self.config.validate()
         
         # Track vector fields and their source fields
         self._vector_fields: dict[str, dict[str, Any]] = {}
@@ -147,26 +177,54 @@ class VectorTextSynchronizer:
         Returns:
             True if the vector is current, False otherwise
         """
-        vector_data = record.get_value(vector_field)
-        if not vector_data or not isinstance(vector_data, (list, np.ndarray)):
+        # Check if field exists
+        from ..fields import VectorField
+        field_obj = record.fields.get(vector_field)
+        if not field_obj:
             return False
         
-        # Check if model version tracking is enabled
-        if self.config.track_model_version and self.model_version:
-            metadata_field = f"{vector_field}_metadata"
-            metadata = record.get_value(metadata_field)
-            if not metadata or not isinstance(metadata, dict):
-                # No metadata when version tracking is enabled means not current
+        # Get the vector value
+        vector_value = None
+        if isinstance(field_obj, VectorField):
+            vector_value = field_obj.value
+            if vector_value is None:
                 return False
-            stored_version = metadata.get("model_version")
-            if stored_version != self.model_version:
+            
+            # For VectorField, check model version if tracking is enabled
+            if self.config.track_model_version and self.model_version:
+                stored_version = field_obj.model_version
+                if stored_version != self.model_version:
+                    return False
+        else:
+            # Plain value (list or array)
+            vector_value = field_obj.value
+            if vector_value is None:
                 return False
+            if not isinstance(vector_value, (list, np.ndarray)):
+                return False
+            
+            # For plain values, check metadata and content hash separately
+            if self.config.track_model_version and self.model_version:
+                metadata_field = f"{vector_field}_metadata"
+                metadata = record.get_value(metadata_field)
+                if not metadata or not isinstance(metadata, dict):
+                    return False
+                stored_version = metadata.get("model_version")
+                if stored_version != self.model_version:
+                    return False
         
         # Check content hash if source field exists
         field_info = self._vector_fields.get(vector_field)
         if field_info and field_info.get("source_field"):
             source_content = record.get_value(field_info["source_field"], "")
             if source_content:
+                # For VectorField objects, we don't check content hash
+                # as they're considered immutable once created
+                if isinstance(field_obj, VectorField):
+                    # VectorField with matching version is considered current
+                    return True
+                    
+                # For plain values, check the content hash field
                 hash_field = f"{vector_field}_content_hash"
                 stored_hash = record.get_value(hash_field)
                 current_hash = self._compute_content_hash(str(source_content))
@@ -230,61 +288,146 @@ class VectorTextSynchronizer:
     
     async def sync_record(
         self,
-        record: Record,
+        record_or_id: Record | str,
         force: bool = False
     ) -> tuple[bool, list[str]]:
         """Synchronize vectors for a single record.
         
         Args:
-            record: The record to synchronize
+            record_or_id: The record or record ID to synchronize
             force: Force update even if vectors appear current
             
         Returns:
             Tuple of (success, list of updated fields)
         """
+        # Get record if ID provided
+        if isinstance(record_or_id, str):
+            record = await self.database.read(record_or_id)
+            if not record:
+                return False, []
+            record_id = record_or_id
+        else:
+            record = record_or_id
+            record_id = record.id
+        
         updated_fields = []
-        success = True
+        failed_fields = []
         
-        for vector_field, field_info in self._vector_fields.items():
-            if not force and not self._needs_update(record, vector_field):
-                continue
+        # If text_fields are specified, use them for the default vector field
+        if self.text_fields:
+            text_parts = []
+            for field in self.text_fields:
+                value = record.get_value(field)
+                if value:
+                    text_parts.append(str(value))
             
-            # Get source text
-            source_text = None
-            if field_info.get("source_field"):
-                source_text = record.get_value(field_info["source_field"])
-            
-            if not source_text:
-                continue
-            
-            # Generate embedding
-            embedding = await self._embed_text(str(source_text))
-            if embedding is None:
-                success = False
-                continue
-            
-            # Update record
-            record.set_value(vector_field, embedding.tolist())
-            
-            # Update metadata
-            if self.config.track_model_version:
-                metadata = VectorMetadata(
-                    dimensions=len(embedding),
-                    source_field=field_info.get("source_field"),
-                    model_name=self.model_name,
-                    model_version=self.model_version,
-                    updated_at=datetime.utcnow().isoformat(),
-                )
-                record.set_value(f"{vector_field}_metadata", metadata.to_dict())
-            
-            # Store content hash
-            if field_info.get("source_field"):
-                hash_field = f"{vector_field}_content_hash"
-                record.set_value(hash_field, self._compute_content_hash(str(source_text)))
-            
-            updated_fields.append(vector_field)
+            if text_parts:
+                text = self.field_separator.join(text_parts)
+                embedding = await self._embed_text(text)
+                if embedding is not None:
+                    from ..fields import VectorField
+                    # Compute content hash for change tracking
+                    content_hash = self._compute_content_hash(text)
+                    vector_field_obj = VectorField(
+                        value=embedding,
+                        name=self.vector_field,
+                        source_field=self.text_fields[0] if len(self.text_fields) == 1 else None,
+                        model_name=self.model_name,
+                        model_version=self.model_version,
+                        metadata={"content_hash": content_hash}
+                    )
+                    record.fields[self.vector_field] = vector_field_obj
+                    updated_fields.append(self.vector_field)
+                else:
+                    # Embedding generation failed
+                    failed_fields.append(self.vector_field)
         
+        # Also process vector fields defined in schema with source fields
+        for vector_field_name, field_info in self._vector_fields.items():
+            source_field = field_info.get("source_field")
+            if source_field and (force or self._needs_update(record, vector_field_name)):
+                source_value = record.get_value(source_field)
+                if source_value:
+                    source_text = str(source_value)
+                    embedding = await self._embed_text(source_text)
+                    if embedding is not None:
+                        from ..fields import VectorField
+                        # Compute content hash for change tracking
+                        content_hash = self._compute_content_hash(source_text)
+                        vector_field_obj = VectorField(
+                            value=embedding,
+                            name=vector_field_name,
+                            source_field=source_field,
+                            model_name=self.model_name,
+                            model_version=self.model_version,
+                            metadata={"content_hash": content_hash}
+                        )
+                        record.fields[vector_field_name] = vector_field_obj
+                        updated_fields.append(vector_field_name)
+                    else:
+                        # Embedding generation failed
+                        failed_fields.append(vector_field_name)
+        
+        # Save to database if any fields were updated
+        if updated_fields:
+            # Use storage_id if available, otherwise fall back to record.id
+            update_id = record.storage_id if record.has_storage_id() else record_id
+            await self.database.update(update_id, record)
+        
+        # Return success=False if there were failures and no successes
+        success = len(failed_fields) == 0 or len(updated_fields) > 0
         return success, updated_fields
+    
+    async def sync_all(
+        self,
+        batch_size: int | None = None,
+        force: bool = False,
+        progress_callback: Callable[[int, int], None] | None = None,
+    ) -> dict[str, Any]:
+        """Synchronize all records in the database.
+        
+        Args:
+            batch_size: Batch size for processing (uses self.batch_size if None)
+            force: Force update even if vectors appear current
+            progress_callback: Callback for progress updates (done, total)
+            
+        Returns:
+            Dictionary with sync results
+        """
+        from ..query import Query
+        
+        batch_size = batch_size or self.batch_size
+        
+        # Get all records
+        all_records = await self.database.search(Query())
+        total = len(all_records)
+        
+        processed = 0
+        updated = 0
+        failed = 0
+        
+        # Process in batches
+        for i in range(0, total, batch_size):
+            batch = all_records[i:i + batch_size]
+            
+            for record in batch:
+                success, fields = await self.sync_record(record, force=force)
+                
+                processed += 1
+                if success and fields:
+                    updated += 1
+                elif not success:
+                    failed += 1
+                
+                if progress_callback:
+                    progress_callback(processed, total)
+        
+        return {
+            "processed": processed,
+            "updated": updated,
+            "failed": failed,
+            "total": total,
+        }
     
     async def bulk_sync(
         self,
@@ -321,8 +464,7 @@ class VectorTextSynchronizer:
                         status.processed_records += 1
                         
                         if updated_fields:
-                            # Update record in database
-                            await self.database.update(record.id, record)
+                            # sync_record already updates the database
                             status.updated_records += 1
                         elif success:
                             status.skipped_records += 1
@@ -436,3 +578,40 @@ class VectorTextSynchronizer:
             return True
         
         return False
+    
+    @classmethod
+    def from_config(
+        cls,
+        database: Database,
+        embedding_fn: Callable[[str], np.ndarray] | Callable[[str], Coroutine[Any, Any, np.ndarray]],
+        config: SyncConfig,
+        text_fields: list[str] | None = None,
+        vector_field: str = "embedding",
+        model_name: str | None = None,
+        model_version: str | None = None,
+    ) -> "VectorTextSynchronizer":
+        """Create synchronizer from a config object for advanced use cases.
+        
+        Args:
+            database: The database to synchronize
+            embedding_fn: Function to generate embeddings from text
+            config: Synchronization configuration
+            text_fields: Text field names (optional)
+            vector_field: Name of the vector field
+            model_name: Name of the embedding model
+            model_version: Version of the embedding model
+            
+        Returns:
+            Configured VectorTextSynchronizer instance
+        """
+        return cls(
+            database=database,
+            embedding_fn=embedding_fn,
+            text_fields=text_fields,
+            vector_field=vector_field,
+            auto_sync=config.auto_embed_on_create,
+            batch_size=config.batch_size,
+            model_name=model_name,
+            model_version=model_version,
+            config=config,
+        )

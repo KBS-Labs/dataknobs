@@ -62,19 +62,25 @@ class ChangeTracker:
     def __init__(
         self,
         database: Database,
+        tracked_fields: list[str] | None = None,
+        vector_field: str = "embedding",
         max_queue_size: int = 10000,
         batch_size: int = 100,
         process_interval: float = 5.0,
     ):
-        """Initialize the change tracker.
+        """Initialize the change tracker with simplified API.
         
         Args:
             database: The database to track changes for
+            tracked_fields: Fields to track for changes (if None, tracks all)
+            vector_field: Vector field that depends on tracked fields
             max_queue_size: Maximum number of pending updates
             batch_size: Number of updates to process in a batch
             process_interval: Seconds between batch processing
         """
         self.database = database
+        self.tracked_fields = tracked_fields or []
+        self.vector_field = vector_field
         self.max_queue_size = max_queue_size
         self.batch_size = batch_size
         self.process_interval = process_interval
@@ -82,6 +88,11 @@ class ChangeTracker:
         # Field dependency mapping: source_field -> [vector_fields]
         self._dependencies: dict[str, list[str]] = defaultdict(list)
         self._vector_fields: dict[str, dict[str, Any]] = {}
+        
+        # Set up dependencies for tracked fields
+        for field in self.tracked_fields:
+            self._dependencies[field].append(self.vector_field)
+        self._vector_fields[self.vector_field] = {"source_fields": self.tracked_fields}
         
         # Update queue and history
         self._update_queue: deque[UpdateTask] = deque(maxlen=max_queue_size)
@@ -238,6 +249,117 @@ class ChangeTracker:
             List of pending tasks
         """
         return list(self._update_queue)
+    
+    async def start_processing(self) -> None:
+        """Start background processing of changes."""
+        if self._processing_task and not self._processing_task.done():
+            return  # Already running
+        
+        # Initialize content hashes for existing vector fields if we have tracked fields
+        if self.tracked_fields:
+            await self._initialize_content_hashes()
+        
+        self._shutdown_event.clear()
+        self._processing_task = asyncio.create_task(self._process_loop())
+    
+    async def start_tracking(self, tracked_fields: list[str] | None = None, vector_field: str | None = None) -> None:
+        """Legacy method for compatibility - redirects to start_processing."""
+        if tracked_fields:
+            self.tracked_fields = tracked_fields
+        if vector_field:
+            self.vector_field = vector_field
+        
+        # Update dependencies
+        self._dependencies.clear()
+        for field in self.tracked_fields:
+            self._dependencies[field].append(self.vector_field)
+        
+        # Initialize content hashes for existing vector fields that don't have them
+        await self._initialize_content_hashes()
+        
+        await self.start_processing()
+    
+    async def get_outdated_records(self) -> list[Record]:
+        """Get records with outdated vector fields.
+        
+        Returns:
+            List of records that need vector updates
+        """
+        from ..query import Query
+        import hashlib
+        
+        # Get all records
+        all_records = await self.database.search(Query())
+        outdated = []
+        
+        for record in all_records:
+            # Check if vector field exists
+            if self.vector_field not in record.fields:
+                outdated.append(record)
+                continue
+            
+            # Check if any tracked field is newer than vector
+            # by comparing content hashes
+            vector_field = record.fields.get(self.vector_field)
+            if vector_field and hasattr(vector_field, 'metadata'):
+                stored_hash = vector_field.metadata.get('content_hash')
+                
+                # If no content hash is stored, auto-generate it and consider record up-to-date
+                if stored_hash is None:
+                    # Calculate and store content hash
+                    content_parts = []
+                    for field_name in self.tracked_fields:
+                        field_value = record.get_value(field_name)
+                        if field_value:
+                            content_parts.append(str(field_value))
+                    
+                    if content_parts:
+                        current_content = " ".join(content_parts)
+                        content_hash = hashlib.md5(current_content.encode()).hexdigest()
+                        
+                        # Update the vector field metadata
+                        vector_field.metadata['content_hash'] = content_hash
+                        
+                        # Update the record in the database
+                        try:
+                            await self.database.update(record.id, record)
+                            logger.debug(f"Auto-initialized content hash for record {record.id}")
+                        except Exception as e:
+                            logger.warning(f"Failed to auto-initialize content hash for record {record.id}: {e}")
+                            # If we can't update, consider it outdated for safety
+                            outdated.append(record)
+                    continue
+                
+                # Compute current content hash from tracked fields
+                content_parts = []
+                for field_name in self.tracked_fields:
+                    field_value = record.get_value(field_name)
+                    if field_value:
+                        content_parts.append(str(field_value))
+                
+                if content_parts:
+                    current_content = " ".join(content_parts)
+                    current_hash = hashlib.md5(current_content.encode()).hexdigest()
+                    
+                    # If hashes don't match, the record is outdated
+                    if stored_hash != current_hash:
+                        outdated.append(record)
+                        continue
+        
+        return outdated
+    
+    async def mark_updated(self, record_id: str) -> None:
+        """Mark a record as having updated vectors.
+        
+        Args:
+            record_id: ID of the updated record
+        """
+        # Remove from pending updates if present
+        if record_id in self._pending_updates:
+            task = self._pending_updates[record_id]
+            if task in self._update_queue:
+                self._update_queue.remove(task)
+            del self._pending_updates[record_id]
     
     def get_change_history(
         self,
@@ -403,3 +525,42 @@ class ChangeTracker:
                 break
         
         return total_processed
+    
+    async def _initialize_content_hashes(self) -> None:
+        """Initialize content hashes for existing vector fields that don't have them."""
+        if not self.tracked_fields:
+            return
+        
+        from ..query import Query
+        import hashlib
+        
+        # Get all records
+        all_records = await self.database.search(Query())
+        
+        for record in all_records:
+            # Check if record has vector field but no content hash
+            vector_field = record.fields.get(self.vector_field)
+            if vector_field and hasattr(vector_field, 'metadata'):
+                stored_hash = vector_field.metadata.get('content_hash')
+                
+                if stored_hash is None:
+                    # Calculate and store content hash
+                    content_parts = []
+                    for field_name in self.tracked_fields:
+                        field_value = record.get_value(field_name)
+                        if field_value:
+                            content_parts.append(str(field_value))
+                    
+                    if content_parts:
+                        current_content = " ".join(content_parts)
+                        content_hash = hashlib.md5(current_content.encode()).hexdigest()
+                        
+                        # Update the vector field metadata
+                        vector_field.metadata['content_hash'] = content_hash
+                        
+                        # Update the record in the database
+                        try:
+                            await self.database.update(record.id, record)
+                            logger.debug(f"Initialized content hash for record {record.id}")
+                        except Exception as e:
+                            logger.warning(f"Failed to initialize content hash for record {record.id}: {e}")

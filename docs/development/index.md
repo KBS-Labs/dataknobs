@@ -13,6 +13,17 @@ Dataknobs is a modular Python ecosystem for AI knowledge base structures and tex
     
     **[→ Learn the dk Command](dk-command.md)**
 
+## Release Management
+
+!!! success "Simplified Release Process"
+    The release process has been streamlined with automated tools that handle version bumping, changelog generation, and publishing. Use `dk release` for an interactive guided process or check the **[Release Process Guide](release-process.md)** for detailed documentation and FAQ.
+    
+    **Quick commands:**
+    - `dk release` - Interactive complete release
+    - `dk release-check` - See what changed
+    - `dk release-bump` - Update versions
+    - `dk release-notes` - Generate changelog
+
 ## Getting Started
 
 If you're new to Dataknobs development:
@@ -45,7 +56,7 @@ If you're new to Dataknobs development:
 
 ### Operations
 - **[CI/CD Pipeline](ci-cd.md)** - Continuous integration and deployment processes
-- **[Release Process](release-process.md)** - How we version and release packages
+- **[Release Process](release-process.md)** - 📦 **Streamlined release workflow** with automated tools and comprehensive FAQ
 
 ## Project Structure
 

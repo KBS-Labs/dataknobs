@@ -181,19 +181,19 @@ class SyncS3Database(
         """Create a new record in S3."""
         self._check_connection()
 
-        # Use record's ID if it has one, otherwise generate a new one
-        record_id = record.id if record.id else str(uuid4())
-        key = self._get_object_key(record_id)
+        # Use centralized method to prepare record
+        record_copy, storage_id = self._prepare_record_for_storage(record)
+        key = self._get_object_key(storage_id)
 
         # Set metadata
-        record.metadata = record.metadata or {}
-        record.metadata["id"] = record_id
+        record_copy.metadata = record_copy.metadata or {}
+        record_copy.metadata["id"] = storage_id
         now = datetime.utcnow()
-        record.metadata["created_at"] = now.isoformat()
-        record.metadata["updated_at"] = now.isoformat()
+        record_copy.metadata["created_at"] = now.isoformat()
+        record_copy.metadata["updated_at"] = now.isoformat()
 
         # Convert record to JSON
-        obj_data = self._record_to_s3_object(record)
+        obj_data = self._record_to_s3_object(record_copy)
         body = json.dumps(obj_data)
 
         # Store in S3
@@ -207,8 +207,8 @@ class SyncS3Database(
         # Invalidate cache
         self._cache_dirty = True
 
-        logger.debug(f"Created record {record_id} at {key}")
-        return record_id
+        logger.debug(f"Created record {storage_id} at {key}")
+        return storage_id
 
     def read(self, id: str) -> Record | None:
         """Read a record from S3."""
@@ -220,7 +220,9 @@ class SyncS3Database(
             response = self.s3_client.get_object(Bucket=self.bucket, Key=key)
             body = response['Body'].read()
             obj_data = json.loads(body)
-            return self._s3_object_to_record(obj_data)
+            record = self._s3_object_to_record(obj_data)
+            # Use centralized method to prepare record
+            return self._prepare_record_from_storage(record, id)
         except self.ClientError as e:
             if e.response['Error']['Code'] == 'NoSuchKey':
                 return None

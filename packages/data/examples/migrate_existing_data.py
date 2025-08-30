@@ -20,7 +20,7 @@ from datetime import datetime
 from sentence_transformers import SentenceTransformer
 from dataclasses import dataclass
 
-from dataknobs_data import DatabaseFactory, Record, VectorField, Query
+from dataknobs_data import AsyncDatabaseFactory, Record, VectorField, Query
 from dataknobs_data.vector import VectorMigration, IncrementalVectorizer
 
 
@@ -59,13 +59,14 @@ async def create_legacy_database():
     print("\n1. Creating legacy database (without vectors)...")
     
     # Create database without vector support
-    db = await DatabaseFactory.create_async(
+    factory = AsyncDatabaseFactory()
+    db = factory.create(
         backend="sqlite",
         database=":memory:",
         vector_enabled=False  # No vector support initially
     )
     
-    await db.initialize()
+    await db.connect()
     
     # Create sample legacy data
     legacy_data = [
@@ -158,14 +159,15 @@ async def migrate_to_vector_database(legacy_db):
     print("\n2. Creating new database with vector support...")
     
     # Create new database with vector support
-    vector_db = await DatabaseFactory.create_async(
+    factory = AsyncDatabaseFactory()
+    vector_db = factory.create(
         backend="sqlite",
         database=":memory:",
         vector_enabled=True,  # Enable vector support
         vector_metric="cosine"
     )
     
-    await vector_db.initialize()
+    await vector_db.connect()
     
     print("✓ Created vector-enabled database")
     
@@ -200,7 +202,7 @@ async def manual_migration(legacy_db, vector_db, stats: MigrationStats):
                 # Create new record with embedding
                 new_record = Record({
                     **record,
-                    "embedding": VectorField(embedding, dimensions=384),
+                    "embedding": VectorField(embedding),  # Simplified - dimensions auto-detected
                     "migrated_at": datetime.now().isoformat()
                 })
                 
@@ -225,17 +227,12 @@ async def incremental_migration(vector_db):
     
     print("\n4. Incremental Vectorization (for large datasets)...")
     
-    # Create incremental vectorizer
+    # Create incremental vectorizer with simplified API
     vectorizer = IncrementalVectorizer(
         database=vector_db,
-        embedding_function=generate_embedding
-    )
-    
-    # Configure vectorization
-    await vectorizer.configure(
-        text_fields=["title", "content"],
+        embedding_fn=generate_embedding,
+        text_fields=["title", "content"],  # Primary configuration
         vector_field="embedding_v2",  # Additional embedding field
-        dimensions=384,
         batch_size=2,
         checkpoint_interval=5  # Save progress every 5 records
     )
@@ -247,15 +244,12 @@ async def incremental_migration(vector_db):
         percentage = (completed / total * 100) if total > 0 else 0
         print(f"    Progress: {completed}/{total} ({percentage:.1f}%) - Processing: {current_batch[0][:30]}...")
     
-    # Run vectorization
-    results = await vectorizer.run(
-        progress_callback=progress_callback,
-        max_workers=2  # Parallel processing
-    )
+    # Run vectorization with simplified API
+    results = await vectorizer.run()
     
     print(f"  ✓ Incremental vectorization completed")
-    print(f"    Processed: {results.get('processed', 0)} records")
-    print(f"    Failed: {results.get('failed', 0)} records")
+    print(f"    Processed: {results.processed} records")
+    print(f"    Failed: {results.failed} records")
     
     return results
 
@@ -316,17 +310,13 @@ async def migration_with_retry(legacy_db, vector_db):
     
     print("\n6. Migration with Retry Logic...")
     
+    # Create migration with simplified API
     migration = VectorMigration(
         source_db=legacy_db,
         target_db=vector_db,
-        embedding_function=generate_embedding
-    )
-    
-    # Configure migration
-    await migration.configure(
-        text_fields=["title", "content"],
+        embedding_fn=generate_embedding,
+        text_fields=["title", "content"],  # Primary configuration
         vector_field="embedding",
-        dimensions=384,
         batch_size=2
     )
     
@@ -334,19 +324,17 @@ async def migration_with_retry(legacy_db, vector_db):
     max_retries = 3
     retry_delay = 0.5  # seconds
     
-    # Run migration with retries
-    print(f"  Running migration with up to {max_retries} retries...")
+    # Run migration with simplified API
+    print(f"  Running migration...")
     
     results = await migration.run(
-        max_retries=max_retries,
-        retry_delay=retry_delay,
-        progress_callback=lambda done, total: print(f"    Progress: {done}/{total}")
+        progress_callback=lambda status: print(f"    Progress: {status.migrated_records}/{status.total_records}")
     )
     
     print(f"  ✓ Migration completed")
-    print(f"    Success: {results.get('success', 0)} records")
-    print(f"    Failed: {results.get('failed', 0)} records")
-    print(f"    Retries: {results.get('retries', 0)}")
+    print(f"    Success: {results.migrated_records} records")
+    print(f"    Failed: {results.failed_records} records")
+    print(f"    Success rate: {results.success_rate:.1f}%")
     
     return results
 

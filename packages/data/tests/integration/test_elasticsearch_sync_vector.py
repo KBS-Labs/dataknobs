@@ -38,7 +38,7 @@ def test_sync_vector_search(elasticsearch_test_index):
         records = []
         for i, vec in enumerate([vec1, vec2, vec3]):
             rec = Record({"name": f"Doc{i}"})
-            rec.fields["embedding"] = VectorField("embedding", vec)
+            rec.fields["embedding"] = VectorField(vec, name="embedding")
             records.append(rec)
         
         # Create records

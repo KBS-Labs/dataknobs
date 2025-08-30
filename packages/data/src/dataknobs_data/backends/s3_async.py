@@ -118,13 +118,13 @@ class AsyncS3Database(
         """Create a new record in S3."""
         self._check_connection()
 
-        # Use record's ID if it has one, otherwise generate a new one
-        id = record.id if record.id else str(uuid.uuid4())
-        key = self._get_key(id)
-        obj = self._record_to_s3_object(record)
+        # Use centralized method to prepare record
+        record_copy, storage_id = self._prepare_record_for_storage(record)
+        key = self._get_key(storage_id)
+        obj = self._record_to_s3_object(record_copy)
 
         # Add ID to metadata
-        obj["metadata"]["id"] = id
+        obj["metadata"]["id"] = storage_id
 
         async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
             await s3.put_object(
@@ -134,7 +134,7 @@ class AsyncS3Database(
                 ContentType="application/json"
             )
 
-        return id
+        return storage_id
 
     async def read(self, id: str) -> Record | None:
         """Read a record from S3."""
@@ -154,6 +154,8 @@ class AsyncS3Database(
                 obj = json.loads(body)
 
                 record = self._s3_object_to_record(obj)
+                # Use centralized method to prepare record
+                record = self._prepare_record_from_storage(record, id)
                 # Ensure ID is in metadata
                 record.metadata["id"] = id
 

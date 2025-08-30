@@ -18,8 +18,8 @@ from typing import List, Optional
 from datetime import datetime
 from sentence_transformers import SentenceTransformer
 
-from dataknobs_data import DatabaseFactory, Record, VectorField, Query
-from dataknobs_data.vector import VectorTextSynchronizer, ChangeTracker
+from dataknobs_data import AsyncDatabaseFactory, Record, VectorField, Query
+from dataknobs_data.vector import VectorTextSynchronizer, SyncConfig
 
 
 # Initialize embedding model
@@ -38,33 +38,28 @@ class DocumentSync:
     
     def __init__(self, db):
         self.db = db
-        self.synchronizer = VectorTextSynchronizer(db, generate_embedding)
-        self.tracker = ChangeTracker(db)
-    
-    async def setup(self):
-        """Configure synchronization settings."""
-        await self.synchronizer.setup(
-            text_fields=["title", "content"],
-            vector_field="embedding",
-            separator=" "
+        # Use the new simplified API
+        self.synchronizer = VectorTextSynchronizer(
+            database=db,
+            embedding_fn=generate_embedding,
+            text_fields=["title", "content"],  # Primary configuration
+            vector_field="embedding",  # Sensible default
+            field_separator=" ",
+            auto_sync=True  # Enable auto-sync
         )
-        
-        await self.tracker.start_tracking(
-            tracked_fields=["title", "content"],
-            vector_field="embedding"
-        )
-        
         print("✓ Synchronization configured")
     
     async def show_sync_status(self):
         """Display current synchronization status."""
-        outdated = await self.tracker.get_outdated_records()
-        total = await self.db.count()
+        # For simplicity, we'll check which records don't have embeddings
+        all_records = await self.db.all()
+        outdated = [r for r in all_records if "embedding" not in r.data or r.data["embedding"] is None]
+        total = len(all_records)
         
         print(f"\nSync Status:")
         print(f"  Total records: {total}")
-        print(f"  Outdated vectors: {len(outdated)}")
-        print(f"  Up-to-date: {total - len(outdated)}")
+        print(f"  Without embeddings: {len(outdated)}")
+        print(f"  With embeddings: {total - len(outdated)}")
         
         return outdated
 
@@ -75,14 +70,15 @@ async def main():
     # 1. Setup database
     print("\n1. Setting up database...")
     
-    db = await DatabaseFactory.create_async(
+    factory = AsyncDatabaseFactory()
+    db = factory.create(
         backend="sqlite",
         database=":memory:",
         vector_enabled=True,
         vector_metric="cosine"
     )
     
-    await db.initialize()
+    await db.connect()
     
     # 2. Create initial documents WITHOUT embeddings
     print("\n2. Creating documents without embeddings...")
@@ -133,7 +129,6 @@ async def main():
     print("\n3. Setting up text-to-vector synchronization...")
     
     sync = DocumentSync(db)
-    await sync.setup()
     
     # Show initial status
     outdated = await sync.show_sync_status()
@@ -143,10 +138,10 @@ async def main():
     
     start_time = time.time()
     
-    # Method 1: Using synchronizer bulk_sync
-    results = await sync.synchronizer.bulk_sync(
-        batch_size=2,  # Process 2 records at a time
-        progress_callback=lambda done, total: print(f"  Progress: {done}/{total} records processed")
+    # Using the new sync_all method
+    results = await sync.synchronizer.sync_all(
+        force=True,  # Force sync even if vectors exist
+        progress_callback=lambda status: print(f"  Progress: {status.processed_records}/{status.total_records} records processed")
     )
     
     elapsed = time.time() - start_time
@@ -199,10 +194,8 @@ async def main():
         embedding = generate_embedding(text)
         
         await db.update(record['id'], {
-            "embedding": VectorField(embedding, dimensions=384)
+            "embedding": VectorField(embedding)  # Simplified - dimensions auto-detected
         })
-        
-        await sync.tracker.mark_updated(record['id'])
         print(f"  ✓ Synced: {record['title']}")
     
     # Verify sync status
@@ -211,9 +204,8 @@ async def main():
     # 8. Auto-sync demonstration
     print("\n8. Demonstrating auto-sync on updates...")
     
-    # Enable auto-sync
-    sync.synchronizer.enable_auto_sync()
-    print("✓ Auto-sync enabled")
+    # Auto-sync is already enabled in constructor
+    print("✓ Auto-sync is enabled")
     
     # Create a new document
     new_doc = Record({
@@ -228,7 +220,8 @@ async def main():
     
     # Note: In a real implementation, auto-sync would use database triggers
     # or event listeners. For this example, we'll manually trigger it.
-    await sync.synchronizer.sync_record(new_id)
+    new_record = await db.read(new_id)
+    success, updated_fields = await sync.synchronizer.sync_record(new_record)
     
     # Verify the new record has an embedding
     record = await db.read(new_id)
@@ -263,7 +256,7 @@ async def main():
             embedding = generate_embedding(text)
             
             await db.update(record['id'], {
-                "embedding": VectorField(embedding, dimensions=384)
+                "embedding": VectorField(embedding)  # Simplified
             })
         
         print(f"  ✓ Batch sync completed")

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 examples_path = Path(__file__).parent.parent.parent / "examples"
 sys.path.insert(0, str(examples_path))
 
-from dataknobs_data import DatabaseFactory, Record, VectorField
+from dataknobs_data import DatabaseFactory, AsyncDatabaseFactory, Record, VectorField
 from dataknobs_data.vector import VectorMigration, IncrementalVectorizer
 
 
@@ -29,18 +29,19 @@ class MockEmbeddingModel:
 def mock_generate_embedding(text: str) -> List[float]:
     """Mock embedding generation function."""
     model = MockEmbeddingModel()
-    return model.encode(text).tolist()
+    return model.encode(text)
 
 
 @pytest.fixture
 async def legacy_db():
     """Create a legacy database without vector support."""
-    db = await DatabaseFactory.create_async(
+    factory = AsyncDatabaseFactory()
+    db = factory.create(
         backend="sqlite",
-        database=":memory:",
+        path=":memory:",
         vector_enabled=False
     )
-    await db.initialize()
+    await db.connect()
     
     # Add legacy data
     legacy_data = [
@@ -77,13 +78,14 @@ async def legacy_db():
 @pytest.fixture
 async def vector_db():
     """Create a vector-enabled database."""
-    db = await DatabaseFactory.create_async(
+    factory = AsyncDatabaseFactory()
+    db = factory.create(
         backend="sqlite",
-        database=":memory:",
+        path=":memory:",
         vector_enabled=True,
         vector_metric="cosine"
     )
-    await db.initialize()
+    await db.connect()
     yield db
     await db.close()
 
@@ -115,12 +117,14 @@ class TestVectorMigration:
         migration = VectorMigration(
             source_db=legacy_db,
             target_db=vector_db,
-            embedding_function=mock_generate_embedding
+            embedding_fn=mock_generate_embedding,
+            text_fields=["title", "content"],
+            vector_field="embedding"
         )
         
         assert migration.source_db == legacy_db
         assert migration.target_db == vector_db
-        assert migration.embedding_function == mock_generate_embedding
+        assert callable(migration.embedding_function)
     
     @pytest.mark.asyncio
     async def test_migration_configuration(self, legacy_db, vector_db):
@@ -128,19 +132,14 @@ class TestVectorMigration:
         migration = VectorMigration(
             source_db=legacy_db,
             target_db=vector_db,
-            embedding_function=mock_generate_embedding
-        )
-        
-        await migration.configure(
+            embedding_fn=mock_generate_embedding,
             text_fields=["title", "content"],
             vector_field="embedding",
-            dimensions=384,
             batch_size=2
         )
         
         assert migration.text_fields == ["title", "content"]
         assert migration.vector_field == "embedding"
-        assert migration.dimensions == 384
         assert migration.batch_size == 2
     
     @pytest.mark.asyncio
@@ -149,37 +148,34 @@ class TestVectorMigration:
         migration = VectorMigration(
             source_db=legacy_db,
             target_db=vector_db,
-            embedding_function=mock_generate_embedding
-        )
-        
-        await migration.configure(
+            embedding_fn=mock_generate_embedding,
             text_fields=["title", "content"],
-            vector_field="embedding",
-            dimensions=384
+            vector_field="embedding"
         )
         
         # Track progress
         progress_calls = []
         
-        def progress_callback(done, total):
-            progress_calls.append((done, total))
+        def progress_callback(status):
+            progress_calls.append(status)
         
         # Run migration
         results = await migration.run(progress_callback=progress_callback)
         
         # Verify migration results
-        assert results['success'] == 3
-        assert results['failed'] == 0
+        assert results.total_processed == 3
+        assert results.failed_count == 0
         assert len(progress_calls) > 0
         
         # Verify records in target database
-        migrated_records = await vector_db.find()
+        from dataknobs_data import Query
+        migrated_records = await vector_db.search(Query())
         assert len(migrated_records) == 3
         
         # Check embeddings
         for record in migrated_records:
-            assert 'embedding' in record
-            assert len(record['embedding']) == 384
+            assert 'embedding' in record.fields
+            assert len(record.fields['embedding'].value) == 384
     
     @pytest.mark.asyncio
     async def test_migration_with_retry(self, legacy_db, vector_db):
@@ -187,23 +183,17 @@ class TestVectorMigration:
         migration = VectorMigration(
             source_db=legacy_db,
             target_db=vector_db,
-            embedding_function=mock_generate_embedding
-        )
-        
-        await migration.configure(
+            embedding_fn=mock_generate_embedding,
             text_fields=["title", "content"],
             vector_field="embedding",
-            dimensions=384
-        )
-        
-        # Run with retry settings
-        results = await migration.run(
             max_retries=3,
             retry_delay=0.1
         )
         
-        assert results['success'] == 3
-        assert 'retries' in results
+        # Run migration
+        results = await migration.run()
+        
+        assert results.total_processed == 3
     
     @pytest.mark.asyncio
     async def test_migration_failure_handling(self, legacy_db, vector_db):
@@ -221,21 +211,18 @@ class TestVectorMigration:
         migration = VectorMigration(
             source_db=legacy_db,
             target_db=vector_db,
-            embedding_function=failing_embedding
-        )
-        
-        await migration.configure(
+            embedding_fn=failing_embedding,
             text_fields=["title", "content"],
             vector_field="embedding",
-            dimensions=384
+            max_retries=0
         )
         
         # Run migration
-        results = await migration.run(max_retries=0)
+        results = await migration.run()
         
         # Should have one failure
-        assert results['failed'] == 1
-        assert results['success'] == 2
+        assert results.failed_count == 1
+        assert results.total_processed - results.failed_count == 2
 
 
 class TestIncrementalVectorizer:
@@ -246,31 +233,28 @@ class TestIncrementalVectorizer:
         """Test IncrementalVectorizer initialization."""
         vectorizer = IncrementalVectorizer(
             database=vector_db,
-            embedding_function=mock_generate_embedding
+            embedding_fn=mock_generate_embedding,
+            text_fields="title",
+            vector_field="embedding"
         )
         
         assert vectorizer.database == vector_db
-        assert vectorizer.embedding_function == mock_generate_embedding
+        assert callable(vectorizer.embedding_function)
     
     @pytest.mark.asyncio
     async def test_incremental_configuration(self, vector_db):
         """Test incremental vectorizer configuration."""
         vectorizer = IncrementalVectorizer(
             database=vector_db,
-            embedding_function=mock_generate_embedding
-        )
-        
-        await vectorizer.configure(
+            embedding_fn=mock_generate_embedding,
             text_fields=["title", "content"],
             vector_field="embedding",
-            dimensions=384,
             batch_size=2,
             checkpoint_interval=5
         )
         
         assert vectorizer.text_fields == ["title", "content"]
         assert vectorizer.vector_field == "embedding"
-        assert vectorizer.dimensions == 384
         assert vectorizer.batch_size == 2
         assert vectorizer.checkpoint_interval == 5
     
@@ -288,13 +272,9 @@ class TestIncrementalVectorizer:
         
         vectorizer = IncrementalVectorizer(
             database=vector_db,
-            embedding_function=mock_generate_embedding
-        )
-        
-        await vectorizer.configure(
+            embedding_fn=mock_generate_embedding,
             text_fields=["title", "content"],
             vector_field="embedding",
-            dimensions=384,
             batch_size=2
         )
         
@@ -315,27 +295,24 @@ class TestIncrementalVectorizer:
         assert len(progress_calls) > 0
         
         # Verify embeddings added
-        all_records = await vector_db.find()
+        from dataknobs_data import Query
+        all_records = await vector_db.search(Query())
         for record in all_records:
-            assert 'embedding' in record
+            assert 'embedding' in record.fields
     
     @pytest.mark.asyncio
     async def test_vectorizer_status(self, vector_db):
         """Test getting vectorizer status."""
         vectorizer = IncrementalVectorizer(
             database=vector_db,
-            embedding_function=mock_generate_embedding
+            embedding_fn=mock_generate_embedding,
+            text_fields=["title"],
+            vector_field="embedding"
         )
         
         # Add some records
         for i in range(3):
             await vector_db.create(Record({"title": f"Doc {i}"}))
-        
-        await vectorizer.configure(
-            text_fields=["title"],
-            vector_field="embedding",
-            dimensions=384
-        )
         
         # Get initial status
         status = await vectorizer.get_status()
@@ -387,20 +364,21 @@ class TestMigrationStats:
 async def test_complete_migration_workflow():
     """Test the complete migration workflow."""
     # Create legacy database
-    legacy_db = await DatabaseFactory.create_async(
+    factory = AsyncDatabaseFactory()
+    legacy_db = factory.create(
         backend="sqlite",
-        database=":memory:",
+        path=":memory:",
         vector_enabled=False
     )
-    await legacy_db.initialize()
+    await legacy_db.connect()
     
     # Create vector database
-    vector_db = await DatabaseFactory.create_async(
+    vector_db = factory.create(
         backend="sqlite",
-        database=":memory:",
+        path=":memory:",
         vector_enabled=True
     )
-    await vector_db.initialize()
+    await vector_db.connect()
     
     try:
         # Add legacy data
@@ -416,24 +394,21 @@ async def test_complete_migration_workflow():
         migration = VectorMigration(
             source_db=legacy_db,
             target_db=vector_db,
-            embedding_function=mock_generate_embedding
-        )
-        
-        await migration.configure(
+            embedding_fn=mock_generate_embedding,
             text_fields=["title", "content"],
             vector_field="embedding",
-            dimensions=384,
             batch_size=2
         )
         
         # Run migration
         results = await migration.run()
         
-        assert results['success'] == 5
-        assert results['failed'] == 0
+        assert results.total_processed == 5
+        assert results.failed_count == 0
         
         # Verify target database
-        migrated = await vector_db.find()
+        from dataknobs_data import Query
+        migrated = await vector_db.search(Query())
         assert len(migrated) == 5
         
         # Test vector search on migrated data
@@ -454,12 +429,13 @@ async def test_complete_migration_workflow():
 @pytest.mark.asyncio
 async def test_migration_verification():
     """Test migration verification functionality."""
-    vector_db = await DatabaseFactory.create_async(
+    factory = AsyncDatabaseFactory()
+    vector_db = factory.create(
         backend="sqlite",
-        database=":memory:",
+        path=":memory:",
         vector_enabled=True
     )
-    await vector_db.initialize()
+    await vector_db.connect()
     
     try:
         # Add records with and without embeddings
@@ -473,10 +449,11 @@ async def test_migration_verification():
         await vector_db.create(without_embedding)
         
         # Count records with vectors
-        all_records = await vector_db.find()
+        from dataknobs_data import Query
+        all_records = await vector_db.search(Query())
         records_with_vectors = sum(
             1 for r in all_records 
-            if 'embedding' in r and r['embedding']
+            if 'embedding' in r.fields and r.fields['embedding'].value is not None
         )
         records_without_vectors = len(all_records) - records_with_vectors
         

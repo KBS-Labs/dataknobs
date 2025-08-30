@@ -307,12 +307,45 @@ class QueryBuilder:
 class ComplexQuery:
     """A query with complex boolean logic support."""
 
+    # All fields have defaults to avoid ordering issues
     condition: Condition | None = None
     sort_specs: list = field(default_factory=list)
     limit_value: int | None = None
     offset_value: int | None = None
     fields: list[str] | None = None
     vector_query: VectorQuery | None = None  # Vector similarity search
+    
+    @classmethod
+    def AND(cls, queries: list["Query"]) -> "ComplexQuery":
+        """Create a complex query with AND logic."""
+        from .query import Query
+        
+        conditions = []
+        for q in queries:
+            if isinstance(q, Query):
+                # Convert Query filters to conditions
+                for f in q.filters:
+                    conditions.append(FilterCondition(filter=f))
+        
+        return cls(
+            condition=LogicCondition(operator=LogicOperator.AND, conditions=conditions)
+        )
+    
+    @classmethod
+    def OR(cls, queries: list["Query"]) -> "ComplexQuery":
+        """Create a complex query with OR logic."""
+        from .query import Query
+        
+        conditions = []
+        for q in queries:
+            if isinstance(q, Query):
+                # Convert Query filters to conditions
+                for f in q.filters:
+                    conditions.append(FilterCondition(filter=f))
+        
+        return cls(
+            condition=LogicCondition(operator=LogicOperator.OR, conditions=conditions)
+        )
 
     def matches(self, record: Any) -> bool:
         """Check if a record matches this query."""

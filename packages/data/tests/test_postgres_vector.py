@@ -34,8 +34,8 @@ class TestVectorFieldIntegration:
         vector = np.array([0.1, 0.2, 0.3])
         record = Record(data={"text": "sample text"})
         record.fields["embedding"] = VectorField(
-            "embedding",
             vector,
+            name="embedding",
             source_field="text",
             model_name="test-model"
         )
@@ -60,8 +60,8 @@ class TestVectorFieldIntegration:
         
         record = Record(data={"title": "Test Document"})
         record.fields["features"] = VectorField(
-            "features",
             vector,
+            name="features",
             dimensions=5,
             source_field="title",
             model_name="bert",
@@ -96,7 +96,7 @@ class TestVectorFieldIntegration:
                 "text": f"document {i}",
                 "category": "test"
             })
-            record.fields["embedding"] = VectorField("embedding", vec)
+            record.fields["embedding"] = VectorField(vec, name="embedding")
             record_id = await db.create(record)
             record_ids.append(record_id)
         
@@ -118,14 +118,14 @@ class TestVectorFieldIntegration:
         # Create initial record
         initial_vector = np.array([1.0, 0.0, 0.0])
         record = Record(data={"text": "initial"})
-        record.fields["embedding"] = VectorField("embedding", initial_vector)
+        record.fields["embedding"] = VectorField(initial_vector, name="embedding")
         
         record_id = await db.create(record)
         
         # Update the record with new vector
         updated_vector = np.array([0.0, 1.0, 0.0])
         updated_record = Record(data={"text": "updated"})
-        updated_record.fields["embedding"] = VectorField("embedding", updated_vector)
+        updated_record.fields["embedding"] = VectorField(updated_vector, name="embedding")
         
         success = await db.update(record_id, updated_record)
         assert success is True
@@ -143,8 +143,8 @@ class TestVectorFieldIntegration:
         for i in range(5):
             record = Record(data={"index": i})
             record.fields["vector"] = VectorField(
-                "vector",
-                np.random.rand(3)  # Random 3D vector
+                np.random.rand(3),  # Random 3D vector
+                name="vector"
             )
             records.append(record)
         
@@ -164,9 +164,9 @@ class TestVectorOperations:
 
     def test_vector_field_cosine_similarity(self):
         """Test cosine similarity computation between vector fields."""
-        vec1 = VectorField("v1", np.array([1.0, 0.0, 0.0]))
-        vec2 = VectorField("v2", np.array([1.0, 0.0, 0.0]))
-        vec3 = VectorField("v3", np.array([0.0, 1.0, 0.0]))
+        vec1 = VectorField(np.array([1.0, 0.0, 0.0]), name="v1")
+        vec2 = VectorField(np.array([1.0, 0.0, 0.0]), name="v2")
+        vec3 = VectorField(np.array([0.0, 1.0, 0.0]), name="v3")
         
         # Same vectors should have similarity 1
         similarity = vec1.cosine_similarity(vec2)
@@ -178,8 +178,8 @@ class TestVectorOperations:
 
     def test_vector_field_euclidean_distance(self):
         """Test Euclidean distance computation."""
-        vec1 = VectorField("v1", np.array([0.0, 0.0]))
-        vec2 = VectorField("v2", np.array([3.0, 4.0]))
+        vec1 = VectorField(np.array([0.0, 0.0]), name="v1")
+        vec2 = VectorField(np.array([3.0, 4.0]), name="v2")
         
         # Distance should be 5 (3-4-5 triangle)
         distance = vec1.euclidean_distance(vec2)
@@ -189,8 +189,8 @@ class TestVectorOperations:
         """Test vector field with full metadata."""
         vector = np.array([0.1, 0.2, 0.3])
         field = VectorField(
-            name="embedding",
             value=vector,
+            name="embedding",
             dimensions=3,
             source_field="text",
             model_name="bert-base",

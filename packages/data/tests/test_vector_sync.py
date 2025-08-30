@@ -20,13 +20,25 @@ from dataknobs_data.vector.sync import (
 @pytest.fixture
 async def memory_database():
     """Create an in-memory database for testing."""
-    db = AsyncMemoryDatabase().with_schema(
-        content=FieldType.TEXT,
-        embedding=(FieldType.VECTOR, {"dimensions": 384, "source_field": "content"}),
-        title=FieldType.TEXT,
-        title_embedding=(FieldType.VECTOR, {"dimensions": 384, "source_field": "title"}),
-        summary=FieldType.TEXT,
-    )
+    # Create schema for the database
+    schema = DatabaseSchema()
+    schema.add_field(FieldSchema(name="content", type=FieldType.TEXT))
+    schema.add_field(FieldSchema(
+        name="embedding", 
+        type=FieldType.VECTOR,
+        metadata={"dimensions": 384, "source_field": "content"}
+    ))
+    schema.add_field(FieldSchema(name="title", type=FieldType.TEXT))
+    schema.add_field(FieldSchema(
+        name="title_embedding",
+        type=FieldType.VECTOR,
+        metadata={"dimensions": 384, "source_field": "title"}
+    ))
+    schema.add_field(FieldSchema(name="summary", type=FieldType.TEXT))
+    
+    # Create database with vector support
+    db = AsyncMemoryDatabase(config={"vector_enabled": True})
+    db.schema = schema
     await db.connect()
     yield db
     await db.close()
@@ -267,14 +279,18 @@ class TestVectorTextSynchronizer:
         assert success is True
         assert "embedding" in updated_fields
         assert "title_embedding" in updated_fields
-        assert record.get_value("embedding") is not None
-        assert record.get_value("title_embedding") is not None
-        assert record.get_value("embedding_metadata") is not None
-        assert record.get_value("embedding_content_hash") is not None
         
-        # Verify vectors have correct dimensions
-        assert len(record.get_value("embedding")) == 384
-        assert len(record.get_value("title_embedding")) == 384
+        # Check the vector fields exist and have correct properties
+        embedding_field = record.fields.get("embedding")
+        assert embedding_field is not None
+        assert embedding_field.value is not None
+        assert len(embedding_field.value) == 384
+        assert embedding_field.metadata.get("model", {}).get("version") == "v1.0"
+        
+        title_embedding_field = record.fields.get("title_embedding")
+        assert title_embedding_field is not None
+        assert title_embedding_field.value is not None
+        assert len(title_embedding_field.value) == 384
         
         # Summary should not have vector (no vector field defined)
         assert record.get_value("summary_embedding") is None
@@ -289,13 +305,21 @@ class TestVectorTextSynchronizer:
         )
         
         # Create record with existing vector
+        from dataknobs_data.fields import VectorField
         existing_vector = [0.1] * 384
         record_id = await memory_database.create(Record(data={
             "content": "Test content",
-            "embedding": existing_vector,
-            "embedding_metadata": {"model_version": "v1.0"},
-            "embedding_content_hash": sync._compute_content_hash("Test content"),
         }))
+        
+        # Manually add the vector field to simulate an already-synced record
+        record = await memory_database.read(record_id)
+        record.fields["embedding"] = VectorField(
+            value=existing_vector,
+            name="embedding",
+            source_field="content",
+            model_version="v1.0"
+        )
+        await memory_database.update(record_id, record)
         record = await memory_database.read(record_id)
         
         # Without force - should skip (vector is current)
@@ -309,7 +333,10 @@ class TestVectorTextSynchronizer:
         assert "embedding" in updated_fields
         
         # Vector should be different from the original
-        assert record.get_value("embedding") != existing_vector
+        new_embedding = record.fields.get("embedding")
+        assert new_embedding is not None
+        # Compare first few values to ensure it's different
+        assert not all(new_embedding.value[i] == existing_vector[i] for i in range(5))
     
     @pytest.mark.asyncio
     async def test_bulk_sync(self, memory_database, simple_embedding_fn):

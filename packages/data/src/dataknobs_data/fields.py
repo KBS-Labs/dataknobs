@@ -2,7 +2,7 @@ import copy
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, TYPE_CHECKING
+from typing import Any, Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     import numpy as np
@@ -152,13 +152,34 @@ class Field:
 
 
 class VectorField(Field):
-    """Represents a vector field with embeddings and metadata."""
+    """Represents a vector field with embeddings and metadata.
+    
+    Examples:
+        # Simple usage - name optional when used in Record
+        record = Record({
+            "embedding": VectorField(value=[0.1, 0.2, 0.3])
+        })
+        
+        # With explicit configuration
+        field = VectorField(
+            value=embedding_array,
+            name="doc_embedding",
+            model_name="all-MiniLM-L6-v2",
+            source_field="content"
+        )
+        
+        # From text using embedding function
+        field = VectorField.from_text(
+            "This is the text to embed",
+            embedding_fn=model.encode
+        )
+    """
 
     def __init__(
         self,
-        name: str,
         value: "np.ndarray | list[float]",
-        dimensions: int | None = None,
+        name: str | None = None,  # Made optional
+        dimensions: int | None = None,  # Auto-detected from value
         source_field: str | None = None,
         model_name: str | None = None,
         model_version: str | None = None,
@@ -167,9 +188,9 @@ class VectorField(Field):
         """Initialize a vector field.
 
         Args:
-            name: Field name
             value: Vector data as numpy array or list of floats
-            dimensions: Expected dimensions (will be validated)
+            name: Field name (optional, defaults to "embedding")
+            dimensions: Expected dimensions (auto-detected if not provided)
             source_field: Name of the text field this vector was generated from
             model_name: Name of the embedding model used
             model_version: Version of the embedding model
@@ -183,6 +204,10 @@ class VectorField(Field):
                 "numpy is required for vector fields. Install with: pip install numpy"
             )
         
+        # Set default name if not provided
+        if name is None:
+            name = "embedding"
+        
         # Convert to numpy array if needed
         if isinstance(value, list):
             value = np.array(value, dtype=np.float32)
@@ -195,7 +220,7 @@ class VectorField(Field):
                 f"Vector value must be numpy array or list, got {type(value)}"
             )
         
-        # Validate dimensions
+        # Auto-detect dimensions if not provided
         actual_dims = len(value) if value.ndim == 1 else value.shape[-1]
         if dimensions is None:
             dimensions = actual_dims
@@ -227,6 +252,49 @@ class VectorField(Field):
         self.source_field = source_field
         self.model_name = model_name
         self.model_version = model_version
+    
+    @classmethod
+    def from_text(
+        cls,
+        text: str,
+        embedding_fn: Callable[[str], Any],
+        name: str | None = None,
+        dimensions: int | None = None,
+        model_name: str | None = None,
+        model_version: str | None = None,
+        **kwargs
+    ) -> "VectorField":
+        """Create a VectorField from text using an embedding function.
+        
+        Args:
+            text: Text to embed
+            embedding_fn: Function that takes text and returns embedding vector
+            name: Field name (optional, defaults to "embedding")
+            dimensions: Expected dimensions (auto-detected if not provided)
+            model_name: Name of the embedding model
+            model_version: Version of the embedding model
+            **kwargs: Additional arguments passed to VectorField constructor
+            
+        Returns:
+            VectorField instance with the generated embedding
+            
+        Example:
+            field = VectorField.from_text(
+                "Machine learning is fascinating",
+                embedding_fn=model.encode,
+                model_name="all-MiniLM-L6-v2"
+            )
+        """
+        embedding = embedding_fn(text)
+        return cls(
+            value=embedding,
+            name=name,
+            dimensions=dimensions,
+            source_field="text",  # Indicate it came from text
+            model_name=model_name,
+            model_version=model_version,
+            **kwargs
+        )
     
     def validate(self) -> bool:
         """Validate the vector field."""

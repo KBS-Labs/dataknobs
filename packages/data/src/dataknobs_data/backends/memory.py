@@ -58,16 +58,19 @@ class AsyncMemoryDatabase(
     async def create(self, record: Record) -> str:
         """Create a new record in memory."""
         async with self._lock:
-            # Use record's ID if it has one, otherwise generate a new one
-            id = record.id if record.id else self._generate_id()
-            self._storage[id] = record.copy(deep=True)
-            return id
+            # Use centralized method to prepare record
+            record_copy, storage_id = self._prepare_record_for_storage(record)
+            
+            # Store the record
+            self._storage[storage_id] = record_copy
+            return storage_id
 
     async def read(self, id: str) -> Record | None:
         """Read a record from memory."""
         async with self._lock:
             record = self._storage.get(id)
-            return record.copy(deep=True) if record else None
+            # Use centralized method to prepare record
+            return self._prepare_record_from_storage(record, id)
 
     async def update(self, id: str, record: Record) -> bool:
         """Update a record in memory."""
@@ -137,10 +140,12 @@ class AsyncMemoryDatabase(
         async with self._lock:
             ids = []
             for record in records:
-                # Use record's ID if it has one, otherwise generate a new one
-                id = record.id if record.id else self._generate_id()
-                self._storage[id] = record.copy(deep=True)
-                ids.append(id)
+                # Use centralized method to prepare record
+                record_copy, storage_id = self._prepare_record_for_storage(record)
+                
+                # Store the record
+                self._storage[storage_id] = record_copy
+                ids.append(storage_id)
             return ids
 
     async def read_batch(self, ids: list[str]) -> list[Record | None]:
@@ -149,7 +154,8 @@ class AsyncMemoryDatabase(
             results = []
             for id in ids:
                 record = self._storage.get(id)
-                results.append(record.copy(deep=True) if record else None)
+                # Use centralized method to prepare record
+                results.append(self._prepare_record_from_storage(record, id))
             return results
 
     async def delete_batch(self, ids: list[str]) -> list[bool]:

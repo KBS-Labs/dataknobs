@@ -43,8 +43,8 @@ class TestPostgresVectorIntegration:
                 "category": "test"
             })
             record.fields["embedding"] = VectorField(
-                "embedding",
                 vector,
+                name="embedding",
                 source_field="text",
                 model_name="test-model"
             )
@@ -82,8 +82,8 @@ class TestPostgresVectorIntegration:
                     "content": f"This is test document number {i}",
                 })
                 record.fields["embedding"] = VectorField(
-                    "embedding",
                     vec,
+                    name="embedding",
                     dimensions=5,
                     source_field="content",
                     model_name="test-model",
@@ -132,8 +132,8 @@ class TestPostgresVectorIntegration:
             for text, embedding in documents:
                 record = Record({"text": text, "type": "document"})
                 record.fields["embedding"] = VectorField(
-                    "embedding",
                     np.array(embedding, dtype=np.float32),
+                    name="embedding",
                     source_field="text"
                 )
                 record_id = db.create(record)
@@ -208,8 +208,8 @@ class TestPostgresVectorIntegration:
                 })
                 # Generate a random vector
                 record.fields["features"] = VectorField(
-                    "features",
                     np.random.rand(8).astype(np.float32),
+                    name="features",
                     source_field="description"
                 )
                 records.append(record)
@@ -231,8 +231,8 @@ class TestPostgresVectorIntegration:
             # Update batch with new vectors
             for record in retrieved:
                 record.fields["features"] = VectorField(
-                    "features",
                     np.random.rand(8).astype(np.float32),
+                    name="features",
                     source_field="description"
                 )
             
@@ -254,8 +254,8 @@ class TestPostgresVectorIntegration:
             vector = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8])
             record = Record({"content": "Test document for metadata"})
             record.fields["embedding"] = VectorField(
-                "embedding",
                 vector,
+                name="embedding",
                 dimensions=8,
                 source_field="content",
                 model_name="sentence-transformer",
@@ -317,7 +317,7 @@ class TestAsyncPostgresVectorIntegration:
                     "name": f"Vector {i}",
                     "category": "test"
                 })
-                record.fields["vector"] = VectorField("vector", vec)
+                record.fields["vector"] = VectorField(vec, name="vector")
                 record_id = await db.create(record)
                 record_ids.append(record_id)
             
@@ -402,8 +402,8 @@ class TestAsyncPostgresVectorIntegration:
             for i in range(100):
                 record = Record({"index": i})
                 record.fields["embedding"] = VectorField(
-                    "embedding",
-                    np.random.rand(16).astype(np.float32)
+                    np.random.rand(16).astype(np.float32),
+                    name="embedding"
                 )
                 await db.create(record)
             

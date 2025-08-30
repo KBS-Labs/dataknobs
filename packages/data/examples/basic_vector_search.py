@@ -141,7 +141,7 @@ class VectorSearchExample:
             
             record = Record({
                 **doc,
-                "embedding": VectorField(name="embedding", value=embedding, dimensions=384)
+                "embedding": VectorField(embedding)  # Simplified - name and dimensions auto-detected
             })
             records.append(record)
         
@@ -246,7 +246,13 @@ async def main():
         vec1 = np.array(records[0].data["embedding"].vector)
         vec2 = np.array(records[1].data["embedding"].vector)
         
-        cosine_sim = np.dot(vec1, vec2) / (np.linalg.norm(vec1) * np.linalg.norm(vec2))
+        # Calculate cosine similarity with safe division
+        norm1 = np.linalg.norm(vec1)
+        norm2 = np.linalg.norm(vec2)
+        if norm1 == 0 or norm2 == 0:
+            cosine_sim = 0.0  # Define similarity as 0 when either vector is zero
+        else:
+            cosine_sim = np.dot(vec1, vec2) / (norm1 * norm2)
         example.log(f"Cosine similarity between first two docs: {cosine_sim:.3f}")
         
         euclidean_dist = np.linalg.norm(vec1 - vec2)

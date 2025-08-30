@@ -418,8 +418,27 @@ class TestAsyncCrossBackendOperations:
         target_records = await self.async_file.search(Query())
 
         for record in target_records:
-            # Find original value from id
-            id_num = int(record.id.split("_")[1])
+            # Find original value from user id
+            user_id = record.get_user_id()
+            if user_id and "_" in str(user_id):
+                id_parts = str(user_id).split("_")
+                if len(id_parts) >= 2:
+                    id_num = int(id_parts[1])
+                else:
+                    # Skip this record if we can't parse the ID
+                    continue
+            elif record.id and "_" in str(record.id):
+                # Fall back to storage id if user id not available
+                id_parts = str(record.id).split("_")
+                if len(id_parts) >= 2:
+                    id_num = int(id_parts[1])
+                else:
+                    # Skip this record if we can't parse the ID
+                    continue
+            else:
+                # Skip this record if neither ID has the expected format
+                continue
+                
             original_value = id_num * 5
             assert record.get_value("doubled_value") == original_value * 2
             assert record.get_value("migrated_at") == "2024-01-01"

@@ -56,6 +56,46 @@ class AsyncDatabase(ABC):
         """Ensure a record has its ID set (delegates to utility function)."""
         return ensure_record_id(record, record_id)
     
+    def _prepare_record_for_storage(self, record: Record) -> tuple[Record, str]:
+        """Prepare a record for storage by ensuring it has a storage_id.
+        
+        Args:
+            record: The record to prepare
+            
+        Returns:
+            Tuple of (prepared_record_copy, storage_id)
+        """
+        import uuid
+        # Make a copy to avoid modifying the original
+        record_copy = record.copy(deep=True)
+        
+        # Generate storage ID if not present
+        if not record_copy.has_storage_id():
+            storage_id = str(uuid.uuid4())
+            record_copy.storage_id = storage_id
+        else:
+            storage_id = record_copy.storage_id
+            
+        return record_copy, storage_id
+    
+    def _prepare_record_from_storage(self, record: Record | None, storage_id: str) -> Record | None:
+        """Prepare a record retrieved from storage by ensuring storage_id is set.
+        
+        Args:
+            record: The record retrieved from storage (or None)
+            storage_id: The storage ID used to retrieve the record
+            
+        Returns:
+            Record with storage_id set, or None if record was None
+        """
+        if record:
+            record_copy = record.copy(deep=True)
+            # Ensure storage_id is set
+            if not record_copy.has_storage_id():
+                record_copy.storage_id = storage_id
+            return record_copy
+        return None
+    
     def _process_search_results(
         self, 
         results: list[tuple[str, Record]],
@@ -470,6 +510,46 @@ class SyncDatabase(ABC):
     def _ensure_record_id(self, record: Record, record_id: str) -> Record:
         """Ensure a record has its ID set (delegates to utility function)."""
         return ensure_record_id(record, record_id)
+    
+    def _prepare_record_for_storage(self, record: Record) -> tuple[Record, str]:
+        """Prepare a record for storage by ensuring it has a storage_id.
+        
+        Args:
+            record: The record to prepare
+            
+        Returns:
+            Tuple of (prepared_record_copy, storage_id)
+        """
+        import uuid
+        # Make a copy to avoid modifying the original
+        record_copy = record.copy(deep=True)
+        
+        # Generate storage ID if not present
+        if not record_copy.has_storage_id():
+            storage_id = str(uuid.uuid4())
+            record_copy.storage_id = storage_id
+        else:
+            storage_id = record_copy.storage_id
+            
+        return record_copy, storage_id
+    
+    def _prepare_record_from_storage(self, record: Record | None, storage_id: str) -> Record | None:
+        """Prepare a record retrieved from storage by ensuring storage_id is set.
+        
+        Args:
+            record: The record retrieved from storage (or None)
+            storage_id: The storage ID used to retrieve the record
+            
+        Returns:
+            Record with storage_id set, or None if record was None
+        """
+        if record:
+            record_copy = record.copy(deep=True)
+            # Ensure storage_id is set
+            if not record_copy.has_storage_id():
+                record_copy.storage_id = storage_id
+            return record_copy
+        return None
     
     def _process_search_results(
         self, 

@@ -60,6 +60,7 @@ class AsyncSQLiteDatabase(
         self.synchronous = config.get("synchronous", "NORMAL")
         self.pool_size = config.get("pool_size", 5)
         
+        # Start with standard query builder, will customize after mixins are initialized
         self.query_builder = SQLQueryBuilder(self.table_name, dialect="sqlite", param_style="qmark")
         self.table_manager = SQLTableManager(self.table_name, dialect="sqlite")
         

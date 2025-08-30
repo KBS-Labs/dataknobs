@@ -11,6 +11,8 @@ The DataKnobs Data Package provides a unified data abstraction layer for consist
 
 ### Core Documentation
 - [Architecture](ARCHITECTURE.md) - System design and components
+- [Record ID Architecture](RECORD_ID_ARCHITECTURE.md) - Dual ID system design
+- [Record Serialization](RECORD_SERIALIZATION.md) - Serialization architecture for complex types
 - [API Reference](API_REFERENCE.md) - Complete API documentation
 - [Progress Checklist](PROGRESS_CHECKLIST.md) - Development status
 
@@ -19,6 +21,11 @@ The DataKnobs Data Package provides a unified data abstraction layer for consist
 - [Range Operators](RANGE_OPERATORS_IMPLEMENTATION.md) - Range and set operations
 - [Batch Processing](BATCH_PROCESSING_GUIDE.md) - Efficient bulk operations
 - [Feature Summary](FEATURE_SUMMARY.md) - Complete feature overview
+
+### Vector Support
+- [Vector Getting Started](VECTOR_GETTING_STARTED.md) - Quick start guide for vector features
+- [Vector Store Design](VECTOR_STORE_DESIGN.md) - Vector storage architecture
+- [Vector Implementation Summary](VECTOR_IMPLEMENTATION_SUMMARY.md) - Implementation details
 
 ### Evolutionary Planning Documents
 - [Design Plan](DESIGN_PLAN.md) - Original design document

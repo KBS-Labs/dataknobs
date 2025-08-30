@@ -8,21 +8,21 @@ from .fields import VectorField
 
 
 def ensure_record_id(record: Record, record_id: str) -> Record:
-    """Ensure a record has its ID set.
+    """Ensure a record has its storage ID set.
     
-    Helper method for backends to ensure records have their IDs set
+    Helper method for backends to ensure records have their storage IDs set
     when returning from storage operations like search.
     
     Args:
         record: The record to check
-        record_id: The ID that should be set on the record
+        record_id: The storage ID that should be set on the record
         
     Returns:
-        The record with ID guaranteed to be set
+        The record with storage_id guaranteed to be set
     """
-    if not record.id or record.id != record_id:
+    if not record.has_storage_id() or record.storage_id != record_id:
         record = record.copy(deep=True)
-        record.id = record_id
+        record.storage_id = record_id
     return record
 
 
