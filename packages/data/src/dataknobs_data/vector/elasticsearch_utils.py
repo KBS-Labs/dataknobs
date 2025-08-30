@@ -21,11 +21,11 @@ def get_similarity_for_metric(metric: DistanceMetric) -> str:
     """
     mapping = {
         DistanceMetric.COSINE: "cosine",
-        DistanceMetric.DOT_PRODUCT: "dot_product", 
+        DistanceMetric.DOT_PRODUCT: "dot_product",
         DistanceMetric.EUCLIDEAN: "l2_norm",
         DistanceMetric.INNER_PRODUCT: "dot_product",
     }
-    
+
     similarity = mapping.get(metric, "cosine")
     logger.debug(f"Using similarity '{similarity}' for metric {metric}")
     return similarity
@@ -53,11 +53,11 @@ def build_knn_query(
     # Convert numpy array to list if needed
     if isinstance(query_vector, np.ndarray):
         query_vector = query_vector.tolist()
-    
+
     # Default num_candidates if not specified
     if num_candidates is None:
         num_candidates = max(k * 10, 100)
-    
+
     # Build the KNN query
     knn_query = {
         "field": f"data.{field_name}",
@@ -65,11 +65,11 @@ def build_knn_query(
         "k": k,
         "num_candidates": num_candidates,
     }
-    
+
     # Add filter if provided
     if filter_query:
         knn_query["filter"] = filter_query
-    
+
     return {"knn": knn_query}
 
 
@@ -93,10 +93,10 @@ def build_script_score_query(
     # Convert numpy array to list if needed
     if isinstance(query_vector, np.ndarray):
         query_vector = query_vector.tolist()
-    
+
     # Build the script based on metric
     field_path = f"data.{field_name}"
-    
+
     if metric == DistanceMetric.COSINE:
         script_source = f"cosineSimilarity(params.query_vector, '{field_path}') + 1.0"
     elif metric == DistanceMetric.DOT_PRODUCT or metric == DistanceMetric.INNER_PRODUCT:
@@ -106,10 +106,10 @@ def build_script_score_query(
     else:
         # Default to cosine
         script_source = f"cosineSimilarity(params.query_vector, '{field_path}') + 1.0"
-    
+
     # Build the query
     base_query = filter_query if filter_query else {"match_all": {}}
-    
+
     return {
         "script_score": {
             "query": base_query,
@@ -149,7 +149,7 @@ def build_hybrid_query(
     # Convert numpy array to list if needed
     if isinstance(query_vector, np.ndarray):
         query_vector = query_vector.tolist()
-    
+
     # Build text query
     text_query_clause = {
         "multi_match": {
@@ -158,7 +158,7 @@ def build_hybrid_query(
             "boost": text_boost,
         }
     }
-    
+
     # Build KNN query
     knn_clause = {
         "field": f"data.{vector_field}",
@@ -166,7 +166,7 @@ def build_hybrid_query(
         "k": k,
         "boost": vector_boost,
     }
-    
+
     # Combine with bool query
     return {
         "bool": {
@@ -206,7 +206,7 @@ def parse_elasticsearch_vector(value: Any) -> np.ndarray | None:
     """
     if value is None:
         return None
-    
+
     if isinstance(value, (list, tuple)):
         return np.array(value, dtype=np.float32)
     elif isinstance(value, np.ndarray):
@@ -288,9 +288,9 @@ def validate_vector_dimensions(vector: np.ndarray | list[float], expected_dims: 
         actual_dims = len(vector)
     else:
         return False
-    
+
     if actual_dims != expected_dims:
         logger.warning(f"Vector dimension mismatch: expected {expected_dims}, got {actual_dims}")
         return False
-    
+
     return True

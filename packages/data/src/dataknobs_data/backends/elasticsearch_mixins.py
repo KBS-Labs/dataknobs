@@ -1,8 +1,7 @@
 """Shared mixins for Elasticsearch backend implementations."""
 
-import json
 import logging
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -17,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 class ElasticsearchBaseConfig:
     """Mixin for parsing Elasticsearch configuration."""
-    
+
     def _parse_elasticsearch_config(self, config: dict[str, Any]) -> tuple[str, int, str, dict]:
         """Parse Elasticsearch configuration.
         
@@ -30,7 +29,7 @@ class ElasticsearchBaseConfig:
         host = config.get("host", "localhost")
         port = config.get("port", 9200)
         index = config.get("index", "records")
-        
+
         # Extract other config options
         extra_config = {
             "refresh": config.get("refresh", True),
@@ -40,13 +39,13 @@ class ElasticsearchBaseConfig:
             }),
             "mappings": config.get("mappings"),
         }
-        
+
         return host, port, index, extra_config
 
 
 class ElasticsearchIndexManager:
     """Mixin for Elasticsearch index management."""
-    
+
     @staticmethod
     def get_index_mappings(vector_fields: dict[str, int] | None = None) -> dict:
         """Get index mappings with vector field support.
@@ -61,7 +60,7 @@ class ElasticsearchIndexManager:
             "properties": {
                 "id": {"type": "keyword"},
                 "data": {
-                    "type": "object", 
+                    "type": "object",
                     "properties": {}
                 },
                 "metadata": {"type": "object", "enabled": True},
@@ -69,7 +68,7 @@ class ElasticsearchIndexManager:
                 "updated_at": {"type": "date"},
             }
         }
-        
+
         # Add vector field mappings if specified
         if vector_fields:
             for field_name, dimensions in vector_fields.items():
@@ -80,9 +79,9 @@ class ElasticsearchIndexManager:
                     "index": True,
                     "similarity": "cosine"  # Default similarity
                 }
-        
+
         return mappings
-    
+
     @staticmethod
     def get_knn_index_settings() -> dict:
         """Get index settings optimized for KNN search.
@@ -100,12 +99,12 @@ class ElasticsearchIndexManager:
 
 class ElasticsearchVectorSupport:
     """Mixin for vector field detection and tracking."""
-    
+
     def __init__(self):
         """Initialize vector support tracking."""
         self.vector_fields: dict[str, int] = {}  # field_name -> dimensions
         self.vector_enabled = False
-    
+
     def _detect_vector_fields(self, record: Record) -> dict[str, int]:
         """Detect vector fields in a record.
         
@@ -116,7 +115,7 @@ class ElasticsearchVectorSupport:
             Dict mapping field names to dimensions
         """
         vector_fields = {}
-        
+
         for field_name, field_obj in record.fields.items():
             if field_obj.type in (FieldType.VECTOR, FieldType.SPARSE_VECTOR):
                 if isinstance(field_obj, VectorField) and field_obj.value is not None:
@@ -125,9 +124,9 @@ class ElasticsearchVectorSupport:
                         dims = len(field_obj.value) if isinstance(field_obj.value, list) else field_obj.value.shape[0]
                         vector_fields[field_name] = dims
                         logger.debug(f"Detected vector field '{field_name}' with {dims} dimensions")
-        
+
         return vector_fields
-    
+
     def _has_vector_fields(self, record: Record) -> bool:
         """Check if a record has vector fields.
         
@@ -138,7 +137,7 @@ class ElasticsearchVectorSupport:
             True if record has vector fields
         """
         return len(self._detect_vector_fields(record)) > 0
-    
+
     def _update_vector_tracking(self, record: Record) -> None:
         """Update tracking of vector fields from a record.
         
@@ -154,7 +153,7 @@ class ElasticsearchVectorSupport:
 
 class ElasticsearchErrorHandler:
     """Mixin for consistent error handling."""
-    
+
     @staticmethod
     def _handle_elasticsearch_error(error: Exception, operation: str) -> None:
         """Handle Elasticsearch errors consistently.
@@ -169,7 +168,7 @@ class ElasticsearchErrorHandler:
             RequestError,
             TransportError,
         )
-        
+
         if isinstance(error, ConnectionError):
             logger.error(f"Connection error during {operation}: {error}")
             raise RuntimeError(f"Failed to connect to Elasticsearch: {error}") from error
@@ -189,7 +188,7 @@ class ElasticsearchErrorHandler:
 
 class ElasticsearchRecordSerializer:
     """Mixin for record serialization with vector field handling."""
-    
+
     @staticmethod
     def _record_to_document(record: Record) -> dict[str, Any]:
         """Convert a record to an Elasticsearch document.
@@ -202,7 +201,7 @@ class ElasticsearchRecordSerializer:
         """
         # Serialize the record data
         data_dict = {}
-        
+
         for field_name, field_obj in record.fields.items():
             if isinstance(field_obj, VectorField) and field_obj.value is not None:
                 # Convert numpy arrays to lists for JSON serialization
@@ -212,25 +211,25 @@ class ElasticsearchRecordSerializer:
                     data_dict[field_name] = field_obj.value
             else:
                 data_dict[field_name] = field_obj.value
-        
+
         # Create the document
         doc = {
             "data": data_dict,
             "metadata": record.metadata,
         }
-        
+
         # Add timestamps if they exist as attributes
         if hasattr(record, "created_at") and record.created_at:
             doc["created_at"] = record.created_at.isoformat()
         if hasattr(record, "updated_at") and record.updated_at:
             doc["updated_at"] = record.updated_at.isoformat()
-        
+
         # Add ID if present
         if record.id:
             doc["id"] = record.id
-        
+
         return doc
-    
+
     @staticmethod
     def _document_to_record(doc: dict[str, Any], doc_id: str | None = None) -> Record:
         """Convert an Elasticsearch document to a record.
@@ -244,19 +243,19 @@ class ElasticsearchRecordSerializer:
         """
         # Get the source data
         source = doc.get("_source", doc)
-        
+
         # Extract data and metadata
         data = source.get("data", {})
         metadata = source.get("metadata", {})
-        
+
         # Create fields
         fields = {}
         for field_name, value in data.items():
             # Check if this is a vector field based on metadata
             field_meta = metadata.get("vector_fields", {}).get(field_name, {})
-            
+
             if field_meta.get("type") == "vector" or (
-                isinstance(value, list) and len(value) > 0 and 
+                isinstance(value, list) and len(value) > 0 and
                 all(isinstance(v, (int, float)) for v in value)
             ):
                 # This looks like a vector field
@@ -276,21 +275,19 @@ class ElasticsearchRecordSerializer:
                     field_type = FieldType.INTEGER
                 elif isinstance(value, float):
                     field_type = FieldType.FLOAT
-                elif isinstance(value, dict):
+                elif isinstance(value, dict) or (isinstance(value, (list, tuple)) and not all(isinstance(v, (int, float)) for v in value)):
                     field_type = FieldType.JSON
-                elif isinstance(value, (list, tuple)) and not all(isinstance(v, (int, float)) for v in value):
-                    field_type = FieldType.JSON
-                    
+
                 fields[field_name] = Field(
                     name=field_name,
                     value=value,
                     type=field_type,
                 )
-        
+
         # Create the record - pass fields as OrderedDict since they're Field objects
         from collections import OrderedDict
         record = Record(data=OrderedDict(fields), metadata=metadata)
-        
+
         # Set ID from document
         if doc_id:
             record.id = doc_id
@@ -298,22 +295,22 @@ class ElasticsearchRecordSerializer:
             record.id = doc["_id"]
         elif "id" in source:
             record.id = source["id"]
-        
+
         # Set timestamps if available (as attributes, not fields)
-        if "created_at" in source and source["created_at"]:
+        if source.get("created_at"):
             from datetime import datetime
-            setattr(record, "created_at", datetime.fromisoformat(source["created_at"]))
-        
-        if "updated_at" in source and source["updated_at"]:
+            record.created_at = datetime.fromisoformat(source["created_at"])
+
+        if source.get("updated_at"):
             from datetime import datetime
-            setattr(record, "updated_at", datetime.fromisoformat(source["updated_at"]))
-        
+            record.updated_at = datetime.fromisoformat(source["updated_at"])
+
         return record
 
 
 class ElasticsearchQueryBuilder:
     """Mixin for building Elasticsearch queries."""
-    
+
     @staticmethod
     def _build_filter_query(filter_query: "Query | None") -> dict[str, Any] | None:
         """Build Elasticsearch filter query from Query object.
@@ -326,17 +323,17 @@ class ElasticsearchQueryBuilder:
         """
         if not filter_query:
             return None
-        
+
         # TODO: Implement full query translation
         # For now, just support simple field equality
         from ..query import Operator
-        
+
         must_clauses = []
-        
+
         if filter_query.filters:
             for filter_item in filter_query.filters:
                 field_path = f"data.{filter_item.field}"
-                
+
                 if filter_item.operator == Operator.EQ:
                     # Use match query for text fields to handle analyzed text
                     must_clauses.append({
@@ -354,8 +351,8 @@ class ElasticsearchQueryBuilder:
                     must_clauses.append({
                         "range": {field_path: {"lt": filter_item.value}}
                     })
-        
+
         if must_clauses:
             return {"bool": {"must": must_clauses}}
-        
+
         return None

@@ -373,7 +373,7 @@ class AsyncFileDatabase(
         # Get the appropriate format handler
         ext = f".{self.format}"
         self.handler = self.FORMAT_HANDLERS.get(ext, JSONFormat)
-        
+
         # Initialize vector support
         self._parse_vector_config(config or {})
         self._init_vector_state()
@@ -590,8 +590,7 @@ class AsyncFileDatabase(
         metric=None,
         **kwargs
     ):
-        """
-        Perform vector similarity search using Python calculations.
+        """Perform vector similarity search using Python calculations.
         
         Note: This implementation reads all records from disk to perform
         the search locally. For better performance with large datasets,
@@ -656,7 +655,7 @@ class SyncFileDatabase(
         # Get the appropriate format handler
         ext = f".{self.format}"
         self.handler = self.FORMAT_HANDLERS.get(ext, JSONFormat)
-        
+
         # Initialize vector support
         self._parse_vector_config(config or {})
         self._init_vector_state()
@@ -709,7 +708,7 @@ class SyncFileDatabase(
         """Ensure record has a storage ID, set data[id]=record.copy() and return the ID"""
         # Use centralized method to prepare record
         record_copy, storage_id = self._prepare_record_for_storage(record)
-        
+
         # Store the record
         data[storage_id] = record_copy
         return storage_id
@@ -930,8 +929,7 @@ class SyncFileDatabase(
         metric=None,
         **kwargs
     ):
-        """
-        Perform vector similarity search using Python calculations.
+        """Perform vector similarity search using Python calculations.
         
         Note: This implementation reads all records from disk to perform
         the search locally. For better performance with large datasets,

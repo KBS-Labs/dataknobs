@@ -18,7 +18,7 @@ def normalize_vector(vector: "np.ndarray") -> "np.ndarray":
         Normalized vector
     """
     import numpy as np
-    
+
     norm = np.linalg.norm(vector)
     if norm == 0:
         return vector
@@ -41,7 +41,7 @@ def compute_distance(
         Distance value
     """
     import numpy as np
-    
+
     if metric == DistanceMetric.COSINE:
         # Cosine similarity (1 - similarity for distance)
         dot = np.dot(vec1, vec2)
@@ -51,19 +51,19 @@ def compute_distance(
             return 1.0
         similarity = dot / (norm1 * norm2)
         return float(1 - similarity)
-    
+
     elif metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
         # Euclidean/L2 distance
         return float(np.linalg.norm(vec1 - vec2))
-    
+
     elif metric in (DistanceMetric.DOT_PRODUCT, DistanceMetric.INNER_PRODUCT):
         # Negative dot product (for distance-based sorting)
         return float(-np.dot(vec1, vec2))
-    
+
     elif metric == DistanceMetric.L1:
         # Manhattan/L1 distance
         return float(np.sum(np.abs(vec1 - vec2)))
-    
+
     else:
         raise ValueError(f"Unknown distance metric: {metric}")
 
@@ -84,7 +84,7 @@ def compute_similarity(
         Similarity value (higher is more similar)
     """
     import numpy as np
-    
+
     if metric == DistanceMetric.COSINE:
         # Cosine similarity
         dot = np.dot(vec1, vec2)
@@ -93,21 +93,21 @@ def compute_similarity(
         if norm1 == 0 or norm2 == 0:
             return 0.0
         return float(dot / (norm1 * norm2))
-    
+
     elif metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
         # Convert distance to similarity (inverse)
         distance = np.linalg.norm(vec1 - vec2)
         return float(1.0 / (1.0 + distance))
-    
+
     elif metric in (DistanceMetric.DOT_PRODUCT, DistanceMetric.INNER_PRODUCT):
         # Direct dot product
         return float(np.dot(vec1, vec2))
-    
+
     elif metric == DistanceMetric.L1:
         # Convert L1 distance to similarity
         distance = np.sum(np.abs(vec1 - vec2))
         return float(1.0 / (1.0 + distance))
-    
+
     else:
         raise ValueError(f"Unknown distance metric: {metric}")
 
@@ -128,36 +128,36 @@ def batch_compute_distances(
         Array of distances
     """
     import numpy as np
-    
+
     if len(vectors.shape) == 1:
         vectors = vectors.reshape(1, -1)
-    
+
     if metric == DistanceMetric.COSINE:
         # Batch cosine similarity
         dots = np.dot(vectors, query_vector)
         query_norm = np.linalg.norm(query_vector)
         vector_norms = np.linalg.norm(vectors, axis=1)
-        
+
         # Handle zero norms
         valid = (vector_norms != 0) & (query_norm != 0)
         similarities = np.zeros(len(vectors))
         similarities[valid] = dots[valid] / (vector_norms[valid] * query_norm)
-        
+
         # Convert to distances
         return 1 - similarities
-    
+
     elif metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
         # Batch Euclidean distance
         return np.linalg.norm(vectors - query_vector, axis=1)
-    
+
     elif metric in (DistanceMetric.DOT_PRODUCT, DistanceMetric.INNER_PRODUCT):
         # Negative dot product for distance
         return -np.dot(vectors, query_vector)
-    
+
     elif metric == DistanceMetric.L1:
         # Batch L1 distance
         return np.sum(np.abs(vectors - query_vector), axis=1)
-    
+
     else:
         raise ValueError(f"Unknown distance metric: {metric}")
 
@@ -181,19 +181,19 @@ def validate_vector_dimensions(
         ValueError: If dimensions don't match
     """
     import numpy as np
-    
+
     if isinstance(vector, list):
         vector = np.array(vector, dtype=np.float32)
-    
+
     actual_dims = len(vector) if vector.ndim == 1 else vector.shape[-1]
-    
+
     if actual_dims != expected_dims:
         field_str = f" for field '{field_name}'" if field_name else ""
         raise ValueError(
             f"Vector dimension mismatch{field_str}: "
             f"expected {expected_dims}, got {actual_dims}"
         )
-    
+
     return vector
 
 
@@ -211,7 +211,7 @@ def chunk_vectors(
         List of vector chunks
     """
     import numpy as np
-    
+
     if isinstance(vectors, list):
         # List of individual vectors
         chunks = []
@@ -249,15 +249,15 @@ def estimate_memory_usage(
         "int8": 1,
         "uint8": 1,
     }.get(dtype, 4)
-    
+
     vector_bytes = num_vectors * dimensions * bytes_per_element
-    
+
     # Add overhead estimates
     index_overhead = vector_bytes * 0.1  # ~10% for basic index
     metadata_overhead = num_vectors * 100  # ~100 bytes per vector for metadata
-    
+
     total_bytes = vector_bytes + index_overhead + metadata_overhead
-    
+
     return {
         "vector_storage_mb": vector_bytes / (1024 * 1024),
         "index_overhead_mb": index_overhead / (1024 * 1024),

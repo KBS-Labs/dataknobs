@@ -21,11 +21,11 @@ class VectorDimensionError(VectorError):
         self.expected = expected
         self.actual = actual
         self.field_name = field_name
-        
+
         message = f"Vector dimension mismatch: expected {expected}, got {actual}"
         if field_name:
             message = f"{message} for field '{field_name}'"
-        
+
         super().__init__(message)
 
 
@@ -53,11 +53,11 @@ class VectorNotSupportedError(VectorError):
         """
         self.backend = backend
         self.operation = operation
-        
+
         message = f"Vector operations not supported by {backend} backend"
         if operation:
             message = f"{message}: {operation}"
-        
+
         super().__init__(message)
 
 

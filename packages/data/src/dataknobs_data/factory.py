@@ -54,12 +54,12 @@ class DatabaseFactory(FactoryBase):
         backend_type = config.pop("backend", "memory").lower()
 
         logger.info(f"Creating database with backend: {backend_type}")
-        
+
         # Check if vector_enabled is set
         vector_enabled = config.get("vector_enabled", False)
         vector_dimensions = config.get("vector_dimensions")
         vector_metric = config.get("vector_metric", "cosine")
-        
+
         if vector_enabled:
             # All backends now have vector support (some native, some via Python)
             logger.debug(f"Vector support enabled for backend: {backend_type}")
@@ -105,7 +105,7 @@ class DatabaseFactory(FactoryBase):
                     "S3 backend requires boto3. "
                     "Install with: pip install dataknobs-data[s3]"
                 ) from e
-                
+
         # Vector store backends
         elif backend_type == "faiss":
             try:
@@ -116,7 +116,7 @@ class DatabaseFactory(FactoryBase):
                     "Faiss backend requires faiss-cpu. "
                     "Install with: pip install faiss-cpu"
                 ) from e
-                
+
         elif backend_type in ("chroma", "chromadb"):
             try:
                 from dataknobs_data.vector.stores.chroma import ChromaVectorStore
@@ -126,7 +126,7 @@ class DatabaseFactory(FactoryBase):
                     "Chroma backend requires chromadb. "
                     "Install with: pip install chromadb"
                 ) from e
-                
+
         elif backend_type == "memory_vector":
             from dataknobs_data.vector.stores.memory import MemoryVectorStore
             return MemoryVectorStore(config)
@@ -137,7 +137,7 @@ class DatabaseFactory(FactoryBase):
                 f"Available backends: memory, file, postgres, elasticsearch, sqlite, s3, "
                 f"faiss, chroma, memory_vector"
             )
-    
+
 
     def get_backend_info(self, backend_type: str) -> dict[str, Any]:
         """Get information about a specific backend.
@@ -282,12 +282,12 @@ class AsyncDatabaseFactory(FactoryBase):
             ValueError: If backend doesn't support async operations
         """
         backend_type = config.pop("backend", "memory").lower()
-        
+
         # Check if vector_enabled is set
         vector_enabled = config.get("vector_enabled", False)
         vector_dimensions = config.get("vector_dimensions")
         vector_metric = config.get("vector_metric", "cosine")
-        
+
         if vector_enabled:
             # All backends now have vector support (some native, some via Python)
             logger.debug(f"Vector support enabled for async backend: {backend_type}")

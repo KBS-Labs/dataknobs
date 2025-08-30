@@ -1,10 +1,8 @@
 """Utility functions for database operations."""
 
-from typing import Any
 
 from .query import Query
 from .records import Record
-from .fields import VectorField
 
 
 def ensure_record_id(record: Record, record_id: str) -> Record:
@@ -56,7 +54,7 @@ def process_search_results(
                 key=lambda x: x[1].get_value(sort_spec.field, ""),
                 reverse=reverse
             )
-    
+
     # Extract records and ensure they have their IDs
     records = []
     for record_id, record in results:
@@ -64,15 +62,15 @@ def process_search_results(
         if deep_copy:
             processed_record = processed_record.copy(deep=True)
         records.append(processed_record)
-    
+
     # Apply offset and limit
     if query.offset_value:
         records = records[query.offset_value:]
     if query.limit_value:
         records = records[:query.limit_value]
-    
+
     # Apply field projection
     if query.fields:
         records = [record.project(query.fields) for record in records]
-    
+
     return records

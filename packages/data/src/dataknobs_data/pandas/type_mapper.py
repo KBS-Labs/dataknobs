@@ -1,9 +1,10 @@
 """Type mapping between DataKnobs Field types and Pandas dtypes."""
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Optional, Union
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -16,10 +17,10 @@ from dataknobs_data.fields import FieldType
 class PandasTypeMapping:
     """Mapping configuration for type conversion."""
     field_type: FieldType
-    pandas_dtype: Union[str, type, np.dtype]
+    pandas_dtype: str | type | np.dtype
     nullable: bool = True
-    converter: Optional[Callable] = None
-    reverse_converter: Optional[Callable] = None
+    converter: Callable | None = None
+    reverse_converter: Callable | None = None
 
 
 class TypeMapper:

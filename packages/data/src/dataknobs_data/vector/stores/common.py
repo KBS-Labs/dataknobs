@@ -18,7 +18,7 @@ class VectorStoreBase(ConfigurableBase):
     - Common parameter extraction
     - Shared utility methods
     """
-    
+
     def __init__(self, config: dict[str, Any] | None = None):
         """Initialize vector store with configuration.
         
@@ -30,7 +30,7 @@ class VectorStoreBase(ConfigurableBase):
         self._parse_common_config()
         self._parse_backend_config()
         self._initialized = False
-    
+
     def _parse_common_config(self) -> None:
         """Parse common configuration parameters.
         
@@ -44,32 +44,32 @@ class VectorStoreBase(ConfigurableBase):
         """
         # Extract dimensions (required for most stores)
         self.dimensions = self.config.get("dimensions", 0)
-        
+
         # Extract and parse metric
         metric = self.config.get("metric", "cosine")
         if isinstance(metric, str):
             self.metric = DistanceMetric(metric)
         else:
             self.metric = metric
-        
+
         # Extract paths and sizes
         self.persist_path = self.config.get("persist_path")
         self.batch_size = self.config.get("batch_size", 100)
-        
+
         # Extract parameter dictionaries
         self.index_params = self.config.get("index_params", {})
         self.search_params = self.config.get("search_params", {})
-        
+
         # Store any additional metadata
         self.metadata = self.config.get("metadata", {})
-    
+
     def _parse_backend_config(self) -> None:
         """Parse backend-specific configuration.
         
         Override this method in subclasses to handle backend-specific parameters.
         """
         pass
-    
+
     def _validate_dimensions(self) -> None:
         """Validate vector dimensions.
         
@@ -80,7 +80,7 @@ class VectorStoreBase(ConfigurableBase):
             raise ValueError(f"Dimensions must be positive, got {self.dimensions}")
         if self.dimensions > 65536:
             raise ValueError(f"Dimensions {self.dimensions} exceeds maximum (65536)")
-    
+
     def _normalize_vector(self, vector: "np.ndarray") -> "np.ndarray":
         """Normalize a vector for cosine similarity.
         
@@ -91,12 +91,12 @@ class VectorStoreBase(ConfigurableBase):
             Normalized vector
         """
         import numpy as np
-        
+
         norm = np.linalg.norm(vector)
         if norm == 0:
             return vector
         return vector / norm
-    
+
     def _calculate_similarity(self, vec1: "np.ndarray", vec2: "np.ndarray") -> float:
         """Calculate similarity between two vectors based on configured metric.
         
@@ -108,7 +108,7 @@ class VectorStoreBase(ConfigurableBase):
             Similarity score
         """
         import numpy as np
-        
+
         if self.metric == DistanceMetric.COSINE:
             # Cosine similarity
             norm1 = np.linalg.norm(vec1)
@@ -116,21 +116,21 @@ class VectorStoreBase(ConfigurableBase):
             if norm1 == 0 or norm2 == 0:
                 return 0.0
             return float(np.dot(vec1, vec2) / (norm1 * norm2))
-        
+
         elif self.metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
             # Convert distance to similarity
             distance = np.linalg.norm(vec1 - vec2)
             return 1.0 / (1.0 + distance)
-        
+
         elif self.metric in (DistanceMetric.DOT_PRODUCT, DistanceMetric.INNER_PRODUCT):
             # Dot product
             return float(np.dot(vec1, vec2))
-        
+
         elif self.metric == DistanceMetric.L1:
             # Manhattan distance to similarity
             distance = np.sum(np.abs(vec1 - vec2))
             return 1.0 / (1.0 + distance)
-        
+
         else:
             # Default to cosine
             norm1 = np.linalg.norm(vec1)
@@ -138,7 +138,7 @@ class VectorStoreBase(ConfigurableBase):
             if norm1 == 0 or norm2 == 0:
                 return 0.0
             return float(np.dot(vec1, vec2) / (norm1 * norm2))
-    
+
     def _convert_distance_to_score(self, distance: float) -> float:
         """Convert a distance to a similarity score based on metric.
         
@@ -160,7 +160,7 @@ class VectorStoreBase(ConfigurableBase):
         else:
             # For dot product and others, higher is better
             return distance
-    
+
     def _prepare_vector(self, vector: "np.ndarray | list[float]", normalize: bool = False) -> "np.ndarray":
         """Prepare a vector for storage or search.
         
@@ -172,26 +172,26 @@ class VectorStoreBase(ConfigurableBase):
             Prepared numpy array
         """
         import numpy as np
-        
+
         # Convert to numpy array
         if isinstance(vector, list):
             vector = np.array(vector, dtype=np.float32)
         else:
             vector = vector.astype(np.float32)
-        
+
         # Ensure correct shape
         if vector.ndim == 1:
             vector = vector.reshape(1, -1)
-        
+
         # Normalize if needed (e.g., for cosine similarity)
         if normalize or self.metric == DistanceMetric.COSINE:
             # Apply normalization for cosine similarity
             norms = np.linalg.norm(vector, axis=1, keepdims=True)
             norms[norms == 0] = 1  # Avoid division by zero
             vector = vector / norms
-        
+
         return vector
-    
+
     def _apply_metadata_filter(self, candidates: list[tuple[Any, dict]], filter: dict[str, Any]) -> list[tuple[Any, dict]]:
         """Apply metadata filter to candidates.
         
@@ -204,7 +204,7 @@ class VectorStoreBase(ConfigurableBase):
         """
         if not filter:
             return candidates
-        
+
         filtered = []
         for item_id, metadata in candidates:
             # Check if all filter conditions match
@@ -214,9 +214,9 @@ class VectorStoreBase(ConfigurableBase):
             )
             if match:
                 filtered.append((item_id, metadata))
-        
+
         return filtered
-    
+
     def __repr__(self) -> str:
         """String representation."""
         return (

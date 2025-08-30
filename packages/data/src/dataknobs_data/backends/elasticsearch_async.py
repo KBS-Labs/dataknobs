@@ -3,7 +3,7 @@
 import logging
 import time
 from collections.abc import AsyncIterator
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from dataknobs_config import ConfigurableBase
 
@@ -22,11 +22,11 @@ from ..vector.mixins import VectorOperationsMixin
 from ..vector.types import DistanceMetric, VectorSearchResult
 from .elasticsearch_mixins import (
     ElasticsearchBaseConfig,
-    ElasticsearchIndexManager,
-    ElasticsearchVectorSupport,
     ElasticsearchErrorHandler,
-    ElasticsearchRecordSerializer,
+    ElasticsearchIndexManager,
     ElasticsearchQueryBuilder,
+    ElasticsearchRecordSerializer,
+    ElasticsearchVectorSupport,
 )
 
 if TYPE_CHECKING:
@@ -54,11 +54,11 @@ class AsyncElasticsearchDatabase(
     def __init__(self, config: dict[str, Any] | None = None):
         """Initialize async Elasticsearch database."""
         super().__init__(config)
-        
+
         # Initialize vector support
         self.vector_fields = {}  # field_name -> dimensions
         self.vector_enabled = False
-        
+
         config = config or {}
         self._pool_config = ElasticsearchPoolConfig.from_dict(config)
         self.index_name = self._pool_config.index
@@ -109,7 +109,7 @@ class AsyncElasticsearchDatabase(
         if not await self._client.indices.exists(index=self.index_name):
             # Get mappings with vector field support
             mappings = self.get_index_mappings(self.vector_fields)
-            
+
             # Get settings optimized for KNN if we have vector fields
             settings = self.get_knn_index_settings() if self.vector_fields else {
                 "number_of_shards": 1,
@@ -121,7 +121,7 @@ class AsyncElasticsearchDatabase(
                 mappings=mappings,
                 settings=settings
             )
-            
+
             if self.vector_fields:
                 self.vector_enabled = True
                 logger.info(f"Created index '{self.index_name}' with vector support")
@@ -136,11 +136,11 @@ class AsyncElasticsearchDatabase(
         # Update vector tracking if needed
         if self._has_vector_fields(record):
             self._update_vector_tracking(record)
-            
+
             # Add vector field metadata to record metadata
             if "vector_fields" not in record.metadata:
                 record.metadata["vector_fields"] = {}
-            
+
             for field_name in self.vector_fields:
                 if field_name in record.fields:
                     field = record.fields[field_name]
@@ -152,18 +152,18 @@ class AsyncElasticsearchDatabase(
                             "model": getattr(field, "model_name", None),
                             "model_version": getattr(field, "model_version", None),
                         }
-        
+
         return self._record_to_document(record)
 
     def _doc_to_record(self, doc: dict[str, Any]) -> Record:
         """Convert an Elasticsearch document to a Record."""
         doc_id = doc.get("_id")
         record = self._document_to_record(doc, doc_id)
-        
+
         # Add score if present
         if "_score" in doc:
             record.metadata["_score"] = doc["_score"]
-        
+
         return record
 
     async def create(self, record: Record) -> str:
@@ -290,9 +290,9 @@ class AsyncElasticsearchDatabase(
         """
         if not updates:
             return []
-        
+
         self._check_connection()
-        
+
         # Build bulk operations for AsyncElasticsearch
         operations = []
         for record_id, record in updates:
@@ -309,15 +309,14 @@ class AsyncElasticsearchDatabase(
                 "doc": doc,
                 "doc_as_upsert": False  # Don't create if doesn't exist
             })
-        
+
         try:
             # Execute bulk update using AsyncElasticsearch
-            from elasticsearch import AsyncElasticsearch
             response = await self._client.bulk(
                 operations=operations,
                 refresh=self.refresh
             )
-            
+
             # Process the response to determine which updates succeeded
             results = []
             if response.get("items"):
@@ -331,9 +330,9 @@ class AsyncElasticsearchDatabase(
             else:
                 # If no items in response, mark all as failed
                 results = [False] * len(updates)
-            
+
             return results
-            
+
         except Exception as e:
             # If bulk operation fails, mark all as failed
             import logging
@@ -581,7 +580,7 @@ class AsyncElasticsearchDatabase(
             operations=operations,
             refresh=self.refresh
         )
-    
+
     async def vector_search(
         self,
         query_vector: "np.ndarray | list[float]",
@@ -607,16 +606,15 @@ class AsyncElasticsearchDatabase(
             List of search results ordered by similarity
         """
         self._check_connection()
-        
+
         # Import vector utilities
         from ..vector.elasticsearch_utils import (
             build_knn_query,
-            get_similarity_for_metric,
         )
-        
+
         # Build filter query if provided
         filter_query = self._build_filter_query(filter) if filter else None
-        
+
         # Build KNN query
         query = build_knn_query(
             query_vector=query_vector,
@@ -624,7 +622,7 @@ class AsyncElasticsearchDatabase(
             k=k,
             filter_query=filter_query,
         )
-        
+
         # Execute search
         try:
             response = await self._client.search(
@@ -636,25 +634,25 @@ class AsyncElasticsearchDatabase(
         except Exception as e:
             self._handle_elasticsearch_error(e, "vector search")
             return []
-        
+
         # Process results
         results = []
         for hit in response.get("hits", {}).get("hits", []):
             score = hit.get("_score", 0.0)
-            
+
             # Apply score threshold if specified
             if score_threshold is not None and score < score_threshold:
                 continue
-            
+
             # Convert document to record if source included
             record = None
             if include_source:
                 record = self._doc_to_record(hit)
-            
+
             # Set the storage ID on the record if we have one
             if record and not record.has_storage_id():
                 record.storage_id = hit["_id"]
-            
+
             results.append(VectorSearchResult(
                 record=record,
                 score=score,
@@ -665,9 +663,9 @@ class AsyncElasticsearchDatabase(
                     "doc_id": hit["_id"],
                 },
             ))
-        
+
         return results
-    
+
     async def bulk_embed_and_store(
         self,
         records: list[Record],
@@ -696,7 +694,7 @@ class AsyncElasticsearchDatabase(
         # Full implementation would require an actual embedding function
         logger.warning("bulk_embed_and_store is not fully implemented for Elasticsearch")
         return []
-    
+
     async def create_vector_index(
         self,
         vector_field: str = "embedding",
@@ -718,24 +716,24 @@ class AsyncElasticsearchDatabase(
             True if index was created/updated successfully
         """
         self._check_connection()
-        
+
         if not dimensions:
             if vector_field not in self.vector_fields:
                 raise ValueError(f"Unknown dimensions for field '{vector_field}'")
             dimensions = self.vector_fields[vector_field]
-        
+
         # Import vector utilities
         from ..vector.elasticsearch_utils import (
             get_similarity_for_metric,
             get_vector_mapping,
         )
-        
+
         # Get similarity function for metric
         similarity = get_similarity_for_metric(metric)
-        
+
         # Build mapping for the vector field
         mapping = get_vector_mapping(dimensions, similarity)
-        
+
         # Update index mapping
         try:
             await self._client.indices.put_mapping(
@@ -744,14 +742,14 @@ class AsyncElasticsearchDatabase(
                     f"data.{vector_field}": mapping
                 }
             )
-            
+
             # Track the vector field
             self.vector_fields[vector_field] = dimensions
             self.vector_enabled = True
-            
+
             logger.info(f"Created vector mapping for field '{vector_field}' with {dimensions} dimensions")
             return True
-            
+
         except Exception as e:
             self._handle_elasticsearch_error(e, "create vector index")
             return False

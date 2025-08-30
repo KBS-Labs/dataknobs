@@ -16,7 +16,7 @@ class DistanceMetric(Enum):
     INNER_PRODUCT = "inner_product"  # Alias for dot_product
     L2 = "l2"  # Alias for euclidean
     L1 = "l1"  # Manhattan distance
-    
+
     def get_aliases(self) -> list[str]:
         """Get alternative names for this metric."""
         aliases = {
@@ -37,11 +37,11 @@ class VectorSearchResult:
     source_text: str | None = None
     vector_field: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
-    
+
     def __lt__(self, other: "VectorSearchResult") -> bool:
         """Enable sorting by score."""
         return self.score < other.score
-    
+
     def __repr__(self) -> str:
         """String representation of the result."""
         return (
@@ -61,12 +61,12 @@ class VectorConfig:
     source_field: str | None = None
     model_name: str | None = None
     model_version: str | None = None
-    
+
     def validate(self) -> None:
         """Validate configuration parameters."""
         if self.dimensions <= 0:
             raise ValueError(f"Dimensions must be positive, got {self.dimensions}")
-        
+
         if self.dimensions > 65536:  # Common maximum for vector databases
             raise ValueError(
                 f"Dimensions {self.dimensions} exceeds maximum supported (65536)"
@@ -84,11 +84,11 @@ class VectorIndexConfig:
     ef_search: int | None = None  # For HNSW search
     probes: int | None = None  # For IVFFlat search
     quantization: str | None = None  # none, scalar, product
-    
+
     def get_optimal_params(self, num_vectors: int) -> dict[str, Any]:
         """Get optimal index parameters based on dataset size."""
         params = {}
-        
+
         if self.index_type == "auto":
             # Auto-select based on dataset size
             if num_vectors < 10_000:
@@ -111,10 +111,10 @@ class VectorIndexConfig:
                 params["m"] = self.m or 16
                 params["ef_construction"] = self.ef_construction or 200
                 params["ef_search"] = self.ef_search or 64
-        
+
         if self.quantization:
             params["quantization"] = self.quantization
-        
+
         return params
 
 
@@ -130,7 +130,7 @@ class VectorMetadata:
     updated_at: str | None = None
     index_type: str | None = None
     metric: str | None = None
-    
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary representation."""
         return {
@@ -145,7 +145,7 @@ class VectorMetadata:
             "index_type": self.index_type,
             "metric": self.metric,
         }
-    
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "VectorMetadata":
         """Create from dictionary representation."""

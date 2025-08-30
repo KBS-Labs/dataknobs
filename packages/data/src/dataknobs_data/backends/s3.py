@@ -15,6 +15,7 @@ from dataknobs_data.database import SyncDatabase
 from dataknobs_data.query import Query
 from dataknobs_data.records import Record
 from dataknobs_data.streaming import StreamConfig, StreamResult, process_batch_with_fallback
+
 from ..vector import VectorOperationsMixin
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
@@ -72,7 +73,7 @@ class SyncS3Database(
         self.aws_access_key_id = self.config.get("access_key_id")
         self.aws_secret_access_key = self.config.get("secret_access_key")
         self.aws_session_token = self.config.get("session_token")
-        
+
         # Initialize vector support
         self._parse_vector_config(config or {})
         self._init_vector_state()
@@ -169,7 +170,7 @@ class SyncS3Database(
         # Use Record's built-in serialization which handles VectorFields
         # Use non-flattened format to preserve field metadata
         record_dict = record.to_dict(include_metadata=True, flatten=False)
-        
+
         return record_dict
 
     def _s3_object_to_record(self, obj_data: dict[str, Any]) -> Record:
@@ -567,8 +568,7 @@ class SyncS3Database(
         metric=None,
         **kwargs
     ):
-        """
-        Perform vector similarity search using Python calculations.
+        """Perform vector similarity search using Python calculations.
         
         WARNING: This implementation downloads all records from S3 to perform
         the search locally. This is inefficient for large datasets. Consider

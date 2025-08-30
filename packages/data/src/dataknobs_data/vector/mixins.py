@@ -1,7 +1,8 @@
 """Mixins and protocols for vector-capable databases."""
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Callable, Protocol
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Protocol
 
 from ..fields import FieldType
 from ..records import Record
@@ -9,7 +10,7 @@ from .types import DistanceMetric, VectorSearchResult
 
 if TYPE_CHECKING:
     import numpy as np
-    
+
     from ..query import Query
 
 
@@ -23,7 +24,7 @@ class VectorCapable(Protocol):
             True if vector operations are supported
         """
         ...
-    
+
     async def enable_vector_support(self) -> bool:
         """Enable vector support (install extensions, configure indices, etc.).
 
@@ -31,7 +32,7 @@ class VectorCapable(Protocol):
             True if vector support was successfully enabled
         """
         ...
-    
+
     async def detect_vector_fields(self, record: Record) -> list[str]:
         """Detect vector fields in a record.
 
@@ -46,7 +47,7 @@ class VectorCapable(Protocol):
             for field_name, field_obj in record.fields.items()
             if field_obj.type in (FieldType.VECTOR, FieldType.SPARSE_VECTOR)
         ]
-    
+
     def get_vector_config(self) -> dict[str, Any]:
         """Get vector-specific configuration for this backend.
 
@@ -90,7 +91,7 @@ class VectorOperationsMixin(ABC):
             List of search results ordered by similarity
         """
         pass
-    
+
     @abstractmethod
     async def bulk_embed_and_store(
         self,
@@ -117,7 +118,7 @@ class VectorOperationsMixin(ABC):
             List of record IDs that were processed
         """
         pass
-    
+
     async def update_vector(
         self,
         record_id: str,
@@ -138,20 +139,20 @@ class VectorOperationsMixin(ABC):
         """
         # Default implementation using standard update
         from ..fields import VectorField
-        
+
         record = await self.read(record_id)  # type: ignore
         if not record:
             return False
-        
+
         # Update the vector field
         record.fields[vector_field] = VectorField(
             name=vector_field,
             value=vector,
             metadata=metadata,
         )
-        
+
         return await self.update(record_id, record) is not None  # type: ignore
-    
+
     async def delete_from_index(
         self,
         record_id: str,
@@ -168,7 +169,7 @@ class VectorOperationsMixin(ABC):
         """
         # Default implementation using standard delete
         return await self.delete(record_id)  # type: ignore
-    
+
     async def create_vector_index(
         self,
         vector_field: str = "embedding",
@@ -191,7 +192,7 @@ class VectorOperationsMixin(ABC):
         """
         # Default no-op implementation
         return True
-    
+
     async def drop_vector_index(
         self,
         vector_field: str = "embedding",
@@ -206,7 +207,7 @@ class VectorOperationsMixin(ABC):
         """
         # Default no-op implementation
         return True
-    
+
     async def get_vector_index_stats(
         self,
         vector_field: str = "embedding",
@@ -251,18 +252,18 @@ class VectorSyncMixin:
         """
         if not embedding_fn:
             raise ValueError("Embedding function is required for vector synchronization")
-        
+
         updated = 0
         for record in records:
             # Check if vector needs update
             needs_update = force or vector_field not in record.fields
-            
+
             if not needs_update:
                 # Check if source fields changed
                 vector_meta = record.fields[vector_field].metadata
                 source_fields = vector_meta.get("source_field", "").split(",")
                 needs_update = set(source_fields) != set(text_fields)
-            
+
             if needs_update:
                 # Concatenate text fields
                 text_content = " ".join([
@@ -270,11 +271,11 @@ class VectorSyncMixin:
                     for field in text_fields
                     if record.get_value(field)
                 ])
-                
+
                 # Generate embedding
                 if text_content:
                     from ..fields import VectorField
-                    
+
                     embeddings = await embedding_fn([text_content])
                     record.fields[vector_field] = VectorField(
                         name=vector_field,
@@ -282,5 +283,5 @@ class VectorSyncMixin:
                         source_field=",".join(text_fields),
                     )
                     updated += 1
-        
+
         return updated

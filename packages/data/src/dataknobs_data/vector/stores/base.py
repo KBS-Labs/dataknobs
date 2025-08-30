@@ -1,16 +1,17 @@
 """Base class for specialized vector stores."""
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
-from ...fields import FieldType, VectorField
+from ...fields import VectorField
 from ...records import Record
-from ..types import DistanceMetric, VectorSearchResult
+from ..types import VectorSearchResult
 from .common import VectorStoreBase
 
 if TYPE_CHECKING:
     import numpy as np
-    from ...query import Query
+
 
 
 class VectorStore(ABC, VectorStoreBase):
@@ -21,17 +22,17 @@ class VectorStore(ABC, VectorStoreBase):
     VectorStoreBase which provides common configuration parsing and
     utility methods.
     """
-    
+
     @abstractmethod
     async def initialize(self) -> None:
         """Initialize the vector store (create index, connect, etc.)."""
         pass
-    
+
     @abstractmethod
     async def close(self) -> None:
         """Close connections and clean up resources."""
         pass
-    
+
     @abstractmethod
     async def add_vectors(
         self,
@@ -50,7 +51,7 @@ class VectorStore(ABC, VectorStoreBase):
             List of IDs for the added vectors
         """
         pass
-    
+
     @abstractmethod
     async def get_vectors(
         self,
@@ -67,7 +68,7 @@ class VectorStore(ABC, VectorStoreBase):
             List of (vector, metadata) tuples
         """
         pass
-    
+
     @abstractmethod
     async def delete_vectors(self, ids: list[str]) -> int:
         """Delete vectors by ID.
@@ -79,7 +80,7 @@ class VectorStore(ABC, VectorStoreBase):
             Number of vectors deleted
         """
         pass
-    
+
     @abstractmethod
     async def search(
         self,
@@ -100,7 +101,7 @@ class VectorStore(ABC, VectorStoreBase):
             List of (id, score, metadata) tuples
         """
         pass
-    
+
     @abstractmethod
     async def update_metadata(
         self,
@@ -117,7 +118,7 @@ class VectorStore(ABC, VectorStoreBase):
             Number of vectors updated
         """
         pass
-    
+
     @abstractmethod
     async def count(self, filter: dict[str, Any] | None = None) -> int:
         """Count vectors in the store.
@@ -129,14 +130,14 @@ class VectorStore(ABC, VectorStoreBase):
             Number of vectors matching filter
         """
         pass
-    
+
     @abstractmethod
     async def clear(self) -> None:
         """Clear all vectors from the store."""
         pass
-    
+
     # Higher-level convenience methods
-    
+
     async def add_records(
         self,
         records: list[Record],
@@ -156,47 +157,47 @@ class VectorStore(ABC, VectorStoreBase):
         vectors = []
         ids = []
         metadatas = []
-        
+
         for record in records:
             # Extract vector
             if vector_field not in record.fields:
                 continue
-                
+
             vector_obj = record.fields[vector_field]
             if not isinstance(vector_obj, VectorField):
                 continue
-                
+
             vectors.append(vector_obj.value)
             ids.append(record.id)
-            
+
             # Build metadata
             metadata = {"record_id": record.id}
-            
+
             # Add source field if present
             if vector_obj.source_field:
                 metadata["source_field"] = vector_obj.source_field
                 # Include source text if available
                 if vector_obj.source_field in record.fields:
                     metadata["source_text"] = record.get_value(vector_obj.source_field)
-            
+
             # Add model info if present
             if vector_obj.model_name:
                 metadata["model_name"] = vector_obj.model_name
             if vector_obj.model_version:
                 metadata["model_version"] = vector_obj.model_version
-            
+
             # Add requested fields
             if include_fields:
                 for field_name in include_fields:
                     if field_name in record.fields:
                         metadata[field_name] = record.get_value(field_name)
-            
+
             metadatas.append(metadata)
-        
+
         if vectors:
             return await self.add_vectors(vectors, ids=ids, metadata=metadatas)
         return []
-    
+
     async def search_similar_records(
         self,
         query_vector: "np.ndarray",
@@ -218,23 +219,23 @@ class VectorStore(ABC, VectorStoreBase):
         results = await self.search(
             query_vector, k=k, filter=filter, include_metadata=True
         )
-        
+
         search_results = []
         record_ids = []
-        
+
         for vector_id, score, metadata in results:
             record_id = metadata.get("record_id", vector_id) if metadata else vector_id
             record_ids.append(record_id)
-        
+
         # Fetch full records if function provided
         records_map = {}
         if fetch_records and record_ids:
             records = fetch_records(record_ids)
             records_map = {r.id: r for r in records}
-        
+
         for vector_id, score, metadata in results:
             record_id = metadata.get("record_id", vector_id) if metadata else vector_id
-            
+
             # Get or create record
             if record_id in records_map:
                 record = records_map[record_id]
@@ -245,12 +246,12 @@ class VectorStore(ABC, VectorStoreBase):
                     for key, value in metadata.items():
                         if key not in ["record_id", "source_text", "source_field"]:
                             record.fields[key] = value
-            
+
             # Extract source text
             source_text = None
             if metadata:
                 source_text = metadata.get("source_text")
-            
+
             search_results.append(
                 VectorSearchResult(
                     record=record,
@@ -260,9 +261,9 @@ class VectorStore(ABC, VectorStoreBase):
                     metadata=metadata or {},
                 )
             )
-        
+
         return search_results
-    
+
     async def bulk_embed_and_store(
         self,
         texts: list[str],
@@ -285,26 +286,26 @@ class VectorStore(ABC, VectorStoreBase):
         """
         batch_size = batch_size or self.batch_size
         all_ids = []
-        
+
         for i in range(0, len(texts), batch_size):
             batch_texts = texts[i:i + batch_size]
             batch_ids = ids[i:i + batch_size] if ids else None
             batch_metadata = metadata[i:i + batch_size] if metadata else None
-            
+
             # Generate embeddings
             embeddings = embedding_fn(batch_texts)
-            
+
             # Add source text to metadata
             if batch_metadata is None:
                 batch_metadata = [{} for _ in batch_texts]
-            
+
             for j, text in enumerate(batch_texts):
                 batch_metadata[j]["source_text"] = text
-            
+
             # Store vectors
             stored_ids = await self.add_vectors(
                 embeddings, ids=batch_ids, metadata=batch_metadata
             )
             all_ids.extend(stored_ids)
-        
+
         return all_ids

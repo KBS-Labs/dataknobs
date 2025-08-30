@@ -37,7 +37,7 @@ class AsyncMemoryDatabase(
         super().__init__(config)
         self._storage: OrderedDict[str, Record] = OrderedDict()
         self._lock = asyncio.Lock()
-        
+
         # Initialize vector support
         self._parse_vector_config(config or {})
         self._init_vector_state()  # From SQLiteVectorSupport
@@ -60,7 +60,7 @@ class AsyncMemoryDatabase(
         async with self._lock:
             # Use centralized method to prepare record
             record_copy, storage_id = self._prepare_record_for_storage(record)
-            
+
             # Store the record
             self._storage[storage_id] = record_copy
             return storage_id
@@ -142,7 +142,7 @@ class AsyncMemoryDatabase(
             for record in records:
                 # Use centralized method to prepare record
                 record_copy, storage_id = self._prepare_record_for_storage(record)
-                
+
                 # Store the record
                 self._storage[storage_id] = record_copy
                 ids.append(storage_id)
@@ -242,7 +242,7 @@ class SyncMemoryDatabase(
         super().__init__(config)
         self._storage: OrderedDict[str, Record] = OrderedDict()
         self._lock = threading.RLock()
-        
+
         # Initialize vector support
         self._parse_vector_config(config or {})
         self._init_vector_state()

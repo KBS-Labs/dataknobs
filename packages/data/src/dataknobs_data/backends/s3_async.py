@@ -50,7 +50,7 @@ class AsyncS3Database(
         self._pool_config = S3PoolConfig.from_dict(config)
         self._session = None
         self._connected = False
-        
+
         # Initialize vector support
         self._parse_vector_config(config or {})
         self._init_vector_state()  # From SQLiteVectorSupport
@@ -99,14 +99,14 @@ class AsyncS3Database(
         """Convert a Record to an S3 object."""
         # Use Record's built-in serialization which handles VectorFields
         record_dict = record.to_dict(include_metadata=True, flatten=False)
-        
+
         # Add timestamps
         now = datetime.utcnow().isoformat()
         if "metadata" not in record_dict:
             record_dict["metadata"] = {}
         record_dict["metadata"]["created_at"] = record_dict["metadata"].get("created_at", now)
         record_dict["metadata"]["updated_at"] = now
-        
+
         return record_dict
 
     def _s3_object_to_record(self, obj: dict[str, Any]) -> Record:
@@ -572,8 +572,7 @@ class AsyncS3Database(
         metric=None,
         **kwargs
     ):
-        """
-        Perform vector similarity search using Python calculations.
+        """Perform vector similarity search using Python calculations.
         
         WARNING: This implementation downloads all records from S3 to perform
         the search locally. This is inefficient for large datasets. Consider

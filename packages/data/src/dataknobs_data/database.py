@@ -21,17 +21,17 @@ class AsyncDatabase(ABC):
             schema: Optional database schema (overrides config schema)
         """
         config = config or {}
-        
+
         # Extract schema from config if present and no explicit schema provided
         if schema is None and "schema" in config:
             schema = self._extract_schema_from_config(config["schema"])
             # Remove schema from config so backends don't see it
             config = {k: v for k, v in config.items() if k != "schema"}
-        
+
         self.config = config
         self.schema = schema or DatabaseSchema()
         self._initialize()
-    
+
     @staticmethod
     def _extract_schema_from_config(schema_config: Any) -> DatabaseSchema | None:
         """Extract schema from configuration.
@@ -51,11 +51,11 @@ class AsyncDatabase(ABC):
     def _initialize(self) -> None:
         """Initialize the database backend. Override in subclasses."""
         pass
-    
+
     def _ensure_record_id(self, record: Record, record_id: str) -> Record:
         """Ensure a record has its ID set (delegates to utility function)."""
         return ensure_record_id(record, record_id)
-    
+
     def _prepare_record_for_storage(self, record: Record) -> tuple[Record, str]:
         """Prepare a record for storage by ensuring it has a storage_id.
         
@@ -68,16 +68,16 @@ class AsyncDatabase(ABC):
         import uuid
         # Make a copy to avoid modifying the original
         record_copy = record.copy(deep=True)
-        
+
         # Generate storage ID if not present
         if not record_copy.has_storage_id():
             storage_id = str(uuid.uuid4())
             record_copy.storage_id = storage_id
         else:
             storage_id = record_copy.storage_id
-            
+
         return record_copy, storage_id
-    
+
     def _prepare_record_from_storage(self, record: Record | None, storage_id: str) -> Record | None:
         """Prepare a record retrieved from storage by ensuring storage_id is set.
         
@@ -95,16 +95,16 @@ class AsyncDatabase(ABC):
                 record_copy.storage_id = storage_id
             return record_copy
         return None
-    
+
     def _process_search_results(
-        self, 
+        self,
         results: list[tuple[str, Record]],
         query: Query,
         deep_copy: bool = True
     ) -> list[Record]:
         """Process search results (delegates to utility function)."""
         return process_search_results(results, query, deep_copy)
-    
+
     def set_schema(self, schema: DatabaseSchema) -> None:
         """Set the database schema.
         
@@ -112,7 +112,7 @@ class AsyncDatabase(ABC):
             schema: The database schema to use
         """
         self.schema = schema
-    
+
     def add_field_schema(self, field_schema: FieldSchema) -> None:
         """Add a field to the database schema.
         
@@ -120,7 +120,7 @@ class AsyncDatabase(ABC):
             field_schema: The field schema to add
         """
         self.schema.add_field(field_schema)
-    
+
     def with_schema(self, **field_definitions) -> "AsyncDatabase":
         """Set schema using field definitions.
         
@@ -195,7 +195,7 @@ class AsyncDatabase(ABC):
             List of matching records
         """
         raise NotImplementedError
-    
+
     async def all(self) -> list[Record]:
         """Get all records from the database.
         
@@ -492,13 +492,13 @@ class SyncDatabase(ABC):
             schema: Optional database schema (overrides config schema)
         """
         config = config or {}
-        
+
         # Extract schema from config if present and no explicit schema provided
         if schema is None and "schema" in config:
             schema = AsyncDatabase._extract_schema_from_config(config["schema"])
             # Remove schema from config so backends don't see it
             config = {k: v for k, v in config.items() if k != "schema"}
-        
+
         self.config = config
         self.schema = schema or DatabaseSchema()
         self._initialize()
@@ -506,11 +506,11 @@ class SyncDatabase(ABC):
     def _initialize(self) -> None:
         """Initialize the database backend. Override in subclasses."""
         pass
-    
+
     def _ensure_record_id(self, record: Record, record_id: str) -> Record:
         """Ensure a record has its ID set (delegates to utility function)."""
         return ensure_record_id(record, record_id)
-    
+
     def _prepare_record_for_storage(self, record: Record) -> tuple[Record, str]:
         """Prepare a record for storage by ensuring it has a storage_id.
         
@@ -523,16 +523,16 @@ class SyncDatabase(ABC):
         import uuid
         # Make a copy to avoid modifying the original
         record_copy = record.copy(deep=True)
-        
+
         # Generate storage ID if not present
         if not record_copy.has_storage_id():
             storage_id = str(uuid.uuid4())
             record_copy.storage_id = storage_id
         else:
             storage_id = record_copy.storage_id
-            
+
         return record_copy, storage_id
-    
+
     def _prepare_record_from_storage(self, record: Record | None, storage_id: str) -> Record | None:
         """Prepare a record retrieved from storage by ensuring storage_id is set.
         
@@ -550,16 +550,16 @@ class SyncDatabase(ABC):
                 record_copy.storage_id = storage_id
             return record_copy
         return None
-    
+
     def _process_search_results(
-        self, 
+        self,
         results: list[tuple[str, Record]],
         query: Query,
         deep_copy: bool = True
     ) -> list[Record]:
         """Process search results (delegates to utility function)."""
         return process_search_results(results, query, deep_copy)
-    
+
     def set_schema(self, schema: DatabaseSchema) -> None:
         """Set the database schema.
         
@@ -567,7 +567,7 @@ class SyncDatabase(ABC):
             schema: The database schema to use
         """
         self.schema = schema
-    
+
     def add_field_schema(self, field_schema: FieldSchema) -> None:
         """Add a field to the database schema.
         
@@ -575,7 +575,7 @@ class SyncDatabase(ABC):
             field_schema: The field schema to add
         """
         self.schema.add_field(field_schema)
-    
+
     def with_schema(self, **field_definitions) -> "SyncDatabase":
         """Set schema using field definitions.
         
@@ -614,7 +614,7 @@ class SyncDatabase(ABC):
     def search(self, query: Query | ComplexQuery) -> list[Record]:
         """Search for records matching a query (simple or complex)."""
         raise NotImplementedError
-    
+
     def all(self) -> list[Record]:
         """Get all records from the database.
         

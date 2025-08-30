@@ -9,6 +9,7 @@ from .query import Filter, Operator, VectorQuery
 
 if TYPE_CHECKING:
     import numpy as np
+
     from .vector.types import DistanceMetric
 
 
@@ -267,7 +268,7 @@ class QueryBuilder:
         """Set field projection."""
         self.fields = list(fields) if fields else None
         return self
-    
+
     def similar_to(
         self,
         vector: "np.ndarray | list[float]",
@@ -314,35 +315,35 @@ class ComplexQuery:
     offset_value: int | None = None
     fields: list[str] | None = None
     vector_query: VectorQuery | None = None  # Vector similarity search
-    
+
     @classmethod
     def AND(cls, queries: list["Query"]) -> "ComplexQuery":
         """Create a complex query with AND logic."""
         from .query import Query
-        
+
         conditions = []
         for q in queries:
             if isinstance(q, Query):
                 # Convert Query filters to conditions
                 for f in q.filters:
                     conditions.append(FilterCondition(filter=f))
-        
+
         return cls(
             condition=LogicCondition(operator=LogicOperator.AND, conditions=conditions)
         )
-    
+
     @classmethod
     def OR(cls, queries: list["Query"]) -> "ComplexQuery":
         """Create a complex query with OR logic."""
         from .query import Query
-        
+
         conditions = []
         for q in queries:
             if isinstance(q, Query):
                 # Convert Query filters to conditions
                 for f in q.filters:
                     conditions.append(FilterCondition(filter=f))
-        
+
         return cls(
             condition=LogicCondition(operator=LogicOperator.OR, conditions=conditions)
         )
@@ -407,7 +408,7 @@ class ComplexQuery:
 
         if self.fields is not None:
             result["fields"] = self.fields
-        
+
         if self.vector_query is not None:
             result["vector_query"] = self.vector_query.to_dict()
 
@@ -425,7 +426,7 @@ class ComplexQuery:
         sort_specs = []
         for sort_data in data.get("sort", []):
             sort_specs.append(SortSpec.from_dict(sort_data))
-        
+
         vector_query = None
         if "vector_query" in data:
             vector_query = VectorQuery.from_dict(data["vector_query"])

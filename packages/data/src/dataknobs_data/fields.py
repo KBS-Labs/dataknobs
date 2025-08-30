@@ -1,8 +1,9 @@
 import copy
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import numpy as np
@@ -138,7 +139,7 @@ class Field:
         field_type = None
         if data.get("type"):
             field_type = FieldType(data["type"])
-        
+
         # Handle vector fields specially
         if field_type in (FieldType.VECTOR, FieldType.SPARSE_VECTOR):
             return VectorField.from_dict(data)
@@ -203,11 +204,11 @@ class VectorField(Field):
             raise ImportError(
                 "numpy is required for vector fields. Install with: pip install numpy"
             )
-        
+
         # Set default name if not provided
         if name is None:
             name = "embedding"
-        
+
         # Convert to numpy array if needed
         if isinstance(value, list):
             value = np.array(value, dtype=np.float32)
@@ -219,7 +220,7 @@ class VectorField(Field):
             raise TypeError(
                 f"Vector value must be numpy array or list, got {type(value)}"
             )
-        
+
         # Auto-detect dimensions if not provided
         actual_dims = len(value) if value.ndim == 1 else value.shape[-1]
         if dimensions is None:
@@ -229,7 +230,7 @@ class VectorField(Field):
                 f"Vector dimension mismatch for field '{name}': "
                 f"expected {dimensions}, got {actual_dims}"
             )
-        
+
         # Store vector metadata
         vector_metadata = metadata or {}
         vector_metadata.update({
@@ -240,19 +241,19 @@ class VectorField(Field):
                 "version": model_version,
             } if model_name else None,
         })
-        
+
         super().__init__(
             name=name,
             value=value,
             type=FieldType.VECTOR,
             metadata=vector_metadata,
         )
-        
+
         self.dimensions = dimensions
         self.source_field = source_field
         self.model_name = model_name
         self.model_version = model_version
-    
+
     @classmethod
     def from_text(
         cls,
@@ -295,73 +296,73 @@ class VectorField(Field):
             model_version=model_version,
             **kwargs
         )
-    
+
     def validate(self) -> bool:
         """Validate the vector field."""
         if self.value is None:
             return True
-        
+
         try:
             import numpy as np
-            
+
             if not isinstance(self.value, np.ndarray):
                 return False
-            
+
             if self.value.ndim not in (1, 2):
                 return False
-            
+
             # Check dimensions match metadata
             actual_dims = len(self.value) if self.value.ndim == 1 else self.value.shape[-1]
             expected_dims = self.metadata.get("dimensions")
             if expected_dims and actual_dims != expected_dims:
                 return False
-            
+
             return True
         except ImportError:
             return False
-    
+
     def to_list(self) -> list[float]:
         """Convert vector to a list of floats."""
         import numpy as np
-        
+
         if isinstance(self.value, np.ndarray):
             return self.value.tolist()
         return list(self.value)
-    
+
     def cosine_similarity(self, other: "VectorField | np.ndarray | list[float]") -> float:
         """Compute cosine similarity with another vector."""
         import numpy as np
-        
+
         if isinstance(other, VectorField):
             other_vec = other.value
         elif isinstance(other, list):
             other_vec = np.array(other, dtype=np.float32)
         else:
             other_vec = other
-        
+
         # Compute cosine similarity
         dot_product = np.dot(self.value, other_vec)
         norm_a = np.linalg.norm(self.value)
         norm_b = np.linalg.norm(other_vec)
-        
+
         if norm_a == 0 or norm_b == 0:
             return 0.0
-        
+
         return float(dot_product / (norm_a * norm_b))
-    
+
     def euclidean_distance(self, other: "VectorField | np.ndarray | list[float]") -> float:
         """Compute Euclidean distance to another vector."""
         import numpy as np
-        
+
         if isinstance(other, VectorField):
             other_vec = other.value
         elif isinstance(other, list):
             other_vec = np.array(other, dtype=np.float32)
         else:
             other_vec = other
-        
+
         return float(np.linalg.norm(self.value - other_vec))
-    
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary representation."""
         return {
@@ -371,13 +372,13 @@ class VectorField(Field):
             "metadata": self.metadata,
             "dimensions": self.dimensions,
         }
-    
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "VectorField":
         """Create from dictionary representation."""
         metadata = data.get("metadata", {})
         model_info = metadata.get("model", {})
-        
+
         return cls(
             name=data["name"],
             value=data["value"],

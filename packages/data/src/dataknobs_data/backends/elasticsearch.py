@@ -3,7 +3,7 @@
 import logging
 import uuid
 from collections.abc import Iterator
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from dataknobs_config import ConfigurableBase
 
@@ -15,15 +15,14 @@ from ..query import Operator, Query, SortOrder
 from ..query_logic import ComplexQuery
 from ..records import Record
 from ..streaming import StreamConfig, StreamingMixin, StreamResult
-from ..vector.mixins import VectorOperationsMixin
 from ..vector.types import DistanceMetric, VectorSearchResult
 from .elasticsearch_mixins import (
     ElasticsearchBaseConfig,
-    ElasticsearchIndexManager,
-    ElasticsearchVectorSupport,
     ElasticsearchErrorHandler,
-    ElasticsearchRecordSerializer,
+    ElasticsearchIndexManager,
     ElasticsearchQueryBuilder,
+    ElasticsearchRecordSerializer,
+    ElasticsearchVectorSupport,
 )
 from .vector_config_mixin import VectorConfigMixin
 
@@ -60,13 +59,13 @@ class SyncElasticsearchDatabase(
                 - mappings: Index mappings dict
         """
         super().__init__(config)
-        
+
         # Parse vector configuration using the mixin
         self._parse_vector_config(config)
-        
+
         # Initialize vector support
         self.vector_fields = {}  # field_name -> dimensions
-        
+
         self.es_index = None  # Will be initialized in connect()
         self._connected = False
 
@@ -95,17 +94,17 @@ class SyncElasticsearchDatabase(
             default_dimensions = config.pop("vector_dimensions", 1536)  # Common default
             default_field = config.pop("default_vector_field", "embedding")
             self.vector_fields[default_field] = default_dimensions
-        
+
         # Get mappings with vector field support
         base_mappings = self.get_index_mappings(self.vector_fields)
-        
+
         # Allow custom mappings to override
         custom_mappings = config.pop("mappings", None)
         if custom_mappings:
             mappings = custom_mappings
         else:
             mappings = base_mappings
-        
+
         # Get settings optimized for KNN if we have vector fields
         settings = config.pop("settings", None)
         if not settings:
@@ -153,15 +152,15 @@ class SyncElasticsearchDatabase(
         """Convert a Record to an Elasticsearch document."""
         # Create a copy of the record to avoid modifying the original
         record_copy = record.copy(deep=True)
-        
+
         # Update vector tracking if needed
         if self._has_vector_fields(record_copy):
             self._update_vector_tracking(record_copy)
-            
+
             # Add vector field metadata to copied record metadata
             if "vector_fields" not in record_copy.metadata:
                 record_copy.metadata["vector_fields"] = {}
-            
+
             for field_name in self.vector_fields:
                 if field_name in record_copy.fields:
                     field = record_copy.fields[field_name]
@@ -173,13 +172,13 @@ class SyncElasticsearchDatabase(
                             "model": getattr(field, "model_name", None),
                             "model_version": getattr(field, "model_version", None),
                         }
-        
+
         doc = self._record_to_document(record_copy)
         if id:
             doc["id"] = id
         elif not doc.get("id"):
             doc["id"] = str(uuid.uuid4())
-        
+
         return doc
 
     def _doc_to_record(self, doc: dict[str, Any]) -> Record:
@@ -189,13 +188,13 @@ class SyncElasticsearchDatabase(
             source_doc = doc
         else:
             source_doc = {"_source": doc}
-        
+
         record = self._document_to_record(source_doc)
-        
+
         # Add score if present
         if "_score" in doc:
             record.metadata["_score"] = doc.get("_score")
-        
+
         return record
 
     def create(self, record: Record) -> str:
@@ -276,16 +275,16 @@ class SyncElasticsearchDatabase(
         """
         if not records:
             return []
-        
+
         # Build bulk operations
         bulk_operations = []
         ids = []
-        
+
         for record in records:
             # Generate ID
             record_id = str(uuid.uuid4())
             ids.append(record_id)
-            
+
             # Create action dict for bulk operation
             doc = self._record_to_doc(record, record_id)
             action = {
@@ -295,10 +294,10 @@ class SyncElasticsearchDatabase(
                 "_source": doc
             }
             bulk_operations.append(action)
-        
+
         # Execute bulk create
         from elasticsearch import helpers
-        
+
         try:
             # Use the bulk helper for creation
             # Note: helpers.BulkIndexError may be raised if raise_on_error=True
@@ -319,7 +318,7 @@ class SyncElasticsearchDatabase(
                         if op_type in err:
                             error_dict[err[op_type].get('_id')] = err
                             break
-                
+
                 result_ids = []
                 for record_id in ids:
                     if record_id not in error_dict:
@@ -330,7 +329,7 @@ class SyncElasticsearchDatabase(
             else:
                 # All succeeded
                 return ids
-                
+
         except Exception as e:
             # Check if this is a BulkIndexError from the helpers module
             if hasattr(e, 'errors'):
@@ -368,7 +367,7 @@ class SyncElasticsearchDatabase(
         """
         if not ids:
             return []
-        
+
         # Build bulk operations
         bulk_operations = []
         for record_id in ids:
@@ -379,10 +378,10 @@ class SyncElasticsearchDatabase(
                 "_id": record_id
             }
             bulk_operations.append(action)
-        
+
         # Execute bulk delete
         from elasticsearch import helpers
-        
+
         try:
             # Use the bulk helper for deletion
             success_count, errors = helpers.bulk(
@@ -392,7 +391,7 @@ class SyncElasticsearchDatabase(
                 raise_on_error=False,
                 stats_only=False
             )
-            
+
             # Process results to determine which deletes succeeded
             results = []
             if errors:
@@ -400,7 +399,7 @@ class SyncElasticsearchDatabase(
                 for err in errors:
                     if 'delete' in err:
                         error_dict[err['delete'].get('_id')] = err
-                
+
                 for record_id in ids:
                     if record_id in error_dict:
                         # Check if error was "not found" (404) - that's still a successful delete
@@ -412,19 +411,19 @@ class SyncElasticsearchDatabase(
             else:
                 # All operations completed (either deleted or not found)
                 results = [True] * len(ids)
-            
+
             return results
-            
+
         except Exception as e:
             # Check if this is a BulkIndexError from the helpers module
             if hasattr(e, 'errors'):
                 # Extract which operations failed
                 results = []
                 failed_ids = {err.get('delete', {}).get('_id') for err in e.errors}
-                
+
                 for record_id in ids:
                     results.append(record_id not in failed_ids)
-                
+
                 return results
             else:
                 # If bulk operation completely fails, mark all as failed
@@ -443,7 +442,7 @@ class SyncElasticsearchDatabase(
         """
         if not updates:
             return []
-        
+
         # Build bulk operations
         bulk_operations = []
         for record_id, record in updates:
@@ -457,10 +456,10 @@ class SyncElasticsearchDatabase(
                 "doc_as_upsert": False  # Don't create if doesn't exist
             }
             bulk_operations.append(action)
-        
+
         # Execute bulk update
         from elasticsearch import helpers
-        
+
         try:
             # Use the bulk helper for the update
             success_count, errors = helpers.bulk(
@@ -470,7 +469,7 @@ class SyncElasticsearchDatabase(
                 raise_on_error=False,
                 stats_only=False
             )
-            
+
             # Process results to determine which updates succeeded
             results = []
             error_dict = {}
@@ -478,7 +477,7 @@ class SyncElasticsearchDatabase(
                 for err in errors:
                     if 'update' in err:
                         error_dict[err['update']['_id']] = err
-            
+
             for record_id, _ in updates:
                 # Check if this ID had an error
                 if record_id in error_dict:
@@ -488,19 +487,19 @@ class SyncElasticsearchDatabase(
                     results.append(status == 200)  # Only 200 is success for update
                 else:
                     results.append(True)
-            
+
             return results
-            
+
         except Exception as e:
             # Check if this is a BulkIndexError from the helpers module
             if hasattr(e, 'errors'):
                 # Extract which operations failed
                 results = []
                 failed_ids = {err['update']['_id'] for err in e.errors}
-                
+
                 for record_id, _ in updates:
                     results.append(record_id not in failed_ids)
-                
+
                 return results
             else:
                 # If bulk operation completely fails, mark all as failed
@@ -639,7 +638,7 @@ upper}}}}}
         else:
             # Build Elasticsearch query from simple Query object
             es_query = {"bool": {"must": []}}
-            
+
             # Apply filters
             for filter_obj in query.filters:
                 field_path = f"data.{filter_obj.field}"
@@ -717,7 +716,7 @@ upper}}}}}
                                 }
                             }
                         })
-    
+
         # If no filters, match all
         if not es_query["bool"]["must"]:
             es_query = {"match_all": {}}
@@ -900,7 +899,7 @@ upper}}}}}
         """Stream records into Elasticsearch."""
         # Use the default implementation from mixin
         return self._default_stream_write(records, config)
-    
+
     def vector_search(
         self,
         query_vector: "np.ndarray | list[float]",
@@ -929,16 +928,15 @@ upper}}}}}
             List of search results ordered by similarity
         """
         self._check_connection()
-        
+
         # Import vector utilities
         from ..vector.elasticsearch_utils import (
             build_knn_query,
-            get_similarity_for_metric,
         )
-        
+
         # Build filter query if provided
         filter_query = self._build_filter_query(filter) if filter else None
-        
+
         # Build KNN query
         query = build_knn_query(
             query_vector=query_vector,
@@ -946,7 +944,7 @@ upper}}}}}
             k=k,
             filter_query=filter_query,
         )
-        
+
         # Execute search using the es_client
         try:
             response = self.es_client.search(
@@ -958,16 +956,16 @@ upper}}}}}
         except Exception as e:
             self._handle_elasticsearch_error(e, "vector search")
             return []
-        
+
         # Process results
         results = []
         for hit in response.get("hits", {}).get("hits", []):
             score = hit.get("_score", 0.0)
-            
+
             # Apply score threshold if specified
             if score_threshold is not None and score < score_threshold:
                 continue
-            
+
             # Convert document to record if source included
             record = None
             if include_source:
@@ -975,7 +973,7 @@ upper}}}}}
                 # Set the storage ID on the record if we have one
                 if not record.has_storage_id():
                     record.storage_id = hit["_id"]
-            
+
             results.append(VectorSearchResult(
                 record=record,
                 score=score,
@@ -986,9 +984,9 @@ upper}}}}}
                     "doc_id": hit["_id"],
                 },
             ))
-        
+
         return results
-    
+
     def create_vector_index(
         self,
         vector_field: str = "embedding",
@@ -1010,24 +1008,24 @@ upper}}}}}
             True if index was created/updated successfully
         """
         self._check_connection()
-        
+
         if not dimensions:
             if vector_field not in self.vector_fields:
                 raise ValueError(f"Unknown dimensions for field '{vector_field}'")
             dimensions = self.vector_fields[vector_field]
-        
+
         # Import vector utilities
         from ..vector.elasticsearch_utils import (
             get_similarity_for_metric,
             get_vector_mapping,
         )
-        
+
         # Get similarity function for metric
         similarity = get_similarity_for_metric(metric)
-        
+
         # Build mapping for the vector field
         mapping = get_vector_mapping(dimensions, similarity)
-        
+
         # Update index mapping using the es_client
         try:
             self.es_client.indices.put_mapping(
@@ -1036,14 +1034,14 @@ upper}}}}}
                     f"data.{vector_field}": mapping
                 }
             )
-            
+
             # Track the vector field
             self.vector_fields[vector_field] = dimensions
             self._vector_enabled = True
-            
+
             logger.info(f"Created vector mapping for field '{vector_field}' with {dimensions} dimensions")
             return True
-            
+
         except Exception as e:
             self._handle_elasticsearch_error(e, "create vector index")
             return False

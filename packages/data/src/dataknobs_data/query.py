@@ -1,9 +1,11 @@
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable, Union
+from typing import TYPE_CHECKING, Any, Union
 
 if TYPE_CHECKING:
     import numpy as np
+
     from .vector.types import DistanceMetric
 
 
@@ -185,21 +187,21 @@ class VectorQuery:
     rerank: bool = False  # Whether to rerank results
     rerank_k: int | None = None  # Number of results to rerank (default: 2*k)
     metadata: dict[str, Any] = field(default_factory=dict)  # Additional metadata
-    
+
     def to_dict(self) -> dict[str, Any]:
         """Convert vector query to dictionary representation."""
         import numpy as np
-        
+
         # Handle vector serialization
         vector_data = self.vector
         if isinstance(vector_data, np.ndarray):
             vector_data = vector_data.tolist()
-        
+
         # Handle metric serialization
         metric_value = self.metric
         if hasattr(metric_value, 'value'):  # DistanceMetric enum
             metric_value = metric_value.value
-        
+
         result = {
             "vector": vector_data,
             "field": self.field_name,
@@ -207,7 +209,7 @@ class VectorQuery:
             "metric": metric_value,
             "include_source": self.include_source,
         }
-        
+
         if self.score_threshold is not None:
             result["score_threshold"] = self.score_threshold
         if self.rerank:
@@ -216,20 +218,21 @@ class VectorQuery:
                 result["rerank_k"] = self.rerank_k
         if self.metadata:
             result["metadata"] = self.metadata
-        
+
         return result
-    
+
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "VectorQuery":
         """Create vector query from dictionary representation."""
         import numpy as np
+
         from .vector.types import DistanceMetric
-        
+
         # Handle vector deserialization
         vector_data = data["vector"]
         if not isinstance(vector_data, np.ndarray):
             vector_data = np.array(vector_data, dtype=np.float32)
-        
+
         # Handle metric deserialization
         metric_value = data.get("metric", "cosine")
         if isinstance(metric_value, str):
@@ -238,7 +241,7 @@ class VectorQuery:
             except ValueError:
                 # Keep as string if not a valid enum value
                 pass
-        
+
         return cls(
             vector=vector_data,
             field_name=data.get("field", "embedding"),
@@ -390,7 +393,7 @@ class Query:
         """Clear all sort specifications (fluent interface)."""
         self.sort_specs = []
         return self
-    
+
     def similar_to(
         self,
         vector: "np.ndarray | list[float]",
@@ -427,7 +430,7 @@ class Query:
         # Always update limit to match k
         self.limit_value = k
         return self
-    
+
     def near_text(
         self,
         text: str,
@@ -465,7 +468,7 @@ class Query:
             include_source=include_source,
             score_threshold=score_threshold,
         )
-    
+
     def hybrid(
         self,
         text_query: str | None = None,
@@ -502,7 +505,7 @@ class Query:
         # Add text filter if provided
         if text_query:
             self.filter(text_field, Operator.LIKE, f"%{text_query}%")
-        
+
         # Add vector search if provided
         if vector is not None:
             self.vector_query = VectorQuery(
@@ -514,13 +517,13 @@ class Query:
             )
             # Store alpha in vector query metadata for backend to use
             self.vector_query.metadata = {"hybrid_alpha": alpha}
-        
+
         # Set limit if not already set
         if self.limit_value is None:
             self.limit_value = k
-        
+
         return self
-    
+
     def with_reranking(self, rerank_k: int | None = None) -> "Query":
         """Enable result reranking for vector queries.
         
@@ -534,7 +537,7 @@ class Query:
             self.vector_query.rerank = True
             self.vector_query.rerank_k = rerank_k or (self.vector_query.k * 2)
         return self
-    
+
     def clear_vector(self) -> "Query":
         """Clear vector search from the query (fluent interface)."""
         self.vector_query = None
@@ -570,7 +573,7 @@ class Query:
         query.limit_value = data.get("limit")
         query.offset_value = data.get("offset")
         query.fields = data.get("fields")
-        
+
         if "vector_query" in data:
             query.vector_query = VectorQuery.from_dict(data["vector_query"])
 

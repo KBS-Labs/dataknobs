@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 class PostgresBaseConfig(VectorConfigMixin):
     """Shared configuration logic for PostgreSQL backends."""
-    
+
     def _parse_postgres_config(self, config: dict[str, Any]) -> tuple[str, str, dict]:
         """Extract table, schema, and connection configuration.
         
@@ -26,20 +26,20 @@ class PostgresBaseConfig(VectorConfigMixin):
             Tuple of (table_name, schema_name, connection_config)
         """
         config = config.copy() if config else {}
-        
+
         # Parse vector configuration using the mixin
         self._parse_vector_config(config)
-        
+
         # Extract PostgreSQL-specific configuration
         table_name = config.pop("table", config.pop("table_name", "records"))
         schema_name = config.pop("schema", config.pop("schema_name", "public"))
-        
+
         # Remove vector config parameters since they've been processed
         config.pop("vector_enabled", None)
         config.pop("vector_metric", None)
-        
+
         return table_name, schema_name, config
-    
+
     def _init_postgres_attributes(self, table_name: str, schema_name: str) -> None:
         """Initialize common PostgreSQL attributes.
         
@@ -50,14 +50,14 @@ class PostgresBaseConfig(VectorConfigMixin):
         self.table_name = table_name
         self.schema_name = schema_name
         self._connected = False
-        
+
         # Initialize vector state using the mixin
         self._init_vector_state()
 
 
 class PostgresTableManager:
     """Shared table management SQL and logic."""
-    
+
     @staticmethod
     def get_create_table_sql(schema_name: str, table_name: str) -> str:
         """Get SQL for creating the records table with indexes.
@@ -84,7 +84,7 @@ class PostgresTableManager:
         CREATE INDEX IF NOT EXISTS idx_{table_name}_metadata
         ON {schema_name}.{table_name} USING GIN (metadata);
         """
-    
+
     @staticmethod
     def get_table_exists_sql(schema_name: str, table_name: str) -> str:
         """Get SQL to check if table exists.
@@ -107,7 +107,7 @@ class PostgresTableManager:
 
 class PostgresVectorSupport:
     """Shared vector support detection and management."""
-    
+
     def _has_vector_fields(self, record: Record) -> bool:
         """Check if record has vector fields.
         
@@ -118,9 +118,9 @@ class PostgresVectorSupport:
             True if record has vector fields
         """
         from ..fields import VectorField
-        return any(isinstance(field, VectorField) 
+        return any(isinstance(field, VectorField)
                    for field in record.fields.values())
-    
+
     def _extract_vector_dimensions(self, record: Record) -> dict[str, int]:
         """Extract dimensions from vector fields in a record.
         
@@ -136,7 +136,7 @@ class PostgresVectorSupport:
             if isinstance(field, VectorField) and field.dimensions:
                 dimensions[name] = field.dimensions
         return dimensions
-    
+
     def _update_vector_dimensions(self, record: Record) -> None:
         """Update tracked vector dimensions from a record.
         
@@ -150,7 +150,7 @@ class PostgresVectorSupport:
 
 class PostgresErrorHandler:
     """Shared error handling logic for PostgreSQL operations."""
-    
+
     @staticmethod
     def handle_connection_error(e: Exception) -> None:
         """Handle and log connection errors consistently.
@@ -163,7 +163,7 @@ class PostgresErrorHandler:
         """
         logger.error(f"PostgreSQL connection error: {e}")
         raise RuntimeError(f"Database connection failed: {e}")
-    
+
     @staticmethod
     def handle_query_error(e: Exception, operation: str) -> None:
         """Handle and log query execution errors.
@@ -177,7 +177,7 @@ class PostgresErrorHandler:
         """
         logger.error(f"PostgreSQL {operation} error: {e}")
         raise RuntimeError(f"Database {operation} failed: {e}")
-    
+
     @staticmethod
     def log_operation(operation: str, details: str = "") -> None:
         """Log a database operation for debugging.
@@ -194,7 +194,7 @@ class PostgresErrorHandler:
 
 class PostgresConnectionValidator:
     """Shared connection validation logic."""
-    
+
     def _check_connection(self) -> None:
         """Check if database is connected.
         
@@ -203,7 +203,7 @@ class PostgresConnectionValidator:
         """
         if not getattr(self, '_connected', False):
             raise RuntimeError("Database not connected. Call connect() first.")
-    
+
     def _check_async_connection(self) -> None:
         """Check if async database is connected with pool.
         

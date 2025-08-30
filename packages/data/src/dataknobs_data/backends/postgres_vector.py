@@ -1,7 +1,7 @@
 """PostgreSQL vector support utilities."""
 
 import logging
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import asyncpg
@@ -45,7 +45,7 @@ def install_pgvector_extension_sync(db: Any) -> bool:
         if check_pgvector_extension_sync(db):
             logger.debug("pgvector extension already installed")
             return True
-            
+
         # Try to install
         db.execute("CREATE EXTENSION IF NOT EXISTS vector")
         logger.info("Successfully installed pgvector extension")
@@ -86,7 +86,7 @@ async def install_pgvector_extension(conn: "asyncpg.Connection") -> bool:
         if await check_pgvector_extension(conn):
             logger.debug("pgvector extension already installed")
             return True
-            
+
         # Try to install
         await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
         logger.info("Successfully installed pgvector extension")
@@ -139,7 +139,7 @@ def get_optimal_index_type(num_vectors: int) -> tuple[str, dict[str, Any]]:
 
 def build_vector_index_sql(
     table_name: str,
-    schema_name: str, 
+    schema_name: str,
     column_name: str,
     dimensions: int,
     metric: str = "cosine",
@@ -164,13 +164,13 @@ def build_vector_index_sql(
     """
     index_params = index_params or {}
     operator = get_vector_operator(metric)
-    
+
     # Determine field name for index naming
     if not field_name:
         field_name = extract_field_name(column_name)
-    
+
     index_name = get_vector_index_name(table_name, field_name, metric)
-    
+
     # Determine operator class based on metric
     op_class = {
         "cosine": "vector_cosine_ops",
@@ -180,7 +180,7 @@ def build_vector_index_sql(
         "ip": "vector_ip_ops",
         "dot_product": "vector_ip_ops",
     }.get(metric.lower(), "vector_cosine_ops")
-    
+
     if index_type == "ivfflat":
         lists = index_params.get("lists", 100)
         # IVFFlat requires proper parentheses for functional indexes with operator class
@@ -249,12 +249,12 @@ def extract_field_name(column_expression: str) -> str:
         r"\$\.([^'\"]+)",  # $.field (JSONPath)
         r"'([^']+)'",  # Any quoted string
     ]
-    
+
     for pattern in patterns:
         match = re.search(pattern, column_expression)
         if match:
             return match.group(1)
-    
+
     # Fallback: try to use the whole expression after basic cleanup
     cleaned = sanitize_identifier(column_expression)
     return cleaned if cleaned else "vector"
@@ -275,7 +275,7 @@ def get_vector_index_name(table_name: str, field_name: str, metric: str = "cosin
     clean_table = sanitize_identifier(table_name)
     clean_field = sanitize_identifier(field_name)
     clean_metric = sanitize_identifier(metric)
-    
+
     return f"idx_{clean_table}_{clean_field}_{clean_metric}"
 
 
@@ -291,7 +291,7 @@ def build_vector_column_expression(field_name: str, dimensions: int | None = Non
         SQL expression for vector column
     """
     dim_cast = f"({dimensions})" if dimensions else ""
-    
+
     if for_index:
         # For indexes, we need a simpler expression
         # Since we're storing VectorFields as objects with 'value' key, index on that
@@ -352,7 +352,7 @@ def format_vector_for_postgres(vector: "np.ndarray | list[float]") -> str:
     """
     if hasattr(vector, 'tolist'):
         vector = vector.tolist()
-    
+
     # Format as PostgreSQL vector literal
     return f"[{','.join(str(float(v)) for v in vector)}]"
 
@@ -368,7 +368,7 @@ def parse_postgres_vector(vector_str: str) -> list[float]:
     """
     if not vector_str or vector_str == "[]":
         return []
-    
+
     # Remove brackets and split by comma
     vector_str = vector_str.strip("[]")
     return [float(v.strip()) for v in vector_str.split(",")]

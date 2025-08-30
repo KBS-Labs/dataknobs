@@ -36,7 +36,7 @@ class VectorStoreFactory(FactoryBase):
             collection_name: documents
             persist_path: ./chroma_db
     """
-    
+
     def create(self, **config) -> VectorStore:
         """Create a vector store instance based on configuration.
         
@@ -50,14 +50,14 @@ class VectorStoreFactory(FactoryBase):
             ValueError: If backend type is not recognized or not available
         """
         backend_type = config.pop("backend", "memory").lower()
-        
+
         logger.info(f"Creating vector store with backend: {backend_type}")
-        
+
         if backend_type == "memory":
             # Simple in-memory implementation
             from .memory import MemoryVectorStore
             return MemoryVectorStore(config)
-        
+
         elif backend_type == "faiss":
             try:
                 from .faiss import FaissVectorStore
@@ -67,7 +67,7 @@ class VectorStoreFactory(FactoryBase):
                     "Faiss backend requires faiss-cpu. "
                     "Install with: pip install faiss-cpu"
                 ) from e
-        
+
         elif backend_type in ("chroma", "chromadb"):
             try:
                 from .chroma import ChromaVectorStore
@@ -77,13 +77,13 @@ class VectorStoreFactory(FactoryBase):
                     "Chroma backend requires chromadb. "
                     "Install with: pip install chromadb"
                 ) from e
-        
+
         else:
             raise ValueError(
                 f"Unknown backend type: {backend_type}. "
                 f"Available backends: memory, faiss, chroma"
             )
-    
+
     def get_backend_info(self, backend_type: str) -> dict[str, Any]:
         """Get information about a specific backend.
         
@@ -128,7 +128,7 @@ class VectorStoreFactory(FactoryBase):
                 }
             },
         }
-        
+
         return info.get(backend_type.lower(), {
             "description": "Unknown backend",
             "error": f"Backend '{backend_type}' not recognized"

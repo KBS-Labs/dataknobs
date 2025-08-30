@@ -1,12 +1,13 @@
 """Mixin providing default bulk_embed_and_store implementation."""
 
-from typing import Any, Callable, TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from ..fields import VectorField
 
 if TYPE_CHECKING:
+
     from ..records import Record
-    import numpy as np
 
 
 class BulkEmbedMixin:
@@ -15,7 +16,7 @@ class BulkEmbedMixin:
     This mixin can be used by any database backend to provide a standard
     implementation of bulk embedding and storage without circular dependencies.
     """
-    
+
     def bulk_embed_and_store(
         self,
         records: list["Record"],
@@ -45,19 +46,19 @@ class BulkEmbedMixin:
         """
         if not embedding_fn:
             raise ValueError("embedding_fn is required for bulk_embed_and_store")
-        
+
         # Process text fields
         if isinstance(text_field, str):
             text_fields = [text_field]
         else:
             text_fields = text_field
-        
+
         processed_ids = []
-        
+
         # Process in batches
         for i in range(0, len(records), batch_size):
             batch = records[i:i + batch_size]
-            
+
             # Extract text from records
             texts = []
             for record in batch:
@@ -69,11 +70,11 @@ class BulkEmbedMixin:
                         if field_value:
                             text_parts.append(str(field_value))
                 texts.append(" ".join(text_parts))
-            
+
             # Generate embeddings
             if texts:
                 embeddings = embedding_fn(texts)
-                
+
                 # Add vectors to records
                 for j, record in enumerate(batch):
                     if j < len(embeddings) if hasattr(embeddings, '__len__') else j == 0:
@@ -83,7 +84,7 @@ class BulkEmbedMixin:
                         else:
                             # Single embedding returned for single text
                             vector = embeddings
-                        
+
                         # Add or update vector field
                         record.fields[vector_field] = VectorField(
                             name=vector_field,
@@ -92,12 +93,12 @@ class BulkEmbedMixin:
                             model_name=model_name,
                             model_version=model_version,
                         )
-                        
+
                         # Update vector dimensions tracking if available
                         if hasattr(self, '_has_vector_fields') and hasattr(self, '_update_vector_dimensions'):
                             if self._has_vector_fields(record):
                                 self._update_vector_dimensions(record)
-                        
+
                         # Create or update the record
                         # Assumes self has create, update, and exists methods (from Database interface)
                         if record.id and self.exists(record.id):  # type: ignore
@@ -106,7 +107,7 @@ class BulkEmbedMixin:
                         else:
                             record_id = self.create(record)  # type: ignore
                             processed_ids.append(record_id)
-        
+
         return processed_ids
 
 
@@ -116,7 +117,7 @@ class AsyncBulkEmbedMixin:
     This mixin can be used by any async database backend to provide a standard
     implementation of bulk embedding and storage without circular dependencies.
     """
-    
+
     async def bulk_embed_and_store(
         self,
         records: list["Record"],
@@ -145,25 +146,25 @@ class AsyncBulkEmbedMixin:
             ValueError: If embedding_fn is not provided
         """
         import inspect
-        
+
         if not embedding_fn:
             raise ValueError("embedding_fn is required for bulk_embed_and_store")
-        
+
         # Check if embedding_fn is async
         is_async_fn = inspect.iscoroutinefunction(embedding_fn)
-        
+
         # Process text fields
         if isinstance(text_field, str):
             text_fields = [text_field]
         else:
             text_fields = text_field
-        
+
         processed_ids = []
-        
+
         # Process in batches
         for i in range(0, len(records), batch_size):
             batch = records[i:i + batch_size]
-            
+
             # Extract text from records
             texts = []
             for record in batch:
@@ -175,14 +176,14 @@ class AsyncBulkEmbedMixin:
                         if field_value:
                             text_parts.append(str(field_value))
                 texts.append(" ".join(text_parts))
-            
+
             # Generate embeddings
             if texts:
                 if is_async_fn:
                     embeddings = await embedding_fn(texts)
                 else:
                     embeddings = embedding_fn(texts)
-                
+
                 # Add vectors to records
                 for j, record in enumerate(batch):
                     if j < len(embeddings) if hasattr(embeddings, '__len__') else j == 0:
@@ -192,7 +193,7 @@ class AsyncBulkEmbedMixin:
                         else:
                             # Single embedding returned for single text
                             vector = embeddings
-                        
+
                         # Add or update vector field
                         record.fields[vector_field] = VectorField(
                             name=vector_field,
@@ -201,12 +202,12 @@ class AsyncBulkEmbedMixin:
                             model_name=model_name,
                             model_version=model_version,
                         )
-                        
+
                         # Update vector dimensions tracking if available
                         if hasattr(self, '_has_vector_fields') and hasattr(self, '_update_vector_dimensions'):
                             if self._has_vector_fields(record):
                                 self._update_vector_dimensions(record)
-                        
+
                         # Create or update the record
                         # Assumes self has async create, update, and exists methods (from AsyncDatabase interface)
                         if record.id and await self.exists(record.id):  # type: ignore
@@ -215,5 +216,5 @@ class AsyncBulkEmbedMixin:
                         else:
                             record_id = await self.create(record)  # type: ignore
                             processed_ids.append(record_id)
-        
+
         return processed_ids

@@ -1,7 +1,7 @@
 """Shared mixin for vector configuration across all backends."""
 
-from typing import Any
 import logging
+from typing import Any
 
 from ..vector.types import DistanceMetric
 
@@ -20,7 +20,7 @@ class VectorConfigMixin:
         Include this mixin in your backend class and call _parse_vector_config()
         during initialization to extract vector configuration parameters.
     """
-    
+
     def _parse_vector_config(self, config: dict[str, Any] | None = None) -> None:
         """Parse vector-related configuration parameters.
         
@@ -29,10 +29,10 @@ class VectorConfigMixin:
         """
         # Use provided config or fall back to self.config
         config = config if config is not None else getattr(self, 'config', {})
-        
+
         # Extract vector configuration parameters
         self._vector_enabled = config.get("vector_enabled", False)
-        
+
         # Parse distance metric
         metric = config.get("vector_metric", "cosine")
         if isinstance(metric, str):
@@ -45,13 +45,13 @@ class VectorConfigMixin:
             self.vector_metric = metric
         else:
             self.vector_metric = DistanceMetric.COSINE
-        
+
         # Log vector configuration
         if self.vector_enabled:
             logger.debug(
                 f"Vector support enabled with metric: {self.vector_metric.value}"
             )
-    
+
     def _init_vector_state(self) -> None:
         """Initialize vector-related state variables.
         
@@ -61,10 +61,10 @@ class VectorConfigMixin:
         # Track vector field dimensions (using underscore for consistency with mixins)
         self._vector_dimensions: dict[str, int] = {}
         self._vector_fields: dict[str, Any] = {}
-        
+
         # For backends that support native vector operations
         self._has_native_vector_support = False
-    
+
     @property
     def vector_enabled(self) -> bool:
         """Check if vector support is enabled.
@@ -73,7 +73,7 @@ class VectorConfigMixin:
             True if vector operations are enabled for this backend
         """
         return getattr(self, '_vector_enabled', False)
-    
+
     @vector_enabled.setter
     def vector_enabled(self, value: bool) -> None:
         """Set vector support enabled state.

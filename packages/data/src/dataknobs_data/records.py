@@ -86,14 +86,14 @@ class Record:
     def storage_id(self) -> str | None:
         """Get the storage system ID (database-assigned ID)."""
         return self._storage_id
-    
+
     @storage_id.setter
     def storage_id(self, value: str | None) -> None:
         """Set the storage system ID."""
         self._storage_id = value
         # Also update _id for backwards compatibility
         self._id = value
-    
+
     @property
     def id(self) -> str | None:
         """Get the record ID.
@@ -109,7 +109,7 @@ class Record:
         # 1. Prefer storage ID (database-assigned)
         if self._storage_id is not None:
             return self._storage_id
-        
+
         # 2. Fall back to legacy _id if set
         if self._id is not None:
             return self._id
@@ -157,7 +157,7 @@ class Record:
         new_id = str(uuid.uuid4())
         self.id = new_id
         return new_id
-    
+
     def get_user_id(self) -> str | None:
         """Get the user-defined ID field value (not the storage ID).
         
@@ -172,7 +172,7 @@ class Record:
             if value is not None:
                 return str(value)
         return None
-    
+
     def has_storage_id(self) -> bool:
         """Check if this record has a storage system ID assigned.
         
@@ -293,7 +293,7 @@ class Record:
             self.fields[name].value = value
         else:
             self.set_field(name, value)
-    
+
     @property
     def data(self) -> dict[str, Any]:
         """Get all field values as a dictionary.
@@ -301,7 +301,7 @@ class Record:
         Provides a simple dict-like view of the record's data.
         """
         return {name: field.value for name, field in self.fields.items()}
-    
+
     def remove_field(self, name: str) -> bool:
         """Remove a field by name. Returns True if field was removed."""
         if name in self.fields:
