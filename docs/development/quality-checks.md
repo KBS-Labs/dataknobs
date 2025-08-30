@@ -214,6 +214,22 @@ rm -rf ~/dataknobs_localstack_data
 
 ## Configuration
 
+### Linting and Code Style
+
+DataKnobs uses Ruff for linting and code formatting. The project has a carefully configured set of linting rules that balance code quality with practicality. See the [Linting Configuration](linting-configuration.md) documentation for details on:
+- Which error types are ignored and why
+- How to run linting checks
+- Understanding the remaining important errors
+
+To run linting checks:
+```bash
+# Check specific package
+uv run bin/validate.sh data
+
+# Auto-fix formatting issues
+uv run ruff format packages/*/src
+```
+
 ### Environment Variables
 
 The quality check scripts respect these environment variables:

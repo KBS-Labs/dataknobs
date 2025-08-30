@@ -144,6 +144,7 @@ nav:
     - Environment Variables: development/environment-variables.md
     - UV Environment: development/uv-environment.md
     - Quality Checks: development/quality-checks.md
+    - Linting Configuration: development/linting-configuration.md
     - Testing: development/testing.md
     - Testing Guide: development/testing-guide.md
     - Integration Testing & CI: development/integration-testing-ci.md
