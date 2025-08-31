@@ -48,9 +48,9 @@ class AsyncDatabase(ABC):
             return DatabaseSchema.from_dict(schema_config)
         return None
 
-    def _initialize(self) -> None:
-        """Initialize the database backend. Override in subclasses."""
-        pass
+    def _initialize(self) -> None:  # noqa: B027
+        """Initialize the database backend. Override in subclasses if needed."""
+        # Default implementation does nothing - backends can override if needed
 
     def _ensure_record_id(self, record: Record, record_id: str) -> Record:
         """Ensure a record has its ID set (delegates to utility function)."""
@@ -372,13 +372,13 @@ class AsyncDatabase(ABC):
         """
         raise NotImplementedError
 
-    async def connect(self) -> None:
-        """Connect to the database."""
-        pass
+    async def connect(self) -> None:  # noqa: B027
+        """Connect to the database. Override in subclasses if needed."""
+        # Default implementation does nothing - many backends don't need explicit connection
 
-    async def close(self) -> None:
-        """Close the database connection."""
-        pass
+    async def close(self) -> None:  # noqa: B027
+        """Close the database connection. Override in subclasses if needed."""
+        # Default implementation does nothing - many backends don't need explicit closing
 
     async def disconnect(self) -> None:
         """Disconnect from the database (alias for close)."""
@@ -458,7 +458,7 @@ class AsyncDatabase(ABC):
                 yield record
 
     @classmethod
-    async def create(cls, backend: str, config: dict[str, Any] | None = None) -> "AsyncDatabase":
+    async def from_backend(cls, backend: str, config: dict[str, Any] | None = None) -> "AsyncDatabase":
         """Factory method to create and connect a database instance.
 
         Args:
@@ -503,9 +503,9 @@ class SyncDatabase(ABC):
         self.schema = schema or DatabaseSchema()
         self._initialize()
 
-    def _initialize(self) -> None:
-        """Initialize the database backend. Override in subclasses."""
-        pass
+    def _initialize(self) -> None:  # noqa: B027
+        """Initialize the database backend. Override in subclasses if needed."""
+        # Default implementation does nothing - backends can override if needed
 
     def _ensure_record_id(self, record: Record, record_id: str) -> Record:
         """Ensure a record has its ID set (delegates to utility function)."""
@@ -744,13 +744,13 @@ class SyncDatabase(ABC):
         """Clear all records from the database."""
         raise NotImplementedError
 
-    def connect(self) -> None:
-        """Connect to the database."""
-        pass
+    def connect(self) -> None:  # noqa: B027
+        """Connect to the database. Override in subclasses if needed."""
+        # Default implementation does nothing - many backends don't need explicit connection
 
-    def close(self) -> None:
-        """Close the database connection."""
-        pass
+    def close(self) -> None:  # noqa: B027
+        """Close the database connection. Override in subclasses if needed."""
+        # Default implementation does nothing - many backends don't need explicit closing
 
     def disconnect(self) -> None:
         """Disconnect from the database (alias for close)."""
@@ -830,7 +830,7 @@ class SyncDatabase(ABC):
                 yield record
 
     @classmethod
-    def create(cls, backend: str, config: dict[str, Any] | None = None) -> "SyncDatabase":
+    def from_backend(cls, backend: str, config: dict[str, Any] | None = None) -> "SyncDatabase":
         """Factory method to create and connect a synchronous database instance.
 
         Args:

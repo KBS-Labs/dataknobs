@@ -6,7 +6,6 @@ import asyncio
 import hashlib
 import logging
 from collections import defaultdict
-from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -17,6 +16,8 @@ from ..fields import VectorField
 from ..records import Record
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
+
     from ..database import Database
 
 logger = logging.getLogger(__name__)

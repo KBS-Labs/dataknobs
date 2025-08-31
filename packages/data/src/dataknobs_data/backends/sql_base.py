@@ -503,6 +503,10 @@ class SQLQueryBuilder:
             updated_at = CURRENT_TIMESTAMP
         WHERE id IN ({', '.join(id_placeholders)})
         """
+        
+        # PostgreSQL can use RETURNING
+        if self.dialect == "postgres":
+            query += " RETURNING id"
 
         return query, params
 

@@ -136,6 +136,31 @@ class VectorStore(ABC, VectorStoreBase):
         """Clear all vectors from the store."""
         pass
 
+    async def update_vectors(
+        self,
+        vectors: "np.ndarray | list[np.ndarray]",
+        ids: list[str],
+        metadata: list[dict[str, Any]] | None = None,
+    ) -> list[str]:
+        """Update existing vectors by ID.
+        
+        This is a convenience method that deletes and re-adds vectors.
+        Some vector stores may override this with a more efficient implementation.
+        
+        Args:
+            vectors: New vector values
+            ids: IDs of vectors to update
+            metadata: Optional new metadata
+            
+        Returns:
+            List of updated IDs
+        """
+        # Delete existing vectors
+        await self.delete_vectors(ids)
+        
+        # Add new vectors with same IDs
+        return await self.add_vectors(vectors, ids, metadata)
+
     # Higher-level convenience methods
 
     async def add_records(
@@ -223,7 +248,7 @@ class VectorStore(ABC, VectorStoreBase):
         search_results = []
         record_ids = []
 
-        for vector_id, score, metadata in results:
+        for vector_id, _score, metadata in results:
             record_id = metadata.get("record_id", vector_id) if metadata else vector_id
             record_ids.append(record_id)
 

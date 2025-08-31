@@ -301,12 +301,13 @@ class DataFrameConverter:
 
         record = Record(id=record_id)
 
-        for column, value in row.items():
+        for original_column, value in row.items():
             # Skip metadata columns
-            if isinstance(column, str) and column.startswith("_meta_"):
+            if isinstance(original_column, str) and original_column.startswith("_meta_"):
                 continue
 
             # Handle multi-index columns
+            column = original_column
             if isinstance(column, tuple):
                 column = column[0]  # Use first level
 

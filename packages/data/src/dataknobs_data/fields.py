@@ -120,7 +120,7 @@ class Field:
             except (ValueError, TypeError) as e:
                 raise ValueError(
                     f"Cannot convert {self.name} from {self.type} to {target_type}: {e}"
-                )
+                ) from e
         else:
             raise ValueError(f"No converter available from {self.type} to {target_type}")
 
@@ -200,10 +200,10 @@ class VectorField(Field):
         # Import numpy lazily to avoid hard dependency
         try:
             import numpy as np
-        except ImportError:
+        except ImportError as e:
             raise ImportError(
                 "numpy is required for vector fields. Install with: pip install numpy"
-            )
+            ) from e
 
         # Set default name if not provided
         if name is None:

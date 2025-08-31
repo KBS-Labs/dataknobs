@@ -25,7 +25,7 @@ class TestElasticsearchIntegration:
 
     def test_connection_and_index_creation(self, elasticsearch_test_index):
         """Test that we can connect and create indices."""
-        db = SyncDatabase.create("elasticsearch", elasticsearch_test_index)
+        db = SyncDatabase.from_backend("elasticsearch", elasticsearch_test_index)
         
         # The index should be created automatically
         # Try to create a record to verify
@@ -41,7 +41,7 @@ class TestElasticsearchIntegration:
 
     def test_full_crud_cycle(self, elasticsearch_test_index):
         """Test complete CRUD operations with real Elasticsearch."""
-        db = SyncDatabase.create("elasticsearch", elasticsearch_test_index)
+        db = SyncDatabase.from_backend("elasticsearch", elasticsearch_test_index)
         
         # Create
         record = Record({
@@ -99,7 +99,7 @@ class TestElasticsearchIntegration:
 
     def test_batch_operations_with_sample_data(self, elasticsearch_test_index, sample_records):
         """Test batch operations with sample dataset."""
-        db = SyncDatabase.create("elasticsearch", elasticsearch_test_index)
+        db = SyncDatabase.from_backend("elasticsearch", elasticsearch_test_index)
         
         # Create batch
         ids = db.create_batch(sample_records)
@@ -143,7 +143,7 @@ class TestElasticsearchIntegration:
 
     def test_complex_queries(self, elasticsearch_test_index, sample_records):
         """Test complex query operations."""
-        db = SyncDatabase.create("elasticsearch", elasticsearch_test_index)
+        db = SyncDatabase.from_backend("elasticsearch", elasticsearch_test_index)
         
         # Insert sample data
         ids = db.create_batch(sample_records)
@@ -212,7 +212,7 @@ class TestElasticsearchIntegration:
 
     def test_sorting_and_pagination(self, elasticsearch_test_index, sample_records):
         """Test sorting and pagination features."""
-        db = SyncDatabase.create("elasticsearch", elasticsearch_test_index)
+        db = SyncDatabase.from_backend("elasticsearch", elasticsearch_test_index)
         
         # Insert sample data
         ids = db.create_batch(sample_records)
@@ -268,7 +268,7 @@ class TestElasticsearchIntegration:
 
     def test_full_text_search_capabilities(self, elasticsearch_test_index):
         """Test Elasticsearch full-text search features."""
-        db = SyncDatabase.create("elasticsearch", elasticsearch_test_index)
+        db = SyncDatabase.from_backend("elasticsearch", elasticsearch_test_index)
         
         # Create documents with text content
         docs = [
@@ -309,7 +309,7 @@ class TestElasticsearchIntegration:
 
     def test_metadata_persistence(self, elasticsearch_test_index):
         """Test that metadata is properly stored and retrieved."""
-        db = SyncDatabase.create("elasticsearch", elasticsearch_test_index)
+        db = SyncDatabase.from_backend("elasticsearch", elasticsearch_test_index)
         
         # Create record with complex metadata
         record = Record(
@@ -365,7 +365,7 @@ class TestElasticsearchIntegration:
 
     def test_concurrent_operations(self, elasticsearch_test_index):
         """Test concurrent database operations."""
-        db = SyncDatabase.create("elasticsearch", elasticsearch_test_index)
+        db = SyncDatabase.from_backend("elasticsearch", elasticsearch_test_index)
         
         def create_record(index):
             record = Record({"index": index, "data": f"concurrent_{index}"})
@@ -402,7 +402,7 @@ class TestElasticsearchIntegration:
 
     def test_special_characters_and_unicode(self, elasticsearch_test_index):
         """Test handling of special characters and Unicode."""
-        db = SyncDatabase.create("elasticsearch", elasticsearch_test_index)
+        db = SyncDatabase.from_backend("elasticsearch", elasticsearch_test_index)
         
         # Create record with special characters
         record = Record({
@@ -437,7 +437,7 @@ class TestElasticsearchIntegration:
 
     def test_count_operations(self, elasticsearch_test_index, sample_records):
         """Test count operations."""
-        db = SyncDatabase.create("elasticsearch", elasticsearch_test_index)
+        db = SyncDatabase.from_backend("elasticsearch", elasticsearch_test_index)
         
         # Initially empty
         assert db.count() == 0
@@ -468,7 +468,7 @@ class TestElasticsearchIntegration:
 
     def test_array_field_operations(self, elasticsearch_test_index):
         """Test operations on array fields."""
-        db = SyncDatabase.create("elasticsearch", elasticsearch_test_index)
+        db = SyncDatabase.from_backend("elasticsearch", elasticsearch_test_index)
         
         # Create records with array fields
         records = [
@@ -515,7 +515,7 @@ class TestElasticsearchAsyncIntegration:
 
     async def test_async_crud_operations(self, elasticsearch_test_index):
         """Test async CRUD operations."""
-        db = await AsyncDatabase.create("elasticsearch", elasticsearch_test_index)
+        db = await AsyncDatabase.from_backend("elasticsearch", elasticsearch_test_index)
         
         # Create
         record = Record({
@@ -560,7 +560,7 @@ class TestElasticsearchAsyncIntegration:
 
     async def test_async_batch_operations(self, elasticsearch_test_index, sample_records):
         """Test async batch operations."""
-        db = await AsyncDatabase.create("elasticsearch", elasticsearch_test_index)
+        db = await AsyncDatabase.from_backend("elasticsearch", elasticsearch_test_index)
         
         # Create batch
         ids = await db.create_batch(sample_records)
@@ -580,7 +580,7 @@ class TestElasticsearchAsyncIntegration:
 
     async def test_async_concurrent_operations(self, elasticsearch_test_index):
         """Test concurrent async operations."""
-        db = await AsyncDatabase.create("elasticsearch", elasticsearch_test_index)
+        db = await AsyncDatabase.from_backend("elasticsearch", elasticsearch_test_index)
         
         # Create multiple records concurrently
         tasks = []
@@ -608,7 +608,7 @@ class TestElasticsearchAsyncIntegration:
 
     async def test_async_search_operations(self, elasticsearch_test_index, sample_records):
         """Test async search operations."""
-        db = await AsyncDatabase.create("elasticsearch", elasticsearch_test_index)
+        db = await AsyncDatabase.from_backend("elasticsearch", elasticsearch_test_index)
         
         # Insert data
         ids = await db.create_batch(sample_records)

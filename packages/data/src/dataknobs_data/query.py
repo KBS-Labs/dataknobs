@@ -1,4 +1,5 @@
-from collections.abc import Callable
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Union
@@ -6,6 +7,8 @@ from typing import TYPE_CHECKING, Any, Union
 if TYPE_CHECKING:
     import numpy as np
 
+    from collections.abc import Callable
+    from .query_logic import ComplexQuery
     from .vector.types import DistanceMetric
 
 
@@ -146,7 +149,7 @@ class Filter:
         return {"field": self.field, "operator": self.operator.value, "value": self.value}
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Filter":
+    def from_dict(cls, data: dict[str, Any]) -> Filter:
         """Create filter from dictionary representation."""
         return cls(
             field=data["field"], operator=Operator(data["operator"]), value=data.get("value")
@@ -165,7 +168,7 @@ class SortSpec:
         return {"field": self.field, "order": self.order.value}
 
     @classmethod
-    def from_dict(cls, data: dict[str, str]) -> "SortSpec":
+    def from_dict(cls, data: dict[str, str]) -> SortSpec:
         """Create sort spec from dictionary representation."""
         return cls(field=data["field"], order=SortOrder(data.get("order", "asc")))
 
@@ -178,10 +181,10 @@ class VectorQuery:
     including the query vector, distance metric, and various search options.
     """
 
-    vector: "np.ndarray | list[float]"  # Query vector or embeddings
+    vector: np.ndarray | list[float]  # Query vector or embeddings
     field_name: str = "embedding"  # Vector field name to search
     k: int = 10  # Number of results (top-k)
-    metric: "DistanceMetric | str" = "cosine"  # Distance metric
+    metric: DistanceMetric | str = "cosine"  # Distance metric
     include_source: bool = True  # Include source text in results
     score_threshold: float | None = None  # Minimum similarity score
     rerank: bool = False  # Whether to rerank results
@@ -222,7 +225,7 @@ class VectorQuery:
         return result
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "VectorQuery":
+    def from_dict(cls, data: dict[str, Any]) -> VectorQuery:
         """Create vector query from dictionary representation."""
         import numpy as np
 
@@ -281,7 +284,7 @@ class Query:
         """Get offset value (backward compatibility)."""
         return self.offset_value
 
-    def filter(self, field: str, operator: str | Operator, value: Any = None) -> "Query":
+    def filter(self, field: str, operator: str | Operator, value: Any = None) -> Query:
         """Add a filter to the query (fluent interface).
 
         Args:
@@ -320,7 +323,7 @@ class Query:
         self.filters.append(Filter(field=field, operator=operator, value=value))
         return self
 
-    def sort_by(self, field: str, order: str | SortOrder = "asc") -> "Query":
+    def sort_by(self, field: str, order: str | SortOrder = "asc") -> Query:
         """Add a sort specification to the query (fluent interface).
 
         Args:
@@ -336,11 +339,11 @@ class Query:
         self.sort_specs.append(SortSpec(field=field, order=order))
         return self
 
-    def sort(self, field: str, order: str | SortOrder = "asc") -> "Query":
+    def sort(self, field: str, order: str | SortOrder = "asc") -> Query:
         """Add sorting (fluent interface)."""
         return self.sort_by(field, order)
 
-    def set_limit(self, limit: int) -> "Query":
+    def set_limit(self, limit: int) -> Query:
         """Set the result limit (fluent interface).
 
         Args:
@@ -352,11 +355,11 @@ class Query:
         self.limit_value = limit
         return self
 
-    def limit(self, value: int) -> "Query":
+    def limit(self, value: int) -> Query:
         """Set limit (fluent interface)."""
         return self.set_limit(value)
 
-    def set_offset(self, offset: int) -> "Query":
+    def set_offset(self, offset: int) -> Query:
         """Set the result offset (fluent interface).
 
         Args:
@@ -368,11 +371,11 @@ class Query:
         self.offset_value = offset
         return self
 
-    def offset(self, value: int) -> "Query":
+    def offset(self, value: int) -> Query:
         """Set offset (fluent interface)."""
         return self.set_offset(value)
 
-    def select(self, *fields: str) -> "Query":
+    def select(self, *fields: str) -> Query:
         """Set field projection (fluent interface).
 
         Args:
@@ -384,25 +387,25 @@ class Query:
         self.fields = list(fields) if fields else None
         return self
 
-    def clear_filters(self) -> "Query":
+    def clear_filters(self) -> Query:
         """Clear all filters (fluent interface)."""
         self.filters = []
         return self
 
-    def clear_sort(self) -> "Query":
+    def clear_sort(self) -> Query:
         """Clear all sort specifications (fluent interface)."""
         self.sort_specs = []
         return self
 
     def similar_to(
         self,
-        vector: "np.ndarray | list[float]",
+        vector: np.ndarray | list[float],
         field: str = "embedding",
         k: int = 10,
-        metric: "DistanceMetric | str" = "cosine",
+        metric: DistanceMetric | str = "cosine",
         include_source: bool = True,
         score_threshold: float | None = None,
-    ) -> "Query":
+    ) -> Query:
         """Add vector similarity search to the query.
         
         This method sets up a vector similarity search that will find the k most
@@ -434,13 +437,13 @@ class Query:
     def near_text(
         self,
         text: str,
-        embedding_fn: Callable[[str], "np.ndarray"],
+        embedding_fn: Callable[[str], np.ndarray],
         field: str = "embedding",
         k: int = 10,
-        metric: "DistanceMetric | str" = "cosine",
+        metric: DistanceMetric | str = "cosine",
         include_source: bool = True,
         score_threshold: float | None = None,
-    ) -> "Query":
+    ) -> Query:
         """Add text-based vector similarity search to the query.
         
         This is a convenience method that converts text to a vector using the
@@ -472,13 +475,13 @@ class Query:
     def hybrid(
         self,
         text_query: str | None = None,
-        vector: "np.ndarray | list[float] | None" = None,
+        vector: np.ndarray | list[float] | None = None,
         text_field: str = "content",
         vector_field: str = "embedding",
         alpha: float = 0.5,
         k: int = 10,
-        metric: "DistanceMetric | str" = "cosine",
-    ) -> "Query":
+        metric: DistanceMetric | str = "cosine",
+    ) -> Query:
         """Create a hybrid query combining text and vector search.
         
         This method combines traditional text search with vector similarity search,
@@ -524,7 +527,7 @@ class Query:
 
         return self
 
-    def with_reranking(self, rerank_k: int | None = None) -> "Query":
+    def with_reranking(self, rerank_k: int | None = None) -> Query:
         """Enable result reranking for vector queries.
         
         Args:
@@ -538,7 +541,7 @@ class Query:
             self.vector_query.rerank_k = rerank_k or (self.vector_query.k * 2)
         return self
 
-    def clear_vector(self) -> "Query":
+    def clear_vector(self) -> Query:
         """Clear vector search from the query (fluent interface)."""
         self.vector_query = None
         return self
@@ -560,7 +563,7 @@ class Query:
         return result
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Query":
+    def from_dict(cls, data: dict[str, Any]) -> Query:
         """Create query from dictionary representation."""
         query = cls()
 
@@ -579,7 +582,7 @@ class Query:
 
         return query
 
-    def copy(self) -> "Query":
+    def copy(self) -> Query:
         """Create a copy of the query."""
         import copy
 
@@ -592,7 +595,7 @@ class Query:
             vector_query=copy.deepcopy(self.vector_query) if self.vector_query else None,
         )
 
-    def or_(self, *filters: Union[Filter, "Query"]) -> "ComplexQuery":
+    def or_(self, *filters: Union[Filter, Query]) -> ComplexQuery:
         """Create a ComplexQuery with OR logic.
         
         The current query's filters become an AND group, combined with OR conditions.
@@ -661,7 +664,7 @@ class Query:
             fields=self.fields.copy() if self.fields else None
         )
 
-    def and_(self, *filters: Union[Filter, "Query"]) -> "Query":
+    def and_(self, *filters: Union[Filter, Query]) -> Query:
         """Add more filters with AND logic (convenience method).
         
         Args:
@@ -677,7 +680,7 @@ class Query:
                 self.filters.extend(item.filters)
         return self
 
-    def not_(self, filter: Filter) -> "ComplexQuery":
+    def not_(self, filter: Filter) -> ComplexQuery:
         """Create a ComplexQuery with NOT logic.
         
         Args:

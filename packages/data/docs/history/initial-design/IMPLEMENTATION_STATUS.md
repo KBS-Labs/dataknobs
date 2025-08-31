@@ -201,7 +201,7 @@ config = {
 db = DatabaseFactory.create(config)
 
 # Async with auto-connect
-async_db = await AsyncDatabase.create("s3", config)
+async_db = await AsyncDatabase.from_backend("s3", config)
 ```
 
 ## Performance Benchmarks

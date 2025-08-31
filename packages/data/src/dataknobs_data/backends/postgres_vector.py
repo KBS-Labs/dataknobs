@@ -163,7 +163,6 @@ def build_vector_index_sql(
         SQL CREATE INDEX statement
     """
     index_params = index_params or {}
-    operator = get_vector_operator(metric)
 
     # Determine field name for index naming
     if not field_name:

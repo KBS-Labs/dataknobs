@@ -7,7 +7,7 @@ import time
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 from dataknobs_config import ConfigurableBase
@@ -24,9 +24,6 @@ from ..vector.types import DistanceMetric, VectorSearchResult
 from .sql_base import SQLQueryBuilder, SQLRecordSerializer, SQLTableManager
 from .sqlite_mixins import SQLiteVectorSupport
 from .vector_config_mixin import VectorConfigMixin
-
-if TYPE_CHECKING:
-    import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -184,9 +181,9 @@ class SyncSQLiteDatabase(
             cursor.execute(query, params)
             self.conn.commit()
             return record.id
-        except sqlite3.IntegrityError:
+        except sqlite3.IntegrityError as e:
             self.conn.rollback()
-            raise ValueError(f"Record with ID {record.id} already exists")
+            raise ValueError(f"Record with ID {record.id} already exists") from e
         finally:
             cursor.close()
 
@@ -349,7 +346,6 @@ class SyncSQLiteDatabase(
             # Execute the batch update in a transaction
             cursor.execute("BEGIN TRANSACTION")
             cursor.execute(query, params)
-            rows_affected = cursor.rowcount
             self.conn.commit()
 
             # Check which records were actually updated

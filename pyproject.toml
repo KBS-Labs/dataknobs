@@ -177,6 +177,10 @@ ignore = [
     
     # Code simplification - sometimes less readable
     "SIM102", # Use a single if statement instead of nested if
+    "SIM103", # Return negated condition directly - sometimes clearer with if/else
+    "SIM118", # Use key in dict instead of key in dict.keys() - explicit is clearer
+    "PLW3301", # Nested max calls - more readable when nested for complex cases
+    "RUF006", # Store asyncio.create_task reference - only needed if canceling task
     "SIM105", # Use contextlib.suppress - not always clearer
     "SIM108", # Use ternary operator instead of if-else-block
     "SIM113", # Use enumerate for index variable

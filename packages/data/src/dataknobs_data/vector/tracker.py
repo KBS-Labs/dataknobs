@@ -5,15 +5,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict, deque
-from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from ..records import Record
-
 if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
+
     from ..database import Database
+    from ..records import Record
 
 logger = logging.getLogger(__name__)
 
@@ -90,8 +90,8 @@ class ChangeTracker:
         self._vector_fields: dict[str, dict[str, Any]] = {}
 
         # Set up dependencies for tracked fields
-        for field in self.tracked_fields:
-            self._dependencies[field].append(self.vector_field)
+        for field_name in self.tracked_fields:
+            self._dependencies[field_name].append(self.vector_field)
         self._vector_fields[self.vector_field] = {"source_fields": self.tracked_fields}
 
         # Update queue and history
@@ -271,8 +271,8 @@ class ChangeTracker:
 
         # Update dependencies
         self._dependencies.clear()
-        for field in self.tracked_fields:
-            self._dependencies[field].append(self.vector_field)
+        for field_name in self.tracked_fields:
+            self._dependencies[field_name].append(self.vector_field)
 
         # Initialize content hashes for existing vector fields that don't have them
         await self._initialize_content_hashes()
@@ -457,15 +457,6 @@ class ChangeTracker:
                 await asyncio.sleep(1)
 
         logger.info("Stopped change tracker processing loop")
-
-    async def start_processing(self) -> None:
-        """Start background processing of updates."""
-        if self._processing_task and not self._processing_task.done():
-            logger.warning("Processing already started")
-            return
-
-        self._shutdown_event.clear()
-        self._processing_task = asyncio.create_task(self._process_loop())
 
     async def stop_processing(self, timeout: float = 10.0) -> None:
         """Stop background processing.

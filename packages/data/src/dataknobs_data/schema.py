@@ -143,9 +143,9 @@ class DatabaseSchema:
     def get_source_fields(self) -> dict[str, list[str]]:
         """Get mapping of source fields to their dependent vector fields."""
         source_map = {}
-        for name, field in self.fields.items():
-            if field.is_vector_field():
-                source = field.get_source_field()
+        for name, field_obj in self.fields.items():
+            if field_obj.is_vector_field():
+                source = field_obj.get_source_field()
                 if source:
                     if source not in source_map:
                         source_map[source] = []

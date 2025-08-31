@@ -183,7 +183,7 @@ class ElasticsearchErrorHandler:
             raise RuntimeError(f"Elasticsearch transport error: {error}") from error
         else:
             logger.error(f"Unexpected error during {operation}: {error}")
-            raise
+            raise error
 
 
 class ElasticsearchRecordSerializer:

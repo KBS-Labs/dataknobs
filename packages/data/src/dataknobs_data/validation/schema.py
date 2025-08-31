@@ -159,8 +159,8 @@ class Schema:
         if isinstance(field_type, str):
             try:
                 field_type = FieldType[field_type.upper()]
-            except KeyError:
-                raise ValueError(f"Invalid field type: {field_type}")
+            except KeyError as e:
+                raise ValueError(f"Invalid field type: {field_type}") from e
 
         # Add Required constraint if field is required
         field_constraints = constraints or []

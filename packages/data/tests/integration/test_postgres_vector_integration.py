@@ -32,7 +32,7 @@ class TestPostgresVectorIntegration:
 
     def test_pgvector_extension_detection(self, vector_test_db):
         """Test automatic pgvector extension detection and installation."""
-        db = SyncDatabase.create("postgres", vector_test_db)
+        db = SyncDatabase.from_backend("postgres", vector_test_db)
         
         try:
             # The database should detect and enable pgvector automatically
@@ -65,7 +65,7 @@ class TestPostgresVectorIntegration:
 
     def test_vector_field_storage_and_retrieval(self, vector_test_db):
         """Test storing and retrieving vector fields with PostgreSQL."""
-        db = SyncDatabase.create("postgres", vector_test_db)
+        db = SyncDatabase.from_backend("postgres", vector_test_db)
         
         try:
             # Create multiple records with vectors
@@ -196,7 +196,7 @@ class TestPostgresVectorIntegration:
 
     def test_batch_vector_operations(self, vector_test_db):
         """Test batch operations with vector fields."""
-        db = SyncDatabase.create("postgres", vector_test_db)
+        db = SyncDatabase.from_backend("postgres", vector_test_db)
         
         try:
             # Create batch of records with vectors
@@ -247,7 +247,7 @@ class TestPostgresVectorIntegration:
 
     def test_vector_field_metadata_persistence(self, vector_test_db):
         """Test that vector field metadata is preserved through storage."""
-        db = SyncDatabase.create("postgres", vector_test_db)
+        db = SyncDatabase.from_backend("postgres", vector_test_db)
         
         try:
             # Create record with detailed vector metadata

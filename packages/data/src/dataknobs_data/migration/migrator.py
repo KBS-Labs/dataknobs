@@ -52,9 +52,10 @@ class Migrator:
         progress.total = len(all_records)
 
         batch = []
-        for record in all_records:
+        for original_record in all_records:
             try:
                 # Apply transformation if provided
+                record = original_record
                 if transform is not None:
                     if isinstance(transform, Transformer):
                         original_id = record.id  # Preserve ID before transformation

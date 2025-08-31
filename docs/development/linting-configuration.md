@@ -5,6 +5,14 @@ This document explains the rationale behind the linting and type checking config
 
 The actual configuration is in `pyproject.toml`. For specific errors that need to be fixed in each package, see the package-specific checklists (e.g., `packages/data/docs/linting-errors-checklist.md`).
 
+## Recent Cleanup (August 2025)
+A comprehensive linting cleanup was performed, reducing Ruff errors in the data package from ~40 to 10. Key achievements:
+- Fixed all functional issues (undefined names, import shadowing, unused variables)
+- Modernized NumPy random generation (NPY002)
+- Fixed loop variable overwrites that revealed a bug in vector search
+- Moved type-checking imports appropriately (TC001/003/004)
+- Established clear guidelines for stylistic vs functional errors
+
 ## Error Categories and Decisions
 
 ### 1. Important Errors to Keep (NOT ignored)
@@ -19,11 +27,15 @@ The actual configuration is in `pyproject.toml`. For specific errors that need t
 - **F401**: Unused imports (except in __init__.py)
 - **F402**: Import shadowing
 - **B007**: Unused loop variable not prefixed with underscore
-- **B027**: Empty method without abstract decorator
+- **B027**: Empty method without abstract decorator (use # noqa: B027 for intentional empty implementations)
 - **PLR1714**: Consider merging multiple comparisons
 - **PLR5501**: Consider using elif
 - **RUF005**: Consider iterable unpacking
-- **RUF006**: Store async task reference
+- **NPY002**: Replace legacy np.random.rand - use modern np.random.default_rng()
+- **SIM101**: Multiple isinstance calls - merge for clarity
+- **PYI056**: Use += for __all__ modifications - better type checker support
+- **PLW2901**: Loop variable overwritten - can indicate logic errors
+- **TC001/TC003/TC004**: Type checking imports - proper placement for performance
 
 #### Security
 - **S3**: Various security issues
@@ -49,9 +61,13 @@ The actual configuration is in `pyproject.toml`. For specific errors that need t
   - Avoiding circular dependencies
   - Conditional imports
 
-#### Code Simplification
+#### Code Simplification (Stylistic Preference)
 - **SIM102**: Combine nested if - Sometimes clearer as nested
+- **SIM103**: Return negated condition directly - Sometimes clearer with explicit if/else
 - **SIM108**: Use ternary operator - Can reduce readability
+- **SIM118**: Use `key in dict` instead of `key in dict.keys()` - Explicit .keys() can be clearer
+- **PLW3301**: Nested max calls - More readable when nested for complex expressions
+- **RUF006**: Store asyncio.create_task reference - Only needed if task cancellation is required
 
 #### Complexity Metrics
 - **PLR0911**: Too many returns - Already limited to 6
@@ -82,13 +98,7 @@ After configuration, focus on these error types that indicate real issues:
 - **F841**: Local variable assigned but never used - Dead code
 - **F401**: Unused imports (except in __init__.py) - Dead code
 - **F402**: Import shadowing - Can cause confusion
-- **B007**: Loop control variable not used - Potential logic error
-- **B027**: Empty method without abstract decorator - Missing abstraction
-
-### Type Checking & Advanced
-- **TC003/TC004/TC001**: Type checking imports - May need runtime_checkable
-- **NPY002**: NumPy legacy random - Should use new random API
-- **PLW2901**: Loop variable overwritten - Potential bug
+- **PLW0127**: Self-assignment - Use # noqa: PLW0127 when intentional for documentation
 
 ### Security
 - **S3**: Various security issues - Always important to address

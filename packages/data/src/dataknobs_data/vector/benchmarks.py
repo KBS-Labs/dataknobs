@@ -65,6 +65,7 @@ class VectorStoreBenchmark:
         """
         self.store = store
         self.results: list[BenchmarkResult] = []
+        self.rng = np.random.default_rng()  # Create RNG once for all benchmarks
 
     async def benchmark_indexing(
         self,
@@ -85,7 +86,7 @@ class VectorStoreBenchmark:
         logger.info(f"Benchmarking indexing: {num_vectors} vectors of dim {vector_dim}")
 
         # Generate random vectors
-        vectors = np.random.rand(num_vectors, vector_dim).astype(np.float32)
+        vectors = self.rng.random((num_vectors, vector_dim), dtype=np.float32)
         ids = [str(i) for i in range(num_vectors)]
         metadata = [{"index": i} for i in range(num_vectors)]
 
@@ -135,7 +136,7 @@ class VectorStoreBenchmark:
         logger.info(f"Benchmarking search: {num_queries} queries, k={k}")
 
         # Generate random query vectors
-        queries = np.random.rand(num_queries, vector_dim).astype(np.float32)
+        queries = self.rng.random((num_queries, vector_dim), dtype=np.float32)
 
         # Measure search latencies
         latencies = []
@@ -193,15 +194,15 @@ class VectorStoreBenchmark:
             await self.benchmark_indexing(num_updates, vector_dim)
 
         # Generate new vectors for updates
-        vectors = np.random.rand(num_updates, vector_dim).astype(np.float32)
+        vectors = self.rng.random((num_updates, vector_dim), dtype=np.float32)
         ids = [str(i) for i in range(num_updates)]
         metadata = [{"updated": True, "index": i} for i in range(num_updates)]
 
-        # Measure update time
+        # Measure update time (vectors and metadata)
         start_time = time.time()
 
-        # Update metadata
-        await self.store.update_metadata(ids, metadata)
+        # Update vectors and metadata
+        await self.store.update_vectors(vectors, ids, metadata)
 
         duration = time.time() - start_time
         throughput = num_updates / duration if duration > 0 else 0
@@ -281,7 +282,7 @@ class VectorStoreBenchmark:
                 # Mix of operations
                 if i % 4 == 0:
                     # Add vector
-                    vector = np.random.rand(vector_dim).astype(np.float32)
+                    vector = self.rng.random(vector_dim, dtype=np.float32)
                     await self.store.add_vectors(
                         vector,
                         ids=[f"w{worker_id}_v{i}"],
@@ -289,7 +290,7 @@ class VectorStoreBenchmark:
                     )
                 else:
                     # Search
-                    query = np.random.rand(vector_dim).astype(np.float32)
+                    query = self.rng.random(vector_dim, dtype=np.float32)
                     await self.store.search(query, k=5)
 
             return time.time() - start

@@ -11,12 +11,12 @@ __all__ = [
 # Import specialized stores when available
 try:
     from .faiss import FaissVectorStore
-    __all__.append("FaissVectorStore")
+    __all__ += ["FaissVectorStore"]
 except ImportError:
     pass
 
 try:
     from .chroma import ChromaVectorStore
-    __all__.append("ChromaVectorStore")
+    __all__ += ["ChromaVectorStore"]
 except ImportError:
     pass

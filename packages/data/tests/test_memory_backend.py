@@ -16,14 +16,14 @@ class TestSyncMemoryDatabase:
 
     def test_create_database(self):
         """Test creating a memory database."""
-        db = SyncDatabase.create("memory")
+        db = SyncDatabase.from_backend("memory")
         assert db is not None
         assert hasattr(db, "_storage")
         assert hasattr(db, "_lock")
 
     def test_crud_operations(self):
         """Test basic CRUD operations."""
-        db = SyncDatabase.create("memory")
+        db = SyncDatabase.from_backend("memory")
 
         # Create
         record = Record({"name": "Test", "value": 42})
@@ -60,7 +60,7 @@ class TestSyncMemoryDatabase:
 
     def test_exists(self):
         """Test existence checking."""
-        db = SyncDatabase.create("memory")
+        db = SyncDatabase.from_backend("memory")
 
         record = Record({"test": "data"})
         id = db.create(record)
@@ -73,7 +73,7 @@ class TestSyncMemoryDatabase:
 
     def test_upsert(self):
         """Test upsert operation."""
-        db = SyncDatabase.create("memory")
+        db = SyncDatabase.from_backend("memory")
 
         # Insert new record
         record1 = Record({"name": "New"})
@@ -91,7 +91,7 @@ class TestSyncMemoryDatabase:
 
     def test_search_with_filters(self):
         """Test searching with filters."""
-        db = SyncDatabase.create("memory")
+        db = SyncDatabase.from_backend("memory")
 
         # Create test data
         db.create(Record({"name": "Alice", "age": 25, "status": "active"}))
@@ -130,7 +130,7 @@ class TestSyncMemoryDatabase:
 
     def test_search_with_sorting(self):
         """Test searching with sorting."""
-        db = SyncDatabase.create("memory")
+        db = SyncDatabase.from_backend("memory")
 
         # Create test data
         db.create(Record({"name": "Charlie", "score": 85}))
@@ -165,7 +165,7 @@ class TestSyncMemoryDatabase:
 
     def test_search_with_pagination(self):
         """Test searching with pagination."""
-        db = SyncDatabase.create("memory")
+        db = SyncDatabase.from_backend("memory")
 
         # Create test data
         for i in range(10):
@@ -194,7 +194,7 @@ class TestSyncMemoryDatabase:
 
     def test_search_with_projection(self):
         """Test searching with field projection."""
-        db = SyncDatabase.create("memory")
+        db = SyncDatabase.from_backend("memory")
 
         # Create test data
         db.create(
@@ -216,7 +216,7 @@ class TestSyncMemoryDatabase:
 
     def test_batch_operations(self):
         """Test batch operations."""
-        db = SyncDatabase.create("memory")
+        db = SyncDatabase.from_backend("memory")
 
         # Batch create
         records = [Record({"name": f"Record_{i}", "value": i}) for i in range(5)]
@@ -245,7 +245,7 @@ class TestSyncMemoryDatabase:
 
     def test_count_and_clear(self):
         """Test count and clear operations."""
-        db = SyncDatabase.create("memory")
+        db = SyncDatabase.from_backend("memory")
 
         # Create test data
         for i in range(5):
@@ -265,7 +265,7 @@ class TestSyncMemoryDatabase:
 
     def test_context_manager(self):
         """Test using database as context manager."""
-        with SyncDatabase.create("memory") as db:
+        with SyncDatabase.from_backend("memory") as db:
             id = db.create(Record({"test": "data"}))
             assert db.exists(id)
 
@@ -274,7 +274,7 @@ class TestSyncMemoryDatabase:
 
     def test_thread_safety(self):
         """Test thread safety of sync memory database."""
-        db = SyncDatabase.create("memory")
+        db = SyncDatabase.from_backend("memory")
         created_ids = []
         lock = threading.Lock()
 
@@ -311,7 +311,7 @@ class TestAsyncMemoryDatabase:
     @pytest.mark.asyncio
     async def test_async_crud_operations(self):
         """Test async CRUD operations."""
-        db = await AsyncDatabase.create("memory")
+        db = await AsyncDatabase.from_backend("memory")
 
         # Create
         record = Record({"name": "AsyncTest", "value": 99})
@@ -337,7 +337,7 @@ class TestAsyncMemoryDatabase:
     @pytest.mark.asyncio
     async def test_async_search(self):
         """Test async search operations."""
-        db = await AsyncDatabase.create("memory")
+        db = await AsyncDatabase.from_backend("memory")
 
         # Create test data
         await db.create(Record({"type": "A", "value": 1}))
@@ -355,7 +355,7 @@ class TestAsyncMemoryDatabase:
     @pytest.mark.asyncio
     async def test_async_batch_operations(self):
         """Test async batch operations."""
-        db = await AsyncDatabase.create("memory")
+        db = await AsyncDatabase.from_backend("memory")
 
         # Batch create
         records = [Record({"id": i}) for i in range(3)]
@@ -370,14 +370,14 @@ class TestAsyncMemoryDatabase:
     @pytest.mark.asyncio
     async def test_async_context_manager(self):
         """Test async context manager."""
-        async with await AsyncDatabase.create("memory") as db:
+        async with await AsyncDatabase.from_backend("memory") as db:
             id = await db.create(Record({"async": "context"}))
             assert await db.exists(id)
 
     @pytest.mark.asyncio
     async def test_concurrent_operations(self):
         """Test concurrent async operations."""
-        db = await AsyncDatabase.create("memory")
+        db = await AsyncDatabase.from_backend("memory")
 
         async def create_records(task_id):
             ids = []

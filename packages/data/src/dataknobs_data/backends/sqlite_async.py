@@ -160,9 +160,9 @@ class AsyncSQLiteDatabase(
             # SQLite doesn't support RETURNING, so we use the ID we generated
             record_id = params[0]  # ID is the first parameter
             return record_id
-        except aiosqlite.IntegrityError:
+        except aiosqlite.IntegrityError as e:
             await self.db.rollback()
-            raise ValueError(f"Record with ID {params[0]} already exists")
+            raise ValueError(f"Record with ID {params[0]} already exists") from e
 
     async def read(self, id: str) -> Record | None:
         """Read a record by ID."""
@@ -281,8 +281,7 @@ class AsyncSQLiteDatabase(
         await self.db.execute("BEGIN TRANSACTION")
 
         try:
-            cursor = await self.db.execute(query, params)
-            rows_affected = cursor.rowcount
+            await self.db.execute(query, params)
             await self.db.commit()
 
             # Check which records were actually updated
@@ -291,8 +290,8 @@ class AsyncSQLiteDatabase(
             placeholders = ", ".join(["?" for _ in update_ids])
             check_query = f"SELECT id FROM {self.table_name} WHERE id IN ({placeholders})"
 
-            async with self.db.execute(check_query, update_ids) as cursor:
-                rows = await cursor.fetchall()
+            async with self.db.execute(check_query, update_ids) as check_cursor:
+                rows = await check_cursor.fetchall()
                 existing_ids = {row[0] for row in rows}
 
             # Return results for each update

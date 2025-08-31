@@ -24,7 +24,7 @@ class TestPostgresIntegration:
 
     def test_connection_and_table_creation(self, postgres_test_db):
         """Test that we can connect and create tables."""
-        db = SyncDatabase.create("postgres", postgres_test_db)
+        db = SyncDatabase.from_backend("postgres", postgres_test_db)
         
         # The table should be created automatically
         # Try to create a record to verify
@@ -40,7 +40,7 @@ class TestPostgresIntegration:
 
     def test_full_crud_cycle(self, postgres_test_db):
         """Test complete CRUD operations with real database."""
-        db = SyncDatabase.create("postgres", postgres_test_db)
+        db = SyncDatabase.from_backend("postgres", postgres_test_db)
         
         # Create
         record = Record({
@@ -87,7 +87,7 @@ class TestPostgresIntegration:
 
     def test_batch_operations_with_sample_data(self, postgres_test_db, sample_records):
         """Test batch operations with sample dataset."""
-        db = SyncDatabase.create("postgres", postgres_test_db)
+        db = SyncDatabase.from_backend("postgres", postgres_test_db)
         
         # Create batch
         ids = db.create_batch(sample_records)
@@ -121,7 +121,7 @@ class TestPostgresIntegration:
 
     def test_complex_queries(self, postgres_test_db, sample_records):
         """Test complex query operations."""
-        db = SyncDatabase.create("postgres", postgres_test_db)
+        db = SyncDatabase.from_backend("postgres", postgres_test_db)
         
         # Insert sample data
         ids = db.create_batch(sample_records)
@@ -171,7 +171,7 @@ class TestPostgresIntegration:
 
     def test_sorting_and_pagination(self, postgres_test_db, sample_records):
         """Test sorting and pagination features."""
-        db = SyncDatabase.create("postgres", postgres_test_db)
+        db = SyncDatabase.from_backend("postgres", postgres_test_db)
         
         # Insert sample data
         ids = db.create_batch(sample_records)
@@ -217,7 +217,7 @@ class TestPostgresIntegration:
 
     def test_metadata_persistence(self, postgres_test_db):
         """Test that metadata is properly stored and retrieved."""
-        db = SyncDatabase.create("postgres", postgres_test_db)
+        db = SyncDatabase.from_backend("postgres", postgres_test_db)
         
         # Create record with metadata
         record = Record(
@@ -256,7 +256,7 @@ class TestPostgresIntegration:
 
     def test_concurrent_operations(self, postgres_test_db):
         """Test concurrent database operations."""
-        db = SyncDatabase.create("postgres", postgres_test_db)
+        db = SyncDatabase.from_backend("postgres", postgres_test_db)
         
         def create_record(index):
             record = Record({"index": index, "data": f"concurrent_{index}"})
@@ -291,8 +291,8 @@ class TestPostgresIntegration:
 
     def test_transaction_isolation(self, postgres_test_db):
         """Test transaction isolation and consistency."""
-        db1 = SyncDatabase.create("postgres", postgres_test_db)
-        db2 = SyncDatabase.create("postgres", postgres_test_db)
+        db1 = SyncDatabase.from_backend("postgres", postgres_test_db)
+        db2 = SyncDatabase.from_backend("postgres", postgres_test_db)
         
         # Create a record in db1
         record = Record({"name": "Transaction Test", "value": 100})
@@ -318,7 +318,7 @@ class TestPostgresIntegration:
 
     def test_special_characters_and_unicode(self, postgres_test_db):
         """Test handling of special characters and Unicode."""
-        db = SyncDatabase.create("postgres", postgres_test_db)
+        db = SyncDatabase.from_backend("postgres", postgres_test_db)
         
         # Create record with special characters
         record = Record({
@@ -349,7 +349,7 @@ class TestPostgresIntegration:
 
     def test_count_operations(self, postgres_test_db, sample_records):
         """Test count operations."""
-        db = SyncDatabase.create("postgres", postgres_test_db)
+        db = SyncDatabase.from_backend("postgres", postgres_test_db)
         
         # Initially empty
         assert db.count() == 0
@@ -381,7 +381,7 @@ class TestPostgresAsyncIntegration:
 
     async def test_async_crud_operations(self, postgres_test_db):
         """Test async CRUD operations."""
-        db = await AsyncDatabase.create("postgres", postgres_test_db)
+        db = await AsyncDatabase.from_backend("postgres", postgres_test_db)
         
         # Create
         record = Record({
@@ -419,7 +419,7 @@ class TestPostgresAsyncIntegration:
 
     async def test_async_batch_operations(self, postgres_test_db, sample_records):
         """Test async batch operations."""
-        db = await AsyncDatabase.create("postgres", postgres_test_db)
+        db = await AsyncDatabase.from_backend("postgres", postgres_test_db)
         
         # Create batch
         ids = await db.create_batch(sample_records)
@@ -437,7 +437,7 @@ class TestPostgresAsyncIntegration:
 
     async def test_async_concurrent_operations(self, postgres_test_db):
         """Test concurrent async operations."""
-        db = await AsyncDatabase.create("postgres", postgres_test_db)
+        db = await AsyncDatabase.from_backend("postgres", postgres_test_db)
         
         # Create multiple records concurrently
         tasks = []
@@ -463,7 +463,7 @@ class TestPostgresAsyncIntegration:
 
     async def test_async_search_operations(self, postgres_test_db, sample_records):
         """Test async search operations."""
-        db = await AsyncDatabase.create("postgres", postgres_test_db)
+        db = await AsyncDatabase.from_backend("postgres", postgres_test_db)
         
         # Insert data
         ids = await db.create_batch(sample_records)

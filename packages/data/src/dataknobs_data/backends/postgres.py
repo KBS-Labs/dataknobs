@@ -332,12 +332,12 @@ class SyncPostgresDatabase(
         for i, param in enumerate(params_list):
             params_dict[f"p{i}"] = param
 
-        # Execute the batch insert
-        result = self.db.execute(query, params_dict)
+        # Execute the batch insert and get returned IDs
+        result_df = self.db.query(query, params_dict)
 
         # PostgreSQL RETURNING clause gives us the actual inserted IDs
-        # But our PostgresDB wrapper doesn't return them directly
-        # So we'll use the generated IDs
+        if not result_df.empty:
+            return result_df['id'].tolist()
         return ids
 
     def delete_batch(self, ids: list[str]) -> list[bool]:
@@ -356,19 +356,11 @@ class SyncPostgresDatabase(
 
         self._check_connection()
 
-        # Check which IDs exist before deletion
-        check_sql = f"""
-        SELECT id FROM {self.schema_name}.{self.table_name}
-        WHERE id = ANY(%(ids)s)
-        """
-        existing_df = self.db.query(check_sql, {"ids": ids})
-        existing_ids = set(existing_df["id"].tolist()) if not existing_df.empty else set()
-
         # Create a query builder for PostgreSQL with pyformat style
         from .sql_base import SQLQueryBuilder
         query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres", param_style="pyformat")
 
-        # Use the shared batch delete query builder
+        # Use the shared batch delete query builder (includes RETURNING clause)
         query, params_list = query_builder.build_batch_delete_query(ids)
 
         # Build params dict for psycopg2
@@ -376,13 +368,16 @@ class SyncPostgresDatabase(
         for i, param in enumerate(params_list):
             params_dict[f"p{i}"] = param
 
-        # Execute the batch delete
-        result = self.db.execute(query, params_dict)
+        # Execute the batch delete and get returned IDs
+        result_df = self.db.query(query, params_dict)
+        
+        # Get list of deleted IDs from RETURNING clause
+        deleted_ids = set(result_df['id'].tolist()) if not result_df.empty else set()
 
-        # Return results based on which IDs existed
+        # Return results based on which IDs were actually deleted
         results = []
         for id in ids:
-            results.append(id in existing_ids)
+            results.append(id in deleted_ids)
 
         return results
 
@@ -414,21 +409,15 @@ class SyncPostgresDatabase(
         for i, param in enumerate(params_list):
             params_dict[f"p{i}"] = param
 
-        # Execute the batch update
-        result = self.db.execute(query, params_dict)
+        # Execute the batch update and get returned IDs (query now includes RETURNING clause)
+        result_df = self.db.query(query, params_dict)
 
-        # Check which records were actually updated
-        update_ids = [record_id for record_id, _ in updates]
-        check_sql = f"""
-        SELECT id FROM {self.schema_name}.{self.table_name}
-        WHERE id = ANY(%(ids)s)
-        """
-        existing_df = self.db.query(check_sql, {"ids": update_ids})
-        existing_ids = set(existing_df["id"].tolist()) if not existing_df.empty else set()
-
+        # Get list of updated IDs from RETURNING clause
+        updated_ids = set(result_df['id'].tolist()) if not result_df.empty else set()
+        
         results = []
         for record_id, _ in updates:
-            results.append(record_id in existing_ids)
+            results.append(record_id in updated_ids)
 
         return results
 
@@ -1229,7 +1218,7 @@ class AsyncPostgresDatabase(
             where_clause, filter_params = self.query_builder.build_where_clause(filter, param_num)
             if where_clause:
                 # Convert %s placeholders to $N for asyncpg
-                for i, param in enumerate(filter_params):
+                for param in filter_params:
                     where_clause = where_clause.replace("%s", f"${param_num}", 1)
                     params.append(param)
                     param_num += 1

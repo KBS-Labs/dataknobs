@@ -57,8 +57,6 @@ class DatabaseFactory(FactoryBase):
 
         # Check if vector_enabled is set
         vector_enabled = config.get("vector_enabled", False)
-        vector_dimensions = config.get("vector_dimensions")
-        vector_metric = config.get("vector_metric", "cosine")
 
         if vector_enabled:
             # All backends now have vector support (some native, some via Python)
@@ -285,8 +283,6 @@ class AsyncDatabaseFactory(FactoryBase):
 
         # Check if vector_enabled is set
         vector_enabled = config.get("vector_enabled", False)
-        vector_dimensions = config.get("vector_dimensions")
-        vector_metric = config.get("vector_metric", "cosine")
 
         if vector_enabled:
             # All backends now have vector support (some native, some via Python)

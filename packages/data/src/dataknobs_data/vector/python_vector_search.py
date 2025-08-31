@@ -74,13 +74,13 @@ class PythonVectorSearchMixin:
         # Calculate similarities
         results = []
         for record_data in records:
-            # Handle different record formats
+            # Handle different record formats and keep original for later use
+            original_record = record_data
             if isinstance(record_data, dict):
                 data = self._extract_record_data(record_data)
             elif isinstance(record_data, Record):
                 # If we already have a Record object, use it directly
                 data = record_data.data
-                record_data = {'id': record_data.id, 'data': data, 'metadata': record_data.metadata}
             else:
                 data = record_data
 
@@ -100,10 +100,10 @@ class PythonVectorSearchMixin:
                 score = self._compute_similarity(query_vector, stored_vector, metric)
 
                 # Create Record object for result
-                if isinstance(record_data, Record):
-                    record = record_data
+                if isinstance(original_record, Record):
+                    record = original_record
                 else:
-                    record = self._create_record_from_data(record_data, data)
+                    record = self._create_record_from_data(original_record, data)
 
                 # Create result
                 result = VectorSearchResult(
@@ -168,13 +168,13 @@ class PythonVectorSearchMixin:
         # Calculate similarities
         results = []
         for record_data in records:
-            # Handle different record formats
+            # Handle different record formats and keep original for later use
+            original_record = record_data
             if isinstance(record_data, dict):
                 data = self._extract_record_data(record_data)
             elif isinstance(record_data, Record):
                 # If we already have a Record object, use it directly
                 data = record_data.data
-                record_data = {'id': record_data.id, 'data': data, 'metadata': record_data.metadata}
             else:
                 data = record_data
 
@@ -194,10 +194,10 @@ class PythonVectorSearchMixin:
                 score = self._compute_similarity(query_vector, stored_vector, metric)
 
                 # Create Record object for result
-                if isinstance(record_data, Record):
-                    record = record_data
+                if isinstance(original_record, Record):
+                    record = original_record
                 else:
-                    record = self._create_record_from_data(record_data, data)
+                    record = self._create_record_from_data(original_record, data)
 
                 # Create result
                 result = VectorSearchResult(

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -19,6 +18,8 @@ from .sync import SyncConfig, VectorTextSynchronizer
 from .types import VectorMetadata
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
+
     from ..database import Database
 
 logger = logging.getLogger(__name__)
@@ -571,8 +572,9 @@ class VectorMigration:
             for i in range(0, len(records), self.config.batch_size):
                 batch = records[i:i + self.config.batch_size]
 
-                for record in batch:
+                for original_record in batch:
                     try:
+                        record = original_record
                         # Apply field mapping
                         if field_mapping:
                             new_data = {}
@@ -983,8 +985,8 @@ class IncrementalVectorizer:
         for record in all_records:
             # Check if has text fields
             has_text = False
-            for field in self.text_fields:
-                if record.get_value(field):
+            for field_name in self.text_fields:
+                if record.get_value(field_name):
                     has_text = True
                     break
 

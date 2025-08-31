@@ -171,7 +171,7 @@ class ChromaVectorStore(VectorStore):
 
         # Convert to expected format
         vectors = []
-        for i, id_val in enumerate(ids):
+        for id_val in ids:
             try:
                 idx = result["ids"].index(id_val)
                 embedding = result["embeddings"][idx] if result["embeddings"] else None

@@ -202,7 +202,7 @@ class TypeMapper:
             # pd.isna can fail on some types like lists
             pass
 
-        if isinstance(value, bool) or isinstance(value, np.bool_):
+        if isinstance(value, (bool, np.bool_)):
             return FieldType.BOOLEAN
         elif isinstance(value, (int, np.integer)):
             return FieldType.INTEGER
@@ -251,7 +251,7 @@ class TypeMapper:
     @staticmethod
     def _to_datetime(value: Any) -> pd.Timestamp:
         """Convert value to pandas Timestamp."""
-        if isinstance(value, str) or isinstance(value, datetime):
+        if isinstance(value, (str, datetime)):
             return pd.Timestamp(value)
         elif isinstance(value, (int, float)):
             # Assume Unix timestamp
@@ -334,7 +334,7 @@ class TypeMapper:
             # Check values for special types
             sample = non_null.iloc[0] if len(non_null) > 0 else None
             if sample is not None:
-                if isinstance(sample, (datetime, pd.Timestamp)) or isinstance(sample, (pd.Timestamp, datetime)) or isinstance(sample, pd._libs.tslibs.timestamps.Timestamp) or isinstance(sample, (pd._libs.tslibs.nattype.NaTType)):
+                if isinstance(sample, (datetime, pd.Timestamp, pd._libs.tslibs.timestamps.Timestamp, pd._libs.tslibs.nattype.NaTType)):
                     return "datetime"
                 elif hasattr(sample, '__class__') and 'date' in sample.__class__.__name__.lower():
                     return "date"

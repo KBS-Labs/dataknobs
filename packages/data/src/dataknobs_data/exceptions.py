@@ -1,5 +1,10 @@
 """Custom exceptions for the dataknobs_data package."""
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from dataknobs_data.query import Query
+
 
 class DataknobsDataError(Exception):
     """Base exception for all dataknobs_data errors."""

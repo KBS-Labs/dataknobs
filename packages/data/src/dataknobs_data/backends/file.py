@@ -274,7 +274,6 @@ class ParquetFormat(FileFormat):
 
         try:
             import pandas as pd
-            import pyarrow.parquet as pq
 
             df = pd.read_parquet(filepath)
             data = {}
@@ -291,8 +290,8 @@ class ParquetFormat(FileFormat):
                 data[record_id] = {"fields": fields}
 
             return data
-        except ImportError:
-            raise ImportError("Parquet support requires pandas and pyarrow packages")
+        except ImportError as e:
+            raise ImportError("Parquet support requires pandas and pyarrow packages") from e
 
     @staticmethod
     def save(filepath: str, data: dict[str, dict[str, Any]]):
@@ -320,8 +319,8 @@ class ParquetFormat(FileFormat):
                 df = pd.DataFrame(rows)
 
             df.to_parquet(filepath, index=False, compression="snappy")
-        except ImportError:
-            raise ImportError("Parquet support requires pandas and pyarrow packages")
+        except ImportError as e:
+            raise ImportError("Parquet support requires pandas and pyarrow packages") from e
 
 
 class AsyncFileDatabase(
@@ -382,10 +381,6 @@ class AsyncFileDatabase(
     def from_config(cls, config: dict) -> "AsyncFileDatabase":
         """Create from config dictionary."""
         return cls(config)
-
-    async def connect(self) -> None:
-        """Connect to the database (no-op for file backend)."""
-        pass
 
     def _generate_id(self) -> str:
         """Generate a unique ID for a record."""
@@ -664,10 +659,6 @@ class SyncFileDatabase(
     def from_config(cls, config: dict) -> "SyncFileDatabase":
         """Create from config dictionary."""
         return cls(config)
-
-    def connect(self) -> None:
-        """Connect to the database (no-op for file backend)."""
-        pass
 
     def _generate_id(self) -> str:
         """Generate a unique ID for a record."""

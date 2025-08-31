@@ -77,7 +77,7 @@ def postgres_config(ensure_test_database):
 @pytest.fixture
 def sync_db(postgres_config):
     """Create a synchronous PostgreSQL database for testing."""
-    db = SyncDatabase.create("postgres", postgres_config)
+    db = SyncDatabase.from_backend("postgres", postgres_config)
     yield db
     # Cleanup: drop the test table
     try:
@@ -90,7 +90,7 @@ def sync_db(postgres_config):
 @pytest.fixture
 async def async_db(postgres_config):
     """Create an asynchronous PostgreSQL database for testing."""
-    db = await AsyncDatabase.create("postgres", postgres_config)
+    db = await AsyncDatabase.from_backend("postgres", postgres_config)
     yield db
     # Cleanup
     try:
@@ -105,7 +105,7 @@ class TestSyncPostgresDatabase:
 
     def test_create_database(self, postgres_config):
         """Test creating a PostgreSQL database."""
-        db = SyncDatabase.create("postgres", postgres_config)
+        db = SyncDatabase.from_backend("postgres", postgres_config)
         assert db is not None
         assert hasattr(db, "db")  # Has PostgresDB instance
         assert hasattr(db, "table_name")
@@ -385,7 +385,7 @@ class TestAsyncPostgresDatabase:
 
     async def test_async_context_manager(self, postgres_config):
         """Test async context manager."""
-        async with await AsyncDatabase.create("postgres", postgres_config) as db:
+        async with await AsyncDatabase.from_backend("postgres", postgres_config) as db:
             record = Record({"context": "manager"})
             id = await db.create(record)
             assert await db.exists(id)

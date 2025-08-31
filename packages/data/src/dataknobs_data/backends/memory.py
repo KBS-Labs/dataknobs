@@ -47,9 +47,6 @@ class AsyncMemoryDatabase(
         """Create from config dictionary."""
         return cls(config)
 
-    async def connect(self) -> None:
-        """Connect to the database (no-op for memory backend)."""
-        pass
 
     def _generate_id(self) -> str:
         """Generate a unique ID for a record."""
@@ -252,9 +249,6 @@ class SyncMemoryDatabase(
         """Create from config dictionary."""
         return cls(config)
 
-    def connect(self) -> None:
-        """Connect to the database (no-op for memory backend)."""
-        pass
 
     def _generate_id(self) -> str:
         """Generate a unique ID for a record."""

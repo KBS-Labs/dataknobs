@@ -866,11 +866,6 @@ upper}}}}}
 
         return response.get("deleted", count)
 
-    def close(self) -> None:
-        """Close the database connection."""
-        # ElasticsearchIndex manages its own connections
-        pass
-
     def stream_read(
         self,
         query: Query | None = None,

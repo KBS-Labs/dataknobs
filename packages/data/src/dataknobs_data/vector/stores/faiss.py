@@ -273,7 +273,7 @@ class FaissVectorStore(VectorStore):
             # Convert score based on metric
             if self.metric == DistanceMetric.COSINE:
                 # Inner product of normalized vectors = cosine similarity
-                score = score  # Already in [0, 1] for similarity
+                score = score  # noqa: PLW0127 - Intentional: documenting that score is already normalized
             elif self.metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
                 # Convert distance to similarity score
                 score = 1.0 / (1.0 + score)
@@ -324,7 +324,7 @@ class FaissVectorStore(VectorStore):
 
         # Count with filter
         count = 0
-        for internal_id, metadata in self.metadata_store.items():
+        for metadata in self.metadata_store.values():
             match = all(
                 metadata.get(key) == value
                 for key, value in filter.items()
