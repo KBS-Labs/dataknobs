@@ -145,6 +145,8 @@ nav:
     - UV Environment: development/uv-environment.md
     - Quality Checks: development/quality-checks.md
     - Linting Configuration: development/linting-configuration.md
+    - MyPy Configuration: development/mypy-configuration.md
+    - Python Compatibility: development/python-compatibility.md
     - Testing: development/testing.md
     - Testing Guide: development/testing-guide.md
     - Integration Testing & CI: development/integration-testing-ci.md

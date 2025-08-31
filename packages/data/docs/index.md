@@ -21,7 +21,7 @@ The DataKnobs Data Package provides a unified data abstraction layer for consist
 - [Batch Processing](BATCH_PROCESSING_GUIDE.md) - Efficient bulk operations
 
 ### Active Development
-- [Linting Errors Checklist](active/linting-errors-checklist.md) - Current linting issues to address
+(Currently no active development checklists)
 
 ## Development History
 
@@ -63,6 +63,14 @@ Comprehensive vector search capability development:
 Backend optimization and code consolidation:
 - [Shared Code Analysis](history/postgres-refactoring/analysis_postgres_shared_code.md) - Code analysis
 - [Refactoring Summary](history/postgres-refactoring/POSTGRES_REFACTORING_SUMMARY.md) - Changes made
+
+### Linting & Type Checking Improvements (August 30-31, 2025)
+Comprehensive code quality improvements:
+- [Linting Errors Checklist](history/linting-and-type-checking/linting-errors-checklist.md) - Complete tracking of linting and type checking fixes
+  - Reduced Ruff errors from ~1500 to 0 (with configuration)
+  - Reduced MyPy errors from 774 to 41 (focused mode)
+  - Fixed Python 3.9 compatibility issues
+  - Added VectorStoreFactory for proper separation of concerns
 
 ## Installation
 
