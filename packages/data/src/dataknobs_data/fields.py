@@ -88,6 +88,8 @@ class Field:
             FieldType.TEXT: lambda v: isinstance(v, str),
         }
 
+        if self.type is None:
+            return True
         validator = type_validators.get(self.type)
         if validator:
             return validator(self.value)
@@ -112,10 +114,14 @@ class Field:
             (FieldType.TEXT, FieldType.STRING): lambda v: v,
         }
 
+        if self.type is None:
+            raise ValueError(f"Cannot convert {self.name} from None to {target_type}")
+        
         converter_key = (self.type, target_type)
         if converter_key in converters:
             try:
-                new_value = converters[converter_key](self.value)
+                converter = converters[converter_key]
+                new_value = converter(self.value)
                 return Field(
                     name=self.name, value=new_value, type=target_type, metadata=self.metadata.copy()
                 )

@@ -192,6 +192,10 @@ class VectorStore(ABC, VectorStoreBase):
             vector_obj = record.fields[vector_field]
             if not isinstance(vector_obj, VectorField):
                 continue
+            
+            # Skip records without IDs
+            if record.id is None:
+                continue
 
             vectors.append(vector_obj.value)
             ids.append(record.id)

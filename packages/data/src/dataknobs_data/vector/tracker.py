@@ -192,6 +192,10 @@ class ChangeTracker:
         Args:
             record: The created record
         """
+        # Skip if record has no ID
+        if record.id is None:
+            return
+            
         for field_name in record.fields.keys():
             value = record.get_value(field_name)
             if field_name in self._dependencies:

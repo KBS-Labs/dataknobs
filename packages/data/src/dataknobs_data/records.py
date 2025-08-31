@@ -560,7 +560,7 @@ class Record:
                     )
             new_metadata = copy.deepcopy(self.metadata)
         else:
-            new_fields = OrderedDict(self.fields)
+            new_fields = OrderedDict(self.fields)  # type: ignore[arg-type]
             new_metadata = self.metadata.copy()
 
         return Record(data=new_fields, metadata=new_metadata, id=self.id)

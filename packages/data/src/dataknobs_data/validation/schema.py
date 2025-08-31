@@ -100,7 +100,7 @@ class Field:
         if value is None:
             return True  # None is handled separately
 
-        type_map = {
+        type_map: dict[FieldType, type | tuple[type, ...]] = {
             FieldType.STRING: str,
             FieldType.INTEGER: int,
             FieldType.FLOAT: (int, float),  # Accept both

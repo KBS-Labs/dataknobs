@@ -277,7 +277,12 @@ class VectorSyncMixin:
                 if text_content:
                     from ..fields import VectorField
 
-                    embeddings = await embedding_fn([text_content])
+                    result = embedding_fn([text_content])
+                    # Handle both sync and async embedding functions
+                    if hasattr(result, '__await__'):
+                        embeddings = await result  # type: ignore[misc]
+                    else:
+                        embeddings = result
                     record.fields[vector_field] = VectorField(
                         name=vector_field,
                         value=embeddings[0],

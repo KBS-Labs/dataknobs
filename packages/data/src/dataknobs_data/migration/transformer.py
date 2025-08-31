@@ -214,24 +214,18 @@ class Transformer:
         self.rules.append(rule)
         return self
 
-    def transform(self, record: Record) -> Record | None:
+    def transform(self, record: Record) -> Record:
         """Apply all transformation rules to a record.
         
         Args:
             record: Record to transform
             
         Returns:
-            Transformed record, or None if record should be filtered out
+            Transformed record
         """
-        if record is None:
-            return None
-
         result = record
         for rule in self.rules:
             result = rule.apply(result)
-            if result is None:
-                # Rule filtered out the record
-                return None
 
         return result
 
@@ -242,13 +236,12 @@ class Transformer:
             records: List of records to transform
             
         Returns:
-            List of transformed records (filtered records excluded)
+            List of transformed records
         """
         results = []
         for record in records:
             transformed = self.transform(record)
-            if transformed is not None:
-                results.append(transformed)
+            results.append(transformed)
         return results
 
     def clear(self) -> Transformer:

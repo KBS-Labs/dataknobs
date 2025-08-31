@@ -441,7 +441,7 @@ class TypeMapper:
                         # Use string dtype for nullable strings
                         result_df[col] = result_df[col].astype("string")
                     else:
-                        result_df[col] = result_df[col].astype(dtype)  # type: ignore[arg-type]
+                        result_df[col] = result_df[col].astype(dtype)  # type: ignore[call-overload]
                 except (TypeError, ValueError):
                     # If casting fails, leave as is
                     pass

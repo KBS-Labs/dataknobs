@@ -7,6 +7,9 @@ from dataknobs_config import FactoryBase
 
 from dataknobs_data.database import SyncDatabase
 
+# Import the VectorStoreFactory from vector.stores.factory
+from dataknobs_data.vector.stores.factory import VectorStoreFactory
+
 
 logger = logging.getLogger(__name__)
 
@@ -105,36 +108,10 @@ class DatabaseFactory(FactoryBase):
                     "Install with: pip install dataknobs-data[s3]"
                 ) from e
 
-        # Vector store backends
-        elif backend_type == "faiss":
-            try:
-                from dataknobs_data.vector.stores.faiss import FaissVectorStore
-                return FaissVectorStore(config)
-            except ImportError as e:
-                raise ValueError(
-                    "Faiss backend requires faiss-cpu. "
-                    "Install with: pip install faiss-cpu"
-                ) from e
-
-        elif backend_type in ("chroma", "chromadb"):
-            try:
-                from dataknobs_data.vector.stores.chroma import ChromaVectorStore
-                return ChromaVectorStore(config)
-            except ImportError as e:
-                raise ValueError(
-                    "Chroma backend requires chromadb. "
-                    "Install with: pip install chromadb"
-                ) from e
-
-        elif backend_type == "memory_vector":
-            from dataknobs_data.vector.stores.memory import MemoryVectorStore
-            return MemoryVectorStore(config)
-
         else:
             raise ValueError(
                 f"Unknown backend type: {backend_type}. "
-                f"Available backends: memory, file, postgres, elasticsearch, sqlite, s3, "
-                f"faiss, chroma, memory_vector"
+                f"Available backends: memory, file, postgres, elasticsearch, sqlite, s3"
             )
 
 
@@ -221,38 +198,6 @@ class DatabaseFactory(FactoryBase):
                     "access_key_id": "AWS access key (or use IAM role)",
                     "secret_access_key": "AWS secret key (or use IAM role)"
                 }
-            },
-            "faiss": {
-                "description": "Facebook AI Similarity Search vector store",
-                "persistent": False,
-                "requires_install": "pip install faiss-cpu",
-                "config_options": {
-                    "dimensions": "Vector dimensions (required)",
-                    "metric": "Distance metric: cosine, euclidean, dot_product (default: cosine)",
-                    "index_type": "Index type: flat, ivfflat, hnsw (default: auto)",
-                    "nlist": "Number of clusters for IVF index",
-                    "m": "Number of connections for HNSW"
-                }
-            },
-            "chroma": {
-                "description": "ChromaDB vector database",
-                "persistent": True,
-                "requires_install": "pip install chromadb",
-                "config_options": {
-                    "collection_name": "Collection name (default: vectors)",
-                    "persist_directory": "Directory for persistence (optional)",
-                    "dimensions": "Vector dimensions (required)",
-                    "metric": "Distance metric: cosine, euclidean, dot_product (default: cosine)"
-                }
-            },
-            "memory_vector": {
-                "description": "In-memory vector store for testing",
-                "persistent": False,
-                "requires_install": False,
-                "config_options": {
-                    "dimensions": "Vector dimensions (required)",
-                    "metric": "Distance metric: cosine, euclidean, dot_product (default: cosine)"
-                }
             }
         }
 
@@ -320,6 +265,13 @@ class AsyncDatabaseFactory(FactoryBase):
             )
 
 
+# TODO: Add AsyncVectorStoreFactory when async vector stores are implemented
+# The async vector store implementations (AsyncFaissVectorStore, AsyncChromaVectorStore, 
+# AsyncMemoryVectorStore) and base class (AsyncVectorStore) need to be created first.
+
+
 # Create singleton instances for registration
 database_factory = DatabaseFactory()
 async_database_factory = AsyncDatabaseFactory()
+vector_store_factory = VectorStoreFactory()
+# TODO: add an 'async_vector_store_factory = AsyncVectorStoreFactory()' when async vector stores are implemented

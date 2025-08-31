@@ -3,22 +3,27 @@
 import numpy as np
 import pytest
 
-from dataknobs_data.factory import DatabaseFactory
+from dataknobs_data.factory import DatabaseFactory, VectorStoreFactory
 from dataknobs_data.query import Query
 
 
 class TestVectorIntegration:
-    """Test vector store integration with DatabaseFactory."""
+    """Test vector store integration with VectorStoreFactory."""
     
     @pytest.fixture
     def factory(self):
+        """Create a vector store factory."""
+        return VectorStoreFactory()
+    
+    @pytest.fixture
+    def db_factory(self):
         """Create a database factory."""
         return DatabaseFactory()
     
     def test_create_memory_vector_store(self, factory):
         """Test creating a memory vector store via factory."""
         store = factory.create(
-            backend="memory_vector",
+            backend="memory",
             dimensions=128,
             metric="cosine"
         )
@@ -27,10 +32,10 @@ class TestVectorIntegration:
         assert hasattr(store, "add_vectors")
         assert hasattr(store, "search")
     
-    def test_vector_enabled_database(self, factory):
+    def test_vector_enabled_database(self, db_factory):
         """Test creating a vector-enabled database."""
         # Test that all backends now support vector mode
-        db = factory.create(
+        db = db_factory.create(
             backend="memory",  # Memory backend now supports vector mode via Python-based search
             vector_enabled=True,
             vector_dimensions=256
@@ -62,7 +67,7 @@ class TestVectorIntegration:
         """Test complete workflow from creation to search."""
         # Create a memory vector store
         store = factory.create(
-            backend="memory_vector",
+            backend="memory",
             dimensions=64,
             metric="cosine"
         )
@@ -109,23 +114,21 @@ class TestVectorIntegration:
         )
         assert len(results2) <= 5  # Just check we get results
     
-    def test_backend_info(self, factory):
+    def test_backend_info(self, factory, db_factory):
         """Test getting backend information."""
-        # Test vector store info
+        # Test standalone vector store info
         faiss_info = factory.get_backend_info("faiss")
         assert "description" in faiss_info
         assert "Facebook AI" in faiss_info["description"]
-        assert faiss_info["persistent"] is False
         
         chroma_info = factory.get_backend_info("chroma")
         assert "ChromaDB" in chroma_info["description"]
-        assert chroma_info["persistent"] is True
         
-        memory_vector_info = factory.get_backend_info("memory_vector")
-        assert "In-memory vector" in memory_vector_info["description"]
+        memory_info = factory.get_backend_info("memory")
+        assert "In-memory vector" in memory_info["description"]
         
         # Test vector-enabled database info
-        postgres_info = factory.get_backend_info("postgres")
+        postgres_info = db_factory.get_backend_info("postgres")
         assert "vector_support" in postgres_info
         assert postgres_info["vector_support"] is True
         assert "pgvector" in postgres_info["description"]
@@ -135,7 +138,7 @@ class TestVectorIntegration:
         """Test vector queries with Query class."""
         # Create a memory vector store
         store = factory.create(
-            backend="memory_vector",
+            backend="memory",
             dimensions=128,
             metric="euclidean"
         )
@@ -172,7 +175,7 @@ class TestVectorIntegration:
     async def test_hybrid_search_workflow(self, factory):
         """Test hybrid search combining filters and vectors."""
         store = factory.create(
-            backend="memory_vector",
+            backend="memory",
             dimensions=64,
             metric="cosine"
         )
@@ -216,7 +219,7 @@ class TestVectorIntegration:
     def test_configuration_validation(self, factory):
         """Test configuration validation for vector stores."""
         # Test creating with empty config (should use defaults)
-        store = factory.create(backend="memory_vector")
+        store = factory.create(backend="memory")
         assert store is not None  # Should work with defaults
     
     @pytest.mark.asyncio
@@ -225,7 +228,7 @@ class TestVectorIntegration:
         backends_to_test = []
         
         # Memory vector store (always available)
-        backends_to_test.append(("memory_vector", {
+        backends_to_test.append(("memory", {
             "dimensions": 64,
             "metric": "cosine"
         }))

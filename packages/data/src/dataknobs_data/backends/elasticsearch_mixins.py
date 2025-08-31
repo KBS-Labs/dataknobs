@@ -75,7 +75,8 @@ class ElasticsearchIndexManager:
         if vector_fields:
             for field_name, dimensions in vector_fields.items():
                 # Use dense_vector type for vector fields nested under data
-                mappings["properties"]["data"]["properties"][field_name] = {
+                data_props = mappings["properties"]["data"]["properties"]  # type: ignore[index]
+                data_props[field_name] = {
                     "type": "dense_vector",
                     "dims": dimensions,
                     "index": True,
@@ -261,9 +262,10 @@ class ElasticsearchRecordSerializer:
                 all(isinstance(v, (int, float)) for v in value)
             ):
                 # This looks like a vector field
+                vector_value = np.array(value, dtype=np.float32) if value else np.array([], dtype=np.float32)
                 fields[field_name] = VectorField(
                     name=field_name,
-                    value=np.array(value, dtype=np.float32) if value else None,
+                    value=vector_value,
                     source_field=field_meta.get("source_field"),
                     model_name=field_meta.get("model"),
                     model_version=field_meta.get("model_version"),

@@ -231,7 +231,10 @@ class DataFrameConverter:
         """
         data = {}
         for field_name, field in record.fields.items():
-            value = self.type_mapper.convert_value_to_pandas(field.value, field.type)
+            if field.type is not None:
+                value = self.type_mapper.convert_value_to_pandas(field.value, field.type)
+            else:
+                value = field.value
             data[field_name] = value
 
         series = pd.Series(data)
@@ -254,7 +257,12 @@ class DataFrameConverter:
         Returns:
             Record
         """
-        record = Record(id=record_id or series.name if hasattr(series, 'name') else None)
+        # Get ID - series.name is Hashable, we need str | None
+        id_value = record_id
+        if not id_value and hasattr(series, 'name'):
+            name = series.name
+            id_value = str(name) if name is not None else None
+        record = Record(id=id_value)
 
         for column, value in series.items():
             # Skip metadata columns
@@ -407,7 +415,7 @@ class DataFrameConverter:
         if options.preserve_types:
             for record in records[:10]:  # Sample first 10 records
                 for field_name, field in record.fields.items():
-                    if field_name in df.columns:
+                    if field_name in df.columns and field.type is not None:
                         df_dtype = str(df[field_name].dtype)
                         expected_dtype = str(self.type_mapper.field_type_to_pandas(field.type))
                         if df_dtype != expected_dtype:

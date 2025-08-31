@@ -60,13 +60,13 @@ class Coercer:
 
     def _field_type_to_python(self, field_type: FieldType) -> type:
         """Convert FieldType enum to Python type."""
-        type_map = {
+        type_map: dict[FieldType, type] = {
             FieldType.STRING: str,
             FieldType.INTEGER: int,
             FieldType.FLOAT: float,
             FieldType.BOOLEAN: bool,
             FieldType.DATETIME: datetime,
-            FieldType.JSON: (dict, list),
+            FieldType.JSON: dict,  # Using dict as primary type for JSON
             FieldType.BINARY: bytes,
         }
         return type_map.get(field_type, object)
@@ -75,14 +75,13 @@ class Coercer:
         """Get readable name for type."""
         if isinstance(target_type, FieldType):
             return target_type.name
-        elif isinstance(target_type, type):
-            return target_type.__name__
         elif isinstance(target_type, tuple):
             # Union type represented as tuple
-            return f"Union[{', '.join(t.__name__ for t in target_type)}]"
-        else:
-            # Fallback for unknown types
-            return str(target_type)
+            return f"Union[{', '.join(t.__name__ if hasattr(t, '__name__') else str(t) for t in target_type)}]"
+        elif isinstance(target_type, type):
+            return target_type.__name__
+        # Fallback for unknown types
+        return str(target_type)
 
     def _coerce_value(self, value: Any, target_type: type) -> Any:
         """Perform the actual coercion.

@@ -22,11 +22,11 @@ class DistanceMetric(Enum):
 
     def get_aliases(self) -> list[str]:
         """Get alternative names for this metric."""
-        aliases = {
-            self.COSINE: ["cosine_similarity", "cos"],
-            self.EUCLIDEAN: ["l2", "euclidean_distance"],
-            self.DOT_PRODUCT: ["inner_product", "ip"],
-            self.L1: ["manhattan", "l1_distance"],
+        aliases: dict[DistanceMetric, list[str]] = {
+            DistanceMetric.COSINE: ["cosine_similarity", "cos"],
+            DistanceMetric.EUCLIDEAN: ["l2", "euclidean_distance"],
+            DistanceMetric.DOT_PRODUCT: ["inner_product", "ip"],
+            DistanceMetric.L1: ["manhattan", "l1_distance"],
         }
         return aliases.get(self, [])
 

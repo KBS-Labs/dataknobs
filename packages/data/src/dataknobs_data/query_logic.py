@@ -154,7 +154,8 @@ class QueryBuilder:
 
     def where(self, field: str, operator: str | Operator, value: Any = None) -> QueryBuilder:
         """Add a filter condition (defaults to AND with existing conditions)."""
-        filter_cond = FilterCondition(Filter(field, operator, value))
+        op = Operator(operator) if isinstance(operator, str) else operator
+        filter_cond = FilterCondition(Filter(field, op, value))
 
         if self.root_condition is None:
             self.root_condition = filter_cond

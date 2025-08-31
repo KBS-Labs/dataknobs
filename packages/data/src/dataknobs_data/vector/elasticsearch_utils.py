@@ -189,7 +189,8 @@ def format_vector_for_elasticsearch(vector: np.ndarray | list[float]) -> list[fl
     """
     if isinstance(vector, np.ndarray):
         # Convert to list and ensure float32
-        return vector.astype(np.float32).tolist()
+        result: list[float] = vector.astype(np.float32).tolist()
+        return result
     elif isinstance(vector, list):
         # Ensure all values are floats
         return [float(v) for v in vector]
