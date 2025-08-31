@@ -117,7 +117,7 @@ class LogicCondition(Condition):
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> LogicCondition:
         """Create from dictionary representation."""
-        conditions = []
+        conditions: list[Condition] = []
         for cond_data in data.get("conditions", []):
             if cond_data["type"] == "filter":
                 conditions.append(FilterCondition.from_dict(cond_data))
@@ -326,7 +326,7 @@ class ComplexQuery:
         """Create a complex query with AND logic."""
         from .query import Query
 
-        conditions = []
+        conditions: list[Condition] = []
         for q in queries:
             if isinstance(q, Query):
                 # Convert Query filters to conditions
@@ -342,7 +342,7 @@ class ComplexQuery:
         """Create a complex query with OR logic."""
         from .query import Query
 
-        conditions = []
+        conditions: list[Condition] = []
         for q in queries:
             if isinstance(q, Query):
                 # Convert Query filters to conditions

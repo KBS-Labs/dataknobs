@@ -29,8 +29,12 @@ class S3PoolConfig(BasePoolConfig):
     @classmethod
     def from_dict(cls, config: dict) -> "S3PoolConfig":
         """Create from configuration dictionary."""
+        bucket = config.get("bucket")
+        if bucket is None:
+            raise ValueError("S3 bucket configuration is required")
+        
         return cls(
-            bucket=config.get("bucket"),
+            bucket=bucket,
             prefix=config.get("prefix", ""),
             region_name=config.get("region_name"),
             aws_access_key_id=config.get("aws_access_key_id"),

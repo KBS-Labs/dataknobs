@@ -395,7 +395,7 @@ class AsyncSQLiteDatabase(
         """Stream records into database."""
         import time
 
-        from ..streaming import StreamConfig, StreamProgress, StreamResult
+        from ..streaming import StreamConfig, StreamResult
 
         config = config or StreamConfig()
         batch = []
@@ -419,17 +419,11 @@ class AsyncSQLiteDatabase(
         elapsed = time.time() - start_time
 
         return StreamResult(
-            records=[],  # Don't return records for write operations
-            has_more=False,
-            progress=StreamProgress(
-                current=total_written,
-                total=total_written,
-                percentage=100.0
-            ),
-            metadata={
-                "total_written": total_written,
-                "elapsed_seconds": elapsed
-            }
+            total_processed=total_written,
+            successful=total_written,
+            failed=0,
+            duration=elapsed,
+            total_batches=(total_written + config.batch_size - 1) // config.batch_size
         )
 
     async def vector_search(

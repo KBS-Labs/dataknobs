@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from .base import BasePoolConfig
 
@@ -27,10 +28,14 @@ class ElasticsearchPoolConfig(BasePoolConfig):
 
     def to_connection_string(self) -> str:
         """Convert to connection string (not used for ES, but required by base)."""
+        if self.hosts is None:
+            raise ValueError("Elasticsearch hosts configuration is missing")
         return ";".join(self.hosts)
 
     def to_hash_key(self) -> tuple:
         """Create a hashable key for this configuration."""
+        if self.hosts is None:
+            raise ValueError("Elasticsearch hosts configuration is missing")
         return (tuple(self.hosts), self.index)
 
     @classmethod
@@ -67,8 +72,12 @@ async def create_async_elasticsearch_client(config: ElasticsearchPoolConfig):
     """Create an async Elasticsearch client."""
     from elasticsearch import AsyncElasticsearch
 
+    # Ensure hosts is not None (should be set by __post_init__)
+    if config.hosts is None:
+        raise ValueError("Elasticsearch hosts configuration is missing")
+    
     # Build client configuration
-    client_config = {
+    client_config: dict[str, Any] = {
         "hosts": config.hosts,
     }
 

@@ -70,7 +70,7 @@ class VectorOperationsMixin(ABC):
     @abstractmethod
     async def vector_search(
         self,
-        query_vector: "np.ndarray | list[float]",
+        query_vector: np.ndarray | list[float],
         vector_field: str = "embedding",
         k: int = 10,
         metric: DistanceMetric = DistanceMetric.COSINE,
@@ -100,7 +100,7 @@ class VectorOperationsMixin(ABC):
         records: list[Record],
         text_field: str | list[str],
         vector_field: str = "embedding",
-        embedding_fn: Callable[[list[str]], "np.ndarray"] | None = None,
+        embedding_fn: Callable[[list[str]], np.ndarray] | None = None,
         batch_size: int = 100,
         model_name: str | None = None,
         model_version: str | None = None,
@@ -125,7 +125,7 @@ class VectorOperationsMixin(ABC):
         self,
         record_id: str,
         vector_field: str,
-        vector: "np.ndarray | list[float]",
+        vector: np.ndarray | list[float],
         metadata: dict[str, Any] | None = None,
     ) -> bool:
         """Update a vector field for a specific record.
@@ -237,7 +237,7 @@ class VectorSyncMixin:
         records: list[Record],
         text_fields: list[str],
         vector_field: str = "embedding",
-        embedding_fn: Callable[[list[str]], "np.ndarray"] | None = None,
+        embedding_fn: Callable[[list[str]], np.ndarray] | None = None,
         force: bool = False,
     ) -> int:
         """Synchronize vector embeddings with text content.

@@ -127,7 +127,7 @@ class SchemaFactory(FactoryBase):
         Returns:
             List of Constraint objects
         """
-        constraints = []
+        constraints: list[Constraint] = []
 
         for config in constraint_configs:
             constraint_type = config.get("type", "").lower()

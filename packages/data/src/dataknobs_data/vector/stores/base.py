@@ -38,7 +38,7 @@ class VectorStore(ABC, VectorStoreBase):
     @abstractmethod
     async def add_vectors(
         self,
-        vectors: "np.ndarray | list[np.ndarray]",
+        vectors: np.ndarray | list[np.ndarray],
         ids: list[str] | None = None,
         metadata: list[dict[str, Any]] | None = None,
     ) -> list[str]:
@@ -59,7 +59,7 @@ class VectorStore(ABC, VectorStoreBase):
         self,
         ids: list[str],
         include_metadata: bool = True,
-    ) -> list[tuple["np.ndarray", dict[str, Any] | None]]:
+    ) -> list[tuple[np.ndarray, dict[str, Any] | None]]:
         """Retrieve vectors by ID.
         
         Args:
@@ -86,7 +86,7 @@ class VectorStore(ABC, VectorStoreBase):
     @abstractmethod
     async def search(
         self,
-        query_vector: "np.ndarray",
+        query_vector: np.ndarray,
         k: int = 10,
         filter: dict[str, Any] | None = None,
         include_metadata: bool = True,
@@ -140,7 +140,7 @@ class VectorStore(ABC, VectorStoreBase):
 
     async def update_vectors(
         self,
-        vectors: "np.ndarray | list[np.ndarray]",
+        vectors: np.ndarray | list[np.ndarray],
         ids: list[str],
         metadata: list[dict[str, Any]] | None = None,
     ) -> list[str]:
@@ -227,7 +227,7 @@ class VectorStore(ABC, VectorStoreBase):
 
     async def search_similar_records(
         self,
-        query_vector: "np.ndarray",
+        query_vector: np.ndarray,
         k: int = 10,
         filter: dict[str, Any] | None = None,
         fetch_records: Callable[[list[str]], list[Record]] | None = None,
@@ -294,7 +294,7 @@ class VectorStore(ABC, VectorStoreBase):
     async def bulk_embed_and_store(
         self,
         texts: list[str],
-        embedding_fn: Callable[[list[str]], "np.ndarray"],
+        embedding_fn: Callable[[list[str]], np.ndarray],
         ids: list[str] | None = None,
         metadata: list[dict[str, Any]] | None = None,
         batch_size: int | None = None,

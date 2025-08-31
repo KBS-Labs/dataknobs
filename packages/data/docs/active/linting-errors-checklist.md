@@ -47,8 +47,8 @@ These have been evaluated and determined to be stylistic preferences that don't 
 
 ### Summary
 - **Total errors (comprehensive)**: 587 (with pyproject.toml, when mypy.ini is absent)
-- **Critical errors (focused)**: 141 (with mypy.ini - used by default)
-- **Reduction achieved**: 774 → 587 → 141 (by suppressing less critical issues)
+- **Critical errors (focused)**: ~~141~~ → ~~117~~ → **92** (with mypy.ini - used by default)
+- **Reduction achieved**: 774 → 587 → 141 → 117 → 92 (49 errors fixed in latest session)
 
 ### Major Accomplishments ✅
 
@@ -86,11 +86,12 @@ Added to dev-dependencies in pyproject.toml:
 
 Created two-tier type checking approach:
 
-1. **Focused Mode (`mypy.ini`)** - 141 critical errors:
-   - `arg-type` (79) - Incorrect argument types
-   - `return-value` (17) - Wrong return types
-   - `operator` (12) - Unsupported operations
-   - `call-arg` (9) - Invalid function arguments
+1. **Focused Mode (`mypy.ini`)** - ~~141~~ → **117 critical errors**:
+   - `arg-type` - Incorrect argument types (still majority)
+   - `return-value` - Wrong return types
+   - `operator` - Unsupported operations 
+   - `call-arg` - Invalid function arguments
+   - `misc` - Definition incompatibilities
    - Other critical issues
 
 2. **Comprehensive Mode (`pyproject.toml`)** - 587 total errors:
@@ -107,28 +108,69 @@ Created two-tier type checking approach:
 - `override` (25) - Method signature incompatibilities
 - `var-annotated` (15) - Missing variable annotations
 
-### Next Priority Areas
+### Fixes Applied in August 31, 2025 Morning Session ✅
 
-#### Priority 1: Add py.typed Marker 🔴
-The package needs a `py.typed` marker file to indicate it supports type checking:
-- [ ] Add empty `py.typed` file to package root
-- [ ] This will resolve 59 `[import-untyped]` errors
+#### 1. StreamResult Constructor Issues (8 instances) - FIXED ✅
+- **Problem**: `StreamResult` was being instantiated with wrong parameters (`records`, `has_more`, `progress`, `metadata`)
+- **Root Cause**: Code was never tested - discovered when adding tests
+- **Fix**: Updated sqlite.py and sqlite_async.py to use correct dataclass fields
+- **Tests Added**: 3 comprehensive stream_write tests (sync and async) - all passing
 
-#### Priority 2: Attribute Access Issues (133 instances) 🟠
-Most common patterns needing type guards:
-- [ ] Vector store operations on potentially None indices
-- [ ] Collection operations on potentially None collections
-- [ ] Add proper initialization checks and type guards
+#### 2. bulk_embed_and_store Signature Mismatch (8 instances) - FIXED ✅
+- **Problem**: `BulkEmbedMixin` had `Callable[[list[str]], Any]` while `VectorOperationsMixin` expected `Callable[[list[str]], np.ndarray]`
+- **Fix**: Updated BulkEmbedMixin to use `np.ndarray` return type
+- **Files Changed**: `vector/bulk_embed_mixin.py`
 
-#### Priority 3: Missing Type Annotations (82 instances) 🟡
-- [ ] Add return type annotations to public methods
-- [ ] Add type hints to function arguments
-- [ ] Focus on public API first, internal methods later
+#### 3. LogicCondition/FilterCondition Type Issues (9 instances) - FIXED ✅
+- **Problem**: List invariance - `list[FilterCondition]` cannot be passed as `list[Condition]`
+- **Fix**: Added type annotations `list[Condition]` for condition lists
+- **Files Changed**: `query.py`, `query_logic.py`
 
-#### Priority 4: Union Type Handling (70 instances) 🟢
-- [ ] Add proper type narrowing for union types
-- [ ] Use isinstance checks before attribute access
-- [ ] Consider using TypeGuard functions for complex cases
+#### 4. Validation Factory Constraint Issues (1 instance) - FIXED ✅
+- **Problem**: Missing type annotation causing MyPy to infer wrong type
+- **Fix**: Added `list[Constraint]` type annotation
+- **Files Changed**: `validation/factory.py`
+
+### Fixes Applied in August 31, 2025 Afternoon Session ✅
+
+#### 1. AsyncElasticsearch Configuration Issues (20 instances) - FIXED ✅
+- **Problem**: Type inference issues with client configuration dictionary
+- **Fix**: Added explicit type annotation `dict[str, Any]` and validation checks
+- **Files Changed**: `pooling/elasticsearch.py`, `pooling/s3.py`
+
+#### 2. Type Annotation Quotes Cleanup (3 instances) - FIXED ✅
+- **Problem**: Unnecessary quotes around type annotations with `from __future__ import annotations`
+- **Fix**: Removed quotes from `np.ndarray` type annotations
+- **Files Changed**: `vector/mixins.py`, `vector/stores/base.py`
+
+#### 3. SQLite Mixins Return Types (3 instances) - FIXED ✅
+- **Problem**: Return type mismatches for vector deserialization and distance calculations
+- **Fix**: Updated return type to `np.ndarray | None` and added explicit float casts
+- **Files Changed**: `backends/sqlite_mixins.py`
+
+### Remaining Priority Areas (92 errors)
+
+#### Priority 1: Pandas Batch Operations (9 instances) 🔴
+- Unsupported operand types for + with "object" type
+- Type inference issues with counters and progress tracking
+- Files: `pandas/batch_ops.py`
+
+#### Priority 2: Backend Method Incompatibilities 🔴
+- `stream_read` async iterator issues in multiple backends
+- `_write_batch` return value issues in S3 and Postgres backends (4 instances)
+- Files: Various backend files
+
+#### Priority 3: Pandas Type Conversion Issues 🟠
+- Series.astype() overload issues
+- DataFrame metadata type incompatibilities
+- isna() overload issues with Hashable types
+- Files: `pandas/type_mapper.py`, `pandas/converter.py`, `pandas/metadata.py`
+
+#### Priority 4: Return Type Mismatches 🟡
+- Vector store return types (faiss, chroma - 4 instances)
+- numpy array type inconsistencies
+- float vs float64 conversion issues
+- Files: `vector/stores/`
 
 ## Python 3.9 Compatibility Requirements
 
@@ -197,10 +239,19 @@ uv run pytest packages/data/tests/test_validation.py -v
 
 ## Progress Summary
 
-| Check | Initial | Current | Status |
-|-------|---------|---------|--------|
-| Ruff Errors | ~1500 | 5-10 stylistic | ✅ Completed |
-| MyPy Errors | 774 | 767 | 🔄 In Progress |
-| Unreachable Code | 31 | 0 | ✅ Completed |
-| Python 3.9 Compat | ❌ Failed | ✅ Passing | ✅ Completed |
-| All Tests | ✅ Passing | ✅ Passing | ✅ Maintained |
+| Check | Initial | August 30, 2025 | August 31, 2025 (AM) | August 31, 2025 (Current) | Status |
+|-------|---------|----------------|---------------------|--------------------------|--------|
+| Ruff Errors | ~1500 | 5-10 stylistic | 5-10 stylistic | 5-10 stylistic | ✅ Completed |
+| MyPy Errors (focused) | 774 | 141 | 117 | **92** | 🔄 In Progress |
+| MyPy Errors (comprehensive) | 774 | 587 | ~570 | ~550 | 🔄 Gradual typing |
+| Unreachable Code | 31 | 0 | 0 | 0 | ✅ Completed |
+| Python 3.9 Compat | ❌ Failed | ✅ Passing | ✅ Passing | ✅ Passing | ✅ Completed |
+| All Tests | ✅ Passing | ✅ Passing | ✅ Passing + 3 new | ✅ Passing | ✅ Maintained |
+
+## Key Files with Most Remaining Errors
+
+1. **pandas/batch_ops.py** - 9 operator errors with object types
+2. **pandas/converter.py** - 5 type conversion and validation issues
+3. **migration/factory.py** - 6 argument type mismatches
+4. **vector/stores/** - 4 return type mismatches
+5. **backends/s3.py, postgres.py** - 4 _write_batch return value issues

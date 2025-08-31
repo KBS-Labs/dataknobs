@@ -87,7 +87,7 @@ class SQLiteVectorSupport:
             vector = vector.tolist()
         return json.dumps(vector)
 
-    def _deserialize_vector(self, vector_str: str) -> np.ndarray:
+    def _deserialize_vector(self, vector_str: str) -> np.ndarray | None:
         """Deserialize a vector from JSON string.
         
         Args:
@@ -143,7 +143,7 @@ class SQLiteVectorSupport:
 
         elif metric == DistanceMetric.EUCLIDEAN:
             # Convert Euclidean distance to similarity (inverse)
-            distance = np.linalg.norm(vec1 - vec2)
+            distance = float(np.linalg.norm(vec1 - vec2))
             return 1.0 / (1.0 + distance)
 
         elif metric == DistanceMetric.DOT_PRODUCT:

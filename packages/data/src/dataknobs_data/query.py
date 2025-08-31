@@ -608,10 +608,10 @@ class Query:
         Returns:
             ComplexQuery with OR logic
         """
-        from .query_logic import ComplexQuery, FilterCondition, LogicCondition, LogicOperator
+        from .query_logic import ComplexQuery, Condition, FilterCondition, LogicCondition, LogicOperator
 
         # Build OR conditions from the arguments
-        or_conditions = []
+        or_conditions: list[Condition] = []
         for item in filters:
             if isinstance(item, Filter):
                 or_conditions.append(FilterCondition(item))
@@ -690,10 +690,10 @@ class Query:
         Returns:
             ComplexQuery with NOT logic
         """
-        from .query_logic import ComplexQuery, FilterCondition, LogicCondition, LogicOperator
+        from .query_logic import ComplexQuery, Condition, FilterCondition, LogicCondition, LogicOperator
 
         # Current filters as AND
-        conditions = []
+        conditions: list[Condition] = []
         if self.filters:
             if len(self.filters) == 1:
                 conditions.append(FilterCondition(self.filters[0]))

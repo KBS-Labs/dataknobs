@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
 from ..fields import VectorField
 
 if TYPE_CHECKING:
@@ -24,7 +26,7 @@ class BulkEmbedMixin:
         records: list["Record"],
         text_field: str | list[str],
         vector_field: str = "embedding",
-        embedding_fn: Callable[[list[str]], Any] | None = None,
+        embedding_fn: Callable[[list[str]], np.ndarray] | None = None,
         batch_size: int = 100,
         model_name: str | None = None,
         model_version: str | None = None,
@@ -125,7 +127,7 @@ class AsyncBulkEmbedMixin:
         records: list["Record"],
         text_field: str | list[str],
         vector_field: str = "embedding",
-        embedding_fn: Callable[[list[str]], Any] | None = None,
+        embedding_fn: Callable[[list[str]], np.ndarray] | None = None,
         batch_size: int = 100,
         model_name: str | None = None,
         model_version: str | None = None,
