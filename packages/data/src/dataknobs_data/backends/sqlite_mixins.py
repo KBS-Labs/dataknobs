@@ -7,9 +7,13 @@ import logging
 
 import numpy as np
 
+from typing import TYPE_CHECKING
 from ..fields import VectorField
-from ..records import Record
 from ..vector.types import DistanceMetric
+
+if TYPE_CHECKING:
+    from ..records import Record
+
 
 logger = logging.getLogger(__name__)
 

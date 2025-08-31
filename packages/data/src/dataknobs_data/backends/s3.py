@@ -5,10 +5,9 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from uuid import uuid4
 
 from dataknobs_config import ConfigurableBase
@@ -24,10 +23,14 @@ from ..vector.python_vector_search import PythonVectorSearchMixin
 from .sqlite_mixins import SQLiteVectorSupport
 from .vector_config_mixin import VectorConfigMixin
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+
 logger = logging.getLogger(__name__)
 
 
-class SyncS3Database(
+class SyncS3Database(  # type: ignore[misc]
     SyncDatabase,
     ConfigurableBase,
     VectorConfigMixin,
@@ -81,7 +84,7 @@ class SyncS3Database(
         self._init_vector_state()
 
     @classmethod
-    def from_config(cls, config: dict) -> "SyncS3Database":
+    def from_config(cls, config: dict) -> SyncS3Database:
         """Create instance from configuration dictionary."""
         return cls(config)
 
@@ -546,7 +549,7 @@ class SyncS3Database(
             # Wait for all writes to complete
             for future in as_completed(futures):
                 future.result()  # This will raise if there was an error
-        
+
         return ids
 
     def _write_single(self, record_id: str, record: Record) -> None:

@@ -39,7 +39,7 @@ class ElasticsearchPoolConfig(BasePoolConfig):
         return (tuple(self.hosts), self.index)
 
     @classmethod
-    def from_dict(cls, config: dict) -> "ElasticsearchPoolConfig":
+    def from_dict(cls, config: dict) -> ElasticsearchPoolConfig:
         """Create from configuration dictionary."""
         # Handle both old-style (host, port) and new-style (hosts) configuration
         if "hosts" in config:
@@ -75,7 +75,7 @@ async def create_async_elasticsearch_client(config: ElasticsearchPoolConfig):
     # Ensure hosts is not None (should be set by __post_init__)
     if config.hosts is None:
         raise ValueError("Elasticsearch hosts configuration is missing")
-    
+
     # Build client configuration
     client_config: dict[str, Any] = {
         "hosts": config.hosts,

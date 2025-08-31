@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ..fields import FieldType
-from ..records import Record
 from .types import DistanceMetric, VectorSearchResult
 
 if TYPE_CHECKING:
     import numpy as np
-
+    from collections.abc import Callable
     from ..query import Query
+    from ..records import Record
 
 
 class VectorCapable(Protocol):
@@ -74,7 +73,7 @@ class VectorOperationsMixin(ABC):
         vector_field: str = "embedding",
         k: int = 10,
         metric: DistanceMetric = DistanceMetric.COSINE,
-        filter: "Query | None" = None,
+        filter: Query | None = None,
         include_source: bool = True,
         score_threshold: float | None = None,
     ) -> list[VectorSearchResult]:

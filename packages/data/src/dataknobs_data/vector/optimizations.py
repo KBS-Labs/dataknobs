@@ -5,14 +5,16 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import deque
-from collections.abc import Callable
 from dataclasses import dataclass
 from threading import Lock
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import numpy as np
 
-from .types import DistanceMetric
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from .types import DistanceMetric
+
 
 logger = logging.getLogger(__name__)
 

@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Callable, Iterator
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from .database_utils import ensure_record_id, process_search_results
 from .query import Query
-from .query_logic import ComplexQuery
-from .records import Record
 from .schema import DatabaseSchema, FieldSchema
-from .streaming import StreamConfig, StreamResult
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Callable, Iterator
+    from .query_logic import ComplexQuery
+    from .records import Record
+    from .streaming import StreamConfig, StreamResult
 
 
 class AsyncDatabase(ABC):
@@ -123,7 +125,7 @@ class AsyncDatabase(ABC):
         """
         self.schema.add_field(field_schema)
 
-    def with_schema(self, **field_definitions) -> "AsyncDatabase":
+    def with_schema(self, **field_definitions) -> AsyncDatabase:
         """Set schema using field definitions.
         
         Returns self for chaining.
@@ -460,7 +462,7 @@ class AsyncDatabase(ABC):
                 yield record
 
     @classmethod
-    async def from_backend(cls, backend: str, config: dict[str, Any] | None = None) -> "AsyncDatabase":
+    async def from_backend(cls, backend: str, config: dict[str, Any] | None = None) -> AsyncDatabase:
         """Factory method to create and connect a database instance.
 
         Args:
@@ -578,7 +580,7 @@ class SyncDatabase(ABC):
         """
         self.schema.add_field(field_schema)
 
-    def with_schema(self, **field_definitions) -> "SyncDatabase":
+    def with_schema(self, **field_definitions) -> SyncDatabase:
         """Set schema using field definitions.
         
         Returns self for chaining.
@@ -832,7 +834,7 @@ class SyncDatabase(ABC):
                 yield record
 
     @classmethod
-    def from_backend(cls, backend: str, config: dict[str, Any] | None = None) -> "SyncDatabase":
+    def from_backend(cls, backend: str, config: dict[str, Any] | None = None) -> SyncDatabase:
         """Factory method to create and connect a synchronous database instance.
 
         Args:

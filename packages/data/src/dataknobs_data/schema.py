@@ -45,7 +45,7 @@ class FieldSchema:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "FieldSchema":
+    def from_dict(cls, data: dict[str, Any]) -> FieldSchema:
         """Create from dictionary representation."""
         return cls(
             name=data["name"],
@@ -64,7 +64,7 @@ class DatabaseSchema:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def create(cls, **field_definitions) -> "DatabaseSchema":
+    def create(cls, **field_definitions) -> DatabaseSchema:
         """Create a schema from keyword arguments.
         
         Examples:
@@ -100,7 +100,7 @@ class DatabaseSchema:
                 raise ValueError(f"Invalid field definition for {name}: {definition}")
         return schema
 
-    def add_field(self, field_schema: FieldSchema) -> "DatabaseSchema":
+    def add_field(self, field_schema: FieldSchema) -> DatabaseSchema:
         """Add a field to the schema.
         
         Returns self for chaining.
@@ -108,7 +108,7 @@ class DatabaseSchema:
         self.fields[field_schema.name] = field_schema
         return self
 
-    def add_text_field(self, name: str, required: bool = False) -> "DatabaseSchema":
+    def add_text_field(self, name: str, required: bool = False) -> DatabaseSchema:
         """Add a text field to the schema."""
         return self.add_field(FieldSchema(name=name, type=FieldType.TEXT, required=required))
 
@@ -118,7 +118,7 @@ class DatabaseSchema:
         dimensions: int,
         source_field: str | None = None,
         required: bool = False
-    ) -> "DatabaseSchema":
+    ) -> DatabaseSchema:
         """Add a vector field to the schema."""
         return self.add_field(FieldSchema(
             name=name,
@@ -162,7 +162,7 @@ class DatabaseSchema:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "DatabaseSchema":
+    def from_dict(cls, data: dict[str, Any]) -> DatabaseSchema:
         """Create from dictionary representation.
         
         Supports multiple formats:

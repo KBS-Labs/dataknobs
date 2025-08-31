@@ -30,7 +30,7 @@ class Field:
     constraints: list[Constraint] = dataclass_field(default_factory=list)
     description: str | None = None
 
-    def add_constraint(self, constraint: Constraint) -> 'Field':
+    def add_constraint(self, constraint: Constraint) -> Field:
         """Add a constraint to this field (fluent API).
         
         Args:
@@ -143,7 +143,7 @@ class Schema:
         default: Any = None,
         constraints: list[Constraint] | None = None,
         description: str | None = None
-    ) -> 'Schema':
+    ) -> Schema:
         """Add a field definition (fluent API).
         
         Args:
@@ -179,7 +179,7 @@ class Schema:
         )
         return self
 
-    def with_description(self, description: str) -> 'Schema':
+    def with_description(self, description: str) -> Schema:
         """Set schema description (fluent API).
         
         Args:
@@ -301,7 +301,7 @@ class Schema:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> 'Schema':
+    def from_dict(cls, data: dict[str, Any]) -> Schema:
         """Create schema from dictionary representation.
         
         Args:

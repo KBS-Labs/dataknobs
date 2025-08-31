@@ -30,7 +30,7 @@ class PostgresPoolConfig(BasePoolConfig):
         return (self.host, self.port, self.database, self.user)
 
     @classmethod
-    def from_dict(cls, config: dict) -> "PostgresPoolConfig":
+    def from_dict(cls, config: dict) -> PostgresPoolConfig:
         """Create from configuration dictionary."""
         return cls(
             host=config.get("host", "localhost"),

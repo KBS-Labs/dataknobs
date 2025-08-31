@@ -117,7 +117,7 @@ class ChromaVectorStore(VectorStore):
 
     async def add_vectors(
         self,
-        vectors: "np.ndarray | list[np.ndarray]",
+        vectors: np.ndarray | list[np.ndarray],
         ids: list[str] | None = None,
         metadata: list[dict[str, Any]] | None = None,
     ) -> list[str]:
@@ -205,7 +205,7 @@ class ChromaVectorStore(VectorStore):
 
     async def search(
         self,
-        query_vector: "np.ndarray",
+        query_vector: np.ndarray,
         k: int = 10,
         filter: dict[str, Any] | None = None,
         include_metadata: bool = True,

@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 from pandas.api.types import is_bool_dtype, is_datetime64_any_dtype, is_numeric_dtype
 
 from dataknobs_data.fields import FieldType
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 @dataclass

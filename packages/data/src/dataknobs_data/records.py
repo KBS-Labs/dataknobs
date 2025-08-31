@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import uuid
 from collections import OrderedDict
-from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from .fields import Field, FieldType
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 @dataclass
@@ -495,7 +497,7 @@ class Record:
         return result
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Record":
+    def from_dict(cls, data: dict[str, Any]) -> Record:
         """Create a record from a dictionary representation."""
         if "fields" in data:
             fields = OrderedDict()
@@ -514,7 +516,7 @@ class Record:
             record_id = data.pop("_id", None) if "_id" in data else None
             return cls(data=data, id=record_id)
 
-    def copy(self, deep: bool = True) -> "Record":
+    def copy(self, deep: bool = True) -> Record:
         """Create a copy of the record.
 
         Args:
@@ -563,7 +565,7 @@ class Record:
 
         return Record(data=new_fields, metadata=new_metadata, id=self.id)
 
-    def project(self, field_names: list[str]) -> "Record":
+    def project(self, field_names: list[str]) -> Record:
         """Create a new record with only specified fields."""
         projected_fields = OrderedDict()
         for name in field_names:
@@ -571,7 +573,7 @@ class Record:
                 projected_fields[name] = self.fields[name]
         return Record(data=projected_fields, metadata=self.metadata.copy(), id=self.id)
 
-    def merge(self, other: "Record", overwrite: bool = True) -> "Record":
+    def merge(self, other: Record, overwrite: bool = True) -> Record:
         """Merge another record into this one.
 
         Args:

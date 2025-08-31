@@ -12,9 +12,8 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from dataknobs_config import ConfigurableBase
 
@@ -27,6 +26,9 @@ from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
 from .sqlite_mixins import SQLiteVectorSupport
 from .vector_config_mixin import VectorConfigMixin
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterator
 
 
 class FileLock:
@@ -325,7 +327,7 @@ class ParquetFormat(FileFormat):
             raise ImportError("Parquet support requires pandas and pyarrow packages") from e
 
 
-class AsyncFileDatabase(
+class AsyncFileDatabase(  # type: ignore[misc]
     AsyncDatabase,
     AsyncStreamingMixin,
     ConfigurableBase,
@@ -380,7 +382,7 @@ class AsyncFileDatabase(
         self._init_vector_state()
 
     @classmethod
-    def from_config(cls, config: dict) -> "AsyncFileDatabase":
+    def from_config(cls, config: dict) -> AsyncFileDatabase:
         """Create from config dictionary."""
         return cls(config)
 
@@ -603,7 +605,7 @@ class AsyncFileDatabase(
         )
 
 
-class SyncFileDatabase(
+class SyncFileDatabase(  # type: ignore[misc]
     SyncDatabase,
     StreamingMixin,
     ConfigurableBase,
@@ -658,7 +660,7 @@ class SyncFileDatabase(
         self._init_vector_state()
 
     @classmethod
-    def from_config(cls, config: dict) -> "SyncFileDatabase":
+    def from_config(cls, config: dict) -> SyncFileDatabase:
         """Create from config dictionary."""
         return cls(config)
 

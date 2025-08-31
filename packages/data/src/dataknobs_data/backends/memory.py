@@ -6,15 +6,12 @@ import asyncio
 import threading
 import uuid
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from dataknobs_config import ConfigurableBase
 
 from ..database import AsyncDatabase, SyncDatabase
-from ..query import Query
 from ..query_logic import ComplexQuery
-from ..records import Record
 from ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult
 from ..vector import VectorOperationsMixin
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
@@ -22,8 +19,13 @@ from ..vector.python_vector_search import PythonVectorSearchMixin
 from .sqlite_mixins import SQLiteVectorSupport
 from .vector_config_mixin import VectorConfigMixin
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterator
+    from ..query import Query
+    from ..records import Record
 
-class AsyncMemoryDatabase(
+
+class AsyncMemoryDatabase(  # type: ignore[misc]
     AsyncDatabase,
     AsyncStreamingMixin,
     ConfigurableBase,
@@ -45,7 +47,7 @@ class AsyncMemoryDatabase(
         self._init_vector_state()  # From SQLiteVectorSupport
 
     @classmethod
-    def from_config(cls, config: dict) -> "AsyncMemoryDatabase":
+    def from_config(cls, config: dict) -> AsyncMemoryDatabase:
         """Create from config dictionary."""
         return cls(config)
 
@@ -225,7 +227,7 @@ class AsyncMemoryDatabase(
         )
 
 
-class SyncMemoryDatabase(
+class SyncMemoryDatabase(  # type: ignore[misc]
     SyncDatabase,
     StreamingMixin,
     ConfigurableBase,
@@ -247,7 +249,7 @@ class SyncMemoryDatabase(
         self._init_vector_state()
 
     @classmethod
-    def from_config(cls, config: dict) -> "SyncMemoryDatabase":
+    def from_config(cls, config: dict) -> SyncMemoryDatabase:
         """Create from config dictionary."""
         return cls(config)
 

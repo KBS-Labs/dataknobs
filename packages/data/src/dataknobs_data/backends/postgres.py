@@ -6,7 +6,6 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Any
 
 import asyncpg
@@ -19,7 +18,6 @@ from ..pooling import ConnectionPoolManager
 from ..pooling.postgres import PostgresPoolConfig, create_asyncpg_pool, validate_asyncpg_pool
 from ..query import Operator, Query
 from ..query_logic import ComplexQuery
-from ..records import Record
 from ..streaming import (
     StreamConfig,
     StreamResult,
@@ -39,7 +37,9 @@ from .sql_base import SQLQueryBuilder, SQLRecordSerializer
 if TYPE_CHECKING:
     import numpy as np
 
+    from collections.abc import AsyncIterator, Iterator
     from ..fields import VectorField
+    from ..records import Record
     from ..vector.types import DistanceMetric, VectorSearchResult
 
 logger = logging.getLogger(__name__)
@@ -84,7 +84,7 @@ class SyncPostgresDatabase(
         self.query_builder = None  # Will be initialized in connect()
 
     @classmethod
-    def from_config(cls, config: dict) -> "SyncPostgresDatabase":
+    def from_config(cls, config: dict) -> SyncPostgresDatabase:
         """Create from config dictionary."""
         return cls(config)
 
@@ -372,7 +372,7 @@ class SyncPostgresDatabase(
 
         # Execute the batch delete and get returned IDs
         result_df = self.db.query(query, params_dict)
-        
+
         # Get list of deleted IDs from RETURNING clause
         deleted_ids = set(result_df['id'].tolist()) if not result_df.empty else set()
 
@@ -416,7 +416,7 @@ class SyncPostgresDatabase(
 
         # Get list of updated IDs from RETURNING clause
         updated_ids = set(result_df['id'].tolist()) if not result_df.empty else set()
-        
+
         results = []
         for record_id, _ in updates:
             results.append(record_id in updated_ids)
@@ -550,12 +550,12 @@ class SyncPostgresDatabase(
 
     def vector_search(
         self,
-        query_vector: "np.ndarray | list[float] | VectorField",
+        query_vector: np.ndarray | list[float] | VectorField,
         field_name: str,
         k: int = 10,
         filter: Query | None = None,
-        metric: "DistanceMetric | str" = "cosine"
-    ) -> list["VectorSearchResult"]:
+        metric: DistanceMetric | str = "cosine"
+    ) -> list[VectorSearchResult]:
         """Search for similar vectors using PostgreSQL pgvector.
         
         Args:
@@ -720,7 +720,7 @@ class AsyncPostgresDatabase(
         self._pool: asyncpg.Pool | None = None
 
     @classmethod
-    def from_config(cls, config: dict) -> "AsyncPostgresDatabase":
+    def from_config(cls, config: dict) -> AsyncPostgresDatabase:
         """Create from config dictionary."""
         return cls(config)
 
@@ -1168,12 +1168,12 @@ class AsyncPostgresDatabase(
 
     async def vector_search(
         self,
-        query_vector: "np.ndarray | list[float] | VectorField",
+        query_vector: np.ndarray | list[float] | VectorField,
         field_name: str,
         k: int = 10,
         filter: Query | None = None,
-        metric: "DistanceMetric | str" = "cosine"
-    ) -> list["VectorSearchResult"]:
+        metric: DistanceMetric | str = "cosine"
+    ) -> list[VectorSearchResult]:
         """Search for similar vectors using PostgreSQL pgvector.
         
         Args:
@@ -1370,7 +1370,7 @@ class AsyncPostgresDatabase(
         self,
         vector_field: str,
         dimensions: int,
-        metric: "DistanceMetric | str" = "cosine",
+        metric: DistanceMetric | str = "cosine",
         index_type: str = "ivfflat",
         lists: int | None = None,
     ) -> bool:
@@ -1628,5 +1628,5 @@ class AsyncPostgresDatabase(
                 records=rows,
                 columns=["id", "data", "metadata"]
             )
-        
+
         return ids

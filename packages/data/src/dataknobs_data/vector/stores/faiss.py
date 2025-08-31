@@ -135,7 +135,7 @@ class FaissVectorStore(VectorStore):
 
     async def add_vectors(
         self,
-        vectors: "np.ndarray | list[np.ndarray]",
+        vectors: np.ndarray | list[np.ndarray],
         ids: list[str] | None = None,
         metadata: list[dict[str, Any]] | None = None,
     ) -> list[str]:
@@ -238,7 +238,7 @@ class FaissVectorStore(VectorStore):
 
     async def search(
         self,
-        query_vector: "np.ndarray",
+        query_vector: np.ndarray,
         k: int = 10,
         filter: dict[str, Any] | None = None,
         include_metadata: bool = True,
@@ -275,7 +275,7 @@ class FaissVectorStore(VectorStore):
             # Convert score based on metric
             if self.metric == DistanceMetric.COSINE:
                 # Inner product of normalized vectors = cosine similarity
-                score = score  # noqa: PLW0127 - Intentional: documenting that score is already normalized
+                score = score  # noqa: PLW0127 - Keep for clarity
             elif self.metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
                 # Convert distance to similarity score
                 score = 1.0 / (1.0 + score)

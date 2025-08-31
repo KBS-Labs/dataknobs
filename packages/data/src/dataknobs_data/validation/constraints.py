@@ -6,12 +6,14 @@ from __future__ import annotations
 import math
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 from numbers import Number
 from re import Pattern as RegexPattern
-from typing import Any as AnyType
+from typing import Any as AnyType, TYPE_CHECKING
 
 from .result import ValidationContext, ValidationResult
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class Constraint(ABC):
@@ -30,7 +32,7 @@ class Constraint(ABC):
         """
         pass
 
-    def __and__(self, other: 'Constraint') -> 'All':
+    def __and__(self, other: Constraint) -> All:
         """Combine with AND: both constraints must pass."""
         if isinstance(self, All):
             return All(self.constraints + [other])
@@ -38,7 +40,7 @@ class Constraint(ABC):
             return All([self] + other.constraints)
         return All([self, other])
 
-    def __or__(self, other: 'Constraint') -> 'AnyOf':
+    def __or__(self, other: Constraint) -> AnyOf:
         """Combine with OR: at least one constraint must pass."""
         if isinstance(self, AnyOf):
             return AnyOf(self.constraints + [other])
@@ -46,7 +48,7 @@ class Constraint(ABC):
             return AnyOf([self] + other.constraints)
         return AnyOf([self, other])
 
-    def __invert__(self) -> 'Not':
+    def __invert__(self) -> Not:
         """Negate this constraint."""
         return Not(self)
 

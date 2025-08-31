@@ -57,7 +57,7 @@ def install_pgvector_extension_sync(db: Any) -> bool:
         return False
 
 
-async def check_pgvector_extension(conn: "asyncpg.Connection") -> bool:
+async def check_pgvector_extension(conn: asyncpg.Connection) -> bool:
     """Check if pgvector extension is installed.
     
     Args:
@@ -74,7 +74,7 @@ async def check_pgvector_extension(conn: "asyncpg.Connection") -> bool:
     return bool(result)
 
 
-async def install_pgvector_extension(conn: "asyncpg.Connection") -> bool:
+async def install_pgvector_extension(conn: asyncpg.Connection) -> bool:
     """Install pgvector extension if not already installed.
     
     Args:
@@ -342,7 +342,7 @@ def get_index_check_sql(schema_name: str, table_name: str, field_name: str) -> t
     return sql, [schema_name, table_name, index_pattern]
 
 
-def format_vector_for_postgres(vector: "np.ndarray | list[float]") -> str:
+def format_vector_for_postgres(vector: np.ndarray | list[float]) -> str:
     """Format vector for PostgreSQL vector column.
     
     Args:

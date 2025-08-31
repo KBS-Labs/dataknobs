@@ -27,12 +27,12 @@ class S3PoolConfig(BasePoolConfig):
         return (self.bucket, self.prefix, self.region_name, self.endpoint_url)
 
     @classmethod
-    def from_dict(cls, config: dict) -> "S3PoolConfig":
+    def from_dict(cls, config: dict) -> S3PoolConfig:
         """Create from configuration dictionary."""
         bucket = config.get("bucket")
         if bucket is None:
             raise ValueError("S3 bucket configuration is required")
-        
+
         return cls(
             bucket=bucket,
             prefix=config.get("prefix", ""),

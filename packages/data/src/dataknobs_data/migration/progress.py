@@ -27,7 +27,7 @@ class MigrationProgress:
     end_time: float | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    def start(self) -> 'MigrationProgress':
+    def start(self) -> MigrationProgress:
         """Mark migration as started.
         
         Returns:
@@ -36,7 +36,7 @@ class MigrationProgress:
         self.start_time = time.time()
         return self
 
-    def finish(self) -> 'MigrationProgress':
+    def finish(self) -> MigrationProgress:
         """Mark migration as finished.
         
         Returns:
@@ -98,7 +98,7 @@ class MigrationProgress:
         """
         return self.failed > 0 or len(self.errors) > 0
 
-    def record_success(self, record_id: str | None = None) -> 'MigrationProgress':
+    def record_success(self, record_id: str | None = None) -> MigrationProgress:
         """Record a successful migration.
         
         Args:
@@ -116,7 +116,7 @@ class MigrationProgress:
         error: str,
         record_id: str | None = None,
         exception: Exception | None = None
-    ) -> 'MigrationProgress':
+    ) -> MigrationProgress:
         """Record a failed migration.
         
         Args:
@@ -143,7 +143,7 @@ class MigrationProgress:
         self.errors.append(error_info)
         return self
 
-    def record_skip(self, reason: str, record_id: str | None = None) -> 'MigrationProgress':
+    def record_skip(self, reason: str, record_id: str | None = None) -> MigrationProgress:
         """Record a skipped record.
         
         Args:
@@ -158,7 +158,7 @@ class MigrationProgress:
         self.warnings.append(f"Skipped record {record_id}: {reason}")
         return self
 
-    def add_warning(self, warning: str) -> 'MigrationProgress':
+    def add_warning(self, warning: str) -> MigrationProgress:
         """Add a warning message.
         
         Args:
@@ -170,7 +170,7 @@ class MigrationProgress:
         self.warnings.append(warning)
         return self
 
-    def set_metadata(self, key: str, value: Any) -> 'MigrationProgress':
+    def set_metadata(self, key: str, value: Any) -> MigrationProgress:
         """Store metadata about the migration.
         
         Args:
@@ -183,7 +183,7 @@ class MigrationProgress:
         self.metadata[key] = value
         return self
 
-    def merge(self, other: 'MigrationProgress') -> 'MigrationProgress':
+    def merge(self, other: MigrationProgress) -> MigrationProgress:
         """Merge another progress object into this one.
         
         Useful for combining progress from parallel migrations.

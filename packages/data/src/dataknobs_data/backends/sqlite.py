@@ -7,9 +7,8 @@ import logging
 import sqlite3
 import time
 import uuid
-from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import numpy as np
 from dataknobs_config import ConfigurableBase
@@ -18,19 +17,23 @@ from ..database import SyncDatabase
 from ..query import Query
 from ..query_logic import ComplexQuery
 from ..records import Record
-from ..streaming import StreamConfig, StreamResult
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from ..vector.mixins import VectorOperationsMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
-from ..vector.types import DistanceMetric, VectorSearchResult
 from .sql_base import SQLQueryBuilder, SQLRecordSerializer, SQLTableManager
 from .sqlite_mixins import SQLiteVectorSupport
 from .vector_config_mixin import VectorConfigMixin
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from ..streaming import StreamConfig, StreamResult
+    from ..vector.types import DistanceMetric, VectorSearchResult
+
+
 logger = logging.getLogger(__name__)
 
 
-class SyncSQLiteDatabase(
+class SyncSQLiteDatabase(  # type: ignore[misc]
     SyncDatabase,
     ConfigurableBase,
     VectorConfigMixin,
@@ -76,7 +79,7 @@ class SyncSQLiteDatabase(
         self._connected = False
 
     @classmethod
-    def from_config(cls, config: dict) -> "SyncSQLiteDatabase":
+    def from_config(cls, config: dict) -> SyncSQLiteDatabase:
         """Create from config dictionary."""
         return cls(config)
 
@@ -182,7 +185,7 @@ class SyncSQLiteDatabase(
         try:
             cursor.execute(query, params)
             self.conn.commit()
-            return record.id
+            return storage_id
         except sqlite3.IntegrityError as e:
             self.conn.rollback()
             raise ValueError(f"Record with ID {record.id} already exists") from e

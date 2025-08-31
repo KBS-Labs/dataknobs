@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-from ..records import Record
+if TYPE_CHECKING:
+    from ..records import Record
 
 
 class DistanceMetric(Enum):
@@ -40,7 +41,7 @@ class VectorSearchResult:
     vector_field: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    def __lt__(self, other: "VectorSearchResult") -> bool:
+    def __lt__(self, other: VectorSearchResult) -> bool:
         """Enable sorting by score."""
         return self.score < other.score
 
@@ -149,7 +150,7 @@ class VectorMetadata:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "VectorMetadata":
+    def from_dict(cls, data: dict[str, Any]) -> VectorMetadata:
         """Create from dictionary representation."""
         model_info = data.get("model", {})
         return cls(

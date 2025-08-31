@@ -6,9 +6,12 @@ import asyncio
 import atexit
 import logging
 from abc import abstractmethod
-from collections.abc import Awaitable, Callable
-from typing import Any, Generic, Protocol, TypeVar
+from typing import Any, Generic, Protocol, TypeVar, TYPE_CHECKING
 from weakref import WeakValueDictionary
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
 
 logger = logging.getLogger(__name__)
 

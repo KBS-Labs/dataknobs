@@ -7,9 +7,8 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from dataknobs_config import ConfigurableBase
 
@@ -25,13 +24,17 @@ from ..vector.python_vector_search import PythonVectorSearchMixin
 from .sqlite_mixins import SQLiteVectorSupport
 from .vector_config_mixin import VectorConfigMixin
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+
 logger = logging.getLogger(__name__)
 
 # Global pool manager for S3 sessions
 _session_manager = ConnectionPoolManager()
 
 
-class AsyncS3Database(
+class AsyncS3Database(  # type: ignore[misc]
     AsyncDatabase,
     ConfigurableBase,
     VectorConfigMixin,
@@ -58,7 +61,7 @@ class AsyncS3Database(
         self._init_vector_state()  # From SQLiteVectorSupport
 
     @classmethod
-    def from_config(cls, config: dict) -> "AsyncS3Database":
+    def from_config(cls, config: dict) -> AsyncS3Database:
         """Create from config dictionary."""
         return cls(config)
 

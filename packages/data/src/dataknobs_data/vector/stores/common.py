@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from dataknobs_config import ConfigurableBase
 
@@ -83,7 +83,7 @@ class VectorStoreBase(ConfigurableBase):
         if self.dimensions > 65536:
             raise ValueError(f"Dimensions {self.dimensions} exceeds maximum (65536)")
 
-    def _normalize_vector(self, vector: "np.ndarray") -> "np.ndarray":
+    def _normalize_vector(self, vector: np.ndarray) -> np.ndarray:
         """Normalize a vector for cosine similarity.
         
         Args:
@@ -99,7 +99,7 @@ class VectorStoreBase(ConfigurableBase):
             return vector
         return vector / norm
 
-    def _calculate_similarity(self, vec1: "np.ndarray", vec2: "np.ndarray") -> float:
+    def _calculate_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
         """Calculate similarity between two vectors based on configured metric.
         
         Args:
@@ -163,7 +163,7 @@ class VectorStoreBase(ConfigurableBase):
             # For dot product and others, higher is better
             return distance
 
-    def _prepare_vector(self, vector: "np.ndarray | list[float] | list[np.ndarray]", normalize: bool = False) -> "np.ndarray":
+    def _prepare_vector(self, vector: np.ndarray | list[float] | list[np.ndarray], normalize: bool = False) -> np.ndarray:
         """Prepare a vector for storage or search.
         
         Args:
@@ -186,6 +186,9 @@ class VectorStoreBase(ConfigurableBase):
         else:
             vector = np.asarray(vector, dtype=np.float32)
 
+        # Ensure vector is an ndarray at this point
+        assert isinstance(vector, np.ndarray)
+
         # Ensure correct shape
         if vector.ndim == 1:
             vector = vector.reshape(1, -1)
@@ -197,7 +200,7 @@ class VectorStoreBase(ConfigurableBase):
             norms[norms == 0] = 1  # Avoid division by zero
             vector = vector / norms
 
-        return vector
+        return cast("np.ndarray", vector)
 
     def _apply_metadata_filter(self, candidates: list[tuple[Any, dict]], filter: dict[str, Any]) -> list[tuple[Any, dict]]:
         """Apply metadata filter to candidates.

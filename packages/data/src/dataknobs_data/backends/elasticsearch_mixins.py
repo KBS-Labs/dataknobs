@@ -314,7 +314,7 @@ class ElasticsearchQueryBuilder:
     """Mixin for building Elasticsearch queries."""
 
     @staticmethod
-    def _build_filter_query(filter_query: "Query | None") -> dict[str, Any] | None:
+    def _build_filter_query(filter_query: Query | None) -> dict[str, Any] | None:
         """Build Elasticsearch filter query from Query object.
         
         Args:

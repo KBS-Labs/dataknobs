@@ -4,16 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Generator
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, cast, TYPE_CHECKING
 
 import pandas as pd
 
-from dataknobs_data.database import AsyncDatabase, SyncDatabase
-from dataknobs_data.query import Query
-
 from .converter import ConversionOptions, DataFrameConverter
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Generator
+    from dataknobs_data.database import AsyncDatabase, SyncDatabase
+    from dataknobs_data.query import Query
+    
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +150,9 @@ class BatchOperations:
         """
         config = config or BatchConfig()
         conversion_options = conversion_options or ConversionOptions()
+        # These are now guaranteed to be non-None
+        assert config is not None
+        assert conversion_options is not None
 
         stats: dict[str, Any] = {
             "total_rows": len(df),
@@ -159,9 +164,12 @@ class BatchOperations:
         # Process in chunks if memory efficient mode
         if config.memory_efficient and len(df) > config.chunk_size:
             processor = ChunkedProcessor(config.chunk_size)
+            # Create local references that are guaranteed non-None
+            final_config = config
+            final_conversion_options = conversion_options
 
             def process_chunk(chunk_df: pd.DataFrame) -> dict[str, int]:
-                return self._insert_chunk(chunk_df, config, conversion_options)
+                return self._insert_chunk(chunk_df, final_config, final_conversion_options)
 
             chunk_results = processor.process_dataframe(df, process_chunk)
 
@@ -195,9 +203,9 @@ class BatchOperations:
 
         # Execute query
         if self.is_async:
-            records = asyncio.run(cast(AsyncDatabase, self.database).search(query))
+            records = asyncio.run(cast("AsyncDatabase", self.database).search(query))
         else:
-            records = cast(SyncDatabase, self.database).search(query)
+            records = cast("SyncDatabase", self.database).search(query)
 
         # Convert to DataFrame
         return self.converter.records_to_dataframe(records, conversion_options)
@@ -233,12 +241,12 @@ class BatchOperations:
 
         # Convert DataFrame to records
         records = self.converter.dataframe_to_records(df, conversion_options)
-        
+
         # Prepare updates as (id, record) tuples
         updates = []
         if id_column is None:
             # Use index as ID source
-            for idx, record in zip(df.index, records):
+            for idx, record in zip(df.index, records, strict=True):
                 record_id = str(idx)
                 updates.append((record_id, record))
         else:
@@ -257,9 +265,9 @@ class BatchOperations:
             try:
                 # Use batch update for better performance
                 if self.is_async:
-                    results = asyncio.run(cast(AsyncDatabase, self.database).update_batch(chunk))
+                    results = asyncio.run(cast("AsyncDatabase", self.database).update_batch(chunk))
                 else:
-                    results = cast(SyncDatabase, self.database).update_batch(chunk)
+                    results = cast("SyncDatabase", self.database).update_batch(chunk)
 
                 # Count successes and failures
                 for success in results:
@@ -276,9 +284,9 @@ class BatchOperations:
                 for record_id, record in chunk:
                     try:
                         if self.is_async:
-                            success = asyncio.run(cast(AsyncDatabase, self.database).update(record_id, record))
+                            success = asyncio.run(cast("AsyncDatabase", self.database).update(record_id, record))
                         else:
-                            success = cast(SyncDatabase, self.database).update(record_id, record)
+                            success = cast("SyncDatabase", self.database).update(record_id, record)
 
                         if success:
                             stats["updated"] += 1
@@ -404,9 +412,9 @@ class BatchOperations:
         if hasattr(self.database, 'create_batch'):
             try:
                 if self.is_async:
-                    ids = asyncio.run(cast(AsyncDatabase, self.database).create_batch(records))
+                    ids = asyncio.run(cast("AsyncDatabase", self.database).create_batch(records))
                 else:
-                    ids = cast(SyncDatabase, self.database).create_batch(records)
+                    ids = cast("SyncDatabase", self.database).create_batch(records)
                 stats["inserted"] = len(ids)
 
                 # Progress callback for successful batch
@@ -418,9 +426,9 @@ class BatchOperations:
                 for i, record in enumerate(records):
                     try:
                         if self.is_async:
-                            asyncio.run(cast(AsyncDatabase, self.database).create(record))
+                            asyncio.run(cast("AsyncDatabase", self.database).create(record))
                         else:
-                            cast(SyncDatabase, self.database).create(record)
+                            cast("SyncDatabase", self.database).create(record)
                         stats["inserted"] += 1
 
                     except Exception as record_error:
@@ -442,9 +450,9 @@ class BatchOperations:
             for i, record in enumerate(records):
                 try:
                     if self.is_async:
-                        asyncio.run(cast(AsyncDatabase, self.database).create(record))
+                        asyncio.run(cast("AsyncDatabase", self.database).create(record))
                     else:
-                        cast(SyncDatabase, self.database).create(record)
+                        cast("SyncDatabase", self.database).create(record)
                     stats["inserted"] += 1
 
                 except Exception as e:

@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
-
-import numpy as np
+from typing import TYPE_CHECKING, cast
 
 from ..fields import VectorField
 
 if TYPE_CHECKING:
-
+    import numpy as np
+    from collections.abc import Awaitable, Callable
     from ..records import Record
 
 
@@ -23,7 +21,7 @@ class BulkEmbedMixin:
 
     def bulk_embed_and_store(
         self,
-        records: list["Record"],
+        records: list[Record],
         text_field: str | list[str],
         vector_field: str = "embedding",
         embedding_fn: Callable[[list[str]], np.ndarray] | None = None,
@@ -90,10 +88,12 @@ class BulkEmbedMixin:
                             vector = embeddings
 
                         # Add or update vector field
+                        # Join multiple source fields with comma for metadata
+                        source_field_str = text_fields[0] if len(text_fields) == 1 else ",".join(text_fields)
                         record.fields[vector_field] = VectorField(
                             name=vector_field,
                             value=vector,
-                            source_field=text_fields[0] if len(text_fields) == 1 else text_fields,
+                            source_field=source_field_str,
                             model_name=model_name,
                             model_version=model_version,
                         )
@@ -124,10 +124,10 @@ class AsyncBulkEmbedMixin:
 
     async def bulk_embed_and_store(
         self,
-        records: list["Record"],
+        records: list[Record],
         text_field: str | list[str],
         vector_field: str = "embedding",
-        embedding_fn: Callable[[list[str]], np.ndarray] | None = None,
+        embedding_fn: Callable[[list[str]], np.ndarray | Awaitable[np.ndarray]] | None = None,
         batch_size: int = 100,
         model_name: str | None = None,
         model_version: str | None = None,
@@ -184,9 +184,9 @@ class AsyncBulkEmbedMixin:
             # Generate embeddings
             if texts:
                 if is_async_fn:
-                    embeddings = await embedding_fn(texts)
+                    embeddings = await cast("Awaitable[np.ndarray]", embedding_fn(texts))
                 else:
-                    embeddings = embedding_fn(texts)
+                    embeddings = cast("np.ndarray", embedding_fn(texts))
 
                 # Add vectors to records
                 for j, record in enumerate(batch):
@@ -199,10 +199,12 @@ class AsyncBulkEmbedMixin:
                             vector = embeddings
 
                         # Add or update vector field
+                        # Join multiple source fields with comma for metadata
+                        source_field_str = text_fields[0] if len(text_fields) == 1 else ",".join(text_fields)
                         record.fields[vector_field] = VectorField(
                             name=vector_field,
                             value=vector,
-                            source_field=text_fields[0] if len(text_fields) == 1 else text_fields,
+                            source_field=source_field_str,
                             model_name=model_name,
                             model_version=model_version,
                         )

@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import time
-from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
-from .records import Record
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Callable, Iterator
     from .query import Query
+    from .records import Record
 
 
 @dataclass
@@ -68,7 +68,7 @@ class StreamResult:
         if index is not None:
             self.failed_indices.append(index)
 
-    def merge(self, other: "StreamResult") -> None:
+    def merge(self, other: StreamResult) -> None:
         """Merge another result into this one."""
         self.total_processed += other.total_processed
         self.successful += other.successful
@@ -342,7 +342,7 @@ class StreamingMixin:
 
     def _default_stream_read(
         self,
-        query: Optional["Query"] = None,
+        query: Query | None = None,
         config: StreamConfig | None = None
     ) -> Iterator[Record]:
         """Default implementation of stream_read using search method.
@@ -424,7 +424,7 @@ class AsyncStreamingMixin:
 
     async def _default_stream_read(
         self,
-        query: Optional["Query"] = None,
+        query: Query | None = None,
         config: StreamConfig | None = None
     ) -> AsyncIterator[Record]:
         """Default implementation of async stream_read using search method.

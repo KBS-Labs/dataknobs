@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import aiosqlite
 from dataknobs_config import ConfigurableBase
@@ -14,8 +13,6 @@ from ..database import AsyncDatabase
 from ..pooling import ConnectionPoolManager
 from ..query import Query
 from ..query_logic import ComplexQuery
-from ..records import Record
-from ..streaming import StreamConfig, StreamResult
 from ..vector import VectorOperationsMixin
 from ..vector.bulk_embed_mixin import BulkEmbedMixin
 from ..vector.python_vector_search import PythonVectorSearchMixin
@@ -23,13 +20,19 @@ from .sql_base import SQLQueryBuilder, SQLTableManager
 from .sqlite_mixins import SQLiteVectorSupport
 from .vector_config_mixin import VectorConfigMixin
 
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from ..records import Record
+    from ..streaming import StreamConfig, StreamResult
+
+
 logger = logging.getLogger(__name__)
 
 # Global pool manager for SQLite connections
 _pool_manager = ConnectionPoolManager()
 
 
-class AsyncSQLiteDatabase(
+class AsyncSQLiteDatabase(  # type: ignore[misc]
     AsyncDatabase,
     ConfigurableBase,
     VectorConfigMixin,
@@ -73,7 +76,7 @@ class AsyncSQLiteDatabase(
         self._init_vector_state()
 
     @classmethod
-    def from_config(cls, config: dict) -> "AsyncSQLiteDatabase":
+    def from_config(cls, config: dict) -> AsyncSQLiteDatabase:
         """Create from config dictionary."""
         return cls(config)
 

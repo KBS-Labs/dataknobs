@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import numpy as np
 
-    from collections.abc import Callable
     from .query_logic import ComplexQuery
     from .vector.types import DistanceMetric
 
@@ -596,7 +597,7 @@ class Query:
             vector_query=copy.deepcopy(self.vector_query) if self.vector_query else None,
         )
 
-    def or_(self, *filters: Union[Filter, Query]) -> ComplexQuery:
+    def or_(self, *filters: Filter | Query) -> ComplexQuery:
         """Create a ComplexQuery with OR logic.
         
         The current query's filters become an AND group, combined with OR conditions.
@@ -608,7 +609,13 @@ class Query:
         Returns:
             ComplexQuery with OR logic
         """
-        from .query_logic import ComplexQuery, Condition, FilterCondition, LogicCondition, LogicOperator
+        from .query_logic import (
+            ComplexQuery,
+            Condition,
+            FilterCondition,
+            LogicCondition,
+            LogicOperator,
+        )
 
         # Build OR conditions from the arguments
         or_conditions: list[Condition] = []
@@ -665,7 +672,7 @@ class Query:
             fields=self.fields.copy() if self.fields else None
         )
 
-    def and_(self, *filters: Union[Filter, Query]) -> Query:
+    def and_(self, *filters: Filter | Query) -> Query:
         """Add more filters with AND logic (convenience method).
         
         Args:
@@ -690,7 +697,13 @@ class Query:
         Returns:
             ComplexQuery with NOT logic
         """
-        from .query_logic import ComplexQuery, Condition, FilterCondition, LogicCondition, LogicOperator
+        from .query_logic import (
+            ComplexQuery,
+            Condition,
+            FilterCondition,
+            LogicCondition,
+            LogicOperator,
+        )
 
         # Current filters as AND
         conditions: list[Condition] = []

@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from dataknobs_config import FactoryBase
 
@@ -19,6 +18,10 @@ from .operations import (
     TransformField,
 )
 from .transformer import Transformer
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 
 logger = logging.getLogger(__name__)
 
@@ -96,32 +99,47 @@ class MigrationFactory(FactoryBase):
         op_type = op_config.get("type", "").lower()
 
         if op_type == "add_field":
+            field_name = op_config.get("field_name")
+            if not field_name:
+                raise ValueError("add_field operation requires field_name")
             return AddField(
-                field_name=op_config.get("field_name"),
+                field_name=field_name,
                 default_value=op_config.get("default_value"),
                 field_type=self._parse_field_type(op_config.get("field_type"))
             )
 
         elif op_type == "remove_field":
+            field_name = op_config.get("field_name")
+            if not field_name:
+                raise ValueError("remove_field operation requires field_name")
             return RemoveField(
-                field_name=op_config.get("field_name"),
+                field_name=field_name,
                 store_removed=op_config.get("store_removed", False)
             )
 
         elif op_type == "rename_field":
+            old_name = op_config.get("old_name")
+            new_name = op_config.get("new_name")
+            if not old_name or not new_name:
+                raise ValueError("rename_field operation requires old_name and new_name")
             return RenameField(
-                old_name=op_config.get("old_name"),
-                new_name=op_config.get("new_name")
+                old_name=old_name,
+                new_name=new_name
             )
 
         elif op_type == "transform_field":
             # Note: Transform functions from config strings require careful handling
             # For security, we don't eval arbitrary code. Instead, support predefined transforms.
+            field_name = op_config.get("field_name")
+            if not field_name:
+                raise ValueError("transform_field operation requires field_name")
             transform_fn = self._get_transform_function(op_config.get("transform"))
+            if not transform_fn:
+                raise ValueError("transform_field operation requires transform function")
             reverse_fn = self._get_transform_function(op_config.get("reverse"))
 
             return TransformField(
-                field_name=op_config.get("field_name"),
+                field_name=field_name,
                 transform_fn=transform_fn,
                 reverse_fn=reverse_fn
             )

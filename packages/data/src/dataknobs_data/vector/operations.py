@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 from .types import DistanceMetric
 
 
-def normalize_vector(vector: "np.ndarray") -> "np.ndarray":
+def normalize_vector(vector: np.ndarray) -> np.ndarray:
     """Normalize a vector to unit length.
 
     Args:
@@ -28,8 +28,8 @@ def normalize_vector(vector: "np.ndarray") -> "np.ndarray":
 
 
 def compute_distance(
-    vec1: "np.ndarray",
-    vec2: "np.ndarray",
+    vec1: np.ndarray,
+    vec2: np.ndarray,
     metric: DistanceMetric,
 ) -> float:
     """Compute distance between two vectors.
@@ -71,8 +71,8 @@ def compute_distance(
 
 
 def compute_similarity(
-    vec1: "np.ndarray",
-    vec2: "np.ndarray",
+    vec1: np.ndarray,
+    vec2: np.ndarray,
     metric: DistanceMetric,
 ) -> float:
     """Compute similarity between two vectors.
@@ -115,10 +115,10 @@ def compute_similarity(
 
 
 def batch_compute_distances(
-    query_vector: "np.ndarray",
-    vectors: "np.ndarray",
+    query_vector: np.ndarray,
+    vectors: np.ndarray,
     metric: DistanceMetric,
-) -> "np.ndarray":
+) -> np.ndarray:
     """Compute distances from query vector to multiple vectors.
 
     Args:
@@ -165,10 +165,10 @@ def batch_compute_distances(
 
 
 def validate_vector_dimensions(
-    vector: "np.ndarray | list[float]",
+    vector: np.ndarray | list[float],
     expected_dims: int,
     field_name: str | None = None,
-) -> "np.ndarray":
+) -> np.ndarray:
     """Validate and convert vector to proper format.
 
     Args:
@@ -200,9 +200,9 @@ def validate_vector_dimensions(
 
 
 def chunk_vectors(
-    vectors: "np.ndarray | list[np.ndarray]",
+    vectors: np.ndarray | list[np.ndarray],
     chunk_size: int,
-) -> list["np.ndarray"]:
+) -> list[np.ndarray]:
     """Split vectors into chunks for batch processing.
 
     Args:

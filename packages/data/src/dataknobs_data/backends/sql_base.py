@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from ..query import Operator, Query, SortOrder
-from ..query_logic import ComplexQuery
 from ..records import Record
+
+if TYPE_CHECKING:
+    from ..query_logic import ComplexQuery
 
 
 class SQLRecordSerializer:
@@ -505,7 +507,7 @@ class SQLQueryBuilder:
             updated_at = CURRENT_TIMESTAMP
         WHERE id IN ({', '.join(id_placeholders)})
         """
-        
+
         # PostgreSQL can use RETURNING
         if self.dialect == "postgres":
             query += " RETURNING id"

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_config import ConfigurableBase
@@ -18,7 +17,6 @@ from ..pooling.elasticsearch import (
     validate_elasticsearch_client,
 )
 from ..query import Operator, Query, SortOrder
-from ..records import Record
 from ..streaming import StreamConfig, StreamResult, async_process_batch_with_fallback
 from ..vector.mixins import VectorOperationsMixin
 from ..vector.types import DistanceMetric, VectorSearchResult
@@ -33,6 +31,8 @@ from .elasticsearch_mixins import (
 
 if TYPE_CHECKING:
     import numpy as np
+    from collections.abc import AsyncIterator
+    from ..records import Record
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +69,7 @@ class AsyncElasticsearchDatabase(
         self._connected = False
 
     @classmethod
-    def from_config(cls, config: dict) -> "AsyncElasticsearchDatabase":
+    def from_config(cls, config: dict) -> AsyncElasticsearchDatabase:
         """Create from config dictionary."""
         return cls(config)
 
@@ -585,7 +585,7 @@ class AsyncElasticsearchDatabase(
 
     async def vector_search(
         self,
-        query_vector: "np.ndarray | list[float]",
+        query_vector: np.ndarray | list[float],
         vector_field: str = "embedding",
         k: int = 10,
         metric: DistanceMetric = DistanceMetric.COSINE,

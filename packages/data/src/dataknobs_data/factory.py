@@ -7,6 +7,7 @@ from dataknobs_config import FactoryBase
 
 from dataknobs_data.database import SyncDatabase
 
+
 logger = logging.getLogger(__name__)
 
 

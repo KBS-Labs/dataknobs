@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any
 
 from .query import Filter, Operator, VectorQuery
 
@@ -169,7 +169,7 @@ class QueryBuilder:
 
         return self
 
-    def and_(self, *conditions: Union[QueryBuilder, Filter, Condition]) -> QueryBuilder:
+    def and_(self, *conditions: QueryBuilder | Filter | Condition) -> QueryBuilder:
         """Add AND conditions."""
         logic_cond = LogicCondition(operator=LogicOperator.AND)
 
@@ -194,7 +194,7 @@ class QueryBuilder:
 
         return self
 
-    def or_(self, *conditions: Union[QueryBuilder, Filter, Condition]) -> QueryBuilder:
+    def or_(self, *conditions: QueryBuilder | Filter | Condition) -> QueryBuilder:
         """Add OR conditions."""
         logic_cond = LogicCondition(operator=LogicOperator.OR)
 
@@ -221,7 +221,7 @@ class QueryBuilder:
 
         return self
 
-    def not_(self, condition: Union[QueryBuilder, Filter, Condition]) -> QueryBuilder:
+    def not_(self, condition: QueryBuilder | Filter | Condition) -> QueryBuilder:
         """Add NOT condition."""
         if isinstance(condition, QueryBuilder):
             not_cond = LogicCondition(

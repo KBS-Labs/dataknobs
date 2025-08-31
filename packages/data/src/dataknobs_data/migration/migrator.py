@@ -4,17 +4,20 @@
 from __future__ import annotations
 
 import concurrent.futures
-from collections.abc import Callable, Iterator
+from typing import TYPE_CHECKING
 
-from dataknobs_data.database import AsyncDatabase, SyncDatabase
 from dataknobs_data.query import Query
-from dataknobs_data.records import Record
 from dataknobs_data.streaming import StreamConfig
 
 from .migration import Migration
 from .progress import MigrationProgress
 from .transformer import Transformer
 
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
+    from dataknobs_data.database import AsyncDatabase, SyncDatabase
+    from dataknobs_data.records import Record
+    
 
 class Migrator:
     """Data migration orchestrator with streaming support.

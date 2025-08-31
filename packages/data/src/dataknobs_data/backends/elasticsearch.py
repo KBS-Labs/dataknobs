@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_config import ConfigurableBase
@@ -15,7 +14,6 @@ from ..database import SyncDatabase
 from ..exceptions import DatabaseError
 from ..query import Operator, Query, SortOrder
 from ..query_logic import ComplexQuery
-from ..records import Record
 from ..streaming import StreamConfig, StreamingMixin, StreamResult
 from ..vector.types import DistanceMetric, VectorSearchResult
 from .elasticsearch_mixins import (
@@ -30,6 +28,8 @@ from .vector_config_mixin import VectorConfigMixin
 
 if TYPE_CHECKING:
     import numpy as np
+    from collections.abc import Iterator
+    from ..records import Record
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ class SyncElasticsearchDatabase(
         self._connected = False
 
     @classmethod
-    def from_config(cls, config: dict) -> "SyncElasticsearchDatabase":
+    def from_config(cls, config: dict) -> SyncElasticsearchDatabase:
         """Create from config dictionary."""
         return cls(config)
 
@@ -899,7 +899,7 @@ upper}}}}}
 
     def vector_search(
         self,
-        query_vector: "np.ndarray | list[float]",
+        query_vector: np.ndarray | list[float],
         field_name: str = "embedding",
         k: int = 10,
         metric: DistanceMetric = DistanceMetric.COSINE,

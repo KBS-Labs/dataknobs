@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from ...fields import VectorField
@@ -13,7 +12,7 @@ from .common import VectorStoreBase
 
 if TYPE_CHECKING:
     import numpy as np
-
+    from collections.abc import Callable
 
 
 class VectorStore(ABC, VectorStoreBase):
@@ -159,7 +158,7 @@ class VectorStore(ABC, VectorStoreBase):
         """
         # Delete existing vectors
         await self.delete_vectors(ids)
-        
+
         # Add new vectors with same IDs
         return await self.add_vectors(vectors, ids, metadata)
 

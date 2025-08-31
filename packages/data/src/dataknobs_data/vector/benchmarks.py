@@ -6,11 +6,13 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import numpy as np
 
-from .stores.base import VectorStore
+if TYPE_CHECKING:
+    from .stores.base import VectorStore
+
 
 logger = logging.getLogger(__name__)
 

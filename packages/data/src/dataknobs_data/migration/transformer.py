@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
-from dataknobs_data.fields import FieldType
 from dataknobs_data.records import Record
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from dataknobs_data.fields import FieldType
 
 
 class TransformRule(ABC):
@@ -135,7 +137,7 @@ class Transformer:
         source: str,
         target: str | None = None,
         transform: Callable[[Any], Any] | None = None
-    ) -> 'Transformer':
+    ) -> Transformer:
         """Map a field, optionally transforming its value (fluent API).
         
         Args:
@@ -153,7 +155,7 @@ class Transformer:
         ))
         return self
 
-    def rename(self, old_name: str, new_name: str) -> 'Transformer':
+    def rename(self, old_name: str, new_name: str) -> Transformer:
         """Rename a field (fluent API).
         
         Args:
@@ -165,7 +167,7 @@ class Transformer:
         """
         return self.map(old_name, new_name)
 
-    def exclude(self, *fields: str) -> 'Transformer':
+    def exclude(self, *fields: str) -> Transformer:
         """Exclude fields from the record (fluent API).
         
         Args:
@@ -182,7 +184,7 @@ class Transformer:
         field_name: str,
         value: Any | Callable[[Record], Any],
         field_type: FieldType | None = None
-    ) -> 'Transformer':
+    ) -> Transformer:
         """Add a new field (fluent API).
         
         Args:
@@ -200,7 +202,7 @@ class Transformer:
         ))
         return self
 
-    def add_rule(self, rule: TransformRule) -> 'Transformer':
+    def add_rule(self, rule: TransformRule) -> Transformer:
         """Add a custom transformation rule (fluent API).
         
         Args:
@@ -249,7 +251,7 @@ class Transformer:
                 results.append(transformed)
         return results
 
-    def clear(self) -> 'Transformer':
+    def clear(self) -> Transformer:
         """Clear all transformation rules (fluent API).
         
         Returns:

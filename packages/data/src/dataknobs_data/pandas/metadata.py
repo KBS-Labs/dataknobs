@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import pandas as pd
 
-from dataknobs_data.records import Record
+if TYPE_CHECKING:
+    from dataknobs_data.records import Record
 
 
 class MetadataStrategy(Enum):

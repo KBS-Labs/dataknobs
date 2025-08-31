@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -9,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import numpy as np
+    from collections.abc import Callable
 
 
 class FieldType(Enum):
@@ -63,7 +63,7 @@ class Field:
         else:
             return FieldType.JSON
 
-    def copy(self) -> "Field":
+    def copy(self) -> Field:
         """Create a deep copy of the field."""
         return Field(
             name=self.name,
@@ -93,7 +93,7 @@ class Field:
             return validator(self.value)
         return True
 
-    def convert_to(self, target_type: FieldType) -> "Field":
+    def convert_to(self, target_type: FieldType) -> Field:
         """Convert the field to a different type."""
         if self.type == target_type:
             return self
@@ -136,7 +136,7 @@ class Field:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Field":
+    def from_dict(cls, data: dict[str, Any]) -> Field:
         """Create a field from a dictionary representation."""
         field_type = None
         if data.get("type"):
@@ -180,7 +180,7 @@ class VectorField(Field):
 
     def __init__(
         self,
-        value: "np.ndarray | list[float]",
+        value: np.ndarray | list[float],
         name: str | None = None,  # Made optional
         dimensions: int | None = None,  # Auto-detected from value
         source_field: str | None = None,
@@ -266,7 +266,7 @@ class VectorField(Field):
         model_name: str | None = None,
         model_version: str | None = None,
         **kwargs
-    ) -> "VectorField":
+    ) -> VectorField:
         """Create a VectorField from text using an embedding function.
         
         Args:
@@ -331,7 +331,7 @@ class VectorField(Field):
             return self.value.tolist()
         return list(self.value)
 
-    def cosine_similarity(self, other: "VectorField | np.ndarray | list[float]") -> float:
+    def cosine_similarity(self, other: VectorField | np.ndarray | list[float]) -> float:
         """Compute cosine similarity with another vector."""
         import numpy as np
 
@@ -352,7 +352,7 @@ class VectorField(Field):
 
         return float(dot_product / (norm_a * norm_b))
 
-    def euclidean_distance(self, other: "VectorField | np.ndarray | list[float]") -> float:
+    def euclidean_distance(self, other: VectorField | np.ndarray | list[float]) -> float:
         """Compute Euclidean distance to another vector."""
         import numpy as np
 
@@ -376,7 +376,7 @@ class VectorField(Field):
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "VectorField":
+    def from_dict(cls, data: dict[str, Any]) -> VectorField:
         """Create from dictionary representation."""
         metadata = data.get("metadata", {})
         model_info = metadata.get("model", {})
