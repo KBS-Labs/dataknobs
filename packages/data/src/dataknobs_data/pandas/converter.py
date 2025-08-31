@@ -203,7 +203,7 @@ class DataFrameConverter:
             # Prepare row data (excluding metadata columns)
             row_data = {}
             for col in row.index:
-                if col not in options.metadata_columns:
+                if options.metadata_columns is None or col not in options.metadata_columns:
                     row_data[col] = row[col]
 
             # Determine record ID
@@ -211,7 +211,7 @@ class DataFrameConverter:
             if options.use_index_as_id:
                 if isinstance(idx, str):
                     record_id = idx
-                elif idx is not None and not pd.isna(idx):
+                elif idx is not None and not pd.isna(idx):  # type: ignore[call-overload]
                     record_id = str(idx)
 
             # Create record

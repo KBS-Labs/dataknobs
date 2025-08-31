@@ -158,7 +158,7 @@ class ChromaVectorStore(VectorStore):
         self,
         ids: list[str],
         include_metadata: bool = True,
-    ) -> list[tuple["np.ndarray", dict[str, Any] | None]]:
+    ) -> list[tuple[np.ndarray | None, dict[str, Any] | None]]:
         """Retrieve vectors by ID."""
         if not self._initialized:
             await self.initialize()

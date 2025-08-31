@@ -187,13 +187,13 @@ class FaissVectorStore(VectorStore):
         self,
         ids: list[str],
         include_metadata: bool = True,
-    ) -> list[tuple["np.ndarray", dict[str, Any] | None]]:
+    ) -> list[tuple[np.ndarray | None, dict[str, Any] | None]]:
         """Retrieve vectors by ID."""
         if not self._initialized:
             await self.initialize()
 
 
-        results = []
+        results: list[tuple[np.ndarray | None, dict[str, Any] | None]] = []
         for ext_id in ids:
             if ext_id not in self.id_map:
                 results.append((None, None))

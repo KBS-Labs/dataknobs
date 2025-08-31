@@ -121,7 +121,7 @@ class VectorStoreBase(ConfigurableBase):
 
         elif self.metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
             # Convert distance to similarity
-            distance = np.linalg.norm(vec1 - vec2)
+            distance = float(np.linalg.norm(vec1 - vec2))
             return 1.0 / (1.0 + distance)
 
         elif self.metric in (DistanceMetric.DOT_PRODUCT, DistanceMetric.INNER_PRODUCT):
@@ -163,11 +163,11 @@ class VectorStoreBase(ConfigurableBase):
             # For dot product and others, higher is better
             return distance
 
-    def _prepare_vector(self, vector: "np.ndarray | list[float]", normalize: bool = False) -> "np.ndarray":
+    def _prepare_vector(self, vector: "np.ndarray | list[float] | list[np.ndarray]", normalize: bool = False) -> "np.ndarray":
         """Prepare a vector for storage or search.
         
         Args:
-            vector: Input vector (numpy array or list)
+            vector: Input vector (numpy array, list of floats, or list of arrays)
             normalize: Whether to normalize for cosine similarity
             
         Returns:
@@ -177,9 +177,14 @@ class VectorStoreBase(ConfigurableBase):
 
         # Convert to numpy array
         if isinstance(vector, list):
-            vector = np.array(vector, dtype=np.float32)
+            if len(vector) > 0 and isinstance(vector[0], np.ndarray):
+                # List of arrays - stack them
+                vector = np.vstack(vector).astype(np.float32)
+            else:
+                # List of floats
+                vector = np.array(vector, dtype=np.float32)
         else:
-            vector = vector.astype(np.float32)
+            vector = np.asarray(vector, dtype=np.float32)
 
         # Ensure correct shape
         if vector.ndim == 1:

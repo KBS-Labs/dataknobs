@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable, Generator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 
@@ -148,7 +149,7 @@ class BatchOperations:
         config = config or BatchConfig()
         conversion_options = conversion_options or ConversionOptions()
 
-        stats = {
+        stats: dict[str, Any] = {
             "total_rows": len(df),
             "inserted": 0,
             "failed": 0,
@@ -194,10 +195,9 @@ class BatchOperations:
 
         # Execute query
         if self.is_async:
-            import asyncio
-            records = asyncio.run(self.database.search(query))
+            records = asyncio.run(cast(AsyncDatabase, self.database).search(query))
         else:
-            records = self.database.search(query)
+            records = cast(SyncDatabase, self.database).search(query)
 
         # Convert to DataFrame
         return self.converter.records_to_dataframe(records, conversion_options)
@@ -205,7 +205,7 @@ class BatchOperations:
     def update_from_dataframe(
         self,
         df: pd.DataFrame,
-        id_column: str,
+        id_column: str | None,
         config: BatchConfig | None = None,
         conversion_options: ConversionOptions | None = None
     ) -> dict[str, Any]:
@@ -223,7 +223,7 @@ class BatchOperations:
         config = config or BatchConfig()
         conversion_options = conversion_options or ConversionOptions()
 
-        stats = {
+        stats: dict[str, Any] = {
             "total_rows": len(df),
             "updated": 0,
             "failed": 0,
@@ -231,18 +231,24 @@ class BatchOperations:
             "errors": []
         }
 
-        # Ensure ID column exists
-        if id_column not in df.columns:
-            raise ValueError(f"ID column '{id_column}' not found in DataFrame")
-
         # Convert DataFrame to records
         records = self.converter.dataframe_to_records(df, conversion_options)
-
+        
         # Prepare updates as (id, record) tuples
         updates = []
-        for i, record in enumerate(records):
-            record_id = str(df.iloc[i][id_column])
-            updates.append((record_id, record))
+        if id_column is None:
+            # Use index as ID source
+            for idx, record in zip(df.index, records):
+                record_id = str(idx)
+                updates.append((record_id, record))
+        else:
+            # Ensure ID column exists
+            if id_column not in df.columns:
+                raise ValueError(f"ID column '{id_column}' not found in DataFrame")
+            # Use specified column as ID source
+            for i, record in enumerate(records):
+                record_id = str(df.iloc[i][id_column])
+                updates.append((record_id, record))
 
         # Process updates in chunks
         for i in range(0, len(updates), config.chunk_size):
@@ -251,10 +257,9 @@ class BatchOperations:
             try:
                 # Use batch update for better performance
                 if self.is_async:
-                    import asyncio
-                    results = asyncio.run(self.database.update_batch(chunk))
+                    results = asyncio.run(cast(AsyncDatabase, self.database).update_batch(chunk))
                 else:
-                    results = self.database.update_batch(chunk)
+                    results = cast(SyncDatabase, self.database).update_batch(chunk)
 
                 # Count successes and failures
                 for success in results:
@@ -271,10 +276,9 @@ class BatchOperations:
                 for record_id, record in chunk:
                     try:
                         if self.is_async:
-                            import asyncio
-                            success = asyncio.run(self.database.update(record_id, record))
+                            success = asyncio.run(cast(AsyncDatabase, self.database).update(record_id, record))
                         else:
-                            success = self.database.update(record_id, record)
+                            success = cast(SyncDatabase, self.database).update(record_id, record)
 
                         if success:
                             stats["updated"] += 1
@@ -386,7 +390,7 @@ class BatchOperations:
         Returns:
             Insert statistics for chunk
         """
-        stats = {
+        stats: dict[str, Any] = {
             "total_rows": len(df),
             "inserted": 0,
             "failed": 0,
@@ -400,10 +404,9 @@ class BatchOperations:
         if hasattr(self.database, 'create_batch'):
             try:
                 if self.is_async:
-                    import asyncio
-                    ids = asyncio.run(self.database.create_batch(records))
+                    ids = asyncio.run(cast(AsyncDatabase, self.database).create_batch(records))
                 else:
-                    ids = self.database.create_batch(records)
+                    ids = cast(SyncDatabase, self.database).create_batch(records)
                 stats["inserted"] = len(ids)
 
                 # Progress callback for successful batch
@@ -415,10 +418,9 @@ class BatchOperations:
                 for i, record in enumerate(records):
                     try:
                         if self.is_async:
-                            import asyncio
-                            asyncio.run(self.database.create(record))
+                            asyncio.run(cast(AsyncDatabase, self.database).create(record))
                         else:
-                            self.database.create(record)
+                            cast(SyncDatabase, self.database).create(record)
                         stats["inserted"] += 1
 
                     except Exception as record_error:
@@ -440,10 +442,9 @@ class BatchOperations:
             for i, record in enumerate(records):
                 try:
                     if self.is_async:
-                        import asyncio
-                        asyncio.run(self.database.create(record))
+                        asyncio.run(cast(AsyncDatabase, self.database).create(record))
                     else:
-                        self.database.create(record)
+                        cast(SyncDatabase, self.database).create(record)
                     stats["inserted"] += 1
 
                 except Exception as e:

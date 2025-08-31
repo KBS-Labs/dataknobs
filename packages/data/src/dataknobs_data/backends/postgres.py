@@ -496,7 +496,7 @@ class SyncPostgresDatabase(
                 # Use lambda wrapper for _write_batch
                 continue_processing = process_batch_with_fallback(
                     batch,
-                    lambda b: self._write_batch(b) or [r.id for r in b],  # _write_batch returns None, we need IDs
+                    lambda b: self._write_batch(b),
                     self.create,
                     result,
                     config
@@ -512,7 +512,7 @@ class SyncPostgresDatabase(
         if batch and not quitting:
             process_batch_with_fallback(
                 batch,
-                lambda b: self._write_batch(b) or [r.id for r in b],
+                lambda b: self._write_batch(b),
                 self.create,
                 result,
                 config
@@ -521,14 +521,20 @@ class SyncPostgresDatabase(
         result.duration = time.time() - start_time
         return result
 
-    def _write_batch(self, records: list[Record]) -> None:
-        """Write a batch of records to the database."""
+    def _write_batch(self, records: list[Record]) -> list[str]:
+        """Write a batch of records to the database.
+        
+        Returns:
+            List of created record IDs
+        """
         # Build batch insert SQL
         values = []
         params = {}
+        ids = []
 
         for i, record in enumerate(records):
             id = str(uuid.uuid4())
+            ids.append(id)
             row = self._record_to_row(record, id)
             values.append(f"(%(id_{i})s, %(data_{i})s, %(metadata_{i})s)")
             params[f"id_{i}"] = row["id"]
@@ -540,6 +546,7 @@ class SyncPostgresDatabase(
         VALUES {', '.join(values)}
         """
         self.db.execute(sql, params)
+        return ids
 
     def vector_search(
         self,
@@ -1593,15 +1600,21 @@ class AsyncPostgresDatabase(
         result.duration = time.time() - start_time
         return result
 
-    async def _write_batch(self, records: list[Record]) -> None:
-        """Write a batch of records using COPY for performance."""
+    async def _write_batch(self, records: list[Record]) -> list[str]:
+        """Write a batch of records using COPY for performance.
+        
+        Returns:
+            List of created record IDs
+        """
         if not records:
-            return
+            return []
 
         # Prepare data for COPY
         rows = []
+        ids = []
         for record in records:
             row_data = self._record_to_row(record)
+            ids.append(row_data["id"])
             rows.append((
                 row_data["id"],
                 row_data["data"],
@@ -1615,3 +1628,5 @@ class AsyncPostgresDatabase(
                 records=rows,
                 columns=["id", "data", "metadata"]
             )
+        
+        return ids

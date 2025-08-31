@@ -246,7 +246,7 @@ class TypeMapper:
                 return series.apply(self._ensure_json_serializable)
 
             # Standard casting
-            return series.astype(target_dtype)
+            return series.astype(target_dtype)  # type: ignore[arg-type]
         except (TypeError, ValueError):
             # If casting fails, return as object dtype
             return series.astype("object")
@@ -439,7 +439,7 @@ class TypeMapper:
                         # Use string dtype for nullable strings
                         result_df[col] = result_df[col].astype("string")
                     else:
-                        result_df[col] = result_df[col].astype(dtype)
+                        result_df[col] = result_df[col].astype(dtype)  # type: ignore[arg-type]
                 except (TypeError, ValueError):
                     # If casting fails, leave as is
                     pass

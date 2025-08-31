@@ -503,7 +503,7 @@ class SyncS3Database(
                 # Use lambda wrapper for _write_batch
                 continue_processing = process_batch_with_fallback(
                     batch,
-                    lambda b: self._write_batch(b) or [r.id for r in b],  # _write_batch returns None, we need IDs
+                    lambda b: self._write_batch(b),
                     self.create,
                     result,
                     config
@@ -519,7 +519,7 @@ class SyncS3Database(
         if batch and not quitting:
             process_batch_with_fallback(
                 batch,
-                lambda b: self._write_batch(b) or [r.id for r in b],
+                lambda b: self._write_batch(b),
                 self.create,
                 result,
                 config
@@ -528,18 +528,26 @@ class SyncS3Database(
         result.duration = time.time() - start_time
         return result
 
-    def _write_batch(self, records: list[Record]) -> None:
-        """Write a batch of records to S3."""
+    def _write_batch(self, records: list[Record]) -> list[str]:
+        """Write a batch of records to S3.
+        
+        Returns:
+            List of created record IDs
+        """
+        ids = []
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = []
             for record in records:
                 record_id = str(uuid4())
+                ids.append(record_id)
                 future = executor.submit(self._write_single, record_id, record)
                 futures.append(future)
 
             # Wait for all writes to complete
             for future in as_completed(futures):
                 future.result()  # This will raise if there was an error
+        
+        return ids
 
     def _write_single(self, record_id: str, record: Record) -> None:
         """Write a single record to S3."""
