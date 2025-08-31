@@ -1,5 +1,7 @@
 """File-based database backend implementation."""
 
+from __future__ import annotations
+
 import asyncio
 import csv
 import gzip
@@ -10,9 +12,8 @@ import tempfile
 import threading
 import time
 import uuid
-from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from dataknobs_config import ConfigurableBase
 
@@ -20,6 +21,14 @@ from ..database import AsyncDatabase, SyncDatabase
 from ..query import Query
 from ..records import Record
 from ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult
+from ..vector import VectorOperationsMixin
+from ..vector.bulk_embed_mixin import BulkEmbedMixin
+from ..vector.python_vector_search import PythonVectorSearchMixin
+from .sqlite_mixins import SQLiteVectorSupport
+from .vector_config_mixin import VectorConfigMixin
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterator
 
 
 class FileLock:
@@ -42,7 +51,7 @@ class FileLock:
                     break
                 except OSError:
                     if self.lock_handle:
-                        self.lock_handle.close()
+                        self.lock_handle.close()  # type: ignore[unreachable]
                     import time
 
                     time.sleep(0.01)
@@ -55,7 +64,7 @@ class FileLock:
     def release(self):
         """Release the file lock."""
         if self.lock_handle:
-            if platform.system() == "Windows":
+            if platform.system() == "Windows":  # type: ignore[unreachable]
                 import msvcrt
 
                 try:
@@ -269,7 +278,6 @@ class ParquetFormat(FileFormat):
 
         try:
             import pandas as pd
-            import pyarrow.parquet as pq
 
             df = pd.read_parquet(filepath)
             data = {}
@@ -286,8 +294,8 @@ class ParquetFormat(FileFormat):
                 data[record_id] = {"fields": fields}
 
             return data
-        except ImportError:
-            raise ImportError("Parquet support requires pandas and pyarrow packages")
+        except ImportError as e:
+            raise ImportError("Parquet support requires pandas and pyarrow packages") from e
 
     @staticmethod
     def save(filepath: str, data: dict[str, dict[str, Any]]):
@@ -315,11 +323,20 @@ class ParquetFormat(FileFormat):
                 df = pd.DataFrame(rows)
 
             df.to_parquet(filepath, index=False, compression="snappy")
-        except ImportError:
-            raise ImportError("Parquet support requires pandas and pyarrow packages")
+        except ImportError as e:
+            raise ImportError("Parquet support requires pandas and pyarrow packages") from e
 
 
-class AsyncFileDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
+class AsyncFileDatabase(  # type: ignore[misc]
+    AsyncDatabase,
+    AsyncStreamingMixin,
+    ConfigurableBase,
+    VectorConfigMixin,
+    SQLiteVectorSupport,
+    PythonVectorSearchMixin,
+    BulkEmbedMixin,
+    VectorOperationsMixin
+):
     """Async file-based database implementation."""
 
     FORMAT_HANDLERS = {
@@ -360,14 +377,14 @@ class AsyncFileDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
         ext = f".{self.format}"
         self.handler = self.FORMAT_HANDLERS.get(ext, JSONFormat)
 
+        # Initialize vector support
+        self._parse_vector_config(config or {})
+        self._init_vector_state()
+
     @classmethod
-    def from_config(cls, config: dict) -> "AsyncFileDatabase":
+    def from_config(cls, config: dict) -> AsyncFileDatabase:
         """Create from config dictionary."""
         return cls(config)
-
-    async def connect(self) -> None:
-        """Connect to the database (no-op for file backend)."""
-        pass
 
     def _generate_id(self) -> str:
         """Generate a unique ID for a record."""
@@ -408,18 +425,19 @@ class AsyncFileDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
         """Create a new record in the file."""
         async with self._lock:
             data = await self._load_data()
-            # Use record's ID if it has one, otherwise generate a new one
-            record_id = record.id if record.id else self._generate_id()
-            data[record_id] = record.copy(deep=True)
+            # Use centralized method to prepare record
+            record_copy, storage_id = self._prepare_record_for_storage(record)
+            data[storage_id] = record_copy
             await self._save_data(data)
-            return record_id
+            return storage_id
 
     async def read(self, id: str) -> Record | None:
         """Read a record from the file."""
         async with self._lock:
             data = await self._load_data()
             record = data.get(id)
-            return record.copy(deep=True) if record else None
+            # Use centralized method to prepare record
+            return self._prepare_record_from_storage(record, id)
 
     async def update(self, id: str, record: Record) -> bool:
         """Update a record in the file."""
@@ -473,30 +491,8 @@ class AsyncFileDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
                 if matches:
                     results.append((record_id, record))
 
-            # Apply sorting
-            if query.sort_specs:
-                for sort_spec in reversed(query.sort_specs):
-                    reverse = sort_spec.order.value == "desc"
-                    results.sort(key=lambda x: x[1].get_value(sort_spec.field, ""), reverse=reverse)
-
-            # Extract records
-            records = [record for _, record in results]
-
-            # Apply offset and limit
-            if query.offset_value:
-                records = records[query.offset_value :]
-            if query.limit_value:
-                records = records[: query.limit_value]
-
-            # Apply field projection
-            if query.fields:
-                projected_records = []
-                for record in records:
-                    projected_records.append(record.project(query.fields))
-                records = projected_records
-
-            # Return deep copies
-            return [record.copy(deep=True) for record in records]
+            # Use the helper method from base class
+            return self._process_search_results(results, query, deep_copy=True)
 
     async def _count_all(self) -> int:
         """Count all records in the file."""
@@ -584,8 +580,41 @@ class AsyncFileDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
         # Use the default implementation from mixin
         return await self._default_stream_write(records, config)
 
+    async def vector_search(
+        self,
+        query_vector,
+        vector_field: str = "embedding",
+        k: int = 10,
+        filter=None,
+        metric=None,
+        **kwargs
+    ):
+        """Perform vector similarity search using Python calculations.
+        
+        Note: This implementation reads all records from disk to perform
+        the search locally. For better performance with large datasets,
+        consider using SQLite or a dedicated vector database.
+        """
+        return await self.python_vector_search_async(
+            query_vector=query_vector,
+            vector_field=vector_field,
+            k=k,
+            filter=filter,
+            metric=metric,
+            **kwargs
+        )
 
-class SyncFileDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
+
+class SyncFileDatabase(  # type: ignore[misc]
+    SyncDatabase,
+    StreamingMixin,
+    ConfigurableBase,
+    VectorConfigMixin,
+    SQLiteVectorSupport,
+    PythonVectorSearchMixin,
+    BulkEmbedMixin,
+    VectorOperationsMixin
+):
     """Synchronous file-based database implementation."""
 
     FORMAT_HANDLERS = {
@@ -626,14 +655,14 @@ class SyncFileDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
         ext = f".{self.format}"
         self.handler = self.FORMAT_HANDLERS.get(ext, JSONFormat)
 
+        # Initialize vector support
+        self._parse_vector_config(config or {})
+        self._init_vector_state()
+
     @classmethod
-    def from_config(cls, config: dict) -> "SyncFileDatabase":
+    def from_config(cls, config: dict) -> SyncFileDatabase:
         """Create from config dictionary."""
         return cls(config)
-
-    def connect(self) -> None:
-        """Connect to the database (no-op for file backend)."""
-        pass
 
     def _generate_id(self) -> str:
         """Generate a unique ID for a record."""
@@ -671,12 +700,13 @@ class SyncFileDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
             raise
 
     def _do_set_data(self, data: dict[str, Record], record: Record) -> str:
-        """Ensure record has an ID, set data[id]=record.copy() and return the ID"""
-        # Use record's ID if it has one, otherwise generate a new one
-        if not record.id:
-            record.id = self._generate_id()
-        data[record.id] = record.copy(deep=True)
-        return record.id
+        """Ensure record has a storage ID, set data[id]=record.copy() and return the ID"""
+        # Use centralized method to prepare record
+        record_copy, storage_id = self._prepare_record_for_storage(record)
+
+        # Store the record
+        data[storage_id] = record_copy
+        return storage_id
 
     def create(self, record: Record) -> str:
         """Create a new record in the file."""
@@ -692,7 +722,8 @@ class SyncFileDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
         with self._lock:
             data = self._load_data()
             record = data.get(id)
-            return record.copy(deep=True) if record else None
+            # Use centralized method to prepare record
+            return self._prepare_record_from_storage(record, id)
 
     def update(self, id: str, record: Record) -> bool:
         """Update a record in the file."""
@@ -746,30 +777,8 @@ class SyncFileDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
                 if matches:
                     results.append((record_id, record))
 
-            # Apply sorting
-            if query.sort_specs:
-                for sort_spec in reversed(query.sort_specs):
-                    reverse = sort_spec.order.value == "desc"
-                    results.sort(key=lambda x: x[1].get_value(sort_spec.field, ""), reverse=reverse)
-
-            # Extract records
-            records = [record for _, record in results]
-
-            # Apply offset and limit
-            if query.offset_value:
-                records = records[query.offset_value :]
-            if query.limit_value:
-                records = records[: query.limit_value]
-
-            # Apply field projection
-            if query.fields:
-                projected_records = []
-                for record in records:
-                    projected_records.append(record.project(query.fields))
-                records = projected_records
-
-            # Return deep copies
-            return [record.copy(deep=True) for record in records]
+            # Use the helper method from base class
+            return self._process_search_results(results, query, deep_copy=True)
 
     def _count_all(self) -> int:
         """Count all records in the file."""
@@ -905,3 +914,27 @@ class SyncFileDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
 
         result.duration = time.time() - start_time
         return result
+
+    def vector_search(
+        self,
+        query_vector,
+        vector_field: str = "embedding",
+        k: int = 10,
+        filter=None,
+        metric=None,
+        **kwargs
+    ):
+        """Perform vector similarity search using Python calculations.
+        
+        Note: This implementation reads all records from disk to perform
+        the search locally. For better performance with large datasets,
+        consider using SQLite or a dedicated vector database.
+        """
+        return self.python_vector_search_sync(
+            query_vector=query_vector,
+            vector_field=vector_field,
+            k=k,
+            filter=filter,
+            metric=metric,
+            **kwargs
+        )

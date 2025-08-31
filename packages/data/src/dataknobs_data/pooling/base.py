@@ -1,12 +1,17 @@
 """Base classes for generic connection pool management."""
 
+from __future__ import annotations
+
 import asyncio
 import atexit
 import logging
 from abc import abstractmethod
-from collections.abc import Awaitable, Callable
-from typing import Any, Generic, Protocol, TypeVar
+from typing import Any, Generic, Protocol, TypeVar, TYPE_CHECKING
 from weakref import WeakValueDictionary
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
 
 logger = logging.getLogger(__name__)
 
@@ -49,8 +54,8 @@ class ConnectionPoolManager(Generic[PoolType]):
 
     def __init__(self):
         """Initialize the connection pool manager."""
-        # Map of (config_hash, loop_id) -> pool
-        self._pools: dict[tuple, PoolType] = {}
+        # Map of (config_hash, loop_id) -> pool or (pool, close_func)
+        self._pools: dict[tuple, PoolType | tuple[PoolType, Callable | None]] = {}
         # Weak references to event loops for cleanup
         self._loop_refs: WeakValueDictionary = WeakValueDictionary()
         # Register cleanup on exit
@@ -86,6 +91,7 @@ class ConnectionPoolManager(Generic[PoolType]):
             if isinstance(pool_entry, tuple):
                 pool, _ = pool_entry
             else:
+                # Non-tuple format (backward compatibility)
                 pool = pool_entry
 
             # Validate the pool if validation function provided
@@ -118,6 +124,7 @@ class ConnectionPoolManager(Generic[PoolType]):
                 pool, stored_close_func = pool_entry
                 close_func = close_func or stored_close_func
             else:
+                # Non-tuple format (backward compatibility)
                 pool = pool_entry
 
             try:
@@ -179,6 +186,7 @@ class ConnectionPoolManager(Generic[PoolType]):
             if isinstance(pool_entry, tuple):
                 pool, _ = pool_entry
             else:
+                # Non-tuple format (backward compatibility)
                 pool = pool_entry
 
             key = f"config_{config_hash}_loop_{loop_id}"

@@ -193,7 +193,7 @@ class TestNewFeature:
     
     def test_feature_with_postgres(self, postgres_test_db):
         """Test feature with PostgreSQL."""
-        db = SyncDatabase.create("postgres", postgres_test_db)
+        db = SyncDatabase.from_backend("postgres", postgres_test_db)
         
         # Your test logic here
         record = Record({"test": "data"})
@@ -208,7 +208,7 @@ class TestNewFeature:
     
     def test_feature_with_elasticsearch(self, elasticsearch_test_index):
         """Test feature with Elasticsearch."""
-        db = SyncDatabase.create("elasticsearch", elasticsearch_test_index)
+        db = SyncDatabase.from_backend("elasticsearch", elasticsearch_test_index)
         
         # Test logic...
         

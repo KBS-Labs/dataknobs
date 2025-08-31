@@ -34,7 +34,7 @@ def elasticsearch_config():
 @pytest.fixture
 def sync_db(elasticsearch_config):
     """Create a synchronous Elasticsearch database for testing."""
-    db = SyncDatabase.create("elasticsearch", elasticsearch_config)
+    db = SyncDatabase.from_backend("elasticsearch", elasticsearch_config)
     yield db
     # Cleanup: delete the test index
     try:
@@ -49,7 +49,7 @@ def sync_db(elasticsearch_config):
 @pytest.fixture
 async def async_db(elasticsearch_config):
     """Create an asynchronous Elasticsearch database for testing."""
-    db = await AsyncDatabase.create("elasticsearch", elasticsearch_config)
+    db = await AsyncDatabase.from_backend("elasticsearch", elasticsearch_config)
     yield db
     # Cleanup
     try:
@@ -66,7 +66,7 @@ class TestSyncElasticsearchDatabase:
 
     def test_create_database(self, elasticsearch_config):
         """Test creating an Elasticsearch database."""
-        db = SyncDatabase.create("elasticsearch", elasticsearch_config)
+        db = SyncDatabase.from_backend("elasticsearch", elasticsearch_config)
         assert db is not None
         assert hasattr(db, "es_index")
         assert hasattr(db, "index_name")
@@ -407,7 +407,7 @@ class TestAsyncElasticsearchDatabase:
 
     async def test_async_context_manager(self, elasticsearch_config):
         """Test async context manager."""
-        async with await AsyncDatabase.create("elasticsearch", elasticsearch_config) as db:
+        async with await AsyncDatabase.from_backend("elasticsearch", elasticsearch_config) as db:
             record = Record({"context": "manager"})
             id = await db.create(record)
             assert await db.exists(id)

@@ -1,6 +1,8 @@
 """Schema definition with fluent API for record validation.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from typing import Any
@@ -28,7 +30,7 @@ class Field:
     constraints: list[Constraint] = dataclass_field(default_factory=list)
     description: str | None = None
 
-    def add_constraint(self, constraint: Constraint) -> 'Field':
+    def add_constraint(self, constraint: Constraint) -> Field:
         """Add a constraint to this field (fluent API).
         
         Args:
@@ -98,7 +100,7 @@ class Field:
         if value is None:
             return True  # None is handled separately
 
-        type_map = {
+        type_map: dict[FieldType, type | tuple[type, ...]] = {
             FieldType.STRING: str,
             FieldType.INTEGER: int,
             FieldType.FLOAT: (int, float),  # Accept both
@@ -141,7 +143,7 @@ class Schema:
         default: Any = None,
         constraints: list[Constraint] | None = None,
         description: str | None = None
-    ) -> 'Schema':
+    ) -> Schema:
         """Add a field definition (fluent API).
         
         Args:
@@ -159,8 +161,8 @@ class Schema:
         if isinstance(field_type, str):
             try:
                 field_type = FieldType[field_type.upper()]
-            except KeyError:
-                raise ValueError(f"Invalid field type: {field_type}")
+            except KeyError as e:
+                raise ValueError(f"Invalid field type: {field_type}") from e
 
         # Add Required constraint if field is required
         field_constraints = constraints or []
@@ -177,7 +179,7 @@ class Schema:
         )
         return self
 
-    def with_description(self, description: str) -> 'Schema':
+    def with_description(self, description: str) -> Schema:
         """Set schema description (fluent API).
         
         Args:
@@ -299,7 +301,7 @@ class Schema:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> 'Schema':
+    def from_dict(cls, data: dict[str, Any]) -> Schema:
         """Create schema from dictionary representation.
         
         Args:

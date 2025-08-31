@@ -32,7 +32,7 @@ class TestFileDatabase:
     @pytest_asyncio.fixture
     async def db_json(self, temp_file):
         """Create a JSON file database."""
-        db = await AsyncDatabase.create("file", {"path": temp_file})
+        db = await AsyncDatabase.from_backend("file", {"path": temp_file})
         yield db
         await db.close()
 
@@ -41,7 +41,7 @@ class TestFileDatabase:
         """Create a CSV file database."""
         fd, path = tempfile.mkstemp(suffix=".csv")
         os.close(fd)
-        db = await AsyncDatabase.create("file", {"path": path})
+        db = await AsyncDatabase.from_backend("file", {"path": path})
         yield db
         await db.close()
         # Cleanup
@@ -56,7 +56,7 @@ class TestFileDatabase:
         """Create a gzipped JSON file database."""
         fd, path = tempfile.mkstemp(suffix=".json.gz")
         os.close(fd)
-        db = await AsyncDatabase.create("file", {"path": path})
+        db = await AsyncDatabase.from_backend("file", {"path": path})
         yield db
         await db.close()
         # Cleanup
@@ -240,12 +240,12 @@ class TestFileDatabase:
     async def test_persistence(self, temp_file):
         """Test data persistence across database instances."""
         # Create and save data
-        db1 = await AsyncDatabase.create("file", {"path": temp_file})
+        db1 = await AsyncDatabase.from_backend("file", {"path": temp_file})
         record_id = await db1.create(Record({"name": "Persistent", "value": 42}))
         await db1.close()
 
         # Load data in new instance
-        db2 = await AsyncDatabase.create("file", {"path": temp_file})
+        db2 = await AsyncDatabase.from_backend("file", {"path": temp_file})
         retrieved = await db2.read(record_id)
         assert retrieved is not None
         assert retrieved.get_value("name") == "Persistent"
@@ -293,7 +293,7 @@ class TestSyncFileDatabase:
     @pytest.fixture
     def db_json(self, temp_file):
         """Create a JSON file database."""
-        db = SyncDatabase.create("file", {"path": temp_file})
+        db = SyncDatabase.from_backend("file", {"path": temp_file})
         yield db
         db.close()
 
@@ -372,12 +372,12 @@ class TestSyncFileDatabase:
     def test_persistence(self, temp_file):
         """Test data persistence across database instances."""
         # Create and save data
-        db1 = SyncDatabase.create("file", {"path": temp_file})
+        db1 = SyncDatabase.from_backend("file", {"path": temp_file})
         record_id = db1.create(Record({"name": "Persistent", "value": 42}))
         db1.close()
 
         # Load data in new instance
-        db2 = SyncDatabase.create("file", {"path": temp_file})
+        db2 = SyncDatabase.from_backend("file", {"path": temp_file})
         retrieved = db2.read(record_id)
         assert retrieved is not None
         assert retrieved.get_value("name") == "Persistent"
@@ -389,7 +389,7 @@ class TestSyncFileDatabase:
         # Test JSON
         fd, path = tempfile.mkstemp(suffix=".json")
         os.close(fd)
-        db = SyncDatabase.create("file", {"path": path})
+        db = SyncDatabase.from_backend("file", {"path": path})
         assert db.format == "json"
         db.close()
         os.remove(path)
@@ -397,7 +397,7 @@ class TestSyncFileDatabase:
         # Test CSV
         fd, path = tempfile.mkstemp(suffix=".csv")
         os.close(fd)
-        db = SyncDatabase.create("file", {"path": path})
+        db = SyncDatabase.from_backend("file", {"path": path})
         assert db.format == "csv"
         db.close()
         os.remove(path)
@@ -405,7 +405,7 @@ class TestSyncFileDatabase:
         # Test gzipped JSON
         fd, path = tempfile.mkstemp(suffix=".json.gz")
         os.close(fd)
-        db = SyncDatabase.create("file", {"path": path})
+        db = SyncDatabase.from_backend("file", {"path": path})
         assert db.format == "json"
         assert db.compression == "gzip"
         db.close()

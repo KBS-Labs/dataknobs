@@ -1,13 +1,17 @@
 """Data transformation with fluent API.
 """
 
-from abc import ABC, abstractmethod
-from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Any
+from __future__ import annotations
 
-from dataknobs_data.fields import FieldType
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Any, TYPE_CHECKING
+
 from dataknobs_data.records import Record
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from dataknobs_data.fields import FieldType
 
 
 class TransformRule(ABC):
@@ -133,7 +137,7 @@ class Transformer:
         source: str,
         target: str | None = None,
         transform: Callable[[Any], Any] | None = None
-    ) -> 'Transformer':
+    ) -> Transformer:
         """Map a field, optionally transforming its value (fluent API).
         
         Args:
@@ -151,7 +155,7 @@ class Transformer:
         ))
         return self
 
-    def rename(self, old_name: str, new_name: str) -> 'Transformer':
+    def rename(self, old_name: str, new_name: str) -> Transformer:
         """Rename a field (fluent API).
         
         Args:
@@ -163,7 +167,7 @@ class Transformer:
         """
         return self.map(old_name, new_name)
 
-    def exclude(self, *fields: str) -> 'Transformer':
+    def exclude(self, *fields: str) -> Transformer:
         """Exclude fields from the record (fluent API).
         
         Args:
@@ -180,7 +184,7 @@ class Transformer:
         field_name: str,
         value: Any | Callable[[Record], Any],
         field_type: FieldType | None = None
-    ) -> 'Transformer':
+    ) -> Transformer:
         """Add a new field (fluent API).
         
         Args:
@@ -198,7 +202,7 @@ class Transformer:
         ))
         return self
 
-    def add_rule(self, rule: TransformRule) -> 'Transformer':
+    def add_rule(self, rule: TransformRule) -> Transformer:
         """Add a custom transformation rule (fluent API).
         
         Args:
@@ -217,17 +221,11 @@ class Transformer:
             record: Record to transform
             
         Returns:
-            Transformed record, or None if record should be filtered out
+            Transformed record, or None to filter out the record
         """
-        if record is None:
-            return None
-
         result = record
         for rule in self.rules:
             result = rule.apply(result)
-            if result is None:
-                # Rule filtered out the record
-                return None
 
         return result
 
@@ -238,7 +236,7 @@ class Transformer:
             records: List of records to transform
             
         Returns:
-            List of transformed records (filtered records excluded)
+            List of transformed records (filtered records are excluded)
         """
         results = []
         for record in records:
@@ -247,7 +245,7 @@ class Transformer:
                 results.append(transformed)
         return results
 
-    def clear(self) -> 'Transformer':
+    def clear(self) -> Transformer:
         """Clear all transformation rules (fluent API).
         
         Returns:

@@ -144,8 +144,8 @@ async def test_create_record(s3_db, mock_session):
     
     # Verify the body contains the record data
     body = json.loads(call_args.kwargs['Body'])
-    assert body['data']['name'] == "test"
-    assert body['data']['value'] == 42
+    assert body['fields']['name']['value'] == "test"
+    assert body['fields']['value']['value'] == 42
 
 
 @pytest.mark.asyncio
@@ -158,7 +158,7 @@ async def test_read_record(s3_db, mock_session):
     mock_client = mock_session.mock_client_instance
     mock_body = AsyncMock()
     mock_body.read = AsyncMock(return_value=json.dumps({
-        "data": {"name": "test"},
+        "fields": {"name": {"value": "test"}},
         "metadata": {"id": "test-id"}
     }).encode())
     
@@ -279,12 +279,12 @@ async def test_search_with_filters(s3_db, mock_session):
         mock_body = AsyncMock()
         if call_count == 1:
             mock_body.read = AsyncMock(return_value=json.dumps({
-                "data": {"name": "doc1", "value": 10},
+                "fields": {"name": {"value": "doc1"}, "value": {"value": 10}},
                 "metadata": {}
             }).encode())
         else:
             mock_body.read = AsyncMock(return_value=json.dumps({
-                "data": {"name": "doc2", "value": 20},
+                "fields": {"name": {"value": "doc2"}, "value": {"value": 20}},
                 "metadata": {}
             }).encode())
         return {'Body': mock_body}
@@ -325,9 +325,9 @@ async def test_search_with_sorting(s3_db, mock_session):
     
     # Mock get_object responses
     responses = [
-        {"data": {"name": "C", "value": 30}, "metadata": {}},
-        {"data": {"name": "A", "value": 10}, "metadata": {}},
-        {"data": {"name": "B", "value": 20}, "metadata": {}}
+        {"fields": {"name": {"value": "C"}, "value": {"value": 30}}, "metadata": {}},
+        {"fields": {"name": {"value": "A"}, "value": {"value": 10}}, "metadata": {}},
+        {"fields": {"name": {"value": "B"}, "value": {"value": 20}}, "metadata": {}}
     ]
     
     call_count = 0
@@ -399,7 +399,7 @@ async def test_stream_read(s3_db, mock_session):
         call_count += 1
         mock_body = AsyncMock()
         mock_body.read = AsyncMock(return_value=json.dumps({
-            "data": {"name": f"doc{call_count}"},
+            "fields": {"name": {"value": f"doc{call_count}"}},
             "metadata": {}
         }).encode())
         return {'Body': mock_body}

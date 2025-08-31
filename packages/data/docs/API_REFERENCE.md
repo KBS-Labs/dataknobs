@@ -33,14 +33,14 @@ from dataknobs_data import Database, SyncDatabase
 
 # Async usage
 async def main():
-    db = await Database.create("memory")  # Auto-connects
+    db = await AsyncDatabase.from_backend("memory")  # Auto-connects
     record = Record({"name": "Alice", "age": 30})
     id = await db.create(record)
     retrieved = await db.read(id)
     await db.close()
 
 # Sync usage
-db = SyncDatabase.create("memory")  # Auto-connects
+db = SyncDatabase.from_backend("memory")  # Auto-connects
 record = Record({"name": "Bob", "age": 25})
 id = db.create(record)
 retrieved = db.read(id)
@@ -223,7 +223,7 @@ Custom(validate_email, "Invalid email format")
 
 # Composite constraints
 All([Required(), Range(min=0)])  # All must pass
-Any([Pattern(r"^\d+$"), Pattern(r"^[A-Z]+$")])  # At least one must pass
+AnyOf([Pattern(r"^\d+$"), Pattern(r"^[A-Z]+$")])  # At least one must pass
 
 # Constraint composition with operators
 constraint = Required() & Range(min=0, max=100)  # AND

@@ -1,18 +1,23 @@
 """Enhanced data migrator with streaming support.
 """
 
-import concurrent.futures
-from collections.abc import Callable, Iterator
+from __future__ import annotations
 
-from dataknobs_data.database import AsyncDatabase, SyncDatabase
+import concurrent.futures
+from typing import TYPE_CHECKING
+
 from dataknobs_data.query import Query
-from dataknobs_data.records import Record
 from dataknobs_data.streaming import StreamConfig
 
 from .migration import Migration
 from .progress import MigrationProgress
 from .transformer import Transformer
 
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
+    from dataknobs_data.database import AsyncDatabase, SyncDatabase
+    from dataknobs_data.records import Record
+    
 
 class Migrator:
     """Data migration orchestrator with streaming support.
@@ -52,9 +57,10 @@ class Migrator:
         progress.total = len(all_records)
 
         batch = []
-        for record in all_records:
+        for original_record in all_records:
             try:
                 # Apply transformation if provided
+                record = original_record
                 if transform is not None:
                     if isinstance(transform, Transformer):
                         original_id = record.id  # Preserve ID before transformation

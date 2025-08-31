@@ -1,195 +1,352 @@
-# Release Process
+# DataKnobs Release Process
 
-This guide describes the release process for the Dataknobs project.
+This document provides a streamlined checklist and guide for releasing new versions of DataKnobs packages.
 
 ## Overview
 
-The Dataknobs project follows a structured release process to ensure quality and consistency across all packages. We use semantic versioning and maintain separate version numbers for each package.
+The DataKnobs release process has been simplified from many manual steps to an automated workflow that:
+- **Automatically detects** what changed since the last release
+- **Suggests version bumps** based on the type of changes
+- **Generates release notes** from commit messages
+- **Provides a single command** for the entire process
+- **Validates installations** to ensure packages work correctly
 
-## Release Workflow
-
-### 1. Prepare for Release
-
-Before creating a release:
-
-1. **Update version numbers** in `pyproject.toml` files:
-   ```bash
-   # Update version in packages/*/pyproject.toml
-   # Follow semantic versioning: MAJOR.MINOR.PATCH
-   ```
-
-2. **Update changelogs**:
-   - Update `CHANGELOG.md` in the root
-   - Update package-specific changelogs if applicable
-
-3. **Run validation**:
-   ```bash
-   ./bin/validate.sh
-   ```
-
-### 2. Create Git Tags
-
-Use the tagging script to create version tags:
+## Quick Commands
 
 ```bash
-./bin/tag-releases.sh
+# Development phase
+dk fix           # Auto-fix style issues
+dk check         # Quick quality check
+dk pr            # Full PR preparation
+
+# Release phase  
+bin/release-helper.sh check    # Check what changed
+bin/release-helper.sh bump     # Bump versions
+bin/release-helper.sh notes    # Generate release notes
+bin/release-helper.sh tag      # Create tags
+bin/release-helper.sh publish  # Publish to PyPI
 ```
 
-This script will:
-- Show current package versions
-- Allow you to tag individual packages or all at once
-- Create annotated git tags in the format `package/vX.Y.Z`
+## Pre-Release Checklist
 
-### 3. Build Packages
-
-Build all packages:
-
+### 1. Code Quality ✓
 ```bash
-./bin/build-packages.sh
+# Run full quality checks
+dk pr
+
+# If issues found, fix them:
+dk fix                    # Auto-fix style issues
+dk check <package>        # Re-check specific package
 ```
 
-Or build individually:
+### 2. Merge to Main ✓
 ```bash
-cd packages/common && uv build
-cd packages/structures && uv build
-# etc...
+git add .
+git commit -m "Your commit message"
+git push origin <branch>
+# Create PR on GitHub
+# Wait for CI to pass
+# Merge PR
 ```
-
-### 4. Publish to PyPI
-
-#### Test Publishing (Optional)
-
-First, test with TestPyPI:
-
-```bash
-./bin/publish-pypi.sh --test
-```
-
-#### Production Publishing
-
-Publish to PyPI:
-
-```bash
-./bin/publish-pypi.sh
-```
-
-The script will:
-- Check for authentication (`.pypirc` or environment variables)
-- Publish packages in the correct order (common first, legacy last)
-- Skip already published versions
-
-### 5. Deploy Documentation
-
-Update and deploy documentation:
-
-```bash
-# Build and test locally
-./bin/docs-build.sh
-./bin/docs-serve.sh  # Preview at http://localhost:8000
-
-# Deploy to GitHub Pages
-./bin/docs-deploy.sh
-```
-
-### 6. Create GitHub Release
-
-1. Go to [GitHub Releases](https://github.com/yourusername/dataknobs/releases)
-2. Click "Create a new release"
-3. Choose the appropriate tag
-4. Add release notes from the changelog
-5. Publish the release
-
-## Version Management
-
-### Semantic Versioning
-
-We follow [Semantic Versioning](https://semver.org/):
-
-- **MAJOR**: Breaking API changes
-- **MINOR**: New features (backward compatible)
-- **PATCH**: Bug fixes (backward compatible)
-
-### Package Versioning Strategy
-
-- **Independent versions**: Each package has its own version number
-- **Coordinated releases**: Major releases are coordinated across packages
-- **Dependency updates**: Update inter-package dependencies as needed
-
-### Version Bumping Guidelines
-
-| Change Type | Version Bump | Example |
-|------------|--------------|---------|
-| Bug fix | PATCH | 1.0.0 → 1.0.1 |
-| New feature | MINOR | 1.0.1 → 1.1.0 |
-| Breaking change | MAJOR | 1.1.0 → 2.0.0 |
 
 ## Release Checklist
 
-Before each release, ensure:
+### 1. Prepare Release Branch
+```bash
+git checkout main
+git pull origin main
+git checkout -b release/v<version>
+```
 
-- [ ] All tests pass (`./bin/test-packages.sh`)
-- [ ] Code is linted (`./bin/validate.sh`)
-- [ ] Documentation is updated
-- [ ] Changelog is updated
-- [ ] Version numbers are bumped
-- [ ] Dependencies are updated
-- [ ] Security vulnerabilities are addressed
+### 2. Determine Version Bumps
+```bash
+# Check what changed since last release
+bin/release-helper.sh check
 
-## Release Schedule
+# This will show:
+# - Changed packages
+# - Type of changes (features, fixes, breaking)
+# - Suggested version bumps
+```
 
-- **Patch releases**: As needed for critical fixes
-- **Minor releases**: Monthly or bi-monthly
-- **Major releases**: Quarterly or semi-annually
+### 3. Update Versions
+```bash
+# Interactive version bumping
+bin/release-helper.sh bump
 
-## Rollback Procedure
+# Or manually edit pyproject.toml files
+```
 
-If issues are discovered after release:
+### 4. Generate Release Notes
+```bash
+# Generate notes for changed packages
+bin/release-helper.sh notes
 
-1. **Yank from PyPI** (if critical):
-   ```bash
-   # This doesn't delete but marks as "yanked"
-   pip install --upgrade twine
-   twine yank dataknobs-package==X.Y.Z
-   ```
+# This updates docs/changelog.md
+# Review and edit as needed
+```
 
-2. **Fix the issue**:
-   - Create a hotfix branch
-   - Apply the fix
-   - Test thoroughly
+### 5. Create Release PR
+```bash
+git add .
+git commit -m "Release: <summary of packages and versions>"
+git push origin release/v<version>
 
-3. **Release patch version**:
-   - Bump patch version
-   - Follow normal release process
+# Create PR on GitHub
+# Ensure all CI checks pass
+# Merge to main
+```
 
-## Automation
+### 6. Tag and Publish
+```bash
+# Pull the merged changes
+git checkout main
+git pull origin main
 
-Consider setting up GitHub Actions for:
+# Create release tags
+bin/tag-releases.sh
 
-- Automated testing on PR
-- Automated version bumping
-- Automated PyPI publishing on tag push
-- Documentation deployment
+# Build packages
+bin/build-packages.sh
 
-See `.github/workflows/` for CI/CD configuration.
+# Publish to PyPI
+bin/publish-pypi.sh
+
+# Or test first with TestPyPI
+bin/publish-pypi.sh --test
+```
+
+### 7. Verify Installation
+```bash
+# Create a test environment
+python -m venv test-release
+source test-release/bin/activate
+
+# Install from PyPI
+pip install dataknobs-<package>
+
+# Test import
+python -c "import dataknobs_<package>; print(dataknobs_<package>.__version__)"
+
+# Clean up
+deactivate
+rm -rf test-release
+```
+
+## Version Bump Guidelines
+
+### Patch Version (0.0.X)
+- Bug fixes
+- Documentation updates
+- Minor internal improvements
+
+### Minor Version (0.X.0)
+- New features (backwards compatible)
+- New optional parameters
+- Performance improvements
+- Deprecations (with warnings)
+
+### Major Version (X.0.0)
+- Breaking changes
+- Removed deprecated features
+- Major architectural changes
+- Incompatible API changes
+
+## Automated Release Notes
+
+The `release-helper.sh notes` command will:
+1. Analyze git commits since last tag
+2. Categorize changes by type
+3. Group by package
+4. Generate markdown for changelog
+
+Format:
+```markdown
+## [Package Name] [Version] - YYYY-MM-DD
+
+### Added
+- New features
+
+### Changed
+- Modified functionality
+
+### Fixed
+- Bug fixes
+
+### Breaking Changes
+- Incompatible changes
+```
+
+## CI/CD Integration
+
+GitHub Actions automatically:
+- Run quality checks on PR
+- Deploy docs when merged to main
+- Validate release tags match versions
 
 ## Troubleshooting
 
-### Common Issues
+### "Package already exists on PyPI"
+- Check version wasn't already published
+- Bump version if needed
 
-1. **Authentication failures**:
-   - Ensure `.pypirc` is configured correctly
-   - Check PyPI tokens are valid
+### "Working directory has uncommitted changes"  
+- Commit or stash changes before tagging
 
-2. **Version conflicts**:
-   - Ensure version hasn't been published already
-   - Check all package versions are updated
+### "Tests failing in CI"
+- Run `dk pr` locally to reproduce
+- Fix issues before merging
 
-3. **Build failures**:
-   - Clear `dist/` directory
-   - Check all dependencies are installed
+### "Import fails after installation"
+- Check dependencies in pyproject.toml
+- Ensure all required packages published
 
-## Related Documentation
+## Quick Reference
 
-- [Contributing Guide](contributing.md)
-- [Testing Guide](testing.md)
-- [CI/CD Pipeline](ci-cd.md)
+| Task | Command | Description |
+|------|---------|-------------|
+| **Development** | | |
+| Fix style issues | `dk fix` | Auto-fix linting and formatting |
+| Quick check | `dk check [package]` | Fast quality check |
+| Full PR check | `dk pr` | Complete quality validation |
+| **Release Prep** | | |
+| Check changes | `dk release-check` | See what changed since last release |
+| Bump versions | `dk release-bump` | Interactive version updates |
+| Generate notes | `dk release-notes` | Create changelog entries |
+| Full process | `dk release` | Guided complete release |
+| **Publishing** | | |
+| Create tags | `bin/tag-releases.sh` | Tag package versions |
+| Build packages | `bin/build-packages.sh` | Build distribution files |
+| Publish to PyPI | `bin/publish-pypi.sh` | Upload to PyPI |
+| Test publish | `bin/publish-pypi.sh --test` | Upload to TestPyPI |
+| Verify install | `bin/release-helper.sh verify` | Test installations |
+
+## Frequently Asked Questions (FAQ)
+
+### Q: What's the simplest way to do a release?
+**A:** Run `dk release` for an interactive, guided process that handles everything.
+
+### Q: Do I need to run all the validation scripts (validate.sh, fix.sh, dev.sh lint)?
+**A:** No, just use:
+- `dk fix` to auto-fix issues
+- `dk pr` for full quality checks before creating a PR
+
+### Q: How do I know what version bump to use?
+**A:** The `dk release-check` command analyzes your commits and suggests:
+- **Patch** (0.0.X) for bug fixes
+- **Minor** (0.X.0) for new features
+- **Major** (X.0.0) for breaking changes
+
+### Q: Should version bumps be part of the feature PR?
+**A:** No, keep them separate:
+- **Feature PR**: Contains the actual code changes
+- **Release PR**: Contains version bumps and changelog updates
+
+### Q: How do I test if packages will install correctly?
+**A:** Run `bin/release-helper.sh verify` which:
+1. Creates a clean virtual environment
+2. Installs each package from PyPI
+3. Verifies imports work correctly
+
+### Q: What if I only want to release some packages?
+**A:** The release tools are interactive and let you:
+- Select specific packages to bump versions
+- Choose which packages to tag
+- Pick individual packages to publish
+
+### Q: Can I test publishing before going to PyPI?
+**A:** Yes! Use `bin/publish-pypi.sh --test` to publish to TestPyPI first.
+
+### Q: How are release notes generated?
+**A:** The `dk release-notes` command:
+- Analyzes commit messages since the last tag
+- Categorizes by type (Added, Changed, Fixed, Breaking)
+- Groups by package
+- Updates `docs/changelog.md`
+
+### Q: What if the publish fails with "package already exists"?
+**A:** This means the version was already published. You need to:
+1. Bump the version number
+2. Create a new tag
+3. Try publishing again
+
+### Q: Do docs deploy automatically?
+**A:** Yes, documentation is automatically deployed to GitHub Pages when changes are merged to main.
+
+### Q: What's the difference between all the scripts?
+**A:** Here's what each does:
+- **`dk`** - Main developer tool with shortcuts
+- **`release-helper.sh`** - Comprehensive release automation
+- **`validate.sh`** - Code validation checks
+- **`fix.sh`** - Auto-fix code issues
+- **`build-packages.sh`** - Build distribution files
+- **`publish-pypi.sh`** - Upload to PyPI
+- **`tag-releases.sh`** - Create git tags
+
+### Q: How do I handle dependencies between packages?
+**A:** The build and publish scripts automatically handle packages in dependency order using the `package-discovery.sh` utility.
+
+### Q: What commit message format should I use?
+**A:** For better release notes generation, use conventional commits:
+- `feat:` or `add:` for new features
+- `fix:` or `bug:` for bug fixes  
+- `docs:` for documentation
+- `chore:` for maintenance
+- `BREAKING:` or `!:` for breaking changes
+
+### Q: Can I customize the release process?
+**A:** Yes! All scripts support individual steps:
+```bash
+# Run steps individually
+dk release-check        # Just check changes
+dk release-bump         # Just bump versions
+dk release-notes        # Just generate notes
+bin/tag-releases.sh     # Just create tags
+bin/publish-pypi.sh     # Just publish
+```
+
+## Best Practices
+
+1. **Always run `dk pr` before creating a PR** - Ensures quality checks pass
+2. **Use semantic versioning** - Be consistent with version bumps
+3. **Write clear commit messages** - They become your release notes
+4. **Test with TestPyPI first** - For major releases or if unsure
+5. **Keep feature and release PRs separate** - Cleaner history
+6. **Tag after merging to main** - Ensures tags point to merged code
+7. **Verify installations work** - Catch issues before users do
+
+## Troubleshooting Guide
+
+### Problem: "Working directory has uncommitted changes"
+**Solution:** Commit or stash changes before tagging:
+```bash
+git add .
+git commit -m "Your message"
+# or
+git stash
+```
+
+### Problem: "Tests failing in CI but not locally"
+**Solution:** Reproduce CI environment locally:
+```bash
+dk pr  # Runs same checks as CI
+```
+
+### Problem: "Import fails after pip install"
+**Solution:** Check dependencies:
+1. Verify all dependencies in `pyproject.toml`
+2. Ensure dependency packages were published first
+3. Check for missing `__init__.py` files
+
+### Problem: "Can't publish - authentication error"
+**Solution:** Set up PyPI authentication:
+```bash
+# Create ~/.pypirc with your token
+# OR set environment variable:
+export UV_PUBLISH_TOKEN='pypi-...'
+```
+
+### Problem: "Version conflict between packages"
+**Solution:** The scripts handle dependency order automatically, but ensure:
+1. All interdependent packages are released together
+2. Version constraints in `pyproject.toml` are compatible

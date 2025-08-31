@@ -1,12 +1,13 @@
 """S3 backend implementation with proper connection management."""
 
+from __future__ import annotations
+
 import json
 import logging
 import time
-from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from uuid import uuid4
 
 from dataknobs_config import ConfigurableBase
@@ -16,10 +17,28 @@ from dataknobs_data.query import Query
 from dataknobs_data.records import Record
 from dataknobs_data.streaming import StreamConfig, StreamResult, process_batch_with_fallback
 
+from ..vector import VectorOperationsMixin
+from ..vector.bulk_embed_mixin import BulkEmbedMixin
+from ..vector.python_vector_search import PythonVectorSearchMixin
+from .sqlite_mixins import SQLiteVectorSupport
+from .vector_config_mixin import VectorConfigMixin
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+
 logger = logging.getLogger(__name__)
 
 
-class SyncS3Database(SyncDatabase, ConfigurableBase):
+class SyncS3Database(  # type: ignore[misc]
+    SyncDatabase,
+    ConfigurableBase,
+    VectorConfigMixin,
+    SQLiteVectorSupport,
+    PythonVectorSearchMixin,
+    BulkEmbedMixin,
+    VectorOperationsMixin
+):
     """S3-based database backend with proper connection management.
     
     Stores records as JSON objects in S3 with metadata as tags.
@@ -60,8 +79,12 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
         self.aws_secret_access_key = self.config.get("secret_access_key")
         self.aws_session_token = self.config.get("session_token")
 
+        # Initialize vector support
+        self._parse_vector_config(config or {})
+        self._init_vector_state()
+
     @classmethod
-    def from_config(cls, config: dict) -> "SyncS3Database":
+    def from_config(cls, config: dict) -> SyncS3Database:
         """Create instance from configuration dictionary."""
         return cls(config)
 
@@ -110,7 +133,7 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
         """Close the S3 connection."""
         if self.s3_client:
             # S3 client doesn't need explicit closing, but clear cache
-            self._index_cache = {}
+            self._index_cache = {}  # type: ignore[unreachable]
             self._connected = False
             logger.info(f"Closed S3 connection to bucket={self.bucket}")
 
@@ -149,38 +172,34 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
 
     def _record_to_s3_object(self, record: Record) -> dict[str, Any]:
         """Convert a Record to S3 object data."""
-        data = {}
-        for field_name, field_obj in record.fields.items():
-            data[field_name] = field_obj.value
+        # Use Record's built-in serialization which handles VectorFields
+        # Use non-flattened format to preserve field metadata
+        record_dict = record.to_dict(include_metadata=True, flatten=False)
 
-        return {
-            "data": data,
-            "metadata": record.metadata or {}
-        }
+        return record_dict
 
     def _s3_object_to_record(self, obj_data: dict[str, Any]) -> Record:
         """Convert S3 object data to a Record."""
-        data = obj_data.get("data", {})
-        metadata = obj_data.get("metadata", {})
-        return Record(data=data, metadata=metadata)
+        # Use Record's built-in deserialization
+        return Record.from_dict(obj_data)
 
     def create(self, record: Record) -> str:
         """Create a new record in S3."""
         self._check_connection()
 
-        # Use record's ID if it has one, otherwise generate a new one
-        record_id = record.id if record.id else str(uuid4())
-        key = self._get_object_key(record_id)
+        # Use centralized method to prepare record
+        record_copy, storage_id = self._prepare_record_for_storage(record)
+        key = self._get_object_key(storage_id)
 
         # Set metadata
-        record.metadata = record.metadata or {}
-        record.metadata["id"] = record_id
+        record_copy.metadata = record_copy.metadata or {}
+        record_copy.metadata["id"] = storage_id
         now = datetime.utcnow()
-        record.metadata["created_at"] = now.isoformat()
-        record.metadata["updated_at"] = now.isoformat()
+        record_copy.metadata["created_at"] = now.isoformat()
+        record_copy.metadata["updated_at"] = now.isoformat()
 
         # Convert record to JSON
-        obj_data = self._record_to_s3_object(record)
+        obj_data = self._record_to_s3_object(record_copy)
         body = json.dumps(obj_data)
 
         # Store in S3
@@ -194,8 +213,8 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
         # Invalidate cache
         self._cache_dirty = True
 
-        logger.debug(f"Created record {record_id} at {key}")
-        return record_id
+        logger.debug(f"Created record {storage_id} at {key}")
+        return storage_id
 
     def read(self, id: str) -> Record | None:
         """Read a record from S3."""
@@ -207,7 +226,9 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
             response = self.s3_client.get_object(Bucket=self.bucket, Key=key)
             body = response['Body'].read()
             obj_data = json.loads(body)
-            return self._s3_object_to_record(obj_data)
+            record = self._s3_object_to_record(obj_data)
+            # Use centralized method to prepare record
+            return self._prepare_record_from_storage(record, id)
         except self.ClientError as e:
             if e.response['Error']['Code'] == 'NoSuchKey':
                 return None
@@ -485,7 +506,7 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
                 # Use lambda wrapper for _write_batch
                 continue_processing = process_batch_with_fallback(
                     batch,
-                    lambda b: self._write_batch(b) or [r.id for r in b],  # _write_batch returns None, we need IDs
+                    lambda b: self._write_batch(b),
                     self.create,
                     result,
                     config
@@ -501,7 +522,7 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
         if batch and not quitting:
             process_batch_with_fallback(
                 batch,
-                lambda b: self._write_batch(b) or [r.id for r in b],
+                lambda b: self._write_batch(b),
                 self.create,
                 result,
                 config
@@ -510,18 +531,26 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
         result.duration = time.time() - start_time
         return result
 
-    def _write_batch(self, records: list[Record]) -> None:
-        """Write a batch of records to S3."""
+    def _write_batch(self, records: list[Record]) -> list[str]:
+        """Write a batch of records to S3.
+        
+        Returns:
+            List of created record IDs
+        """
+        ids = []
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = []
             for record in records:
                 record_id = str(uuid4())
+                ids.append(record_id)
                 future = executor.submit(self._write_single, record_id, record)
                 futures.append(future)
 
             # Wait for all writes to complete
             for future in as_completed(futures):
                 future.result()  # This will raise if there was an error
+
+        return ids
 
     def _write_single(self, record_id: str, record: Record) -> None:
         """Write a single record to S3."""
@@ -541,6 +570,31 @@ class SyncS3Database(SyncDatabase, ConfigurableBase):
             Key=key,
             Body=body,
             ContentType='application/json'
+        )
+
+    def vector_search(
+        self,
+        query_vector,
+        vector_field: str = "embedding",
+        k: int = 10,
+        filter=None,
+        metric=None,
+        **kwargs
+    ):
+        """Perform vector similarity search using Python calculations.
+        
+        WARNING: This implementation downloads all records from S3 to perform
+        the search locally. This is inefficient for large datasets. Consider
+        using a vector-enabled backend like PostgreSQL or Elasticsearch for
+        production use with large datasets.
+        """
+        return self.python_vector_search_sync(
+            query_vector=query_vector,
+            vector_field=vector_field,
+            k=k,
+            filter=filter,
+            metric=metric,
+            **kwargs
         )
 
 

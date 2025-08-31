@@ -4,6 +4,7 @@ Complete API documentation for all Dataknobs packages.
 
 ## Package APIs
 
+- [dataknobs-data](dataknobs-data.md) - Data abstraction API
 - [dataknobs-config](dataknobs-config.md) - Configuration management API
 - [dataknobs-structures](dataknobs-structures.md) - Core data structures API
 - [dataknobs-utils](dataknobs-utils.md) - Utility functions API  
@@ -11,6 +12,9 @@ Complete API documentation for all Dataknobs packages.
 - [dataknobs-common](dataknobs-common.md) - Common components API
 
 ## Quick Reference
+
+### Data
+- See [dataknobs-data API reference](../packages/data/api-reference.md) documentation
 
 ### Config
 ```python

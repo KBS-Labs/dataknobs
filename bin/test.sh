@@ -32,6 +32,8 @@ START_SERVICES="auto"
 COVERAGE="yes"
 PYTEST_ARGS=""
 COV_REPORT="term-missing"
+SKIP_INTEGRATION="false"  # If true, sets TEST_*=false
+ONLY_INTEGRATION="false"  # If true, only runs integration tests
 
 # Check if we're running in a Docker container
 IN_DOCKER=false
@@ -87,6 +89,21 @@ set_integration_env_vars() {
     export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-test}"
     export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
     export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
+    
+    # Enable test flags based on environment or defaults
+    # These control whether integration tests are skipped or run
+    # Can be overridden by setting these before calling the script
+    if [ "$SKIP_INTEGRATION" = "true" ]; then
+        # Explicitly skip integration tests
+        export TEST_S3="false"
+        export TEST_ELASTICSEARCH="false"
+        export TEST_POSTGRES="false"
+    else
+        # Use environment values or default to true (run tests if services available)
+        export TEST_S3="${TEST_S3:-true}"
+        export TEST_ELASTICSEARCH="${TEST_ELASTICSEARCH:-true}"
+        export TEST_POSTGRES="${TEST_POSTGRES:-true}"
+    fi
 }
 
 # Function to show usage
@@ -111,6 +128,8 @@ ${YELLOW}Options:${NC}
                             If not specified, tests all packages
     -s, --services          Start services for integration tests (auto by default)
     -n, --no-services       Don't start services (assume they're already running)
+    --skip-integration      Skip integration tests (sets TEST_*=false)
+    --only-integration      Only run integration tests (requires services)
     --no-cov                Disable coverage reporting
     --cov-report TYPE       Coverage report type: term, term-missing, html, xml, or combinations
                            (default: term-missing, use comma to combine: term-missing,html,xml)
@@ -145,6 +164,8 @@ ${YELLOW}Examples:${NC}
     $0 data -- --lf                       # Rerun only last failures
     $0 data -- --pdb --maxfail=3          # Custom pytest args
     $0 -n data                            # Run without starting services (Docker)
+    $0 --skip-integration data            # Skip integration tests, only run unit tests
+    $0 --only-integration data            # Only run integration tests
 
 ${YELLOW}Docker/Container Notes:${NC}
     - Services are automatically detected when running in Docker
@@ -177,6 +198,15 @@ while [[ $# -gt 0 ]]; do
             ;;
         -n|--no-services)
             START_SERVICES="no"
+            shift
+            ;;
+        --skip-integration)
+            SKIP_INTEGRATION="true"
+            shift
+            ;;
+        --only-integration)
+            ONLY_INTEGRATION="true"
+            TEST_TYPE="integration"
             shift
             ;;
         --no-cov)
@@ -227,6 +257,24 @@ if [[ "$TEST_TYPE" != "unit" && "$TEST_TYPE" != "integration" && "$TEST_TYPE" !=
     exit 1
 fi
 
+# Handle conflicting flags
+if [ "$SKIP_INTEGRATION" = "true" ] && [ "$ONLY_INTEGRATION" = "true" ]; then
+    echo -e "${RED}Error: Cannot use --skip-integration and --only-integration together${NC}"
+    exit 1
+fi
+
+# Adjust test type based on flags
+if [ "$SKIP_INTEGRATION" = "true" ]; then
+    if [ "$TEST_TYPE" = "integration" ]; then
+        echo -e "${RED}Error: Cannot skip integration tests when test type is 'integration'${NC}"
+        echo "Remove --skip-integration or change test type"
+        exit 1
+    elif [ "$TEST_TYPE" = "both" ]; then
+        # Silently change to unit tests only
+        TEST_TYPE="unit"
+    fi
+fi
+
 # Function to extract package name from a test path
 extract_package_from_path() {
     local path=$1
@@ -266,8 +314,12 @@ run_path_tests() {
         return 1
     fi
     
+    # Always set environment variables for tests (they control which tests are skipped)
+    set_integration_env_vars
+    
     # Check if it's an integration test path to determine if services are needed
-    if [[ "$path" == *"/integration"* ]] || [[ "$path" == *"/integration/"* ]]; then
+    # Skip service startup if we're explicitly skipping integration tests
+    if [ "$SKIP_INTEGRATION" != "true" ] && ([[ "$path" == *"/integration"* ]] || [[ "$path" == *"/integration/"* ]] || [[ "$path" == *"/tests"* ]]); then
         # Start services if needed using manage-services.sh
         if [ "$START_SERVICES" = "auto" ] || [ "$START_SERVICES" = "yes" ]; then
             if [ "$IN_DOCKER" = true ]; then
@@ -286,9 +338,6 @@ run_path_tests() {
                 fi
             fi
         fi
-        
-        # Set environment variables for integration tests
-        set_integration_env_vars
     fi
     
     # Build coverage args if enabled
@@ -473,7 +522,8 @@ run_combined_tests() {
     local test_path="packages/$package/tests"
     
     # Check if we need to start services for integration tests
-    if [ -d "$test_path/integration" ]; then
+    # Skip service startup if we're explicitly skipping integration tests
+    if [ "$SKIP_INTEGRATION" != "true" ] && [ -d "$test_path/integration" ]; then
         # Start services if needed using manage-services.sh
         if [ "$START_SERVICES" = "auto" ] || [ "$START_SERVICES" = "yes" ]; then
             if [ "$IN_DOCKER" = true ]; then

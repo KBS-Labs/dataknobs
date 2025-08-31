@@ -1,6 +1,8 @@
 """Validation result types with consistent, predictable behavior.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -22,7 +24,7 @@ class ValidationResult:
         """Allow 'if result:' usage to check validity."""
         return self.valid
 
-    def merge(self, other: 'ValidationResult') -> 'ValidationResult':
+    def merge(self, other: ValidationResult) -> ValidationResult:
         """Combine results for composite validation.
         
         Args:
@@ -38,7 +40,7 @@ class ValidationResult:
             warnings=self.warnings + other.warnings
         )
 
-    def add_error(self, error: str) -> 'ValidationResult':
+    def add_error(self, error: str) -> ValidationResult:
         """Add an error and mark as invalid (fluent API).
         
         Args:
@@ -51,7 +53,7 @@ class ValidationResult:
         self.valid = False
         return self
 
-    def add_warning(self, warning: str) -> 'ValidationResult':
+    def add_warning(self, warning: str) -> ValidationResult:
         """Add a warning without affecting validity (fluent API).
         
         Args:
@@ -64,7 +66,7 @@ class ValidationResult:
         return self
 
     @classmethod
-    def success(cls, value: Any, warnings: list[str] | None = None) -> 'ValidationResult':
+    def success(cls, value: Any, warnings: list[str] | None = None) -> ValidationResult:
         """Create a successful validation result.
         
         Args:
@@ -82,7 +84,7 @@ class ValidationResult:
         )
 
     @classmethod
-    def failure(cls, value: Any, errors: list[str], warnings: list[str] | None = None) -> 'ValidationResult':
+    def failure(cls, value: Any, errors: list[str], warnings: list[str] | None = None) -> ValidationResult:
         """Create a failed validation result.
         
         Args:

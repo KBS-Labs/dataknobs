@@ -1,5 +1,7 @@
 """Core converter between DataKnobs Records and Pandas DataFrames."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,11 +18,11 @@ from .type_mapper import TypeMapper
 class ConversionOptions:
     """Options for conversion between Records and DataFrames."""
     include_metadata: bool = False
-    metadata_columns: list[str] = None  # Columns to treat as metadata
+    metadata_columns: list[str] | None = None  # Columns to treat as metadata
     flatten_nested: bool = False  # Flatten nested structures
     preserve_index: bool = True
     use_index_as_id: bool = False  # Use DataFrame index as record ID
-    type_mapping: dict[str, str] = None  # Custom type mappings
+    type_mapping: dict[str, str] | None = None  # Custom type mappings
     null_handling: str = "preserve"  # "preserve", "drop", "fill"
     datetime_format: str | None = None  # Format for datetime conversion
     timezone: str | None = None  # Timezone for datetime conversion
@@ -201,7 +203,7 @@ class DataFrameConverter:
             # Prepare row data (excluding metadata columns)
             row_data = {}
             for col in row.index:
-                if col not in options.metadata_columns:
+                if options.metadata_columns is None or col not in options.metadata_columns:
                     row_data[col] = row[col]
 
             # Determine record ID
@@ -209,7 +211,7 @@ class DataFrameConverter:
             if options.use_index_as_id:
                 if isinstance(idx, str):
                     record_id = idx
-                elif idx is not None and not pd.isna(idx):
+                elif idx is not None and not pd.isna(idx):  # type: ignore[call-overload]
                     record_id = str(idx)
 
             # Create record
@@ -229,7 +231,10 @@ class DataFrameConverter:
         """
         data = {}
         for field_name, field in record.fields.items():
-            value = self.type_mapper.convert_value_to_pandas(field.value, field.type)
+            if field.type is not None:
+                value = self.type_mapper.convert_value_to_pandas(field.value, field.type)
+            else:
+                value = field.value
             data[field_name] = value
 
         series = pd.Series(data)
@@ -252,7 +257,12 @@ class DataFrameConverter:
         Returns:
             Record
         """
-        record = Record(id=record_id or series.name if hasattr(series, 'name') else None)
+        # Get ID - series.name is Hashable, we need str | None
+        id_value = record_id
+        if not id_value and hasattr(series, 'name'):
+            name = series.name
+            id_value = str(name) if name is not None else None
+        record = Record(id=id_value)
 
         for column, value in series.items():
             # Skip metadata columns
@@ -301,12 +311,13 @@ class DataFrameConverter:
 
         record = Record(id=record_id)
 
-        for column, value in row.items():
+        for original_column, value in row.items():
             # Skip metadata columns
-            if isinstance(column, str) and column.startswith("_meta_"):
+            if isinstance(original_column, str) and original_column.startswith("_meta_"):
                 continue
 
             # Handle multi-index columns
+            column = original_column
             if isinstance(column, tuple):
                 column = column[0]  # Use first level
 
@@ -375,7 +386,7 @@ class DataFrameConverter:
         """
         options = options or ConversionOptions()
 
-        report = {
+        report: dict[str, Any] = {
             "record_count_match": len(records) == len(df),
             "original_record_count": len(records),
             "dataframe_row_count": len(df),
@@ -404,11 +415,14 @@ class DataFrameConverter:
         if options.preserve_types:
             for record in records[:10]:  # Sample first 10 records
                 for field_name, field in record.fields.items():
-                    if field_name in df.columns:
+                    if field_name in df.columns and field.type is not None:
                         df_dtype = str(df[field_name].dtype)
                         expected_dtype = str(self.type_mapper.field_type_to_pandas(field.type))
                         if df_dtype != expected_dtype:
-                            report["type_preservation"][field_name] = {
+                            type_preservation = report["type_preservation"]
+                            if not isinstance(type_preservation, dict):
+                                raise TypeError("type_preservation should be a dict")
+                            type_preservation[field_name] = {
                                 "expected": expected_dtype,
                                 "actual": df_dtype
                             }

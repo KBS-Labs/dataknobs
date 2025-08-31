@@ -1,11 +1,13 @@
 """Migration definition with reversible operations.
 """
 
+from __future__ import annotations
+from typing import TYPE_CHECKING
 
-from dataknobs_data.records import Record
-
-from .operations import Operation
-
+if TYPE_CHECKING:
+    from dataknobs_data.records import Record
+    from .operations import Operation
+    
 
 class Migration:
     """Migration between data versions with reversible operations.
@@ -27,7 +29,7 @@ class Migration:
         self.description = description
         self.operations: list[Operation] = []
 
-    def add(self, operation: Operation) -> 'Migration':
+    def add(self, operation: Operation) -> Migration:
         """Add an operation to the migration (fluent API).
         
         Args:
@@ -39,7 +41,7 @@ class Migration:
         self.operations.append(operation)
         return self
 
-    def add_many(self, operations: list[Operation]) -> 'Migration':
+    def add_many(self, operations: list[Operation]) -> Migration:
         """Add multiple operations (fluent API).
         
         Args:

@@ -1,13 +1,14 @@
 """Native async S3 backend implementation with aioboto3 and connection pooling."""
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import Any
+from typing import Any, TYPE_CHECKING, cast, Callable, Awaitable
 
 from dataknobs_config import ConfigurableBase
 
@@ -17,6 +18,15 @@ from ..pooling.s3 import S3PoolConfig, create_aioboto3_session, validate_s3_sess
 from ..query import Operator, Query, SortOrder
 from ..records import Record
 from ..streaming import StreamConfig, StreamResult, async_process_batch_with_fallback
+from ..vector import VectorOperationsMixin
+from ..vector.bulk_embed_mixin import BulkEmbedMixin
+from ..vector.python_vector_search import PythonVectorSearchMixin
+from .sqlite_mixins import SQLiteVectorSupport
+from .vector_config_mixin import VectorConfigMixin
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +34,15 @@ logger = logging.getLogger(__name__)
 _session_manager = ConnectionPoolManager()
 
 
-class AsyncS3Database(AsyncDatabase, ConfigurableBase):
+class AsyncS3Database(  # type: ignore[misc]
+    AsyncDatabase,
+    ConfigurableBase,
+    VectorConfigMixin,
+    SQLiteVectorSupport,
+    PythonVectorSearchMixin,
+    BulkEmbedMixin,
+    VectorOperationsMixin
+):
     """Native async S3 database backend with aioboto3 and session pooling."""
 
     def __init__(self, config: dict[str, Any] | None = None):
@@ -38,8 +56,12 @@ class AsyncS3Database(AsyncDatabase, ConfigurableBase):
         self._session = None
         self._connected = False
 
+        # Initialize vector support
+        self._parse_vector_config(config or {})
+        self._init_vector_state()  # From SQLiteVectorSupport
+
     @classmethod
-    def from_config(cls, config: dict) -> "AsyncS3Database":
+    def from_config(cls, config: dict) -> AsyncS3Database:
         """Create from config dictionary."""
         return cls(config)
 
@@ -49,9 +71,10 @@ class AsyncS3Database(AsyncDatabase, ConfigurableBase):
             return
 
         # Get or create session for current event loop
+        from ..pooling import BasePoolConfig
         self._session = await _session_manager.get_pool(
             self._pool_config,
-            create_aioboto3_session,
+            cast("Callable[[BasePoolConfig], Awaitable[Any]]", create_aioboto3_session),
             lambda session: validate_s3_session(session, self._pool_config)
         )
 
@@ -80,41 +103,34 @@ class AsyncS3Database(AsyncDatabase, ConfigurableBase):
 
     def _record_to_s3_object(self, record: Record) -> dict[str, Any]:
         """Convert a Record to an S3 object."""
-        data = {}
-        for field_name, field_obj in record.fields.items():
-            data[field_name] = field_obj.value
+        # Use Record's built-in serialization which handles VectorFields
+        record_dict = record.to_dict(include_metadata=True, flatten=False)
 
-        return {
-            "data": data,
-            "metadata": record.metadata or {},
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat()
-        }
+        # Add timestamps
+        now = datetime.utcnow().isoformat()
+        if "metadata" not in record_dict:
+            record_dict["metadata"] = {}
+        record_dict["metadata"]["created_at"] = record_dict["metadata"].get("created_at", now)
+        record_dict["metadata"]["updated_at"] = now
+
+        return record_dict
 
     def _s3_object_to_record(self, obj: dict[str, Any]) -> Record:
         """Convert an S3 object to a Record."""
-        data = obj.get("data", {})
-        metadata = obj.get("metadata", {})
-
-        # Add timestamps to metadata
-        if "created_at" in obj:
-            metadata["created_at"] = obj["created_at"]
-        if "updated_at" in obj:
-            metadata["updated_at"] = obj["updated_at"]
-
-        return Record(data=data, metadata=metadata)
+        # Use Record's built-in deserialization
+        return Record.from_dict(obj)
 
     async def create(self, record: Record) -> str:
         """Create a new record in S3."""
         self._check_connection()
 
-        # Use record's ID if it has one, otherwise generate a new one
-        id = record.id if record.id else str(uuid.uuid4())
-        key = self._get_key(id)
-        obj = self._record_to_s3_object(record)
+        # Use centralized method to prepare record
+        record_copy, storage_id = self._prepare_record_for_storage(record)
+        key = self._get_key(storage_id)
+        obj = self._record_to_s3_object(record_copy)
 
         # Add ID to metadata
-        obj["metadata"]["id"] = id
+        obj["metadata"]["id"] = storage_id
 
         async with self._session.client("s3", endpoint_url=self._pool_config.endpoint_url) as s3:
             await s3.put_object(
@@ -124,7 +140,7 @@ class AsyncS3Database(AsyncDatabase, ConfigurableBase):
                 ContentType="application/json"
             )
 
-        return id
+        return storage_id
 
     async def read(self, id: str) -> Record | None:
         """Read a record from S3."""
@@ -144,6 +160,8 @@ class AsyncS3Database(AsyncDatabase, ConfigurableBase):
                 obj = json.loads(body)
 
                 record = self._s3_object_to_record(obj)
+                # Use centralized method to prepare record
+                record = self._prepare_record_from_storage(record, id)
                 # Ensure ID is in metadata
                 record.metadata["id"] = id
 
@@ -279,7 +297,7 @@ class AsyncS3Database(AsyncDatabase, ConfigurableBase):
             for sort_spec in reversed(query.sort_specs):
                 reverse = sort_spec.order == SortOrder.DESC
                 records.sort(
-                    key=lambda r: r.get_field(sort_spec.field).value if r.get_field(sort_spec.field) else None,
+                    key=lambda r: (r.get_field(sort_spec.field).value if r.get_field(sort_spec.field) else "") or "",
                     reverse=reverse
                 )
 
@@ -550,3 +568,31 @@ class AsyncS3Database(AsyncDatabase, ConfigurableBase):
                         ids.append(id)
 
         return ids
+
+    async def vector_search(
+        self,
+        query_vector,
+        vector_field: str = "embedding",
+        k: int = 10,
+        filter=None,
+        metric=None,
+        **kwargs
+    ):
+        """Perform vector similarity search using Python calculations.
+        
+        WARNING: This implementation downloads all records from S3 to perform
+        the search locally. This is inefficient for large datasets. Consider
+        using a vector-enabled backend like PostgreSQL or Elasticsearch for
+        production use with large datasets.
+        
+        Future optimization: Override this method to use AWS OpenSearch or
+        similar vector-enabled service when available.
+        """
+        return await self.python_vector_search_async(
+            query_vector=query_vector,
+            vector_field=vector_field,
+            k=k,
+            filter=filter,
+            metric=metric,
+            **kwargs
+        )

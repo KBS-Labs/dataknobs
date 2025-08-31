@@ -21,6 +21,8 @@ source "$ROOT_DIR/bin/package-discovery.sh"
 TARGETS=()
 QUICK=false
 FIX=false
+STATS=false
+ALL_ERRORS=false
 
 # Usage function
 usage() {
@@ -39,6 +41,8 @@ usage() {
     echo "Options:"
     echo "  -q, --quick           Quick validation (skip slow checks)"
     echo "  -f, --fix             Attempt to auto-fix issues"
+    echo "  -s, --stats           Show detailed error statistics"
+    echo "  -a, --all-errors      Show all errors (bypass suppression rules)"
     echo "  -h, --help            Show this help message"
     echo ""
     echo "Examples:"
@@ -47,6 +51,8 @@ usage() {
     echo "  $0 packages/utils/src                     # Validate specific directory"
     echo "  $0 packages/utils/src/dataknobs_utils/*.py  # Validate specific files"
     echo "  $0 -f                                     # Validate and fix issues"
+    echo "  $0 -s data                                # Show error statistics for data package"
+    echo "  $0 -s -a data                             # Show ALL error statistics (including suppressed)"
     exit 0
 }
 
@@ -59,6 +65,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         -f|--fix)
             FIX=true
+            shift
+            ;;
+        -s|--stats)
+            STATS=true
+            shift
+            ;;
+        -a|--all-errors)
+            ALL_ERRORS=true
             shift
             ;;
         -h|--help)
@@ -121,6 +135,81 @@ if [[ ${#VALIDATE_TARGETS[@]} -eq 0 ]]; then
     exit 1
 fi
 
+# Stats mode - show error statistics and exit
+if [[ "$STATS" == true ]]; then
+    echo -e "${BLUE}Error Statistics for targets:${NC}"
+    echo -e "${YELLOW}==============================${NC}"
+    
+    # Ruff statistics
+    echo -e "\n${BLUE}Ruff Linting Statistics:${NC}"
+    for target in "${VALIDATE_TARGETS[@]}"; do
+        echo -e "${YELLOW}  $target:${NC}"
+        if [[ "$ALL_ERRORS" == true ]]; then
+            # Show all errors without config (no suppression)
+            uv run ruff check "$target" --statistics 2>/dev/null || true
+        else
+            # Normal mode with configured suppressions from pyproject.toml
+            uv run ruff check "$target" --statistics --config "$ROOT_DIR/pyproject.toml" 2>/dev/null || true
+        fi
+    done
+    
+    # MyPy statistics
+    if [[ "$QUICK" != true ]]; then
+        echo -e "\n${BLUE}MyPy Type Checking Statistics:${NC}"
+        for target in "${VALIDATE_TARGETS[@]}"; do
+            echo -e "${YELLOW}  $target:${NC}"
+            # Count errors by type
+            if [[ "$ALL_ERRORS" == true ]]; then
+                # Use pyproject.toml for comprehensive checking (more errors shown)
+                uv run mypy "$target" --config-file "$ROOT_DIR/pyproject.toml" 2>&1 | \
+                    grep "error:" | \
+                    sed 's/.*error: //' | \
+                    sed 's/  \[/\n[/' | \
+                    grep '^\[' | \
+                    sed 's/\[//' | \
+                    sed 's/\]//' | \
+                    sort | uniq -c | sort -rn || echo "    No type errors found"
+            else
+                # Use mypy.ini for focused checking (fewer errors shown)
+                uv run mypy "$target" --config-file "$ROOT_DIR/mypy.ini" 2>&1 | \
+                    grep "error:" | \
+                    sed 's/.*error: //' | \
+                    sed 's/  \[/\n[/' | \
+                    grep '^\[' | \
+                    sed 's/\[//' | \
+                    sed 's/\]//' | \
+                    sort | uniq -c | sort -rn || echo "    No type errors found"
+            fi
+        done
+        
+        # Show total mypy errors
+        echo -e "\n${BLUE}Total MyPy Errors:${NC}"
+        for target in "${VALIDATE_TARGETS[@]}"; do
+            if [[ "$ALL_ERRORS" == true ]]; then
+                ERROR_COUNT=$(uv run mypy "$target" --config-file "$ROOT_DIR/pyproject.toml" 2>&1 | grep -c "error:" || echo "0")
+                echo -e "  ${YELLOW}$target:${NC} $ERROR_COUNT errors (comprehensive)"
+            else
+                ERROR_COUNT=$(uv run mypy "$target" --config-file "$ROOT_DIR/mypy.ini" 2>&1 | grep -c "error:" || echo "0")
+                echo -e "  ${YELLOW}$target:${NC} $ERROR_COUNT errors (focused)"
+            fi
+        done
+    fi
+    
+    # TODO/FIXME count
+    echo -e "\n${BLUE}TODO/FIXME Comments:${NC}"
+    for target in "${VALIDATE_TARGETS[@]}"; do
+        if [[ -f "$target" ]]; then
+            count=$(grep -c "TODO\|FIXME" "$target" 2>/dev/null || echo 0)
+            echo -e "  ${YELLOW}$target:${NC} $count"
+        elif [[ -d "$target" ]]; then
+            count=$(find "$target" -name "*.py" -exec grep -c "TODO\|FIXME" {} + 2>/dev/null | awk -F: '{sum += $2} END {print sum ? sum : 0}')
+            echo -e "  ${YELLOW}$target:${NC} $count"
+        fi
+    done
+    
+    exit 0
+fi
+
 echo -e "${YELLOW}Validating targets...${NC}"
 
 # Track overall status
@@ -133,14 +222,14 @@ for target in "${VALIDATE_TARGETS[@]}"; do
     
     if [[ -f "$target" ]]; then
         # Single file
-        if ! python -m py_compile "$target" 2>/dev/null; then
+        if ! uv run python -m py_compile "$target" 2>/dev/null; then
             echo -e "${RED}    ✗ Syntax error in $target${NC}"
             FAILED=true
         fi
     elif [[ -d "$target" ]]; then
         # Directory - find all Python files
         while IFS= read -r -d '' file; do
-            if ! python -m py_compile "$file" 2>/dev/null; then
+            if ! uv run python -m py_compile "$file" 2>/dev/null; then
                 echo -e "${RED}    ✗ Syntax error in $file${NC}"
                 FAILED=true
             fi
@@ -160,19 +249,41 @@ for target in "${VALIDATE_TARGETS[@]}"; do
     
     if [[ "$FIX" == true ]]; then
         # Run ruff with auto-fix (matching fix.sh behavior)
-        if ruff check "$target" --fix --no-unsafe-fixes --config "$ROOT_DIR/pyproject.toml"; then
-            echo -e "${GREEN}    ✓ Ruff checks passed${NC}"
+        if [[ "$ALL_ERRORS" == true ]]; then
+            # No config = show all errors
+            if uv run ruff check "$target" --fix --no-unsafe-fixes; then
+                echo -e "${GREEN}    ✓ Ruff checks passed${NC}"
+            else
+                echo -e "${YELLOW}    ⚠ Some issues remain that need manual fixing${NC}"
+                FAILED=true
+            fi
         else
-            echo -e "${YELLOW}    ⚠ Some issues remain that need manual fixing${NC}"
-            FAILED=true
+            # Use config for suppressions
+            if uv run ruff check "$target" --fix --no-unsafe-fixes --config "$ROOT_DIR/pyproject.toml"; then
+                echo -e "${GREEN}    ✓ Ruff checks passed${NC}"
+            else
+                echo -e "${YELLOW}    ⚠ Some issues remain that need manual fixing${NC}"
+                FAILED=true
+            fi
         fi
     else
         # Run ruff without fixing
-        if ruff check "$target" --no-fix --config "$ROOT_DIR/pyproject.toml"; then
-            echo -e "${GREEN}    ✓ Ruff checks passed${NC}"
+        if [[ "$ALL_ERRORS" == true ]]; then
+            # No config = show all errors
+            if uv run ruff check "$target" --no-fix; then
+                echo -e "${GREEN}    ✓ Ruff checks passed${NC}"
+            else
+                echo -e "${RED}    ✗ Ruff found issues${NC}"
+                FAILED=true
+            fi
         else
-            echo -e "${RED}    ✗ Ruff found issues${NC}"
-            FAILED=true
+            # Use config for suppressions
+            if uv run ruff check "$target" --no-fix --config "$ROOT_DIR/pyproject.toml"; then
+                echo -e "${GREEN}    ✓ Ruff checks passed${NC}"
+            else
+                echo -e "${RED}    ✗ Ruff found issues${NC}"
+                FAILED=true
+            fi
         fi
     fi
 done
@@ -185,7 +296,7 @@ if [[ ${#VALIDATE_PACKAGES[@]} -gt 0 ]]; then
         
         # Try to import the package
         PACKAGE_NAME="dataknobs_${package//-/_}"
-        if python -c "import $PACKAGE_NAME" 2>/dev/null; then
+        if uv run python -c "import $PACKAGE_NAME" 2>/dev/null; then
             echo -e "${GREEN}    ✓ Package imports successfully${NC}"
         else
             echo -e "${RED}    ✗ Failed to import $PACKAGE_NAME${NC}"
@@ -200,10 +311,17 @@ if [[ "$QUICK" != true ]]; then
     for target in "${VALIDATE_TARGETS[@]}"; do
         echo -e "${YELLOW}  Checking $target...${NC}"
         
+        # Choose config based on all-errors flag
+        if [[ "$ALL_ERRORS" == true ]]; then
+            MYPY_CONFIG="$ROOT_DIR/pyproject.toml"
+        else
+            MYPY_CONFIG="$ROOT_DIR/mypy.ini"
+        fi
+        
         # For individual files, skip following imports to avoid checking the whole codebase
         if [[ -f "$target" ]]; then
             # Single file - don't follow imports
-            if mypy "$target" --config-file "$ROOT_DIR/pyproject.toml" --follow-imports=skip 2>&1 | grep -E "(error|Error)"; then
+            if uv run mypy "$target" --config-file "$MYPY_CONFIG" --follow-imports=skip 2>&1 | grep -E "(error|Error)"; then
                 echo -e "${RED}    ✗ Type errors found${NC}"
                 FAILED=true
             else
@@ -211,7 +329,7 @@ if [[ "$QUICK" != true ]]; then
             fi
         else
             # Directory or package - normal behavior
-            if mypy "$target" --config-file "$ROOT_DIR/pyproject.toml" 2>&1 | grep -E "(error|Error)"; then
+            if uv run mypy "$target" --config-file "$MYPY_CONFIG" 2>&1 | grep -E "(error|Error)"; then
                 echo -e "${RED}    ✗ Type errors found${NC}"
                 FAILED=true
             else

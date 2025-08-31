@@ -20,11 +20,11 @@ The DataKnobs Data Package provides a unified abstraction layer for database ope
 #### Record Model
 ```python
 Record(
-    data: Dict[str, Any],      # Core data fields
-    id: Optional[str] = None,   # Unique identifier
-    metadata: Dict = {},        # Additional metadata
-    created_at: datetime,       # Auto-set timestamp
-    updated_at: datetime        # Auto-updated timestamp
+    data: Dict[str, Any],          # Core data fields
+    storage_id: Optional[str],     # System-assigned storage ID
+    metadata: Dict = {},           # Additional metadata
+    created_at: datetime,          # Auto-set timestamp
+    updated_at: datetime           # Auto-updated timestamp
 )
 ```
 
@@ -34,6 +34,8 @@ Record(
 - Automatic timestamp management
 - Metadata support for annotations
 - Type validation and coercion
+- **Dual ID system**: Separates user IDs from storage IDs (see [Record ID Architecture](RECORD_ID_ARCHITECTURE.md))
+- **Advanced serialization**: Handles complex types including vectors (see [Record Serialization](RECORD_SERIALIZATION.md))
 
 #### Database Interface
 ```python

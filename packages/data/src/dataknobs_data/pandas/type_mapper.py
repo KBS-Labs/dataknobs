@@ -1,9 +1,11 @@
 """Type mapping between DataKnobs Field types and Pandas dtypes."""
 
+from __future__ import annotations
+
 import json
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Optional, Union
+from typing import Any, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
@@ -11,15 +13,18 @@ from pandas.api.types import is_bool_dtype, is_datetime64_any_dtype, is_numeric_
 
 from dataknobs_data.fields import FieldType
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 
 @dataclass
 class PandasTypeMapping:
     """Mapping configuration for type conversion."""
     field_type: FieldType
-    pandas_dtype: Union[str, type, np.dtype]
+    pandas_dtype: str | type | np.dtype
     nullable: bool = True
-    converter: Optional[Callable] = None
-    reverse_converter: Optional[Callable] = None
+    converter: Callable | None = None
+    reverse_converter: Callable | None = None
 
 
 class TypeMapper:
@@ -201,7 +206,7 @@ class TypeMapper:
             # pd.isna can fail on some types like lists
             pass
 
-        if isinstance(value, bool) or isinstance(value, np.bool_):
+        if isinstance(value, (bool, np.bool_)):
             return FieldType.BOOLEAN
         elif isinstance(value, (int, np.integer)):
             return FieldType.INTEGER
@@ -209,7 +214,7 @@ class TypeMapper:
             return FieldType.FLOAT
         elif isinstance(value, (datetime, pd.Timestamp)):
             return FieldType.DATETIME
-        elif isinstance(value, bytes):
+        elif isinstance(value, bytes):  # type: ignore[unreachable]
             return FieldType.BINARY
         elif isinstance(value, (dict, list)):
             return FieldType.JSON
@@ -217,8 +222,9 @@ class TypeMapper:
             if len(value) > 1000:
                 return FieldType.TEXT
             return FieldType.STRING
-
-        return FieldType.JSON  # Complex objects as JSON
+        else:
+            # Complex objects as JSON
+            return FieldType.JSON
 
     def cast_series(self, series: pd.Series, field_type: FieldType) -> pd.Series:
         """Cast a pandas Series to the appropriate dtype for a FieldType.
@@ -242,7 +248,7 @@ class TypeMapper:
                 return series.apply(self._ensure_json_serializable)
 
             # Standard casting
-            return series.astype(target_dtype)
+            return series.astype(target_dtype)  # type: ignore[arg-type]
         except (TypeError, ValueError):
             # If casting fails, return as object dtype
             return series.astype("object")
@@ -250,7 +256,7 @@ class TypeMapper:
     @staticmethod
     def _to_datetime(value: Any) -> pd.Timestamp:
         """Convert value to pandas Timestamp."""
-        if isinstance(value, str) or isinstance(value, datetime):
+        if isinstance(value, (str, datetime)):
             return pd.Timestamp(value)
         elif isinstance(value, (int, float)):
             # Assume Unix timestamp
@@ -333,14 +339,18 @@ class TypeMapper:
             # Check values for special types
             sample = non_null.iloc[0] if len(non_null) > 0 else None
             if sample is not None:
-                if isinstance(sample, (datetime, pd.Timestamp)) or isinstance(sample, (pd.Timestamp, datetime)) or isinstance(sample, pd._libs.tslibs.timestamps.Timestamp) or isinstance(sample, (pd._libs.tslibs.nattype.NaTType)):
+                if isinstance(sample, (datetime, pd.Timestamp, pd._libs.tslibs.timestamps.Timestamp, pd._libs.tslibs.nattype.NaTType)):
                     return "datetime"
-                elif hasattr(sample, '__class__') and 'date' in sample.__class__.__name__.lower():
+                elif hasattr(sample, '__class__') and 'date' in sample.__class__.__name__.lower():  # type: ignore[unreachable]
                     return "date"
                 elif hasattr(sample, '__class__') and 'time' in sample.__class__.__name__.lower():
                     return "time"
-
-        return "string"  # Default
+                else:
+                    # Other object types
+                    return "string"
+            else:
+                # No sample available
+                return "string"
 
     def get_pandas_dtype(self, field_type: str) -> str:
         """Get pandas dtype for a field type string.
@@ -431,7 +441,7 @@ class TypeMapper:
                         # Use string dtype for nullable strings
                         result_df[col] = result_df[col].astype("string")
                     else:
-                        result_df[col] = result_df[col].astype(dtype)
+                        result_df[col] = result_df[col].astype(dtype)  # type: ignore[call-overload]
                 except (TypeError, ValueError):
                     # If casting fails, leave as is
                     pass
@@ -506,7 +516,8 @@ class TypeMapper:
 
             # Check for datetime
             try:
-                pd.to_datetime(non_null)
+                # Use infer_datetime_format to suppress the warning
+                pd.to_datetime(non_null, format='mixed')
                 return "datetime64[ns]"
             except (ValueError, TypeError):
                 pass

@@ -1,11 +1,11 @@
 {
-  "timestamp": "2025-08-27T17:54:09Z",
+  "timestamp": "2025-08-31T22:22:41Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.7.12 (Homebrew 2025-06-06)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/configure-mkdocs",
-  "git_commit": "bfb86a707f76d5d679a18e147268e6f1ae24a419",
+  "git_branch": "sbk/add-vector-store",
+  "git_commit": "4acc65fa7e7efc8ee8509768b17a486437ac658c",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

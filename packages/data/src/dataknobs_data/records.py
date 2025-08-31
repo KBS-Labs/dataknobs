@@ -1,10 +1,14 @@
+from __future__ import annotations
+
 import uuid
 from collections import OrderedDict
-from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from .fields import Field, FieldType
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 @dataclass
@@ -12,31 +16,39 @@ class Record:
     """Represents a structured data record with fields and metadata.
 
     The record ID can be accessed via the `id` property, which:
-    - Returns the explicitly set ID if available
-    - Falls back to metadata['id'] if present
-    - Returns None if no ID is set
+    - Returns the storage_id if set (database-assigned ID)
+    - Falls back to user-defined 'id' field if present
+    - Returns None if no ID is available
+    
+    This separation allows records to have both:
+    - A user-defined 'id' field as part of their data
+    - A system-assigned storage_id for database operations
     """
 
     fields: OrderedDict[str, Field] = field(default_factory=OrderedDict)
     metadata: dict[str, Any] = field(default_factory=dict)
-    _id: str | None = field(default=None, repr=False)
+    _id: str | None = field(default=None, repr=False)  # Deprecated, use storage_id
+    _storage_id: str | None = field(default=None, repr=False)
 
     def __init__(
         self,
         data: dict[str, Any] | OrderedDict[str, Field] | None = None,
         metadata: dict[str, Any] | None = None,
         id: str | None = None,
+        storage_id: str | None = None,
     ):
         """Initialize a record from various data formats.
 
         Args:
             data: Can be a dict of field names to values, or an OrderedDict of Field objects
             metadata: Optional metadata for the record
-            id: Optional unique identifier for the record
+            id: Optional unique identifier for the record (deprecated, use storage_id)
+            storage_id: Optional storage system identifier for the record
         """
         self.metadata = metadata or {}
         self.fields = OrderedDict()
-        self._id = id
+        self._id = id  # Deprecated
+        self._storage_id = storage_id or id  # Use storage_id if provided, fall back to id
 
         # Process data first to populate fields
         if data:
@@ -47,6 +59,9 @@ class Record:
             else:
                 for key, value in data.items():
                     if isinstance(value, Field):
+                        # Ensure the field has the correct name
+                        if value.name is None or value.name == "embedding":
+                            value.name = key
                         self.fields[key] = value
                     else:
                         self.fields[key] = Field(name=key, value=value)
@@ -72,32 +87,48 @@ class Record:
                     self.metadata["id"] = self._id
 
     @property
+    def storage_id(self) -> str | None:
+        """Get the storage system ID (database-assigned ID)."""
+        return self._storage_id
+
+    @storage_id.setter
+    def storage_id(self, value: str | None) -> None:
+        """Set the storage system ID."""
+        self._storage_id = value
+        # Also update _id for backwards compatibility
+        self._id = value
+
+    @property
     def id(self) -> str | None:
         """Get the record ID.
 
-        Checks for ID in the following priority order:
-        1. Explicitly set ID (_id)
-        2. ID in metadata
-        3. ID field in record fields
-        4. record_id field in record fields (common in DataFrames)
+        Priority order:
+        1. Storage ID (database-assigned) if set
+        2. User-defined 'id' field value
+        3. Metadata 'id' (for backwards compatibility)
+        4. record_id field (common in DataFrames)
 
         Returns the first ID found, or None if no ID is present.
         """
-        # 1. Check explicitly set ID
+        # 1. Prefer storage ID (database-assigned)
+        if self._storage_id is not None:
+            return self._storage_id
+
+        # 2. Fall back to legacy _id if set
         if self._id is not None:
             return self._id
 
-        # 2. Check metadata
-        if "id" in self.metadata:
-            return str(self.metadata["id"])
-
-        # 3. Check for 'id' field
+        # 3. Check for 'id' field in user data
         if "id" in self.fields:
             value = self.get_value("id")
             if value is not None:
                 return str(value)
 
-        # 4. Check for 'record_id' field (common in DataFrames)
+        # 4. Check metadata (backwards compatibility)
+        if "id" in self.metadata:
+            return str(self.metadata["id"])
+
+        # 5. Check for 'record_id' field (common in DataFrames)
         if "record_id" in self.fields:
             value = self.get_value("record_id")
             if value is not None:
@@ -109,26 +140,17 @@ class Record:
     def id(self, value: str | None) -> None:
         """Set the record ID.
 
-        Updates the ID in all locations for consistency:
-        - Internal _id attribute
-        - Metadata (for backward compatibility)
-        - ID field if it exists
+        This sets the storage_id, which is the database-assigned ID.
+        It does NOT modify user data fields.
         """
-        self._id = value
+        self._storage_id = value
+        self._id = value  # Backwards compatibility
 
         # Update metadata for backward compatibility
         if value is not None:
             self.metadata["id"] = value
         elif "id" in self.metadata:
             del self.metadata["id"]
-
-        # Update ID field if it exists (don't create it if it doesn't)
-        if "id" in self.fields and value is not None:
-            self.fields["id"].value = value
-
-        # Update record_id field if it exists (common in DataFrames)
-        if "record_id" in self.fields and value is not None:
-            self.fields["record_id"].value = value
 
     def generate_id(self) -> str:
         """Generate and set a new UUID for this record.
@@ -139,6 +161,29 @@ class Record:
         new_id = str(uuid.uuid4())
         self.id = new_id
         return new_id
+
+    def get_user_id(self) -> str | None:
+        """Get the user-defined ID field value (not the storage ID).
+        
+        This explicitly returns the value of the 'id' field in the record's data,
+        ignoring any storage_id that may be set.
+        
+        Returns:
+            The value of the 'id' field if present, None otherwise
+        """
+        if "id" in self.fields:
+            value = self.get_value("id")
+            if value is not None:
+                return str(value)
+        return None
+
+    def has_storage_id(self) -> bool:
+        """Check if this record has a storage system ID assigned.
+        
+        Returns:
+            True if storage_id is set, False otherwise
+        """
+        return self._storage_id is not None
 
     def get_field(self, name: str) -> Field | None:
         """Get a field by name."""
@@ -242,6 +287,24 @@ class Record:
         self.fields[name] = Field(
             name=name, value=value, type=field_type, metadata=field_metadata or {}
         )
+
+    def set_value(self, name: str, value: Any) -> None:
+        """Set a field's value by name.
+        
+        Convenience method that creates the field if it doesn't exist.
+        """
+        if name in self.fields:
+            self.fields[name].value = value
+        else:
+            self.set_field(name, value)
+
+    @property
+    def data(self) -> dict[str, Any]:
+        """Get all field values as a dictionary.
+        
+        Provides a simple dict-like view of the record's data.
+        """
+        return {name: field.value for name, field in self.fields.items()}
 
     def remove_field(self, name: str) -> bool:
         """Remove a field by name. Returns True if field was removed."""
@@ -360,15 +423,20 @@ class Record:
         """Set field value by attribute access.
 
         Allows setting field values using attribute syntax.
-        Special attributes (fields, metadata, _id) are handled normally.
+        Special attributes (fields, metadata, _id, _storage_id) are handled normally.
+        Properties (id, storage_id) are also handled specially.
 
         Args:
             name: Attribute/field name
             value: Value to set
         """
-        # Handle special attributes normally
-        if name in ("fields", "metadata", "_id") or name.startswith("_"):
+        # Handle special attributes and private attributes normally
+        if name in ("fields", "metadata", "_id", "_storage_id") or name.startswith("_"):
             super().__setattr__(name, value)
+        # Handle properties that have setters
+        elif name in ("id", "storage_id"):
+            # Use the property setter
+            object.__setattr__(self, name, value)
         elif hasattr(self, "fields") and name in self.fields:
             # Update existing field value
             self.fields[name].value = value
@@ -398,7 +466,14 @@ class Record:
         """
         if flatten:
             # Simple dict with just values (default behavior for ergonomics)
-            result = {name: field.value for name, field in self.fields.items()}
+            result = {}
+            for name, field in self.fields.items():
+                # Handle VectorField specially to ensure JSON serialization
+                if hasattr(field, 'to_list') and callable(field.to_list):
+                    # VectorField has a to_list() method for serialization
+                    result[name] = field.to_list()
+                else:
+                    result[name] = field.value
             if self.id:
                 result["_id"] = self.id
             if include_metadata and self.metadata:
@@ -422,13 +497,15 @@ class Record:
         return result
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Record":
+    def from_dict(cls, data: dict[str, Any]) -> Record:
         """Create a record from a dictionary representation."""
         if "fields" in data:
             fields = OrderedDict()
             for name, field_data in data["fields"].items():
                 if isinstance(field_data, dict) and "value" in field_data:
-                    fields[name] = Field.from_dict(field_data)
+                    # Add name to field_data for Field.from_dict
+                    field_data_with_name = {"name": name, **field_data}
+                    fields[name] = Field.from_dict(field_data_with_name)
                 else:
                     fields[name] = Field(name=name, value=field_data)
             metadata = data.get("metadata", {})
@@ -439,7 +516,7 @@ class Record:
             record_id = data.pop("_id", None) if "_id" in data else None
             return cls(data=data, id=record_id)
 
-    def copy(self, deep: bool = True) -> "Record":
+    def copy(self, deep: bool = True) -> Record:
         """Create a copy of the record.
 
         Args:
@@ -450,20 +527,45 @@ class Record:
 
             new_fields = OrderedDict()
             for name, field in self.fields.items():
-                new_fields[name] = Field(
-                    name=field.name,
-                    value=copy.deepcopy(field.value),
-                    type=field.type,
-                    metadata=copy.deepcopy(field.metadata),
-                )
+                # Preserve the actual field type (Field or VectorField)
+                if hasattr(field, '__class__'):
+                    # Use the actual class of the field
+                    field_class = field.__class__
+                    if field_class.__name__ == 'VectorField':
+                        # Import VectorField if needed
+                        from dataknobs_data.fields import VectorField
+                        new_fields[name] = VectorField(
+                            name=field.name,
+                            value=copy.deepcopy(field.value),
+                            dimensions=getattr(field, 'dimensions', None),
+                            source_field=getattr(field, 'source_field', None),
+                            model_name=getattr(field, 'model_name', None),
+                            model_version=getattr(field, 'model_version', None),
+                            metadata=copy.deepcopy(field.metadata),
+                        )
+                    else:
+                        new_fields[name] = Field(
+                            name=field.name,
+                            value=copy.deepcopy(field.value),
+                            type=field.type,
+                            metadata=copy.deepcopy(field.metadata),
+                        )
+                else:
+                    # Fallback to regular Field
+                    new_fields[name] = Field(
+                        name=field.name,
+                        value=copy.deepcopy(field.value),
+                        type=field.type,
+                        metadata=copy.deepcopy(field.metadata),
+                    )
             new_metadata = copy.deepcopy(self.metadata)
         else:
-            new_fields = OrderedDict(self.fields)
+            new_fields = OrderedDict(self.fields)  # type: ignore[arg-type]
             new_metadata = self.metadata.copy()
 
         return Record(data=new_fields, metadata=new_metadata, id=self.id)
 
-    def project(self, field_names: list[str]) -> "Record":
+    def project(self, field_names: list[str]) -> Record:
         """Create a new record with only specified fields."""
         projected_fields = OrderedDict()
         for name in field_names:
@@ -471,7 +573,7 @@ class Record:
                 projected_fields[name] = self.fields[name]
         return Record(data=projected_fields, metadata=self.metadata.copy(), id=self.id)
 
-    def merge(self, other: "Record", overwrite: bool = True) -> "Record":
+    def merge(self, other: Record, overwrite: bool = True) -> Record:
         """Merge another record into this one.
 
         Args:

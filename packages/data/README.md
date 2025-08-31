@@ -61,7 +61,7 @@ from dataknobs_data import AsyncDatabase, Record, Query, Operator
 # Async usage
 async def main():
     # Create and auto-connect to database
-    db = await AsyncDatabase.create("memory")
+    db = await AsyncDatabase.from_backend("memory")
     
     # Create a record
     record = Record({
@@ -94,7 +94,7 @@ async def main():
 # Synchronous usage
 from dataknobs_data import SyncDatabase
 
-db = SyncDatabase.create("memory")
+db = SyncDatabase.from_backend("memory")
 record = Record({"name": "Jane Doe", "age": 28})
 id = db.create(record)
 retrieved = db.read(id)
@@ -450,7 +450,7 @@ class CustomBackend(DatabaseBackend):
 AsyncDatabase.register_backend("custom", CustomBackend)
 
 # Use custom backend
-db = AsyncDatabase.create("custom", config)
+db = AsyncDatabase.from_backend("custom", config)
 ```
 
 ## Development

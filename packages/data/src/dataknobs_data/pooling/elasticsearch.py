@@ -1,6 +1,9 @@
 """Elasticsearch-specific connection pooling implementation."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
+from typing import Any
 
 from .base import BasePoolConfig
 
@@ -8,7 +11,7 @@ from .base import BasePoolConfig
 @dataclass
 class ElasticsearchPoolConfig(BasePoolConfig):
     """Configuration for Elasticsearch connection pools."""
-    hosts: list[str] = None
+    hosts: list[str] | None = None
     index: str = "records"
     api_key: str | None = None
     basic_auth: tuple | None = None
@@ -25,14 +28,18 @@ class ElasticsearchPoolConfig(BasePoolConfig):
 
     def to_connection_string(self) -> str:
         """Convert to connection string (not used for ES, but required by base)."""
+        if self.hosts is None:
+            raise ValueError("Elasticsearch hosts configuration is missing")
         return ";".join(self.hosts)
 
     def to_hash_key(self) -> tuple:
         """Create a hashable key for this configuration."""
+        if self.hosts is None:
+            raise ValueError("Elasticsearch hosts configuration is missing")
         return (tuple(self.hosts), self.index)
 
     @classmethod
-    def from_dict(cls, config: dict) -> "ElasticsearchPoolConfig":
+    def from_dict(cls, config: dict) -> ElasticsearchPoolConfig:
         """Create from configuration dictionary."""
         # Handle both old-style (host, port) and new-style (hosts) configuration
         if "hosts" in config:
@@ -65,8 +72,12 @@ async def create_async_elasticsearch_client(config: ElasticsearchPoolConfig):
     """Create an async Elasticsearch client."""
     from elasticsearch import AsyncElasticsearch
 
+    # Ensure hosts is not None (should be set by __post_init__)
+    if config.hosts is None:
+        raise ValueError("Elasticsearch hosts configuration is missing")
+
     # Build client configuration
-    client_config = {
+    client_config: dict[str, Any] = {
         "hosts": config.hosts,
     }
 

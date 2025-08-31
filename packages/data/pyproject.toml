@@ -25,6 +25,7 @@ dependencies = [
     "dataknobs-config>=0.1.0",
     "boto3>=1.38.27",
     "moto>=5.1.10",
+    "numpy>=1.24.0",
 ]
 
 [project.optional-dependencies]
@@ -46,8 +47,13 @@ elasticsearch = [
 parquet = [
     "pyarrow>=14.0.0",
 ]
+vector = [
+    "pgvector>=0.2.0",  # PostgreSQL vector extension
+    "faiss-cpu>=1.7.4",  # Optional for Faiss backend
+    "chromadb>=0.4.0",  # Optional for Chroma backend
+]
 all = [
-    "dataknobs-data[postgres,sqlite,s3,elasticsearch,parquet]",
+    "dataknobs-data[postgres,sqlite,s3,elasticsearch,parquet,vector]",
 ]
 dev = [
     "pytest>=8.0.0",

@@ -3,10 +3,6 @@ name: Quality Validation
 on:
   pull_request:
     branches: [ main, develop ]
-    paths-ignore:
-      - 'docs/**'
-      - '*.md'
-      - '.quality-artifacts/**'
 
 jobs:
   validate-quality-artifacts:
@@ -87,6 +83,49 @@ jobs:
           } else {
             console.log('Skipping status check - not a pull request event or PR data not available');
           }
+
+  build-docs:
+    runs-on: ubuntu-latest
+    name: Build Documentation
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Full history for git revision date plugin
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    
+    - name: Install uv
+      uses: astral-sh/setup-uv@v2
+      with:
+        enable-cache: true
+        version: "latest"
+    
+    - name: Install dependencies
+      run: |
+        uv pip install --system mkdocs mkdocs-material mkdocstrings[python] \
+          mkdocs-monorepo-plugin mkdocs-awesome-pages-plugin \
+          mkdocs-git-revision-date-localized-plugin
+        uv pip install --system -e packages/common
+        uv pip install --system -e packages/structures
+        uv pip install --system -e packages/utils
+        uv pip install --system -e packages/xization
+        uv pip install --system -e packages/legacy
+        uv pip install --system -e packages/data
+    
+    - name: Build documentation
+      run: mkdocs build --strict
+    
+    - name: Upload documentation artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: documentation-build
+        path: ./site/
+        retention-days: 7
 
   quick-unit-tests:
     runs-on: ubuntu-latest

@@ -11,7 +11,7 @@ This module provides a complete rewrite of the validation system with:
 from .coercer import Coercer
 from .constraints import (
     All,
-    Any,
+    AnyOf,
     Constraint,
     Custom,
     Enum,
@@ -32,7 +32,7 @@ __all__ = [
     # Constraints
     "Constraint",
     "All",
-    "Any",
+    "AnyOf",
     "Required",
     "Range",
     "Length",

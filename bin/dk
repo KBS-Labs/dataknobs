@@ -98,6 +98,12 @@ ${BOLD}${BLUE}Detailed Commands:${NC}
     clean            Clean artifacts and caches
     cleanall         Deep clean (includes .venv)
     reset            Reset to clean state
+    
+  ${BOLD}Release Management:${NC}
+    release          Interactive release process
+    release-check    Check what changed since last release
+    release-bump     Bump package versions
+    release-notes    Generate release notes
 
 ${BOLD}${MAGENTA}Shortcuts & Aliases:${NC}
   dk pr         = dk prepare-for-pr
@@ -150,7 +156,7 @@ main() {
     local cmd="${1:-help}"
     shift || true
     
-    # Note: TEST_ELASTICSEARCH=true and TEST_POSTGRES=true are set for test commands
+    # Note: TEST_S3=true, TEST_ELASTICSEARCH=true, and TEST_POSTGRES=true are set for test commands
     # to ensure integration tests are not skipped when services are available
     
     case "$cmd" in
@@ -164,12 +170,14 @@ main() {
             
         # PR Preparation
         pr|prepare|prepare-for-pr|p4p)
+            export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
             run_command "Preparing for PR (full quality checks)" \
                 "$SCRIPT_DIR/run-quality-checks.sh" --pr "$@"
             ;;
         prq|pr-quick|prquick)
+            export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
             run_command "Quick PR check (skipping lint)" \
@@ -178,12 +186,14 @@ main() {
             
         # Quality Checks
         check|c|q|quick)
+            export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
             run_command "Quick quality check (dev mode)" \
                 "$SCRIPT_DIR/run-quality-checks.sh" --dev "$@"
             ;;
         checkall|ca|qa)
+            export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
             run_command "Checking all packages (dev mode)" \
@@ -201,6 +211,7 @@ main() {
         # Testing
         test|t)
             # Set environment variables for integration tests
+            export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
             # Smart test mode - determines best approach
@@ -218,12 +229,14 @@ main() {
             fi
             ;;
         testlast|tf|test-failed)
+            export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
             run_command "Re-running failed tests" \
                 "$SCRIPT_DIR/test.sh" -- --lf "$@"
             ;;
         testquick|tq)
+            export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
             run_command "Running tests without coverage" \
@@ -235,6 +248,7 @@ main() {
                 "$SCRIPT_DIR/test.sh" -t unit "$@"
             ;;
         int|i|integration)
+            export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
             run_command "Running integration tests" \
@@ -356,29 +370,52 @@ main() {
                 uv sync --all-packages
             ;;
             
+        # Release Management
+        release)
+            run_command "Interactive release process" \
+                "$SCRIPT_DIR/release-helper.sh" all
+            ;;
+        release-check)
+            run_command "Checking changes since last release" \
+                "$SCRIPT_DIR/release-helper.sh" check
+            ;;
+        release-bump)
+            run_command "Bumping package versions" \
+                "$SCRIPT_DIR/release-helper.sh" bump
+            ;;
+        release-notes)
+            run_command "Generating release notes" \
+                "$SCRIPT_DIR/release-helper.sh" notes
+            ;;
+            
         # Shortcuts
         p) 
+            export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
             dk pr "${@}" 
             ;;
         q) 
+            export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
             dk check "${@}" 
             ;;
         t) 
+            export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
             dk test "${@}" 
             ;;
         tf) 
+            export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
             dk testlast "${@}" 
             ;;
         u) dk unit "${@}" ;;
         i) 
+            export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
             dk int "${@}" 

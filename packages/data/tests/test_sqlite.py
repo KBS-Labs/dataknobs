@@ -312,6 +312,52 @@ class TestSyncSQLiteDatabase:
         
         assert new_count == original_count + 2
         assert len(ids) == 2
+    
+    def test_stream_write(self, memory_db):
+        """Test streaming write functionality."""
+        from dataknobs_data.streaming import StreamConfig
+        
+        # Create a generator of records
+        def record_generator():
+            for i in range(100):
+                yield Record(data={"index": i, "value": f"record_{i}"})
+        
+        # Stream write the records
+        config = StreamConfig(batch_size=10)
+        result = memory_db.stream_write(record_generator(), config)
+        
+        # Verify the result
+        assert result.total_processed == 100
+        assert result.successful == 100
+        assert result.failed == 0
+        assert result.total_batches == 10  # 100 records / 10 batch_size
+        assert result.duration > 0
+        
+        # Verify records were actually written
+        all_records = memory_db.all()
+        assert len(all_records) == 100
+        
+        # Verify data integrity
+        for i, record in enumerate(sorted(all_records, key=lambda r: r.data.get("index", -1))):
+            assert record.data["index"] == i
+            assert record.data["value"] == f"record_{i}"
+    
+    def test_stream_write_small_batch(self, memory_db):
+        """Test stream write with small batches."""
+        from dataknobs_data.streaming import StreamConfig
+        
+        # Create a generator with fewer records than batch size
+        def record_generator():
+            for i in range(3):
+                yield Record(data={"index": i})
+        
+        config = StreamConfig(batch_size=10)
+        result = memory_db.stream_write(record_generator(), config)
+        
+        assert result.total_processed == 3
+        assert result.successful == 3
+        assert result.failed == 0
+        assert result.total_batches == 1  # Only one partial batch
 
 
 class TestAsyncSQLiteDatabase:
@@ -440,6 +486,36 @@ class TestAsyncSQLiteDatabase:
             assert all(delete_results)
         finally:
             await db.close()
+    
+    @pytest.mark.asyncio
+    async def test_stream_write(self, memory_db):
+        """Test async streaming write functionality."""
+        from dataknobs_data.streaming import StreamConfig
+        
+        # Create an async generator of records
+        async def record_generator():
+            for i in range(50):
+                yield Record(data={"index": i, "value": f"async_record_{i}"})
+        
+        # Stream write the records
+        config = StreamConfig(batch_size=5)
+        result = await memory_db.stream_write(record_generator(), config)
+        
+        # Verify the result
+        assert result.total_processed == 50
+        assert result.successful == 50
+        assert result.failed == 0
+        assert result.total_batches == 10  # 50 records / 5 batch_size
+        assert result.duration > 0
+        
+        # Verify records were actually written
+        all_records = await memory_db.all()
+        assert len(all_records) == 50
+        
+        # Verify data integrity
+        for i, record in enumerate(sorted(all_records, key=lambda r: r.data.get("index", -1))):
+            assert record.data["index"] == i
+            assert record.data["value"] == f"async_record_{i}"
     
 
 

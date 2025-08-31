@@ -1,5 +1,7 @@
 """PostgreSQL-specific connection pooling implementation."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,8 +16,8 @@ class PostgresPoolConfig(BasePoolConfig):
     database: str = "postgres"
     user: str = "postgres"
     password: str = ""
-    min_size: int = 10
-    max_size: int = 10
+    min_size: int = 2
+    max_size: int = 5
     command_timeout: float | None = None
     ssl: Any | None = None
 
@@ -28,7 +30,7 @@ class PostgresPoolConfig(BasePoolConfig):
         return (self.host, self.port, self.database, self.user)
 
     @classmethod
-    def from_dict(cls, config: dict) -> "PostgresPoolConfig":
+    def from_dict(cls, config: dict) -> PostgresPoolConfig:
         """Create from configuration dictionary."""
         return cls(
             host=config.get("host", "localhost"),
@@ -36,8 +38,8 @@ class PostgresPoolConfig(BasePoolConfig):
             database=config.get("database", "postgres"),
             user=config.get("user", "postgres"),
             password=config.get("password", ""),
-            min_size=config.get("min_pool_size", 10),
-            max_size=config.get("max_pool_size", 10),
+            min_size=config.get("min_pool_size", 2),
+            max_size=config.get("max_pool_size", 5),
             command_timeout=config.get("command_timeout"),
             ssl=config.get("ssl")
         )

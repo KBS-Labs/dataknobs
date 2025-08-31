@@ -7,6 +7,10 @@ from dataknobs_config import FactoryBase
 
 from dataknobs_data.database import SyncDatabase
 
+# Import the VectorStoreFactory from vector.stores.factory
+from dataknobs_data.vector.stores.factory import VectorStoreFactory
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -55,6 +59,13 @@ class DatabaseFactory(FactoryBase):
 
         logger.info(f"Creating database with backend: {backend_type}")
 
+        # Check if vector_enabled is set
+        vector_enabled = config.get("vector_enabled", False)
+
+        if vector_enabled:
+            # All backends now have vector support (some native, some via Python)
+            logger.debug(f"Vector support enabled for backend: {backend_type}")
+
         if backend_type in ("memory", "mem"):
             from dataknobs_data.backends.memory import SyncMemoryDatabase
             return SyncMemoryDatabase.from_config(config)
@@ -83,6 +94,10 @@ class DatabaseFactory(FactoryBase):
                     "Install with: pip install dataknobs-data[elasticsearch]"
                 ) from e
 
+        elif backend_type == "sqlite":
+            from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
+            return SyncSQLiteDatabase.from_config(config)
+
         elif backend_type == "s3":
             try:
                 from dataknobs_data.backends.s3 import SyncS3Database
@@ -96,8 +111,9 @@ class DatabaseFactory(FactoryBase):
         else:
             raise ValueError(
                 f"Unknown backend type: {backend_type}. "
-                f"Available backends: memory, file, postgres, elasticsearch, s3"
+                f"Available backends: memory, file, postgres, elasticsearch, sqlite, s3"
             )
+
 
     def get_backend_info(self, backend_type: str) -> dict[str, Any]:
         """Get information about a specific backend.
@@ -128,28 +144,46 @@ class DatabaseFactory(FactoryBase):
                 }
             },
             "postgres": {
-                "description": "PostgreSQL database backend",
+                "description": "PostgreSQL database backend with native vector support (pgvector)",
                 "persistent": True,
                 "requires_install": "pip install dataknobs-data[postgres]",
+                "vector_support": True,
                 "config_options": {
                     "host": "Database host (required)",
                     "port": "Database port (default: 5432)",
                     "database": "Database name (required)",
                     "user": "Username (required)",
                     "password": "Password (required)",
-                    "table": "Table name (default: records)"
+                    "table": "Table name (default: records)",
+                    "vector_enabled": "Enable vector support (default: False)",
+                    "vector_metric": "Distance metric for vectors: cosine, euclidean, dot_product (default: cosine)"
                 }
             },
             "elasticsearch": {
-                "description": "Elasticsearch search engine backend",
+                "description": "Elasticsearch search engine backend with native KNN vector support",
                 "persistent": True,
                 "requires_install": "pip install dataknobs-data[elasticsearch]",
+                "vector_support": True,
                 "config_options": {
                     "hosts": "List of host URLs (required)",
                     "index": "Index name (required)",
                     "doc_type": "Document type (default: _doc)",
                     "username": "Optional username",
-                    "password": "Optional password"
+                    "password": "Optional password",
+                    "vector_enabled": "Enable vector support (default: False)",
+                    "vector_metric": "Distance metric for vectors: cosine, euclidean, dot_product (default: cosine)"
+                }
+            },
+            "sqlite": {
+                "description": "SQLite database backend with Python-based vector support",
+                "persistent": True,
+                "requires_install": False,
+                "vector_support": True,
+                "config_options": {
+                    "path": "Path to database file (required)",
+                    "table": "Table name (default: records)",
+                    "vector_enabled": "Enable vector support (default: False)",
+                    "vector_metric": "Distance metric for vectors: cosine, euclidean, dot_product (default: cosine)"
                 }
             },
             "s3": {
@@ -193,6 +227,13 @@ class AsyncDatabaseFactory(FactoryBase):
         """
         backend_type = config.pop("backend", "memory").lower()
 
+        # Check if vector_enabled is set
+        vector_enabled = config.get("vector_enabled", False)
+
+        if vector_enabled:
+            # All backends now have vector support (some native, some via Python)
+            logger.debug(f"Vector support enabled for async backend: {backend_type}")
+
         if backend_type in ("memory", "mem"):
             from dataknobs_data.backends.memory import AsyncMemoryDatabase
             return AsyncMemoryDatabase.from_config(config)
@@ -213,13 +254,24 @@ class AsyncDatabaseFactory(FactoryBase):
             from dataknobs_data.backends.s3_async import AsyncS3Database
             return AsyncS3Database.from_config(config)
 
+        elif backend_type == "sqlite":
+            from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
+            return AsyncSQLiteDatabase.from_config(config)
+
         else:
             raise ValueError(
                 f"Backend '{backend_type}' does not support async operations yet. "
-                f"Available async backends: memory, file, postgres, elasticsearch, s3"
+                f"Available async backends: memory, file, postgres, elasticsearch, s3, sqlite"
             )
+
+
+# TODO: Add AsyncVectorStoreFactory when async vector stores are implemented
+# The async vector store implementations (AsyncFaissVectorStore, AsyncChromaVectorStore, 
+# AsyncMemoryVectorStore) and base class (AsyncVectorStore) need to be created first.
 
 
 # Create singleton instances for registration
 database_factory = DatabaseFactory()
 async_database_factory = AsyncDatabaseFactory()
+vector_store_factory = VectorStoreFactory()
+# TODO: add an 'async_vector_store_factory = AsyncVectorStoreFactory()' when async vector stores are implemented

@@ -195,6 +195,23 @@ dk docs-build      # Build final documentation
 dk docs-open       # View built docs
 ```
 
+### Release Management
+
+```bash
+# Interactive release process
+dk release         # Full guided release workflow
+
+# Individual release steps
+dk release-check   # See what changed since last release
+dk release-bump    # Update package versions
+dk release-notes   # Generate changelog entries
+
+# After creating release PR and merging
+bin/tag-releases.sh      # Create git tags
+bin/build-packages.sh    # Build distributions
+bin/publish-pypi.sh      # Publish to PyPI
+```
+
 ## Advanced Usage
 
 ### Passing Arguments to Underlying Tools

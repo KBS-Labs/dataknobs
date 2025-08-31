@@ -1,22 +1,26 @@
 """Constraint implementations with consistent, composable API.
 """
 
+from __future__ import annotations
+
 import math
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 from numbers import Number
 from re import Pattern as RegexPattern
-from typing import Any
+from typing import Any as AnyType, TYPE_CHECKING
 
 from .result import ValidationContext, ValidationResult
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class Constraint(ABC):
     """Base class for all constraints with composable operators."""
 
     @abstractmethod
-    def check(self, value: Any, context: ValidationContext | None = None) -> ValidationResult:
+    def check(self, value: AnyType, context: ValidationContext | None = None) -> ValidationResult:
         """Validate a value against this constraint.
         
         Args:
@@ -28,7 +32,7 @@ class Constraint(ABC):
         """
         pass
 
-    def __and__(self, other: 'Constraint') -> 'All':
+    def __and__(self, other: Constraint) -> All:
         """Combine with AND: both constraints must pass."""
         if isinstance(self, All):
             return All(self.constraints + [other])
@@ -36,15 +40,15 @@ class Constraint(ABC):
             return All([self] + other.constraints)
         return All([self, other])
 
-    def __or__(self, other: 'Constraint') -> 'Any':
+    def __or__(self, other: Constraint) -> AnyOf:
         """Combine with OR: at least one constraint must pass."""
-        if isinstance(self, Any):
-            return Any(self.constraints + [other])
-        elif isinstance(other, Any):
-            return Any([self] + other.constraints)
-        return Any([self, other])
+        if isinstance(self, AnyOf):
+            return AnyOf(self.constraints + [other])
+        elif isinstance(other, AnyOf):
+            return AnyOf([self] + other.constraints)
+        return AnyOf([self, other])
 
-    def __invert__(self) -> 'Not':
+    def __invert__(self) -> Not:
         """Negate this constraint."""
         return Not(self)
 
@@ -60,7 +64,7 @@ class All(Constraint):
         """
         self.constraints = constraints
 
-    def check(self, value: Any, context: ValidationContext | None = None) -> ValidationResult:
+    def check(self, value: AnyType, context: ValidationContext | None = None) -> ValidationResult:
         """Check all constraints."""
         result = ValidationResult.success(value)
 
@@ -73,7 +77,7 @@ class All(Constraint):
         return result
 
 
-class Any(Constraint):
+class AnyOf(Constraint):
     """At least one constraint must pass (OR logic)."""
 
     def __init__(self, constraints: list[Constraint]):
@@ -84,7 +88,7 @@ class Any(Constraint):
         """
         self.constraints = constraints
 
-    def check(self, value: Any, context: ValidationContext | None = None) -> ValidationResult:
+    def check(self, value: AnyType, context: ValidationContext | None = None) -> ValidationResult:
         """Check if any constraint passes."""
         all_errors = []
 
@@ -111,7 +115,7 @@ class Not(Constraint):
         """
         self.constraint = constraint
 
-    def check(self, value: Any, context: ValidationContext | None = None) -> ValidationResult:
+    def check(self, value: AnyType, context: ValidationContext | None = None) -> ValidationResult:
         """Check if constraint fails (negation)."""
         result = self.constraint.check(value, context)
         if result.valid:
@@ -133,7 +137,7 @@ class Required(Constraint):
         """
         self.allow_empty = allow_empty
 
-    def check(self, value: Any, context: ValidationContext | None = None) -> ValidationResult:
+    def check(self, value: AnyType, context: ValidationContext | None = None) -> ValidationResult:
         """Check if value is present and non-null."""
         if value is None:
             return ValidationResult.failure(value, ["Value is required"])
@@ -156,12 +160,12 @@ class Range(Constraint):
             min: Minimum value (inclusive)
             max: Maximum value (inclusive)
         """
-        if min is not None and max is not None and min > max:
+        if min is not None and max is not None and float(min) > float(max):  # type: ignore[arg-type]
             raise ValueError(f"min ({min}) cannot be greater than max ({max})")
         self.min = min
         self.max = max
 
-    def check(self, value: Any, context: ValidationContext | None = None) -> ValidationResult:
+    def check(self, value: AnyType, context: ValidationContext | None = None) -> ValidationResult:
         """Check if value is in range."""
         if value is None:
             return ValidationResult.success(value)  # None is considered valid (use Required to enforce)
@@ -180,9 +184,9 @@ class Range(Constraint):
             )
 
         errors = []
-        if self.min is not None and value < self.min:
+        if self.min is not None and float(value) < float(self.min):  # type: ignore[arg-type]
             errors.append(f"Value {value} is less than minimum {self.min}")
-        if self.max is not None and value > self.max:
+        if self.max is not None and float(value) > float(self.max):  # type: ignore[arg-type]
             errors.append(f"Value {value} is greater than maximum {self.max}")
 
         if errors:
@@ -209,7 +213,7 @@ class Length(Constraint):
         self.min = min
         self.max = max
 
-    def check(self, value: Any, context: ValidationContext | None = None) -> ValidationResult:
+    def check(self, value: AnyType, context: ValidationContext | None = None) -> ValidationResult:
         """Check if value length is in range."""
         if value is None:
             return ValidationResult.success(value)
@@ -248,7 +252,7 @@ class Pattern(Constraint):
             self.regex = pattern
         self.pattern_str = pattern if isinstance(pattern, str) else pattern.pattern
 
-    def check(self, value: Any, context: ValidationContext | None = None) -> ValidationResult:
+    def check(self, value: AnyType, context: ValidationContext | None = None) -> ValidationResult:
         """Check if value matches pattern."""
         if value is None:
             return ValidationResult.success(value)
@@ -271,7 +275,7 @@ class Pattern(Constraint):
 class Enum(Constraint):
     """Value must be in allowed set."""
 
-    def __init__(self, values: list[Any]):
+    def __init__(self, values: list[AnyType]):
         """Initialize enum constraint.
         
         Args:
@@ -282,7 +286,7 @@ class Enum(Constraint):
         self.allowed = set(values)
         self.allowed_str = ', '.join(repr(v) for v in values)
 
-    def check(self, value: Any, context: ValidationContext | None = None) -> ValidationResult:
+    def check(self, value: AnyType, context: ValidationContext | None = None) -> ValidationResult:
         """Check if value is in allowed set."""
         if value is None:
             return ValidationResult.success(value)
@@ -307,7 +311,7 @@ class Unique(Constraint):
         """
         self.field_name = field_name or "default"
 
-    def check(self, value: Any, context: ValidationContext | None = None) -> ValidationResult:
+    def check(self, value: AnyType, context: ValidationContext | None = None) -> ValidationResult:
         """Check if value is unique using context."""
         if value is None:
             return ValidationResult.success(value)
@@ -334,7 +338,7 @@ class Custom(Constraint):
 
     def __init__(
         self,
-        validator: Callable[[Any], bool | ValidationResult],
+        validator: Callable[[AnyType], bool | ValidationResult],
         error_message: str = "Custom validation failed"
     ):
         """Initialize custom constraint.
@@ -346,7 +350,7 @@ class Custom(Constraint):
         self.validator = validator
         self.error_message = error_message
 
-    def check(self, value: Any, context: ValidationContext | None = None) -> ValidationResult:
+    def check(self, value: AnyType, context: ValidationContext | None = None) -> ValidationResult:
         """Check using custom validator."""
         try:
             result = self.validator(value)
@@ -359,7 +363,7 @@ class Custom(Constraint):
                 else:
                     return ValidationResult.failure(value, [self.error_message])
             else:
-                return ValidationResult.failure(
+                return ValidationResult.failure(  # type: ignore[unreachable]
                     value,
                     [f"Custom validator returned unexpected type: {type(result).__name__}"]
                 )

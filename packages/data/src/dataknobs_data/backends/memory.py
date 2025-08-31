@@ -1,22 +1,40 @@
 """In-memory database backend implementation."""
 
+from __future__ import annotations
+
 import asyncio
 import threading
 import uuid
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from dataknobs_config import ConfigurableBase
 
 from ..database import AsyncDatabase, SyncDatabase
-from ..query import Query
 from ..query_logic import ComplexQuery
-from ..records import Record
 from ..streaming import AsyncStreamingMixin, StreamConfig, StreamingMixin, StreamResult
+from ..vector import VectorOperationsMixin
+from ..vector.bulk_embed_mixin import BulkEmbedMixin
+from ..vector.python_vector_search import PythonVectorSearchMixin
+from .sqlite_mixins import SQLiteVectorSupport
+from .vector_config_mixin import VectorConfigMixin
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Iterator
+    from ..query import Query
+    from ..records import Record
 
 
-class AsyncMemoryDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
+class AsyncMemoryDatabase(  # type: ignore[misc]
+    AsyncDatabase,
+    AsyncStreamingMixin,
+    ConfigurableBase,
+    VectorConfigMixin,           # Parse vector config
+    SQLiteVectorSupport,          # Provides _compute_similarity
+    PythonVectorSearchMixin,      # Provides python_vector_search_async
+    BulkEmbedMixin,              # Bulk embedding operations
+    VectorOperationsMixin        # Standard vector interface
+):
     """Async in-memory database implementation."""
 
     def __init__(self, config: dict[str, Any] | None = None):
@@ -24,14 +42,15 @@ class AsyncMemoryDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
         self._storage: OrderedDict[str, Record] = OrderedDict()
         self._lock = asyncio.Lock()
 
+        # Initialize vector support
+        self._parse_vector_config(config or {})
+        self._init_vector_state()  # From SQLiteVectorSupport
+
     @classmethod
-    def from_config(cls, config: dict) -> "AsyncMemoryDatabase":
+    def from_config(cls, config: dict) -> AsyncMemoryDatabase:
         """Create from config dictionary."""
         return cls(config)
 
-    async def connect(self) -> None:
-        """Connect to the database (no-op for memory backend)."""
-        pass
 
     def _generate_id(self) -> str:
         """Generate a unique ID for a record."""
@@ -40,16 +59,19 @@ class AsyncMemoryDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
     async def create(self, record: Record) -> str:
         """Create a new record in memory."""
         async with self._lock:
-            # Use record's ID if it has one, otherwise generate a new one
-            id = record.id if record.id else self._generate_id()
-            self._storage[id] = record.copy(deep=True)
-            return id
+            # Use centralized method to prepare record
+            record_copy, storage_id = self._prepare_record_for_storage(record)
+
+            # Store the record
+            self._storage[storage_id] = record_copy
+            return storage_id
 
     async def read(self, id: str) -> Record | None:
         """Read a record from memory."""
         async with self._lock:
             record = self._storage.get(id)
-            return record.copy(deep=True) if record else None
+            # Use centralized method to prepare record
+            return self._prepare_record_from_storage(record, id)
 
     async def update(self, id: str, record: Record) -> bool:
         """Update a record in memory."""
@@ -99,30 +121,8 @@ class AsyncMemoryDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
                 if matches:
                     results.append((id, record))
 
-            # Apply sorting
-            if query.sort_specs:
-                for sort_spec in reversed(query.sort_specs):
-                    reverse = sort_spec.order.value == "desc"
-                    results.sort(key=lambda x: x[1].get_value(sort_spec.field, ""), reverse=reverse)
-
-            # Extract records
-            records = [record for _, record in results]
-
-            # Apply offset and limit
-            if query.offset_value:
-                records = records[query.offset_value :]
-            if query.limit_value:
-                records = records[: query.limit_value]
-
-            # Apply field projection
-            if query.fields:
-                projected_records = []
-                for record in records:
-                    projected_records.append(record.project(query.fields))
-                records = projected_records
-
-            # Return deep copies
-            return [record.copy(deep=True) for record in records]
+            # Use the helper method from base class
+            return self._process_search_results(results, query, deep_copy=True)
 
     async def _count_all(self) -> int:
         """Count all records in memory."""
@@ -141,10 +141,12 @@ class AsyncMemoryDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
         async with self._lock:
             ids = []
             for record in records:
-                # Use record's ID if it has one, otherwise generate a new one
-                id = record.id if record.id else self._generate_id()
-                self._storage[id] = record.copy(deep=True)
-                ids.append(id)
+                # Use centralized method to prepare record
+                record_copy, storage_id = self._prepare_record_for_storage(record)
+
+                # Store the record
+                self._storage[storage_id] = record_copy
+                ids.append(storage_id)
             return ids
 
     async def read_batch(self, ids: list[str]) -> list[Record | None]:
@@ -153,7 +155,8 @@ class AsyncMemoryDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
             results = []
             for id in ids:
                 record = self._storage.get(id)
-                results.append(record.copy(deep=True) if record else None)
+                # Use centralized method to prepare record
+                results.append(self._prepare_record_from_storage(record, id))
             return results
 
     async def delete_batch(self, ids: list[str]) -> list[bool]:
@@ -181,7 +184,11 @@ class AsyncMemoryDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
             records = await self.search(query)
         else:
             async with self._lock:
-                records = list(self._storage.values())
+                # Ensure records have IDs when getting directly from storage
+                records = []
+                for record_id, record in self._storage.items():
+                    record_copy = self._ensure_record_id(record, record_id)
+                    records.append(record_copy)
 
         # Yield records in batches
         for i in range(0, len(records), config.batch_size):
@@ -200,8 +207,36 @@ class AsyncMemoryDatabase(AsyncDatabase, AsyncStreamingMixin, ConfigurableBase):
         # Use the default implementation from mixin
         return await self._default_stream_write(records, config)
 
+    async def vector_search(
+        self,
+        query_vector,
+        vector_field: str = "embedding",
+        k: int = 10,
+        filter=None,
+        metric=None,
+        **kwargs
+    ):
+        """Perform vector similarity search using Python calculations."""
+        return await self.python_vector_search_async(
+            query_vector=query_vector,
+            vector_field=vector_field,
+            k=k,
+            filter=filter,
+            metric=metric,
+            **kwargs
+        )
 
-class SyncMemoryDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
+
+class SyncMemoryDatabase(  # type: ignore[misc]
+    SyncDatabase,
+    StreamingMixin,
+    ConfigurableBase,
+    VectorConfigMixin,
+    SQLiteVectorSupport,
+    PythonVectorSearchMixin,
+    BulkEmbedMixin,
+    VectorOperationsMixin
+):
     """Synchronous in-memory database implementation."""
 
     def __init__(self, config: dict[str, Any] | None = None):
@@ -209,14 +244,15 @@ class SyncMemoryDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
         self._storage: OrderedDict[str, Record] = OrderedDict()
         self._lock = threading.RLock()
 
+        # Initialize vector support
+        self._parse_vector_config(config or {})
+        self._init_vector_state()
+
     @classmethod
-    def from_config(cls, config: dict) -> "SyncMemoryDatabase":
+    def from_config(cls, config: dict) -> SyncMemoryDatabase:
         """Create from config dictionary."""
         return cls(config)
 
-    def connect(self) -> None:
-        """Connect to the database (no-op for memory backend)."""
-        pass
 
     def _generate_id(self) -> str:
         """Generate a unique ID for a record."""
@@ -284,30 +320,8 @@ class SyncMemoryDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
                 if matches:
                     results.append((id, record))
 
-            # Apply sorting
-            if query.sort_specs:
-                for sort_spec in reversed(query.sort_specs):
-                    reverse = sort_spec.order.value == "desc"
-                    results.sort(key=lambda x: x[1].get_value(sort_spec.field, ""), reverse=reverse)
-
-            # Extract records
-            records = [record for _, record in results]
-
-            # Apply offset and limit
-            if query.offset_value:
-                records = records[query.offset_value :]
-            if query.limit_value:
-                records = records[: query.limit_value]
-
-            # Apply field projection
-            if query.fields:
-                projected_records = []
-                for record in records:
-                    projected_records.append(record.project(query.fields))
-                records = projected_records
-
-            # Return deep copies
-            return [record.copy(deep=True) for record in records]
+            # Use the helper method from base class
+            return self._process_search_results(results, query, deep_copy=True)
 
     def _count_all(self) -> int:
         """Count all records in memory."""
@@ -366,7 +380,11 @@ class SyncMemoryDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
             records = self.search(query)
         else:
             with self._lock:
-                records = list(self._storage.values())
+                # Ensure records have IDs when getting directly from storage
+                records = []
+                for record_id, record in self._storage.items():
+                    record_copy = self._ensure_record_id(record, record_id)
+                    records.append(record_copy)
 
         # Yield records in batches
         for i in range(0, len(records), config.batch_size):
@@ -382,3 +400,22 @@ class SyncMemoryDatabase(SyncDatabase, StreamingMixin, ConfigurableBase):
         """Stream records into memory."""
         # Use the default implementation from mixin
         return self._default_stream_write(records, config)
+
+    def vector_search(
+        self,
+        query_vector,
+        vector_field: str = "embedding",
+        k: int = 10,
+        filter=None,
+        metric=None,
+        **kwargs
+    ):
+        """Perform vector similarity search using Python calculations."""
+        return self.python_vector_search_sync(
+            query_vector=query_vector,
+            vector_field=vector_field,
+            k=k,
+            filter=filter,
+            metric=metric,
+            **kwargs
+        )

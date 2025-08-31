@@ -128,4 +128,4 @@ With the new async connection pooling system:
 - [Factory Pattern](factory-pattern.md) - Dynamic backend selection
 - [Configuration](configuration.md) - Advanced configuration options
 - [Examples](examples.md) - Complete working examples
-- [API Reference](api.md) - Detailed API documentation
+- [API Reference](api-reference.md) - Detailed API documentation

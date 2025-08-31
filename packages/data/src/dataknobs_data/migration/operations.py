@@ -1,13 +1,17 @@
 """Reversible operations for data migration.
 """
 
-from abc import ABC, abstractmethod
-from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Any
+from __future__ import annotations
 
-from dataknobs_data.fields import FieldType
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Any, TYPE_CHECKING
+
 from dataknobs_data.records import Record
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from dataknobs_data.fields import FieldType
 
 
 @dataclass
@@ -271,7 +275,7 @@ class CompositeOperation(Operation):
             result = operation.reverse(result)
         return result
 
-    def add(self, operation: Operation) -> 'CompositeOperation':
+    def add(self, operation: Operation) -> CompositeOperation:
         """Add an operation (fluent API)."""
         self.operations.append(operation)
         return self

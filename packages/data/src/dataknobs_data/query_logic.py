@@ -1,11 +1,19 @@
 """Boolean logic support for complex queries."""
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Union
+from typing import TYPE_CHECKING, Any
 
-from .query import Filter, Operator
+from .query import Filter, Operator, VectorQuery
+
+if TYPE_CHECKING:
+    import numpy as np
+
+    from .query import Query
+    from .vector.types import DistanceMetric
 
 
 class LogicOperator(Enum):
@@ -30,7 +38,7 @@ class Condition(ABC):
 
     @classmethod
     @abstractmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Condition":
+    def from_dict(cls, data: dict[str, Any]) -> Condition:
         """Create condition from dictionary representation."""
         pass
 
@@ -68,7 +76,7 @@ class FilterCondition(Condition):
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "FilterCondition":
+    def from_dict(cls, data: dict[str, Any]) -> FilterCondition:
         """Create from dictionary representation."""
         return cls(filter=Filter.from_dict(data["filter"]))
 
@@ -94,7 +102,9 @@ class LogicCondition(Condition):
             else:
                 # NOT with multiple conditions = none should match
                 return not any(cond.matches(record) for cond in self.conditions)
-        return False
+        else:
+            # This should never be reached as all operators are handled above
+            raise ValueError(f"Unknown logical operator: {self.operator}")
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary representation."""
@@ -105,9 +115,9 @@ class LogicCondition(Condition):
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "LogicCondition":
+    def from_dict(cls, data: dict[str, Any]) -> LogicCondition:
         """Create from dictionary representation."""
-        conditions = []
+        conditions: list[Condition] = []
         for cond_data in data.get("conditions", []):
             if cond_data["type"] == "filter":
                 conditions.append(FilterCondition.from_dict(cond_data))
@@ -140,10 +150,12 @@ class QueryBuilder:
         self.limit_value = None
         self.offset_value = None
         self.fields = None
+        self.vector_query = None
 
-    def where(self, field: str, operator: str | Operator, value: Any = None) -> "QueryBuilder":
+    def where(self, field: str, operator: str | Operator, value: Any = None) -> QueryBuilder:
         """Add a filter condition (defaults to AND with existing conditions)."""
-        filter_cond = FilterCondition(Filter(field, operator, value))
+        op = Operator(operator) if isinstance(operator, str) else operator
+        filter_cond = FilterCondition(Filter(field, op, value))
 
         if self.root_condition is None:
             self.root_condition = filter_cond
@@ -158,7 +170,7 @@ class QueryBuilder:
 
         return self
 
-    def and_(self, *conditions: Union["QueryBuilder", Filter, Condition]) -> "QueryBuilder":
+    def and_(self, *conditions: QueryBuilder | Filter | Condition) -> QueryBuilder:
         """Add AND conditions."""
         logic_cond = LogicCondition(operator=LogicOperator.AND)
 
@@ -183,7 +195,7 @@ class QueryBuilder:
 
         return self
 
-    def or_(self, *conditions: Union["QueryBuilder", Filter, Condition]) -> "QueryBuilder":
+    def or_(self, *conditions: QueryBuilder | Filter | Condition) -> QueryBuilder:
         """Add OR conditions."""
         logic_cond = LogicCondition(operator=LogicOperator.OR)
 
@@ -210,7 +222,7 @@ class QueryBuilder:
 
         return self
 
-    def not_(self, condition: Union["QueryBuilder", Filter, Condition]) -> "QueryBuilder":
+    def not_(self, condition: QueryBuilder | Filter | Condition) -> QueryBuilder:
         """Add NOT condition."""
         if isinstance(condition, QueryBuilder):
             not_cond = LogicCondition(
@@ -240,7 +252,7 @@ class QueryBuilder:
 
         return self
 
-    def sort_by(self, field: str, order: str = "asc") -> "QueryBuilder":
+    def sort_by(self, field: str, order: str = "asc") -> QueryBuilder:
         """Add sort specification."""
         from .query import SortOrder, SortSpec
 
@@ -248,29 +260,53 @@ class QueryBuilder:
         self.sort_specs.append(SortSpec(field=field, order=sort_order))
         return self
 
-    def limit(self, value: int) -> "QueryBuilder":
+    def limit(self, value: int) -> QueryBuilder:
         """Set result limit."""
         self.limit_value = value
         return self
 
-    def offset(self, value: int) -> "QueryBuilder":
+    def offset(self, value: int) -> QueryBuilder:
         """Set result offset."""
         self.offset_value = value
         return self
 
-    def select(self, *fields: str) -> "QueryBuilder":
+    def select(self, *fields: str) -> QueryBuilder:
         """Set field projection."""
         self.fields = list(fields) if fields else None
         return self
 
-    def build(self) -> "ComplexQuery":
+    def similar_to(
+        self,
+        vector: np.ndarray | list[float],
+        field: str = "embedding",
+        k: int = 10,
+        metric: DistanceMetric | str = "cosine",
+        include_source: bool = True,
+        score_threshold: float | None = None,
+    ) -> QueryBuilder:
+        """Add vector similarity search."""
+        self.vector_query = VectorQuery(
+            vector=vector,
+            field_name=field,
+            k=k,
+            metric=metric,
+            include_source=include_source,
+            score_threshold=score_threshold,
+        )
+        # If limit is not set, use k as the limit
+        if self.limit_value is None:
+            self.limit_value = k
+        return self
+
+    def build(self) -> ComplexQuery:
         """Build the final query."""
         return ComplexQuery(
             condition=self.root_condition,
             sort_specs=self.sort_specs,
             limit_value=self.limit_value,
             offset_value=self.offset_value,
-            fields=self.fields
+            fields=self.fields,
+            vector_query=self.vector_query
         )
 
 
@@ -278,11 +314,45 @@ class QueryBuilder:
 class ComplexQuery:
     """A query with complex boolean logic support."""
 
+    # All fields have defaults to avoid ordering issues
     condition: Condition | None = None
     sort_specs: list = field(default_factory=list)
     limit_value: int | None = None
     offset_value: int | None = None
     fields: list[str] | None = None
+    vector_query: VectorQuery | None = None  # Vector similarity search
+
+    @classmethod
+    def AND(cls, queries: list[Query]) -> ComplexQuery:
+        """Create a complex query with AND logic."""
+        from .query import Query
+
+        conditions: list[Condition] = []
+        for q in queries:
+            if isinstance(q, Query):
+                # Convert Query filters to conditions
+                for f in q.filters:
+                    conditions.append(FilterCondition(filter=f))
+
+        return cls(
+            condition=LogicCondition(operator=LogicOperator.AND, conditions=conditions)
+        )
+
+    @classmethod
+    def OR(cls, queries: list[Query]) -> ComplexQuery:
+        """Create a complex query with OR logic."""
+        from .query import Query
+
+        conditions: list[Condition] = []
+        for q in queries:
+            if isinstance(q, Query):
+                # Convert Query filters to conditions
+                for f in q.filters:
+                    conditions.append(FilterCondition(filter=f))
+
+        return cls(
+            condition=LogicCondition(operator=LogicOperator.OR, conditions=conditions)
+        )
 
     def matches(self, record: Any) -> bool:
         """Check if a record matches this query."""
@@ -290,7 +360,7 @@ class ComplexQuery:
             return True
         return self.condition.matches(record)
 
-    def to_simple_query(self) -> "Query":
+    def to_simple_query(self) -> Query:
         """Convert to simple Query if possible (AND filters only)."""
         from .query import Query
 
@@ -322,7 +392,8 @@ class ComplexQuery:
             sort_specs=self.sort_specs,
             limit_value=self.limit_value,
             offset_value=self.offset_value,
-            fields=self.fields
+            fields=self.fields,
+            vector_query=self.vector_query
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -344,10 +415,13 @@ class ComplexQuery:
         if self.fields is not None:
             result["fields"] = self.fields
 
+        if self.vector_query is not None:
+            result["vector_query"] = self.vector_query.to_dict()
+
         return result
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ComplexQuery":
+    def from_dict(cls, data: dict[str, Any]) -> ComplexQuery:
         """Create from dictionary representation."""
         from .query import SortSpec
 
@@ -359,10 +433,15 @@ class ComplexQuery:
         for sort_data in data.get("sort", []):
             sort_specs.append(SortSpec.from_dict(sort_data))
 
+        vector_query = None
+        if "vector_query" in data:
+            vector_query = VectorQuery.from_dict(data["vector_query"])
+
         return cls(
             condition=condition,
             sort_specs=sort_specs,
             limit_value=data.get("limit"),
             offset_value=data.get("offset"),
-            fields=data.get("fields")
+            fields=data.get("fields"),
+            vector_query=vector_query
         )

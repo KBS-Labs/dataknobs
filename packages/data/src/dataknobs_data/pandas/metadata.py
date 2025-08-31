@@ -1,12 +1,15 @@
 """Metadata preservation for DataKnobs-Pandas conversions."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import pandas as pd
 
-from dataknobs_data.records import Record
+if TYPE_CHECKING:
+    from dataknobs_data.records import Record
 
 
 class MetadataStrategy(Enum):
@@ -82,7 +85,7 @@ class MetadataHandler:
             return df
 
         elif self.config.strategy == MetadataStrategy.ATTRS:
-            df.attrs.update(metadata)
+            df.attrs.update(metadata)  # type: ignore[arg-type]
             if records and self.config.preserve_record_ids:
                 record_ids = [r.id for r in records]
                 df.attrs["record_ids"] = record_ids
@@ -120,7 +123,10 @@ class MetadataHandler:
         metadata = {}
 
         if self.config.strategy == MetadataStrategy.ATTRS:
-            metadata.update(df.attrs)
+            # Convert attrs keys to strings for consistency
+            for key, value in df.attrs.items():
+                if key is not None:
+                    metadata[str(key)] = value
 
         elif self.config.strategy == MetadataStrategy.COLUMNS:
             # Extract from metadata columns

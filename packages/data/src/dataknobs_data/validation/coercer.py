@@ -1,6 +1,8 @@
 """Type coercion with predictable, consistent behavior.
 """
 
+from __future__ import annotations
+
 import json
 from datetime import datetime
 from typing import Any
@@ -58,27 +60,28 @@ class Coercer:
 
     def _field_type_to_python(self, field_type: FieldType) -> type:
         """Convert FieldType enum to Python type."""
-        type_map = {
+        type_map: dict[FieldType, type] = {
             FieldType.STRING: str,
             FieldType.INTEGER: int,
             FieldType.FLOAT: float,
             FieldType.BOOLEAN: bool,
             FieldType.DATETIME: datetime,
-            FieldType.JSON: (dict, list),
+            FieldType.JSON: dict,  # Using dict as primary type for JSON
             FieldType.BINARY: bytes,
         }
         return type_map.get(field_type, object)
 
-    def _type_name(self, target_type: type | FieldType) -> str:
+    def _type_name(self, target_type: type | FieldType | tuple[type, ...]) -> str:
         """Get readable name for type."""
         if isinstance(target_type, FieldType):
             return target_type.name
+        elif isinstance(target_type, tuple):
+            # Union type represented as tuple
+            return f"Union[{', '.join(t.__name__ if hasattr(t, '__name__') else str(t) for t in target_type)}]"
         elif isinstance(target_type, type):
             return target_type.__name__
-        elif isinstance(target_type, tuple):
-            return f"Union[{', '.join(t.__name__ for t in target_type)}]"
-        else:
-            return str(target_type)
+        # Fallback for unknown types (for runtime safety)
+        return str(target_type)  # type: ignore[unreachable]
 
     def _coerce_value(self, value: Any, target_type: type) -> Any:
         """Perform the actual coercion.

@@ -364,6 +364,24 @@ db = await Database.create("file", {
 })
 ```
 
+### SQLite Backend
+
+SQLite database storage with full SQL capabilities:
+
+```python
+# In-memory database
+db = await Database.create("sqlite", {
+    "path": ":memory:"
+})
+
+# File-based database
+db = await Database.create("sqlite", {
+    "path": "/data/app.db",
+    "journal_mode": "WAL",  # Better concurrency
+    "synchronous": "NORMAL"  # Balance safety/speed
+})
+```
+
 ### PostgreSQL Backend
 
 PostgreSQL database storage:

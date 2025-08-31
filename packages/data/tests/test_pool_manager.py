@@ -27,8 +27,8 @@ class TestPostgresPoolConfig:
         assert config.database == "postgres"
         assert config.user == "postgres"
         assert config.password == ""
-        assert config.min_size == 10
-        assert config.max_size == 10
+        assert config.min_size == 2
+        assert config.max_size == 5
     
     def test_from_dict_with_custom_values(self):
         """Test creating PostgresPoolConfig with custom values."""

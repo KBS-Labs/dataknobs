@@ -92,7 +92,8 @@ class TestPostgresRangeOperators:
             db.db.execute(f"DROP TABLE IF EXISTS {db.schema_name}.{db.table_name}")
         except:
             pass
-        db.disconnect()
+        finally:
+            db.close()
     
     def test_numeric_between_postgres(self, postgres_db):
         """Test BETWEEN with numeric values in PostgreSQL."""
@@ -223,10 +224,12 @@ class TestPostgresRangeOperators:
         finally:
             # Cleanup
             try:
-                await db._pool.execute(f"DROP TABLE IF EXISTS {db.schema_name}.{db.table_name}")
+                if db._pool:
+                    await db._pool.execute(f"DROP TABLE IF EXISTS {db.schema_name}.{db.table_name}")
             except:
                 pass
-            await db.disconnect()
+            finally:
+                await db.close()
 
 
 @pytest.mark.skipif(
@@ -569,4 +572,5 @@ class TestCrossBackendConsistency:
                 db.db.execute(f"DROP TABLE IF EXISTS {db.schema_name}.{db.table_name}")
             except:
                 pass
-            db.disconnect()
+            finally:
+                db.close()
