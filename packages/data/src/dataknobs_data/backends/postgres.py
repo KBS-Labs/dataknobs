@@ -6,7 +6,7 @@ import json
 import logging
 import time
 import uuid
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import asyncpg
 from dataknobs_config import ConfigurableBase
@@ -37,7 +37,7 @@ from .sql_base import SQLQueryBuilder, SQLRecordSerializer
 if TYPE_CHECKING:
     import numpy as np
 
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import AsyncIterator, Iterator, Callable, Awaitable
     from ..fields import VectorField
     from ..records import Record
     from ..vector.types import DistanceMetric, VectorSearchResult
@@ -606,7 +606,7 @@ class SyncPostgresDatabase(
         WHERE data ? %(p1)s  -- Check field exists
         """
 
-        params = [vector_str, field_name]
+        params: list[Any] = [vector_str, field_name]
 
         # Add filters if provided using the query builder
         if filter:
@@ -730,9 +730,10 @@ class AsyncPostgresDatabase(
             return
 
         # Get or create pool for current event loop
+        from ..pooling import BasePoolConfig
         self._pool = await _pool_manager.get_pool(
             self._pool_config,
-            create_asyncpg_pool,
+            cast("Callable[[BasePoolConfig], Awaitable[Any]]", create_asyncpg_pool),
             validate_asyncpg_pool
         )
 
@@ -1357,11 +1358,15 @@ class AsyncPostgresDatabase(
 
                         # Create or update record
                         if record.has_storage_id():
+                            if record.storage_id is None:
+                                raise ValueError("Record has_storage_id() returned True but storage_id is None")
                             await self.update(record.storage_id, record)
                         else:
                             record_id = await self.create(record)
                             record.storage_id = record_id
 
+                        if record.storage_id is None:
+                            raise ValueError("Record storage_id is None after create/update")
                         processed_ids.append(record.storage_id)
 
         return processed_ids

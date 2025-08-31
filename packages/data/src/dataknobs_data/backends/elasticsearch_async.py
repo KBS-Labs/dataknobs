@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from dataknobs_config import ConfigurableBase
 
@@ -31,7 +31,7 @@ from .elasticsearch_mixins import (
 
 if TYPE_CHECKING:
     import numpy as np
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable, Awaitable
     from ..records import Record
 
 logger = logging.getLogger(__name__)
@@ -79,9 +79,10 @@ class AsyncElasticsearchDatabase(
             return
 
         # Get or create client for current event loop
+        from ..pooling import BasePoolConfig
         self._client = await _client_manager.get_pool(
             self._pool_config,
-            create_async_elasticsearch_client,
+            cast("Callable[[BasePoolConfig], Awaitable[Any]]", create_async_elasticsearch_client),
             validate_elasticsearch_client,
             close_elasticsearch_client
         )
@@ -296,7 +297,7 @@ class AsyncElasticsearchDatabase(
         self._check_connection()
 
         # Build bulk operations for AsyncElasticsearch
-        operations = []
+        operations: list[dict[str, Any]] = []
         for record_id, record in updates:
             # Add update operation
             operations.append({
@@ -654,6 +655,10 @@ class AsyncElasticsearchDatabase(
             # Set the storage ID on the record if we have one
             if record and not record.has_storage_id():
                 record.storage_id = hit["_id"]
+
+            # Skip if no record (shouldn't happen if include_source is True)
+            if record is None:
+                continue
 
             results.append(VectorSearchResult(
                 record=record,

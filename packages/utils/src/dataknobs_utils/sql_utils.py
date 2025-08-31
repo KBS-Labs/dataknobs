@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List
@@ -113,7 +115,7 @@ class DotenvPostgresConnector:
 class PostgresDB:
     def __init__(
         self,
-        host: str | None = None,
+        host: str | DotenvPostgresConnector | None = None,
         db: str | None = None,
         user: str | None = None,
         pwd: str | None = None,

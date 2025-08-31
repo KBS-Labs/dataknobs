@@ -386,7 +386,7 @@ class DataFrameConverter:
         """
         options = options or ConversionOptions()
 
-        report = {
+        report: dict[str, Any] = {
             "record_count_match": len(records) == len(df),
             "original_record_count": len(records),
             "dataframe_row_count": len(df),
@@ -419,7 +419,10 @@ class DataFrameConverter:
                         df_dtype = str(df[field_name].dtype)
                         expected_dtype = str(self.type_mapper.field_type_to_pandas(field.type))
                         if df_dtype != expected_dtype:
-                            report["type_preservation"][field_name] = {
+                            type_preservation = report["type_preservation"]
+                            if not isinstance(type_preservation, dict):
+                                raise TypeError("type_preservation should be a dict")
+                            type_preservation[field_name] = {
                                 "expected": expected_dtype,
                                 "actual": df_dtype
                             }

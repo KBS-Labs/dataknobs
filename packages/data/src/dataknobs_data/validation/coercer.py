@@ -71,7 +71,7 @@ class Coercer:
         }
         return type_map.get(field_type, object)
 
-    def _type_name(self, target_type: type | FieldType) -> str:
+    def _type_name(self, target_type: type | FieldType | tuple[type, ...]) -> str:
         """Get readable name for type."""
         if isinstance(target_type, FieldType):
             return target_type.name
@@ -80,8 +80,8 @@ class Coercer:
             return f"Union[{', '.join(t.__name__ if hasattr(t, '__name__') else str(t) for t in target_type)}]"
         elif isinstance(target_type, type):
             return target_type.__name__
-        # Fallback for unknown types
-        return str(target_type)
+        # Fallback for unknown types (for runtime safety)
+        return str(target_type)  # type: ignore[unreachable]
 
     def _coerce_value(self, value: Any, target_type: type) -> Any:
         """Perform the actual coercion.

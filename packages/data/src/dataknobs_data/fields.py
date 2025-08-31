@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import numpy as np
     from collections.abc import Callable
+else:
+    from typing import Callable
 
 
 class FieldType(Enum):
@@ -100,7 +102,7 @@ class Field:
         if self.type == target_type:
             return self
 
-        converters = {
+        converters: dict[tuple[FieldType, FieldType], Callable[[Any], Any]] = {
             (FieldType.INTEGER, FieldType.STRING): str,
             (FieldType.INTEGER, FieldType.FLOAT): float,
             (FieldType.FLOAT, FieldType.STRING): str,

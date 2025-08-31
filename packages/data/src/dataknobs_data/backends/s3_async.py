@@ -8,7 +8,7 @@ import logging
 import time
 import uuid
 from datetime import datetime
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, cast, Callable, Awaitable
 
 from dataknobs_config import ConfigurableBase
 
@@ -71,9 +71,10 @@ class AsyncS3Database(  # type: ignore[misc]
             return
 
         # Get or create session for current event loop
+        from ..pooling import BasePoolConfig
         self._session = await _session_manager.get_pool(
             self._pool_config,
-            create_aioboto3_session,
+            cast("Callable[[BasePoolConfig], Awaitable[Any]]", create_aioboto3_session),
             lambda session: validate_s3_session(session, self._pool_config)
         )
 
@@ -296,7 +297,7 @@ class AsyncS3Database(  # type: ignore[misc]
             for sort_spec in reversed(query.sort_specs):
                 reverse = sort_spec.order == SortOrder.DESC
                 records.sort(
-                    key=lambda r: r.get_field(sort_spec.field).value if r.get_field(sort_spec.field) else None,
+                    key=lambda r: (r.get_field(sort_spec.field).value if r.get_field(sort_spec.field) else "") or "",
                     reverse=reverse
                 )
 

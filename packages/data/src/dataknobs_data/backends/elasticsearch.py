@@ -325,8 +325,7 @@ class SyncElasticsearchDatabase(
                 for record_id in ids:
                     if record_id not in error_dict:
                         result_ids.append(record_id)
-                    else:
-                        result_ids.append(None)  # Failed to create
+                    # Skip failed records
                 return result_ids
             else:
                 # All succeeded
@@ -341,12 +340,11 @@ class SyncElasticsearchDatabase(
                 for record_id in ids:
                     if record_id not in failed_ids:
                         result_ids.append(record_id)
-                    else:
-                        result_ids.append(None)
+                    # Skip failed records
                 return result_ids
             else:
-                # Complete failure
-                return [None] * len(records)
+                # Complete failure - return empty list
+                return []
 
     def read_batch(self, ids: list[str]) -> list[Record | None]:
         """Read multiple records in batch."""
@@ -948,7 +946,7 @@ upper}}}}}
                 index=self.index_name,
                 **query,
                 size=k,
-                _source=include_source,
+                source=include_source,
             )
         except Exception as e:
             self._handle_elasticsearch_error(e, "vector search")
@@ -970,6 +968,10 @@ upper}}}}}
                 # Set the storage ID on the record if we have one
                 if not record.has_storage_id():
                     record.storage_id = hit["_id"]
+
+            # Skip if no record (shouldn't happen if include_source is True)
+            if record is None:
+                continue
 
             results.append(VectorSearchResult(
                 record=record,
