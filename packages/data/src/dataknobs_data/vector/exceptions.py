@@ -1,5 +1,7 @@
 """Vector-specific exceptions."""
 
+from __future__ import annotations
+
 
 class VectorError(Exception):
     """Base exception for vector operations."""

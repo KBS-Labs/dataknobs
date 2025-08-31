@@ -1,5 +1,7 @@
 """Mixin providing default bulk_embed_and_store implementation."""
 
+from __future__ import annotations
+
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 

@@ -1,5 +1,7 @@
 """S3 backend implementation with proper connection management."""
 
+from __future__ import annotations
+
 import json
 import logging
 import time
@@ -128,7 +130,7 @@ class SyncS3Database(
         """Close the S3 connection."""
         if self.s3_client:
             # S3 client doesn't need explicit closing, but clear cache
-            self._index_cache = {}
+            self._index_cache = {}  # type: ignore[unreachable]
             self._connected = False
             logger.info(f"Closed S3 connection to bucket={self.bucket}")
 

@@ -1,5 +1,7 @@
 """Native async Elasticsearch backend implementation with connection pooling."""
 
+from __future__ import annotations
+
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -106,7 +108,7 @@ class AsyncElasticsearchDatabase(
             raise RuntimeError("Database not connected. Call connect() first.")
 
         # Check if index exists
-        if not await self._client.indices.exists(index=self.index_name):
+        if not await self._client.indices.exists(index=self.index_name):  # type: ignore[unreachable]
             # Get mappings with vector field support
             mappings = self.get_index_mappings(self.vector_fields)
 

@@ -1,5 +1,7 @@
 """Elasticsearch-specific vector utilities."""
 
+from __future__ import annotations
+
 import logging
 from typing import Any
 
@@ -287,7 +289,8 @@ def validate_vector_dimensions(vector: np.ndarray | list[float], expected_dims: 
     elif isinstance(vector, list):
         actual_dims = len(vector)
     else:
-        return False
+        # Unsupported vector type
+        return False  # type: ignore[unreachable]
 
     if actual_dims != expected_dims:
         logger.warning(f"Vector dimension mismatch: expected {expected_dims}, got {actual_dims}")

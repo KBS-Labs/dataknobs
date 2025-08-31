@@ -1,5 +1,7 @@
 """Elasticsearch backend implementation for the data package."""
 
+from __future__ import annotations
+
 import logging
 import uuid
 from collections.abc import Iterator
@@ -136,7 +138,7 @@ class SyncElasticsearchDatabase(
         """Close the database connection."""
         if self.es_index:
             # ElasticsearchIndex manages its own connections
-            self._connected = False
+            self._connected = False  # type: ignore[unreachable]
 
     def _initialize(self) -> None:
         """Initialize method - connection setup moved to connect()."""

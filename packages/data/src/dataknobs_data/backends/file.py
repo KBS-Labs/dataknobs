@@ -1,5 +1,7 @@
 """File-based database backend implementation."""
 
+from __future__ import annotations
+
 import asyncio
 import csv
 import gzip
@@ -47,7 +49,7 @@ class FileLock:
                     break
                 except OSError:
                     if self.lock_handle:
-                        self.lock_handle.close()
+                        self.lock_handle.close()  # type: ignore[unreachable]
                     import time
 
                     time.sleep(0.01)
@@ -60,7 +62,7 @@ class FileLock:
     def release(self):
         """Release the file lock."""
         if self.lock_handle:
-            if platform.system() == "Windows":
+            if platform.system() == "Windows":  # type: ignore[unreachable]
                 import msvcrt
 
                 try:

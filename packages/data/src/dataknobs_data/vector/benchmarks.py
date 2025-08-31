@@ -1,5 +1,7 @@
 """Vector store performance benchmarks."""
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import time
@@ -26,7 +28,7 @@ class BenchmarkResult:
     latency_p50: float | None = None
     latency_p95: float | None = None
     latency_p99: float | None = None
-    metadata: dict[str, Any] = None
+    metadata: dict[str, Any] | None = None
 
     def __post_init__(self):
         if self.metadata is None:
@@ -325,8 +327,8 @@ class VectorStoreBenchmark:
 
     async def run_full_benchmark(
         self,
-        vector_dims: list[int] = None,
-        num_vectors_list: list[int] = None
+        vector_dims: list[int] | None = None,
+        num_vectors_list: list[int] | None = None
     ) -> list[BenchmarkResult]:
         """Run a complete benchmark suite.
         

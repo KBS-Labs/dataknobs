@@ -1,5 +1,7 @@
 """Base SQL functionality shared between SQL database backends."""
 
+from __future__ import annotations
+
 import json
 import uuid
 from datetime import datetime

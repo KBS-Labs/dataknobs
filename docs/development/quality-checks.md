@@ -230,6 +230,29 @@ uv run bin/validate.sh data
 uv run ruff format packages/*/src
 ```
 
+### Type Checking and Python Compatibility
+
+DataKnobs maintains **Python 3.9+ compatibility** with modern type hints. See the [Python Compatibility Guide](python-compatibility.md) for important requirements.
+
+**Key requirements:**
+- All Python files with type hints must include `from __future__ import annotations`
+- Use modern type hint syntax (`str | None` instead of `Optional[str]`)
+- Run type checking with `uv run mypy` to use project dependencies
+
+To run type checking:
+```bash
+# Check entire data package
+uv run mypy packages/data/src/dataknobs_data
+
+# Check specific file
+uv run mypy packages/data/src/dataknobs_data/validation/constraints.py
+```
+
+Current status (August 31, 2025):
+- ✅ All tests pass on Python 3.9.6
+- ✅ 49 source files updated with future annotations
+- 📊 MyPy errors reduced from 774 to 767
+
 ### Environment Variables
 
 The quality check scripts respect these environment variables:

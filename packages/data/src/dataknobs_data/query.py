@@ -100,8 +100,9 @@ class Filter:
             import re
 
             return bool(re.search(self.value, record_value))
-
-        return False
+        else:
+            # This should never be reached as all operators are handled above
+            raise ValueError(f"Unknown operator: {self.operator}")
 
     def _compare_values(self, a: Any, b: Any, comparator) -> bool:
         """Compare two values with type awareness.

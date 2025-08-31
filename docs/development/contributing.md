@@ -327,22 +327,26 @@ def example_function(param1: str, param2: int = 0) -> bool:
 
 ### Type Hints
 
-```python
-from typing import Dict, List, Optional, Union, Any
-from pathlib import Path
+**Important**: All files with type hints must include `from __future__ import annotations` for Python 3.9 compatibility. See the [Python Compatibility Guide](./python-compatibility.md) for details.
 
-# Good examples
-def process_files(file_paths: List[Path]) -> Dict[str, Any]:
+```python
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+# Good examples (modern style with future annotations)
+def process_files(file_paths: list[Path]) -> dict[str, Any]:
     """Process multiple files and return results."""
     pass
 
-def get_value(data: Dict[str, Any], key: str, default: Optional[str] = None) -> Optional[str]:
+def get_value(data: dict[str, Any], key: str, default: str | None = None) -> str | None:
     """Get value from dictionary with optional default."""
     pass
 
 # For complex types, create type aliases
-DocumentData = Dict[str, Union[str, int, List[str]]]
-ProcessingResult = Dict[str, Union[bool, str, List[DocumentData]]]
+DocumentData = dict[str, str | int | list[str]]
+ProcessingResult = dict[str, bool | str | list[DocumentData]]
 ```
 
 ## Testing Guidelines

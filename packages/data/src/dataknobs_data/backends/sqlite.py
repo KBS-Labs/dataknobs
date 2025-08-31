@@ -1,5 +1,7 @@
 """SQLite backend implementation with sync and async support."""
 
+from __future__ import annotations
+
 import json
 import logging
 import sqlite3

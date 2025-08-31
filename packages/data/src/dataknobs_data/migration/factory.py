@@ -1,5 +1,7 @@
 """Factory classes for migration v2 components."""
 
+from __future__ import annotations
+
 import logging
 from collections.abc import Callable
 from typing import Any

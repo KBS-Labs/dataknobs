@@ -1,5 +1,7 @@
 """SQLite-specific mixins for vector support and other functionality."""
 
+from __future__ import annotations
+
 import json
 import logging
 
@@ -104,8 +106,8 @@ class SQLiteVectorSupport:
 
     def _compute_similarity(
         self,
-        vec1: np.ndarray,
-        vec2: np.ndarray,
+        vec1: np.ndarray | None,
+        vec2: np.ndarray | None,
         metric: DistanceMetric = DistanceMetric.COSINE
     ) -> float:
         """Compute similarity between two vectors.
@@ -123,9 +125,9 @@ class SQLiteVectorSupport:
 
         # Ensure vectors are numpy arrays
         if not isinstance(vec1, np.ndarray):
-            vec1 = np.array(vec1, dtype=np.float32)
+            vec1 = np.array(vec1, dtype=np.float32)  # type: ignore[unreachable]
         if not isinstance(vec2, np.ndarray):
-            vec2 = np.array(vec2, dtype=np.float32)
+            vec2 = np.array(vec2, dtype=np.float32)  # type: ignore[unreachable]
 
         # Check dimensions match
         if vec1.shape != vec2.shape:

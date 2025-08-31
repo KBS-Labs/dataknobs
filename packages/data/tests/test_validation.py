@@ -13,7 +13,7 @@ from dataknobs_data.validation import (
     ValidationContext,
     Constraint,
     All,
-    Any,
+    AnyOf,
     Required,
     Range,
     Length,

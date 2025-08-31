@@ -1,5 +1,7 @@
 """Elasticsearch-specific connection pooling implementation."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from .base import BasePoolConfig
@@ -8,7 +10,7 @@ from .base import BasePoolConfig
 @dataclass
 class ElasticsearchPoolConfig(BasePoolConfig):
     """Configuration for Elasticsearch connection pools."""
-    hosts: list[str] = None
+    hosts: list[str] | None = None
     index: str = "records"
     api_key: str | None = None
     basic_auth: tuple | None = None

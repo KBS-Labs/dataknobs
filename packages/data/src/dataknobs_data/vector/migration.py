@@ -1002,8 +1002,6 @@ class IncrementalVectorizer:
             "percentage": (completed / total * 100) if total > 0 else 0,
         }
 
-        logger.info(f"Vectorization stopped. Stats: {self._stats}")
-
     def get_stats(self) -> dict[str, Any]:
         """Get vectorization statistics.
         

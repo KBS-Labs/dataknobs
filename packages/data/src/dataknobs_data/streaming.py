@@ -1,5 +1,7 @@
 """Streaming support for database operations."""
 
+from __future__ import annotations
+
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from dataclasses import dataclass, field

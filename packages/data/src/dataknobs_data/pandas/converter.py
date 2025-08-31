@@ -1,5 +1,7 @@
 """Core converter between DataKnobs Records and Pandas DataFrames."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,11 +18,11 @@ from .type_mapper import TypeMapper
 class ConversionOptions:
     """Options for conversion between Records and DataFrames."""
     include_metadata: bool = False
-    metadata_columns: list[str] = None  # Columns to treat as metadata
+    metadata_columns: list[str] | None = None  # Columns to treat as metadata
     flatten_nested: bool = False  # Flatten nested structures
     preserve_index: bool = True
     use_index_as_id: bool = False  # Use DataFrame index as record ID
-    type_mapping: dict[str, str] = None  # Custom type mappings
+    type_mapping: dict[str, str] | None = None  # Custom type mappings
     null_handling: str = "preserve"  # "preserve", "drop", "fill"
     datetime_format: str | None = None  # Format for datetime conversion
     timezone: str | None = None  # Timezone for datetime conversion

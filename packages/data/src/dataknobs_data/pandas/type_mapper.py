@@ -1,5 +1,7 @@
 """Type mapping between DataKnobs Field types and Pandas dtypes."""
 
+from __future__ import annotations
+
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -210,7 +212,7 @@ class TypeMapper:
             return FieldType.FLOAT
         elif isinstance(value, (datetime, pd.Timestamp)):
             return FieldType.DATETIME
-        elif isinstance(value, bytes):
+        elif isinstance(value, bytes):  # type: ignore[unreachable]
             return FieldType.BINARY
         elif isinstance(value, (dict, list)):
             return FieldType.JSON
@@ -218,8 +220,9 @@ class TypeMapper:
             if len(value) > 1000:
                 return FieldType.TEXT
             return FieldType.STRING
-
-        return FieldType.JSON  # Complex objects as JSON
+        else:
+            # Complex objects as JSON
+            return FieldType.JSON
 
     def cast_series(self, series: pd.Series, field_type: FieldType) -> pd.Series:
         """Cast a pandas Series to the appropriate dtype for a FieldType.
@@ -336,12 +339,16 @@ class TypeMapper:
             if sample is not None:
                 if isinstance(sample, (datetime, pd.Timestamp, pd._libs.tslibs.timestamps.Timestamp, pd._libs.tslibs.nattype.NaTType)):
                     return "datetime"
-                elif hasattr(sample, '__class__') and 'date' in sample.__class__.__name__.lower():
+                elif hasattr(sample, '__class__') and 'date' in sample.__class__.__name__.lower():  # type: ignore[unreachable]
                     return "date"
                 elif hasattr(sample, '__class__') and 'time' in sample.__class__.__name__.lower():
                     return "time"
-
-        return "string"  # Default
+                else:
+                    # Other object types
+                    return "string"
+            else:
+                # No sample available
+                return "string"
 
     def get_pandas_dtype(self, field_type: str) -> str:
         """Get pandas dtype for a field type string.

@@ -1,6 +1,8 @@
 """Type coercion with predictable, consistent behavior.
 """
 
+from __future__ import annotations
+
 import json
 from datetime import datetime
 from typing import Any
@@ -76,8 +78,10 @@ class Coercer:
         elif isinstance(target_type, type):
             return target_type.__name__
         elif isinstance(target_type, tuple):
+            # Union type represented as tuple
             return f"Union[{', '.join(t.__name__ for t in target_type)}]"
         else:
+            # Fallback for unknown types
             return str(target_type)
 
     def _coerce_value(self, value: Any, target_type: type) -> Any:

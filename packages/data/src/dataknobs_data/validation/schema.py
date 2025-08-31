@@ -1,6 +1,8 @@
 """Schema definition with fluent API for record validation.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from typing import Any

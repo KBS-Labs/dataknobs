@@ -223,7 +223,7 @@ Custom(validate_email, "Invalid email format")
 
 # Composite constraints
 All([Required(), Range(min=0)])  # All must pass
-Any([Pattern(r"^\d+$"), Pattern(r"^[A-Z]+$")])  # At least one must pass
+AnyOf([Pattern(r"^\d+$"), Pattern(r"^[A-Z]+$")])  # At least one must pass
 
 # Constraint composition with operators
 constraint = Required() & Range(min=0, max=100)  # AND

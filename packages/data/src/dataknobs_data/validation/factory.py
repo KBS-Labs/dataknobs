@@ -8,7 +8,7 @@ from dataknobs_config import FactoryBase
 from .coercer import Coercer
 from .constraints import (
     All,
-    Any as AnyConstraint,
+    AnyOf,
     Constraint,
     Enum,
     Length,
@@ -174,7 +174,7 @@ class SchemaFactory(FactoryBase):
                 # Recursive build for composite constraints
                 sub_constraints = self._build_constraints(config.get("constraints", []))
                 if sub_constraints:
-                    constraints.append(AnyConstraint(sub_constraints))
+                    constraints.append(AnyOf(sub_constraints))
 
             else:
                 logger.warning(f"Unknown constraint type: {constraint_type}")

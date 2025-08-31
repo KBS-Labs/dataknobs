@@ -1,5 +1,7 @@
 """Custom exceptions for the dataknobs_data package."""
 
+from __future__ import annotations
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -23,7 +25,7 @@ class RecordNotFoundError(DataknobsDataError):
 class RecordValidationError(DataknobsDataError):
     """Raised when record validation fails."""
 
-    def __init__(self, message: str, field_name: str = None):
+    def __init__(self, message: str, field_name: str | None = None):
         self.field_name = field_name
         if field_name:
             message = f"Field '{field_name}': {message}"
@@ -67,7 +69,7 @@ class DatabaseOperationError(DataknobsDataError):
 class QueryError(DataknobsDataError):
     """Raised when query execution fails."""
 
-    def __init__(self, message: str, query: "Query" = None):
+    def __init__(self, message: str, query: Query | None = None):
         self.query = query
         super().__init__(f"Query error: {message}")
 
@@ -91,7 +93,7 @@ class DataFormatError(DataknobsDataError):
 class BackendNotFoundError(DataknobsDataError):
     """Raised when a requested backend is not available."""
 
-    def __init__(self, backend: str, available: list = None):
+    def __init__(self, backend: str, available: list | None = None):
         self.backend = backend
         self.available = available or []
         message = f"Backend '{backend}' not found"

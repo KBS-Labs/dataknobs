@@ -102,7 +102,9 @@ class LogicCondition(Condition):
             else:
                 # NOT with multiple conditions = none should match
                 return not any(cond.matches(record) for cond in self.conditions)
-        return False
+        else:
+            # This should never be reached as all operators are handled above
+            raise ValueError(f"Unknown logical operator: {self.operator}")
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary representation."""

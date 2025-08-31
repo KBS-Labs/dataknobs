@@ -1,5 +1,7 @@
 """PostgreSQL backend implementation with proper connection management and vector support."""
 
+from __future__ import annotations
+
 import json
 import logging
 import time
@@ -124,7 +126,7 @@ class SyncPostgresDatabase(
         if self.db:
             # PostgresDB manages its own connections via context managers
             # but we can mark as disconnected
-            self._connected = False
+            self._connected = False  # type: ignore[unreachable]
 
     def _initialize(self) -> None:
         """Initialize method - connection setup moved to connect()."""
@@ -156,7 +158,7 @@ class SyncPostgresDatabase(
         if not self.db:
             raise RuntimeError("Database not connected. Call connect() first.")
 
-        create_table_sql = self.get_create_table_sql(self.schema_name, self.table_name)
+        create_table_sql = self.get_create_table_sql(self.schema_name, self.table_name)  # type: ignore[unreachable]
         self.db.execute(create_table_sql)
 
 

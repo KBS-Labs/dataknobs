@@ -1,6 +1,8 @@
 """Migration definition with reversible operations.
 """
 
+from __future__ import annotations
+
 
 from dataknobs_data.records import Record
 

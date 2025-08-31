@@ -24,6 +24,10 @@ dev-dependencies = [
     "black>=24.0.0",
     "isort>=5.13.0",
     "mypy>=1.0.0",
+    "pandas-stubs>=2.0.0",
+    "types-requests>=2.31.0",
+    "types-beautifulsoup4>=4.12.0",
+    "numpy>=1.24.0",
     "jupyter>=1.1.1",
     "ipywidgets>=8.1.5",
     "matplotlib>=3.10.1",
@@ -67,7 +71,9 @@ explicit_package_bases = true
 mypy_path = "packages/common/src:packages/config/src:packages/data/src:packages/kv/src:packages/structures/src:packages/utils/src:packages/xization/src"
 cache_dir = ".mypy_cache"
 incremental = true
-#plugins = ["numpy.typing.mypy_plugin"] -- DEPRECATED
+# Note: For focused type checking that suppresses less critical errors,
+# use: uv run mypy --config-file mypy.ini
+# This configuration shows all type issues for comprehensive analysis.
 
 # Per-module options
 [[tool.mypy.overrides]]
