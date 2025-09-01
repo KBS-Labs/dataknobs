@@ -5,9 +5,59 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
 
-## New Releases - 2025-08-18
+## New Releases - 2025-08-31
+
+### Dataknobs project
+
+#### Added and Fixed
+- Global developer tools and project documentation
+
+### dataknobs-common [1.0.1]
+
+#### Fixed
+- Auto lint and formatting fixes
+
+### dataknobs-structures [1.0.1]
+
+#### Fixed
+- Auto lint and formatting fixes
+
+### dataknobs-xization [1.0.1]
+
+#### Fixed
+- Auto lint and formatting fixes
+
+### dataknobs-data [0.2.0]
+
+#### Added
+- Added SQLite backend
+- Added VectorStore abstraction
+  - As an integrated feature in Databases
+  - As a stand-alone abstraction
+
+#### Fixed
+- All ruff lint and mypy errors
+
+## Releases - 2025-08-18
+
+### Dataknobs project
+
+### Added
+- New modular package structure
+- `dataknobs-structures` - Core data structures
+- `dataknobs-utils` - Utility functions
+- `dataknobs-xization` - Text processing
+- `dataknobs-common` - Shared components
+- Migration guide from legacy package
+
+### Changed
+- Migrated from Poetry to uv package manager
+- Split monolithic package into focused modules
+- Improved test coverage and organization
+
+### Deprecated
+- Legacy `dataknobs` package (use modular packages instead)
 
 ### dataknobs-data [0.1.0] - Initial Release 🎉
 
@@ -65,37 +115,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Real-world example projects
   - Migration guides
 
-## Modular Packages [1.0.0] - 2024-01-XX
+## Legacy Package [0.0.15] - Pre-2025
 
 ### Added
-- New modular package structure
-- `dataknobs-structures` - Core data structures
-- `dataknobs-utils` - Utility functions
-- `dataknobs-xization` - Text processing
-- `dataknobs-common` - Shared components
-- Migration guide from legacy package
-
-### Changed
-- Migrated from Poetry to uv package manager
-- Split monolithic package into focused modules
-- Improved test coverage and organization
-
-### Deprecated
-- Legacy `dataknobs` package (use modular packages instead)
-
-## Legacy Package [0.0.15] - 2024-01-XX
-
-### Added
-- Compatibility wrappers for new package structure
-- Deprecation warnings
-
-### Changed
-- Now acts as a compatibility layer for modular packages
-
-## [0.0.14] - Previous Version
-
-### Added
-- Initial features and functionality
+- Initial tools, features, and functionality
 
 ---
 

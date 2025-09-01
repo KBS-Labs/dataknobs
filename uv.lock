@@ -1145,7 +1145,7 @@ requires-dist = [
 
 [[package]]
 name = "dataknobs-common"
-version = "1.0.0"
+version = "1.0.1"
 source = { editable = "packages/common" }
 dependencies = [
     { name = "more-itertools" },
@@ -1193,7 +1193,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "dataknobs-data"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/data" }
 dependencies = [
     { name = "aiofiles" },
@@ -1365,7 +1365,7 @@ provides-extras = ["cache", "all", "dev"]
 
 [[package]]
 name = "dataknobs-structures"
-version = "1.0.0"
+version = "1.0.1"
 source = { editable = "packages/structures" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1495,7 +1495,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-xization"
-version = "1.0.0"
+version = "1.0.1"
 source = { editable = "packages/xization" }
 dependencies = [
     { name = "dataknobs-common" },
