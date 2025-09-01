@@ -1,5 +1,6 @@
 """Test S3 backend configuration integration."""
 
+import os
 import pytest
 from unittest.mock import patch, MagicMock
 from dataknobs_config import Config
@@ -48,11 +49,17 @@ class TestS3ConfigIntegration:
         mock_boto_client.return_value = mock_s3
         mock_s3.head_bucket.return_value = {}  # Bucket exists
         
+        # Detect if we're running in Docker container
+        if os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER'):
+            localstack_host = 'localstack'
+        else:
+            localstack_host = 'localhost'
+        
         # Set environment variables
         monkeypatch.setenv("S3_BUCKET", "env-bucket")
         monkeypatch.setenv("S3_PREFIX", "env-prefix/")
         monkeypatch.setenv("AWS_REGION", "eu-west-1")
-        monkeypatch.setenv("LOCALSTACK_ENDPOINT", "http://localhost:4566")
+        monkeypatch.setenv("LOCALSTACK_ENDPOINT", f"http://{localstack_host}:4566")
         
         # Create configuration with environment variables
         config = Config()
@@ -74,7 +81,7 @@ class TestS3ConfigIntegration:
         assert db.bucket == "env-bucket"
         assert db.prefix == "env-prefix/"
         assert db.region == "eu-west-1"
-        assert db.endpoint_url == "http://localhost:4566"
+        assert db.endpoint_url == f"http://{localstack_host}:4566"
     
     @patch('boto3.client')
     def test_s3_config_with_defaults(self, mock_boto_client, monkeypatch):

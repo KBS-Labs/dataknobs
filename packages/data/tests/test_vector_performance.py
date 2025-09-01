@@ -1,11 +1,18 @@
 """Performance tests for vector store operations."""
 
 import asyncio
+import os
 import time
 from unittest.mock import Mock, patch
 
 import numpy as np
 import pytest
+
+# Skip all tests if PostgreSQL is not available
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
+    reason="Vector performance tests require TEST_POSTGRES=true and a running PostgreSQL instance with pgvector"
+)
 
 from dataknobs_data.vector.benchmarks import (
     BenchmarkResult,

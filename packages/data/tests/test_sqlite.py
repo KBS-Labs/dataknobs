@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 
 from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
 from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
@@ -363,7 +364,7 @@ class TestSyncSQLiteDatabase:
 class TestAsyncSQLiteDatabase:
     """Test asynchronous SQLite database backend."""
     
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def memory_db(self):
         """Create an in-memory async SQLite database."""
         db = AsyncSQLiteDatabase({"path": ":memory:"})

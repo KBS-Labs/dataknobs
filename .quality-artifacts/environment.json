@@ -1,11 +1,11 @@
 {
-  "timestamp": "2025-09-01T01:13:10Z",
+  "timestamp": "2025-09-01T18:53:29Z",
   "python_version": "Python 3.10.18",
-  "uv_version": "uv 0.7.12 (Homebrew 2025-06-06)",
-  "os": "Darwin",
-  "os_version": "24.6.0",
-  "git_branch": "sbk/release-data-v0.2.0",
-  "git_commit": "6d46c1a7f738a7d58c665f43c0cc860ec2c551fb",
-  "docker_container": "false",
+  "uv_version": "uv 0.8.11",
+  "os": "Linux",
+  "os_version": "6.10.14-linuxkit",
+  "git_branch": "sbk/skip-tests-missing-services",
+  "git_commit": "49749913ac86137b45e42a859c7ece7e5de9513f",
+  "docker_container": "true",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

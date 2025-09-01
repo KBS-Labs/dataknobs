@@ -6,6 +6,7 @@ practical sensor monitoring scenarios.
 """
 
 import pytest
+import pytest_asyncio
 from datetime import datetime, timedelta
 from dataknobs_data import StreamConfig, StreamProcessor
 from dataknobs_data.backends.memory import SyncMemoryDatabase, AsyncMemoryDatabase
@@ -224,10 +225,11 @@ class TestSensorDashboardStreamingEnhancements:
 class TestAsyncSensorDashboardStreaming:
     """Test async streaming improvements."""
     
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def async_dashboard(self):
         """Create async dashboard."""
         db = AsyncMemoryDatabase()
+        await db.connect()  # Ensure database is connected
         return AsyncSensorDashboard(db)
     
     @pytest.fixture

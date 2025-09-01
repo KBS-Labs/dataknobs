@@ -6,6 +6,7 @@ practical sensor monitoring scenarios.
 """
 
 import pytest
+import pytest_asyncio
 from datetime import datetime, timedelta
 from dataknobs_data import (
     Query, Filter, Operator, QueryBuilder,
@@ -395,10 +396,11 @@ class TestQueryBuilderIntegration:
 class TestAsyncSensorDashboardAdvanced:
     """Test advanced features with async dashboard."""
     
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def async_dashboard(self):
         """Create async dashboard with test data."""
         db = AsyncMemoryDatabase()
+        await db.connect()  # Ensure database is connected
         dashboard = AsyncSensorDashboard(db)
         
         now = datetime.now()

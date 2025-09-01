@@ -42,8 +42,14 @@ def localstack_s3_backend(s3_config):
     This fixture requires LocalStack to be running.
     Start with: docker run -d -p 4566:4566 localstack/localstack
     """
+    # Detect if we're running in Docker container
+    if os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER'):
+        default_host = 'localstack'
+    else:
+        default_host = 'localhost'
+    
     # Check if LocalStack is available
-    localstack_endpoint = os.environ.get("LOCALSTACK_ENDPOINT", "http://localhost:4566")
+    localstack_endpoint = os.environ.get("LOCALSTACK_ENDPOINT", f"http://{default_host}:4566")
     
     try:
         # Test connection to LocalStack
@@ -477,9 +483,16 @@ class TestS3Configuration:
         """Test configuration with custom endpoint."""
         # Note: This test only verifies configuration, not actual connection
         # For real LocalStack testing, use the TestS3BackendWithLocalStack class
+        
+        # Detect if we're running in Docker container
+        if os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER'):
+            default_host = 'localstack'
+        else:
+            default_host = 'localhost'
+        
         config = {
             "bucket": "test-bucket",
-            "endpoint_url": "http://localhost:4566",
+            "endpoint_url": f"http://{default_host}:4566",
             "access_key_id": "test",
             "secret_access_key": "test"
         }
@@ -491,7 +504,7 @@ class TestS3Configuration:
         db.access_key_id = config.get("access_key_id")
         db.secret_access_key = config.get("secret_access_key")
         
-        assert db.endpoint_url == "http://localhost:4566"
+        assert db.endpoint_url == f"http://{default_host}:4566"
         assert db.bucket == "test-bucket"
 
 

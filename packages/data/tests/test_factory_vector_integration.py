@@ -213,8 +213,14 @@ class TestFactoryVectorIntegration:
             # Clean up the table
             try:
                 import psycopg2
+                # Detect if we're running in Docker container
+                if os.path.exists('/.dockerenv') or os.getenv('DOCKER_CONTAINER'):
+                    postgres_host = os.getenv('POSTGRES_HOST', 'postgres')
+                else:
+                    postgres_host = os.getenv('POSTGRES_HOST', 'localhost')
+                
                 conn = psycopg2.connect(
-                    host=os.environ.get("POSTGRES_HOST", "localhost"),
+                    host=postgres_host,
                     port=int(os.environ.get("POSTGRES_PORT", 5432)),
                     database=os.environ.get("POSTGRES_DB", "dataknobs_test"),
                     user=os.environ.get("POSTGRES_USER", "postgres"),
@@ -240,12 +246,19 @@ class TestFactoryVectorIntegration:
         # Use a unique index name to avoid conflicts
         index_name = f"test_factory_vectors_{uuid.uuid4().hex[:8]}"
         
+        # Detect if we're running in Docker container
+        if os.path.exists('/.dockerenv') or os.getenv('DOCKER_CONTAINER'):
+            elasticsearch_host = os.getenv('ELASTICSEARCH_HOST', 'elasticsearch')
+        else:
+            elasticsearch_host = os.getenv('ELASTICSEARCH_HOST', 'localhost')
+        
         # Get Elasticsearch configuration from environment
-        hosts = os.environ.get("ELASTICSEARCH_HOSTS", "http://localhost:9200").split(",")
+        port = int(os.environ.get("ELASTICSEARCH_PORT", "9200"))
         
         db = factory.create(
             backend="elasticsearch",
-            hosts=hosts,
+            host=elasticsearch_host,
+            port=port,
             index=index_name,
             vector_enabled=True,
             vector_dimensions=4  # Specify dimensions for test vectors

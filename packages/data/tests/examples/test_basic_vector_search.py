@@ -1,11 +1,18 @@
 """Tests for the basic vector search example."""
 
+import os
 import pytest
 import asyncio
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch, AsyncMock
 from typing import List, Dict, Any
+
+# Skip all tests if PostgreSQL is not available
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
+    reason="Vector search tests require TEST_POSTGRES=true and a running PostgreSQL instance with pgvector"
+)
 
 # Add examples to path
 examples_path = Path(__file__).parent.parent.parent / "examples"
