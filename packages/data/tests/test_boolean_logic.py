@@ -1,6 +1,7 @@
 """Tests for boolean logic operators in queries."""
 
 import pytest
+import pytest_asyncio
 from dataknobs_data import (
     Record,
     Query,
@@ -202,10 +203,11 @@ class TestAsyncBooleanLogic:
             Record(id="4", data={"type": "sensor", "value": 28.7, "location": "room3"}),
         ]
     
-    @pytest.fixture
+    @pytest_asyncio.fixture
     async def async_db_with_data(self, sample_records):
         """Create async database with sample data."""
         db = AsyncMemoryDatabase()
+        await db.connect()  # Ensure database is connected
         for record in sample_records:
             await db.create(record)
         return db

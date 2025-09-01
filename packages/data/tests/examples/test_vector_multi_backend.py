@@ -364,12 +364,18 @@ class TestS3Backend:
         """Test S3 backend with vector support."""
         from dataknobs_data import DatabaseFactory
         
+        # Detect if we're running in Docker container
+        if os.path.exists('/.dockerenv') or os.getenv('DOCKER_CONTAINER'):
+            localstack_host = 'localstack'
+        else:
+            localstack_host = os.getenv('LOCALSTACK_HOST', 'localhost')
+        
         factory = DatabaseFactory()
         db = factory.create(
             backend="s3",
             bucket="test-bucket",
             prefix="test-vectors/",
-            endpoint_url="http://localhost:4566",  # LocalStack
+            endpoint_url=f"http://{localstack_host}:4566",  # LocalStack
             vector_enabled=True,
             vector_metric="cosine"
         )
@@ -414,12 +420,18 @@ class TestS3Backend:
         """Test async S3 backend with vector support."""
         from dataknobs_data import AsyncDatabaseFactory
         
+        # Detect if we're running in Docker container
+        if os.path.exists('/.dockerenv') or os.getenv('DOCKER_CONTAINER'):
+            localstack_host = 'localstack'
+        else:
+            localstack_host = os.getenv('LOCALSTACK_HOST', 'localhost')
+        
         factory = AsyncDatabaseFactory()
         db = factory.create(
             backend="s3",
             bucket="test-bucket",
             prefix="test-vectors-async/",
-            endpoint_url="http://localhost:4566",  # LocalStack
+            endpoint_url=f"http://{localstack_host}:4566",  # LocalStack
             vector_enabled=True,
             vector_metric="euclidean"
         )

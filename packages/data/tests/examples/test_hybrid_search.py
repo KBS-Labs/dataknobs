@@ -1,11 +1,18 @@
 """Tests for the hybrid search example using real implementations."""
 
+import os
 import pytest
 import asyncio
 import sys
 from pathlib import Path
 from typing import List, Dict, Any
 from dataclasses import dataclass
+
+# Skip all tests if PostgreSQL is not available
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
+    reason="Hybrid search tests require TEST_POSTGRES=true and a running PostgreSQL instance with pgvector"
+)
 
 # Add examples to path
 examples_path = Path(__file__).parent.parent.parent / "examples"

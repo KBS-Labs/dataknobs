@@ -4,6 +4,7 @@ These tests use the in-memory backend to test vector functionality
 without requiring a real PostgreSQL instance with pgvector.
 """
 
+import os
 import pytest
 
 from dataknobs_data import Record, VectorField
@@ -12,6 +13,12 @@ from dataknobs_data.vector import DistanceMetric, VectorSearchResult
 
 # Skip tests if numpy is not available
 np = pytest.importorskip("numpy")
+
+# Skip all tests if PostgreSQL is not available
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
+    reason="PostgreSQL vector tests require TEST_POSTGRES=true and a running PostgreSQL instance with pgvector"
+)
 
 
 @pytest.mark.asyncio

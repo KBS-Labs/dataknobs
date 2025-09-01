@@ -1,5 +1,6 @@
 """Integration tests for all example scripts using real implementations."""
 
+import os
 import pytest
 import asyncio
 import sys
@@ -7,6 +8,12 @@ import time
 from pathlib import Path
 from typing import List, Dict, Any
 import numpy as np
+
+# Skip all tests if PostgreSQL is not available
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
+    reason="Example integration tests require TEST_POSTGRES=true and a running PostgreSQL instance with pgvector"
+)
 
 # Add examples to path
 examples_path = Path(__file__).parent.parent.parent / "examples"

@@ -83,8 +83,14 @@ def wait_for_elasticsearch(host: str, port: int, max_retries: int = 30):
 @pytest.fixture(scope="session")
 def postgres_connection_params():
     """PostgreSQL connection parameters for integration tests."""
+    # Detect if we're running in Docker container
+    if os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER'):
+        default_host = 'postgres'
+    else:
+        default_host = 'localhost'
+    
     return {
-        "host": os.environ.get("POSTGRES_HOST", "localhost"),
+        "host": os.environ.get("POSTGRES_HOST", default_host),
         "port": int(os.environ.get("POSTGRES_PORT", 5432)),
         "user": os.environ.get("POSTGRES_USER", "postgres"),
         "password": os.environ.get("POSTGRES_PASSWORD", "postgres"),
@@ -95,8 +101,14 @@ def postgres_connection_params():
 @pytest.fixture(scope="session")
 def elasticsearch_connection_params():
     """Elasticsearch connection parameters for integration tests."""
+    # Detect if we're running in Docker container
+    if os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER'):
+        default_host = 'elasticsearch'
+    else:
+        default_host = 'localhost'
+    
     return {
-        "host": os.environ.get("ELASTICSEARCH_HOST", "localhost"),
+        "host": os.environ.get("ELASTICSEARCH_HOST", default_host),
         "port": int(os.environ.get("ELASTICSEARCH_PORT", 9200)),
     }
 
