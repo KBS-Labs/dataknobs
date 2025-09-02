@@ -41,6 +41,8 @@ jobs:
             mkdocs-monorepo-plugin mkdocs-awesome-pages-plugin \
             mkdocs-git-revision-date-localized-plugin
           uv pip install --system -e packages/common
+          uv pip install --system -e packages/config
+          uv pip install --system -e packages/data
           uv pip install --system -e packages/structures
           uv pip install --system -e packages/utils
           uv pip install --system -e packages/xization
