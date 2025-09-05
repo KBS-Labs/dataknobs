@@ -1,0 +1,404 @@
+"""Base interfaces and classes for FSM functions.
+
+This module defines the interfaces for:
+- Validation functions (check data validity)
+- Transform functions (modify data)
+- State test functions (determine next state)
+- End state test functions (check if processing should end)
+- Resources (external systems and services)
+"""
+
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
+from enum import Enum
+from dataclasses import dataclass
+
+T = TypeVar("T")
+
+
+class FunctionType(Enum):
+    """Types of functions in the FSM."""
+    
+    VALIDATION = "validation"
+    TRANSFORM = "transform"
+    STATE_TEST = "state_test"
+    END_STATE_TEST = "end_state_test"
+
+
+class ExecutionResult:
+    """Result of function execution."""
+    
+    def __init__(
+        self,
+        success: bool,
+        data: Optional[Any] = None,
+        error: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ):
+        """Initialize execution result.
+        
+        Args:
+            success: Whether execution succeeded.
+            data: Result data if successful.
+            error: Error message if failed.
+            metadata: Additional metadata about execution.
+        """
+        self.success = success
+        self.data = data
+        self.error = error
+        self.metadata = metadata or {}
+    
+    @classmethod
+    def success_result(cls, data: Any, metadata: Optional[Dict[str, Any]] = None):
+        """Create a successful result.
+        
+        Args:
+            data: The result data.
+            metadata: Optional metadata.
+            
+        Returns:
+            A successful ExecutionResult.
+        """
+        return cls(success=True, data=data, metadata=metadata)
+    
+    @classmethod
+    def failure_result(cls, error: str, metadata: Optional[Dict[str, Any]] = None):
+        """Create a failure result.
+        
+        Args:
+            error: The error message.
+            metadata: Optional metadata.
+            
+        Returns:
+            A failed ExecutionResult.
+        """
+        return cls(success=False, error=error, metadata=metadata)
+
+
+class IValidationFunction(ABC):
+    """Interface for validation functions."""
+    
+    @abstractmethod
+    def validate(self, data: Any, context: Optional[Dict[str, Any]] = None) -> ExecutionResult:
+        """Validate data according to function logic.
+        
+        Args:
+            data: The data to validate.
+            context: Optional execution context.
+            
+        Returns:
+            ExecutionResult with validation outcome.
+        """
+        pass
+    
+    @abstractmethod
+    def get_validation_rules(self) -> Dict[str, Any]:
+        """Get the validation rules this function implements.
+        
+        Returns:
+            Dictionary describing the validation rules.
+        """
+        pass
+
+
+class ITransformFunction(ABC):
+    """Interface for transform functions."""
+    
+    @abstractmethod
+    def transform(self, data: Any, context: Optional[Dict[str, Any]] = None) -> ExecutionResult:
+        """Transform data according to function logic.
+        
+        Args:
+            data: The data to transform.
+            context: Optional execution context.
+            
+        Returns:
+            ExecutionResult with transformed data.
+        """
+        pass
+    
+    @abstractmethod
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation.
+        
+        Returns:
+            String describing what this transform does.
+        """
+        pass
+
+
+class IStateTestFunction(ABC):
+    """Interface for state test functions."""
+    
+    @abstractmethod
+    def test(self, data: Any, context: Optional[Dict[str, Any]] = None) -> Tuple[bool, Optional[str]]:
+        """Test if a condition is met for state transition.
+        
+        Args:
+            data: The data to test.
+            context: Optional execution context.
+            
+        Returns:
+            Tuple of (test_passed, reason).
+        """
+        pass
+    
+    @abstractmethod
+    def get_test_description(self) -> str:
+        """Get a description of what this test checks.
+        
+        Returns:
+            String describing the test condition.
+        """
+        pass
+
+
+class IEndStateTestFunction(ABC):
+    """Interface for end state test functions."""
+    
+    @abstractmethod
+    def should_end(self, data: Any, context: Optional[Dict[str, Any]] = None) -> Tuple[bool, Optional[str]]:
+        """Test if processing should end.
+        
+        Args:
+            data: The current data.
+            context: Optional execution context.
+            
+        Returns:
+            Tuple of (should_end, reason).
+        """
+        pass
+    
+    @abstractmethod
+    def get_end_condition(self) -> str:
+        """Get a description of the end condition.
+        
+        Returns:
+            String describing when processing ends.
+        """
+        pass
+
+
+class ResourceStatus(Enum):
+    """Status of a resource."""
+    
+    UNINITIALIZED = "uninitialized"
+    INITIALIZING = "initializing"
+    READY = "ready"
+    BUSY = "busy"
+    ERROR = "error"
+    SHUTDOWN = "shutdown"
+
+
+@dataclass
+class ResourceConfig:
+    """Configuration for a resource."""
+    
+    name: str
+    type: str
+    connection_params: Dict[str, Any]
+    pool_size: Optional[int] = None
+    timeout: Optional[float] = None
+    retry_policy: Optional[Dict[str, Any]] = None
+    health_check_interval: Optional[float] = None
+
+
+class IResource(ABC):
+    """Interface for external resources."""
+    
+    @abstractmethod
+    async def initialize(self, config: ResourceConfig) -> None:
+        """Initialize the resource.
+        
+        Args:
+            config: Resource configuration.
+        """
+        pass
+    
+    @abstractmethod
+    async def acquire(self, timeout: Optional[float] = None) -> Any:
+        """Acquire a connection/handle to the resource.
+        
+        Args:
+            timeout: Optional timeout for acquisition.
+            
+        Returns:
+            A resource handle/connection.
+        """
+        pass
+    
+    @abstractmethod
+    async def release(self, handle: Any) -> None:
+        """Release a resource handle/connection.
+        
+        Args:
+            handle: The handle to release.
+        """
+        pass
+    
+    @abstractmethod
+    async def health_check(self) -> bool:
+        """Check if the resource is healthy.
+        
+        Returns:
+            True if healthy, False otherwise.
+        """
+        pass
+    
+    @abstractmethod
+    async def shutdown(self) -> None:
+        """Shutdown the resource and cleanup."""
+        pass
+    
+    @abstractmethod
+    def get_status(self) -> ResourceStatus:
+        """Get the current resource status.
+        
+        Returns:
+            Current ResourceStatus.
+        """
+        pass
+
+
+# Exception classes
+
+class FSMException(Exception):
+    """Base exception for FSM errors."""
+    pass
+
+
+class ValidationError(FSMException):
+    """Raised when validation fails."""
+    
+    def __init__(self, message: str, validation_errors: Optional[List[str]] = None):
+        """Initialize validation error.
+        
+        Args:
+            message: Error message.
+            validation_errors: List of specific validation errors.
+        """
+        super().__init__(message)
+        self.validation_errors = validation_errors or []
+
+
+class TransformError(FSMException):
+    """Raised when transformation fails."""
+    pass
+
+
+class StateTransitionError(FSMException):
+    """Raised when state transition fails."""
+    
+    def __init__(self, message: str, from_state: str, to_state: Optional[str] = None):
+        """Initialize state transition error.
+        
+        Args:
+            message: Error message.
+            from_state: The state transitioning from.
+            to_state: The state attempting to transition to.
+        """
+        super().__init__(message)
+        self.from_state = from_state
+        self.to_state = to_state
+
+
+class ResourceError(FSMException):
+    """Raised when resource operations fail."""
+    
+    def __init__(self, message: str, resource_name: str, operation: str):
+        """Initialize resource error.
+        
+        Args:
+            message: Error message.
+            resource_name: Name of the resource.
+            operation: The operation that failed.
+        """
+        super().__init__(message)
+        self.resource_name = resource_name
+        self.operation = operation
+
+
+class ConfigurationError(FSMException):
+    """Raised when configuration is invalid."""
+    pass
+
+
+# Base implementations
+
+class BaseFunction:
+    """Base class for functions with common functionality."""
+    
+    def __init__(self, name: str, description: str = ""):
+        """Initialize base function.
+        
+        Args:
+            name: Function name.
+            description: Function description.
+        """
+        self.name = name
+        self.description = description
+        self.execution_count = 0
+        self.error_count = 0
+    
+    def _record_execution(self, success: bool) -> None:
+        """Record execution statistics.
+        
+        Args:
+            success: Whether execution succeeded.
+        """
+        self.execution_count += 1
+        if not success:
+            self.error_count += 1
+    
+    def get_stats(self) -> Dict[str, int]:
+        """Get execution statistics.
+        
+        Returns:
+            Dictionary with execution stats.
+        """
+        return {
+            "executions": self.execution_count,
+            "errors": self.error_count,
+            "success_rate": (
+                (self.execution_count - self.error_count) / self.execution_count
+                if self.execution_count > 0 else 0
+            )
+        }
+
+
+class CompositeFunction(BaseFunction):
+    """Base class for functions that compose multiple sub-functions."""
+    
+    def __init__(self, name: str, functions: List[BaseFunction], description: str = ""):
+        """Initialize composite function.
+        
+        Args:
+            name: Function name.
+            functions: List of sub-functions to compose.
+            description: Function description.
+        """
+        super().__init__(name, description)
+        self.functions = functions
+    
+    def add_function(self, function: BaseFunction) -> None:
+        """Add a function to the composite.
+        
+        Args:
+            function: Function to add.
+        """
+        self.functions.append(function)
+    
+    def remove_function(self, function_name: str) -> bool:
+        """Remove a function from the composite.
+        
+        Args:
+            function_name: Name of function to remove.
+            
+        Returns:
+            True if removed, False if not found.
+        """
+        for i, func in enumerate(self.functions):
+            if func.name == function_name:
+                self.functions.pop(i)
+                return True
+        return False
