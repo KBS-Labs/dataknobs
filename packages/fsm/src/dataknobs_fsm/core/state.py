@@ -353,3 +353,35 @@ class StateInstance:
             "executed_arcs": self.executed_arcs,
             "next_state": self.next_state,
         }
+
+
+# Simplified State class for network usage
+class State:
+    """Simplified state class for use in state networks."""
+    
+    def __init__(self, name: str, **kwargs):
+        """Initialize state.
+        
+        Args:
+            name: State name.
+            **kwargs: Additional state properties.
+        """
+        self.name = name
+        self.metadata = kwargs
+        self.resource_requirements = kwargs.get("resource_requirements", {})
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "name": self.name,
+            "metadata": self.metadata,
+            "resource_requirements": self.resource_requirements
+        }
+
+
+# StateMode for backwards compatibility
+class StateMode(Enum):
+    """Mode of state operation."""
+    NORMAL = "normal"
+    PARALLEL = "parallel"
+    SEQUENTIAL = "sequential"

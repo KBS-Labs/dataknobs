@@ -11,7 +11,7 @@ This module defines the interfaces for:
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
 from enum import Enum
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 T = TypeVar("T")
 
@@ -73,6 +73,15 @@ class ExecutionResult:
             A failed ExecutionResult.
         """
         return cls(success=False, error=error, metadata=metadata)
+
+
+@dataclass
+class FunctionContext:
+    """Context passed to functions during execution."""
+    state_name: str
+    function_name: str
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    resources: Dict[str, Any] = field(default_factory=dict)
 
 
 class IValidationFunction(ABC):
