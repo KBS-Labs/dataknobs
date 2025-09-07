@@ -68,9 +68,9 @@ class DoubleFunction(Function):
         return data
 
 
-# Test stream source
-class TestStreamSource(IStreamSource):
-    """Test stream source with configurable data."""
+# Mock stream source for testing
+class MockStreamSource(IStreamSource):
+    """Mock stream source with configurable data."""
     
     def __init__(self, data_chunks: List[List[Any]]):
         self.data_chunks = data_chunks
@@ -93,9 +93,9 @@ class TestStreamSource(IStreamSource):
         pass
 
 
-# Test stream sink
-class TestStreamSink(IStreamSink):
-    """Test stream sink that collects data."""
+# Mock stream sink for testing
+class MockStreamSink(IStreamSink):
+    """Mock stream sink that collects data."""
     
     def __init__(self):
         self.chunks: List[StreamChunk] = []
@@ -673,8 +673,8 @@ class TestStreamExecutor(unittest.TestCase):
             [4, 5, 6],
             [7, 8, 9]
         ]
-        source = TestStreamSource(data_chunks)
-        sink = TestStreamSink()
+        source = MockStreamSource(data_chunks)
+        sink = MockStreamSink()
         
         pipeline = StreamPipeline(source=source, sink=sink)
         
@@ -687,8 +687,8 @@ class TestStreamExecutor(unittest.TestCase):
     def test_stream_transformations(self):
         """Test stream with transformations."""
         data_chunks = [[1, 2, 3]]
-        source = TestStreamSource(data_chunks)
-        sink = TestStreamSink()
+        source = MockStreamSource(data_chunks)
+        sink = MockStreamSink()
         
         # Add transformation
         def multiply_by_10(x):
@@ -711,7 +711,7 @@ class TestStreamExecutor(unittest.TestCase):
     def test_stream_progress_tracking(self):
         """Test stream progress tracking."""
         data_chunks = [[1], [2], [3]]
-        source = TestStreamSource(data_chunks)
+        source = MockStreamSource(data_chunks)
         
         progress_updates = []
         
@@ -730,7 +730,7 @@ class TestStreamExecutor(unittest.TestCase):
         """Test error handling in stream."""
         # Create chunks with invalid data
         data_chunks = [[1, "invalid", 3]]
-        source = TestStreamSource(data_chunks)
+        source = MockStreamSource(data_chunks)
         
         pipeline = StreamPipeline(source=source)
         stats = self.executor.execute_stream(pipeline)
@@ -754,7 +754,7 @@ class TestStreamExecutor(unittest.TestCase):
         
         # Create large stream
         data_chunks = [[i] * 10 for i in range(10)]
-        source = TestStreamSource(data_chunks)
+        source = MockStreamSource(data_chunks)
         
         pipeline = StreamPipeline(source=source)
         stats = executor.execute_stream(pipeline)
@@ -764,10 +764,10 @@ class TestStreamExecutor(unittest.TestCase):
     def test_multi_stage_pipeline(self):
         """Test multi-stage pipeline creation."""
         stages = [
-            {'type': 'source', 'source': TestStreamSource([[1, 2, 3]])},
+            {'type': 'source', 'source': MockStreamSource([[1, 2, 3]])},
             {'type': 'transform', 'function': lambda x: x * 2},
             {'type': 'transform', 'function': lambda x: x + 1},
-            {'type': 'sink', 'sink': TestStreamSink()},
+            {'type': 'sink', 'sink': MockStreamSink()},
         ]
         
         pipeline = self.executor.create_multi_stage_pipeline(stages)
@@ -834,7 +834,7 @@ class TestIntegration(unittest.TestCase):
         from dataknobs_fsm.streaming.db_stream import DatabaseStreamSink
         
         data_chunks = [[1, 2, 3], [4, 5, 6]]
-        source = TestStreamSource(data_chunks)
+        source = MockStreamSource(data_chunks)
         sink = DatabaseStreamSink(db, batch_size=2)
         
         pipeline = StreamPipeline(source=source, sink=sink)
