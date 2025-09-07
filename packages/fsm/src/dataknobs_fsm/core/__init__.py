@@ -6,6 +6,7 @@ from dataknobs_fsm.core.arc import (
     DataIsolationMode,
     PushArc,
 )
+from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.network import (
     Arc,
     NetworkResourceRequirements,
@@ -14,6 +15,8 @@ from dataknobs_fsm.core.network import (
 from dataknobs_fsm.core.state import State, StateMode
 
 __all__ = [
+    # FSM
+    "FSM",
     # State
     "State",
     "StateMode",

@@ -411,3 +411,109 @@ class CompositeFunction(BaseFunction):
                 self.functions.pop(i)
                 return True
         return False
+
+
+# Simple Function class for basic use
+class Function(ABC):
+    """Abstract base class for simple functions."""
+    
+    @abstractmethod
+    def execute(self, data: Any, context: 'FunctionContext') -> Any:
+        """Execute the function.
+        
+        Args:
+            data: Input data.
+            context: Function context.
+            
+        Returns:
+            Function result.
+        """
+        pass
+
+
+# FunctionRegistry for managing functions
+class FunctionRegistry:
+    """Registry for managing FSM functions."""
+    
+    def __init__(self):
+        """Initialize function registry."""
+        self.functions: Dict[str, Any] = {}
+        self.validators: Dict[str, IValidationFunction] = {}
+        self.transforms: Dict[str, ITransformFunction] = {}
+    
+    def register(self, name: str, function: Any) -> None:
+        """Register a function.
+        
+        Args:
+            name: Function name.
+            function: Function instance.
+        """
+        if isinstance(function, Function):
+            self.functions[name] = function
+        elif isinstance(function, IValidationFunction):
+            self.validators[name] = function
+        elif isinstance(function, ITransformFunction):
+            self.transforms[name] = function
+        else:
+            # Store as generic function
+            self.functions[name] = function
+    
+    def get_function(self, name: str) -> Optional[Any]:
+        """Get a function by name.
+        
+        Args:
+            name: Function name.
+            
+        Returns:
+            Function instance or None.
+        """
+        # Check all registries
+        if name in self.functions:
+            return self.functions[name]
+        elif name in self.validators:
+            return self.validators[name]
+        elif name in self.transforms:
+            return self.transforms[name]
+        return None
+    
+    def remove(self, name: str) -> bool:
+        """Remove a function.
+        
+        Args:
+            name: Function name.
+            
+        Returns:
+            True if removed.
+        """
+        if name in self.functions:
+            del self.functions[name]
+            return True
+        elif name in self.validators:
+            del self.validators[name]
+            return True
+        elif name in self.transforms:
+            del self.transforms[name]
+            return True
+        return False
+    
+    def list_functions(self) -> List[str]:
+        """List all registered functions.
+        
+        Returns:
+            List of function names.
+        """
+        all_names = []
+        all_names.extend(self.functions.keys())
+        all_names.extend(self.validators.keys())
+        all_names.extend(self.transforms.keys())
+        return sorted(all_names)
+    
+    def clear(self) -> None:
+        """Clear all registered functions."""
+        self.functions.clear()
+        self.validators.clear()
+        self.transforms.clear()
+
+
+# Alias FunctionError to StateTransitionError for compatibility
+FunctionError = StateTransitionError

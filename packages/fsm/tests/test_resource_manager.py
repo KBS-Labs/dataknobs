@@ -645,7 +645,7 @@ class TestResourceIntegration:
         def worker(owner_id):
             resource = manager.acquire("test", owner_id)
             results.append(resource)
-            time.sleep(0.1)
+            time.sleep(0.01)  # Reduced sleep time
             manager.release("test", owner_id)
         
         threads = [threading.Thread(target=worker, args=(f"owner{i}",)) 
@@ -653,8 +653,13 @@ class TestResourceIntegration:
         
         for t in threads:
             t.start()
+        
+        # Add timeout to prevent hanging
         for t in threads:
-            t.join()
+            t.join(timeout=5.0)  # 5 second timeout
+            if t.is_alive():
+                # Thread is still running, which indicates a deadlock
+                raise TimeoutError(f"Thread {t.name} did not complete within timeout")
         
         assert len(results) == 5
         assert len(set(results)) <= 5  # May reuse resources from pool

@@ -6,7 +6,10 @@ from dataknobs_fsm.functions.base import (
     ConfigurationError,
     ExecutionResult,
     FSMException,
+    Function,
     FunctionContext,
+    FunctionError,
+    FunctionRegistry,
     FunctionType,
     IEndStateTestFunction,
     IResource,
@@ -28,6 +31,9 @@ __all__ = [
     # Result classes
     "ExecutionResult",
     "FunctionContext",
+    # Core Classes
+    "Function",
+    "FunctionRegistry",
     # Interfaces
     "IValidationFunction",
     "ITransformFunction",
@@ -41,6 +47,7 @@ __all__ = [
     "ValidationError",
     "TransformError",
     "StateTransitionError",
+    "FunctionError",
     "ResourceError",
     "ConfigurationError",
     # Base classes

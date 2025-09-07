@@ -128,6 +128,62 @@ class StateNetwork:
         # Validation cache
         self._validation_cache: Optional[Dict[str, Any]] = None
     
+    @property
+    def states(self) -> Dict[str, State]:
+        """Get all states in the network."""
+        return self._states
+    
+    @property
+    def arcs(self) -> Dict[str, Any]:
+        """Get all arcs in the network."""
+        # Import here to avoid circular dependency
+        from dataknobs_fsm.core.arc import ArcDefinition
+        
+        # Return arcs as a dict indexed by "source:target" 
+        # Convert Arc to ArcDefinition for compatibility
+        arc_dict = {}
+        for arc in self._arcs:
+            key = f"{arc.source_state}:{arc.target_state}"
+            # Create ArcDefinition from Arc
+            arc_def = ArcDefinition(
+                target_state=arc.target_state,
+                pre_test=arc.pre_test,
+                transform=arc.transform
+            )
+            # Copy metadata if it exists
+            if hasattr(arc, 'metadata') and arc.metadata:
+                arc_def.metadata = arc.metadata.copy()
+            arc_dict[key] = arc_def
+        return arc_dict
+    
+    @property
+    def initial_states(self) -> Set[str]:
+        """Get initial states (returns set for compatibility)."""
+        if self._initial_state:
+            return {self._initial_state}
+        return set()
+    
+    @property
+    def final_states(self) -> Set[str]:
+        """Get final states."""
+        return self._final_states.copy()
+    
+    @property
+    def resource_requirements(self) -> Dict[str, Set[str]]:
+        """Get resource requirements."""
+        return {
+            'databases': self._resource_requirements.databases,
+            'filesystems': self._resource_requirements.filesystems,
+            'http_services': self._resource_requirements.http_services,
+            'llms': self._resource_requirements.llms,
+            'custom': self._resource_requirements.custom
+        }
+    
+    @property
+    def supports_streaming(self) -> bool:
+        """Check if network supports streaming."""
+        return self._streaming_enabled
+    
     def add_state(
         self,
         state: State,

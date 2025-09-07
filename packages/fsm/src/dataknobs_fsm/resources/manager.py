@@ -94,6 +94,7 @@ class ResourceManager:
         if self._closed:
             raise ResourceError("Resource manager is closed", resource_name=name, operation="acquire")
         
+        # First check if provider exists and if owner already has resource
         with self._lock:
             if name not in self._providers:
                 raise ResourceError(
@@ -107,11 +108,26 @@ class ResourceManager:
             if owner_key in self._resources:
                 return self._resources[owner_key]
             
-            # Acquire from pool or provider
-            if name in self._pools:
-                resource = self._pools[name].acquire(timeout)
-            else:
-                resource = self._providers[name].acquire(**kwargs)
+            # Check if we have a pool for this resource
+            has_pool = name in self._pools
+        
+        # Acquire resource outside of lock to prevent deadlock
+        if has_pool:
+            resource = self._pools[name].acquire(timeout)
+        else:
+            resource = self._providers[name].acquire(**kwargs)
+        
+        # Re-acquire lock to track ownership
+        with self._lock:
+            # Double-check that owner doesn't have resource (race condition check)
+            owner_key = f"{owner_id}:{name}"
+            if owner_key in self._resources:
+                # Another thread already acquired for this owner, release the extra
+                if has_pool:
+                    self._pools[name].release(resource)
+                else:
+                    self._providers[name].release(resource)
+                return self._resources[owner_key]
             
             # Track ownership
             self._resources[owner_key] = resource
