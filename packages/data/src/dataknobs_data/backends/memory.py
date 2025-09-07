@@ -113,7 +113,11 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
                 # Apply filters
                 matches = True
                 for filter in query.filters:
-                    field_value = record.get_value(filter.field)
+                    # Special handling for 'id' field
+                    if filter.field == 'id':
+                        field_value = id
+                    else:
+                        field_value = record.get_value(filter.field)
                     if not filter.matches(field_value):
                         matches = False
                         break
@@ -312,7 +316,11 @@ class SyncMemoryDatabase(  # type: ignore[misc]
                 # Apply filters
                 matches = True
                 for filter in query.filters:
-                    field_value = record.get_value(filter.field)
+                    # Special handling for 'id' field
+                    if filter.field == 'id':
+                        field_value = id
+                    else:
+                        field_value = record.get_value(filter.field)
                     if not filter.matches(field_value):
                         matches = False
                         break

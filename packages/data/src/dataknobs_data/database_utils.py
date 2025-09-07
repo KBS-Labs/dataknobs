@@ -50,10 +50,17 @@ def process_search_results(
     if query.sort_specs:
         for sort_spec in reversed(query.sort_specs):
             reverse = sort_spec.order.value == "desc"
-            results.sort(
-                key=lambda x: x[1].get_value(sort_spec.field, ""),
-                reverse=reverse
-            )
+            # Special handling for 'id' field
+            if sort_spec.field == 'id':
+                results.sort(
+                    key=lambda x: x[0] or "",  # x[0] is the record ID
+                    reverse=reverse
+                )
+            else:
+                results.sort(
+                    key=lambda x: x[1].get_value(sort_spec.field, ""),
+                    reverse=reverse
+                )
 
     # Extract records and ensure they have their IDs
     records = []

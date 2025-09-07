@@ -572,20 +572,25 @@ class SyncElasticsearchDatabase(
         Returns:
             Elasticsearch query dict for the filter
         """
-        field_path = f"data.{filter_obj.field}"
+        # Special handling for 'id' field - use _id in Elasticsearch
+        if filter_obj.field == 'id':
+            field_path = "_id"
+            # _id field doesn't need .keyword suffix
+        else:
+            field_path = f"data.{filter_obj.field}"
 
-        # For string fields in exact match queries, use .keyword suffix
-        if filter_obj.operator in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
-            if isinstance(filter_obj.value, str) or (
-                isinstance(filter_obj.value, list) and
-                filter_obj.value and
-                isinstance(filter_obj.value[0], str)
-            ):
-                field_path = f"{field_path}.keyword"
-        elif filter_obj.operator == Operator.LIKE:
-            # Wildcard needs .keyword for proper matching
-            if isinstance(filter_obj.value, str):
-                field_path = f"{field_path}.keyword"
+            # For string fields in exact match queries, use .keyword suffix
+            if filter_obj.operator in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
+                if isinstance(filter_obj.value, str) or (
+                    isinstance(filter_obj.value, list) and
+                    filter_obj.value and
+                    isinstance(filter_obj.value[0], str)
+                ):
+                    field_path = f"{field_path}.keyword"
+            elif filter_obj.operator in [Operator.LIKE, Operator.NOT_LIKE]:
+                # Wildcard needs .keyword for proper matching
+                if isinstance(filter_obj.value, str):
+                    field_path = f"{field_path}.keyword"
 
         if filter_obj.operator == Operator.EQ:
             value = str(filter_obj.value).lower() if isinstance(filter_obj.value, bool) else filter_obj.value
@@ -604,10 +609,21 @@ class SyncElasticsearchDatabase(
         elif filter_obj.operator == Operator.LIKE:
             pattern = filter_obj.value.replace("%", "*").replace("_", "?")
             return {"wildcard": {field_path: pattern}}
+        elif filter_obj.operator == Operator.NOT_LIKE:
+            pattern = filter_obj.value.replace("%", "*").replace("_", "?")
+            return {"bool": {"must_not": {"wildcard": {field_path: pattern}}}}
         elif filter_obj.operator == Operator.IN:
-            return {"terms": {field_path: filter_obj.value}}
+            # Special handling for _id field - use ids query instead of terms
+            if filter_obj.field == 'id':
+                return {"ids": {"values": filter_obj.value}}
+            else:
+                return {"terms": {field_path: filter_obj.value}}
         elif filter_obj.operator == Operator.NOT_IN:
-            return {"bool": {"must_not": {"terms": {field_path: filter_obj.value}}}}
+            # Special handling for _id field
+            if filter_obj.field == 'id':
+                return {"bool": {"must_not": {"ids": {"values": filter_obj.value}}}}
+            else:
+                return {"bool": {"must_not": {"terms": {field_path: filter_obj.value}}}}
         elif filter_obj.operator == Operator.EXISTS:
             return {"exists": {"field": field_path}}
         elif filter_obj.operator == Operator.NOT_EXISTS:
@@ -641,21 +657,26 @@ upper}}}}}
 
             # Apply filters
             for filter_obj in query.filters:
-                field_path = f"data.{filter_obj.field}"
+                # Special handling for 'id' field - use _id in Elasticsearch
+                if filter_obj.field == 'id':
+                    field_path = "_id"
+                    # _id field doesn't need .keyword suffix
+                else:
+                    field_path = f"data.{filter_obj.field}"
 
-                # For string fields in exact match queries, use .keyword suffix
-                # LIKE and REGEX need to use the text field, not keyword
-                if filter_obj.operator in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
-                    if isinstance(filter_obj.value, str) or (
-                        isinstance(filter_obj.value, list) and
-                        filter_obj.value and
-                        isinstance(filter_obj.value[0], str)
-                    ):
-                        field_path = f"{field_path}.keyword"
-                elif filter_obj.operator == Operator.LIKE:
-                    # Wildcard needs .keyword for proper matching
-                    if isinstance(filter_obj.value, str):
-                        field_path = f"{field_path}.keyword"
+                    # For string fields in exact match queries, use .keyword suffix
+                    # LIKE and REGEX need to use the text field, not keyword
+                    if filter_obj.operator in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
+                        if isinstance(filter_obj.value, str) or (
+                            isinstance(filter_obj.value, list) and
+                            filter_obj.value and
+                            isinstance(filter_obj.value[0], str)
+                        ):
+                            field_path = f"{field_path}.keyword"
+                    elif filter_obj.operator in [Operator.LIKE, Operator.NOT_LIKE]:
+                        # Wildcard needs .keyword for proper matching
+                        if isinstance(filter_obj.value, str):
+                            field_path = f"{field_path}.keyword"
 
                 if filter_obj.operator == Operator.EQ:
                     # Handle boolean values correctly
@@ -678,10 +699,21 @@ upper}}}}}
                     pattern = filter_obj.value.replace("%", "*").replace("_", "?")
                     # Use the base field path for LIKE (already has .keyword added above if string)
                     es_query["bool"]["must"].append({"wildcard": {field_path: pattern}})
+                elif filter_obj.operator == Operator.NOT_LIKE:
+                    pattern = filter_obj.value.replace("%", "*").replace("_", "?")
+                    es_query["bool"]["must"].append({"bool": {"must_not": {"wildcard": {field_path: pattern}}}})
                 elif filter_obj.operator == Operator.IN:
-                    es_query["bool"]["must"].append({"terms": {field_path: filter_obj.value}})
+                    # Special handling for _id field - use ids query instead of terms
+                    if filter_obj.field == 'id':
+                        es_query["bool"]["must"].append({"ids": {"values": filter_obj.value}})
+                    else:
+                        es_query["bool"]["must"].append({"terms": {field_path: filter_obj.value}})
                 elif filter_obj.operator == Operator.NOT_IN:
-                    es_query["bool"]["must"].append({"bool": {"must_not": {"terms": {field_path: filter_obj.value}}}})
+                    # Special handling for _id field
+                    if filter_obj.field == 'id':
+                        es_query["bool"]["must"].append({"bool": {"must_not": {"ids": {"values": filter_obj.value}}}})
+                    else:
+                        es_query["bool"]["must"].append({"bool": {"must_not": {"terms": {field_path: filter_obj.value}}}})
                 elif filter_obj.operator == Operator.EXISTS:
                     es_query["bool"]["must"].append({"exists": {"field": field_path}})
                 elif filter_obj.operator == Operator.NOT_EXISTS:
@@ -725,15 +757,21 @@ upper}}}}}
         sort = []
         if query.sort_specs:
             for sort_spec in query.sort_specs:
-                field_path = f"data.{sort_spec.field}"
-                # Don't add .keyword if user already specified it or for common numeric fields
-                # This is a heuristic - ideally we'd check the mapping
-                numeric_fields = ['age', 'salary', 'balance', 'count', 'score', 'amount', 'price', 'index', 'id', 'number', 'total', 'quantity']
-                if (not sort_spec.field.endswith('.keyword') and
-                    not sort_spec.field.endswith('.raw') and
-                    sort_spec.field.lower() not in numeric_fields):
-                    # Likely a text field, add .keyword for sorting
-                    field_path = f"data.{sort_spec.field}.keyword"
+                # Special handling for 'id' field - sort by the id field in source data
+                # We can't sort by _id directly as it requires fielddata which is disabled by default
+                # The id field is already of type keyword, so no .keyword suffix needed
+                if sort_spec.field == 'id':
+                    field_path = "id"
+                else:
+                    field_path = f"data.{sort_spec.field}"
+                    # Don't add .keyword if user already specified it or for common numeric fields
+                    # This is a heuristic - ideally we'd check the mapping
+                    numeric_fields = ['age', 'salary', 'balance', 'count', 'score', 'amount', 'price', 'index', 'number', 'total', 'quantity']
+                    if (not sort_spec.field.endswith('.keyword') and
+                        not sort_spec.field.endswith('.raw') and
+                        sort_spec.field.lower() not in numeric_fields):
+                        # Likely a text field, add .keyword for sorting
+                        field_path = f"data.{sort_spec.field}.keyword"
                 order = "desc" if sort_spec.order == SortOrder.DESC else "asc"
                 sort.append({field_path: {"order": order}})
 
@@ -797,21 +835,26 @@ upper}}}}}
         es_query = {"bool": {"must": []}}
 
         for filter_obj in query.filters:
-            field_path = f"data.{filter_obj.field}"
+            # Special handling for 'id' field - use _id in Elasticsearch
+            if filter_obj.field == 'id':
+                field_path = "_id"
+                # _id field doesn't need .keyword suffix
+            else:
+                field_path = f"data.{filter_obj.field}"
 
-            # For string fields in exact match queries, use .keyword suffix
-            # LIKE and REGEX need different handling
-            if filter_obj.operator in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
-                if isinstance(filter_obj.value, str) or (
-                    isinstance(filter_obj.value, list) and
-                    filter_obj.value and
-                    isinstance(filter_obj.value[0], str)
-                ):
-                    field_path = f"{field_path}.keyword"
-            elif filter_obj.operator == Operator.LIKE:
-                # Wildcard needs .keyword for proper matching
-                if isinstance(filter_obj.value, str):
-                    field_path = f"{field_path}.keyword"
+                # For string fields in exact match queries, use .keyword suffix
+                # LIKE and REGEX need different handling
+                if filter_obj.operator in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
+                    if isinstance(filter_obj.value, str) or (
+                        isinstance(filter_obj.value, list) and
+                        filter_obj.value and
+                        isinstance(filter_obj.value[0], str)
+                    ):
+                        field_path = f"{field_path}.keyword"
+                elif filter_obj.operator in [Operator.LIKE, Operator.NOT_LIKE]:
+                    # Wildcard needs .keyword for proper matching
+                    if isinstance(filter_obj.value, str):
+                        field_path = f"{field_path}.keyword"
 
             if filter_obj.operator == Operator.EQ:
                 # Handle boolean values correctly
@@ -831,10 +874,21 @@ upper}}}}}
             elif filter_obj.operator == Operator.LIKE:
                 pattern = filter_obj.value.replace("%", "*").replace("_", "?")
                 es_query["bool"]["must"].append({"wildcard": {field_path: pattern}})
+            elif filter_obj.operator == Operator.NOT_LIKE:
+                pattern = filter_obj.value.replace("%", "*").replace("_", "?")
+                es_query["bool"]["must"].append({"bool": {"must_not": {"wildcard": {field_path: pattern}}}})
             elif filter_obj.operator == Operator.IN:
-                es_query["bool"]["must"].append({"terms": {field_path: filter_obj.value}})
+                # Special handling for _id field - use ids query instead of terms
+                if filter_obj.field == 'id':
+                    es_query["bool"]["must"].append({"ids": {"values": filter_obj.value}})
+                else:
+                    es_query["bool"]["must"].append({"terms": {field_path: filter_obj.value}})
             elif filter_obj.operator == Operator.NOT_IN:
-                es_query["bool"]["must"].append({"bool": {"must_not": {"terms": {field_path: filter_obj.value}}}})
+                # Special handling for _id field
+                if filter_obj.field == 'id':
+                    es_query["bool"]["must"].append({"bool": {"must_not": {"ids": {"values": filter_obj.value}}}})
+                else:
+                    es_query["bool"]["must"].append({"bool": {"must_not": {"terms": {field_path: filter_obj.value}}}})
             elif filter_obj.operator == Operator.EXISTS:
                 es_query["bool"]["must"].append({"exists": {"field": field_path}})
             elif filter_obj.operator == Operator.NOT_EXISTS:

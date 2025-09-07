@@ -214,6 +214,56 @@ class TestSyncMemoryDatabase:
         assert "age" not in record
         assert "phone" not in record
 
+    def test_search_by_id_field(self):
+        """Test searching by the special 'id' field."""
+        db = SyncDatabase.from_backend("memory")
+        
+        # Create records with specific IDs
+        for i in range(5):
+            record = Record(id=str(i), data={"value": i * 10})
+            db.create(record)
+        
+        # Test filtering by ID with various operators
+        from dataknobs_data.query import Operator
+        
+        # Test GT (greater than)
+        query = Query().filter("id", Operator.GT, "2").sort_by("id", "asc")
+        results = db.search(query)
+        assert len(results) == 2
+        assert results[0].id == "3"
+        assert results[1].id == "4"
+        
+        # Test LT (less than)
+        query = Query().filter("id", Operator.LT, "2").sort_by("id", "asc")
+        results = db.search(query)
+        assert len(results) == 2
+        assert results[0].id == "0"
+        assert results[1].id == "1"
+        
+        # Test EQ (equal)
+        query = Query().filter("id", Operator.EQ, "3")
+        results = db.search(query)
+        assert len(results) == 1
+        assert results[0].id == "3"
+        
+        # Test BETWEEN
+        query = Query().filter("id", Operator.BETWEEN, ["1", "3"]).sort_by("id", "asc")
+        results = db.search(query)
+        assert len(results) == 3
+        assert [r.id for r in results] == ["1", "2", "3"]
+        
+        # Test IN
+        query = Query().filter("id", Operator.IN, ["0", "2", "4"])
+        results = db.search(query)
+        assert len(results) == 3
+        assert set(r.id for r in results) == {"0", "2", "4"}
+        
+        # Test combined filters (id AND value)
+        query = Query().filter("id", Operator.GT, "1").filter("value", Operator.LTE, 30)
+        results = db.search(query)
+        assert len(results) == 2
+        assert set(r.id for r in results) == {"2", "3"}
+    
     def test_batch_operations(self):
         """Test batch operations."""
         db = SyncDatabase.from_backend("memory")
@@ -334,6 +384,45 @@ class TestAsyncMemoryDatabase:
         # Verify deletion
         assert await db.read(id) is None
 
+    @pytest.mark.asyncio
+    async def test_async_search_by_id_field(self):
+        """Test async searching by the special 'id' field."""
+        db = await AsyncDatabase.from_backend("memory")
+        
+        # Create records with specific IDs
+        for i in range(5):
+            record = Record(id=str(i), data={"value": i * 10})
+            await db.create(record)
+        
+        # Test filtering by ID with various operators
+        from dataknobs_data.query import Operator
+        
+        # Test GT (greater than)
+        query = Query().filter("id", Operator.GT, "2").sort_by("id", "asc")
+        results = await db.search(query)
+        assert len(results) == 2
+        assert results[0].id == "3"
+        assert results[1].id == "4"
+        
+        # Test LT (less than)
+        query = Query().filter("id", Operator.LT, "2").sort_by("id", "asc")
+        results = await db.search(query)
+        assert len(results) == 2
+        assert results[0].id == "0"
+        assert results[1].id == "1"
+        
+        # Test EQ (equal)
+        query = Query().filter("id", Operator.EQ, "3")
+        results = await db.search(query)
+        assert len(results) == 1
+        assert results[0].id == "3"
+        
+        # Test combined filters (id AND value)
+        query = Query().filter("id", Operator.GT, "1").filter("value", Operator.LTE, 30)
+        results = await db.search(query)
+        assert len(results) == 2
+        assert set(r.id for r in results) == {"2", "3"}
+    
     @pytest.mark.asyncio
     async def test_async_search(self):
         """Test async search operations."""
