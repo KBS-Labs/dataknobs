@@ -1,0 +1,360 @@
+"""Configuration loader for FSM configurations.
+
+This module provides functionality to load FSM configurations from various sources:
+- Files (JSON, YAML)
+- Dictionaries
+- Templates
+- Environment variables
+"""
+
+import json
+import os
+from pathlib import Path
+from typing import Any, Dict, Optional, Union
+
+import yaml
+from dataknobs_config import Config as DataknobsConfig
+
+from dataknobs_fsm.config.schema import (
+    FSMConfig,
+    TemplateConfig,
+    UseCaseTemplate,
+    apply_template,
+    validate_config,
+)
+
+
+class ConfigLoader:
+    """Load and process FSM configurations from various sources."""
+
+    def __init__(self, use_dataknobs_config: bool = False):
+        """Initialize the ConfigLoader.
+        
+        Args:
+            use_dataknobs_config: Whether to use dataknobs_config for advanced features.
+        """
+        self.use_dataknobs_config = use_dataknobs_config
+        self._env_prefix = "FSM_"
+        self._included_configs: Dict[str, Dict[str, Any]] = {}
+
+    def load_from_file(
+        self,
+        file_path: Union[str, Path],
+        resolve_env: bool = True,
+        resolve_references: bool = True,
+    ) -> FSMConfig:
+        """Load configuration from a file.
+        
+        Args:
+            file_path: Path to configuration file (JSON or YAML).
+            resolve_env: Whether to resolve environment variables.
+            resolve_references: Whether to resolve file references.
+            
+        Returns:
+            Validated FSMConfig instance.
+            
+        Raises:
+            FileNotFoundError: If file doesn't exist.
+            ValueError: If file format is not supported.
+        """
+        file_path = Path(file_path)
+        
+        if not file_path.exists():
+            raise FileNotFoundError(f"Configuration file not found: {file_path}")
+        
+        # Load raw configuration
+        raw_config = self._load_file(file_path)
+        
+        # Process with dataknobs_config if enabled
+        if self.use_dataknobs_config:
+            config_obj = DataknobsConfig(raw_config)
+            processed_config = config_obj.to_dict()
+        else:
+            processed_config = raw_config
+        
+        # Resolve environment variables
+        if resolve_env:
+            processed_config = self._resolve_environment_vars(processed_config)
+        
+        # Resolve file references (includes/imports)
+        if resolve_references:
+            processed_config = self._resolve_references(processed_config, file_path.parent)
+        
+        # Validate and return
+        return validate_config(processed_config)
+
+    def load_from_dict(
+        self,
+        config_dict: Dict[str, Any],
+        resolve_env: bool = True,
+    ) -> FSMConfig:
+        """Load configuration from a dictionary.
+        
+        Args:
+            config_dict: Configuration dictionary.
+            resolve_env: Whether to resolve environment variables.
+            
+        Returns:
+            Validated FSMConfig instance.
+        """
+        processed_config = config_dict.copy()
+        
+        # Process with dataknobs_config if enabled
+        if self.use_dataknobs_config:
+            config_obj = DataknobsConfig(processed_config)
+            processed_config = config_obj.to_dict()
+        
+        # Resolve environment variables
+        if resolve_env:
+            processed_config = self._resolve_environment_vars(processed_config)
+        
+        # Validate and return
+        return validate_config(processed_config)
+
+    def load_from_template(
+        self,
+        template: Union[UseCaseTemplate, str],
+        params: Optional[Dict[str, Any]] = None,
+        overrides: Optional[Dict[str, Any]] = None,
+    ) -> FSMConfig:
+        """Load configuration from a template.
+        
+        Args:
+            template: Template name or enum value.
+            params: Template parameters.
+            overrides: Configuration overrides.
+            
+        Returns:
+            Validated FSMConfig instance.
+        """
+        if isinstance(template, str):
+            template = UseCaseTemplate(template)
+        
+        # Apply template
+        config_dict = apply_template(template, params, overrides)
+        
+        # Load from dictionary
+        return self.load_from_dict(config_dict)
+
+    def load_template_config(self, template_config: TemplateConfig) -> FSMConfig:
+        """Load configuration from a template configuration object.
+        
+        Args:
+            template_config: Template configuration.
+            
+        Returns:
+            Validated FSMConfig instance.
+        """
+        return self.load_from_template(
+            template_config.template,
+            template_config.params,
+            template_config.overrides,
+        )
+
+    def _load_file(self, file_path: Path) -> Dict[str, Any]:
+        """Load raw configuration from a file.
+        
+        Args:
+            file_path: Path to configuration file.
+            
+        Returns:
+            Raw configuration dictionary.
+            
+        Raises:
+            ValueError: If file format is not supported.
+        """
+        suffix = file_path.suffix.lower()
+        
+        with open(file_path, "r") as f:
+            if suffix == ".json":
+                return json.load(f)
+            elif suffix in [".yaml", ".yml"]:
+                return yaml.safe_load(f)
+            else:
+                raise ValueError(f"Unsupported file format: {suffix}")
+
+    def _resolve_environment_vars(self, config: Any) -> Any:
+        """Resolve environment variables in configuration.
+        
+        Supports:
+        - ${VAR_NAME} - Required variable
+        - ${VAR_NAME:-default} - Variable with default value
+        - ${VAR_NAME:?error message} - Required with custom error
+        
+        Args:
+            config: Configuration to process.
+            
+        Returns:
+            Configuration with resolved environment variables.
+        """
+        if isinstance(config, str):
+            # Check for environment variable pattern
+            if config.startswith("${") and config.endswith("}"):
+                var_expr = config[2:-1]
+                
+                # Handle default value
+                if ":-" in var_expr:
+                    var_name, default_value = var_expr.split(":-", 1)
+                    return os.environ.get(var_name, default_value)
+                
+                # Handle error message
+                elif ":?" in var_expr:
+                    var_name, error_msg = var_expr.split(":?", 1)
+                    if var_name not in os.environ:
+                        raise ValueError(f"Required environment variable: {error_msg}")
+                    return os.environ[var_name]
+                
+                # Simple variable
+                else:
+                    if var_expr not in os.environ:
+                        # Check with prefix
+                        prefixed_var = f"{self._env_prefix}{var_expr}"
+                        if prefixed_var in os.environ:
+                            return os.environ[prefixed_var]
+                        raise ValueError(f"Environment variable not found: {var_expr}")
+                    return os.environ[var_expr]
+            
+            # Also support $VAR_NAME format for compatibility
+            elif config.startswith("$") and not config.startswith("${"):
+                var_name = config[1:]
+                if var_name in os.environ:
+                    return os.environ[var_name]
+                prefixed_var = f"{self._env_prefix}{var_name}"
+                if prefixed_var in os.environ:
+                    return os.environ[prefixed_var]
+            
+            return config
+        
+        elif isinstance(config, dict):
+            return {key: self._resolve_environment_vars(value) for key, value in config.items()}
+        
+        elif isinstance(config, list):
+            return [self._resolve_environment_vars(item) for item in config]
+        
+        else:
+            return config
+
+    def _resolve_references(self, config: Dict[str, Any], base_path: Path) -> Dict[str, Any]:
+        """Resolve file references (includes/imports) in configuration.
+        
+        Supports:
+        - $include: path/to/file.yaml
+        - $import: { file: path/to/file.yaml, path: some.nested.path }
+        
+        Args:
+            config: Configuration dictionary.
+            base_path: Base path for resolving relative paths.
+            
+        Returns:
+            Configuration with resolved references.
+        """
+        processed = {}
+        
+        for key, value in config.items():
+            if key == "$include" and isinstance(value, str):
+                # Load and merge included file
+                include_path = base_path / value
+                if include_path.as_posix() not in self._included_configs:
+                    included = self._load_file(include_path)
+                    self._included_configs[include_path.as_posix()] = included
+                else:
+                    included = self._included_configs[include_path.as_posix()]
+                
+                # Recursively resolve references in included content
+                included = self._resolve_references(included, include_path.parent)
+                
+                # Merge with current config
+                for inc_key, inc_value in included.items():
+                    if inc_key not in processed:
+                        processed[inc_key] = inc_value
+            
+            elif key == "$import" and isinstance(value, dict):
+                # Import specific path from file
+                file_path = base_path / value["file"]
+                path_expr = value.get("path", "")
+                
+                if file_path.as_posix() not in self._included_configs:
+                    imported = self._load_file(file_path)
+                    self._included_configs[file_path.as_posix()] = imported
+                else:
+                    imported = self._included_configs[file_path.as_posix()]
+                
+                # Navigate to specified path
+                if path_expr:
+                    for part in path_expr.split("."):
+                        imported = imported.get(part, {})
+                
+                # Recursively resolve references
+                if isinstance(imported, dict):
+                    imported = self._resolve_references(imported, file_path.parent)
+                
+                return imported
+            
+            elif isinstance(value, dict):
+                processed[key] = self._resolve_references(value, base_path)
+            
+            elif isinstance(value, list):
+                processed[key] = [
+                    self._resolve_references(item, base_path) if isinstance(item, dict) else item
+                    for item in value
+                ]
+            
+            else:
+                processed[key] = value
+        
+        return processed
+
+    def validate_file(self, file_path: Union[str, Path]) -> bool:
+        """Validate a configuration file without fully loading it.
+        
+        Args:
+            file_path: Path to configuration file.
+            
+        Returns:
+            True if valid, False otherwise.
+        """
+        try:
+            self.load_from_file(file_path)
+            return True
+        except Exception:
+            return False
+
+    def merge_configs(self, *configs: FSMConfig) -> FSMConfig:
+        """Merge multiple FSM configurations.
+        
+        Later configurations override earlier ones.
+        
+        Args:
+            *configs: FSMConfig instances to merge.
+            
+        Returns:
+            Merged FSMConfig instance.
+        """
+        merged_dict = {}
+        
+        for config in configs:
+            config_dict = config.model_dump()
+            self._deep_merge(merged_dict, config_dict)
+        
+        return validate_config(merged_dict)
+
+    def _deep_merge(self, base: Dict, updates: Dict) -> Dict:
+        """Deep merge two dictionaries.
+        
+        Args:
+            base: Base dictionary (modified in place).
+            updates: Updates to apply.
+            
+        Returns:
+            Merged dictionary.
+        """
+        for key, value in updates.items():
+            if key in base and isinstance(base[key], dict) and isinstance(value, dict):
+                self._deep_merge(base[key], value)
+            elif key in base and isinstance(base[key], list) and isinstance(value, list):
+                # For lists, we extend rather than replace
+                base[key].extend(value)
+            else:
+                base[key] = value
+        
+        return base

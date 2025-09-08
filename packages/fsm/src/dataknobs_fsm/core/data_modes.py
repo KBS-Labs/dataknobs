@@ -329,3 +329,23 @@ class DataModeManager:
             mode: The new default data mode.
         """
         self.default_mode = mode
+
+
+# Global registry of data handlers
+_GLOBAL_HANDLERS = {
+    DataMode.COPY: CopyModeHandler(),
+    DataMode.REFERENCE: ReferenceModeHandler(),
+    DataMode.DIRECT: DirectModeHandler(),
+}
+
+
+def get_data_handler(mode: DataMode) -> DataHandler:
+    """Get a data handler for the specified mode.
+    
+    Args:
+        mode: The data mode.
+        
+    Returns:
+        The appropriate data handler.
+    """
+    return _GLOBAL_HANDLERS[mode]
