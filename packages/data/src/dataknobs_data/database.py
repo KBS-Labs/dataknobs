@@ -269,20 +269,50 @@ class AsyncDatabase(ABC):
         """
         raise NotImplementedError
 
-    async def upsert(self, id: str, record: Record) -> str:
+    async def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
         """Update or insert a record.
-
+        
+        Can be called as:
+        - upsert(id, record) - explicit ID and record
+        - upsert(record) - extract ID from record using Record's built-in logic
+        
         Args:
-            id: The record ID
-            record: The record to upsert
-
+            id_or_record: Either an ID string or a Record
+            record: The record to upsert (if first arg is ID)
+            
         Returns:
             The record ID
         """
+        import uuid
+        
+        # Determine ID and record based on arguments
+        if isinstance(id_or_record, str):
+            # Called with explicit ID: upsert(id, record)
+            id = id_or_record
+            if record is None:
+                raise ValueError("Record required when ID is provided")
+        else:
+            # Called with just record: upsert(record)
+            record = id_or_record
+            # Use Record's built-in ID property which handles all the logic
+            id = record.id
+            
+            if id is None:
+                # Generate a new ID if none found
+                id = str(uuid.uuid4())
+                # Set it on the record for future reference
+                record.storage_id = id
+        
+        # Now perform the upsert
         if await self.exists(id):
             await self.update(id, record)
         else:
-            return await self.create(record)
+            # Ensure the record has the storage_id set for create
+            if not record.storage_id:
+                record.storage_id = id
+            created_id = await self.create(record)
+            # Return the created ID (might be different from what we provided)
+            return created_id or id
         return id
 
     async def create_batch(self, records: list[Record]) -> list[str]:
@@ -681,12 +711,50 @@ class SyncDatabase(ABC):
         """Check if a record exists."""
         raise NotImplementedError
 
-    def upsert(self, id: str, record: Record) -> str:
-        """Update or insert a record."""
+    def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+        """Update or insert a record.
+        
+        Can be called as:
+        - upsert(id, record) - explicit ID and record
+        - upsert(record) - extract ID from record using Record's built-in logic
+        
+        Args:
+            id_or_record: Either an ID string or a Record
+            record: The record to upsert (if first arg is ID)
+            
+        Returns:
+            The record ID
+        """
+        import uuid
+        
+        # Determine ID and record based on arguments
+        if isinstance(id_or_record, str):
+            # Called with explicit ID: upsert(id, record)
+            id = id_or_record
+            if record is None:
+                raise ValueError("Record required when ID is provided")
+        else:
+            # Called with just record: upsert(record)
+            record = id_or_record
+            # Use Record's built-in ID property which handles all the logic
+            id = record.id
+            
+            if id is None:
+                # Generate a new ID if none found
+                id = str(uuid.uuid4())
+                # Set it on the record for future reference
+                record.storage_id = id
+        
+        # Now perform the upsert
         if self.exists(id):
             self.update(id, record)
         else:
-            return self.create(record)
+            # Ensure the record has the storage_id set for create
+            if not record.storage_id:
+                record.storage_id = id
+            created_id = self.create(record)
+            # Return the created ID (might be different from what we provided)
+            return created_id or id
         return id
 
     def create_batch(self, records: list[Record]) -> list[str]:

@@ -254,8 +254,26 @@ class SyncElasticsearchDatabase(
         """Check if a record exists."""
         return self.es_index.exists(doc_id=id)
 
-    def upsert(self, id: str, record: Record) -> str:
-        """Update or insert a record with a specific ID."""
+    def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+        """Update or insert a record.
+        
+        Can be called as:
+        - upsert(id, record) - explicit ID and record
+        - upsert(record) - extract ID from record using Record's built-in logic
+        """
+        # Determine ID and record based on arguments
+        if isinstance(id_or_record, str):
+            id = id_or_record
+            if record is None:
+                raise ValueError("Record required when ID is provided")
+        else:
+            record = id_or_record
+            id = record.id
+            if id is None:
+                import uuid
+                id = str(uuid.uuid4())
+                record.storage_id = id
+        
         doc = self._record_to_doc(record, id)
         response = self.es_index.index(body=doc, doc_id=id, refresh=self.refresh)
 

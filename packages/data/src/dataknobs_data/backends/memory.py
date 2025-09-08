@@ -94,8 +94,25 @@ class AsyncMemoryDatabase(  # type: ignore[misc]
         async with self._lock:
             return id in self._storage
 
-    async def upsert(self, id: str, record: Record) -> str:
-        """Update or insert a record with the specified ID."""
+    async def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+        """Update or insert a record with the specified ID.
+        
+        Overrides base class to handle memory-specific storage.
+        """
+        # Use base class logic to determine ID and record
+        if isinstance(id_or_record, str):
+            id = id_or_record
+            if record is None:
+                raise ValueError("Record required when ID is provided")
+        else:
+            record = id_or_record
+            id = record.id
+            if id is None:
+                import uuid
+                id = str(uuid.uuid4())
+                record.storage_id = id
+        
+        # Memory-specific implementation
         async with self._lock:
             self._storage[id] = record.copy(deep=True)
             return id
@@ -297,8 +314,25 @@ class SyncMemoryDatabase(  # type: ignore[misc]
         with self._lock:
             return id in self._storage
 
-    def upsert(self, id: str, record: Record) -> str:
-        """Update or insert a record with the specified ID."""
+    def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+        """Update or insert a record with the specified ID.
+        
+        Overrides base class to handle memory-specific storage.
+        """
+        # Use base class logic to determine ID and record
+        if isinstance(id_or_record, str):
+            id = id_or_record
+            if record is None:
+                raise ValueError("Record required when ID is provided")
+        else:
+            record = id_or_record
+            id = record.id
+            if id is None:
+                import uuid
+                id = str(uuid.uuid4())
+                record.storage_id = id
+        
+        # Memory-specific implementation
         with self._lock:
             self._storage[id] = record.copy(deep=True)
             return id
