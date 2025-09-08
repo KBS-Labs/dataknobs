@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Set, Union
 
 from pydantic import BaseModel, ValidationError
 
-from dataknobs_fsm.functions.base import IValidationFunction, ValidationFunctionError
+from dataknobs_fsm.functions.base import IValidationFunction, ValidationError as FSMValidationError
 
 
 class RequiredFieldsValidator(IValidationFunction):
@@ -35,10 +35,10 @@ class RequiredFieldsValidator(IValidationFunction):
             True if valid, False otherwise.
             
         Raises:
-            ValidationFunctionError: If validation fails with details.
+            FSMValidationError: If validation fails with details.
         """
         if not isinstance(data, dict):
-            raise ValidationFunctionError(f"Expected dict, got {type(data).__name__}")
+            raise FSMValidationError(f"Expected dict, got {type(data).__name__}")
         
         missing_fields = []
         none_fields = []
@@ -50,12 +50,12 @@ class RequiredFieldsValidator(IValidationFunction):
                 none_fields.append(field)
         
         if missing_fields:
-            raise ValidationFunctionError(
+            raise FSMValidationError(
                 f"Missing required fields: {', '.join(missing_fields)}"
             )
         
         if none_fields:
-            raise ValidationFunctionError(
+            raise FSMValidationError(
                 f"Fields cannot be None: {', '.join(none_fields)}"
             )
         
@@ -88,7 +88,7 @@ class SchemaValidator(IValidationFunction):
             True if valid, False otherwise.
             
         Raises:
-            ValidationFunctionError: If validation fails with details.
+            FSMValidationError: If validation fails with details.
         """
         try:
             self.schema(**data)
@@ -99,7 +99,7 @@ class SchemaValidator(IValidationFunction):
                 field_path = ".".join(str(loc) for loc in error["loc"])
                 errors.append(f"{field_path}: {error['msg']}")
             
-            raise ValidationFunctionError(
+            raise FSMValidationError(
                 f"Schema validation failed: {'; '.join(errors)}"
             )
 
@@ -129,7 +129,7 @@ class RangeValidator(IValidationFunction):
             True if valid, False otherwise.
             
         Raises:
-            ValidationFunctionError: If validation fails with details.
+            FSMValidationError: If validation fails with details.
         """
         errors = []
         
@@ -149,7 +149,7 @@ class RangeValidator(IValidationFunction):
                 errors.append(f"{field}: Value {value} is above maximum {range_spec['max']}")
         
         if errors:
-            raise ValidationFunctionError("; ".join(errors))
+            raise FSMValidationError("; ".join(errors))
         
         return True
 
@@ -182,7 +182,7 @@ class PatternValidator(IValidationFunction):
             True if valid, False otherwise.
             
         Raises:
-            ValidationFunctionError: If validation fails with details.
+            FSMValidationError: If validation fails with details.
         """
         errors = []
         
@@ -199,7 +199,7 @@ class PatternValidator(IValidationFunction):
                 errors.append(f"{field}: Value '{value}' does not match pattern")
         
         if errors:
-            raise ValidationFunctionError("; ".join(errors))
+            raise FSMValidationError("; ".join(errors))
         
         return True
 
@@ -231,7 +231,7 @@ class TypeValidator(IValidationFunction):
             True if valid, False otherwise.
             
         Raises:
-            ValidationFunctionError: If validation fails with details.
+            FSMValidationError: If validation fails with details.
         """
         errors = []
         
@@ -264,7 +264,7 @@ class TypeValidator(IValidationFunction):
                 errors.append(f"Unexpected fields: {', '.join(extra_fields)}")
         
         if errors:
-            raise ValidationFunctionError("; ".join(errors))
+            raise FSMValidationError("; ".join(errors))
         
         return True
 
@@ -294,7 +294,7 @@ class LengthValidator(IValidationFunction):
             True if valid, False otherwise.
             
         Raises:
-            ValidationFunctionError: If validation fails with details.
+            FSMValidationError: If validation fails with details.
         """
         errors = []
         
@@ -321,7 +321,7 @@ class LengthValidator(IValidationFunction):
                 errors.append(f"{field}: Length {length} is above maximum {length_spec['max']}")
         
         if errors:
-            raise ValidationFunctionError("; ".join(errors))
+            raise FSMValidationError("; ".join(errors))
         
         return True
 
@@ -353,7 +353,7 @@ class UniqueValidator(IValidationFunction):
             True if valid, False otherwise.
             
         Raises:
-            ValidationFunctionError: If validation fails with details.
+            FSMValidationError: If validation fails with details.
         """
         errors = []
         
@@ -389,7 +389,7 @@ class UniqueValidator(IValidationFunction):
                 errors.append(f"{field}: Duplicate values found: {', '.join(duplicates)}")
         
         if errors:
-            raise ValidationFunctionError("; ".join(errors))
+            raise FSMValidationError("; ".join(errors))
         
         return True
 
@@ -418,7 +418,7 @@ class DependencyValidator(IValidationFunction):
             True if valid, False otherwise.
             
         Raises:
-            ValidationFunctionError: If validation fails with details.
+            FSMValidationError: If validation fails with details.
         """
         errors = []
         
@@ -437,7 +437,7 @@ class DependencyValidator(IValidationFunction):
                 )
         
         if errors:
-            raise ValidationFunctionError("; ".join(errors))
+            raise FSMValidationError("; ".join(errors))
         
         return True
 
@@ -469,20 +469,20 @@ class CompositeValidator(IValidationFunction):
             True if all validators pass.
             
         Raises:
-            ValidationFunctionError: If any validation fails.
+            FSMValidationError: If any validation fails.
         """
         errors = []
         
         for validator in self.validators:
             try:
                 validator.validate(data)
-            except ValidationFunctionError as e:
+            except FSMValidationError as e:
                 if self.stop_on_first_error:
                     raise
                 errors.append(str(e))
         
         if errors:
-            raise ValidationFunctionError("; ".join(errors))
+            raise FSMValidationError("; ".join(errors))
         
         return True
 

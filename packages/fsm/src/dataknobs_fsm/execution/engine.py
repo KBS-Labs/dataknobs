@@ -69,6 +69,26 @@ class ExecutionEngine:
         self._post_transition_hooks: List[callable] = []
         self._error_hooks: List[callable] = []
     
+    async def execute_async(
+        self,
+        context: ExecutionContext,
+        data: Any = None,
+        max_transitions: int = 1000
+    ) -> Tuple[bool, Any]:
+        """Execute the FSM asynchronously with given context.
+        
+        Args:
+            context: Execution context.
+            data: Input data to process.
+            max_transitions: Maximum transitions before stopping.
+            
+        Returns:
+            Tuple of (success, result).
+        """
+        # For now, wrap the synchronous execution
+        # In the future, this could be made truly async with async state functions
+        return self.execute(context, data, max_transitions)
+    
     def execute(
         self,
         context: ExecutionContext,

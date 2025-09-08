@@ -369,6 +369,15 @@ class ResourceManager:
             self._resources.clear()
             self._resource_owners.clear()
     
+    async def cleanup(self) -> None:
+        """Async cleanup of all resource providers.
+        
+        This is an alias for close() but provides async interface for compatibility.
+        """
+        # For now, just call the sync close method
+        # In the future, this could be made truly async
+        self.close()
+    
     def __enter__(self):
         """Enter context manager."""
         return self

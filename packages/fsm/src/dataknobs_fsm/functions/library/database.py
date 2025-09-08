@@ -6,7 +6,7 @@ in FSM configurations, leveraging the dataknobs_data package.
 
 from typing import Any, Dict, List, Optional, Union
 
-from dataknobs_fsm.functions.base import ITransformFunction, TransformFunctionError
+from dataknobs_fsm.functions.base import ITransformFunction, TransformError
 from dataknobs_fsm.resources.database import DatabaseResourceAdapter
 
 
@@ -48,7 +48,7 @@ class DatabaseFetch(ITransformFunction):
         # Get resource from context (injected during execution)
         resource = data.get("_resources", {}).get(self.resource_name)
         if not resource or not isinstance(resource, DatabaseResourceAdapter):
-            raise TransformFunctionError(
+            raise TransformError(
                 f"Database resource '{self.resource_name}' not found"
             )
         
@@ -77,7 +77,7 @@ class DatabaseFetch(ITransformFunction):
                 return {"records": result, **data}
         
         except Exception as e:
-            raise TransformFunctionError(f"Database query failed: {e}")
+            raise TransformError(f"Database query failed: {e}")
 
 
 class DatabaseUpsert(ITransformFunction):
@@ -118,7 +118,7 @@ class DatabaseUpsert(ITransformFunction):
         # Get resource from context
         resource = data.get("_resources", {}).get(self.resource_name)
         if not resource or not isinstance(resource, DatabaseResourceAdapter):
-            raise TransformFunctionError(
+            raise TransformError(
                 f"Database resource '{self.resource_name}' not found"
             )
         
@@ -147,7 +147,7 @@ class DatabaseUpsert(ITransformFunction):
             }
         
         except Exception as e:
-            raise TransformFunctionError(f"Database upsert failed: {e}")
+            raise TransformError(f"Database upsert failed: {e}")
 
 
 class BatchCommit(ITransformFunction):
@@ -182,7 +182,7 @@ class BatchCommit(ITransformFunction):
         # Get resource from context
         resource = data.get("_resources", {}).get(self.resource_name)
         if not resource or not isinstance(resource, DatabaseResourceAdapter):
-            raise TransformFunctionError(
+            raise TransformError(
                 f"Database resource '{self.resource_name}' not found"
             )
         
@@ -209,7 +209,7 @@ class BatchCommit(ITransformFunction):
             }
         
         except Exception as e:
-            raise TransformFunctionError(f"Batch commit failed: {e}")
+            raise TransformError(f"Batch commit failed: {e}")
 
 
 class DatabaseQuery(ITransformFunction):
@@ -247,14 +247,14 @@ class DatabaseQuery(ITransformFunction):
         # Get resource from context
         resource = data.get("_resources", {}).get(self.resource_name)
         if not resource or not isinstance(resource, DatabaseResourceAdapter):
-            raise TransformFunctionError(
+            raise TransformError(
                 f"Database resource '{self.resource_name}' not found"
             )
         
         # Get query and parameters
         query = data.get(self.query_field)
         if not query:
-            raise TransformFunctionError(f"Query field '{self.query_field}' not found")
+            raise TransformError(f"Query field '{self.query_field}' not found")
         
         params = data.get(self.params_field, {})
         
@@ -268,7 +268,7 @@ class DatabaseQuery(ITransformFunction):
             }
         
         except Exception as e:
-            raise TransformFunctionError(f"Query execution failed: {e}")
+            raise TransformError(f"Query execution failed: {e}")
 
 
 class DatabaseTransaction(ITransformFunction):
@@ -303,7 +303,7 @@ class DatabaseTransaction(ITransformFunction):
         # Get resource from context
         resource = data.get("_resources", {}).get(self.resource_name)
         if not resource or not isinstance(resource, DatabaseResourceAdapter):
-            raise TransformFunctionError(
+            raise TransformError(
                 f"Database resource '{self.resource_name}' not found"
             )
         
@@ -337,10 +337,10 @@ class DatabaseTransaction(ITransformFunction):
                 }
             
             else:
-                raise TransformFunctionError(f"Unknown action: {self.action}")
+                raise TransformError(f"Unknown action: {self.action}")
         
         except Exception as e:
-            raise TransformFunctionError(f"Transaction {self.action} failed: {e}")
+            raise TransformError(f"Transaction {self.action} failed: {e}")
 
 
 class DatabaseBulkInsert(ITransformFunction):
@@ -381,7 +381,7 @@ class DatabaseBulkInsert(ITransformFunction):
         # Get resource from context
         resource = data.get("_resources", {}).get(self.resource_name)
         if not resource or not isinstance(resource, DatabaseResourceAdapter):
-            raise TransformFunctionError(
+            raise TransformError(
                 f"Database resource '{self.resource_name}' not found"
             )
         
@@ -414,7 +414,7 @@ class DatabaseBulkInsert(ITransformFunction):
             }
         
         except Exception as e:
-            raise TransformFunctionError(f"Bulk insert failed: {e}")
+            raise TransformError(f"Bulk insert failed: {e}")
 
 
 # Convenience functions for creating database functions

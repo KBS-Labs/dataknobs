@@ -80,8 +80,8 @@ class ConfigLoader:
         if resolve_references:
             processed_config = self._resolve_references(processed_config, file_path.parent)
         
-        # Validate and return
-        return validate_config(processed_config)
+        # Apply common transformations and validate
+        return self._finalize_config(processed_config)
 
     def load_from_dict(
         self,
@@ -108,8 +108,8 @@ class ConfigLoader:
         if resolve_env:
             processed_config = self._resolve_environment_vars(processed_config)
         
-        # Validate and return
-        return validate_config(processed_config)
+        # Apply common transformations and validate
+        return self._finalize_config(processed_config)
 
     def load_from_template(
         self,
@@ -234,6 +234,88 @@ class ConfigLoader:
         else:
             return config
 
+    def _finalize_config(self, config: Dict[str, Any]) -> FSMConfig:
+        """Apply final transformations and validate configuration.
+        
+        This method applies all common transformations that should happen
+        regardless of the source of the configuration.
+        
+        Args:
+            config: Configuration dictionary.
+            
+        Returns:
+            Validated FSMConfig instance.
+        """
+        # Transform network-level arcs to state-level arcs if present
+        config = self._transform_network_arcs(config)
+        
+        # Add any other common transformations here in the future
+        
+        # Validate and return
+        return validate_config(config)
+    
+    def _transform_network_arcs(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Transform network-level arcs format to state-level arcs format.
+        
+        This allows for a more intuitive configuration format where arcs
+        are defined at the network level with 'from' and 'to' fields,
+        rather than attached to the source state.
+        
+        Args:
+            config: Configuration dictionary.
+            
+        Returns:
+            Transformed configuration.
+        """
+        config = config.copy()
+        
+        # Process each network
+        if 'networks' in config:
+            for network in config['networks']:
+                if 'arcs' in network and isinstance(network['arcs'], list):
+                    # Build a map of state name to state config
+                    state_map = {}
+                    for state in network.get('states', []):
+                        state_map[state['name']] = state
+                        # Ensure each state has an arcs list
+                        if 'arcs' not in state:
+                            state['arcs'] = []
+                    
+                    # Transform network-level arcs to state-level arcs
+                    for arc in network['arcs']:
+                        if 'from' in arc and 'to' in arc:
+                            from_state = arc['from']
+                            to_state = arc['to']
+                            
+                            # Create state-level arc config
+                            state_arc = {
+                                'target': to_state
+                            }
+                            
+                            # Copy optional fields
+                            for field in ['name', 'condition', 'transform', 'priority', 'metadata']:
+                                if field in arc:
+                                    if field == 'name':
+                                        # Store arc name in metadata
+                                        if 'metadata' not in state_arc:
+                                            state_arc['metadata'] = {}
+                                        state_arc['metadata']['name'] = arc[field]
+                                    else:
+                                        state_arc[field] = arc[field]
+                            
+                            # Add arc to the source state
+                            if from_state in state_map:
+                                state_map[from_state]['arcs'].append(state_arc)
+                    
+                    # Remove network-level arcs since they've been transformed
+                    del network['arcs']
+                    
+                    # Debug: Print the transformed states to verify
+                    # for state in network.get('states', []):
+                    #     print(f"State {state['name']} has arcs: {state.get('arcs', [])}")
+        
+        return config
+    
     def _resolve_references(self, config: Dict[str, Any], base_path: Path) -> Dict[str, Any]:
         """Resolve file references (includes/imports) in configuration.
         

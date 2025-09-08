@@ -25,6 +25,9 @@ dependencies = [
     "dataknobs-config>=0.1.0",
     "typing-extensions>=4.8.0",
     "aiofiles>=23.0.0",
+    "click>=8.1.0",
+    "rich>=13.0.0",
+    "pyyaml>=6.0.0",
 ]
 
 [project.optional-dependencies]
@@ -56,6 +59,9 @@ dev = [
     "mkdocs>=1.5.0",
     "mkdocs-material>=9.0.0",
 ]
+
+[project.scripts]
+fsm = "dataknobs_fsm.cli:main"
 
 [project.urls]
 "Homepage" = "https://github.com/dataknobs/dataknobs"

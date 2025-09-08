@@ -1,0 +1,705 @@
+"""Advanced API for full control over FSM execution.
+
+This module provides advanced interfaces for users who need fine-grained
+control over FSM execution, resource management, and monitoring.
+"""
+
+from typing import Any, Dict, List, Optional, Union, AsyncIterator, Callable, Type
+from pathlib import Path
+from dataclasses import dataclass
+from enum import Enum
+import asyncio
+from contextlib import asynccontextmanager
+from dataknobs_data import Record, Query
+
+from ..core.fsm import FSM
+from ..core.state import StateInstance, StateDefinition
+from ..core.arc import ArcDefinition
+from ..core.data_modes import DataMode, DataHandler
+from ..core.transactions import TransactionStrategy, TransactionManager
+from ..execution.engine import ExecutionEngine, TraversalStrategy
+from ..execution.context import ExecutionContext
+from ..execution.network import NetworkExecutor
+from ..resources.manager import ResourceManager
+from ..resources.base import IResourceProvider
+from ..streaming.core import StreamConfig
+from ..execution.history import ExecutionHistory
+from ..storage.base import IHistoryStorage
+
+
+class ExecutionMode(Enum):
+    """Advanced execution modes."""
+    STEP_BY_STEP = "step"  # Execute one transition at a time
+    BREAKPOINT = "breakpoint"  # Stop at specific states
+    TRACE = "trace"  # Full execution tracing
+    PROFILE = "profile"  # Performance profiling
+    DEBUG = "debug"  # Debug mode with detailed logging
+
+
+@dataclass
+class ExecutionHook:
+    """Hook for monitoring execution events."""
+    on_state_enter: Optional[Callable] = None
+    on_state_exit: Optional[Callable] = None
+    on_arc_execute: Optional[Callable] = None
+    on_error: Optional[Callable] = None
+    on_resource_acquire: Optional[Callable] = None
+    on_resource_release: Optional[Callable] = None
+    on_transaction_begin: Optional[Callable] = None
+    on_transaction_commit: Optional[Callable] = None
+    on_transaction_rollback: Optional[Callable] = None
+
+
+class AdvancedFSM:
+    """Advanced FSM interface with full control capabilities."""
+    
+    def __init__(
+        self,
+        fsm: FSM,
+        execution_mode: ExecutionMode = ExecutionMode.STEP_BY_STEP
+    ):
+        """Initialize AdvancedFSM.
+        
+        Args:
+            fsm: Core FSM instance
+            execution_mode: Execution mode for advanced control
+        """
+        self.fsm = fsm
+        self.execution_mode = execution_mode
+        self._engine = ExecutionEngine(fsm)
+        self._resource_manager = ResourceManager()
+        self._transaction_manager = None
+        self._history = None
+        self._storage = None
+        self._hooks = ExecutionHook()
+        self._breakpoints = set()
+        self._trace_buffer = []
+        self._profile_data = {}
+        
+    def set_execution_strategy(self, strategy: TraversalStrategy) -> None:
+        """Set custom execution strategy.
+        
+        Args:
+            strategy: Execution strategy to use
+        """
+        self._engine.strategy = strategy
+        
+    def set_data_handler(self, handler: DataHandler) -> None:
+        """Set custom data handler.
+        
+        Args:
+            handler: Data handler implementation
+        """
+        self._engine.data_handler = handler
+        
+    def configure_transactions(
+        self,
+        strategy: TransactionStrategy,
+        **config
+    ) -> None:
+        """Configure transaction management.
+        
+        Args:
+            strategy: Transaction strategy to use
+            **config: Strategy-specific configuration
+        """
+        self._transaction_manager = TransactionManager(strategy, **config)
+        
+    def register_resource(
+        self,
+        name: str,
+        resource: Union[IResourceProvider, Dict[str, Any]]
+    ) -> None:
+        """Register a custom resource.
+        
+        Args:
+            name: Resource name
+            resource: Resource instance or configuration
+        """
+        if isinstance(resource, dict):
+            self._resource_manager.register_resource(name, resource)
+        else:
+            self._resource_manager._resources[name] = resource
+            
+    def set_hooks(self, hooks: ExecutionHook) -> None:
+        """Set execution hooks for monitoring.
+        
+        Args:
+            hooks: Execution hooks configuration
+        """
+        self._hooks = hooks
+        
+    def add_breakpoint(self, state_name: str) -> None:
+        """Add a breakpoint at a specific state.
+        
+        Args:
+            state_name: Name of state to break at
+        """
+        self._breakpoints.add(state_name)
+        
+    def remove_breakpoint(self, state_name: str) -> None:
+        """Remove a breakpoint.
+        
+        Args:
+            state_name: Name of state to remove breakpoint from
+        """
+        self._breakpoints.discard(state_name)
+        
+    def enable_history(
+        self,
+        storage: Optional[IHistoryStorage] = None,
+        max_depth: int = 100
+    ) -> None:
+        """Enable execution history tracking.
+        
+        Args:
+            storage: Optional storage backend for history
+            max_depth: Maximum history depth to track
+        """
+        self._history = ExecutionHistory(max_depth=max_depth)
+        self._storage = storage
+        
+    @asynccontextmanager
+    async def execution_context(
+        self,
+        data: Union[Dict[str, Any], Record],
+        data_mode: DataMode = DataMode.COPY,
+        initial_state: Optional[str] = None
+    ):
+        """Create an execution context for manual control.
+        
+        Args:
+            data: Initial data
+            data_mode: Data handling mode
+            initial_state: Starting state name
+            
+        Yields:
+            ExecutionContext for manual execution
+        """
+        # Convert to Record if needed
+        if isinstance(data, dict):
+            record = Record(data)
+        else:
+            record = data
+            
+        # Create context
+        context = ExecutionContext(
+            data_mode=data_mode,
+            resources=self._resource_manager
+        )
+        
+        # Set transaction manager if configured
+        if self._transaction_manager:
+            context.transaction_manager = self._transaction_manager
+            
+        # Initialize state
+        if initial_state:
+            state_def = self.fsm.get_state(initial_state)
+        else:
+            state_def = self.fsm.get_start_state()
+            
+        state = StateInstance(state_def, record.to_dict())
+        context.set_current_state(state)
+        
+        # Call hook
+        if self._hooks.on_state_enter:
+            await self._hooks.on_state_enter(state)
+            
+        try:
+            yield context
+        finally:
+            # Cleanup
+            if self._hooks.on_state_exit:
+                await self._hooks.on_state_exit(context.current_state)
+            await self._resource_manager.cleanup()
+            
+    async def step(
+        self,
+        context: ExecutionContext,
+        arc_name: Optional[str] = None
+    ) -> Optional[StateInstance]:
+        """Execute a single transition step.
+        
+        Args:
+            context: Execution context
+            arc_name: Optional specific arc to follow
+            
+        Returns:
+            New state instance or None if no transition
+        """
+        current_state = context.current_state
+        
+        # Find available arcs
+        arcs = self.fsm.get_outgoing_arcs(current_state.definition.name)
+        
+        # Filter to specific arc if requested
+        if arc_name:
+            arcs = [arc for arc in arcs if arc.name == arc_name]
+            
+        # Execute first valid arc
+        for arc in arcs:
+            # Check pre-test if exists
+            if arc.pre_test:
+                if not await arc.pre_test.test(current_state):
+                    continue
+                    
+            # Call arc hook
+            if self._hooks.on_arc_execute:
+                await self._hooks.on_arc_execute(arc)
+                
+            # Execute transformation
+            if arc.transform:
+                new_data = await arc.transform.transform(current_state.data)
+            else:
+                new_data = current_state.data.copy()
+                
+            # Create new state
+            target_def = self.fsm.get_state(arc.target_state)
+            new_state = StateInstance(target_def, new_data)
+            
+            # Update context
+            context.set_current_state(new_state)
+            
+            # Track in history
+            if self._history:
+                self._history.add_transition(
+                    from_state=current_state.definition.name,
+                    to_state=new_state.definition.name,
+                    arc=arc.name,
+                    data=new_data
+                )
+                
+            # Add to trace if tracing
+            if self.execution_mode == ExecutionMode.TRACE:
+                self._trace_buffer.append({
+                    'from': current_state.definition.name,
+                    'to': new_state.definition.name,
+                    'arc': arc.name,
+                    'data': new_data
+                })
+                
+            # Call state enter hook
+            if self._hooks.on_state_enter:
+                await self._hooks.on_state_enter(new_state)
+                
+            return new_state
+            
+        return None
+        
+    async def run_until_breakpoint(
+        self,
+        context: ExecutionContext
+    ) -> StateInstance:
+        """Run execution until a breakpoint is hit.
+        
+        Args:
+            context: Execution context
+            
+        Returns:
+            State where execution stopped
+        """
+        while True:
+            # Check if current state is a breakpoint
+            if context.current_state.definition.name in self._breakpoints:
+                return context.current_state
+                
+            # Step to next state
+            new_state = await self.step(context)
+            
+            # Check if we reached an end state
+            if not new_state or new_state.definition.is_end:
+                return context.current_state
+                
+    async def trace_execution(
+        self,
+        data: Union[Dict[str, Any], Record],
+        initial_state: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Execute with full tracing enabled.
+        
+        Args:
+            data: Input data
+            initial_state: Optional starting state
+            
+        Returns:
+            List of trace entries
+        """
+        self.execution_mode = ExecutionMode.TRACE
+        self._trace_buffer.clear()
+        
+        async with self.execution_context(data, initial_state=initial_state) as context:
+            # Run to completion
+            while True:
+                new_state = await self.step(context)
+                if not new_state or new_state.definition.is_end:
+                    break
+                    
+        return self._trace_buffer
+        
+    async def profile_execution(
+        self,
+        data: Union[Dict[str, Any], Record],
+        initial_state: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Execute with performance profiling.
+        
+        Args:
+            data: Input data
+            initial_state: Optional starting state
+            
+        Returns:
+            Profiling data
+        """
+        import time
+        
+        self.execution_mode = ExecutionMode.PROFILE
+        self._profile_data.clear()
+        
+        async with self.execution_context(data, initial_state=initial_state) as context:
+            start_time = time.time()
+            transitions = 0
+            
+            # Track per-state timing
+            state_times = {}
+            state_start = time.time()
+            
+            while True:
+                current_state_name = context.current_state.definition.name
+                
+                # Step
+                new_state = await self.step(context)
+                
+                # Record state timing
+                state_duration = time.time() - state_start
+                if current_state_name not in state_times:
+                    state_times[current_state_name] = []
+                state_times[current_state_name].append(state_duration)
+                
+                if not new_state or new_state.definition.is_end:
+                    break
+                    
+                transitions += 1
+                state_start = time.time()
+                
+        total_time = time.time() - start_time
+        
+        # Compute statistics
+        self._profile_data = {
+            'total_time': total_time,
+            'transitions': transitions,
+            'avg_transition_time': total_time / transitions if transitions > 0 else 0,
+            'state_times': {
+                state: {
+                    'count': len(times),
+                    'total': sum(times),
+                    'avg': sum(times) / len(times),
+                    'min': min(times),
+                    'max': max(times)
+                }
+                for state, times in state_times.items()
+            }
+        }
+        
+        return self._profile_data
+        
+    def get_available_transitions(
+        self,
+        state_name: str
+    ) -> List[Dict[str, Any]]:
+        """Get available transitions from a state.
+        
+        Args:
+            state_name: Name of state
+            
+        Returns:
+            List of available transition information
+        """
+        arcs = self.fsm.get_outgoing_arcs(state_name)
+        return [
+            {
+                'name': arc.name,
+                'target': arc.target_state,
+                'has_pre_test': arc.pre_test is not None,
+                'has_transform': arc.transform is not None
+            }
+            for arc in arcs
+        ]
+        
+    def inspect_state(self, state_name: str) -> Dict[str, Any]:
+        """Inspect a state's configuration.
+        
+        Args:
+            state_name: Name of state to inspect
+            
+        Returns:
+            State configuration details
+        """
+        state = self.fsm.get_state(state_name)
+        return {
+            'name': state.name,
+            'is_start': state.is_start,
+            'is_end': state.is_end,
+            'has_schema': state.schema is not None,
+            'has_validator': state.validator is not None,
+            'resources': list(state.resources) if state.resources else [],
+            'metadata': state.metadata
+        }
+        
+    def visualize_fsm(self) -> str:
+        """Generate a visual representation of the FSM.
+        
+        Returns:
+            GraphViz DOT format string
+        """
+        lines = ['digraph FSM {']
+        lines.append('  rankdir=LR;')
+        lines.append('  node [shape=circle];')
+        
+        # Add states
+        for state in self.fsm.states.values():
+            attrs = []
+            if state.is_start:
+                attrs.append('style=filled')
+                attrs.append('fillcolor=green')
+            elif state.is_end:
+                attrs.append('shape=doublecircle')
+                attrs.append('style=filled')
+                attrs.append('fillcolor=red')
+                
+            if attrs:
+                lines.append(f'  {state.name} [{",".join(attrs)}];')
+            else:
+                lines.append(f'  {state.name};')
+                
+        # Add arcs
+        for state_name, state in self.fsm.states.items():
+            for arc in self.fsm.get_outgoing_arcs(state_name):
+                label = arc.name if arc.name else ""
+                lines.append(f'  {state_name} -> {arc.target_state} [label="{label}"];')
+                
+        lines.append('}')
+        return '\n'.join(lines)
+        
+    async def validate_network(self) -> Dict[str, Any]:
+        """Validate the FSM network for consistency.
+        
+        Returns:
+            Validation results
+        """
+        issues = []
+        
+        # Check for unreachable states
+        reachable = set()
+        to_visit = [s.name for s in self.fsm.states.values() if s.is_start]
+        
+        while to_visit:
+            state = to_visit.pop(0)
+            if state in reachable:
+                continue
+            reachable.add(state)
+            
+            arcs = self.fsm.get_outgoing_arcs(state)
+            for arc in arcs:
+                if arc.target_state not in reachable:
+                    to_visit.append(arc.target_state)
+                    
+        unreachable = set(self.fsm.states.keys()) - reachable
+        if unreachable:
+            issues.append({
+                'type': 'unreachable_states',
+                'states': list(unreachable)
+            })
+            
+        # Check for dead ends (non-end states with no outgoing arcs)
+        for state_name, state in self.fsm.states.items():
+            if not state.is_end:
+                arcs = self.fsm.get_outgoing_arcs(state_name)
+                if not arcs:
+                    issues.append({
+                        'type': 'dead_end',
+                        'state': state_name
+                    })
+                    
+        return {
+            'valid': len(issues) == 0,
+            'issues': issues,
+            'stats': {
+                'total_states': len(self.fsm.states),
+                'reachable_states': len(reachable),
+                'unreachable_states': len(unreachable),
+                'start_states': sum(1 for s in self.fsm.states.values() if s.is_start),
+                'end_states': sum(1 for s in self.fsm.states.values() if s.is_end)
+            }
+        }
+        
+    def get_history(self) -> Optional[ExecutionHistory]:
+        """Get execution history if enabled.
+        
+        Returns:
+            Execution history or None
+        """
+        return self._history
+        
+    async def save_history(self) -> bool:
+        """Save execution history to storage.
+        
+        Returns:
+            True if saved successfully
+        """
+        if self._history and self._storage:
+            return await self._storage.save(self._history)
+        return False
+        
+    async def load_history(self, history_id: str) -> bool:
+        """Load execution history from storage.
+        
+        Args:
+            history_id: History identifier
+            
+        Returns:
+            True if loaded successfully
+        """
+        if self._storage:
+            history = await self._storage.load(history_id)
+            if history:
+                self._history = history
+                return True
+        return False
+
+
+class FSMDebugger:
+    """Interactive debugger for FSM execution."""
+    
+    def __init__(self, fsm: AdvancedFSM):
+        """Initialize debugger.
+        
+        Args:
+            fsm: Advanced FSM instance to debug
+        """
+        self.fsm = fsm
+        self.context = None
+        self.watch_vars = {}
+        self.command_history = []
+        
+    async def start(
+        self,
+        data: Union[Dict[str, Any], Record],
+        initial_state: Optional[str] = None
+    ):
+        """Start debugging session.
+        
+        Args:
+            data: Initial data
+            initial_state: Optional starting state
+        """
+        self.context = await self.fsm.execution_context(
+            data,
+            initial_state=initial_state
+        ).__aenter__()
+        
+        print(f"Debugger started at state: {self.context.current_state.definition.name}")
+        
+    async def step(self) -> None:
+        """Execute single step."""
+        if not self.context:
+            print("No active debugging session")
+            return
+            
+        new_state = await self.fsm.step(self.context)
+        if new_state:
+            print(f"Transitioned to: {new_state.definition.name}")
+        else:
+            print("No transition available")
+            
+    async def continue_execution(self) -> None:
+        """Continue execution until breakpoint."""
+        if not self.context:
+            print("No active debugging session")
+            return
+            
+        final_state = await self.fsm.run_until_breakpoint(self.context)
+        print(f"Stopped at: {final_state.definition.name}")
+        
+    def inspect(self, path: str) -> Any:
+        """Inspect data at path.
+        
+        Args:
+            path: Dot-separated path to data field
+            
+        Returns:
+            Value at path
+        """
+        if not self.context:
+            return None
+            
+        data = self.context.current_state.data
+        for key in path.split('.'):
+            if isinstance(data, dict):
+                data = data.get(key)
+            else:
+                return None
+        return data
+        
+    def watch(self, name: str, path: str) -> None:
+        """Add a watch expression.
+        
+        Args:
+            name: Watch name
+            path: Data path to watch
+        """
+        self.watch_vars[name] = path
+        
+    def print_watches(self) -> None:
+        """Print all watch values."""
+        for name, path in self.watch_vars.items():
+            value = self.inspect(path)
+            print(f"{name}: {value}")
+            
+    def print_state(self) -> None:
+        """Print current state information."""
+        if not self.context:
+            print("No active debugging session")
+            return
+            
+        state = self.context.current_state
+        print(f"State: {state.definition.name}")
+        print(f"Data: {state.data}")
+        
+        # Print available transitions
+        transitions = self.fsm.get_available_transitions(state.definition.name)
+        if transitions:
+            print("Available transitions:")
+            for t in transitions:
+                print(f"  - {t['name']} -> {t['target']}")
+        else:
+            print("No available transitions")
+
+
+def create_advanced_fsm(
+    config: Union[str, Path, Dict[str, Any], FSM],
+    **kwargs
+) -> AdvancedFSM:
+    """Factory function to create an AdvancedFSM instance.
+    
+    Args:
+        config: Configuration, FSM instance, or path
+        **kwargs: Additional arguments
+        
+    Returns:
+        Configured AdvancedFSM instance
+    """
+    if isinstance(config, FSM):
+        fsm = config
+    else:
+        from ..config.loader import ConfigLoader
+        from ..config.builder import FSMBuilder
+        
+        if isinstance(config, (str, Path)):
+            config_dict = ConfigLoader.load_file(str(config))
+        else:
+            config_dict = config
+            
+        builder = FSMBuilder()
+        fsm = builder.build_from_config(config_dict)
+        
+    return AdvancedFSM(fsm, **kwargs)

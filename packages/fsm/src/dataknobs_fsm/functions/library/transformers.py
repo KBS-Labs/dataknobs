@@ -10,7 +10,7 @@ import re
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Union
 
-from dataknobs_fsm.functions.base import ITransformFunction, TransformFunctionError
+from dataknobs_fsm.functions.base import ITransformFunction, TransformError
 
 
 class FieldMapper(ITransformFunction):
@@ -218,7 +218,7 @@ class TypeConverter(ITransformFunction):
                 result[field] = self._convert_value(value, target_type)
             except Exception as e:
                 if self.strict:
-                    raise TransformFunctionError(
+                    raise TransformError(
                         f"Failed to convert field '{field}': {e}"
                     )
                 # Keep original value if conversion fails and not strict
@@ -298,7 +298,7 @@ class DataEnricher(ITransformFunction):
                 try:
                     result[field] = value(data)
                 except Exception as e:
-                    raise TransformFunctionError(
+                    raise TransformError(
                         f"Failed to compute enrichment for '{field}': {e}"
                     )
             else:
@@ -474,11 +474,11 @@ class DataSplitter(ITransformFunction):
             Transformed data with split records.
         """
         if self.split_field not in data:
-            raise TransformFunctionError(f"Split field '{self.split_field}' not found")
+            raise TransformError(f"Split field '{self.split_field}' not found")
         
         split_values = data[self.split_field]
         if not isinstance(split_values, list):
-            raise TransformFunctionError(f"Split field must be a list")
+            raise TransformError(f"Split field must be a list")
         
         # Create a record for each value
         records = []

@@ -258,10 +258,24 @@ class FSMBuilder:
             state_def = state_defs[state_config.name]
             for arc_config in state_config.arcs:
                 arc = self._build_arc(arc_config, state_def, network, fsm_config)
-                # add_arc expects state names, not state objects
-                # We need to add the arc manually or fix add_arc method
-                # For now, let's add it to the state definition
+                # Add arc to both the state definition and the network
                 state_def.outgoing_arcs.append(arc)
+                # Also register the arc with the network for execution
+                # Extract function names for network registration
+                pre_test_name = None
+                transform_name = None
+                if arc.pre_test:
+                    pre_test_name = getattr(arc.pre_test, '__name__', str(arc.pre_test))
+                if arc.transform:
+                    transform_name = getattr(arc.transform, '__name__', str(arc.transform))
+                
+                network.add_arc(
+                    source_state=state_config.name,
+                    target_state=arc_config.target,
+                    pre_test=pre_test_name,
+                    transform=transform_name,
+                    metadata=arc_config.metadata
+                )
         
         return network
 
@@ -367,26 +381,74 @@ class FSMBuilder:
             arc.required_resources = {r: r for r in arc_config.resources}
             return arc
 
-    def _build_schema(self, schema_config: Dict[str, Any]) -> Dict[str, Field]:
+    def _build_schema(self, schema_config: Dict[str, Any]) -> Any:
         """Build a schema from configuration.
         
         Args:
-            schema_config: Schema configuration.
+            schema_config: Schema configuration (JSON Schema format).
             
         Returns:
-            Schema as dictionary of Fields.
+            Schema object for validation.
         """
-        schema = {}
-        for field_name, field_config in schema_config.items():
-            if isinstance(field_config, dict):
-                # Create Field from configuration
-                field = Field(**field_config)
-            else:
-                # Simple type specification
-                field = Field(type=field_config)
-            schema[field_name] = field
+        # Handle JSON Schema format - create a simple validation schema
+        # that can be used by the FSM's validation system
         
-        return schema
+        # For JSON Schema format, create a simple validator wrapper
+        class JSONSchemaValidator:
+            def __init__(self, schema_def):
+                self.schema_def = schema_def
+            
+            def validate(self, data):
+                """Validate data against JSON schema."""
+                # Simple validation for basic JSON schema
+                if self.schema_def.get('type') == 'object':
+                    if not isinstance(data, dict):
+                        return type('Result', (), {
+                            'valid': False,
+                            'errors': [f'Expected object, got {type(data).__name__}']
+                        })()
+                    
+                    errors = []
+                    properties = self.schema_def.get('properties', {})
+                    required = self.schema_def.get('required', [])
+                    
+                    # Check required fields
+                    for field in required:
+                        if field not in data:
+                            errors.append(f"Required field '{field}' is missing")
+                    
+                    # Check field types
+                    for field, value in data.items():
+                        if field in properties:
+                            field_schema = properties[field]
+                            field_type = field_schema.get('type')
+                            if field_type and not self._validate_type(value, field_type):
+                                errors.append(f"Field '{field}' has wrong type")
+                    
+                    return type('Result', (), {
+                        'valid': len(errors) == 0,
+                        'errors': errors
+                    })()
+                else:
+                    # Simple pass-through for non-object schemas
+                    return type('Result', (), {'valid': True, 'errors': []})()
+            
+            def _validate_type(self, value, expected_type):
+                """Validate value type."""
+                type_map = {
+                    'string': str,
+                    'integer': int,
+                    'number': (int, float),
+                    'boolean': bool,
+                    'array': list,
+                    'object': dict
+                }
+                expected_python_type = type_map.get(expected_type)
+                if expected_python_type:
+                    return isinstance(value, expected_python_type)
+                return True
+        
+        return JSONSchemaValidator(schema_config)
 
     def _resolve_function(
         self,
@@ -558,6 +620,7 @@ class FSM:
         # Convenience properties
         self.networks = core_fsm.networks
         self.main_network = self.networks.get(core_fsm.main_network) if core_fsm.main_network else None
+        self.name = core_fsm.main_network  # ExecutionEngine expects this
         
         # Engine will be created on demand
         self._engine: Optional[ExecutionEngine] = None
@@ -628,3 +691,49 @@ class FSM:
             return True
         except Exception:
             return False
+    
+    def get_start_state(self, network_name: Optional[str] = None):
+        """Get the start state from a network.
+        
+        Args:
+            network_name: Network to get start state from. Uses main network if None.
+            
+        Returns:
+            Start state definition.
+        """
+        if network_name is None:
+            network = self.main_network
+        else:
+            network = self.networks.get(network_name)
+        
+        if not network:
+            raise ValueError(f"Network '{network_name or 'main'}' not found")
+        
+        # Find start state in the network
+        for state in network.states.values():
+            if state.is_start_state():
+                return state
+        
+        raise ValueError(f"No start state found in network '{network.name}'")
+    
+    def get_state(self, state_name: str, network_name: Optional[str] = None):
+        """Get a state definition by name.
+        
+        Args:
+            state_name: Name of the state.
+            network_name: Network to search in. Searches all if None.
+            
+        Returns:
+            State definition.
+        """
+        if network_name:
+            network = self.networks.get(network_name)
+            if network and state_name in network.states:
+                return network.states[state_name]
+        else:
+            # Search all networks
+            for network in self.networks.values():
+                if state_name in network.states:
+                    return network.states[state_name]
+        
+        raise ValueError(f"State '{state_name}' not found")
