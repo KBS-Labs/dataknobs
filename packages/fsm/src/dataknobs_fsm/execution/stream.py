@@ -190,7 +190,11 @@ class StreamExecutor:
                 
         finally:
             # Clean up
-            pipeline.source.close()
+            if hasattr(pipeline.source, 'aclose'):
+                pipeline.source.close()
+            elif hasattr(pipeline.source, 'close'):
+                pipeline.source.close()
+            
             if pipeline.sink:
                 pipeline.sink.flush()
                 pipeline.sink.close()
@@ -317,205 +321,16 @@ class StreamExecutor:
             Processing statistics.
         """
         return {
+            'total_processed': progress.records_processed,
+            'successful': progress.records_processed - len(progress.errors),
+            'failed': len(progress.errors),
+            'duration': progress.elapsed_time,
+            'throughput': progress.records_per_second,
+            # Additional details
             'chunks_processed': progress.chunks_processed,
-            'records_processed': progress.records_processed,
             'bytes_processed': progress.bytes_processed,
-            'errors': len(progress.errors),
-            'elapsed_time': progress.elapsed_time,
-            'chunks_per_second': progress.chunks_per_second,
-            'records_per_second': progress.records_per_second,
             'error_details': progress.errors[:10]  # First 10 errors
         }
-    
-    async def execute_stream_async(
-        self,
-        pipeline: StreamPipeline,
-        context_template: Optional[ExecutionContext] = None,
-        max_transitions: int = 1000
-    ) -> Dict[str, Any]:
-        """Execute stream processing asynchronously.
-        
-        Args:
-            pipeline: Stream pipeline configuration.
-            context_template: Template context.
-            max_transitions: Maximum transitions.
-            
-        Returns:
-            Stream processing statistics.
-        """
-        # Create progress tracker
-        progress = StreamProgress()
-        
-        # Create base context
-        if context_template is None:
-            context_template = ExecutionContext(
-                data_mode=DataMode.STREAM,
-                transaction_mode=TransactionMode.NONE
-            )
-        
-        # Create async stream context
-        async_context = AsyncStreamContext(config=self.stream_config)
-        
-        # Set stream context
-        context_template.stream_context = async_context
-        
-        # Process stream asynchronously
-        try:
-            while True:
-                # Check backpressure
-                if self._should_apply_backpressure():
-                    await asyncio.sleep(0.1)
-                    continue
-                
-                # Read chunk asynchronously from source
-                # For now, use sync read in async context
-                chunk = pipeline.source.read_chunk()
-                if chunk is None:
-                    break
-                
-                # Process in parallel using asyncio
-                chunk_results = await self._process_chunk_async(
-                    chunk,
-                    context_template,
-                    pipeline.transformations,
-                    max_transitions,
-                    progress
-                )
-                
-                # Write results
-                if pipeline.sink and chunk_results:
-                    result_chunk = StreamChunk(
-                        data=chunk_results,
-                        sequence_number=chunk.sequence_number,
-                        metadata=chunk.metadata,
-                        is_last=chunk.is_last
-                    )
-                    # Write synchronously for now
-                    pipeline.sink.write_chunk(result_chunk)
-                
-                # Update progress
-                progress.chunks_processed += 1
-                progress.records_processed += len(chunk.data)
-                
-                # Fire callback
-                if self.progress_callback:
-                    await asyncio.get_event_loop().run_in_executor(
-                        None,
-                        self.progress_callback,
-                        progress
-                    )
-                
-                if chunk.is_last:
-                    break
-                
-        finally:
-            # Clean up
-            pipeline.source.close()
-            if pipeline.sink:
-                pipeline.sink.flush()
-                pipeline.sink.close()
-        
-        return self._generate_stats(progress)
-    
-    async def _process_chunk_async(
-        self,
-        chunk: StreamChunk,
-        context_template: ExecutionContext,
-        transformations: List[callable],
-        max_transitions: int,
-        progress: StreamProgress
-    ) -> List[Any]:
-        """Process chunk asynchronously.
-        
-        Args:
-            chunk: Chunk to process.
-            context_template: Template context.
-            transformations: Transformations.
-            max_transitions: Maximum transitions.
-            progress: Progress tracker.
-            
-        Returns:
-            Processed results.
-        """
-        tasks = []
-        
-        for i, record in enumerate(chunk.data):
-            # Create task for each record
-            task = asyncio.create_task(
-                self._process_record_async(
-                    record,
-                    i,
-                    context_template,
-                    transformations,
-                    max_transitions,
-                    progress
-                )
-            )
-            tasks.append(task)
-        
-        # Wait for all tasks
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Filter out errors
-        valid_results = []
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                progress.errors.append((
-                    progress.records_processed + i,
-                    result
-                ))
-            else:
-                valid_results.append(result)
-        
-        return valid_results
-    
-    async def _process_record_async(
-        self,
-        record: Any,
-        index: int,
-        context_template: ExecutionContext,
-        transformations: List[callable],
-        max_transitions: int,
-        progress: StreamProgress
-    ) -> Any:
-        """Process single record asynchronously.
-        
-        Args:
-            record: Record to process.
-            index: Record index.
-            context_template: Template context.
-            transformations: Transformations.
-            max_transitions: Maximum transitions.
-            progress: Progress tracker.
-            
-        Returns:
-            Processed result.
-        """
-        # Apply transformations
-        transformed = record
-        for transform in transformations:
-            transformed = transform(transformed)
-            if transformed is None:
-                return None
-        
-        # Create context
-        context = context_template.clone()
-        context.data = transformed
-        
-        # Execute in thread pool
-        loop = asyncio.get_event_loop()
-        success, result = await loop.run_in_executor(
-            None,
-            self.engine.execute,
-            context,
-            transformed,
-            max_transitions
-        )
-        
-        if not success:
-            raise Exception(result)
-        
-        return result
     
     def create_multi_stage_pipeline(
         self,

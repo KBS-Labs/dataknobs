@@ -9,8 +9,8 @@ from pathlib import Path
 import tempfile
 
 from dataknobs_fsm.cli.main import (
-    cli, config_group, run_group, debug_group,
-    history_group, pattern_group
+    cli, config, run, debug,
+    history, pattern
 )
 
 

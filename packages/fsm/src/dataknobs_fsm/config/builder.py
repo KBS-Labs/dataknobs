@@ -107,6 +107,10 @@ class FSMBuilder:
             description=config.description,
         )
         
+        # Register all functions from builder into core FSM's function registry
+        for func_name, func in self._function_registry.items():
+            fsm.function_registry.register(func_name, func)
+        
         # Add networks to FSM
         for network_name, network in self._networks.items():
             fsm.add_network(network, is_main=(network_name == config.main_network))
@@ -117,6 +121,7 @@ class FSMBuilder:
             config=config,
             resource_manager=self._resource_manager,
             transaction_manager=self._transaction_manager,
+            function_registry=self._function_registry,
         )
 
     def register_function(self, name: str, func: Callable) -> None:
@@ -305,6 +310,9 @@ class FSMBuilder:
         for func_ref in state_config.transforms:
             transform = self._resolve_function(func_ref, ITransformFunction)
             transforms.append(transform)
+            # Register transform in function registry for potential arc use
+            func_name = f"{state_config.name}_transform"
+            self._function_registry[func_name] = transform
         
         # Determine data mode
         data_mode = state_config.data_mode or fsm_config.data_mode.default
@@ -485,12 +493,21 @@ class FSMBuilder:
         elif func_ref.type == "inline":
             # Compile inline code
             namespace = {}
-            exec(func_ref.code, namespace)
-            # Find the function in namespace
-            funcs = [v for v in namespace.values() if callable(v)]
-            if not funcs:
-                raise ValueError("No function found in inline code")
-            func = funcs[0]
+            
+            # Check if the code is a lambda expression
+            code = func_ref.code.strip()
+            if code.startswith('lambda'):
+                # Wrap lambda in assignment to make it accessible
+                exec(f"func = {code}", namespace)
+                func = namespace['func']
+            else:
+                # Execute code and find function
+                exec(code, namespace)
+                # Find the function in namespace
+                funcs = [v for v in namespace.values() if callable(v)]
+                if not funcs:
+                    raise ValueError("No function found in inline code")
+                func = funcs[0]
         
         else:
             raise ValueError(f"Unknown function type: {func_ref.type}")
@@ -530,7 +547,23 @@ class FSMBuilder:
         if interface == IValidationFunction:
             FunctionWrapper.validate = lambda self, data: self.func(data)
         elif interface == ITransformFunction:
-            FunctionWrapper.transform = lambda self, data: self.func(data)
+            # Create a state-like object for the lambda that has a 'data' attribute
+            def transform_wrapper(self, data, context=None):
+                # Create a simple state object with a data attribute
+                class State:
+                    def __init__(self, data):
+                        self.data = data
+                state = State(data)
+                return self.func(state)
+            FunctionWrapper.transform = transform_wrapper
+            # Also make it callable directly
+            def call_wrapper(self, data, context=None):
+                class State:
+                    def __init__(self, data):
+                        self.data = data
+                state = State(data)
+                return self.func(state)
+            FunctionWrapper.__call__ = call_wrapper
         elif interface == IStateTestFunction:
             FunctionWrapper.test = lambda self, state: self.func(state)
         
@@ -603,6 +636,7 @@ class FSM:
         config: FSMConfig,
         resource_manager: ResourceManager,
         transaction_manager: Optional[TransactionManager] = None,
+        function_registry: Optional[Dict[str, Callable]] = None,
     ):
         """Initialize FSM wrapper instance.
         
@@ -611,10 +645,12 @@ class FSM:
             config: FSM configuration.
             resource_manager: Resource manager.
             transaction_manager: Optional transaction manager.
+            function_registry: Optional function registry.
         """
         self.core_fsm = core_fsm
         self.config = config
         self.resource_manager = resource_manager
+        self.function_registry = function_registry or {}
         self.transaction_manager = transaction_manager
         
         # Convenience properties

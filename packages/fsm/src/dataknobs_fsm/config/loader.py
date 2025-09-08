@@ -249,7 +249,8 @@ class ConfigLoader:
         # Transform network-level arcs to state-level arcs if present
         config = self._transform_network_arcs(config)
         
-        # Add any other common transformations here in the future
+        # Transform state functions field to transforms list
+        config = self._transform_state_functions(config)
         
         # Validate and return
         return validate_config(config)
@@ -313,6 +314,42 @@ class ConfigLoader:
                     # Debug: Print the transformed states to verify
                     # for state in network.get('states', []):
                     #     print(f"State {state['name']} has arcs: {state.get('arcs', [])}")
+        
+        return config
+    
+    def _transform_state_functions(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Transform state 'functions' field to proper schema format.
+        
+        This converts the legacy 'functions.transform' format to the
+        proper 'transforms' list format expected by the schema.
+        
+        Args:
+            config: Configuration dictionary.
+            
+        Returns:
+            Transformed configuration.
+        """
+        config = config.copy()
+        
+        # Process each network
+        if 'networks' in config:
+            for network in config['networks']:
+                if 'states' in network:
+                    for state in network['states']:
+                        # Check if state has 'functions' field
+                        if 'functions' in state and isinstance(state['functions'], dict):
+                            functions = state['functions']
+                            
+                            # Convert transform function to transforms list
+                            if 'transform' in functions:
+                                # Create inline function reference
+                                state['transforms'] = [{
+                                    'type': 'inline',
+                                    'code': functions['transform']
+                                }]
+                            
+                            # Remove the functions field as it's not in the schema
+                            del state['functions']
         
         return config
     

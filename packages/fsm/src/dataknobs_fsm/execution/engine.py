@@ -9,7 +9,7 @@ from dataknobs_fsm.core.arc import ArcDefinition, ArcExecution
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import DataMode, TransactionMode
 from dataknobs_fsm.core.network import StateNetwork
-from dataknobs_fsm.core.state import State
+from dataknobs_fsm.core.state import State, StateType
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.functions.base import FunctionContext, StateTransitionError
 
@@ -69,26 +69,6 @@ class ExecutionEngine:
         self._post_transition_hooks: List[callable] = []
         self._error_hooks: List[callable] = []
     
-    async def execute_async(
-        self,
-        context: ExecutionContext,
-        data: Any = None,
-        max_transitions: int = 1000
-    ) -> Tuple[bool, Any]:
-        """Execute the FSM asynchronously with given context.
-        
-        Args:
-            context: Execution context.
-            data: Input data to process.
-            max_transitions: Maximum transitions before stopping.
-            
-        Returns:
-            Tuple of (success, result).
-        """
-        # For now, wrap the synchronous execution
-        # In the future, this could be made truly async with async state functions
-        return self.execute(context, data, max_transitions)
-    
     def execute(
         self,
         context: ExecutionContext,
@@ -106,7 +86,9 @@ class ExecutionEngine:
             Tuple of (success, result).
         """
         self._execution_count += 1
-        context.data = data
+        # Only override context.data if data was explicitly provided
+        if data is not None:
+            context.data = data
         
         # Initialize state if needed
         if not context.current_state:
@@ -344,10 +326,18 @@ class ExecutionEngine:
                     return False
                 
                 # Create arc execution (pass current state as source)
+                if hasattr(self.fsm, 'function_registry'):
+                    if hasattr(self.fsm.function_registry, 'functions'):
+                        func_reg = self.fsm.function_registry.functions
+                    else:
+                        func_reg = {}
+                else:
+                    func_reg = {}
+                    
                 arc_exec = ArcExecution(
                     arc,
                     source_state=context.current_state or "",
-                    function_registry=self.fsm.function_registry.functions
+                    function_registry=func_reg
                 )
                 
                 # Execute with resource context
@@ -362,6 +352,9 @@ class ExecutionEngine:
                     # Update state
                     context.set_state(arc.target_state)
                     self._transition_count += 1
+                    
+                    # Execute state transforms when entering the new state
+                    self._execute_state_transforms(context, arc.target_state)
                     
                     # Fire post-transition hooks
                     if self.enable_hooks:
@@ -401,6 +394,42 @@ class ExecutionEngine:
                     return False
         
         return False
+    
+    def _execute_state_transforms(
+        self,
+        context: ExecutionContext,
+        state_name: str
+    ) -> None:
+        """Execute transform functions when entering a state.
+        
+        Args:
+            context: Execution context.
+            state_name: Name of the state being entered.
+        """
+        # Get the state definition
+        state_def = self.fsm.get_state(state_name)
+        if not state_def:
+            return
+            
+        # Execute any transform functions defined on the state
+        if hasattr(state_def, 'transform_functions') and state_def.transform_functions:
+            for transform_func in state_def.transform_functions:
+                try:
+                    # Create function context
+                    func_context = FunctionContext(
+                        state_name=state_name,
+                        function_name=getattr(transform_func, '__name__', 'transform'),
+                        metadata={'state': state_name},
+                        resources={}
+                    )
+                    
+                    # Execute the transform
+                    result = transform_func(context.data, func_context)
+                    if result is not None:
+                        context.data = result
+                except Exception as e:
+                    # Log but don't fail - state transforms are optional
+                    pass
     
     def _get_available_transitions(
         self,
@@ -550,10 +579,31 @@ class ExecutionEngine:
         if not state_name:
             return False
         
-        # Check in main network
-        if self.fsm.name in self.fsm.networks:
-            network = self.fsm.networks[self.fsm.name]
-            return state_name in network.final_states
+        # Get the main network - could be a string or object
+        main_network_ref = getattr(self.fsm, 'main_network', None)
+        
+        if main_network_ref is None:
+            # If no main network specified, check all networks
+            for network in self.fsm.networks.values():
+                if state_name in network.states:
+                    state = network.states[state_name]
+                    if state.is_end_state() if hasattr(state, 'is_end_state') else state.type == StateType.END:
+                        return True
+            return False
+        
+        # Handle case where main_network is already a network object (FSM wrapper)
+        if hasattr(main_network_ref, 'states'):
+            main_network = main_network_ref
+        # Handle case where main_network is a string (core FSM)
+        elif isinstance(main_network_ref, str) and main_network_ref in self.fsm.networks:
+            main_network = self.fsm.networks[main_network_ref]
+        else:
+            return False
+        
+        # Check if the state exists and is an end state
+        if state_name in main_network.states:
+            state = main_network.states[state_name]
+            return state.is_end_state() if hasattr(state, 'is_end_state') else state.type == StateType.END
         
         return False
     
