@@ -13,7 +13,7 @@ from dataknobs_fsm.core.state import (
     StateDefinition,
     StateInstance,
 )
-from dataknobs_fsm.core.data_modes import DataMode, DataModeManager
+from dataknobs_fsm.core.data_modes import DataHandlingMode, DataModeManager
 from dataknobs_fsm.functions.base import (
     IValidationFunction,
     ITransformFunction,
@@ -375,7 +375,7 @@ class TestStateInstance:
     
     def test_data_mode_direct(self):
         """Test DIRECT data mode."""
-        definition = StateDefinition(name="test", data_mode=DataMode.DIRECT)
+        definition = StateDefinition(name="test", data_mode=DataHandlingMode.DIRECT)
         instance = StateInstance(definition=definition)
         
         input_data = {"key": "value"}
@@ -389,7 +389,7 @@ class TestStateInstance:
     
     def test_data_mode_reference(self):
         """Test REFERENCE data mode."""
-        definition = StateDefinition(name="test", data_mode=DataMode.REFERENCE)
+        definition = StateDefinition(name="test", data_mode=DataHandlingMode.REFERENCE)
         instance = StateInstance(definition=definition)
         
         input_data = {"key": "value"}

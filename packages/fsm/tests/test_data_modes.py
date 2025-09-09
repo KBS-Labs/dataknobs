@@ -5,7 +5,7 @@ from threading import Thread
 from typing import Dict, Any
 
 from dataknobs_fsm.core.data_modes import (
-    DataMode,
+    DataHandlingMode,
     DataHandler,
     CopyModeHandler,
     ReferenceModeHandler,
@@ -164,7 +164,7 @@ class TestDataModeManager:
     def test_default_mode(self):
         """Test default mode handling."""
         manager = DataModeManager()
-        assert manager.default_mode == DataMode.COPY
+        assert manager.default_mode == DataHandlingMode.COPY
         
         handler = manager.get_handler()
         assert isinstance(handler, CopyModeHandler)
@@ -173,21 +173,21 @@ class TestDataModeManager:
         """Test getting specific mode handlers."""
         manager = DataModeManager()
         
-        copy_handler = manager.get_handler(DataMode.COPY)
+        copy_handler = manager.get_handler(DataHandlingMode.COPY)
         assert isinstance(copy_handler, CopyModeHandler)
         
-        ref_handler = manager.get_handler(DataMode.REFERENCE)
+        ref_handler = manager.get_handler(DataHandlingMode.REFERENCE)
         assert isinstance(ref_handler, ReferenceModeHandler)
         
-        direct_handler = manager.get_handler(DataMode.DIRECT)
+        direct_handler = manager.get_handler(DataHandlingMode.DIRECT)
         assert isinstance(direct_handler, DirectModeHandler)
     
     def test_set_default_mode(self):
         """Test changing the default mode."""
         manager = DataModeManager()
         
-        manager.set_default_mode(DataMode.DIRECT)
-        assert manager.default_mode == DataMode.DIRECT
+        manager.set_default_mode(DataHandlingMode.DIRECT)
+        assert manager.default_mode == DataHandlingMode.DIRECT
         
         handler = manager.get_handler()
         assert isinstance(handler, DirectModeHandler)
@@ -196,8 +196,8 @@ class TestDataModeManager:
         """Test that handlers are reused."""
         manager = DataModeManager()
         
-        handler1 = manager.get_handler(DataMode.COPY)
-        handler2 = manager.get_handler(DataMode.COPY)
+        handler1 = manager.get_handler(DataHandlingMode.COPY)
+        handler2 = manager.get_handler(DataHandlingMode.COPY)
         
         assert handler1 is handler2
 
@@ -212,21 +212,21 @@ class TestDataModesIntegration:
         data = {"counter": 0}
         
         # COPY mode
-        copy_handler = manager.get_handler(DataMode.COPY)
+        copy_handler = manager.get_handler(DataHandlingMode.COPY)
         copied = copy_handler.on_entry(data)
         copied["counter"] += 1
         copy_handler.on_exit(copied, commit=True)
         assert data["counter"] == 0  # Original unchanged
         
         # REFERENCE mode
-        ref_handler = manager.get_handler(DataMode.REFERENCE)
+        ref_handler = manager.get_handler(DataHandlingMode.REFERENCE)
         referenced = ref_handler.on_entry(data)
         referenced["counter"] += 1
         ref_handler.on_exit(referenced, commit=True)
         assert data["counter"] == 1  # Original changed
         
         # DIRECT mode
-        direct_handler = manager.get_handler(DataMode.DIRECT)
+        direct_handler = manager.get_handler(DataHandlingMode.DIRECT)
         direct = direct_handler.on_entry(data)
         direct["counter"] += 1
         direct_handler.on_exit(direct, commit=True)

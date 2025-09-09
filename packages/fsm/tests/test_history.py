@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 
 import pytest
 
-from dataknobs_fsm.core.data_modes import DataMode
+from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.execution.history import (
     ExecutionHistory,
     ExecutionStep,
@@ -30,12 +30,12 @@ class TestExecutionHistory:
         history = ExecutionHistory(
             fsm_name="test_fsm",
             execution_id="exec_123",
-            data_mode=DataMode.COPY
+            data_mode=DataHandlingMode.COPY
         )
         
         assert history.fsm_name == "test_fsm"
         assert history.execution_id == "exec_123"
-        assert history.data_mode == DataMode.COPY
+        assert history.data_mode == DataHandlingMode.COPY
         assert history.total_steps == 0
         assert history.failed_steps == 0
         assert history.skipped_steps == 0
@@ -195,7 +195,7 @@ class TestExecutionHistory:
         copy_history = ExecutionHistory(
             fsm_name="test",
             execution_id="copy_123",
-            data_mode=DataMode.COPY,
+            data_mode=DataHandlingMode.COPY,
             enable_data_snapshots=True
         )
         step = copy_history.add_step("state", "net", data={"key": "value"})
@@ -205,7 +205,7 @@ class TestExecutionHistory:
         ref_history = ExecutionHistory(
             fsm_name="test",
             execution_id="ref_123",
-            data_mode=DataMode.REFERENCE,
+            data_mode=DataHandlingMode.REFERENCE,
             enable_data_snapshots=True
         )
         step = ref_history.add_step("state", "net", data={"key": "value"})
@@ -217,7 +217,7 @@ class TestExecutionHistory:
         direct_history = ExecutionHistory(
             fsm_name="test",
             execution_id="direct_123",
-            data_mode=DataMode.DIRECT,
+            data_mode=DataHandlingMode.DIRECT,
             enable_data_snapshots=True
         )
         step = direct_history.add_step("state", "net", data={"key": "value"})
@@ -229,7 +229,7 @@ class TestExecutionHistory:
         history = ExecutionHistory(
             fsm_name="test",
             execution_id="exec_123",
-            data_mode=DataMode.DIRECT,
+            data_mode=DataHandlingMode.DIRECT,
             max_depth=3
         )
         
@@ -401,7 +401,7 @@ class TestStorageBackends:
             history = ExecutionHistory(
                 fsm_name=f"fsm_{i % 2}",
                 execution_id=f"exec_{i}",
-                data_mode=DataMode.COPY if i == 0 else DataMode.REFERENCE
+                data_mode=DataHandlingMode.COPY if i == 0 else DataHandlingMode.REFERENCE
             )
             history.add_step("start", "main")
             if i == 1:
@@ -473,9 +473,9 @@ class TestStorageBackends:
         config = StorageConfig(
             backend=StorageBackend.MEMORY,
             mode_specific_config={
-                DataMode.COPY: {"store_snapshots": True},
-                DataMode.REFERENCE: {"compress": True},
-                DataMode.DIRECT: {"max_history": 5}
+                DataHandlingMode.COPY: {"store_snapshots": True},
+                DataHandlingMode.REFERENCE: {"compress": True},
+                DataHandlingMode.DIRECT: {"max_history": 5}
             }
         )
         
@@ -483,7 +483,7 @@ class TestStorageBackends:
         await storage.initialize()
         
         # Test each mode
-        for mode in [DataMode.COPY, DataMode.REFERENCE, DataMode.DIRECT]:
+        for mode in [DataHandlingMode.COPY, DataHandlingMode.REFERENCE, DataHandlingMode.DIRECT]:
             history = ExecutionHistory(
                 fsm_name="test",
                 execution_id=f"{mode.value}_123",

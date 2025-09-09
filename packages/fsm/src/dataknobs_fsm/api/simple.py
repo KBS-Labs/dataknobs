@@ -13,7 +13,10 @@ from dataknobs_data import Record
 from ..core.fsm import FSM
 from ..core.state import StateInstance
 from ..core.data_modes import DataHandlingMode
+from ..core.context_factory import ContextFactory
+from ..core.result_formatter import ResultFormatter
 from ..execution.engine import ExecutionEngine
+from ..execution.async_engine import AsyncExecutionEngine
 from ..execution.context import ExecutionContext
 from ..config.loader import ConfigLoader
 from ..config.builder import FSMBuilder
@@ -61,8 +64,9 @@ class SimpleFSM:
         self._resource_manager = ResourceManager()
         self._setup_resources()
         
-        # Create execution engine
+        # Create execution engines
         self._engine = ExecutionEngine(self._fsm)
+        self._async_engine = AsyncExecutionEngine(self._fsm)
         
     def _setup_resources(self) -> None:
         """Set up resources from configuration."""
@@ -79,9 +83,8 @@ class SimpleFSM:
         # Register additional resources passed to constructor
         for name, resource_config in self._resources.items():
             try:
-                # Convert dict config to a simple resource provider
-                provider = self._create_simple_resource_provider(name, resource_config)
-                self._resource_manager.register_provider(name, provider)
+                # Use ResourceManager factory method
+                self._resource_manager.register_from_dict(name, resource_config)
             except Exception:
                 # Continue if resource creation fails
                 pass
@@ -107,29 +110,15 @@ class SimpleFSM:
                 - success: Whether processing completed successfully
                 - error: Error message if processing failed
         """
-        # Convert to Record if needed
-        if isinstance(data, dict):
-            record = Record(data)
-        else:
-            record = data
-            
-        # Create context
+        # Create context using factory
         from ..core.modes import ProcessingMode
-        context = ExecutionContext(
+        context = ContextFactory.create_context(
+            fsm=self._fsm,
+            data=data,
+            initial_state=initial_state,
             data_mode=ProcessingMode.SINGLE,
-            resources={}
+            resource_manager=self._resource_manager
         )
-        
-        # Set initial data and state
-        context.data = record.to_dict()
-        
-        # Initialize state
-        if initial_state:
-            state_def = self._fsm.get_state(initial_state)
-            context.current_state = initial_state
-        else:
-            state_def = self._fsm.get_start_state()
-            context.current_state = state_def.name
         
         # Execute using the sync engine
         try:
@@ -140,22 +129,17 @@ class SimpleFSM:
             else:
                 success, result = self._engine.execute(context)
                 
-            # Extract result from execution
-            return {
-                'final_state': context.current_state,
-                'data': context.data,
-                'path': context.state_history + ([context.current_state] if context.current_state else []),
-                'success': success,
-                'error': None if success else str(result)
-            }
+            # Format result using ResultFormatter
+            return ResultFormatter.format_single_result(
+                context=context,
+                success=success,
+                result=result
+            )
         except Exception as e:
-            return {
-                'final_state': context.current_state,
-                'data': context.data,
-                'path': context.state_history,
-                'success': False,
-                'error': str(e)
-            }
+            return ResultFormatter.format_error_result(
+                context=context,
+                error=e
+            )
     
     async def process_async(
         self,
@@ -173,58 +157,35 @@ class SimpleFSM:
         Returns:
             Dict containing processing results
         """
-        # Convert to Record if needed
-        if isinstance(data, dict):
-            record = Record(data)
-        else:
-            record = data
-            
-        # Create context
+        # Create context using factory
         from ..core.modes import ProcessingMode
-        context = ExecutionContext(
+        context = ContextFactory.create_context(
+            fsm=self._fsm,
+            data=data,
+            initial_state=initial_state,
             data_mode=ProcessingMode.SINGLE,
-            resources={}
+            resource_manager=self._resource_manager
         )
-        
-        # Set initial data and state
-        context.data = record.to_dict()
-        
-        # Initialize state
-        if initial_state:
-            state_def = self._fsm.get_state(initial_state)
-            context.current_state = initial_state
-        else:
-            state_def = self._fsm.get_start_state()
-            context.current_state = state_def.name
-        
-        # Execute using async engine
-        from ..execution.async_engine import AsyncExecutionEngine
-        async_engine = AsyncExecutionEngine(self._fsm)
         
         try:
             if timeout:
                 success, result = await asyncio.wait_for(
-                    async_engine.execute(context),
+                    self._async_engine.execute(context),
                     timeout=timeout
                 )
             else:
-                success, result = await async_engine.execute(context)
+                success, result = await self._async_engine.execute(context)
                 
-            return {
-                'final_state': context.current_state,
-                'data': context.data,
-                'path': context.state_history + ([context.current_state] if context.current_state else []),
-                'success': success,
-                'error': None if success else str(result)
-            }
+            return ResultFormatter.format_async_result(
+                context=context,
+                success=success,
+                result=result
+            )
         except Exception as e:
-            return {
-                'final_state': context.current_state,
-                'data': context.data,
-                'path': context.state_history,
-                'success': False,
-                'error': str(e)
-            }
+            return ResultFormatter.format_error_result(
+                context=context,
+                error=e
+            )
     
     def process_batch(
         self,
@@ -418,22 +379,6 @@ class SimpleFSM:
         builder = FSMBuilder()
         return builder._create_resource(resource_config)
     
-    def _create_simple_resource_provider(self, name: str, config: Dict[str, Any]):
-        """Create a simple resource provider from dict config."""
-        # Create a simple in-memory resource provider
-        class SimpleResourceProvider:
-            def __init__(self, name: str, config: Dict[str, Any]):
-                self.name = name
-                self.config = config
-                self.data = config.get('data', {})
-            
-            async def get_resource(self):
-                return self.data
-            
-            async def close(self):
-                pass
-        
-        return SimpleResourceProvider(name, config)
 
 
 def create_fsm(

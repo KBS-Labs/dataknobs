@@ -414,6 +414,20 @@ class ExecutionContext:
             'parallel_paths': len(self.parallel_paths)
         }
     
+    def get_complete_path(self) -> List[str]:
+        """Get the complete state traversal path including current state.
+        
+        Returns:
+            List of state names in traversal order.
+        """
+        path = self.state_history.copy() if self.state_history else []
+        
+        # Add current state if not already in path and if it exists
+        if self.current_state and (not path or path[-1] != self.current_state):
+            path.append(self.current_state)
+        
+        return path
+    
     def clone(self) -> 'ExecutionContext':
         """Create a clone of this context.
         

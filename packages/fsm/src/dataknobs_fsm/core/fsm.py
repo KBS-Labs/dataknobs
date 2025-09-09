@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.core.network import StateNetwork
+from dataknobs_fsm.core.state import StateDefinition, StateInstance, StateType
 from dataknobs_fsm.functions.base import FunctionRegistry
 
 
@@ -297,3 +298,104 @@ class FSM:
             fsm.resource_requirements[resource_type] = set(requirements)
         
         return fsm
+    
+    def find_state_definition(self, state_name: str, network_name: Optional[str] = None) -> Optional[StateDefinition]:
+        """Find a state definition by name.
+        
+        Args:
+            state_name: Name of the state to find
+            network_name: Optional specific network to search in
+            
+        Returns:
+            StateDefinition if found, None otherwise
+        """
+        if network_name:
+            # Search specific network
+            network = self.networks.get(network_name)
+            if network and hasattr(network, 'states'):
+                return network.states.get(state_name)
+        else:
+            # Search all networks
+            for network in self.networks.values():
+                if hasattr(network, 'states') and state_name in network.states:
+                    return network.states[state_name]
+        
+        return None
+    
+    def create_state_instance(self, state_name: str, data: Optional[Dict[str, Any]] = None, network_name: Optional[str] = None) -> StateInstance:
+        """Create a state instance from a state name.
+        
+        Args:
+            state_name: Name of the state
+            data: Optional initial data for the state
+            network_name: Optional specific network to search in
+            
+        Returns:
+            StateInstance object
+        """
+        # Try to find existing state definition
+        state_def = self.find_state_definition(state_name, network_name)
+        
+        if not state_def:
+            # Create minimal state definition
+            state_def = StateDefinition(
+                name=state_name,
+                type=StateType.START if state_name in ['start', 'Start', 'START'] else StateType.NORMAL
+            )
+        
+        # Create and return state instance
+        return StateInstance(
+            definition=state_def,
+            data=data or {}
+        )
+    
+    def get_state(self, state_name: str, network_name: Optional[str] = None) -> Optional[StateDefinition]:
+        """Get a state definition by name.
+        
+        This is an alias for find_state_definition for compatibility.
+        
+        Args:
+            state_name: Name of the state
+            network_name: Optional specific network to search in
+            
+        Returns:
+            StateDefinition if found, None otherwise
+        """
+        return self.find_state_definition(state_name, network_name)
+    
+    def get_start_state(self, network_name: Optional[str] = None) -> Optional[StateDefinition]:
+        """Get the start state definition.
+        
+        Args:
+            network_name: Optional specific network to search in
+            
+        Returns:
+            Start state definition if found, None otherwise
+        """
+        # If network specified, search that network
+        if network_name:
+            network = self.networks.get(network_name)
+            if network and hasattr(network, 'states'):
+                for state in network.states.values():
+                    if hasattr(state, 'is_start_state') and state.is_start_state():
+                        return state
+                    elif hasattr(state, 'type') and state.type == StateType.START:
+                        return state
+        else:
+            # Search main network first
+            if self.main_network:
+                start_state = self.get_start_state(self.main_network)
+                if start_state:
+                    return start_state
+            
+            # Search all networks
+            for network in self.networks.values():
+                if hasattr(network, 'states'):
+                    for state in network.states.values():
+                        if hasattr(state, 'is_start_state') and state.is_start_state():
+                            return state
+                        elif hasattr(state, 'type') and state.type == StateType.START:
+                            return state
+        
+        # Fallback: look for state named 'start'
+        return self.find_state_definition('start', network_name)

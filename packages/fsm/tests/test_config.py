@@ -24,7 +24,7 @@ from dataknobs_fsm.config.schema import (
     generate_json_schema,
     validate_config,
 )
-from dataknobs_fsm.core.data_modes import DataMode
+from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.core.transactions import TransactionStrategy
 
 
@@ -124,12 +124,12 @@ class TestConfigSchema:
     def test_data_mode_config(self):
         """Test DataModeConfig."""
         config = DataModeConfig(
-            default=DataMode.REFERENCE,
-            state_overrides={"state1": DataMode.COPY},
+            default=DataHandlingMode.REFERENCE,
+            state_overrides={"state1": DataHandlingMode.COPY},
         )
         
-        assert config.default == DataMode.REFERENCE
-        assert config.state_overrides["state1"] == DataMode.COPY
+        assert config.default == DataHandlingMode.REFERENCE
+        assert config.state_overrides["state1"] == DataHandlingMode.COPY
 
     def test_generate_json_schema(self):
         """Test JSON schema generation."""
@@ -177,7 +177,7 @@ class TestConfigTemplates:
         """Test applying database ETL template."""
         config = apply_template(UseCaseTemplate.DATABASE_ETL)
         
-        assert config["data_mode"]["default"] == DataMode.COPY
+        assert config["data_mode"]["default"] == DataHandlingMode.COPY
         assert config["transaction"]["strategy"] == TransactionStrategy.BATCH
         assert config["transaction"]["batch_size"] == 1000
 
@@ -186,12 +186,12 @@ class TestConfigTemplates:
         config = apply_template(
             UseCaseTemplate.FILE_PROCESSING,
             overrides={
-                "data_mode": {"default": DataMode.COPY},
+                "data_mode": {"default": DataHandlingMode.COPY},
                 "transaction": {"batch_size": 500},
             },
         )
         
-        assert config["data_mode"]["default"] == DataMode.COPY
+        assert config["data_mode"]["default"] == DataHandlingMode.COPY
         assert config["transaction"]["batch_size"] == 500
 
     def test_all_templates(self):
@@ -335,7 +335,7 @@ class TestConfigLoader:
         )
         
         assert isinstance(config, FSMConfig)
-        assert config.data_mode.default == DataMode.COPY
+        assert config.data_mode.default == DataHandlingMode.COPY
 
     def test_merge_configs(self):
         """Test merging multiple configurations."""
@@ -532,7 +532,7 @@ def test_full_config_workflow(sample_config_dict, tmp_path):
     
     # Validate
     assert config.name == "sample_fsm"
-    assert config.data_mode.default == DataMode.COPY
+    assert config.data_mode.default == DataHandlingMode.COPY
     assert len(config.networks) == 1
     assert len(config.resources) == 1
     

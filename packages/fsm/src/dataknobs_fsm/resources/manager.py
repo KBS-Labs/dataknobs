@@ -378,6 +378,75 @@ class ResourceManager:
         # In the future, this could be made truly async
         self.close()
     
+    def create_provider_from_dict(self, name: str, config: Dict[str, Any]) -> IResourceProvider:
+        """Create a resource provider from a dictionary configuration.
+        
+        Args:
+            name: Resource name
+            config: Dictionary configuration for the resource
+            
+        Returns:
+            Resource provider instance
+        """
+        # Create a simple in-memory resource provider
+        class SimpleResourceProvider(IResourceProvider):
+            def __init__(self, name: str, config: Dict[str, Any]):
+                self.name = name
+                self.config = config
+                self.data = config.get('data', {})
+                self._status = ResourceStatus.IDLE
+            
+            def acquire(self, **kwargs) -> Any:
+                self._status = ResourceStatus.BUSY
+                return self.data
+            
+            def release(self, resource: Any) -> None:
+                self._status = ResourceStatus.IDLE
+            
+            def validate(self, resource: Any) -> bool:
+                return resource is not None
+            
+            def health_check(self) -> ResourceHealth:
+                return ResourceHealth.HEALTHY
+            
+            def get_metrics(self) -> ResourceMetrics:
+                return ResourceMetrics(
+                    total_acquires=0,
+                    total_releases=0,
+                    active_count=1 if self._status == ResourceStatus.BUSY else 0,
+                    error_count=0
+                )
+            
+            async def get_resource(self):
+                return self.data
+            
+            async def close(self):
+                pass
+        
+        return SimpleResourceProvider(name, config)
+    
+    def create_simple_provider(self, name: str, data: Any) -> IResourceProvider:
+        """Create a simple resource provider with static data.
+        
+        Args:
+            name: Resource name
+            data: The resource data to provide
+            
+        Returns:
+            Resource provider instance
+        """
+        return self.create_provider_from_dict(name, {'data': data})
+    
+    def register_from_dict(self, name: str, config: Dict[str, Any]) -> None:
+        """Register a resource provider from a dictionary configuration.
+        
+        Args:
+            name: Resource name
+            config: Dictionary configuration for the resource
+        """
+        provider = self.create_provider_from_dict(name, config)
+        self.register_provider(name, provider)
+    
     def __enter__(self):
         """Enter context manager."""
         return self

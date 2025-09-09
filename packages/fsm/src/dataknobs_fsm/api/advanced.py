@@ -17,6 +17,8 @@ from ..core.state import StateInstance, StateDefinition
 from ..core.arc import ArcDefinition
 from ..core.data_modes import DataHandlingMode, DataHandler
 from ..core.modes import ProcessingMode
+from ..core.context_factory import ContextFactory
+from ..core.result_formatter import ResultFormatter
 from ..core.transactions import TransactionStrategy, TransactionManager
 from ..execution.engine import ExecutionEngine, TraversalStrategy
 from ..execution.async_engine import AsyncExecutionEngine
@@ -120,21 +122,8 @@ class AdvancedFSM:
             resource: Resource instance or configuration
         """
         if isinstance(resource, dict):
-            # For dict configs, create a simple in-memory provider
-            from ..resources.base import IResourceProvider
-            
-            class SimpleProvider(IResourceProvider):
-                def __init__(self, config):
-                    self.config = config
-                    
-                async def get_resource(self):
-                    return self.config
-                    
-                async def close(self):
-                    pass
-            
-            provider = SimpleProvider(resource)
-            self._resource_manager.register_provider(name, provider)
+            # Use ResourceManager factory method
+            self._resource_manager.register_from_dict(name, resource)
         else:
             # Assume it's already a provider
             self._resource_manager.register_provider(name, resource)
@@ -208,80 +197,28 @@ class AdvancedFSM:
         Yields:
             ExecutionContext for manual execution
         """
-        # Convert to Record if needed
-        if isinstance(data, dict):
-            record = Record(data)
-        else:
-            record = data
-            
-        # Create context - use SINGLE processing mode for now
-        # The data_mode parameter is for data handling (COPY/REFERENCE/DIRECT)
-        # but ExecutionContext expects processing mode (SINGLE/BATCH/STREAM)
-        context = ExecutionContext(
+        # Create context using factory
+        context = ContextFactory.create_context(
+            fsm=self.fsm,
+            data=data,
+            initial_state=initial_state,
             data_mode=ProcessingMode.SINGLE,
-            resources={}  # Pass empty dict, not the manager itself
+            resource_manager=self._resource_manager
         )
         
         # Set transaction manager if configured
         if self._transaction_manager:
             context.transaction_manager = self._transaction_manager
-            
-        # Initialize state and data
-        context.data = record.to_dict()
         
-        # Find the state definition and create a StateInstance
-        from dataknobs_fsm.core.state import StateInstance, StateDefinition, StateType
-        
-        state_def = None
-        state_name = initial_state
-        
-        if not state_name:
-            # Find start state from FSM
-            if hasattr(self.fsm, 'get_start_state'):
-                state_def = self.fsm.get_start_state()
-                if state_def:
-                    state_name = state_def.name
-            elif hasattr(self.fsm, 'core_fsm'):
-                # It's an FSM wrapper
-                for network in self.fsm.core_fsm.networks.values():
-                    for state in network.states.values():
-                        if state.is_start_state():
-                            state_def = state
-                            state_name = state.name
-                            break
-                    if state_def:
-                        break
-            
-            if not state_name:
-                state_name = 'start'  # Default fallback
-        
-        # Get state definition if we don't have it yet
-        if not state_def and hasattr(self.fsm, 'core_fsm'):
-            for network in self.fsm.core_fsm.networks.values():
-                if state_name in network.states:
-                    state_def = network.states[state_name]
-                    break
-        
-        # Create StateInstance if we have a definition, otherwise create a minimal one
-        if state_def:
-            state_instance = StateInstance(
-                definition=state_def,
-                data=context.data.copy() if isinstance(context.data, dict) else {}
+        # Get the state instance for the hook
+        state_instance = context.current_state_instance
+        if not state_instance:
+            # Create state instance if not set by factory
+            state_instance = self.fsm.create_state_instance(
+                context.current_state,
+                context.data.copy() if isinstance(context.data, dict) else {}
             )
-        else:
-            # Create a minimal StateDefinition for backward compatibility
-            state_def = StateDefinition(
-                name=state_name,
-                type=StateType.START if state_name == 'start' else StateType.NORMAL
-            )
-            state_instance = StateInstance(
-                definition=state_def,
-                data=context.data.copy() if isinstance(context.data, dict) else {}
-            )
-        
-        # Store both string name and instance for API compatibility
-        context.current_state = state_name
-        context.current_state_instance = state_instance
+            context.current_state_instance = state_instance
         
         # Call hook with StateInstance
         if self._hooks.on_state_enter:
