@@ -31,74 +31,59 @@ These capture the current reality and learnings:
 ## Current Status Summary
 
 ### Where We Are
-- **Overall Progress**: ~75% complete
-- **Test Status**: 12/22 passing (54.5%)
-- **Phase 7**: 85% complete - CLI done, APIs implemented, tests partially passing
+- **Overall Progress**: ~85% complete
+- **Test Status**: 24/24 passing (100%) for Simple & Advanced API tests
+- **Phase 7**: 95% complete - CLI done, APIs implemented, all API tests passing
 
-### Immediate Issues (from 07_IMPLEMENTATION_STATUS)
-1. **Transition Execution Failures** (4 tests) - Critical
-2. **BatchExecutor API Mismatch** (4 tests) - High
-3. **StreamExecutor API Mismatch** (1 test) - High
-4. **Validation Functionality** (1 test) - Medium
+### Recently Completed
+1. **Simple API Test Fixes** - All 12 tests now passing
+2. **Advanced API Test Fixes** - All 12 tests now passing  
+3. **Arc Name Filtering** - Added support for named arc filtering in both sync and async engines
+4. **Execution Context Issues** - Fixed dual state tracking (string name + StateInstance)
+5. **Function Registration** - Fixed inline function compilation and registration
+6. **Config Handling** - Enhanced to support legacy pre_test format
+
+### Current Focus
+- **API Refactoring** - Before proceeding with Phase 8, we need to address code duplication and API-specific workarounds identified during test fixes (see 10_API_TO_GENERAL_REFACTOR.md)
 
 ## Next Steps Workflow
 
-### Step 1: Fix Current Test Failures (Priority 1)
-**Goal**: Get all 22 tests passing
+### Step 1: API to General Level Refactor (Priority 1) 
+**Goal**: Eliminate code duplication and API-specific workarounds before proceeding
+**Reference**: 10_API_TO_GENERAL_REFACTOR.md
 
-#### 1.1 Fix Transition Execution (4 tests failing)
-- **Reference**: 06_LEARNINGS.md - "Arc Registration Architecture"
-- **Issue**: Arcs found but execution fails
-- **Files to check**:
-  - `src/dataknobs_fsm/execution/engine.py` - `_execute_transition()`
-  - `src/dataknobs_fsm/core/arc.py` - `ArcExecution.execute()`
-- **Test file**: `tests/test_api_simple_real.py`
-- [ ] Debug why transitions fail after being found
-- [ ] Fix execution logic
-- [ ] Verify all 4 tests pass
-
-#### 1.2 Fix BatchExecutor API (4 tests failing)
-- **Reference**: 06_LEARNINGS.md - "Parameter Naming Consistency"
-- **Issue**: Parameter mismatch between SimpleFSM and BatchExecutor
-- **Files to check**:
-  - `src/dataknobs_fsm/execution/batch.py` - parameter names
-  - `src/dataknobs_fsm/api/simple.py` - `process_batch()` method
-- [ ] Align parameter names (records vs data, etc.)
-- [ ] Update method signatures
-- [ ] Verify batch tests pass
-
-#### 1.3 Fix StreamExecutor API (1 test failing)
-- **Reference**: Similar to BatchExecutor issues
-- **Files to check**:
-  - `src/dataknobs_fsm/execution/stream.py`
-  - `src/dataknobs_fsm/api/simple.py` - `process_stream()` method
-- [ ] Align parameter names
-- [ ] Fix method signatures
-- [ ] Verify stream test passes
-
-#### 1.4 Fix Validation (1 test failing)
-- **Reference**: 06_LEARNINGS.md - "Schema vs Field Confusion"
-- **Files to check**:
-  - `src/dataknobs_fsm/api/simple.py` - `validate()` method
-  - Schema validation logic
-- [ ] Debug validation failure
-- [ ] Fix schema handling
-- [ ] Verify validation test passes
+- [ ] **Phase 1: Core Infrastructure**
+  - [ ] Create ContextFactory class
+  - [ ] Create ResultFormatter utility class  
+  - [ ] Enhance ExecutionContext with get_complete_path() method
+- [ ] **Phase 2: ResourceManager Enhancement** 
+  - [ ] Add factory methods for provider creation
+  - [ ] Remove resource creation logic from APIs
+- [ ] **Phase 3: Engine Lifecycle Standardization**
+  - [ ] Standardize engine management patterns across APIs
+- [ ] **Phase 4: FSM Core Enhancements**
+  - [ ] Improve state resolution in FSM core
+- [ ] **Phase 5: API Refactoring**
+  - [ ] Refactor Simple API to use general infrastructure
+  - [ ] Refactor Advanced API to use general infrastructure
+- [ ] **Phase 6: Testing and Validation**
+  - [ ] Verify all tests still pass after refactoring
+  - [ ] Ensure no performance regressions
 
 ### Step 2: Complete Phase 7 (Priority 2)
 **Reference**: 07_IMPLEMENTATION_STATUS.md - "Phase 7" section
 
-- [ ] Fix all test failures (Step 1)
+- [x] Fix all API test failures (COMPLETED)
 - [ ] Add missing integration tests
 - [ ] Complete API documentation
 - [ ] Create usage examples
 - [ ] Update 07_IMPLEMENTATION_STATUS.md to show Phase 7 complete
 
 ### Step 3: Revisit 05_UPDATED_IMPLEMENTATION_PLAN
-**After Phase 7 completion, review original plan for missed items**
+**After API refactoring and Phase 7 completion, review original plan**
 
 - [ ] Review Phase 7 requirements in detail
-- [ ] Identify any missing features
+- [ ] Identify any missing features from original plan
 - [ ] Create issues for gaps
 - [ ] Update plan for Phases 8-10 based on learnings
 
@@ -136,15 +121,16 @@ These capture the current reality and learnings:
 
 ### Test Progress
 ```
-Current: 12/22 passing (54.5%)
-Target:  22/22 passing (100%)
+Current API Tests: 24/24 passing (100%) ✅
+- Simple API: 12/12 passing  
+- Advanced API: 12/12 passing
 
-Categories:
-[ ] Transition Execution: 0/4 passing
-[ ] Batch Processing: 0/4 passing  
-[ ] Stream Processing: 0/1 passing
-[ ] Validation: 0/1 passing
-[x] Other Tests: 12/12 passing
+Recent Fixes:
+[x] Transition Execution: Fixed execution context state tracking
+[x] Arc Name Filtering: Added support for named arc filtering
+[x] Function Registration: Fixed inline function compilation  
+[x] Config Handling: Enhanced legacy format support
+[x] All Test Categories: Now passing
 ```
 
 ### Phase Progress
@@ -155,7 +141,7 @@ Categories:
 [x] Phase 4: Resource Management (100%)
 [x] Phase 5: Functions and Connectors (100%)
 [x] Phase 6: Streaming and Events (100%)
-[~] Phase 7: API and Integration (85%)
+[~] Phase 7: API and Integration (95% - API tests complete, refactoring needed)
 [ ] Phase 8: Monitoring and Observability (0%)
 [ ] Phase 9: Advanced Features (0%)
 [ ] Phase 10: Production Readiness (0%)
@@ -177,7 +163,8 @@ Categories:
 ## Success Criteria
 
 ### Phase 7 Completion
-- [ ] All 22 tests passing
+- [x] All API tests passing (24/24)
+- [ ] API refactoring complete (10_API_TO_GENERAL_REFACTOR.md)
 - [ ] API documentation complete
 - [ ] Usage examples created
 - [ ] 07_IMPLEMENTATION_STATUS updated to 100% for Phase 7
