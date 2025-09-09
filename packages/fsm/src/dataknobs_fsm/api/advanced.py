@@ -311,103 +311,58 @@ class AdvancedFSM:
         """
         from dataknobs_fsm.core.state import StateInstance, StateDefinition, StateType
         
-        # Get the current state instance - now stored separately from state name
-        current_state_instance = getattr(context, 'current_state_instance', None)
-        if not current_state_instance:
-            # Create StateInstance if not present (for backward compatibility)
-            # current_state should be a string now
-            state_name = context.current_state if isinstance(context.current_state, str) else 'START'
-            state_def = StateDefinition(
-                name=state_name,
-                type=StateType.NORMAL
-            )
-            current_state_instance = StateInstance(
-                definition=state_def,
-                data=context.data.copy() if isinstance(context.data, dict) else {}
-            )
-            # Store it for future use
-            context.current_state_instance = current_state_instance
+        # Store the current state before the transition
+        state_before = context.current_state
         
-        # Find available arcs from the current network
-        # Get the main network (simplified - should track network stack in real implementation)
-        # Note: fsm.main_network is the actual network object, not a string key
-        network = self.fsm.main_network
-        if not network:
-            return None
-            
-        # Find arcs from current state
-        current_state_name = current_state_instance.definition.name
-        arcs = []
-        for arc_id, arc in network.arcs.items():
-            # Arc IDs are typically formatted as "source:target"
-            if ':' in arc_id:
-                source_state = arc_id.split(':')[0]
-                if source_state == current_state_name:
-                    arcs.append(arc)
+        # Use the async execution engine to execute one step
+        # This ensures consistent execution logic across all FSM types
+        success, result = await self._async_engine.execute(
+            context=context,
+            data=None,  # Don't override context data
+            max_transitions=1  # Execute exactly one transition
+        )
         
-        # Filter to specific arc if requested
-        if arc_name:
-            arcs = [arc for arc in arcs if arc.metadata.get('name') == arc_name]
-            
-        # Execute first valid arc
-        for arc in arcs:
-            # Check pre-test if exists
-            if arc.pre_test:
-                if not await arc.pre_test.test(current_state_instance):
-                    continue
-                    
-            # Call arc hook
-            if self._hooks.on_arc_execute:
-                await self._hooks.on_arc_execute(arc)
+        # Check if we actually transitioned to a new state
+        if context.current_state != state_before:
+            # Get the current state instance
+            network = self.fsm.main_network
+            if network and context.current_state in network.states:
+                state_def = network.states[context.current_state]
                 
-            # Execute transformation
-            if arc.transform:
-                new_data = await arc.transform.transform(current_state_instance.data)
-            else:
-                new_data = current_state_instance.data.copy()
-                
-            # Create new state
-            # Get target state definition from network
-            target_def = network.states.get(arc.target_state)
-            if not target_def:
-                continue  # Skip if target state not found
-                
-            new_state = StateInstance(
-                definition=target_def,
-                data=new_data
-            )
-            
-            # Update context - store both string name and instance
-            context.current_state = new_state.definition.name
-            context.current_state_instance = new_state
-            context.data = new_data
-            
-            # Track in history
-            if self._history:
-                # Add a step for the new state
-                step = self._history.add_step(
-                    state_name=new_state.definition.name,
-                    network_name=getattr(context, 'network_name', 'main'),
-                    data=new_data
+                # Create StateInstance for the new state
+                new_state = StateInstance(
+                    definition=state_def,
+                    data=context.data.copy() if isinstance(context.data, dict) else {}
                 )
-                # Mark it as completed with the arc taken
-                step.complete(arc_taken=arc.metadata.get('name', 'unnamed'))
                 
-            # Add to trace if tracing
-            if self.execution_mode == ExecutionMode.TRACE:
-                self._trace_buffer.append({
-                    'from': current_state_instance.definition.name,
-                    'to': new_state.definition.name,
-                    'arc': arc.metadata.get('name', 'unnamed'),
-                    'data': new_data
-                })
+                # Store both string name and instance for API compatibility
+                context.current_state_instance = new_state
                 
-            # Call state enter hook
-            if self._hooks.on_state_enter:
-                await self._hooks.on_state_enter(new_state)
+                # Track in history if enabled
+                if self._history:
+                    step = self._history.add_step(
+                        state_name=context.current_state,
+                        network_name=getattr(context, 'network_name', 'main'),
+                        data=context.data
+                    )
+                    step.complete(arc_taken='transition')
                 
-            return new_state
-            
+                # Add to trace if tracing
+                if self.execution_mode == ExecutionMode.TRACE:
+                    self._trace_buffer.append({
+                        'from': state_before,
+                        'to': context.current_state,
+                        'arc': 'transition',
+                        'data': context.data
+                    })
+                
+                # Call state enter hook
+                if self._hooks.on_state_enter:
+                    await self._hooks.on_state_enter(new_state)
+                
+                return new_state
+        
+        # No transition occurred
         return None
         
     async def run_until_breakpoint(

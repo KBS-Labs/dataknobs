@@ -530,6 +530,26 @@ class FSMBuilder:
             # Wrap function to match expected interface
             func = self._wrap_function(func, expected_type)
         
+        # For inline functions, generate a unique name and register them
+        if func_ref.type == "inline":
+            import hashlib
+            import uuid
+            
+            # Generate a unique name based on the code content
+            code_hash = hashlib.md5(func_ref.code.encode()).hexdigest()[:8]
+            func_name = f"inline_{expected_type.__name__.lower()}_{code_hash}"
+            
+            # Ensure uniqueness
+            counter = 0
+            base_name = func_name
+            while func_name in self._function_registry:
+                counter += 1
+                func_name = f"{base_name}_{counter}"
+            
+            # Register the function and add name attribute
+            self._function_registry[func_name] = func
+            func.name = func_name
+        
         return func
 
     def _wrap_function(self, func: Callable, interface: Type) -> Any:
@@ -573,6 +593,12 @@ class FSMBuilder:
             FunctionWrapper.__call__ = call_wrapper
         elif interface == IStateTestFunction:
             FunctionWrapper.test = lambda self, state: self.func(state)
+            # Also make it callable directly for the async engine
+            def test_call_wrapper(self, data, context=None):
+                from types import SimpleNamespace
+                state = SimpleNamespace(data=data)
+                return self.func(state)
+            FunctionWrapper.__call__ = test_call_wrapper
         
         return FunctionWrapper(func)
 

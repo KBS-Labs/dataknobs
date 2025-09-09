@@ -293,6 +293,22 @@ class ConfigLoader:
                                 'target': to_state
                             }
                             
+                            # Handle legacy pre_test format
+                            if 'pre_test' in arc and 'condition' not in arc:
+                                pre_test = arc['pre_test']
+                                if isinstance(pre_test, dict) and 'test' in pre_test:
+                                    # Convert pre_test.test to condition
+                                    state_arc['condition'] = {
+                                        'type': 'inline',
+                                        'code': pre_test['test']
+                                    }
+                                elif isinstance(pre_test, str):
+                                    # Direct function reference
+                                    state_arc['condition'] = {
+                                        'type': 'inline',
+                                        'code': pre_test
+                                    }
+                            
                             # Copy optional fields
                             for field in ['name', 'condition', 'transform', 'priority', 'metadata']:
                                 if field in arc:
@@ -339,6 +355,14 @@ class ConfigLoader:
                         # Check if state has 'functions' field
                         if 'functions' in state and isinstance(state['functions'], dict):
                             functions = state['functions']
+                            
+                            # Convert validate function to validators list
+                            if 'validate' in functions:
+                                # Create inline function reference
+                                state['validators'] = [{
+                                    'type': 'inline',
+                                    'code': functions['validate']
+                                }]
                             
                             # Convert transform function to transforms list
                             if 'transform' in functions:

@@ -140,6 +140,10 @@ class ExecutionEngine:
                 stuck_count = 0
                 last_state = context.current_state
             
+            # Execute state functions (validators and transforms) before evaluating transitions
+            # This ensures that state functions can update the data that arc conditions depend on
+            self._execute_state_functions(context, context.current_state)
+            
             # Get available transitions
             transitions_available = self._get_available_transitions(context)
             
@@ -424,7 +428,98 @@ class ExecutionEngine:
                     )
                     
                     # Execute the transform
-                    result = transform_func(context.data, func_context)
+                    # Create a mock state object for transforms that expect state.data
+                    from types import SimpleNamespace
+                    state_obj = SimpleNamespace(data=context.data)
+                    
+                    # Try calling with state object first (for inline lambdas)
+                    try:
+                        result = transform_func(state_obj)
+                    except (TypeError, AttributeError):
+                        # Fall back to calling with data and context
+                        result = transform_func(context.data, func_context)
+                    
+                    if result is not None:
+                        context.data = result
+                except Exception as e:
+                    # Log but don't fail - state transforms are optional
+                    pass
+    
+    def _execute_state_functions(
+        self,
+        context: ExecutionContext,
+        state_name: str
+    ) -> None:
+        """Execute all state functions (validators and transforms) for a state.
+        
+        This should be called before evaluating arc conditions to ensure
+        that state functions can update the data that conditions depend on.
+        
+        Args:
+            context: Execution context.
+            state_name: Name of the current state.
+        """
+        # Get the state definition
+        state_def = self.fsm.get_state(state_name)
+        if not state_def:
+            return
+        
+        # Execute validation functions first
+        if hasattr(state_def, 'validation_functions') and state_def.validation_functions:
+            for validator_func in state_def.validation_functions:
+                try:
+                    # Create function context
+                    func_context = FunctionContext(
+                        state_name=state_name,
+                        function_name=getattr(validator_func, '__name__', 'validate'),
+                        metadata={'state': state_name},
+                        resources={}
+                    )
+                    
+                    # Execute the validator
+                    # Validators typically return a dict with validation results
+                    # Create a mock state object for validators that expect state.data
+                    from types import SimpleNamespace
+                    state_obj = SimpleNamespace(data=context.data)
+                    
+                    # Try calling with state object first (for inline lambdas)
+                    try:
+                        result = validator_func(state_obj)
+                    except (TypeError, AttributeError):
+                        # Fall back to calling with data and context
+                        result = validator_func(context.data, func_context)
+                    
+                    if isinstance(result, dict):
+                        # Merge validation results into context data
+                        context.data.update(result)
+                except Exception as e:
+                    # Log but don't fail - state validators are optional
+                    pass
+        
+        # Execute transform functions
+        if hasattr(state_def, 'transform_functions') and state_def.transform_functions:
+            for transform_func in state_def.transform_functions:
+                try:
+                    # Create function context
+                    func_context = FunctionContext(
+                        state_name=state_name,
+                        function_name=getattr(transform_func, '__name__', 'transform'),
+                        metadata={'state': state_name},
+                        resources={}
+                    )
+                    
+                    # Execute the transform
+                    # Create a mock state object for transforms that expect state.data
+                    from types import SimpleNamespace
+                    state_obj = SimpleNamespace(data=context.data)
+                    
+                    # Try calling with state object first (for inline lambdas)
+                    try:
+                        result = transform_func(state_obj)
+                    except (TypeError, AttributeError):
+                        # Fall back to calling with data and context
+                        result = transform_func(context.data, func_context)
+                    
                     if result is not None:
                         context.data = result
                 except Exception as e:

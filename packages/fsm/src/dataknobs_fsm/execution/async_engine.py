@@ -371,8 +371,7 @@ class AsyncExecutionEngine:
                             context
                         )
             
-            # Update state
-            context.add_to_history(context.current_state)
+            # Update state (history is automatically tracked by set_state)
             context.set_state(arc.target_state)
             
             return True
@@ -384,7 +383,10 @@ class AsyncExecutionEngine:
         self,
         context: ExecutionContext
     ) -> None:
-        """Execute transforms when entering a state.
+        """Execute state functions (validators and transforms) when in a state.
+        
+        This should be called before evaluating arc conditions to ensure
+        that state functions can update the data that conditions depend on.
         
         Args:
             context: Execution context.
@@ -395,19 +397,68 @@ class AsyncExecutionEngine:
         
         state = network.states[context.current_state]
         
-        # Execute all state transforms in sequence
-        for transform in state.transform_functions:
-            if asyncio.iscoroutinefunction(transform):
-                context.data = await transform(context.data, context)
-            else:
-                # Run sync function in executor
-                loop = asyncio.get_event_loop()
-                context.data = await loop.run_in_executor(
-                    None,
-                    transform,
-                    context.data,
-                    context
-                )
+        # Execute validation functions first
+        if hasattr(state, 'validation_functions') and state.validation_functions:
+            for validator in state.validation_functions:
+                try:
+                    # Create a mock state object for validators that expect state.data
+                    from types import SimpleNamespace
+                    state_obj = SimpleNamespace(data=context.data)
+                    
+                    # Handle both async and sync validators
+                    if asyncio.iscoroutinefunction(validator.validate):
+                        # Try with state object first (for inline lambdas)
+                        try:
+                            result = await validator.validate(state_obj)
+                        except (TypeError, AttributeError):
+                            # Fall back to standard signature
+                            result = await validator.validate(context.data, context)
+                    else:
+                        # Run sync function in executor
+                        loop = asyncio.get_event_loop()
+                        try:
+                            result = await loop.run_in_executor(None, validator.validate, state_obj)
+                        except (TypeError, AttributeError):
+                            # Fall back to standard signature
+                            result = await loop.run_in_executor(None, validator.validate, context.data, context)
+                    
+                    if isinstance(result, dict):
+                        # Merge validation results into context data
+                        context.data.update(result)
+                except Exception as e:
+                    # Log but don't fail - validators are optional
+                    pass
+        
+        # Execute transform functions
+        if hasattr(state, 'transform_functions') and state.transform_functions:
+            for transform in state.transform_functions:
+                try:
+                    # Create a mock state object for transforms that expect state.data
+                    from types import SimpleNamespace
+                    state_obj = SimpleNamespace(data=context.data)
+                    
+                    # Handle both async and sync transforms
+                    if asyncio.iscoroutinefunction(transform.transform):
+                        # Try with state object first (for inline lambdas)
+                        try:
+                            result = await transform.transform(state_obj)
+                        except (TypeError, AttributeError):
+                            # Fall back to standard signature
+                            result = await transform.transform(context.data, context)
+                    else:
+                        # Run sync function in executor
+                        loop = asyncio.get_event_loop()
+                        try:
+                            result = await loop.run_in_executor(None, transform.transform, state_obj)
+                        except (TypeError, AttributeError):
+                            # Fall back to standard signature
+                            result = await loop.run_in_executor(None, transform.transform, context.data, context)
+                    
+                    if result is not None:
+                        context.data = result
+                except Exception as e:
+                    # Log but don't fail - transforms are optional
+                    pass
     
     async def _find_initial_state(self) -> Optional[str]:
         """Find initial state in FSM.
