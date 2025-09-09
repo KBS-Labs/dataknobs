@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from dataknobs_fsm.core.arc import ArcDefinition, ArcExecution
 from dataknobs_fsm.core.fsm import FSM
-from dataknobs_fsm.core.modes import DataMode, TransactionMode
+from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.state import State, StateType
 from dataknobs_fsm.execution.context import ExecutionContext
@@ -98,11 +98,11 @@ class ExecutionEngine:
             context.set_state(initial_state)
         
         # Execute based on data mode
-        if context.data_mode == DataMode.SINGLE:
+        if context.data_mode == ProcessingMode.SINGLE:
             return self._execute_single(context, max_transitions)
-        elif context.data_mode == DataMode.BATCH:
+        elif context.data_mode == ProcessingMode.BATCH:
             return self._execute_batch(context, max_transitions)
-        elif context.data_mode == DataMode.STREAM:
+        elif context.data_mode == ProcessingMode.STREAM:
             return self._execute_stream(context, max_transitions)
         else:
             return False, f"Unknown data mode: {context.data_mode}"

@@ -1,10 +1,10 @@
-"""Data and transaction modes for FSM."""
+"""Processing and transaction modes for FSM execution."""
 
 from enum import Enum
 
 
-class DataMode(Enum):
-    """Data processing mode for FSM execution."""
+class ProcessingMode(Enum):
+    """Processing mode for FSM execution - defines how many records to process."""
     
     SINGLE = "single"
     """Process a single record at a time."""

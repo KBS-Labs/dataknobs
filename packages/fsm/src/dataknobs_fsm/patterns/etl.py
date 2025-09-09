@@ -11,7 +11,7 @@ from enum import Enum
 from dataknobs_data import AsyncDatabase, Record, Query
 
 from ..api.simple import SimpleFSM
-from ..core.data_modes import DataMode
+from dataknobs_fsm.core.data_modes import DataHandlingMode
 from ..config.builder import FSMBuilder
 from ..functions.library.database import DatabaseFetch, DatabaseUpsert
 from ..functions.library.transformers import (
@@ -72,7 +72,7 @@ class DatabaseETL:
         # Create FSM configuration
         fsm_config = {
             'name': 'ETL_Pipeline',
-            'data_mode': DataMode.COPY.value,  # Use COPY for data isolation
+            'data_mode': DataHandlingMode.COPY.value,  # Use COPY for data isolation
             'resources': {
                 'source_db': self.config.source_db,
                 'target_db': self.config.target_db
@@ -148,7 +148,7 @@ class DatabaseETL:
         # Add functions
         self._register_functions(fsm_config)
         
-        return SimpleFSM(fsm_config, data_mode=DataMode.COPY)
+        return SimpleFSM(fsm_config, data_mode=DataHandlingMode.COPY)
         
     def _get_transform_resources(self) -> List[str]:
         """Get resources needed for transformation."""

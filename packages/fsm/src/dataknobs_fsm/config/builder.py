@@ -23,7 +23,7 @@ from dataknobs_fsm.config.schema import (
     StateConfig,
 )
 from dataknobs_fsm.core.arc import ArcDefinition, PushArc
-from dataknobs_fsm.core.data_modes import DataHandler, DataMode, get_data_handler
+from dataknobs_fsm.core.data_modes import DataHandler, DataHandlingMode, get_data_handler
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.state import StateDefinition, StateType
 from dataknobs_fsm.core.transactions import (
@@ -54,7 +54,7 @@ class FSMBuilder:
         self._function_registry: Dict[str, Callable] = {}
         self._builtin_functions: Dict[str, Callable] = {}
         self._networks: Dict[str, StateNetwork] = {}
-        self._data_handlers: Dict[DataMode, DataHandler] = {}
+        self._data_handlers: Dict[DataHandlingMode, DataHandler] = {}
         self._transaction_manager: Optional[TransactionManager] = None
         
         # Register built-in functions on initialization
@@ -93,7 +93,7 @@ class FSMBuilder:
         self._validate_completeness(config)
         
         # 6. Create core FSM instance
-        from dataknobs_fsm.core.modes import DataMode as CoreDataMode
+        from dataknobs_fsm.core.modes import ProcessingMode as CoreDataMode
         from dataknobs_fsm.core.modes import TransactionMode as CoreTransactionMode
         
         # Map config modes to core modes
@@ -215,7 +215,7 @@ class FSMBuilder:
         Args:
             config: Data mode configuration.
         """
-        for mode in DataMode:
+        for mode in DataHandlingMode:
             self._data_handlers[mode] = get_data_handler(mode)
 
     def _init_transaction_manager(self, config: Any) -> None:
@@ -408,25 +408,32 @@ class FSMBuilder:
             
             def validate(self, data):
                 """Validate data against JSON schema."""
+                from dataknobs_data import Record
+                
+                # Convert Record to dict if needed
+                if isinstance(data, Record):
+                    data_dict = data.to_dict()
+                elif isinstance(data, dict):
+                    data_dict = data
+                else:
+                    return type('Result', (), {
+                        'valid': False,
+                        'errors': [f'Expected object or Record, got {type(data).__name__}']
+                    })()
+                
                 # Simple validation for basic JSON schema
                 if self.schema_def.get('type') == 'object':
-                    if not isinstance(data, dict):
-                        return type('Result', (), {
-                            'valid': False,
-                            'errors': [f'Expected object, got {type(data).__name__}']
-                        })()
-                    
                     errors = []
                     properties = self.schema_def.get('properties', {})
                     required = self.schema_def.get('required', [])
                     
                     # Check required fields
                     for field in required:
-                        if field not in data:
+                        if field not in data_dict:
                             errors.append(f"Required field '{field}' is missing")
                     
                     # Check field types
-                    for field, value in data.items():
+                    for field, value in data_dict.items():
                         if field in properties:
                             field_schema = properties[field]
                             field_type = field_schema.get('type')
@@ -616,8 +623,8 @@ class FSMBuilder:
         Returns:
             ExecutionContext instance.
         """
-        # Map our DataMode to the execution context's DataMode
-        from dataknobs_fsm.core.modes import DataMode as CoreDataMode
+        # Map our DataHandlingMode to the execution context's ProcessingMode
+        from dataknobs_fsm.core.modes import ProcessingMode as CoreDataMode
         
         # Simple mapping - we'll use SINGLE mode for now
         # This could be enhanced to support batch and stream modes

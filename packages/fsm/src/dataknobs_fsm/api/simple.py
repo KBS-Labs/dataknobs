@@ -12,7 +12,7 @@ from dataknobs_data import Record
 
 from ..core.fsm import FSM
 from ..core.state import StateInstance
-from ..core.data_modes import DataMode
+from ..core.data_modes import DataHandlingMode
 from ..execution.engine import ExecutionEngine
 from ..execution.context import ExecutionContext
 from ..config.loader import ConfigLoader
@@ -32,7 +32,7 @@ class SimpleFSM:
     def __init__(
         self,
         config: Union[str, Path, Dict[str, Any]],
-        data_mode: DataMode = DataMode.COPY,
+        data_mode: DataHandlingMode = DataHandlingMode.COPY,
         resources: Optional[Dict[str, Any]] = None
     ):
         """Initialize SimpleFSM from configuration.
@@ -114,9 +114,9 @@ class SimpleFSM:
             record = data
             
         # Create context
-        from ..core.modes import DataMode as CoreDataMode
+        from ..core.modes import ProcessingMode
         context = ExecutionContext(
-            data_mode=CoreDataMode.SINGLE,
+            data_mode=ProcessingMode.SINGLE,
             resources={}
         )
         
@@ -180,9 +180,9 @@ class SimpleFSM:
             record = data
             
         # Create context
-        from ..core.modes import DataMode as CoreDataMode
+        from ..core.modes import ProcessingMode
         context = ExecutionContext(
-            data_mode=CoreDataMode.SINGLE,
+            data_mode=ProcessingMode.SINGLE,
             resources={}
         )
         

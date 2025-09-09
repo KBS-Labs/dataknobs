@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 from uuid import uuid4
 
 from dataknobs_data.fields import Field, FieldType
-from dataknobs_fsm.core.data_modes import DataMode, DataModeManager
+from dataknobs_fsm.core.data_modes import DataHandlingMode, DataModeManager
 from dataknobs_fsm.core.transactions import Transaction
 from dataknobs_fsm.functions.base import (
     IValidationFunction,
@@ -101,7 +101,7 @@ class StateDefinition:
     
     # Schema and data handling
     schema: Optional[StateSchema] = None
-    data_mode: Optional[DataMode] = None  # Preferred data mode
+    data_mode: Optional[DataHandlingMode] = None  # Preferred data mode
     
     # Resource requirements
     resource_requirements: List[ResourceConfig] = dataclass_field(default_factory=list)
@@ -207,7 +207,7 @@ class StateInstance:
         """Initialize data mode manager if not provided."""
         if self.data_mode_manager is None:
             # Use definition's data_mode if available and not None, else default to COPY
-            default_mode = DataMode.COPY
+            default_mode = DataHandlingMode.COPY
             if self.definition and self.definition.data_mode:
                 default_mode = self.definition.data_mode
             self.data_mode_manager = DataModeManager(default_mode)

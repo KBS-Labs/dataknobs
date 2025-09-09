@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from dataknobs_fsm.core.data_modes import DataMode
+from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.core.transactions import TransactionStrategy
 
 
@@ -65,8 +65,8 @@ class FunctionReference(BaseModel):
 class DataModeConfig(BaseModel):
     """Configuration for data handling modes."""
 
-    default: DataMode = DataMode.COPY
-    state_overrides: Dict[str, DataMode] = Field(default_factory=dict)
+    default: DataHandlingMode = DataHandlingMode.COPY
+    state_overrides: Dict[str, DataHandlingMode] = Field(default_factory=dict)
     copy_config: Dict[str, Any] = Field(default_factory=dict)
     reference_config: Dict[str, Any] = Field(default_factory=dict)
     direct_config: Dict[str, Any] = Field(default_factory=dict)
@@ -122,7 +122,7 @@ class PushArcConfig(ArcConfig):
 
     target_network: str
     return_state: Optional[str] = None
-    data_isolation: DataMode = DataMode.COPY
+    data_isolation: DataHandlingMode = DataHandlingMode.COPY
 
 
 class StateConfig(BaseModel):
@@ -134,7 +134,7 @@ class StateConfig(BaseModel):
     transforms: List[FunctionReference] = Field(default_factory=list)
     arcs: List[Union[ArcConfig, PushArcConfig]] = Field(default_factory=list)
     resources: List[str] = Field(default_factory=list)
-    data_mode: Optional[DataMode] = None
+    data_mode: Optional[DataHandlingMode] = None
     is_start: bool = False
     is_end: bool = False
     metadata: Dict[str, Any] = Field(default_factory=dict)
@@ -278,7 +278,7 @@ def validate_config(config: Dict[str, Any]) -> FSMConfig:
 TEMPLATES: Dict[UseCaseTemplate, Dict[str, Any]] = {
     UseCaseTemplate.DATABASE_ETL: {
         "data_mode": {
-            "default": DataMode.COPY,
+            "default": DataHandlingMode.COPY,
         },
         "transaction": {
             "strategy": TransactionStrategy.BATCH,
@@ -288,7 +288,7 @@ TEMPLATES: Dict[UseCaseTemplate, Dict[str, Any]] = {
     },
     UseCaseTemplate.FILE_PROCESSING: {
         "data_mode": {
-            "default": DataMode.REFERENCE,
+            "default": DataHandlingMode.REFERENCE,
         },
         "transaction": {
             "strategy": TransactionStrategy.SINGLE,
@@ -297,7 +297,7 @@ TEMPLATES: Dict[UseCaseTemplate, Dict[str, Any]] = {
     },
     UseCaseTemplate.API_ORCHESTRATION: {
         "data_mode": {
-            "default": DataMode.COPY,
+            "default": DataHandlingMode.COPY,
         },
         "transaction": {
             "strategy": TransactionStrategy.MANUAL,
@@ -306,7 +306,7 @@ TEMPLATES: Dict[UseCaseTemplate, Dict[str, Any]] = {
     },
     UseCaseTemplate.LLM_WORKFLOW: {
         "data_mode": {
-            "default": DataMode.COPY,
+            "default": DataHandlingMode.COPY,
         },
         "transaction": {
             "strategy": TransactionStrategy.SINGLE,
@@ -315,7 +315,7 @@ TEMPLATES: Dict[UseCaseTemplate, Dict[str, Any]] = {
     },
     UseCaseTemplate.DATA_VALIDATION: {
         "data_mode": {
-            "default": DataMode.DIRECT,
+            "default": DataHandlingMode.DIRECT,
         },
         "transaction": {
             "strategy": TransactionStrategy.SINGLE,
@@ -324,7 +324,7 @@ TEMPLATES: Dict[UseCaseTemplate, Dict[str, Any]] = {
     },
     UseCaseTemplate.STREAM_PROCESSING: {
         "data_mode": {
-            "default": DataMode.REFERENCE,
+            "default": DataHandlingMode.REFERENCE,
         },
         "transaction": {
             "strategy": TransactionStrategy.BATCH,

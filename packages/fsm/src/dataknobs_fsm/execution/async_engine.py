@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from dataknobs_fsm.core.arc import ArcDefinition
 from dataknobs_fsm.core.fsm import FSM
-from dataknobs_fsm.core.modes import DataMode, TransactionMode
+from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.state import StateDefinition, StateType
 from dataknobs_fsm.execution.context import ExecutionContext
@@ -75,11 +75,11 @@ class AsyncExecutionEngine:
         
         try:
             # Execute based on data mode
-            if context.data_mode == DataMode.SINGLE:
+            if context.data_mode == ProcessingMode.SINGLE:
                 result = await self._execute_single(context, max_transitions)
-            elif context.data_mode == DataMode.BATCH:
+            elif context.data_mode == ProcessingMode.BATCH:
                 result = await self._execute_batch(context, max_transitions)
-            elif context.data_mode == DataMode.STREAM:
+            elif context.data_mode == ProcessingMode.STREAM:
                 result = await self._execute_stream(context, max_transitions)
             else:
                 result = False, f"Unknown data mode: {context.data_mode}"

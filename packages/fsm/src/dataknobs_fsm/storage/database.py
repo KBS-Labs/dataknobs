@@ -16,7 +16,7 @@ from dataknobs_data.records import Record
 from dataknobs_data.query import Query
 from dataknobs_data.schema import DatabaseSchema, FieldSchema
 
-from dataknobs_fsm.core.data_modes import DataMode
+from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.execution.history import ExecutionHistory, ExecutionStep, ExecutionStatus
 from dataknobs_fsm.storage.base import BaseHistoryStorage, StorageBackend, StorageConfig, StorageFactory
 
@@ -325,7 +325,7 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
                 state_name=step_data['state_name'],
                 network_name=step_data['network_name'],
                 timestamp=step_data['timestamp'],
-                data_mode=DataMode(step_data['data_mode']),
+                data_mode=DataHandlingMode(step_data['data_mode']),
                 status=ExecutionStatus(step_data['status'])
             )
             

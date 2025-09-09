@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from dataknobs_fsm.core.fsm import FSM
-from dataknobs_fsm.core.modes import DataMode, TransactionMode
+from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.execution.engine import ExecutionEngine
 from dataknobs_fsm.streaming.core import (
@@ -124,7 +124,7 @@ class StreamExecutor:
         # Create base context
         if context_template is None:
             context_template = ExecutionContext(
-                data_mode=DataMode.STREAM,
+                data_mode=ProcessingMode.STREAM,
                 transaction_mode=TransactionMode.NONE
             )
         

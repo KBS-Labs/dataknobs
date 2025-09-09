@@ -8,7 +8,7 @@ import tempfile
 import json
 
 from dataknobs_fsm.api.simple import SimpleFSM, create_fsm, process_file, validate_data, batch_process
-from dataknobs_fsm.core.data_modes import DataMode
+from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_data import Record
 
 
@@ -109,7 +109,7 @@ class TestSimpleFSMInitialization:
         fsm = SimpleFSM(simple_fsm_config)
         
         # Test basic properties
-        assert fsm.data_mode == DataMode.COPY
+        assert fsm.data_mode == DataHandlingMode.COPY
         assert fsm._config.name == simple_fsm_config['name']
         assert fsm._config.main_network == simple_fsm_config['main_network']
         assert fsm._fsm is not None
@@ -132,8 +132,8 @@ class TestSimpleFSMInitialization:
     
     def test_initialization_with_data_mode(self, simple_fsm_config):
         """Test FSM with different data modes."""
-        fsm = SimpleFSM(simple_fsm_config, data_mode=DataMode.REFERENCE)
-        assert fsm.data_mode == DataMode.REFERENCE
+        fsm = SimpleFSM(simple_fsm_config, data_mode=DataHandlingMode.REFERENCE)
+        assert fsm.data_mode == DataHandlingMode.REFERENCE
     
     def test_initialization_with_resources(self, simple_fsm_config):
         """Test FSM with additional resources."""
@@ -320,10 +320,10 @@ class TestSimpleFSMFactoryFunctions:
     
     def test_create_fsm_factory(self, simple_fsm_config):
         """Test create_fsm factory function."""
-        fsm = create_fsm(simple_fsm_config, data_mode=DataMode.REFERENCE)
+        fsm = create_fsm(simple_fsm_config, data_mode=DataHandlingMode.REFERENCE)
         
         assert isinstance(fsm, SimpleFSM)
-        assert fsm.data_mode == DataMode.REFERENCE
+        assert fsm.data_mode == DataHandlingMode.REFERENCE
         
         # Test it actually works
         states = fsm.get_states()

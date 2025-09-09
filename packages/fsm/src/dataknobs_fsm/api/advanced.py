@@ -15,9 +15,11 @@ from dataknobs_data import Record, Query
 from ..core.fsm import FSM
 from ..core.state import StateInstance, StateDefinition
 from ..core.arc import ArcDefinition
-from ..core.data_modes import DataMode, DataHandler
+from ..core.data_modes import DataHandlingMode, DataHandler
+from ..core.modes import ProcessingMode
 from ..core.transactions import TransactionStrategy, TransactionManager
 from ..execution.engine import ExecutionEngine, TraversalStrategy
+from ..execution.async_engine import AsyncExecutionEngine
 from ..execution.context import ExecutionContext
 from ..execution.network import NetworkExecutor
 from ..resources.manager import ResourceManager
@@ -67,6 +69,7 @@ class AdvancedFSM:
         self.fsm = fsm
         self.execution_mode = execution_mode
         self._engine = ExecutionEngine(fsm)
+        self._async_engine = AsyncExecutionEngine(fsm)
         self._resource_manager = ResourceManager()
         self._transaction_manager = None
         self._history = None
@@ -103,7 +106,7 @@ class AdvancedFSM:
             strategy: Transaction strategy to use
             **config: Strategy-specific configuration
         """
-        self._transaction_manager = TransactionManager(strategy, **config)
+        self._transaction_manager = TransactionManager.create(strategy, **config)
         
     def register_resource(
         self,
@@ -117,9 +120,24 @@ class AdvancedFSM:
             resource: Resource instance or configuration
         """
         if isinstance(resource, dict):
-            self._resource_manager.register_resource(name, resource)
+            # For dict configs, create a simple in-memory provider
+            from ..resources.base import IResourceProvider
+            
+            class SimpleProvider(IResourceProvider):
+                def __init__(self, config):
+                    self.config = config
+                    
+                async def get_resource(self):
+                    return self.config
+                    
+                async def close(self):
+                    pass
+            
+            provider = SimpleProvider(resource)
+            self._resource_manager.register_provider(name, provider)
         else:
-            self._resource_manager._resources[name] = resource
+            # Assume it's already a provider
+            self._resource_manager.register_provider(name, resource)
             
     def set_hooks(self, hooks: ExecutionHook) -> None:
         """Set execution hooks for monitoring.
@@ -163,7 +181,7 @@ class AdvancedFSM:
     async def execution_context(
         self,
         data: Union[Dict[str, Any], Record],
-        data_mode: DataMode = DataMode.COPY,
+        data_mode: DataHandlingMode = DataHandlingMode.COPY,
         initial_state: Optional[str] = None
     ):
         """Create an execution context for manual control.
@@ -182,28 +200,49 @@ class AdvancedFSM:
         else:
             record = data
             
-        # Create context
+        # Create context - use SINGLE processing mode for now
+        # The data_mode parameter is for data handling (COPY/REFERENCE/DIRECT)
+        # but ExecutionContext expects processing mode (SINGLE/BATCH/STREAM)
         context = ExecutionContext(
-            data_mode=data_mode,
-            resources=self._resource_manager
+            data_mode=ProcessingMode.SINGLE,
+            resources={}  # Pass empty dict, not the manager itself
         )
         
         # Set transaction manager if configured
         if self._transaction_manager:
             context.transaction_manager = self._transaction_manager
             
-        # Initialize state
-        if initial_state:
-            state_def = self.fsm.get_state(initial_state)
-        else:
-            state_def = self.fsm.get_start_state()
-            
-        state = StateInstance(state_def, record.to_dict())
-        context.set_current_state(state)
+        # Initialize state and data
+        context.data = record.to_dict()
         
-        # Call hook
+        # Set initial state name
+        if initial_state:
+            context.current_state = initial_state
+        else:
+            # Find start state from FSM
+            start_state = None
+            if hasattr(self.fsm, 'get_start_state'):
+                start_state_def = self.fsm.get_start_state()
+                if start_state_def:
+                    start_state = start_state_def.name
+            elif hasattr(self.fsm, 'core_fsm'):
+                # It's an FSM wrapper
+                for network in self.fsm.core_fsm.networks.values():
+                    for state in network.states.values():
+                        if state.is_start_state():
+                            start_state = state.name
+                            break
+                    if start_state:
+                        break
+            
+            if start_state:
+                context.current_state = start_state
+            else:
+                context.current_state = 'start'  # Default fallback
+        
+        # Call hook with current state name
         if self._hooks.on_state_enter:
-            await self._hooks.on_state_enter(state)
+            await self._hooks.on_state_enter(context.current_state)
             
         try:
             yield context

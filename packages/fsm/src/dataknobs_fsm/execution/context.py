@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from dataknobs_data.database import AsyncDatabase, SyncDatabase
 from dataknobs_data.records import Record
 
-from dataknobs_fsm.core.modes import DataMode, TransactionMode
+from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.streaming.core import StreamChunk, StreamContext
 
 
@@ -56,7 +56,7 @@ class ExecutionContext:
     
     def __init__(
         self,
-        data_mode: DataMode = DataMode.SINGLE,
+        data_mode: ProcessingMode = ProcessingMode.SINGLE,
         transaction_mode: TransactionMode = TransactionMode.NONE,
         resources: Optional[Dict[str, Any]] = None,
         database: Optional[Union[SyncDatabase, AsyncDatabase]] = None,
@@ -288,7 +288,7 @@ class ExecutionContext:
         Args:
             item: Item to add to batch.
         """
-        if self.data_mode == DataMode.BATCH:
+        if self.data_mode == ProcessingMode.BATCH:
             self.batch_data.append(item)
     
     def add_batch_result(self, result: Any) -> None:
@@ -297,7 +297,7 @@ class ExecutionContext:
         Args:
             result: Processing result.
         """
-        if self.data_mode == DataMode.BATCH:
+        if self.data_mode == ProcessingMode.BATCH:
             self.batch_results.append(result)
     
     def add_batch_error(self, index: int, error: Exception) -> None:
@@ -307,7 +307,7 @@ class ExecutionContext:
             index: Batch item index.
             error: Error that occurred.
         """
-        if self.data_mode == DataMode.BATCH:
+        if self.data_mode == ProcessingMode.BATCH:
             self.batch_errors.append((index, error))
     
     def create_child_context(self, path_id: str) -> 'ExecutionContext':
@@ -349,7 +349,7 @@ class ExecutionContext:
         child = self.parallel_paths[path_id]
         
         # Merge results
-        if self.data_mode == DataMode.BATCH:
+        if self.data_mode == ProcessingMode.BATCH:
             self.batch_results.extend(child.batch_results)
             self.batch_errors.extend(child.batch_errors)
         

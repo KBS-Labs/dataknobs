@@ -101,6 +101,30 @@ class TransactionManager(ABC):
         self._transactions: Dict[str, Transaction] = {}
         self._active_transaction: Optional[Transaction] = None
     
+    @classmethod
+    def create(cls, strategy: TransactionStrategy, **config) -> "TransactionManager":
+        """Factory method to create appropriate transaction manager.
+        
+        Args:
+            strategy: Transaction strategy to use
+            **config: Strategy-specific configuration (currently unused)
+            
+        Returns:
+            Appropriate TransactionManager subclass instance
+            
+        Raises:
+            ValueError: If strategy is unknown
+        """
+        # Import here to avoid circular dependencies
+        if strategy == TransactionStrategy.SINGLE:
+            return SingleTransactionManager(strategy)
+        elif strategy == TransactionStrategy.BATCH:
+            return BatchTransactionManager(strategy)
+        elif strategy == TransactionStrategy.MANUAL:
+            return ManualTransactionManager(strategy)
+        else:
+            raise ValueError(f"Unknown transaction strategy: {strategy}")
+    
     @abstractmethod
     def begin_transaction(self, transaction_id: Optional[str] = None) -> Transaction:
         """Begin a new transaction.

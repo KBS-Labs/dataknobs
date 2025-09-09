@@ -12,7 +12,7 @@ import mimetypes
 from dataknobs_data import Record
 
 from ..api.simple import SimpleFSM
-from ..core.data_modes import DataMode
+from dataknobs_fsm.core.data_modes import DataHandlingMode
 from ..streaming.file_stream import FileStreamSource, FileStreamSink
 from ..functions.library.transformers import FieldMapper, TypeConverter
 from ..functions.library.validators import SchemaValidator
@@ -104,11 +104,11 @@ class FileProcessor:
         """Build FSM for file processing."""
         # Determine data mode based on processing mode
         if self.config.mode == ProcessingMode.STREAM:
-            data_mode = DataMode.REFERENCE  # Use reference for streaming
+            data_mode = DataHandlingMode.REFERENCE  # Use reference for streaming
         elif self.config.mode == ProcessingMode.BATCH:
-            data_mode = DataMode.COPY  # Use copy for batch isolation
+            data_mode = DataHandlingMode.COPY  # Use copy for batch isolation
         else:
-            data_mode = DataMode.DIRECT  # Use direct for whole file
+            data_mode = DataHandlingMode.DIRECT  # Use direct for whole file
             
         # Create FSM configuration
         fsm_config = {

@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Any, Dict, List, Optional, Type, Union
 
-from dataknobs_fsm.core.data_modes import DataMode
+from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.execution.history import ExecutionHistory, ExecutionStep
 
 
@@ -29,7 +29,7 @@ class StorageConfig:
         retention_policy: Optional[Dict[str, Any]] = None,
         compression: bool = False,
         batch_size: int = 100,
-        mode_specific_config: Optional[Dict[DataMode, Dict[str, Any]]] = None
+        mode_specific_config: Optional[Dict[DataHandlingMode, Dict[str, Any]]] = None
     ):
         """Initialize storage configuration.
         
@@ -48,7 +48,7 @@ class StorageConfig:
         self.batch_size = batch_size
         self.mode_specific_config = mode_specific_config or {}
     
-    def get_mode_config(self, mode: DataMode) -> Dict[str, Any]:
+    def get_mode_config(self, mode: DataHandlingMode) -> Dict[str, Any]:
         """Get configuration for a specific data mode.
         
         Args:
@@ -278,7 +278,7 @@ class BaseHistoryStorage(IHistoryStorage):
         history = ExecutionHistory(
             fsm_name=fsm_name,
             execution_id=execution_id,
-            data_mode=DataMode(summary['data_mode']),
+            data_mode=DataHandlingMode(summary['data_mode']),
             max_depth=None,  # Will be set from data
             enable_data_snapshots=False  # Will be determined from data
         )

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 from dataknobs_fsm.api.advanced import AdvancedFSM, ExecutionMode, ExecutionHook
 from dataknobs_fsm.core.fsm import FSM
-from dataknobs_fsm.core.data_modes import DataMode
+from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.execution.engine import TraversalStrategy
 from dataknobs_fsm.core.transactions import TransactionStrategy
 from dataknobs_fsm.config.builder import FSMBuilder
@@ -19,6 +19,7 @@ def simple_fsm():
     """Create a real FSM instance for testing."""
     config = {
         'name': 'test_advanced_fsm',
+        'main_network': 'main',
         'networks': [{
             'name': 'main',
             'states': [
@@ -33,8 +34,12 @@ def simple_fsm():
         }]
     }
     
+    from dataknobs_fsm.config.loader import ConfigLoader
+    
+    loader = ConfigLoader()
+    fsm_config = loader.load_from_dict(config)
     builder = FSMBuilder()
-    return builder.build_from_config(config)
+    return builder.build(fsm_config)
 
 
 @pytest.fixture
@@ -42,6 +47,7 @@ def complex_fsm():
     """Create a more complex FSM with multiple paths."""
     config = {
         'name': 'complex_workflow',
+        'main_network': 'main',
         'networks': [{
             'name': 'main',
             'states': [
@@ -87,8 +93,12 @@ def complex_fsm():
         }]
     }
     
+    from dataknobs_fsm.config.loader import ConfigLoader
+    
+    loader = ConfigLoader()
+    fsm_config = loader.load_from_dict(config)
     builder = FSMBuilder()
-    return builder.build_from_config(config)
+    return builder.build(fsm_config)
 
 
 @pytest.fixture
@@ -141,7 +151,7 @@ class TestAdvancedFSMInitialization:
     def test_configure_transactions(self, advanced_fsm):
         """Test configuring transaction management."""
         advanced_fsm.configure_transactions(
-            TransactionStrategy.OPTIMISTIC,
+            TransactionStrategy.BATCH,
             timeout=30,
             max_retries=3
         )
@@ -244,13 +254,13 @@ class TestAdvancedFSMExecutionContext:
         
         async with advanced_fsm.execution_context(
             data=test_data,
-            data_mode=DataMode.COPY
+            data_mode=DataHandlingMode.COPY
         ) as context:
             # Verify context was created correctly
             assert context is not None
             assert context.current_state is not None
-            assert context.current_state.definition.name == 'start'
-            assert context.current_state.data == test_data
+            assert context.current_state == 'start'
+            assert context.data == test_data
     
     @pytest.mark.asyncio
     async def test_execution_context_with_initial_state(self, advanced_fsm):
@@ -261,7 +271,7 @@ class TestAdvancedFSMExecutionContext:
             data=test_data,
             initial_state='middle'
         ) as context:
-            assert context.current_state.definition.name == 'middle'
+            assert context.current_state == 'middle'
     
     @pytest.mark.asyncio
     async def test_execution_context_with_record(self, advanced_fsm):
@@ -309,7 +319,7 @@ class TestAdvancedFSMStepExecution:
             # Should transition to 'middle'
             if new_state is not None:
                 assert new_state.definition.name == 'middle'
-                assert context.current_state.definition.name == 'middle'
+                assert context.current_state == 'middle'
     
     @pytest.mark.asyncio
     async def test_multi_step_execution(self, advanced_fsm):

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from dataknobs_fsm.core.fsm import FSM
-from dataknobs_fsm.core.modes import DataMode, TransactionMode
+from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.execution.batch import BatchResult, BatchProgress
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.execution.engine import ExecutionEngine
@@ -77,7 +77,7 @@ class AsyncBatchExecutor:
         # Create base context if not provided
         if context_template is None:
             context_template = ExecutionContext(
-                data_mode=DataMode.SINGLE,
+                data_mode=ProcessingMode.SINGLE,
                 transaction_mode=TransactionMode.PER_RECORD if self.enable_transactions else TransactionMode.NONE
             )
         

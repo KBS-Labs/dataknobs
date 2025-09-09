@@ -4,7 +4,7 @@ This is a thin wrapper around UnifiedDatabaseStorage that uses
 dataknobs_data's memory backend.
 """
 
-from dataknobs_fsm.core.data_modes import DataMode
+from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.storage.base import StorageBackend, StorageConfig, StorageFactory
 from dataknobs_fsm.storage.database import UnifiedDatabaseStorage
 
@@ -53,24 +53,24 @@ class InMemoryStorage(UnifiedDatabaseStorage):
         if not config.mode_specific_config:
             config.mode_specific_config = {}
         
-        if DataMode.REFERENCE not in config.mode_specific_config:
-            config.mode_specific_config[DataMode.REFERENCE] = {
+        if DataHandlingMode.REFERENCE not in config.mode_specific_config:
+            config.mode_specific_config[DataHandlingMode.REFERENCE] = {
                 'compress': True,
                 'eviction_policy': 'lru',
                 'cache_size': 100
             }
         
         # For DIRECT mode, use minimal storage
-        if DataMode.DIRECT not in config.mode_specific_config:
-            config.mode_specific_config[DataMode.DIRECT] = {
+        if DataHandlingMode.DIRECT not in config.mode_specific_config:
+            config.mode_specific_config[DataHandlingMode.DIRECT] = {
                 'store_paths': False,
                 'store_snapshots': False,
                 'max_history': 10  # Keep only last 10 for DIRECT mode
             }
         
         # For COPY mode, full storage but with size limits
-        if DataMode.COPY not in config.mode_specific_config:
-            config.mode_specific_config[DataMode.COPY] = {
+        if DataHandlingMode.COPY not in config.mode_specific_config:
+            config.mode_specific_config[DataHandlingMode.COPY] = {
                 'store_paths': True,
                 'store_snapshots': True,
                 'max_size_mb': 100  # Limit total size for COPY mode

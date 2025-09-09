@@ -15,8 +15,8 @@ from typing import Any, Dict, Optional, TypeVar
 T = TypeVar("T")
 
 
-class DataMode(Enum):
-    """Data handling modes for state instances."""
+class DataHandlingMode(Enum):
+    """Data handling modes for state instances - defines how data is managed within states."""
     
     COPY = "copy"  # Deep copy on entry, isolated changes
     REFERENCE = "reference"  # Lazy loading with locking
@@ -26,7 +26,7 @@ class DataMode(Enum):
 class DataHandler(ABC):
     """Abstract base class for data mode handlers."""
     
-    def __init__(self, mode: DataMode):
+    def __init__(self, mode: DataHandlingMode):
         """Initialize the data handler.
         
         Args:
@@ -86,7 +86,7 @@ class CopyModeHandler(DataHandler):
     
     def __init__(self):
         """Initialize the COPY mode handler."""
-        super().__init__(DataMode.COPY)
+        super().__init__(DataHandlingMode.COPY)
         self._originals: Dict[int, Any] = {}
         self._lock = Lock()
     
@@ -147,7 +147,7 @@ class ReferenceModeHandler(DataHandler):
     
     def __init__(self):
         """Initialize the REFERENCE mode handler."""
-        super().__init__(DataMode.REFERENCE)
+        super().__init__(DataHandlingMode.REFERENCE)
         # Don't use WeakValueDictionary as it can't hold dict objects
         self._references: Dict[int, Any] = {}
         self._versions: Dict[int, int] = {}
@@ -235,7 +235,7 @@ class DirectModeHandler(DataHandler):
     
     def __init__(self):
         """Initialize the DIRECT mode handler."""
-        super().__init__(DataMode.DIRECT)
+        super().__init__(DataHandlingMode.DIRECT)
         self._active_data: Optional[Any] = None
         self._lock = Lock()
     
@@ -296,20 +296,20 @@ class DirectModeHandler(DataHandler):
 class DataModeManager:
     """Manager for data mode handlers."""
     
-    def __init__(self, default_mode: DataMode = DataMode.COPY):
+    def __init__(self, default_mode: DataHandlingMode = DataHandlingMode.COPY):
         """Initialize the data mode manager.
         
         Args:
             default_mode: The default data mode to use.
         """
         self.default_mode = default_mode
-        self._handlers: Dict[DataMode, DataHandler] = {
-            DataMode.COPY: CopyModeHandler(),
-            DataMode.REFERENCE: ReferenceModeHandler(),
-            DataMode.DIRECT: DirectModeHandler(),
+        self._handlers: Dict[DataHandlingMode, DataHandler] = {
+            DataHandlingMode.COPY: CopyModeHandler(),
+            DataHandlingMode.REFERENCE: ReferenceModeHandler(),
+            DataHandlingMode.DIRECT: DirectModeHandler(),
         }
     
-    def get_handler(self, mode: Optional[DataMode] = None) -> DataHandler:
+    def get_handler(self, mode: Optional[DataHandlingMode] = None) -> DataHandler:
         """Get a handler for the specified mode.
         
         Args:
@@ -322,7 +322,7 @@ class DataModeManager:
             mode = self.default_mode
         return self._handlers[mode]
     
-    def set_default_mode(self, mode: DataMode) -> None:
+    def set_default_mode(self, mode: DataHandlingMode) -> None:
         """Set the default data mode.
         
         Args:
@@ -333,13 +333,13 @@ class DataModeManager:
 
 # Global registry of data handlers
 _GLOBAL_HANDLERS = {
-    DataMode.COPY: CopyModeHandler(),
-    DataMode.REFERENCE: ReferenceModeHandler(),
-    DataMode.DIRECT: DirectModeHandler(),
+    DataHandlingMode.COPY: CopyModeHandler(),
+    DataHandlingMode.REFERENCE: ReferenceModeHandler(),
+    DataHandlingMode.DIRECT: DirectModeHandler(),
 }
 
 
-def get_data_handler(mode: DataMode) -> DataHandler:
+def get_data_handler(mode: DataHandlingMode) -> DataHandler:
     """Get a data handler for the specified mode.
     
     Args:

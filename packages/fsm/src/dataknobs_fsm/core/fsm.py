@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from dataknobs_fsm.core.modes import DataMode, TransactionMode
+from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.functions.base import FunctionRegistry
 
@@ -21,7 +21,7 @@ class FSM:
     def __init__(
         self,
         name: str,
-        data_mode: DataMode = DataMode.SINGLE,
+        data_mode: ProcessingMode = ProcessingMode.SINGLE,
         transaction_mode: TransactionMode = TransactionMode.NONE,
         description: Optional[str] = None
     ):
@@ -282,7 +282,7 @@ class FSM:
         """
         fsm = cls(
             name=data['name'],
-            data_mode=DataMode(data.get('data_mode', 'single')),
+            data_mode=ProcessingMode(data.get('data_mode', 'single')),
             transaction_mode=TransactionMode(data.get('transaction_mode', 'none')),
             description=data.get('description')
         )

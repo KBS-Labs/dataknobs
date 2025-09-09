@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
 
 from dataknobs_fsm.core.fsm import FSM
-from dataknobs_fsm.core.modes import DataMode, TransactionMode
+from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.execution.engine import ExecutionEngine
 from dataknobs_fsm.execution.stream import StreamProgress
@@ -86,7 +86,7 @@ class AsyncStreamExecutor:
         
         # Create base context
         context_template = ExecutionContext(
-            data_mode=DataMode.STREAM,
+            data_mode=ProcessingMode.STREAM,
             transaction_mode=TransactionMode.NONE
         )
         

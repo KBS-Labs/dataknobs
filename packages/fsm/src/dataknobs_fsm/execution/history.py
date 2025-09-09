@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from dataknobs_structures import Tree
 
-from dataknobs_fsm.core.data_modes import DataMode
+from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.core.state import StateInstance
 
 
@@ -29,7 +29,7 @@ class ExecutionStep:
         state_name: str,
         network_name: str,
         timestamp: float,
-        data_mode: DataMode = DataMode.COPY,
+        data_mode: DataHandlingMode = DataHandlingMode.COPY,
         status: ExecutionStatus = ExecutionStatus.PENDING
     ):
         """Initialize execution step.
@@ -180,7 +180,7 @@ class ExecutionHistory:
         self,
         fsm_name: str,
         execution_id: str,
-        data_mode: DataMode = DataMode.COPY,
+        data_mode: DataHandlingMode = DataHandlingMode.COPY,
         max_depth: Optional[int] = None,
         enable_data_snapshots: bool = False
     ):
@@ -211,10 +211,10 @@ class ExecutionHistory:
         self.skipped_steps = 0
         
         # Mode-specific storage
-        self._mode_storage: Dict[DataMode, List[ExecutionStep]] = {
-            DataMode.COPY: [],
-            DataMode.REFERENCE: [],
-            DataMode.DIRECT: []
+        self._mode_storage: Dict[DataHandlingMode, List[ExecutionStep]] = {
+            DataHandlingMode.COPY: [],
+            DataHandlingMode.REFERENCE: [],
+            DataHandlingMode.DIRECT: []
         }
         
         # Resource tracking
@@ -391,7 +391,7 @@ class ExecutionHistory:
         
         return steps
     
-    def get_steps_by_mode(self, mode: DataMode) -> List[ExecutionStep]:
+    def get_steps_by_mode(self, mode: DataHandlingMode) -> List[ExecutionStep]:
         """Get all steps executed in a specific data mode.
         
         Args:
@@ -545,10 +545,10 @@ class ExecutionHistory:
         """
         import copy
         
-        if self.data_mode == DataMode.COPY:
+        if self.data_mode == DataHandlingMode.COPY:
             # Deep copy for COPY mode
             return copy.deepcopy(data)
-        elif self.data_mode == DataMode.REFERENCE:
+        elif self.data_mode == DataHandlingMode.REFERENCE:
             # Store reference info only
             return {
                 'type': type(data).__name__,
@@ -583,10 +583,10 @@ class ExecutionHistory:
     
     def _prune_old_branches(self) -> None:
         """Prune old branches based on mode-specific strategy."""
-        if self.data_mode == DataMode.COPY:
+        if self.data_mode == DataHandlingMode.COPY:
             # Keep all branches for COPY mode (full history)
             pass
-        elif self.data_mode == DataMode.REFERENCE:
+        elif self.data_mode == DataHandlingMode.REFERENCE:
             # Prune branches not on critical path
             # Keep only paths that lead to current node
             pass

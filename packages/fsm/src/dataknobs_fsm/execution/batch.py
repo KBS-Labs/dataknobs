@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from dataknobs_fsm.core.fsm import FSM
-from dataknobs_fsm.core.modes import DataMode, TransactionMode
+from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.execution.engine import ExecutionEngine, TraversalStrategy
 
@@ -128,7 +128,7 @@ class BatchExecutor:
         # Create base context if not provided
         if context_template is None:
             context_template = ExecutionContext(
-                data_mode=DataMode.SINGLE,
+                data_mode=ProcessingMode.SINGLE,
                 transaction_mode=TransactionMode.PER_RECORD
             )
         

@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from dataknobs_fsm.core.arc import PushArc, DataIsolationMode
 from dataknobs_fsm.core.fsm import FSM
-from dataknobs_fsm.core.modes import DataMode
+from dataknobs_fsm.core.modes import ProcessingMode
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.execution.engine import ExecutionEngine, TraversalStrategy
