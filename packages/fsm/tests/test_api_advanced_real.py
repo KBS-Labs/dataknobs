@@ -499,7 +499,7 @@ class TestAdvancedFSMIntegration:
         
         # Configure all features
         fsm.set_execution_strategy(TraversalStrategy.BREADTH_FIRST)
-        fsm.configure_transactions(TransactionStrategy.PESSIMISTIC, timeout=60)
+        fsm.configure_transactions(TransactionStrategy.SINGLE, timeout=60)
         fsm.register_resource('test_db', {'type': 'memory', 'data': {}})
         
         # Set up hooks

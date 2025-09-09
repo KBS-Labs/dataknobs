@@ -117,11 +117,11 @@ class TransactionManager(ABC):
         """
         # Import here to avoid circular dependencies
         if strategy == TransactionStrategy.SINGLE:
-            return SingleTransactionManager(strategy)
+            return SingleTransactionManager()
         elif strategy == TransactionStrategy.BATCH:
-            return BatchTransactionManager(strategy)
+            return BatchTransactionManager()
         elif strategy == TransactionStrategy.MANUAL:
-            return ManualTransactionManager(strategy)
+            return ManualTransactionManager()
         else:
             raise ValueError(f"Unknown transaction strategy: {strategy}")
     

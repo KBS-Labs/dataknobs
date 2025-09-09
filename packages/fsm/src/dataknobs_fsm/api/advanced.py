@@ -279,9 +279,8 @@ class AdvancedFSM:
                 data=context.data.copy() if isinstance(context.data, dict) else {}
             )
         
-        # Store both the state name and instance
-        context.current_state = state_name
-        context.current_state_instance = state_instance
+        # Store the state instance as current_state for API compatibility
+        context.current_state = state_instance
         
         # Call hook with StateInstance
         if self._hooks.on_state_enter:
@@ -309,13 +308,16 @@ class AdvancedFSM:
         Returns:
             New state instance or None if no transition
         """
+        from dataknobs_fsm.core.state import StateInstance, StateDefinition, StateType
+        
         # Get the current state instance
-        current_state_instance = getattr(context, 'current_state_instance', None)
+        current_state_instance = context.current_state if isinstance(context.current_state, StateInstance) else None
         if not current_state_instance:
             # Create StateInstance if not present
-            from dataknobs_fsm.core.state import StateInstance, StateDefinition, StateType
+            # If current_state is a string, use it as the name
+            state_name = context.current_state if isinstance(context.current_state, str) else 'START'
             state_def = StateDefinition(
-                name=context.current_state,
+                name=state_name,
                 type=StateType.NORMAL
             )
             current_state_instance = StateInstance(
@@ -367,25 +369,25 @@ class AdvancedFSM:
             if not target_def:
                 continue  # Skip if target state not found
                 
-            from dataknobs_fsm.core.state import StateInstance
             new_state = StateInstance(
                 definition=target_def,
                 data=new_data
             )
             
-            # Update context - store both name and instance
-            context.current_state = new_state.definition.name
-            context.current_state_instance = new_state
+            # Update context - store StateInstance as current_state
+            context.current_state = new_state
             context.data = new_data
             
             # Track in history
             if self._history:
-                self._history.add_transition(
-                    from_state=current_state_instance.definition.name,
-                    to_state=new_state.definition.name,
-                    arc=arc.metadata.get('name', 'unnamed'),
+                # Add a step for the new state
+                step = self._history.add_step(
+                    state_name=new_state.definition.name,
+                    network_name=getattr(context, 'network_name', 'main'),
                     data=new_data
                 )
+                # Mark it as completed with the arc taken
+                step.complete(arc_taken=arc.metadata.get('name', 'unnamed'))
                 
             # Add to trace if tracing
             if self.execution_mode == ExecutionMode.TRACE:
