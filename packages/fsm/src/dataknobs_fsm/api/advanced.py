@@ -319,7 +319,8 @@ class AdvancedFSM:
         success, result = await self._async_engine.execute(
             context=context,
             data=None,  # Don't override context data
-            max_transitions=1  # Execute exactly one transition
+            max_transitions=1,  # Execute exactly one transition
+            arc_name=arc_name  # Pass arc_name for filtering
         )
         
         # Check if we actually transitioned to a new state
@@ -345,14 +346,14 @@ class AdvancedFSM:
                         network_name=getattr(context, 'network_name', 'main'),
                         data=context.data
                     )
-                    step.complete(arc_taken='transition')
+                    step.complete(arc_taken=arc_name or 'transition')
                 
                 # Add to trace if tracing
                 if self.execution_mode == ExecutionMode.TRACE:
                     self._trace_buffer.append({
                         'from': state_before,
                         'to': context.current_state,
-                        'arc': 'transition',
+                        'arc': arc_name or 'transition',
                         'data': context.data
                     })
                 

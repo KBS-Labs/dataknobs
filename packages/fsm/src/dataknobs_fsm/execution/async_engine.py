@@ -47,7 +47,8 @@ class AsyncExecutionEngine:
         self,
         context: ExecutionContext,
         data: Any = None,
-        max_transitions: int = 1000
+        max_transitions: int = 1000,
+        arc_name: Optional[str] = None
     ) -> Tuple[bool, Any]:
         """Execute the FSM asynchronously with given context.
         
@@ -55,6 +56,7 @@ class AsyncExecutionEngine:
             context: Execution context.
             data: Input data to process.
             max_transitions: Maximum transitions before stopping.
+            arc_name: Optional specific arc name to follow.
             
         Returns:
             Tuple of (success, result).
@@ -76,7 +78,7 @@ class AsyncExecutionEngine:
         try:
             # Execute based on data mode
             if context.data_mode == ProcessingMode.SINGLE:
-                result = await self._execute_single(context, max_transitions)
+                result = await self._execute_single(context, max_transitions, arc_name)
             elif context.data_mode == ProcessingMode.BATCH:
                 result = await self._execute_batch(context, max_transitions)
             elif context.data_mode == ProcessingMode.STREAM:
@@ -95,13 +97,15 @@ class AsyncExecutionEngine:
     async def _execute_single(
         self,
         context: ExecutionContext,
-        max_transitions: int
+        max_transitions: int,
+        arc_name: Optional[str] = None
     ) -> Tuple[bool, Any]:
         """Execute in single record mode asynchronously.
         
         Args:
             context: Execution context.
             max_transitions: Maximum transitions.
+            arc_name: Optional specific arc name to follow.
             
         Returns:
             Tuple of (success, result).
@@ -119,7 +123,8 @@ class AsyncExecutionEngine:
             # Get available transitions
             transitions_available = await self._get_available_transitions(
                 context.current_state,
-                context
+                context,
+                arc_name
             )
             
             if not transitions_available:
@@ -229,7 +234,8 @@ class AsyncExecutionEngine:
     async def _get_available_transitions(
         self,
         state_name: str,
-        context: ExecutionContext
+        context: ExecutionContext,
+        arc_name: Optional[str] = None
     ) -> List[ArcDefinition]:
         """Get available transitions from current state asynchronously.
         
@@ -238,6 +244,7 @@ class AsyncExecutionEngine:
         Args:
             state_name: Current state name.
             context: Execution context.
+            arc_name: Optional specific arc name to filter by.
             
         Returns:
             List of available arc definitions.
@@ -249,9 +256,18 @@ class AsyncExecutionEngine:
         state = network.states[state_name]
         available = []
         
+        # Filter arcs by name if specified
+        arcs_to_evaluate = state.outgoing_arcs
+        if arc_name:
+            arcs_to_evaluate = [arc for arc in state.outgoing_arcs 
+                              if hasattr(arc, 'name') and arc.name == arc_name]
+            # If no arcs match the specified name, return empty list
+            if not arcs_to_evaluate:
+                return []
+        
         # Evaluate all arc pre-conditions in parallel
         tasks = []
-        for arc in state.outgoing_arcs:
+        for arc in arcs_to_evaluate:
             task = asyncio.create_task(self._evaluate_arc(arc, context))
             tasks.append((arc, task))
         

@@ -73,7 +73,8 @@ class ExecutionEngine:
         self,
         context: ExecutionContext,
         data: Any = None,
-        max_transitions: int = 1000
+        max_transitions: int = 1000,
+        arc_name: Optional[str] = None
     ) -> Tuple[bool, Any]:
         """Execute the FSM with given context.
         
@@ -81,6 +82,7 @@ class ExecutionEngine:
             context: Execution context.
             data: Input data to process.
             max_transitions: Maximum transitions before stopping.
+            arc_name: Optional specific arc name to follow.
             
         Returns:
             Tuple of (success, result).
@@ -99,7 +101,7 @@ class ExecutionEngine:
         
         # Execute based on data mode
         if context.data_mode == ProcessingMode.SINGLE:
-            return self._execute_single(context, max_transitions)
+            return self._execute_single(context, max_transitions, arc_name)
         elif context.data_mode == ProcessingMode.BATCH:
             return self._execute_batch(context, max_transitions)
         elif context.data_mode == ProcessingMode.STREAM:
@@ -110,13 +112,15 @@ class ExecutionEngine:
     def _execute_single(
         self,
         context: ExecutionContext,
-        max_transitions: int
+        max_transitions: int,
+        arc_name: Optional[str] = None
     ) -> Tuple[bool, Any]:
         """Execute in single record mode.
         
         Args:
             context: Execution context.
             max_transitions: Maximum transitions.
+            arc_name: Optional specific arc name to follow.
             
         Returns:
             Tuple of (success, result).
@@ -145,7 +149,7 @@ class ExecutionEngine:
             self._execute_state_functions(context, context.current_state)
             
             # Get available transitions
-            transitions_available = self._get_available_transitions(context)
+            transitions_available = self._get_available_transitions(context, arc_name)
             
             if not transitions_available:
                 # No valid transitions - check if this is a final state
@@ -528,12 +532,14 @@ class ExecutionEngine:
     
     def _get_available_transitions(
         self,
-        context: ExecutionContext
+        context: ExecutionContext,
+        arc_name: Optional[str] = None
     ) -> List[ArcDefinition]:
         """Get available transitions from current state.
         
         Args:
             context: Execution context.
+            arc_name: Optional specific arc name to filter by.
             
         Returns:
             List of available arc definitions.
@@ -553,6 +559,12 @@ class ExecutionEngine:
             if ':' in arc_id:
                 source_state = arc_id.split(':')[0]
                 if source_state == context.current_state:
+                    # Filter by arc name if specified
+                    if arc_name:
+                        arc_actual_name = arc.metadata.get('name')
+                        if arc_actual_name != arc_name:
+                            continue
+                    
                     # Check if pre-test passes
                     if arc.pre_test:
                         if not self._evaluate_pre_test(arc, context):
