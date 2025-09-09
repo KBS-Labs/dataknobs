@@ -280,7 +280,10 @@ class TestAdvancedFSMExecutionContext:
         
         async with advanced_fsm.execution_context(data=record) as context:
             assert context.current_state is not None
-            assert context.current_state.data == {'test': 'record_data'}
+            assert context.data == {'test': 'record_data'}
+            # Also check that we have a state instance with data
+            assert hasattr(context, 'current_state_instance')
+            assert context.current_state_instance.data == {'test': 'record_data'}
     
     @pytest.mark.asyncio
     async def test_execution_context_with_hooks(self, advanced_fsm):
@@ -311,7 +314,8 @@ class TestAdvancedFSMStepExecution:
         """Test executing a single step."""
         async with advanced_fsm.execution_context({'test': 'data'}) as context:
             # Initial state should be 'start'
-            assert context.current_state.definition.name == 'start'
+            assert context.current_state == 'start'
+            assert context.current_state_instance.definition.name == 'start'
             
             # Execute one step
             new_state = await advanced_fsm.step(context)
@@ -325,7 +329,7 @@ class TestAdvancedFSMStepExecution:
     async def test_multi_step_execution(self, advanced_fsm):
         """Test executing multiple steps to completion."""
         async with advanced_fsm.execution_context({'test': 'data'}) as context:
-            states_visited = [context.current_state.definition.name]
+            states_visited = [context.current_state_instance.definition.name]
             
             # Execute steps until no more transitions
             while True:
@@ -350,7 +354,8 @@ class TestAdvancedFSMStepExecution:
         # Use valid data that will pass validation
         async with advanced_fsm.execution_context({'value': 10}) as context:
             # Should start at 'validate' state
-            assert context.current_state.definition.name == 'validate'
+            assert context.current_state == 'validate'
+            assert context.current_state_instance.definition.name == 'validate'
             
             # Execute validation step (should set 'valid' to true)
             new_state = await advanced_fsm.step(context)

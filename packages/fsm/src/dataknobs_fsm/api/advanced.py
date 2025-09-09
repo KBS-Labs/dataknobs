@@ -174,7 +174,21 @@ class AdvancedFSM:
             storage: Optional storage backend for history
             max_depth: Maximum history depth to track
         """
-        self._history = ExecutionHistory(max_depth=max_depth)
+        import uuid
+        from dataknobs_fsm.core.data_modes import DataHandlingMode
+        
+        # Get FSM name from the FSM object
+        fsm_name = getattr(self.fsm, 'name', 'unnamed_fsm')
+        
+        # Generate a unique execution ID
+        execution_id = str(uuid.uuid4())
+        
+        self._history = ExecutionHistory(
+            fsm_name=fsm_name,
+            execution_id=execution_id,
+            data_mode=DataHandlingMode.COPY,  # Default data mode
+            max_depth=max_depth
+        )
         self._storage = storage
         
     @asynccontextmanager
@@ -215,41 +229,70 @@ class AdvancedFSM:
         # Initialize state and data
         context.data = record.to_dict()
         
-        # Set initial state name
-        if initial_state:
-            context.current_state = initial_state
-        else:
+        # Find the state definition and create a StateInstance
+        from dataknobs_fsm.core.state import StateInstance, StateDefinition, StateType
+        
+        state_def = None
+        state_name = initial_state
+        
+        if not state_name:
             # Find start state from FSM
-            start_state = None
             if hasattr(self.fsm, 'get_start_state'):
-                start_state_def = self.fsm.get_start_state()
-                if start_state_def:
-                    start_state = start_state_def.name
+                state_def = self.fsm.get_start_state()
+                if state_def:
+                    state_name = state_def.name
             elif hasattr(self.fsm, 'core_fsm'):
                 # It's an FSM wrapper
                 for network in self.fsm.core_fsm.networks.values():
                     for state in network.states.values():
                         if state.is_start_state():
-                            start_state = state.name
+                            state_def = state
+                            state_name = state.name
                             break
-                    if start_state:
+                    if state_def:
                         break
             
-            if start_state:
-                context.current_state = start_state
-            else:
-                context.current_state = 'start'  # Default fallback
+            if not state_name:
+                state_name = 'start'  # Default fallback
         
-        # Call hook with current state name
+        # Get state definition if we don't have it yet
+        if not state_def and hasattr(self.fsm, 'core_fsm'):
+            for network in self.fsm.core_fsm.networks.values():
+                if state_name in network.states:
+                    state_def = network.states[state_name]
+                    break
+        
+        # Create StateInstance if we have a definition, otherwise create a minimal one
+        if state_def:
+            state_instance = StateInstance(
+                definition=state_def,
+                data=context.data.copy() if isinstance(context.data, dict) else {}
+            )
+        else:
+            # Create a minimal StateDefinition for backward compatibility
+            state_def = StateDefinition(
+                name=state_name,
+                type=StateType.START if state_name == 'start' else StateType.NORMAL
+            )
+            state_instance = StateInstance(
+                definition=state_def,
+                data=context.data.copy() if isinstance(context.data, dict) else {}
+            )
+        
+        # Store both the state name and instance
+        context.current_state = state_name
+        context.current_state_instance = state_instance
+        
+        # Call hook with StateInstance
         if self._hooks.on_state_enter:
-            await self._hooks.on_state_enter(context.current_state)
+            await self._hooks.on_state_enter(state_instance)
             
         try:
             yield context
         finally:
             # Cleanup
             if self._hooks.on_state_exit:
-                await self._hooks.on_state_exit(context.current_state)
+                await self._hooks.on_state_exit(state_instance)
             await self._resource_manager.cleanup()
             
     async def step(
@@ -266,20 +309,46 @@ class AdvancedFSM:
         Returns:
             New state instance or None if no transition
         """
-        current_state = context.current_state
+        # Get the current state instance
+        current_state_instance = getattr(context, 'current_state_instance', None)
+        if not current_state_instance:
+            # Create StateInstance if not present
+            from dataknobs_fsm.core.state import StateInstance, StateDefinition, StateType
+            state_def = StateDefinition(
+                name=context.current_state,
+                type=StateType.NORMAL
+            )
+            current_state_instance = StateInstance(
+                definition=state_def,
+                data=context.data.copy() if isinstance(context.data, dict) else {}
+            )
         
-        # Find available arcs
-        arcs = self.fsm.get_outgoing_arcs(current_state.definition.name)
+        # Find available arcs from the current network
+        # Get the main network (simplified - should track network stack in real implementation)
+        # Note: fsm.main_network is the actual network object, not a string key
+        network = self.fsm.main_network
+        if not network:
+            return None
+            
+        # Find arcs from current state
+        current_state_name = current_state_instance.definition.name
+        arcs = []
+        for arc_id, arc in network.arcs.items():
+            # Arc IDs are typically formatted as "source:target"
+            if ':' in arc_id:
+                source_state = arc_id.split(':')[0]
+                if source_state == current_state_name:
+                    arcs.append(arc)
         
         # Filter to specific arc if requested
         if arc_name:
-            arcs = [arc for arc in arcs if arc.name == arc_name]
+            arcs = [arc for arc in arcs if arc.metadata.get('name') == arc_name]
             
         # Execute first valid arc
         for arc in arcs:
             # Check pre-test if exists
             if arc.pre_test:
-                if not await arc.pre_test.test(current_state):
+                if not await arc.pre_test.test(current_state_instance):
                     continue
                     
             # Call arc hook
@@ -288,32 +357,42 @@ class AdvancedFSM:
                 
             # Execute transformation
             if arc.transform:
-                new_data = await arc.transform.transform(current_state.data)
+                new_data = await arc.transform.transform(current_state_instance.data)
             else:
-                new_data = current_state.data.copy()
+                new_data = current_state_instance.data.copy()
                 
             # Create new state
-            target_def = self.fsm.get_state(arc.target_state)
-            new_state = StateInstance(target_def, new_data)
+            # Get target state definition from network
+            target_def = network.states.get(arc.target_state)
+            if not target_def:
+                continue  # Skip if target state not found
+                
+            from dataknobs_fsm.core.state import StateInstance
+            new_state = StateInstance(
+                definition=target_def,
+                data=new_data
+            )
             
-            # Update context
-            context.set_current_state(new_state)
+            # Update context - store both name and instance
+            context.current_state = new_state.definition.name
+            context.current_state_instance = new_state
+            context.data = new_data
             
             # Track in history
             if self._history:
                 self._history.add_transition(
-                    from_state=current_state.definition.name,
+                    from_state=current_state_instance.definition.name,
                     to_state=new_state.definition.name,
-                    arc=arc.name,
+                    arc=arc.metadata.get('name', 'unnamed'),
                     data=new_data
                 )
                 
             # Add to trace if tracing
             if self.execution_mode == ExecutionMode.TRACE:
                 self._trace_buffer.append({
-                    'from': current_state.definition.name,
+                    'from': current_state_instance.definition.name,
                     'to': new_state.definition.name,
-                    'arc': arc.name,
+                    'arc': arc.metadata.get('name', 'unnamed'),
                     'data': new_data
                 })
                 
