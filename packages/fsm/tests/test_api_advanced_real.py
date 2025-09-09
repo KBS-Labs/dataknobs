@@ -438,14 +438,14 @@ class TestAdvancedFSMComplexWorkflows:
             
             # Should be able to proceed to processing
             # (exact path depends on FSM execution logic)
-            current_state = context.current_state.definition.name
+            current_state = context.current_state
             assert current_state in ['validate', 'process', 'error']
         
         # Test with invalid data (should go to error)
         async with advanced_fsm.execution_context({'value': -1}) as context:
             await advanced_fsm.step(context)
             
-            current_state = context.current_state.definition.name
+            current_state = context.current_state
             assert current_state in ['validate', 'error']
     
     @pytest.mark.asyncio
@@ -458,7 +458,7 @@ class TestAdvancedFSMComplexWorkflows:
             max_steps = 10  # Prevent infinite loops
             
             for _ in range(max_steps):
-                current_name = context.current_state.definition.name
+                current_name = context.current_state
                 states_visited.append(current_name)
                 
                 # Stop if we reach an end state
@@ -555,7 +555,7 @@ class TestAdvancedFSMIntegration:
                 steps += 1
                 
                 # Stop if we reach end state
-                if context.current_state.definition.name == 'end':
+                if context.current_state == 'end':
                     break
         
         # Verify monitoring captured execution
@@ -563,5 +563,5 @@ class TestAdvancedFSMIntegration:
         assert len(hook_calls) >= 0
         
         # Final state should be 'end' or we should have made progress
-        final_state_name = context.current_state.definition.name
+        final_state_name = context.current_state
         assert final_state_name in ['start', 'middle', 'end']

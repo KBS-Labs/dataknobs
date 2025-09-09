@@ -279,8 +279,9 @@ class AdvancedFSM:
                 data=context.data.copy() if isinstance(context.data, dict) else {}
             )
         
-        # Store the state instance as current_state for API compatibility
-        context.current_state = state_instance
+        # Store both string name and instance for API compatibility
+        context.current_state = state_name
+        context.current_state_instance = state_instance
         
         # Call hook with StateInstance
         if self._hooks.on_state_enter:
@@ -310,11 +311,11 @@ class AdvancedFSM:
         """
         from dataknobs_fsm.core.state import StateInstance, StateDefinition, StateType
         
-        # Get the current state instance
-        current_state_instance = context.current_state if isinstance(context.current_state, StateInstance) else None
+        # Get the current state instance - now stored separately from state name
+        current_state_instance = getattr(context, 'current_state_instance', None)
         if not current_state_instance:
-            # Create StateInstance if not present
-            # If current_state is a string, use it as the name
+            # Create StateInstance if not present (for backward compatibility)
+            # current_state should be a string now
             state_name = context.current_state if isinstance(context.current_state, str) else 'START'
             state_def = StateDefinition(
                 name=state_name,
@@ -324,6 +325,8 @@ class AdvancedFSM:
                 definition=state_def,
                 data=context.data.copy() if isinstance(context.data, dict) else {}
             )
+            # Store it for future use
+            context.current_state_instance = current_state_instance
         
         # Find available arcs from the current network
         # Get the main network (simplified - should track network stack in real implementation)
@@ -374,8 +377,9 @@ class AdvancedFSM:
                 data=new_data
             )
             
-            # Update context - store StateInstance as current_state
-            context.current_state = new_state
+            # Update context - store both string name and instance
+            context.current_state = new_state.definition.name
+            context.current_state_instance = new_state
             context.data = new_data
             
             # Track in history
@@ -419,16 +423,16 @@ class AdvancedFSM:
             State where execution stopped
         """
         while True:
-            # Check if current state is a breakpoint
-            if context.current_state.definition.name in self._breakpoints:
-                return context.current_state
+            # Check if current state is a breakpoint (current_state is now a string)
+            if context.current_state in self._breakpoints:
+                return context.current_state_instance
                 
             # Step to next state
             new_state = await self.step(context)
             
             # Check if we reached an end state
-            if not new_state or new_state.definition.is_end:
-                return context.current_state
+            if not new_state or (hasattr(new_state.definition, 'is_end') and new_state.definition.is_end):
+                return context.current_state_instance
                 
     async def trace_execution(
         self,
