@@ -4,7 +4,7 @@ This module provides consistent result formatting across Simple and Advanced API
 eliminating code duplication and ensuring uniform output structure.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List
 from ..execution.context import ExecutionContext
 
 
@@ -16,7 +16,7 @@ class ResultFormatter:
         context: ExecutionContext,
         success: bool,
         result: Any = None,
-        error: Optional[Exception] = None
+        error: Exception | None = None
     ) -> Dict[str, Any]:
         """Format a single execution result.
         
@@ -103,7 +103,7 @@ class ResultFormatter:
         context: ExecutionContext,
         success: bool,
         result: Any = None,
-        error: Optional[Exception] = None
+        error: Exception | None = None
     ) -> Dict[str, Any]:
         """Format an async execution result.
         
@@ -123,7 +123,7 @@ class ResultFormatter:
     @staticmethod
     def format_step_result(
         context: ExecutionContext,
-        new_state: Optional[str] = None,
+        new_state: str | None = None,
         transition_taken: bool = False
     ) -> Dict[str, Any]:
         """Format a step-by-step execution result.
@@ -150,7 +150,7 @@ class ResultFormatter:
     def format_error_result(
         context: ExecutionContext,
         error: Exception,
-        error_state: Optional[str] = None
+        error_state: str | None = None
     ) -> Dict[str, Any]:
         """Format an error result with context.
         

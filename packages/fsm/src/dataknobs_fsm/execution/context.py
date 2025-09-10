@@ -1,13 +1,11 @@
 """Execution context for FSM state machines."""
 
-import asyncio
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Tuple, Union
 
 from dataknobs_data.database import AsyncDatabase, SyncDatabase
-from dataknobs_data.records import Record
 
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.streaming.core import StreamChunk, StreamContext
@@ -58,9 +56,9 @@ class ExecutionContext:
         self,
         data_mode: ProcessingMode = ProcessingMode.SINGLE,
         transaction_mode: TransactionMode = TransactionMode.NONE,
-        resources: Optional[Dict[str, Any]] = None,
-        database: Optional[Union[SyncDatabase, AsyncDatabase]] = None,
-        stream_context: Optional[StreamContext] = None
+        resources: Dict[str, Any] | None = None,
+        database: Union[SyncDatabase, AsyncDatabase] | None = None,
+        stream_context: StreamContext | None = None
     ):
         """Initialize execution context.
         
@@ -76,9 +74,9 @@ class ExecutionContext:
         self.transaction_mode = transaction_mode
         
         # State tracking
-        self.current_state: Optional[str] = None
-        self.previous_state: Optional[str] = None
-        self.network_stack: List[Tuple[str, Optional[str]]] = []
+        self.current_state: str | None = None
+        self.previous_state: str | None = None
+        self.network_stack: List[Tuple[str, str | None]] = []
         self.state_history: List[str] = []
         
         # Data management
@@ -92,12 +90,12 @@ class ExecutionContext:
         
         # Transaction management
         self.database = database
-        self.current_transaction: Optional[TransactionInfo] = None
+        self.current_transaction: TransactionInfo | None = None
         self.transaction_history: List[TransactionInfo] = []
         
         # Stream coordination
         self.stream_context = stream_context
-        self.current_chunk: Optional[StreamChunk] = None
+        self.current_chunk: StreamChunk | None = None
         self.processed_chunks: int = 0
         
         # Batch processing
@@ -106,16 +104,16 @@ class ExecutionContext:
         self.batch_errors: List[Tuple[int, Exception]] = []
         
         # Parallel execution
-        self.parallel_paths: Dict[str, 'ExecutionContext'] = {}
+        self.parallel_paths: Dict[str, ExecutionContext] = {}
         self.is_child_context: bool = False
-        self.parent_context: Optional['ExecutionContext'] = None
+        self.parent_context: ExecutionContext | None = None
         
         # Performance tracking
         self.start_time: float = time.time()
         self.state_timings: Dict[str, float] = {}
         self.function_call_count: Dict[str, int] = {}
     
-    def push_network(self, network_name: str, return_state: Optional[str] = None) -> None:
+    def push_network(self, network_name: str, return_state: str | None = None) -> None:
         """Push a network onto the execution stack.
         
         Args:
@@ -124,7 +122,7 @@ class ExecutionContext:
         """
         self.network_stack.append((network_name, return_state))
     
-    def pop_network(self) -> Tuple[str, Optional[str]]:
+    def pop_network(self) -> Tuple[str, str | None]:
         """Pop a network from the execution stack.
         
         Returns:
@@ -150,7 +148,7 @@ class ExecutionContext:
         self,
         resource_type: str,
         resource_id: str,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Dict[str, Any] | None = None
     ) -> bool:
         """Allocate a resource.
         
@@ -194,7 +192,7 @@ class ExecutionContext:
             return True
         return False
     
-    def start_transaction(self, transaction_id: Optional[str] = None) -> bool:
+    def start_transaction(self, transaction_id: str | None = None) -> bool:
         """Start a new transaction.
         
         Args:

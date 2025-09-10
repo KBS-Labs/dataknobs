@@ -3,7 +3,7 @@
 import json
 import time
 from dataclasses import dataclass, field as dataclass_field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 from enum import Enum
 
 from dataknobs_fsm.functions.base import ResourceError
@@ -31,8 +31,8 @@ class LLMSession:
     
     provider: LLMProvider
     model_name: str
-    api_key: Optional[str] = None
-    endpoint: Optional[str] = None
+    api_key: str | None = None
+    endpoint: str | None = None
     temperature: float = 0.7
     max_tokens: int = 1000
     top_p: float = 1.0
@@ -117,8 +117,8 @@ class LLMResource(BaseResourceProvider):
         name: str,
         provider: Union[str, LLMProvider] = "ollama",
         model: str = "llama2",
-        api_key: Optional[str] = None,
-        endpoint: Optional[str] = None,
+        api_key: str | None = None,
+        endpoint: str | None = None,
         **config
     ):
         """Initialize LLM resource.
@@ -153,7 +153,7 @@ class LLMResource(BaseResourceProvider):
         self._sessions = {}
         self.status = ResourceStatus.IDLE
     
-    def _get_default_endpoint(self) -> Optional[str]:
+    def _get_default_endpoint(self) -> str | None:
         """Get default endpoint for provider.
         
         Returns:
@@ -348,7 +348,7 @@ class LLMResource(BaseResourceProvider):
     def complete(
         self,
         prompt: str,
-        session: Optional[LLMSession] = None,
+        session: LLMSession | None = None,
         **kwargs
     ) -> Dict[str, Any]:
         """Generate a completion for the given prompt.
@@ -556,7 +556,7 @@ class LLMResource(BaseResourceProvider):
     def embed(
         self,
         text: Union[str, List[str]],
-        session: Optional[LLMSession] = None,
+        session: LLMSession | None = None,
         **kwargs
     ) -> List[List[float]]:
         """Generate embeddings for text.

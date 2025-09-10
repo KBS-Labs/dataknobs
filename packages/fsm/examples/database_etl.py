@@ -12,8 +12,8 @@ import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, List
 
-from dataknobs_fsm import SimpleFSM
-from dataknobs_fsm.patterns import ETLPattern
+from dataknobs_fsm.api.simple import SimpleFSM
+from dataknobs_fsm.patterns.etl import DatabaseETL, ETLConfig, ETLMode
 
 # Configure logging
 logging.basicConfig(
@@ -45,35 +45,28 @@ class SalesETLPipeline:
             "errors": []
         }
     
-    def build_pipeline(self) -> ETLPattern:
+    def build_pipeline(self) -> DatabaseETL:
         """Build the ETL pipeline with all transformations."""
         
-        # Create ETL pattern
-        self.etl = ETLPattern(
-            name="sales_etl",
-            source_config={
-                "type": "database",
-                **self.source_config
-            },
-            target_config={
-                "type": "database",
-                **self.target_config
-            },
-            options={
-                "batch_size": 5000,
-                "parallel": True,
-                "workers": 4,
-                "checkpoint_interval": 10000,
-                "error_threshold": 0.01,  # Allow 1% errors
-                "on_error": "log_and_continue"
-            }
+        # Create ETL configuration
+        config = ETLConfig(
+            source_db=self.source_config,
+            target_db=self.target_config,
+            mode=ETLMode.INCREMENTAL,
+            batch_size=5000,
+            parallel_workers=4,
+            checkpoint_interval=10000,
+            error_threshold=0.01,  # Allow 1% errors
+            transformations=[
+                self.clean_data,
+                self.validate_data,
+                self.enrich_data,
+                self.calculate_metrics
+            ]
         )
         
-        # Add transformations
-        self.etl.add_transformation(self.clean_data)
-        self.etl.add_transformation(self.validate_data)
-        self.etl.add_transformation(self.enrich_data)
-        self.etl.add_transformation(self.calculate_metrics)
+        # Create DatabaseETL instance
+        self.etl = DatabaseETL(config)
         
         return self.etl
     
@@ -244,11 +237,8 @@ class SalesETLPipeline:
         }
         
         try:
-            # Run ETL with progress monitoring
-            result = await self.etl.run_async(
-                input_data,
-                on_progress=self.progress_callback
-            )
+            # Run ETL pipeline
+            result = await self.etl.run()
             
             self.stats['end_time'] = datetime.now()
             self.stats['records_extracted'] = result.get('records_extracted', 0)

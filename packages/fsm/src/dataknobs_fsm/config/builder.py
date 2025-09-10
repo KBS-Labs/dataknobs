@@ -9,9 +9,8 @@ instances from configuration objects, including:
 """
 
 import importlib
-from typing import Any, Callable, Dict, List, Optional, Type
+from typing import Any, Callable, Dict, List, Type
 
-from dataknobs_data import Field
 
 from dataknobs_fsm.config.schema import (
     ArcConfig,
@@ -56,7 +55,7 @@ class FSMBuilder:
         self._builtin_functions: Dict[str, Callable] = {}
         self._networks: Dict[str, StateNetwork] = {}
         self._data_handlers: Dict[DataHandlingMode, DataHandler] = {}
-        self._transaction_manager: Optional[TransactionManager] = None
+        self._transaction_manager: TransactionManager | None = None
         
         # Register built-in functions on initialization
         self._register_builtin_functions()
@@ -524,7 +523,7 @@ class FSMBuilder:
     def _resolve_function(
         self,
         func_ref: FunctionReference,
-        expected_type: Optional[Type] = None,
+        expected_type: Type | None = None,
     ) -> Callable:
         """Resolve a function reference to a callable.
         
@@ -639,7 +638,6 @@ def transform(data, context=None):
         # For inline functions, generate a unique name and register them
         if func_ref.type == "inline":
             import hashlib
-            import uuid
             
             # Generate a unique name based on the code content
             code_hash = hashlib.md5(func_ref.code.encode()).hexdigest()[:8]
@@ -792,8 +790,8 @@ class FSM:
         core_fsm: CoreFSM,
         config: FSMConfig,
         resource_manager: ResourceManager,
-        transaction_manager: Optional[TransactionManager] = None,
-        function_registry: Optional[Dict[str, Callable]] = None,
+        transaction_manager: TransactionManager | None = None,
+        function_registry: Dict[str, Callable] | None = None,
     ):
         """Initialize FSM wrapper instance.
         
@@ -822,7 +820,7 @@ class FSM:
         self.name = core_fsm.name  # ExecutionEngine expects this
         
         # Engine will be created on demand
-        self._engine: Optional[ExecutionEngine] = None
+        self._engine: ExecutionEngine | None = None
 
     def get_engine(self) -> ExecutionEngine:
         """Get or create the execution engine.
@@ -854,7 +852,7 @@ class FSM:
         
         return self._engine
 
-    async def execute(self, initial_data: Optional[Dict[str, Any]] = None) -> Any:
+    async def execute(self, initial_data: Dict[str, Any] | None = None) -> Any:
         """Execute the FSM with initial data.
         
         This is a simplified API for running the FSM.
@@ -891,7 +889,7 @@ class FSM:
         except Exception:
             return False
     
-    def get_start_state(self, network_name: Optional[str] = None):
+    def get_start_state(self, network_name: str | None = None):
         """Get the start state from a network.
         
         Args:
@@ -915,7 +913,7 @@ class FSM:
         
         raise ValueError(f"No start state found in network '{network.name}'")
     
-    def get_state(self, state_name: str, network_name: Optional[str] = None):
+    def get_state(self, state_name: str, network_name: str | None = None):
         """Get a state definition by name.
         
         Args:

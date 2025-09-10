@@ -4,7 +4,7 @@ This module provides database-related functions that can be referenced
 in FSM configurations, leveraging the dataknobs_data package.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List
 
 from dataknobs_fsm.functions.base import ITransformFunction, TransformError
 from dataknobs_fsm.resources.database import DatabaseResourceAdapter
@@ -17,7 +17,7 @@ class DatabaseFetch(ITransformFunction):
         self,
         resource_name: str,
         query: str,
-        params: Optional[Dict[str, Any]] = None,
+        params: Dict[str, Any] | None = None,
         fetch_one: bool = False,
         as_dict: bool = True,
     ):
@@ -92,7 +92,7 @@ class DatabaseUpsert(ITransformFunction):
         resource_name: str,
         table: str,
         key_columns: List[str],
-        value_columns: Optional[List[str]] = None,
+        value_columns: List[str] | None = None,
         on_conflict: str = "update",  # "update", "ignore", "error"
     ):
         """Initialize the database upsert function.
@@ -294,7 +294,7 @@ class DatabaseTransaction(ITransformFunction):
         self,
         resource_name: str,
         action: str = "begin",  # "begin", "commit", "rollback"
-        savepoint: Optional[str] = None,
+        savepoint: str | None = None,
     ):
         """Initialize the database transaction function.
         
@@ -370,7 +370,7 @@ class DatabaseBulkInsert(ITransformFunction):
         self,
         resource_name: str,
         table: str,
-        columns: Optional[List[str]] = None,
+        columns: List[str] | None = None,
         chunk_size: int = 1000,
         on_duplicate: str = "error",  # "error", "ignore", "update"
     ):

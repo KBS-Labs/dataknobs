@@ -7,10 +7,9 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
-    Any, Dict, List, Optional, Union, AsyncIterator, Iterator,
-    Callable, TypeVar, Protocol
+    Any, Dict, List, Union, AsyncIterator, Iterator,
+    Callable, Protocol
 )
-import asyncio
 from datetime import datetime
 
 
@@ -40,8 +39,8 @@ class LLMMessage:
     """Represents a message in LLM conversation."""
     role: str  # 'system', 'user', 'assistant', 'function'
     content: str
-    name: Optional[str] = None  # For function messages
-    function_call: Optional[Dict[str, Any]] = None  # For function calling
+    name: str | None = None  # For function messages
+    function_call: Dict[str, Any] | None = None  # For function calling
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -50,9 +49,9 @@ class LLMResponse:
     """Response from LLM."""
     content: str
     model: str
-    finish_reason: Optional[str] = None  # 'stop', 'length', 'function_call'
-    usage: Optional[Dict[str, int]] = None  # tokens used
-    function_call: Optional[Dict[str, Any]] = None
+    finish_reason: str | None = None  # 'stop', 'length', 'function_call'
+    usage: Dict[str, int] | None = None  # tokens used
+    function_call: Dict[str, Any] | None = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
 
@@ -62,8 +61,8 @@ class LLMStreamResponse:
     """Streaming response from LLM."""
     delta: str  # Incremental content
     is_final: bool = False
-    finish_reason: Optional[str] = None
-    usage: Optional[Dict[str, int]] = None
+    finish_reason: str | None = None
+    usage: Dict[str, int] | None = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -72,40 +71,40 @@ class LLMConfig:
     """Configuration for LLM operations."""
     provider: str  # 'openai', 'anthropic', 'ollama', etc.
     model: str  # Model name/identifier
-    api_key: Optional[str] = None
-    api_base: Optional[str] = None  # Custom API endpoint
+    api_key: str | None = None
+    api_base: str | None = None  # Custom API endpoint
     
     # Generation parameters
     temperature: float = 0.7
-    max_tokens: Optional[int] = None
+    max_tokens: int | None = None
     top_p: float = 1.0
     frequency_penalty: float = 0.0
     presence_penalty: float = 0.0
-    stop_sequences: Optional[List[str]] = None
+    stop_sequences: List[str] | None = None
     
     # Mode settings
     mode: CompletionMode = CompletionMode.CHAT
-    system_prompt: Optional[str] = None
-    response_format: Optional[str] = None  # 'text' or 'json'
+    system_prompt: str | None = None
+    response_format: str | None = None  # 'text' or 'json'
     
     # Function calling
-    functions: Optional[List[Dict[str, Any]]] = None
-    function_call: Optional[Union[str, Dict[str, str]]] = None  # 'auto', 'none', or specific function
+    functions: List[Dict[str, Any]] | None = None
+    function_call: Union[str, Dict[str, str]] | None = None  # 'auto', 'none', or specific function
     
     # Streaming
     stream: bool = False
-    stream_callback: Optional[Callable[[LLMStreamResponse], None]] = None
+    stream_callback: Callable[[LLMStreamResponse], None] | None = None
     
     # Rate limiting
-    rate_limit: Optional[int] = None  # Requests per minute
+    rate_limit: int | None = None  # Requests per minute
     retry_count: int = 3
     retry_delay: float = 1.0
     timeout: float = 60.0
     
     # Advanced settings
-    seed: Optional[int] = None  # For reproducibility
-    logit_bias: Optional[Dict[str, float]] = None
-    user_id: Optional[str] = None
+    seed: int | None = None  # For reproducibility
+    logit_bias: Dict[str, float] | None = None
+    user_id: str | None = None
     
     # Provider-specific options
     options: Dict[str, Any] = field(default_factory=dict)

@@ -8,10 +8,10 @@ This module provides:
 from dataclasses import dataclass, field as dataclass_field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Set, Tuple, TYPE_CHECKING
 from uuid import uuid4
 
-from dataknobs_data.fields import Field, FieldType
+from dataknobs_data.fields import Field
 from dataknobs_fsm.core.data_modes import DataHandlingMode, DataModeManager
 from dataknobs_fsm.core.transactions import Transaction
 from dataknobs_fsm.functions.base import (
@@ -100,8 +100,8 @@ class StateDefinition:
     metadata: Dict[str, Any] = dataclass_field(default_factory=dict)
     
     # Schema and data handling
-    schema: Optional[StateSchema] = None
-    data_mode: Optional[DataHandlingMode] = None  # Preferred data mode
+    schema: StateSchema | None = None
+    data_mode: DataHandlingMode | None = None  # Preferred data mode
     
     # Resource requirements
     resource_requirements: List[ResourceConfig] = dataclass_field(default_factory=list)
@@ -109,13 +109,13 @@ class StateDefinition:
     # Functions
     validation_functions: List[IValidationFunction] = dataclass_field(default_factory=list)
     transform_functions: List[ITransformFunction] = dataclass_field(default_factory=list)
-    end_test_function: Optional[IEndStateTestFunction] = None
+    end_test_function: IEndStateTestFunction | None = None
     
     # Arc references (will be populated when building network)
     outgoing_arcs: List["ArcDefinition"] = dataclass_field(default_factory=list)
     
     # Execution settings
-    timeout: Optional[float] = None  # Timeout in seconds
+    timeout: float | None = None  # Timeout in seconds
     retry_count: int = 0  # Number of retries on failure
     retry_delay: float = 1.0  # Delay between retries in seconds
     
@@ -183,25 +183,25 @@ class StateInstance:
     
     # Data handling
     data: Dict[str, Any] = dataclass_field(default_factory=dict)
-    data_mode_manager: Optional[DataModeManager] = None
-    data_handler: Optional[Any] = None  # Active data handler
+    data_mode_manager: DataModeManager | None = None
+    data_handler: Any | None = None  # Active data handler
     
     # Transaction participation
-    transaction: Optional[Transaction] = None
+    transaction: Transaction | None = None
     
     # Resource access
     acquired_resources: Dict[str, Any] = dataclass_field(default_factory=dict)
     
     # Execution tracking
-    entry_time: Optional[datetime] = None
-    exit_time: Optional[datetime] = None
+    entry_time: datetime | None = None
+    exit_time: datetime | None = None
     execution_count: int = 0
     error_count: int = 0
-    last_error: Optional[str] = None
+    last_error: str | None = None
     
     # Arc execution history
     executed_arcs: List[str] = dataclass_field(default_factory=list)
-    next_state: Optional[str] = None
+    next_state: str | None = None
     
     def __post_init__(self):
         """Initialize data mode manager if not provided."""
@@ -298,7 +298,7 @@ class StateInstance:
         """
         self.acquired_resources[name] = resource
     
-    def get_resource(self, name: str) -> Optional[Any]:
+    def get_resource(self, name: str) -> Any | None:
         """Get an acquired resource.
         
         Args:
@@ -321,7 +321,7 @@ class StateInstance:
         """
         self.executed_arcs.append(arc_id)
     
-    def get_duration(self) -> Optional[float]:
+    def get_duration(self) -> float | None:
         """Get execution duration in seconds.
         
         Returns:

@@ -5,17 +5,16 @@ including data extraction from source databases, transformation pipelines,
 and loading into target systems.
 """
 
-from typing import Any, Dict, List, Optional, Union, Callable, AsyncIterator
+from typing import Any, Dict, List, Union, Callable, AsyncIterator
 from dataclasses import dataclass
 from enum import Enum
 from dataknobs_data import AsyncDatabase, Record, Query
 
 from ..api.simple import SimpleFSM
 from dataknobs_fsm.core.data_modes import DataHandlingMode
-from ..config.builder import FSMBuilder
 from ..functions.library.database import DatabaseFetch, DatabaseUpsert
 from ..functions.library.transformers import (
-    FieldMapper, ValueNormalizer, TypeConverter, DataEnricher
+    FieldMapper, DataEnricher
 )
 from ..functions.library.validators import SchemaValidator
 
@@ -40,13 +39,13 @@ class ETLConfig:
     checkpoint_interval: int = 10000  # Checkpoint every N records
     
     # Optional configurations
-    source_query: Optional[str] = "SELECT * FROM source_table"
+    source_query: str | None = "SELECT * FROM source_table"
     target_table: str = "target_table"
-    key_columns: Optional[List[str]] = None
-    field_mappings: Optional[Dict[str, str]] = None
-    transformations: Optional[List[Callable]] = None
-    validation_schema: Optional[Dict[str, Any]] = None
-    enrichment_sources: Optional[List[Dict[str, Any]]] = None
+    key_columns: List[str] | None = None
+    field_mappings: Dict[str, str] | None = None
+    transformations: List[Callable] | None = None
+    validation_schema: Dict[str, Any] | None = None
+    enrichment_sources: List[Dict[str, Any]] | None = None
 
 
 class DatabaseETL:
@@ -189,7 +188,7 @@ class DatabaseETL:
                     resources.append(f'enrichment_api_{i}')
         return resources
         
-    def _create_validation_test(self) -> Optional[Callable]:
+    def _create_validation_test(self) -> Callable | None:
         """Create validation test function."""
         if not self.config.validation_schema:
             return None
@@ -197,7 +196,7 @@ class DatabaseETL:
         validator = SchemaValidator(self.config.validation_schema)
         return lambda state: validator.validate(Record(state.data))
         
-    def _create_validation_test_reference(self) -> Optional[Dict[str, Any]]:
+    def _create_validation_test_reference(self) -> Dict[str, Any] | None:
         """Create validation test function reference for FSM config."""
         if not self.config.validation_schema:
             return None
@@ -245,7 +244,7 @@ class DatabaseETL:
             
         return transform
         
-    def _create_enricher(self) -> Optional[Callable]:
+    def _create_enricher(self) -> Callable | None:
         """Create enrichment function."""
         if not self.config.enrichment_sources:
             return None
@@ -253,7 +252,7 @@ class DatabaseETL:
         enricher = DataEnricher(self.config.enrichment_sources)
         return enricher.transform
         
-    def _create_transformer_reference(self) -> Optional[Dict[str, Any]]:
+    def _create_transformer_reference(self) -> Dict[str, Any] | None:
         """Create transformation function reference for FSM config."""
         if not self.config.field_mappings and not self.config.transformations:
             return None
@@ -282,7 +281,7 @@ class DatabaseETL:
             'code': '\n'.join(code_lines)
         }
         
-    def _create_enricher_reference(self) -> Optional[Dict[str, Any]]:
+    def _create_enricher_reference(self) -> Dict[str, Any] | None:
         """Create enrichment function reference for FSM config."""
         if not self.config.enrichment_sources:
             return None
@@ -317,7 +316,7 @@ class DatabaseETL:
         
     async def run(
         self,
-        checkpoint_id: Optional[str] = None
+        checkpoint_id: str | None = None
     ) -> Dict[str, Any]:
         """Run ETL pipeline.
         
@@ -551,8 +550,8 @@ def create_database_sync(
 def create_data_migration(
     source: Dict[str, Any],
     target: Dict[str, Any],
-    field_mappings: Optional[Dict[str, str]] = None,
-    transformations: Optional[List[Callable]] = None
+    field_mappings: Dict[str, str] | None = None,
+    transformations: List[Callable] | None = None
 ) -> DatabaseETL:
     """Create data migration pipeline.
     
@@ -579,7 +578,7 @@ def create_data_migration(
 def create_data_warehouse_load(
     sources: List[Dict[str, Any]],
     warehouse: Dict[str, Any],
-    aggregations: Optional[List[Callable]] = None
+    aggregations: List[Callable] | None = None
 ) -> List[DatabaseETL]:
     """Create data warehouse loading pipelines.
     

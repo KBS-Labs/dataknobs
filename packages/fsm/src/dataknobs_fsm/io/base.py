@@ -7,11 +7,9 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
-    Any, Dict, List, Optional, Union, AsyncIterator, Iterator,
-    Callable, TypeVar, Generic, Protocol
+    Any, Dict, List, Union, AsyncIterator, Iterator,
+    Callable, TypeVar, Protocol
 )
-import asyncio
-from contextlib import asynccontextmanager, contextmanager
 
 T = TypeVar('T')
 
@@ -44,26 +42,26 @@ class IOConfig:
     mode: IOMode
     format: IOFormat
     source: Union[str, Dict[str, Any]]  # Path, URL, or connection config
-    target: Optional[Union[str, Dict[str, Any]]] = None
+    target: Union[str, Dict[str, Any]] | None = None
     
     # Operation settings
     batch_size: int = 1000
     buffer_size: int = 8192
-    timeout: Optional[float] = None
+    timeout: float | None = None
     retry_count: int = 3
     retry_delay: float = 1.0
     
     # Format-specific settings
     encoding: str = "utf-8"
-    compression: Optional[str] = None
+    compression: str | None = None
     delimiter: str = ","
-    headers: Optional[Dict[str, str]] = None
+    headers: Dict[str, str] | None = None
     
     # Advanced settings
     parallel_workers: int = 1
     checkpoint_enabled: bool = False
     checkpoint_interval: int = 10000
-    error_handler: Optional[Callable[[Exception, Any], Any]] = None
+    error_handler: Callable[[Exception, Any], Any] | None = None
     
     # Additional options
     options: Dict[str, Any] = field(default_factory=dict)
@@ -131,7 +129,7 @@ class AsyncIOProvider(IOProvider):
         pass
         
     @abstractmethod
-    async def batch_read(self, batch_size: Optional[int] = None, **kwargs) -> AsyncIterator[List[Any]]:
+    async def batch_read(self, batch_size: int | None = None, **kwargs) -> AsyncIterator[List[Any]]:
         """Read data in batches asynchronously."""
         pass
         
@@ -182,7 +180,7 @@ class SyncIOProvider(IOProvider):
         pass
         
     @abstractmethod
-    def batch_read(self, batch_size: Optional[int] = None, **kwargs) -> Iterator[List[Any]]:
+    def batch_read(self, batch_size: int | None = None, **kwargs) -> Iterator[List[Any]]:
         """Read data in batches synchronously."""
         pass
         

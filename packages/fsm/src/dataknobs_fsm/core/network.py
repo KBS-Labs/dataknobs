@@ -1,10 +1,9 @@
 """State network implementation for FSM."""
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 from dataknobs_fsm.core.state import State
-from dataknobs_fsm.functions.base import StateTransitionError as FunctionError
 
 
 @dataclass
@@ -20,15 +19,15 @@ class Arc:
     """
     source_state: str
     target_state: str
-    pre_test: Optional[str] = None
-    transform: Optional[str] = None
+    pre_test: str | None = None
+    transform: str | None = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     
     def __hash__(self) -> int:
         """Make Arc hashable for use in sets."""
         return hash((self.source_state, self.target_state, self.pre_test, self.transform))
     
-    def __eq__(self, other: Any) -> bool:
+    def __eq__(self, other: object) -> bool:
         """Check equality."""
         if not isinstance(other, Arc):
             return False
@@ -102,7 +101,7 @@ class StateNetwork:
     and edges are arcs (transitions) between states.
     """
     
-    def __init__(self, name: str, description: Optional[str] = None):
+    def __init__(self, name: str, description: str | None = None):
         """Initialize state network.
         
         Args:
@@ -114,7 +113,7 @@ class StateNetwork:
         
         # State management
         self._states: Dict[str, State] = {}
-        self._initial_state: Optional[str] = None
+        self._initial_state: str | None = None
         self._final_states: Set[str] = set()
         
         # Arc management
@@ -126,7 +125,7 @@ class StateNetwork:
         self._streaming_enabled = False
         
         # Validation cache
-        self._validation_cache: Optional[Dict[str, Any]] = None
+        self._validation_cache: Dict[str, Any] | None = None
     
     @property
     def states(self) -> Dict[str, State]:
@@ -260,9 +259,9 @@ class StateNetwork:
         self,
         source_state: str,
         target_state: str,
-        pre_test: Optional[str] = None,
-        transform: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        pre_test: str | None = None,
+        transform: str | None = None,
+        metadata: Dict[str, Any] | None = None
     ) -> Arc:
         """Add an arc between two states.
         
@@ -327,7 +326,7 @@ class StateNetwork:
         # Invalidate validation cache
         self._validation_cache = None
     
-    def get_state(self, name: str) -> Optional[State]:
+    def get_state(self, name: str) -> State | None:
         """Get a state by name.
         
         Args:

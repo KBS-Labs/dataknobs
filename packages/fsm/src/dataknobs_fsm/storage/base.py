@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, List, Type
 
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.execution.history import ExecutionHistory, ExecutionStep
@@ -25,11 +25,11 @@ class StorageConfig:
     def __init__(
         self,
         backend: StorageBackend = StorageBackend.MEMORY,
-        connection_params: Optional[Dict[str, Any]] = None,
-        retention_policy: Optional[Dict[str, Any]] = None,
+        connection_params: Dict[str, Any] | None = None,
+        retention_policy: Dict[str, Any] | None = None,
         compression: bool = False,
         batch_size: int = 100,
-        mode_specific_config: Optional[Dict[DataHandlingMode, Dict[str, Any]]] = None
+        mode_specific_config: Dict[DataHandlingMode, Dict[str, Any]] | None = None
     ):
         """Initialize storage configuration.
         
@@ -67,7 +67,7 @@ class IHistoryStorage(ABC):
     async def save_history(
         self,
         history: ExecutionHistory,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Dict[str, Any] | None = None
     ) -> str:
         """Save execution history.
         
@@ -84,7 +84,7 @@ class IHistoryStorage(ABC):
     async def load_history(
         self,
         history_id: str
-    ) -> Optional[ExecutionHistory]:
+    ) -> ExecutionHistory | None:
         """Load execution history by ID.
         
         Args:
@@ -100,7 +100,7 @@ class IHistoryStorage(ABC):
         self,
         execution_id: str,
         step: ExecutionStep,
-        parent_id: Optional[str] = None
+        parent_id: str | None = None
     ) -> str:
         """Save a single execution step.
         
@@ -118,7 +118,7 @@ class IHistoryStorage(ABC):
     async def load_steps(
         self,
         execution_id: str,
-        filters: Optional[Dict[str, Any]] = None
+        filters: Dict[str, Any] | None = None
     ) -> List[ExecutionStep]:
         """Load execution steps.
         
@@ -168,7 +168,7 @@ class IHistoryStorage(ABC):
     @abstractmethod
     async def get_statistics(
         self,
-        execution_id: Optional[str] = None
+        execution_id: str | None = None
     ) -> Dict[str, Any]:
         """Get storage statistics.
         
@@ -183,7 +183,7 @@ class IHistoryStorage(ABC):
     @abstractmethod
     async def cleanup(
         self,
-        before_timestamp: Optional[float] = None,
+        before_timestamp: float | None = None,
         keep_failed: bool = True
     ) -> int:
         """Clean up old histories.

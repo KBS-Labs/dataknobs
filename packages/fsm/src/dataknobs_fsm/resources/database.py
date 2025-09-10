@@ -1,7 +1,7 @@
 """Database resource adapter for dataknobs_data backends."""
 
 from contextlib import contextmanager
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from dataknobs_data.factory import DatabaseFactory
 from dataknobs_data.database import SyncDatabase, AsyncDatabase
@@ -41,7 +41,7 @@ class DatabaseResourceAdapter(BaseResourceProvider):
         
         self.backend = backend
         self.factory = DatabaseFactory()
-        self._database: Optional[SyncDatabase] = None
+        self._database: SyncDatabase | None = None
         self._initialize_database()
     
     def _initialize_database(self) -> None:
@@ -160,7 +160,7 @@ class DatabaseResourceAdapter(BaseResourceProvider):
             return ResourceHealth.UNHEALTHY
     
     @contextmanager
-    def transaction_context(self, database: Optional[SyncDatabase] = None):
+    def transaction_context(self, database: SyncDatabase | None = None):
         """Context manager for database transactions.
         
         Note: Transaction support depends on the backend.
@@ -203,7 +203,7 @@ class DatabaseResourceAdapter(BaseResourceProvider):
     
     # Convenience methods that delegate to the database
     
-    def create(self, record: Record, database: Optional[SyncDatabase] = None) -> str:
+    def create(self, record: Record, database: SyncDatabase | None = None) -> str:
         """Create a record in the database.
         
         Args:
@@ -221,7 +221,7 @@ class DatabaseResourceAdapter(BaseResourceProvider):
         
         return database.create(record)
     
-    def read(self, record_id: str, database: Optional[SyncDatabase] = None) -> Optional[Record]:
+    def read(self, record_id: str, database: SyncDatabase | None = None) -> Record | None:
         """Read a record from the database.
         
         Args:
@@ -239,7 +239,7 @@ class DatabaseResourceAdapter(BaseResourceProvider):
         
         return database.read(record_id)
     
-    def update(self, record_id: str, record: Record, database: Optional[SyncDatabase] = None) -> bool:
+    def update(self, record_id: str, record: Record, database: SyncDatabase | None = None) -> bool:
         """Update a record in the database.
         
         Args:
@@ -258,7 +258,7 @@ class DatabaseResourceAdapter(BaseResourceProvider):
         
         return database.update(record_id, record)
     
-    def delete(self, record_id: str, database: Optional[SyncDatabase] = None) -> bool:
+    def delete(self, record_id: str, database: SyncDatabase | None = None) -> bool:
         """Delete a record from the database.
         
         Args:
@@ -276,7 +276,7 @@ class DatabaseResourceAdapter(BaseResourceProvider):
         
         return database.delete(record_id)
     
-    def search(self, query: Query, database: Optional[SyncDatabase] = None) -> list[Record]:
+    def search(self, query: Query, database: SyncDatabase | None = None) -> list[Record]:
         """Search for records in the database.
         
         Args:

@@ -5,9 +5,8 @@ This module provides adapters for different I/O sources like files, databases, a
 
 import json
 import csv
-import asyncio
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union, AsyncIterator, Iterator
+from typing import Any, Dict, List, Union, AsyncIterator, Iterator
 import aiofiles
 from dataknobs_data import AsyncDatabase, Record, Query
 
@@ -64,10 +63,10 @@ class FileIOAdapter(IOAdapter):
         """Convert dictionary to CSV row."""
         return list(data.values())
         
-    def _csv_row_to_dict(self, row: List[Any], headers: Optional[List[str]] = None) -> Dict[str, Any]:
+    def _csv_row_to_dict(self, row: List[Any], headers: List[str] | None = None) -> Dict[str, Any]:
         """Convert CSV row to dictionary."""
         if headers:
-            return dict(zip(headers, row))
+            return dict(zip(headers, row, strict=False))
         return {f'col_{i}': val for i, val in enumerate(row)}
 
 
@@ -131,7 +130,7 @@ class AsyncFileProvider(AsyncIOProvider):
             content = self._format_content(data)
             await self.file_handle.write(content + '\n')
             
-    async def batch_read(self, batch_size: Optional[int] = None, **kwargs) -> AsyncIterator[List[Any]]:
+    async def batch_read(self, batch_size: int | None = None, **kwargs) -> AsyncIterator[List[Any]]:
         """Read file in batches."""
         batch_size = batch_size or self.config.batch_size
         batch = []
@@ -229,7 +228,7 @@ class SyncFileProvider(SyncIOProvider):
         for data in data_stream:
             self.file_handle.write(str(data) + '\n')
             
-    def batch_read(self, batch_size: Optional[int] = None, **kwargs) -> Iterator[List[Any]]:
+    def batch_read(self, batch_size: int | None = None, **kwargs) -> Iterator[List[Any]]:
         """Read file in batches."""
         batch_size = batch_size or self.config.batch_size
         batch = []
@@ -339,7 +338,7 @@ class AsyncDatabaseProvider(AsyncIOProvider):
         async for data in data_stream:
             await self.db.upsert(table, data)
             
-    async def batch_read(self, query: Union[str, Query] = None, batch_size: Optional[int] = None, **kwargs) -> AsyncIterator[List[Dict[str, Any]]]:
+    async def batch_read(self, query: Union[str, Query] = None, batch_size: int | None = None, **kwargs) -> AsyncIterator[List[Dict[str, Any]]]:
         """Read from database in batches."""
         batch_size = batch_size or self.config.batch_size
         batch = []
@@ -459,7 +458,7 @@ class AsyncHTTPProvider(AsyncIOProvider):
         async for data in data_stream:
             await self.write(data, **kwargs)
             
-    async def batch_read(self, batch_size: Optional[int] = None, **kwargs) -> AsyncIterator[List[Any]]:
+    async def batch_read(self, batch_size: int | None = None, **kwargs) -> AsyncIterator[List[Any]]:
         """Read from HTTP endpoint in batches (pagination)."""
         batch_size = batch_size or self.config.batch_size
         page = 0

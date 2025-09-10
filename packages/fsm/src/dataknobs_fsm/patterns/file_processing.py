@@ -4,17 +4,15 @@ This module provides pre-configured FSM patterns for processing files,
 including CSV, JSON, XML, and other formats with streaming support.
 """
 
-from typing import Any, Dict, List, Optional, Union, Callable, AsyncIterator
+from typing import Any, Dict, List, Callable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-import mimetypes
 from dataknobs_data import Record
 
 from ..api.simple import SimpleFSM
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 from ..streaming.file_stream import FileStreamSource, FileStreamSink
-from ..functions.library.transformers import FieldMapper, TypeConverter
 from ..functions.library.validators import SchemaValidator
 
 
@@ -39,23 +37,23 @@ class ProcessingMode(Enum):
 class FileProcessingConfig:
     """Configuration for file processing."""
     input_path: str
-    output_path: Optional[str] = None
-    format: Optional[FileFormat] = None  # Auto-detect if not specified
+    output_path: str | None = None
+    format: FileFormat | None = None  # Auto-detect if not specified
     mode: ProcessingMode = ProcessingMode.STREAM
     chunk_size: int = 1000
     parallel_chunks: int = 4
     encoding: str = "utf-8"
     
     # Processing options
-    validation_schema: Optional[Dict[str, Any]] = None
-    transformations: Optional[List[Callable]] = None
-    filters: Optional[List[Callable]] = None
-    aggregations: Optional[Dict[str, Callable]] = None
+    validation_schema: Dict[str, Any] | None = None
+    transformations: List[Callable] | None = None
+    filters: List[Callable] | None = None
+    aggregations: Dict[str, Callable] | None = None
     
     # Output options
-    output_format: Optional[FileFormat] = None
-    compression: Optional[str] = None  # gzip, bz2, etc.
-    partition_by: Optional[str] = None  # Field to partition output
+    output_format: FileFormat | None = None
+    compression: str | None = None  # gzip, bz2, etc.
+    partition_by: str | None = None  # Field to partition output
     
     # Format-specific configs
     json_config: Dict[str, Any] = field(default_factory=dict)
@@ -313,7 +311,7 @@ data
         else:
             return lambda data: data
             
-    def _create_validator(self) -> Optional[Callable]:
+    def _create_validator(self) -> Callable | None:
         """Create validator function."""
         if not self.config.validation_schema:
             return None
@@ -321,7 +319,7 @@ data
         validator = SchemaValidator(self.config.validation_schema)
         return lambda state: validator.validate(Record(state.data))
         
-    def _create_filter(self) -> Optional[Callable]:
+    def _create_filter(self) -> Callable | None:
         """Create filter function."""
         if not self.config.filters:
             return None
@@ -334,7 +332,7 @@ data
             
         return apply_filters
         
-    def _create_transformer(self) -> Optional[Callable]:
+    def _create_transformer(self) -> Callable | None:
         """Create transformation function."""
         if not self.config.transformations:
             return None
@@ -350,7 +348,7 @@ data
             
         return transform
         
-    def _create_aggregator(self) -> Optional[Callable]:
+    def _create_aggregator(self) -> Callable | None:
         """Create aggregation function."""
         if not self.config.aggregations:
             return None
@@ -443,7 +441,7 @@ data
     async def _process_whole(self) -> Dict[str, Any]:
         """Process entire file at once."""
         # Read entire file
-        with open(self.config.input_path, 'r', encoding=self.config.encoding) as f:
+        with open(self.config.input_path, encoding=self.config.encoding) as f:
             content = f.read()
             
         # Parse content
@@ -478,7 +476,7 @@ data
     async def _read_batches(self) -> AsyncIterator[List[Dict[str, Any]]]:
         """Read file in batches."""
         batch = []
-        with open(self.config.input_path, 'r', encoding=self.config.encoding) as f:
+        with open(self.config.input_path, encoding=self.config.encoding) as f:
             for line in f:
                 self._metrics['lines_read'] += 1
                 
@@ -528,9 +526,9 @@ data
 
 def create_csv_processor(
     input_file: str,
-    output_file: Optional[str] = None,
-    transformations: Optional[List[Callable]] = None,
-    filters: Optional[List[Callable]] = None
+    output_file: str | None = None,
+    transformations: List[Callable] | None = None,
+    filters: List[Callable] | None = None
 ) -> FileProcessor:
     """Create CSV file processor.
     
@@ -557,8 +555,8 @@ def create_csv_processor(
 
 def create_json_stream_processor(
     input_file: str,
-    output_file: Optional[str] = None,
-    validation_schema: Optional[Dict[str, Any]] = None,
+    output_file: str | None = None,
+    validation_schema: Dict[str, Any] | None = None,
     chunk_size: int = 1000
 ) -> FileProcessor:
     """Create JSON lines stream processor.
@@ -586,9 +584,9 @@ def create_json_stream_processor(
 
 def create_log_analyzer(
     log_file: str,
-    output_file: Optional[str] = None,
-    patterns: Optional[List[str]] = None,
-    aggregations: Optional[Dict[str, Callable]] = None
+    output_file: str | None = None,
+    patterns: List[str] | None = None,
+    aggregations: Dict[str, Callable] | None = None
 ) -> FileProcessor:
     """Create log file analyzer.
     
@@ -632,7 +630,7 @@ def create_file_processor(
     output_path: str,
     pattern: str = "*",
     mode: ProcessingMode = ProcessingMode.WHOLE,
-    transformations: Optional[List[Callable]] = None
+    transformations: List[Callable] | None = None
 ) -> FileProcessor:
     """Create generic file processor.
     

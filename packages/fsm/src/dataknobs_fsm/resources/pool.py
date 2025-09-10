@@ -4,12 +4,11 @@ import queue
 import threading
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from dataknobs_fsm.functions.base import ResourceError
 from dataknobs_fsm.resources.base import (
     IResourceProvider,
-    ResourceStatus,
     ResourceMetrics,
 )
 
@@ -66,7 +65,7 @@ class ResourcePool:
     def __init__(
         self,
         provider: IResourceProvider,
-        config: Optional[PoolConfig] = None
+        config: PoolConfig | None = None
     ):
         """Initialize the pool.
         
@@ -102,7 +101,7 @@ class ResourcePool:
             except Exception:
                 pass  # Continue with fewer resources
     
-    def acquire(self, timeout: Optional[float] = None) -> Any:
+    def acquire(self, timeout: float | None = None) -> Any:
         """Acquire a resource from the pool.
         
         Args:

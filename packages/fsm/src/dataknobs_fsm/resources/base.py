@@ -1,10 +1,10 @@
 """Base interfaces and classes for resource management."""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, List, Protocol, runtime_checkable
 from contextlib import contextmanager
 
 
@@ -36,10 +36,10 @@ class ResourceMetrics:
     active_connections: int = 0
     failed_acquisitions: int = 0
     average_hold_time: float = 0.0
-    last_acquisition_time: Optional[datetime] = None
-    last_release_time: Optional[datetime] = None
+    last_acquisition_time: datetime | None = None
+    last_release_time: datetime | None = None
     health_check_failures: int = 0
-    last_health_check: Optional[datetime] = None
+    last_health_check: datetime | None = None
     
     def record_acquisition(self) -> None:
         """Record a resource acquisition."""
@@ -136,7 +136,7 @@ class IResourceProvider(Protocol):
 class IResourcePool(Protocol):
     """Interface for resource pools."""
     
-    def acquire(self, timeout: Optional[float] = None) -> Any:
+    def acquire(self, timeout: float | None = None) -> Any:
         """Acquire a resource from the pool.
         
         Args:
@@ -182,7 +182,7 @@ class IResourcePool(Protocol):
 class BaseResourceProvider(ABC):
     """Base class for resource providers."""
     
-    def __init__(self, name: str, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, name: str, config: Dict[str, Any] | None = None):
         """Initialize the provider.
         
         Args:

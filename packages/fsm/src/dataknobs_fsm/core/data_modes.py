@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from copy import deepcopy
 from enum import Enum
 from threading import Lock
-from typing import Any, Dict, Optional, TypeVar
+from typing import Any, Dict, TypeVar
 
 T = TypeVar("T")
 
@@ -236,7 +236,7 @@ class DirectModeHandler(DataHandler):
     def __init__(self):
         """Initialize the DIRECT mode handler."""
         super().__init__(DataHandlingMode.DIRECT)
-        self._active_data: Optional[Any] = None
+        self._active_data: Any | None = None
         self._lock = Lock()
     
     def on_entry(self, data: Any) -> Any:
@@ -309,7 +309,7 @@ class DataModeManager:
             DataHandlingMode.DIRECT: DirectModeHandler(),
         }
     
-    def get_handler(self, mode: Optional[DataHandlingMode] = None) -> DataHandler:
+    def get_handler(self, mode: DataHandlingMode | None = None) -> DataHandler:
         """Get a handler for the specified mode.
         
         Args:

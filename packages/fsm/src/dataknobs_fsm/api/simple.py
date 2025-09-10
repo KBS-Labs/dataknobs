@@ -5,23 +5,19 @@ abstracting away the complexity of configuration, resource management,
 and execution strategies.
 """
 
-from typing import Any, Dict, List, Optional, Union, AsyncIterator, Iterator, Tuple
+from typing import Any, Dict, List, Union, AsyncIterator
 from pathlib import Path
 import asyncio
 from dataknobs_data import Record
 
-from ..core.fsm import FSM
-from ..core.state import StateInstance
 from ..core.data_modes import DataHandlingMode
 from ..core.context_factory import ContextFactory
 from ..core.result_formatter import ResultFormatter
 from ..execution.engine import ExecutionEngine
 from ..execution.async_engine import AsyncExecutionEngine
-from ..execution.context import ExecutionContext
 from ..config.loader import ConfigLoader
 from ..config.builder import FSMBuilder
 from ..resources.manager import ResourceManager
-from ..streaming.core import StreamConfig
 
 
 class SimpleFSM:
@@ -36,7 +32,7 @@ class SimpleFSM:
         self,
         config: Union[str, Path, Dict[str, Any]],
         data_mode: DataHandlingMode = DataHandlingMode.COPY,
-        resources: Optional[Dict[str, Any]] = None
+        resources: Dict[str, Any] | None = None
     ):
         """Initialize SimpleFSM from configuration.
         
@@ -92,8 +88,8 @@ class SimpleFSM:
     def process(
         self,
         data: Union[Dict[str, Any], Record],
-        initial_state: Optional[str] = None,
-        timeout: Optional[float] = None
+        initial_state: str | None = None,
+        timeout: float | None = None
     ) -> Dict[str, Any]:
         """Process a single data record through the FSM.
         
@@ -144,8 +140,8 @@ class SimpleFSM:
     async def process_async(
         self,
         data: Union[Dict[str, Any], Record],
-        initial_state: Optional[str] = None,
-        timeout: Optional[float] = None
+        initial_state: str | None = None,
+        timeout: float | None = None
     ) -> Dict[str, Any]:
         """Process a single data record through the FSM asynchronously.
         
@@ -192,7 +188,7 @@ class SimpleFSM:
         data: List[Union[Dict[str, Any], Record]],
         batch_size: int = 10,
         max_workers: int = 4,
-        on_progress: Optional[callable] = None
+        on_progress: callable | None = None
     ) -> List[Dict[str, Any]]:
         """Process multiple records in parallel batches.
         
@@ -252,9 +248,9 @@ class SimpleFSM:
     async def process_stream(
         self,
         source: Union[str, AsyncIterator[Dict[str, Any]]],
-        sink: Optional[str] = None,
+        sink: str | None = None,
         chunk_size: int = 100,
-        on_progress: Optional[callable] = None
+        on_progress: callable | None = None
     ) -> Dict[str, Any]:
         """Process a stream of data through the FSM.
         
@@ -289,7 +285,7 @@ class SimpleFSM:
             # Read file and convert to async iterator
             async def file_reader():
                 import json
-                with open(source, 'r') as f:
+                with open(source) as f:
                     for line in f:
                         if line.strip():
                             yield json.loads(line)
@@ -402,7 +398,7 @@ def create_fsm(
 def process_file(
     fsm_config: Union[str, Path, Dict[str, Any]],
     input_file: str,
-    output_file: Optional[str] = None,
+    output_file: str | None = None,
     format: str = 'json',
     chunk_size: int = 1000
 ) -> Dict[str, Any]:

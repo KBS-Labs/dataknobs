@@ -1,16 +1,14 @@
 """Stream executor for chunk-based processing."""
 
-import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.execution.engine import ExecutionEngine
 from dataknobs_fsm.streaming.core import (
-    AsyncStreamContext,
     IStreamSink,
     IStreamSource,
     StreamChunk,
@@ -23,7 +21,7 @@ from dataknobs_fsm.streaming.core import (
 class StreamPipeline:
     """Pipeline configuration for stream processing."""
     source: IStreamSource
-    sink: Optional[IStreamSink] = None
+    sink: IStreamSink | None = None
     transformations: List[callable] = field(default_factory=list)
     chunk_processors: List[callable] = field(default_factory=list)
 
@@ -74,9 +72,9 @@ class StreamExecutor:
     def __init__(
         self,
         fsm: FSM,
-        stream_config: Optional[StreamConfig] = None,
+        stream_config: StreamConfig | None = None,
         enable_backpressure: bool = True,
-        progress_callback: Optional[callable] = None
+        progress_callback: callable | None = None
     ):
         """Initialize stream executor.
         
@@ -105,7 +103,7 @@ class StreamExecutor:
     def execute_stream(
         self,
         pipeline: StreamPipeline,
-        context_template: Optional[ExecutionContext] = None,
+        context_template: ExecutionContext | None = None,
         max_transitions: int = 1000
     ) -> Dict[str, Any]:
         """Execute stream processing pipeline.
@@ -190,9 +188,7 @@ class StreamExecutor:
                 
         finally:
             # Clean up
-            if hasattr(pipeline.source, 'aclose'):
-                pipeline.source.close()
-            elif hasattr(pipeline.source, 'close'):
+            if hasattr(pipeline.source, 'aclose') or hasattr(pipeline.source, 'close'):
                 pipeline.source.close()
             
             if pipeline.sink:
@@ -298,7 +294,7 @@ class StreamExecutor:
         
         return False
     
-    def _find_initial_state(self) -> Optional[str]:
+    def _find_initial_state(self) -> str | None:
         """Find initial state in FSM.
         
         Returns:

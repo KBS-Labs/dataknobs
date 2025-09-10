@@ -4,7 +4,7 @@ import json
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field as dataclass_field
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Union
 from urllib.parse import urljoin
 import urllib.request
 import urllib.error
@@ -31,7 +31,7 @@ class HTTPSession:
     # Circuit breaker state
     failure_count: int = 0
     failure_threshold: int = 5
-    last_failure_time: Optional[float] = None
+    last_failure_time: float | None = None
     circuit_open: bool = False
     circuit_half_open_after: float = 60.0  # seconds
     
@@ -75,8 +75,8 @@ class HTTPServiceResource(BaseResourceProvider):
         self,
         name: str,
         base_url: str,
-        headers: Optional[Dict[str, str]] = None,
-        auth: Optional[Dict[str, str]] = None,
+        headers: Dict[str, str] | None = None,
+        auth: Dict[str, str] | None = None,
         timeout: float = 30.0,
         max_retries: int = 3,
         **config
@@ -230,8 +230,8 @@ class HTTPServiceResource(BaseResourceProvider):
         session: HTTPSession,
         method: str,
         path: str,
-        data: Optional[Union[Dict, bytes]] = None,
-        headers: Optional[Dict[str, str]] = None,
+        data: Union[Dict, bytes] | None = None,
+        headers: Dict[str, str] | None = None,
         **kwargs
     ) -> Dict[str, Any]:
         """Execute an HTTP request with retry logic.
@@ -348,7 +348,7 @@ class HTTPServiceResource(BaseResourceProvider):
     def get(
         self,
         path: str,
-        session: Optional[HTTPSession] = None,
+        session: HTTPSession | None = None,
         **kwargs
     ) -> Dict[str, Any]:
         """Execute GET request.
@@ -369,8 +369,8 @@ class HTTPServiceResource(BaseResourceProvider):
     def post(
         self,
         path: str,
-        data: Optional[Union[Dict, bytes]] = None,
-        session: Optional[HTTPSession] = None,
+        data: Union[Dict, bytes] | None = None,
+        session: HTTPSession | None = None,
         **kwargs
     ) -> Dict[str, Any]:
         """Execute POST request.
@@ -392,8 +392,8 @@ class HTTPServiceResource(BaseResourceProvider):
     def put(
         self,
         path: str,
-        data: Optional[Union[Dict, bytes]] = None,
-        session: Optional[HTTPSession] = None,
+        data: Union[Dict, bytes] | None = None,
+        session: HTTPSession | None = None,
         **kwargs
     ) -> Dict[str, Any]:
         """Execute PUT request.
@@ -415,7 +415,7 @@ class HTTPServiceResource(BaseResourceProvider):
     def delete(
         self,
         path: str,
-        session: Optional[HTTPSession] = None,
+        session: HTTPSession | None = None,
         **kwargs
     ) -> Dict[str, Any]:
         """Execute DELETE request.

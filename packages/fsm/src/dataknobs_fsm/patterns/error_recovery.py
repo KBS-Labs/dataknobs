@@ -4,17 +4,16 @@ This module provides pre-configured FSM patterns for error recovery and resilien
 including retry strategies, circuit breakers, fallback mechanisms, and compensation.
 """
 
-from typing import Any, Dict, List, Optional, Union, Callable, AsyncIterator
-from dataclasses import dataclass, field
+from typing import Any, Dict, List, Callable
+from dataclasses import dataclass
 from enum import Enum
 import asyncio
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 import random
 
 from ..api.simple import SimpleFSM
 from ..core.data_modes import DataHandlingMode
-from ..io.utils import retry_io_operation
 
 
 class RecoveryStrategy(Enum):
@@ -48,12 +47,12 @@ class RetryConfig:
     jitter_range: float = 0.1  # 10% jitter
     
     # Retry conditions
-    retry_on_exceptions: Optional[List[type]] = None
-    retry_on_result: Optional[Callable[[Any], bool]] = None
+    retry_on_exceptions: List[type] | None = None
+    retry_on_result: Callable[[Any], bool] | None = None
     
     # Hooks
-    on_retry: Optional[Callable[[int, Exception], None]] = None
-    on_failure: Optional[Callable[[Exception], None]] = None
+    on_retry: Callable[[int, Exception], None] | None = None
+    on_failure: Callable[[Exception], None] | None = None
 
 
 @dataclass
@@ -68,24 +67,24 @@ class CircuitBreakerConfig:
     window_duration: float = 60.0  # Window duration in seconds
     
     # Callbacks
-    on_open: Optional[Callable[[], None]] = None
-    on_close: Optional[Callable[[], None]] = None
-    on_half_open: Optional[Callable[[], None]] = None
+    on_open: Callable[[], None] | None = None
+    on_close: Callable[[], None] | None = None
+    on_half_open: Callable[[], None] | None = None
 
 
 @dataclass
 class FallbackConfig:
     """Configuration for fallback strategy."""
-    fallback_value: Optional[Any] = None
-    fallback_function: Optional[Callable[[Exception], Any]] = None
-    fallback_service: Optional[str] = None  # Alternative service URL
+    fallback_value: Any | None = None
+    fallback_function: Callable[[Exception], Any] | None = None
+    fallback_service: str | None = None  # Alternative service URL
     
     # Cache fallback
     use_cache: bool = False
     cache_ttl: float = 300.0  # 5 minutes
     
     # Conditions
-    fallback_on_exceptions: Optional[List[type]] = None
+    fallback_on_exceptions: List[type] | None = None
     fallback_on_timeout: bool = True
 
 
@@ -100,8 +99,8 @@ class CompensationConfig:
     saga_timeout: float = 300.0
     
     # Callbacks
-    on_compensation_start: Optional[Callable[[], None]] = None
-    on_compensation_complete: Optional[Callable[[], None]] = None
+    on_compensation_start: Callable[[], None] | None = None
+    on_compensation_complete: Callable[[], None] | None = None
 
 
 @dataclass
@@ -123,22 +122,22 @@ class BulkheadConfig:
 class ErrorRecoveryConfig:
     """Configuration for error recovery workflow."""
     primary_strategy: RecoveryStrategy
-    secondary_strategies: Optional[List[RecoveryStrategy]] = None
+    secondary_strategies: List[RecoveryStrategy] | None = None
     
     # Strategy configurations
-    retry_config: Optional[RetryConfig] = None
-    circuit_breaker_config: Optional[CircuitBreakerConfig] = None
-    fallback_config: Optional[FallbackConfig] = None
-    compensation_config: Optional[CompensationConfig] = None
-    bulkhead_config: Optional[BulkheadConfig] = None
+    retry_config: RetryConfig | None = None
+    circuit_breaker_config: CircuitBreakerConfig | None = None
+    fallback_config: FallbackConfig | None = None
+    compensation_config: CompensationConfig | None = None
+    bulkhead_config: BulkheadConfig | None = None
     
     # Global settings
     max_total_attempts: int = 10
     global_timeout: float = 300.0
     
     # Error classification
-    transient_errors: Optional[List[type]] = None
-    permanent_errors: Optional[List[type]] = None
+    transient_errors: List[type] | None = None
+    permanent_errors: List[type] | None = None
     
     # Monitoring
     log_errors: bool = True
@@ -286,7 +285,7 @@ class CircuitBreaker:
                     
             return result
             
-        except Exception as e:
+        except Exception:
             # Failure
             async with self._lock:
                 self.failure_count += 1
@@ -532,7 +531,7 @@ class ErrorRecoveryWorkflow:
             result = await func(*args, **kwargs) if asyncio.iscoroutinefunction(func) else func(*args, **kwargs)
             return result
             
-        except Exception as e:
+        except Exception:
             # Execute compensation
             if self.config.compensation_config:
                 self._metrics['compensations'] += 1

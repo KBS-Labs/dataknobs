@@ -2,13 +2,13 @@
 
 import asyncio
 import time
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Tuple
 
 from dataknobs_fsm.core.arc import ArcDefinition
 from dataknobs_fsm.core.fsm import FSM
-from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
+from dataknobs_fsm.core.modes import ProcessingMode
 from dataknobs_fsm.core.network import StateNetwork
-from dataknobs_fsm.core.state import StateDefinition, StateType
+from dataknobs_fsm.core.state import StateType
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.execution.engine import TraversalStrategy
 
@@ -48,7 +48,7 @@ class AsyncExecutionEngine:
         context: ExecutionContext,
         data: Any = None,
         max_transitions: int = 1000,
-        arc_name: Optional[str] = None
+        arc_name: str | None = None
     ) -> Tuple[bool, Any]:
         """Execute the FSM asynchronously with given context.
         
@@ -98,7 +98,7 @@ class AsyncExecutionEngine:
         self,
         context: ExecutionContext,
         max_transitions: int,
-        arc_name: Optional[str] = None
+        arc_name: str | None = None
     ) -> Tuple[bool, Any]:
         """Execute in single record mode asynchronously.
         
@@ -235,7 +235,7 @@ class AsyncExecutionEngine:
         self,
         state_name: str,
         context: ExecutionContext,
-        arc_name: Optional[str] = None
+        arc_name: str | None = None
     ) -> List[ArcDefinition]:
         """Get available transitions from current state asynchronously.
         
@@ -331,7 +331,7 @@ class AsyncExecutionEngine:
         self,
         available: List[ArcDefinition],
         context: ExecutionContext
-    ) -> Optional[ArcDefinition]:
+    ) -> ArcDefinition | None:
         """Choose transition based on strategy.
         
         Args:
@@ -441,7 +441,7 @@ class AsyncExecutionEngine:
                     if isinstance(result, dict):
                         # Merge validation results into context data
                         context.data.update(result)
-                except Exception as e:
+                except Exception:
                     # Log but don't fail - validators are optional
                     pass
         
@@ -472,11 +472,11 @@ class AsyncExecutionEngine:
                     
                     if result is not None:
                         context.data = result
-                except Exception as e:
+                except Exception:
                     # Log but don't fail - transforms are optional
                     pass
     
-    async def _find_initial_state(self) -> Optional[str]:
+    async def _find_initial_state(self) -> str | None:
         """Find initial state in FSM.
         
         Returns:
@@ -500,7 +500,7 @@ class AsyncExecutionEngine:
         
         return None
     
-    async def _is_final_state(self, state_name: Optional[str]) -> bool:
+    async def _is_final_state(self, state_name: str | None) -> bool:
         """Check if state is a final state.
         
         Args:
@@ -543,7 +543,7 @@ class AsyncExecutionEngine:
     async def _get_current_network(
         self,
         context: ExecutionContext
-    ) -> Optional[StateNetwork]:
+    ) -> StateNetwork | None:
         """Get the current network from context.
         
         Args:

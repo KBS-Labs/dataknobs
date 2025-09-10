@@ -4,21 +4,18 @@ This module provides pre-configured FSM patterns for LLM-based workflows,
 including RAG pipelines, chain-of-thought reasoning, and multi-agent systems.
 """
 
-from typing import Any, Dict, List, Optional, Union, Callable, AsyncIterator
-from dataclasses import dataclass, field
+from typing import Any, Dict, List, Union, Callable
+from dataclasses import dataclass
 from enum import Enum
 import asyncio
 
 from ..api.simple import SimpleFSM
 from ..core.data_modes import DataHandlingMode
-from ..llm.base import LLMConfig, LLMMessage, LLMResponse, CompletionMode
+from ..llm.base import LLMConfig, LLMMessage, LLMResponse
 from ..llm.providers import create_llm_provider
 from ..llm.utils import (
-    PromptTemplate, MessageBuilder, ResponseParser,
-    TokenCounter, create_few_shot_prompt
+    PromptTemplate, MessageBuilder, ResponseParser
 )
-from ..io.base import IOConfig, IOMode, IOFormat
-from ..io.utils import create_io_provider
 
 
 class WorkflowType(Enum):
@@ -37,23 +34,23 @@ class LLMStep:
     """Single step in LLM workflow."""
     name: str
     prompt_template: PromptTemplate
-    model_config: Optional[LLMConfig] = None  # Override default
+    model_config: LLMConfig | None = None  # Override default
     
     # Processing
-    pre_processor: Optional[Callable[[Any], Any]] = None
-    post_processor: Optional[Callable[[LLMResponse], Any]] = None
+    pre_processor: Callable[[Any], Any] | None = None
+    post_processor: Callable[[LLMResponse], Any] | None = None
     
     # Validation
-    validator: Optional[Callable[[Any], bool]] = None
+    validator: Callable[[Any], bool] | None = None
     retry_on_failure: bool = True
     max_retries: int = 3
     
     # Dependencies
-    depends_on: Optional[List[str]] = None
+    depends_on: List[str] | None = None
     pass_context: bool = True  # Pass previous results
     
     # Output
-    output_key: Optional[str] = None  # Key in results dict
+    output_key: str | None = None  # Key in results dict
     parse_json: bool = False
     extract_code: bool = False
 
@@ -62,18 +59,18 @@ class LLMStep:
 class RAGConfig:
     """Configuration for RAG (Retrieval-Augmented Generation)."""
     retriever_type: str  # 'vector', 'keyword', 'hybrid'
-    index_path: Optional[str] = None
-    embedding_model: Optional[str] = None
+    index_path: str | None = None
+    embedding_model: str | None = None
     
     # Retrieval settings
     top_k: int = 5
     similarity_threshold: float = 0.7
     rerank: bool = False
-    rerank_model: Optional[str] = None
+    rerank_model: str | None = None
     
     # Context settings
     max_context_length: int = 2000
-    context_template: Optional[PromptTemplate] = None
+    context_template: PromptTemplate | None = None
     
     # Chunking settings
     chunk_size: int = 500
@@ -88,11 +85,11 @@ class AgentConfig:
     capabilities: List[str]
     
     # Tools
-    tools: Optional[List[Dict[str, Any]]] = None
-    tool_descriptions: Optional[str] = None
+    tools: List[Dict[str, Any]] | None = None
+    tool_descriptions: str | None = None
     
     # Memory
-    memory_type: Optional[str] = None  # 'buffer', 'summary', 'vector'
+    memory_type: str | None = None  # 'buffer', 'summary', 'vector'
     memory_size: int = 10
     
     # Planning
@@ -101,7 +98,7 @@ class AgentConfig:
     
     # Reflection
     reflection_enabled: bool = False
-    reflection_prompt: Optional[PromptTemplate] = None
+    reflection_prompt: PromptTemplate | None = None
 
 
 @dataclass
@@ -113,13 +110,13 @@ class LLMWorkflowConfig:
     
     # Workflow settings
     max_iterations: int = 10
-    early_stop_condition: Optional[Callable[[Dict[str, Any]], bool]] = None
+    early_stop_condition: Callable[[Dict[str, Any]], bool] | None = None
     
     # RAG settings (if applicable)
-    rag_config: Optional[RAGConfig] = None
+    rag_config: RAGConfig | None = None
     
     # Agent settings (if applicable)
-    agent_configs: Optional[List[AgentConfig]] = None
+    agent_configs: List[AgentConfig] | None = None
     
     # Memory and context
     maintain_history: bool = True
@@ -128,11 +125,11 @@ class LLMWorkflowConfig:
     
     # Output settings
     aggregate_outputs: bool = False
-    output_formatter: Optional[Callable[[Dict[str, Any]], Any]] = None
+    output_formatter: Callable[[Dict[str, Any]], Any] | None = None
     
     # Error handling
-    error_handler: Optional[Callable[[Exception, str], Any]] = None
-    fallback_response: Optional[str] = None
+    error_handler: Callable[[Exception, str], Any] | None = None
+    fallback_response: str | None = None
     
     # Monitoring
     log_prompts: bool = False
@@ -262,7 +259,7 @@ class LLMWorkflow:
         
         return SimpleFSM(fsm_config)
         
-    async def _get_provider(self, step: Optional[LLMStep] = None):
+    async def _get_provider(self, step: LLMStep | None = None):
         """Get LLM provider for step."""
         config = step.model_config if step and step.model_config else self.config.default_model_config
         

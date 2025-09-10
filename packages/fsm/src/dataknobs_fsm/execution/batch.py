@@ -4,12 +4,12 @@ import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List
 
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.execution.context import ExecutionContext
-from dataknobs_fsm.execution.engine import ExecutionEngine, TraversalStrategy
+from dataknobs_fsm.execution.engine import ExecutionEngine
 
 
 @dataclass
@@ -18,7 +18,7 @@ class BatchResult:
     index: int
     success: bool
     result: Any
-    error: Optional[Exception] = None
+    error: Exception | None = None
     processing_time: float = 0.0
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -79,7 +79,7 @@ class BatchExecutor:
         parallelism: int = 4,
         batch_size: int = 100,
         enable_resource_pooling: bool = True,
-        progress_callback: Optional[callable] = None
+        progress_callback: callable | None = None
     ):
         """Initialize batch executor.
         
@@ -106,7 +106,7 @@ class BatchExecutor:
     def execute_batch(
         self,
         items: List[Any],
-        context_template: Optional[ExecutionContext] = None,
+        context_template: ExecutionContext | None = None,
         max_transitions: int = 1000
     ) -> List[BatchResult]:
         """Execute batch of items.
@@ -395,7 +395,7 @@ class BatchExecutor:
                         allocation.resource_id
                     )
     
-    def _find_initial_state(self) -> Optional[str]:
+    def _find_initial_state(self) -> str | None:
         """Find initial state in FSM.
         
         Returns:
@@ -411,7 +411,7 @@ class BatchExecutor:
     def execute_batches(
         self,
         items: List[Any],
-        context_template: Optional[ExecutionContext] = None,
+        context_template: ExecutionContext | None = None,
         max_transitions: int = 1000
     ) -> Dict[str, Any]:
         """Execute items in batches.

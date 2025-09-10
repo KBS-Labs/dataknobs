@@ -1,13 +1,12 @@
 """Network executor for running state networks."""
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from dataknobs_fsm.core.arc import PushArc, DataIsolationMode
 from dataknobs_fsm.core.fsm import FSM
-from dataknobs_fsm.core.modes import ProcessingMode
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.execution.context import ExecutionContext
-from dataknobs_fsm.execution.engine import ExecutionEngine, TraversalStrategy
+from dataknobs_fsm.execution.engine import ExecutionEngine
 from dataknobs_fsm.functions.base import StateTransitionError
 
 
@@ -48,7 +47,7 @@ class NetworkExecutor:
     def execute_network(
         self,
         network_name: str,
-        context: Optional[ExecutionContext] = None,
+        context: ExecutionContext | None = None,
         data: Any = None,
         max_transitions: int = 1000
     ) -> Tuple[bool, Any]:
@@ -268,7 +267,7 @@ class NetworkExecutor:
     def _get_available_arcs(
         self,
         network: StateNetwork,
-        state_name: Optional[str]
+        state_name: str | None
     ) -> List[Tuple[str, Any]]:
         """Get available arcs from a state.
         
@@ -295,7 +294,7 @@ class NetworkExecutor:
     def execute_parallel_networks(
         self,
         network_configs: List[Dict[str, Any]],
-        base_context: Optional[ExecutionContext] = None
+        base_context: ExecutionContext | None = None
     ) -> List[Tuple[bool, Any]]:
         """Execute multiple networks in parallel.
         

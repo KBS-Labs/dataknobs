@@ -2,12 +2,11 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, TYPE_CHECKING
 
 from dataknobs_fsm.functions.base import FunctionContext, StateTransitionError as FunctionError
 
 if TYPE_CHECKING:
-    from dataknobs_fsm.core.network import StateNetwork
     from dataknobs_fsm.execution.context import ExecutionContext
 
 
@@ -27,8 +26,8 @@ class ArcDefinition:
     """
     
     target_state: str
-    pre_test: Optional[str] = None
-    transform: Optional[str] = None
+    pre_test: str | None = None
+    transform: str | None = None
     priority: int = 0  # Higher priority arcs are evaluated first
     metadata: Dict[str, Any] = field(default_factory=dict)
     
@@ -56,7 +55,7 @@ class PushArc(ArcDefinition):
     """
     
     target_network: str = ""  # Name of the target network
-    return_state: Optional[str] = None  # State to return to after sub-network
+    return_state: str | None = None  # State to return to after sub-network
     isolation_mode: DataIsolationMode = DataIsolationMode.COPY
     pass_context: bool = True  # Whether to pass execution context
     
@@ -81,7 +80,7 @@ class ArcExecution:
         self,
         arc_def: ArcDefinition,
         source_state: str,
-        function_registry: Optional[Dict[str, callable]] = None
+        function_registry: Dict[str, callable] | None = None
     ):
         """Initialize arc execution.
         
@@ -236,7 +235,7 @@ class ArcExecution:
         self,
         context: "ExecutionContext",
         data: Any = None,
-        transaction_id: Optional[str] = None
+        transaction_id: str | None = None
     ) -> Any:
         """Execute arc within a transaction context.
         
@@ -265,7 +264,7 @@ class ArcExecution:
             
             return result
             
-        except Exception as e:
+        except Exception:
             # Rollback transaction
             self._rollback_transaction(context, transaction_id)
             raise
@@ -328,7 +327,7 @@ class ArcExecution:
     def _create_function_context(
         self,
         exec_context: "ExecutionContext",
-        resources: Optional[Dict[str, Any]] = None,
+        resources: Dict[str, Any] | None = None,
         stream_enabled: bool = False
     ) -> FunctionContext:
         """Create function context for execution.

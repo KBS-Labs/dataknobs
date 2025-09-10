@@ -4,29 +4,24 @@ This module provides advanced interfaces for users who need fine-grained
 control over FSM execution, resource management, and monitoring.
 """
 
-from typing import Any, Dict, List, Optional, Union, AsyncIterator, Callable, Type
+from typing import Any, Dict, List, Union, Callable
 from pathlib import Path
 from dataclasses import dataclass
 from enum import Enum
-import asyncio
 from contextlib import asynccontextmanager
-from dataknobs_data import Record, Query
+from dataknobs_data import Record
 
 from ..core.fsm import FSM
-from ..core.state import StateInstance, StateDefinition
-from ..core.arc import ArcDefinition
+from ..core.state import StateInstance
 from ..core.data_modes import DataHandlingMode, DataHandler
 from ..core.modes import ProcessingMode
 from ..core.context_factory import ContextFactory
-from ..core.result_formatter import ResultFormatter
 from ..core.transactions import TransactionStrategy, TransactionManager
 from ..execution.engine import ExecutionEngine, TraversalStrategy
 from ..execution.async_engine import AsyncExecutionEngine
 from ..execution.context import ExecutionContext
-from ..execution.network import NetworkExecutor
 from ..resources.manager import ResourceManager
 from ..resources.base import IResourceProvider
-from ..streaming.core import StreamConfig
 from ..execution.history import ExecutionHistory
 from ..storage.base import IHistoryStorage
 
@@ -43,15 +38,15 @@ class ExecutionMode(Enum):
 @dataclass
 class ExecutionHook:
     """Hook for monitoring execution events."""
-    on_state_enter: Optional[Callable] = None
-    on_state_exit: Optional[Callable] = None
-    on_arc_execute: Optional[Callable] = None
-    on_error: Optional[Callable] = None
-    on_resource_acquire: Optional[Callable] = None
-    on_resource_release: Optional[Callable] = None
-    on_transaction_begin: Optional[Callable] = None
-    on_transaction_commit: Optional[Callable] = None
-    on_transaction_rollback: Optional[Callable] = None
+    on_state_enter: Callable | None = None
+    on_state_exit: Callable | None = None
+    on_arc_execute: Callable | None = None
+    on_error: Callable | None = None
+    on_resource_acquire: Callable | None = None
+    on_resource_release: Callable | None = None
+    on_transaction_begin: Callable | None = None
+    on_transaction_commit: Callable | None = None
+    on_transaction_rollback: Callable | None = None
 
 
 class AdvancedFSM:
@@ -154,7 +149,7 @@ class AdvancedFSM:
         
     def enable_history(
         self,
-        storage: Optional[IHistoryStorage] = None,
+        storage: IHistoryStorage | None = None,
         max_depth: int = 100
     ) -> None:
         """Enable execution history tracking.
@@ -185,7 +180,7 @@ class AdvancedFSM:
         self,
         data: Union[Dict[str, Any], Record],
         data_mode: DataHandlingMode = DataHandlingMode.COPY,
-        initial_state: Optional[str] = None
+        initial_state: str | None = None
     ):
         """Create an execution context for manual control.
         
@@ -235,8 +230,8 @@ class AdvancedFSM:
     async def step(
         self,
         context: ExecutionContext,
-        arc_name: Optional[str] = None
-    ) -> Optional[StateInstance]:
+        arc_name: str | None = None
+    ) -> StateInstance | None:
         """Execute a single transition step.
         
         Args:
@@ -246,7 +241,7 @@ class AdvancedFSM:
         Returns:
             New state instance or None if no transition
         """
-        from dataknobs_fsm.core.state import StateInstance, StateDefinition, StateType
+        from dataknobs_fsm.core.state import StateInstance
         
         # Store the current state before the transition
         state_before = context.current_state
@@ -330,7 +325,7 @@ class AdvancedFSM:
     async def trace_execution(
         self,
         data: Union[Dict[str, Any], Record],
-        initial_state: Optional[str] = None
+        initial_state: str | None = None
     ) -> List[Dict[str, Any]]:
         """Execute with full tracing enabled.
         
@@ -356,7 +351,7 @@ class AdvancedFSM:
     async def profile_execution(
         self,
         data: Union[Dict[str, Any], Record],
-        initial_state: Optional[str] = None
+        initial_state: str | None = None
     ) -> Dict[str, Any]:
         """Execute with performance profiling.
         
@@ -549,7 +544,7 @@ class AdvancedFSM:
             }
         }
         
-    def get_history(self) -> Optional[ExecutionHistory]:
+    def get_history(self) -> ExecutionHistory | None:
         """Get execution history if enabled.
         
         Returns:
@@ -601,7 +596,7 @@ class FSMDebugger:
     async def start(
         self,
         data: Union[Dict[str, Any], Record],
-        initial_state: Optional[str] = None
+        initial_state: str | None = None
     ):
         """Start debugging session.
         

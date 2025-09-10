@@ -7,10 +7,10 @@ in FSM configurations for processing large data sets efficiently.
 import csv
 import json
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 
 from dataknobs_fsm.functions.base import ITransformFunction, TransformFunctionError
-from dataknobs_fsm.streaming.core import IStreamSink, IStreamSource
+from dataknobs_fsm.streaming.core import IStreamSource
 
 
 class ChunkReader(ITransformFunction):
@@ -94,7 +94,7 @@ class ChunkReader(ITransformFunction):
         offset = state.get("offset", 0)
         
         # For JSON, we need to load the entire file (or use streaming JSON parser)
-        with open(file_path, "r") as f:
+        with open(file_path) as f:
             data = json.load(f)
         
         if isinstance(data, list):
@@ -125,7 +125,7 @@ class ChunkReader(ITransformFunction):
         offset = state.get("offset", 0)
         records = []
         
-        with open(file_path, "r") as f:
+        with open(file_path) as f:
             reader = csv.DictReader(f)
             
             # Skip to offset
@@ -158,7 +158,7 @@ class ChunkReader(ITransformFunction):
         offset = state.get("offset", 0)
         records = []
         
-        with open(file_path, "r") as f:
+        with open(file_path) as f:
             # Skip to offset
             for _ in range(offset):
                 if not f.readline():
@@ -206,7 +206,7 @@ class RecordParser(ITransformFunction):
         format: str,
         field: str = "raw",
         output_field: str = "parsed",
-        options: Optional[Dict[str, Any]] = None,
+        options: Dict[str, Any] | None = None,
     ):
         """Initialize the record parser.
         
@@ -384,7 +384,7 @@ class FileAppender(ITransformFunction):
             # Append to JSON array
             existing = []
             if self.file_path.exists() and self.file_path.stat().st_size > 0:
-                with open(self.file_path, "r") as f:
+                with open(self.file_path) as f:
                     existing = json.load(f)
             
             existing.extend(self._buffer)
@@ -434,8 +434,8 @@ class StreamAggregator(ITransformFunction):
     def __init__(
         self,
         aggregations: Dict[str, Dict[str, Any]],
-        group_by: Optional[List[str]] = None,
-        window_size: Optional[int] = None,
+        group_by: List[str] | None = None,
+        window_size: int | None = None,
     ):
         """Initialize the stream aggregator.
         
@@ -479,7 +479,7 @@ class StreamAggregator(ITransformFunction):
             # Compute aggregations per group
             results = []
             for key, group_records in self._groups.items():
-                result = dict(zip(self.group_by, key))
+                result = dict(zip(self.group_by, key, strict=False))
                 for output_field, agg_spec in self.aggregations.items():
                     result[output_field] = self._compute_aggregation(group_records, agg_spec)
                 results.append(result)

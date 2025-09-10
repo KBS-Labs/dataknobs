@@ -9,7 +9,7 @@ This module provides different transaction strategies:
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, TypeVar
+from typing import Any, Callable, Dict, List, TypeVar
 import logging
 
 logger = logging.getLogger(__name__)
@@ -99,7 +99,7 @@ class TransactionManager(ABC):
         """
         self.strategy = strategy
         self._transactions: Dict[str, Transaction] = {}
-        self._active_transaction: Optional[Transaction] = None
+        self._active_transaction: Transaction | None = None
     
     @classmethod
     def create(cls, strategy: TransactionStrategy, **config) -> "TransactionManager":
@@ -126,7 +126,7 @@ class TransactionManager(ABC):
             raise ValueError(f"Unknown transaction strategy: {strategy}")
     
     @abstractmethod
-    def begin_transaction(self, transaction_id: Optional[str] = None) -> Transaction:
+    def begin_transaction(self, transaction_id: str | None = None) -> Transaction:
         """Begin a new transaction.
         
         Args:
@@ -138,7 +138,7 @@ class TransactionManager(ABC):
         pass
     
     @abstractmethod
-    def commit_transaction(self, transaction_id: Optional[str] = None) -> None:
+    def commit_transaction(self, transaction_id: str | None = None) -> None:
         """Commit a transaction.
         
         Args:
@@ -147,7 +147,7 @@ class TransactionManager(ABC):
         pass
     
     @abstractmethod
-    def rollback_transaction(self, transaction_id: Optional[str] = None) -> None:
+    def rollback_transaction(self, transaction_id: str | None = None) -> None:
         """Rollback a transaction.
         
         Args:
@@ -165,7 +165,7 @@ class TransactionManager(ABC):
         pass
     
     @contextmanager
-    def transaction(self, transaction_id: Optional[str] = None):
+    def transaction(self, transaction_id: str | None = None):
         """Context manager for transactions.
         
         Args:
@@ -183,7 +183,7 @@ class TransactionManager(ABC):
             self.rollback_transaction(txn.id)
             raise e
     
-    def get_transaction(self, transaction_id: str) -> Optional[Transaction]:
+    def get_transaction(self, transaction_id: str) -> Transaction | None:
         """Get a transaction by ID.
         
         Args:
@@ -194,7 +194,7 @@ class TransactionManager(ABC):
         """
         return self._transactions.get(transaction_id)
     
-    def get_active_transaction(self) -> Optional[Transaction]:
+    def get_active_transaction(self) -> Transaction | None:
         """Get the currently active transaction.
         
         Returns:
@@ -211,7 +211,7 @@ class SingleTransactionManager(TransactionManager):
         super().__init__(TransactionStrategy.SINGLE)
         self._transaction_counter = 0
     
-    def begin_transaction(self, transaction_id: Optional[str] = None) -> Transaction:
+    def begin_transaction(self, transaction_id: str | None = None) -> Transaction:
         """Begin a new single transaction.
         
         Args:
@@ -233,7 +233,7 @@ class SingleTransactionManager(TransactionManager):
         self._active_transaction = txn
         return txn
     
-    def commit_transaction(self, transaction_id: Optional[str] = None) -> None:
+    def commit_transaction(self, transaction_id: str | None = None) -> None:
         """Commit a single transaction.
         
         Args:
@@ -250,7 +250,7 @@ class SingleTransactionManager(TransactionManager):
             if self._active_transaction == txn:
                 self._active_transaction = None
     
-    def rollback_transaction(self, transaction_id: Optional[str] = None) -> None:
+    def rollback_transaction(self, transaction_id: str | None = None) -> None:
         """Rollback a single transaction.
         
         Args:
@@ -292,7 +292,7 @@ class BatchTransactionManager(TransactionManager):
         self._batch_counter = 0
         self._operation_count = 0
     
-    def begin_transaction(self, transaction_id: Optional[str] = None) -> Transaction:
+    def begin_transaction(self, transaction_id: str | None = None) -> Transaction:
         """Begin or get the current batch transaction.
         
         Args:
@@ -329,7 +329,7 @@ class BatchTransactionManager(TransactionManager):
         if self.auto_commit and self._operation_count >= self.batch_size:
             self.commit_transaction()
     
-    def commit_transaction(self, transaction_id: Optional[str] = None) -> None:
+    def commit_transaction(self, transaction_id: str | None = None) -> None:
         """Commit the batch transaction.
         
         Args:
@@ -347,7 +347,7 @@ class BatchTransactionManager(TransactionManager):
                 self._active_transaction = None
                 self._operation_count = 0
     
-    def rollback_transaction(self, transaction_id: Optional[str] = None) -> None:
+    def rollback_transaction(self, transaction_id: str | None = None) -> None:
         """Rollback the batch transaction.
         
         Args:
@@ -387,7 +387,7 @@ class ManualTransactionManager(TransactionManager):
         super().__init__(TransactionStrategy.MANUAL)
         self._transaction_counter = 0
     
-    def begin_transaction(self, transaction_id: Optional[str] = None) -> Transaction:
+    def begin_transaction(self, transaction_id: str | None = None) -> Transaction:
         """Begin a new manual transaction.
         
         Args:
@@ -409,7 +409,7 @@ class ManualTransactionManager(TransactionManager):
         self._active_transaction = txn
         return txn
     
-    def commit_transaction(self, transaction_id: Optional[str] = None) -> None:
+    def commit_transaction(self, transaction_id: str | None = None) -> None:
         """Manually commit a transaction.
         
         Args:
@@ -431,7 +431,7 @@ class ManualTransactionManager(TransactionManager):
         if self._active_transaction == txn:
             self._active_transaction = None
     
-    def rollback_transaction(self, transaction_id: Optional[str] = None) -> None:
+    def rollback_transaction(self, transaction_id: str | None = None) -> None:
         """Manually rollback a transaction.
         
         Args:

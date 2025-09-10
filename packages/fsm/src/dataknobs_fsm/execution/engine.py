@@ -1,17 +1,16 @@
 """Execution engine for FSM state machines."""
 
-import asyncio
 import time
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Tuple
 
 from dataknobs_fsm.core.arc import ArcDefinition, ArcExecution
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.core.network import StateNetwork
-from dataknobs_fsm.core.state import State, StateType
+from dataknobs_fsm.core.state import StateType
 from dataknobs_fsm.execution.context import ExecutionContext
-from dataknobs_fsm.functions.base import FunctionContext, StateTransitionError
+from dataknobs_fsm.functions.base import FunctionContext
 
 
 class TraversalStrategy(Enum):
@@ -74,7 +73,7 @@ class ExecutionEngine:
         context: ExecutionContext,
         data: Any = None,
         max_transitions: int = 1000,
-        arc_name: Optional[str] = None
+        arc_name: str | None = None
     ) -> Tuple[bool, Any]:
         """Execute the FSM with given context.
         
@@ -113,7 +112,7 @@ class ExecutionEngine:
         self,
         context: ExecutionContext,
         max_transitions: int,
-        arc_name: Optional[str] = None
+        arc_name: str | None = None
     ) -> Tuple[bool, Any]:
         """Execute in single record mode.
         
@@ -451,7 +450,7 @@ class ExecutionEngine:
                     
                     if result is not None:
                         context.data = result
-                except Exception as e:
+                except Exception:
                     # Log but don't fail - state transforms are optional
                     pass
     
@@ -502,7 +501,7 @@ class ExecutionEngine:
                     if isinstance(result, dict):
                         # Merge validation results into context data
                         context.data.update(result)
-                except Exception as e:
+                except Exception:
                     # Log but don't fail - state validators are optional
                     pass
         
@@ -532,14 +531,14 @@ class ExecutionEngine:
                     
                     if result is not None:
                         context.data = result
-                except Exception as e:
+                except Exception:
                     # Log but don't fail - state transforms are optional
                     pass
     
     def _get_available_transitions(
         self,
         context: ExecutionContext,
-        arc_name: Optional[str] = None
+        arc_name: str | None = None
     ) -> List[ArcDefinition]:
         """Get available transitions from current state.
         
@@ -634,7 +633,7 @@ class ExecutionEngine:
         self,
         transitions: List[ArcDefinition],
         context: ExecutionContext
-    ) -> Optional[ArcDefinition]:
+    ) -> ArcDefinition | None:
         """Choose next transition based on strategy.
         
         Args:
@@ -680,7 +679,7 @@ class ExecutionEngine:
         
         return transitions[0]
     
-    def _find_initial_state(self) -> Optional[str]:
+    def _find_initial_state(self) -> str | None:
         """Find the initial state in the FSM.
         
         Returns:
@@ -706,7 +705,7 @@ class ExecutionEngine:
         
         return None
     
-    def _is_final_state(self, state_name: Optional[str]) -> bool:
+    def _is_final_state(self, state_name: str | None) -> bool:
         """Check if state is a final state.
         
         Args:
@@ -749,7 +748,7 @@ class ExecutionEngine:
     def _get_current_network(
         self,
         context: ExecutionContext
-    ) -> Optional[StateNetwork]:
+    ) -> StateNetwork | None:
         """Get the current network from context.
         
         Args:

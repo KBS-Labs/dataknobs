@@ -1,7 +1,7 @@
 """Database streaming implementation for FSM."""
 
 import time
-from typing import Any, Dict, Iterator, List, Optional, Union
+from typing import Any, Dict, Iterator, List, Union
 
 from dataknobs_data.database import AsyncDatabase, SyncDatabase
 from dataknobs_data.query import Query
@@ -24,10 +24,10 @@ class DatabaseStreamSource(IStreamSource):
     def __init__(
         self,
         database: Union[SyncDatabase, AsyncDatabase],
-        query: Optional[Query] = None,
+        query: Query | None = None,
         batch_size: int = 1000,
-        cursor_field: Optional[str] = None,
-        start_cursor: Optional[Any] = None
+        cursor_field: str | None = None,
+        start_cursor: Any | None = None
     ):
         """Initialize database stream source.
         
@@ -54,7 +54,7 @@ class DatabaseStreamSource(IStreamSource):
         except Exception:
             self._total_records = None
     
-    def read_chunk(self) -> Optional[StreamChunk]:
+    def read_chunk(self) -> StreamChunk | None:
         """Read next chunk of records from database.
         
         Returns:
@@ -192,11 +192,11 @@ class DatabaseStreamSink(IStreamSink):
     def __init__(
         self,
         database: Union[SyncDatabase, AsyncDatabase],
-        table_name: Optional[str] = None,
+        table_name: str | None = None,
         batch_size: int = 1000,
         upsert: bool = False,
         transaction_batch: int = 10000,
-        on_conflict_update: Optional[List[str]] = None
+        on_conflict_update: List[str] | None = None
     ):
         """Initialize database stream sink.
         
@@ -350,7 +350,7 @@ class DatabaseBulkLoader:
     def __init__(
         self,
         database: Union[SyncDatabase, AsyncDatabase],
-        table_name: Optional[str] = None
+        table_name: str | None = None
     ):
         """Initialize bulk loader.
         
@@ -372,7 +372,7 @@ class DatabaseBulkLoader:
         self,
         source: IStreamSource,
         batch_size: int = 1000,
-        progress_callback: Optional[callable] = None
+        progress_callback: callable | None = None
     ) -> Dict[str, Any]:
         """Load data from stream source into database.
         
@@ -424,9 +424,9 @@ class DatabaseBulkLoader:
     def export_to_sink(
         self,
         sink: IStreamSink,
-        query: Optional[Query] = None,
+        query: Query | None = None,
         batch_size: int = 1000,
-        progress_callback: Optional[callable] = None
+        progress_callback: callable | None = None
     ) -> Dict[str, Any]:
         """Export data from database to stream sink.
         

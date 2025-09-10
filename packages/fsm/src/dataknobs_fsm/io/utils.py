@@ -5,14 +5,14 @@ This module provides utility functions for common I/O patterns.
 
 import asyncio
 from typing import (
-    Any, Dict, List, Optional, Union, AsyncIterator, Iterator,
+    Any, Dict, List, Union, AsyncIterator, Iterator,
     Callable, TypeVar, Awaitable
 )
 from functools import reduce
 
-from .base import IOConfig, IOMode, IOFormat, IOProvider
+from .base import IOConfig, IOFormat, IOProvider
 from .adapters import (
-    FileIOAdapter, DatabaseIOAdapter, HTTPIOAdapter, StreamIOAdapter
+    FileIOAdapter, DatabaseIOAdapter, HTTPIOAdapter
 )
 
 T = TypeVar('T')
@@ -34,9 +34,7 @@ def create_io_provider(
     # Determine adapter based on format and source
     if config.format == IOFormat.DATABASE:
         adapter = DatabaseIOAdapter()
-    elif config.format == IOFormat.API:
-        adapter = HTTPIOAdapter()
-    elif isinstance(config.source, str) and config.source.startswith(('http://', 'https://')):
+    elif config.format == IOFormat.API or (isinstance(config.source, str) and config.source.startswith(('http://', 'https://'))):
         adapter = HTTPIOAdapter()
     elif isinstance(config.source, dict):
         adapter = DatabaseIOAdapter()
@@ -140,7 +138,7 @@ class IORouter:
         self,
         condition: Callable[[Any], bool],
         provider: IOProvider,
-        transform: Optional[Callable[[Any], Any]] = None
+        transform: Callable[[Any], Any] | None = None
     ):
         """Add a routing rule.
         
@@ -183,7 +181,7 @@ class IOBuffer:
     def __init__(
         self,
         max_size: int = 10000,
-        overflow_handler: Optional[Callable[[List[Any]], None]] = None
+        overflow_handler: Callable[[List[Any]], None] | None = None
     ):
         """Initialize buffer.
         

@@ -6,7 +6,7 @@ in FSM configurations for AI-powered workflows.
 
 import asyncio
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List
 
 from dataknobs_fsm.functions.base import (
     ITransformFunction,
@@ -23,9 +23,9 @@ class PromptBuilder(ITransformFunction):
     def __init__(
         self,
         template: str,
-        system_prompt: Optional[str] = None,
-        variables: Optional[List[str]] = None,
-        format_spec: Optional[str] = None,  # "json", "markdown", "plain"
+        system_prompt: str | None = None,
+        variables: List[str] | None = None,
+        format_spec: str | None = None,  # "json", "markdown", "plain"
     ):
         """Initialize the prompt builder.
         
@@ -97,9 +97,9 @@ class LLMCaller(ITransformFunction):
     def __init__(
         self,
         resource_name: str,
-        model: Optional[str] = None,
+        model: str | None = None,
         temperature: float = 0.7,
-        max_tokens: Optional[int] = None,
+        max_tokens: int | None = None,
         stream: bool = False,
         response_field: str = "llm_response",
     ):
@@ -177,11 +177,11 @@ class ResponseValidator(IValidationFunction):
     def __init__(
         self,
         response_field: str = "llm_response",
-        format: Optional[str] = None,  # "json", "markdown", etc.
-        schema: Optional[Dict[str, Any]] = None,
-        min_length: Optional[int] = None,
-        max_length: Optional[int] = None,
-        required_fields: Optional[List[str]] = None,
+        format: str | None = None,  # "json", "markdown", etc.
+        schema: Dict[str, Any] | None = None,
+        min_length: int | None = None,
+        max_length: int | None = None,
+        required_fields: List[str] | None = None,
     ):
         """Initialize the response validator.
         
@@ -264,7 +264,7 @@ class FunctionCaller(ITransformFunction):
     def __init__(
         self,
         response_field: str = "llm_response",
-        function_registry: Optional[Dict[str, callable]] = None,
+        function_registry: Dict[str, callable] | None = None,
         result_field: str = "function_result",
     ):
         """Initialize the function caller.
@@ -402,7 +402,7 @@ class EmbeddingGenerator(ITransformFunction):
         resource_name: str,
         text_field: str = "text",
         embedding_field: str = "embedding",
-        model: Optional[str] = None,
+        model: str | None = None,
         batch_size: int = 100,
     ):
         """Initialize the embedding generator.

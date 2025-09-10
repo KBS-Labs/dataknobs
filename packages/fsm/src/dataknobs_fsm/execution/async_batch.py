@@ -2,8 +2,7 @@
 
 import asyncio
 import time
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
@@ -29,7 +28,7 @@ class AsyncBatchExecutor:
         parallelism: int = 10,
         batch_size: int = 100,
         enable_transactions: bool = False,
-        progress_callback: Optional[callable] = None
+        progress_callback: callable | None = None
     ):
         """Initialize async batch executor.
         
@@ -55,7 +54,7 @@ class AsyncBatchExecutor:
     async def execute_batch(
         self,
         items: List[Any],
-        context_template: Optional[ExecutionContext] = None,
+        context_template: ExecutionContext | None = None,
         max_transitions: int = 1000
     ) -> List[BatchResult]:
         """Execute batch of items asynchronously.
@@ -198,7 +197,7 @@ class AsyncBatchExecutor:
     async def execute_batches(
         self,
         items: List[Any],
-        context_template: Optional[ExecutionContext] = None,
+        context_template: ExecutionContext | None = None,
         max_transitions: int = 1000
     ) -> Dict[str, Any]:
         """Execute items in multiple batches.
@@ -238,7 +237,7 @@ class AsyncBatchExecutor:
             'results': all_results
         }
     
-    def _find_initial_state(self) -> Optional[str]:
+    def _find_initial_state(self) -> str | None:
         """Find initial state in FSM.
         
         Returns:

@@ -5,7 +5,7 @@ This module provides utility functions for working with LLMs.
 
 import re
 import json
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 from dataclasses import dataclass, field
 
 from .base import LLMMessage, LLMResponse
@@ -105,7 +105,7 @@ class MessageBuilder:
         self,
         name: str,
         content: str,
-        function_call: Optional[Dict[str, Any]] = None
+        function_call: Dict[str, Any] | None = None
     ) -> 'MessageBuilder':
         """Add function message.
         
@@ -167,7 +167,7 @@ class ResponseParser:
     """Parser for LLM responses."""
     
     @staticmethod
-    def extract_json(response: Union[str, LLMResponse]) -> Optional[Dict[str, Any]]:
+    def extract_json(response: Union[str, LLMResponse]) -> Dict[str, Any] | None:
         """Extract JSON from response.
         
         Args:
@@ -203,7 +203,7 @@ class ResponseParser:
     @staticmethod
     def extract_code(
         response: Union[str, LLMResponse],
-        language: Optional[str] = None
+        language: str | None = None
     ) -> List[str]:
         """Extract code blocks from response.
         
@@ -392,8 +392,8 @@ class CostCalculator:
     def calculate_cost(
         cls,
         response: LLMResponse,
-        model: Optional[str] = None
-    ) -> Optional[float]:
+        model: str | None = None
+    ) -> float | None:
         """Calculate cost for LLM response.
         
         Args:
@@ -430,7 +430,7 @@ class CostCalculator:
         text: str,
         model: str,
         expected_output_tokens: int = 100
-    ) -> Optional[float]:
+    ) -> float | None:
         """Estimate cost for text completion.
         
         Args:

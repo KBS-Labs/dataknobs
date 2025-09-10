@@ -6,13 +6,12 @@ import io
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Union
+from typing import Any, Dict, Iterator, List, Union
 
 from dataknobs_fsm.streaming.core import (
     IStreamSink,
     IStreamSource,
     StreamChunk,
-    StreamConfig,
 )
 
 
@@ -77,8 +76,8 @@ class FileStreamSource(IStreamSource):
     def __init__(
         self,
         file_path: Union[str, Path],
-        format: Optional[str] = None,
-        compression: Optional[str] = None,
+        format: str | None = None,
+        compression: str | None = None,
         chunk_size: int = 1000,
         encoding: str = 'utf-8'
     ):
@@ -117,7 +116,7 @@ class FileStreamSource(IStreamSource):
         elif self.format == FileFormat.BINARY:
             self._file_handle = open(self.file_path, 'rb')
         else:
-            self._file_handle = open(self.file_path, 'r', encoding=self.encoding)
+            self._file_handle = open(self.file_path, encoding=self.encoding)
         
         # Set up format-specific reader
         if self.format == FileFormat.CSV:
@@ -133,14 +132,12 @@ class FileStreamSource(IStreamSource):
         elif self.format == FileFormat.JSONL:
             # Will read line by line
             self._reader = self._file_handle
-        elif self.format == FileFormat.TEXT:
-            self._reader = self._file_handle
-        elif self.format == FileFormat.BINARY:
+        elif self.format == FileFormat.TEXT or self.format == FileFormat.BINARY:
             self._reader = self._file_handle
         else:
             self._reader = self._file_handle
     
-    def read_chunk(self) -> Optional[StreamChunk]:
+    def read_chunk(self) -> StreamChunk | None:
         """Read next chunk from file.
         
         Returns:
@@ -198,7 +195,7 @@ class FileStreamSource(IStreamSource):
                 is_last=True
             )
     
-    def _read_next_item(self) -> Optional[Any]:
+    def _read_next_item(self) -> Any | None:
         """Read next item based on format.
         
         Returns:
@@ -254,8 +251,8 @@ class FileStreamSink(IStreamSink):
     def __init__(
         self,
         file_path: Union[str, Path],
-        format: Optional[str] = None,
-        compression: Optional[str] = None,
+        format: str | None = None,
+        compression: str | None = None,
         encoding: str = 'utf-8',
         atomic: bool = True,
         append: bool = False
@@ -456,7 +453,7 @@ class DirectoryStreamSource(IStreamSource):
         directory: Union[str, Path],
         pattern: str = "*",
         recursive: bool = False,
-        format: Optional[str] = None,
+        format: str | None = None,
         chunk_size: int = 1000
     ):
         """Initialize directory stream source.
@@ -484,10 +481,10 @@ class DirectoryStreamSource(IStreamSource):
         self.files.sort()
         
         self._current_file_index = 0
-        self._current_source: Optional[FileStreamSource] = None
+        self._current_source: FileStreamSource | None = None
         self._total_chunks = 0
     
-    def read_chunk(self) -> Optional[StreamChunk]:
+    def read_chunk(self) -> StreamChunk | None:
         """Read next chunk from directory files.
         
         Returns:

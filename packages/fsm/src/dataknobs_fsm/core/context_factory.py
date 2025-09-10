@@ -4,7 +4,7 @@ This module provides a centralized factory for creating execution contexts,
 eliminating duplication between Simple and Advanced APIs.
 """
 
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Union
 from dataknobs_data import Record
 
 from ..core.fsm import FSM
@@ -21,11 +21,11 @@ class ContextFactory:
     def create_context(
         fsm: FSM,
         data: Union[Dict[str, Any], Record],
-        initial_state: Optional[str] = None,
+        initial_state: str | None = None,
         data_mode: ProcessingMode = ProcessingMode.SINGLE,
         transaction_mode: TransactionMode = TransactionMode.NONE,
-        resources: Optional[Dict[str, Any]] = None,
-        resource_manager: Optional[ResourceManager] = None
+        resources: Dict[str, Any] | None = None,
+        resource_manager: ResourceManager | None = None
     ) -> ExecutionContext:
         """Create and configure an ExecutionContext.
         
@@ -76,8 +76,8 @@ class ContextFactory:
     @staticmethod
     def _resolve_initial_state(
         fsm: FSM, 
-        state_name: Optional[str] = None
-    ) -> tuple[str, Optional[StateDefinition]]:
+        state_name: str | None = None
+    ) -> tuple[str, StateDefinition | None]:
         """Resolve the initial state for execution.
         
         Args:
@@ -140,7 +140,7 @@ class ContextFactory:
         fsm: FSM,
         batch_data: list,
         data_mode: ProcessingMode = ProcessingMode.BATCH,
-        resources: Optional[Dict[str, Any]] = None
+        resources: Dict[str, Any] | None = None
     ) -> ExecutionContext:
         """Create a context for batch processing.
         
@@ -177,7 +177,7 @@ class ContextFactory:
     def create_stream_context(
         fsm: FSM,
         stream_context,
-        resources: Optional[Dict[str, Any]] = None
+        resources: Dict[str, Any] | None = None
     ) -> ExecutionContext:
         """Create a context for stream processing.
         

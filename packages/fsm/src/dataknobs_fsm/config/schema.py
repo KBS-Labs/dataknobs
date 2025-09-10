@@ -12,8 +12,7 @@ This module defines the schema for FSM configuration files, including:
 """
 
 from enum import Enum
-from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Union
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -45,9 +44,9 @@ class FunctionReference(BaseModel):
     """Reference to a function."""
 
     type: Literal["builtin", "custom", "inline"]
-    name: Optional[str] = None
-    module: Optional[str] = None
-    code: Optional[str] = None
+    name: str | None = None
+    module: str | None = None
+    code: str | None = None
     params: Dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -79,7 +78,7 @@ class TransactionConfig(BaseModel):
     batch_size: int = Field(default=100, ge=1)
     commit_triggers: List[str] = Field(default_factory=list)
     rollback_on_error: bool = True
-    timeout_seconds: Optional[int] = Field(default=None, ge=1)
+    timeout_seconds: int | None = Field(default=None, ge=1)
 
 
 class StreamConfig(BaseModel):
@@ -88,9 +87,9 @@ class StreamConfig(BaseModel):
     enabled: bool = False
     chunk_size: int = Field(default=1000, ge=1)
     parallelism: int = Field(default=1, ge=1)
-    memory_limit_mb: Optional[int] = Field(default=None, ge=1)
+    memory_limit_mb: int | None = Field(default=None, ge=1)
     backpressure_threshold: float = Field(default=0.8, ge=0, le=1)
-    format: Optional[str] = None
+    format: str | None = None
 
 
 class ResourceConfig(BaseModel):
@@ -103,15 +102,15 @@ class ResourceConfig(BaseModel):
     timeout_seconds: int = Field(default=30, ge=1)
     retry_attempts: int = Field(default=3, ge=0)
     retry_delay_seconds: float = Field(default=1.0, ge=0)
-    health_check_interval: Optional[int] = Field(default=None, ge=1)
+    health_check_interval: int | None = Field(default=None, ge=1)
 
 
 class ArcConfig(BaseModel):
     """Configuration for an arc."""
 
     target: str
-    condition: Optional[FunctionReference] = None
-    transform: Optional[FunctionReference] = None
+    condition: FunctionReference | None = None
+    transform: FunctionReference | None = None
     resources: List[str] = Field(default_factory=list)
     priority: int = Field(default=0)
     metadata: Dict[str, Any] = Field(default_factory=dict)
@@ -121,7 +120,7 @@ class PushArcConfig(ArcConfig):
     """Configuration for a push arc to another network."""
 
     target_network: str
-    return_state: Optional[str] = None
+    return_state: str | None = None
     data_isolation: DataHandlingMode = DataHandlingMode.COPY
 
 
@@ -129,12 +128,12 @@ class StateConfig(BaseModel):
     """Configuration for a state."""
 
     name: str
-    data_schema: Optional[Dict[str, Any]] = Field(default=None, alias="schema")
+    data_schema: Dict[str, Any] | None = Field(default=None, alias="schema")
     validators: List[FunctionReference] = Field(default_factory=list)
     transforms: List[FunctionReference] = Field(default_factory=list)
     arcs: List[Union[ArcConfig, PushArcConfig]] = Field(default_factory=list)
     resources: List[str] = Field(default_factory=list)
-    data_mode: Optional[DataHandlingMode] = None
+    data_mode: DataHandlingMode | None = None
     is_start: bool = False
     is_end: bool = False
     metadata: Dict[str, Any] = Field(default_factory=dict)
@@ -162,7 +161,7 @@ class NetworkConfig(BaseModel):
     name: str
     states: List[StateConfig]
     resources: List[str] = Field(default_factory=list)
-    streaming: Optional[StreamConfig] = None
+    streaming: StreamConfig | None = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -189,7 +188,7 @@ class FSMConfig(BaseModel):
 
     name: str
     version: str = "1.0.0"
-    description: Optional[str] = None
+    description: str | None = None
     
     # Data handling
     data_mode: DataModeConfig = Field(default_factory=DataModeConfig)
@@ -205,7 +204,7 @@ class FSMConfig(BaseModel):
     # Execution
     execution_strategy: ExecutionStrategy = ExecutionStrategy.DEPTH_FIRST
     max_transitions: int = Field(default=1000, ge=1)
-    timeout_seconds: Optional[int] = Field(default=None, ge=1)
+    timeout_seconds: int | None = Field(default=None, ge=1)
     
     # Metadata
     metadata: Dict[str, Any] = Field(default_factory=dict)
@@ -339,8 +338,8 @@ TEMPLATES: Dict[UseCaseTemplate, Dict[str, Any]] = {
 
 def apply_template(
     template: UseCaseTemplate,
-    params: Optional[Dict[str, Any]] = None,
-    overrides: Optional[Dict[str, Any]] = None,
+    params: Dict[str, Any] | None = None,
+    overrides: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Apply a use case template to generate configuration.
     

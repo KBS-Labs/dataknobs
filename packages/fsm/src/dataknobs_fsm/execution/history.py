@@ -1,14 +1,12 @@
 """Execution history tracking for FSM state machines."""
 
 import time
-from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List
 
 from dataknobs_structures import Tree
 
 from dataknobs_fsm.core.data_modes import DataHandlingMode
-from dataknobs_fsm.core.state import StateInstance
 
 
 class ExecutionStatus(Enum):
@@ -46,20 +44,20 @@ class ExecutionStep:
         self.state_name = state_name
         self.network_name = network_name
         self.timestamp = timestamp
-        self.start_time: Optional[float] = None
-        self.end_time: Optional[float] = None
+        self.start_time: float | None = None
+        self.end_time: float | None = None
         self.data_mode = data_mode
         self.status = status
         
         # Execution details
-        self.arc_taken: Optional[str] = None
-        self.data_snapshot: Optional[Any] = None
-        self.error: Optional[Exception] = None
+        self.arc_taken: str | None = None
+        self.data_snapshot: Any | None = None
+        self.error: Exception | None = None
         self.metrics: Dict[str, Any] = {}
         self.resource_usage: Dict[str, Any] = {}
         
         # Stream tracking
-        self.stream_progress: Optional[Dict[str, Any]] = None
+        self.stream_progress: Dict[str, Any] | None = None
         self.chunks_processed: int = 0
         self.records_processed: int = 0
     
@@ -68,7 +66,7 @@ class ExecutionStep:
         self.start_time = time.time()
         self.status = ExecutionStatus.IN_PROGRESS
     
-    def complete(self, arc_taken: Optional[str] = None) -> None:
+    def complete(self, arc_taken: str | None = None) -> None:
         """Mark step as completed.
         
         Args:
@@ -120,7 +118,7 @@ class ExecutionStep:
         self,
         chunks: int,
         records: int,
-        current_position: Optional[int] = None
+        current_position: int | None = None
     ) -> None:
         """Update streaming progress.
         
@@ -137,7 +135,7 @@ class ExecutionStep:
             self.stream_progress['position'] = current_position
     
     @property
-    def duration(self) -> Optional[float]:
+    def duration(self) -> float | None:
         """Get execution duration in seconds."""
         if self.start_time and self.end_time:
             return self.end_time - self.start_time
@@ -181,7 +179,7 @@ class ExecutionHistory:
         fsm_name: str,
         execution_id: str,
         data_mode: DataHandlingMode = DataHandlingMode.COPY,
-        max_depth: Optional[int] = None,
+        max_depth: int | None = None,
         enable_data_snapshots: bool = False
     ):
         """Initialize execution history.
@@ -201,11 +199,11 @@ class ExecutionHistory:
         
         # Create tree structure - Tree stores root nodes
         self.tree_roots: List[Tree] = []
-        self.current_node: Optional[Tree] = None
+        self.current_node: Tree | None = None
         
         # Tracking
         self.start_time = time.time()
-        self.end_time: Optional[float] = None
+        self.end_time: float | None = None
         self.total_steps = 0
         self.failed_steps = 0
         self.skipped_steps = 0
@@ -231,8 +229,8 @@ class ExecutionHistory:
         self,
         state_name: str,
         network_name: str,
-        data: Optional[Any] = None,
-        parent_step_id: Optional[str] = None
+        data: Any | None = None,
+        parent_step_id: str | None = None
     ) -> ExecutionStep:
         """Add a new execution step.
         
@@ -286,10 +284,10 @@ class ExecutionHistory:
     def update_step(
         self,
         step_id: str,
-        status: Optional[ExecutionStatus] = None,
-        arc_taken: Optional[str] = None,
-        error: Optional[Exception] = None,
-        metrics: Optional[Dict[str, Any]] = None
+        status: ExecutionStatus | None = None,
+        arc_taken: str | None = None,
+        error: Exception | None = None,
+        metrics: Dict[str, Any] | None = None
     ) -> bool:
         """Update an existing step.
         
@@ -508,7 +506,7 @@ class ExecutionHistory:
             }
         }
     
-    def _find_node_by_step_id(self, step_id: str) -> Optional[Tree]:
+    def _find_node_by_step_id(self, step_id: str) -> Tree | None:
         """Find a node by step ID.
         
         Args:
@@ -517,7 +515,7 @@ class ExecutionHistory:
         Returns:
             Tree node if found, None otherwise.
         """
-        def search_node(node: Tree) -> Optional[Tree]:
+        def search_node(node: Tree) -> Tree | None:
             if node.data.step_id == step_id:
                 return node
             if node.children:
@@ -570,8 +568,7 @@ class ExecutionHistory:
         def get_depth(node: Tree, depth: int = 0):
             nonlocal max_depth
             depth += 1
-            if depth > max_depth:
-                max_depth = depth
+            max_depth = max(max_depth, depth)
             if node.children:
                 for child in node.children:
                     get_depth(child, depth)

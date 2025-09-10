@@ -9,7 +9,7 @@ This module defines the interfaces for:
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union
+from typing import Any, Dict, List, Tuple, TypeVar
 from enum import Enum
 from dataclasses import dataclass, field
 
@@ -31,9 +31,9 @@ class ExecutionResult:
     def __init__(
         self,
         success: bool,
-        data: Optional[Any] = None,
-        error: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        data: Any | None = None,
+        error: str | None = None,
+        metadata: Dict[str, Any] | None = None
     ):
         """Initialize execution result.
         
@@ -49,7 +49,7 @@ class ExecutionResult:
         self.metadata = metadata or {}
     
     @classmethod
-    def success_result(cls, data: Any, metadata: Optional[Dict[str, Any]] = None):
+    def success_result(cls, data: Any, metadata: Dict[str, Any] | None = None):
         """Create a successful result.
         
         Args:
@@ -62,7 +62,7 @@ class ExecutionResult:
         return cls(success=True, data=data, metadata=metadata)
     
     @classmethod
-    def failure_result(cls, error: str, metadata: Optional[Dict[str, Any]] = None):
+    def failure_result(cls, error: str, metadata: Dict[str, Any] | None = None):
         """Create a failure result.
         
         Args:
@@ -88,7 +88,7 @@ class IValidationFunction(ABC):
     """Interface for validation functions."""
     
     @abstractmethod
-    def validate(self, data: Any, context: Optional[Dict[str, Any]] = None) -> ExecutionResult:
+    def validate(self, data: Any, context: Dict[str, Any] | None = None) -> ExecutionResult:
         """Validate data according to function logic.
         
         Args:
@@ -114,7 +114,7 @@ class ITransformFunction(ABC):
     """Interface for transform functions."""
     
     @abstractmethod
-    def transform(self, data: Any, context: Optional[Dict[str, Any]] = None) -> ExecutionResult:
+    def transform(self, data: Any, context: Dict[str, Any] | None = None) -> ExecutionResult:
         """Transform data according to function logic.
         
         Args:
@@ -140,7 +140,7 @@ class IStateTestFunction(ABC):
     """Interface for state test functions."""
     
     @abstractmethod
-    def test(self, data: Any, context: Optional[Dict[str, Any]] = None) -> Tuple[bool, Optional[str]]:
+    def test(self, data: Any, context: Dict[str, Any] | None = None) -> Tuple[bool, str | None]:
         """Test if a condition is met for state transition.
         
         Args:
@@ -166,7 +166,7 @@ class IEndStateTestFunction(ABC):
     """Interface for end state test functions."""
     
     @abstractmethod
-    def should_end(self, data: Any, context: Optional[Dict[str, Any]] = None) -> Tuple[bool, Optional[str]]:
+    def should_end(self, data: Any, context: Dict[str, Any] | None = None) -> Tuple[bool, str | None]:
         """Test if processing should end.
         
         Args:
@@ -206,10 +206,10 @@ class ResourceConfig:
     name: str
     type: str
     connection_params: Dict[str, Any]
-    pool_size: Optional[int] = None
-    timeout: Optional[float] = None
-    retry_policy: Optional[Dict[str, Any]] = None
-    health_check_interval: Optional[float] = None
+    pool_size: int | None = None
+    timeout: float | None = None
+    retry_policy: Dict[str, Any] | None = None
+    health_check_interval: float | None = None
 
 
 class IResource(ABC):
@@ -225,7 +225,7 @@ class IResource(ABC):
         pass
     
     @abstractmethod
-    async def acquire(self, timeout: Optional[float] = None) -> Any:
+    async def acquire(self, timeout: float | None = None) -> Any:
         """Acquire a connection/handle to the resource.
         
         Args:
@@ -279,7 +279,7 @@ class FSMException(Exception):
 class ValidationError(FSMException):
     """Raised when validation fails."""
     
-    def __init__(self, message: str, validation_errors: Optional[List[str]] = None):
+    def __init__(self, message: str, validation_errors: List[str] | None = None):
         """Initialize validation error.
         
         Args:
@@ -298,7 +298,7 @@ class TransformError(FSMException):
 class StateTransitionError(FSMException):
     """Raised when state transition fails."""
     
-    def __init__(self, message: str, from_state: str, to_state: Optional[str] = None):
+    def __init__(self, message: str, from_state: str, to_state: str | None = None):
         """Initialize state transition error.
         
         Args:
@@ -458,7 +458,7 @@ class FunctionRegistry:
             # Store as generic function
             self.functions[name] = function
     
-    def get_function(self, name: str) -> Optional[Any]:
+    def get_function(self, name: str) -> Any | None:
         """Get a function by name.
         
         Args:

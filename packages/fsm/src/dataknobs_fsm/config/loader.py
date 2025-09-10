@@ -10,7 +10,7 @@ This module provides functionality to load FSM configurations from various sourc
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 
 import yaml
 from dataknobs_config import Config as DataknobsConfig
@@ -114,8 +114,8 @@ class ConfigLoader:
     def load_from_template(
         self,
         template: Union[UseCaseTemplate, str],
-        params: Optional[Dict[str, Any]] = None,
-        overrides: Optional[Dict[str, Any]] = None,
+        params: Dict[str, Any] | None = None,
+        overrides: Dict[str, Any] | None = None,
     ) -> FSMConfig:
         """Load configuration from a template.
         
@@ -165,7 +165,7 @@ class ConfigLoader:
         """
         suffix = file_path.suffix.lower()
         
-        with open(file_path, "r") as f:
+        with open(file_path) as f:
             if suffix == ".json":
                 return json.load(f)
             elif suffix in [".yaml", ".yml"]:

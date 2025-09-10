@@ -5,7 +5,7 @@ referenced in FSM configurations.
 """
 
 import re
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Union
 
 from pydantic import BaseModel, ValidationError
 
@@ -341,7 +341,7 @@ class UniqueValidator(IValidationFunction):
     def __init__(
         self,
         fields: List[str],
-        key: Optional[str] = None,
+        key: str | None = None,
     ):
         """Initialize the validator.
         
@@ -527,7 +527,7 @@ def length(**field_lengths: Dict[str, int]) -> LengthValidator:
     return LengthValidator(field_lengths)
 
 
-def unique(*fields: str, key: Optional[str] = None) -> UniqueValidator:
+def unique(*fields: str, key: str | None = None) -> UniqueValidator:
     """Create a UniqueValidator."""
     return UniqueValidator(list(fields), key)
 

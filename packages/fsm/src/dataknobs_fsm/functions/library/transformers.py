@@ -8,7 +8,7 @@ import copy
 import json
 import re
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Union
 
 from dataknobs_fsm.functions.base import ITransformFunction, TransformError
 
@@ -94,7 +94,7 @@ class ValueNormalizer(ITransformFunction):
     def __init__(
         self,
         normalizations: Dict[str, str],
-        fields: Optional[List[str]] = None,
+        fields: List[str] | None = None,
     ):
         """Initialize the value normalizer.
         
@@ -317,8 +317,8 @@ class FieldFilter(ITransformFunction):
 
     def __init__(
         self,
-        include: Optional[List[str]] = None,
-        exclude: Optional[List[str]] = None,
+        include: List[str] | None = None,
+        exclude: List[str] | None = None,
     ):
         """Initialize the field filter.
         
@@ -358,7 +358,7 @@ class ValueReplacer(ITransformFunction):
     def __init__(
         self,
         replacements: Dict[str, Dict[Any, Any]],
-        default_replacements: Optional[Dict[Any, Any]] = None,
+        default_replacements: Dict[Any, Any] | None = None,
     ):
         """Initialize the value replacer.
         
@@ -483,7 +483,7 @@ class DataSplitter(ITransformFunction):
         
         split_values = data[self.split_field]
         if not isinstance(split_values, list):
-            raise TransformError(f"Split field must be a list")
+            raise TransformError("Split field must be a list")
         
         # Create a record for each value
         records = []
@@ -544,7 +544,7 @@ def enrich(**enrichments: Any) -> DataEnricher:
     return DataEnricher(enrichments)
 
 
-def filter_fields(include: Optional[List[str]] = None, exclude: Optional[List[str]] = None) -> FieldFilter:
+def filter_fields(include: List[str] | None = None, exclude: List[str] | None = None) -> FieldFilter:
     """Create a FieldFilter."""
     return FieldFilter(include, exclude)
 

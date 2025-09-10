@@ -4,8 +4,8 @@ This module provides pre-configured FSM patterns for orchestrating API calls,
 including parallel requests, sequential workflows, rate limiting, and retries.
 """
 
-from typing import Any, Dict, List, Optional, Union, Callable, AsyncIterator
-from dataclasses import dataclass, field
+from typing import Any, Dict, List, Union, Callable
+from dataclasses import dataclass
 from enum import Enum
 import asyncio
 from datetime import datetime, timedelta
@@ -13,8 +13,7 @@ from datetime import datetime, timedelta
 from ..api.simple import SimpleFSM
 from ..core.data_modes import DataHandlingMode
 from ..io.base import IOConfig, IOMode, IOFormat
-from ..io.adapters import HTTPIOAdapter
-from ..io.utils import create_io_provider, retry_io_operation, IOMetrics, parallel_io_executor
+from ..io.utils import create_io_provider, retry_io_operation, IOMetrics
 
 
 class OrchestrationMode(Enum):
@@ -33,24 +32,24 @@ class APIEndpoint:
     name: str
     url: str
     method: str = "GET"
-    headers: Optional[Dict[str, str]] = None
-    params: Optional[Dict[str, Any]] = None
-    body: Optional[Union[Dict[str, Any], str]] = None
+    headers: Dict[str, str] | None = None
+    params: Dict[str, Any] | None = None
+    body: Union[Dict[str, Any], str] | None = None
     timeout: float = 30.0
     retry_count: int = 3
     retry_delay: float = 1.0
     
     # Rate limiting
-    rate_limit: Optional[int] = None  # Requests per minute
-    burst_limit: Optional[int] = None  # Max burst size
+    rate_limit: int | None = None  # Requests per minute
+    burst_limit: int | None = None  # Max burst size
     
     # Response handling
-    response_parser: Optional[Callable[[Any], Any]] = None
-    error_handler: Optional[Callable[[Exception], Any]] = None
+    response_parser: Callable[[Any], Any] | None = None
+    error_handler: Callable[[Exception], Any] | None = None
     
     # Dependencies
-    depends_on: Optional[List[str]] = None
-    transform_input: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None
+    depends_on: List[str] | None = None
+    transform_input: Callable[[Dict[str, Any]], Dict[str, Any]] | None = None
 
 
 @dataclass
@@ -65,12 +64,12 @@ class APIOrchestrationConfig:
     fail_fast: bool = False  # Stop on first error
     
     # Rate limiting (global)
-    global_rate_limit: Optional[int] = None
+    global_rate_limit: int | None = None
     rate_limit_window: int = 60  # seconds
     
     # Result handling
-    result_merger: Optional[Callable[[List[Dict[str, Any]]], Any]] = None
-    result_transformer: Optional[Callable[[Any], Any]] = None
+    result_merger: Callable[[List[Dict[str, Any]]], Any] | None = None
+    result_transformer: Callable[[Any], Any] | None = None
     
     # Error handling
     error_threshold: float = 0.1  # Max 10% errors
@@ -78,8 +77,8 @@ class APIOrchestrationConfig:
     circuit_breaker_timeout: float = 60.0  # seconds
     
     # Caching
-    cache_ttl: Optional[int] = None  # seconds
-    cache_key_generator: Optional[Callable[[APIEndpoint], str]] = None
+    cache_ttl: int | None = None  # seconds
+    cache_key_generator: Callable[[APIEndpoint], str] | None = None
     
     # Monitoring
     metrics_enabled: bool = True
@@ -181,7 +180,7 @@ class CircuitBreaker:
                 
             return result
             
-        except Exception as e:
+        except Exception:
             # Record failure
             async with self._lock:
                 self.failure_count += 1
@@ -396,7 +395,7 @@ class APIOrchestrator:
     async def _call_endpoint(
         self,
         endpoint: APIEndpoint,
-        input_data: Optional[Dict[str, Any]] = None
+        input_data: Dict[str, Any] | None = None
     ) -> Any:
         """Call a single API endpoint.
         
@@ -489,7 +488,7 @@ class APIOrchestrator:
             
     async def orchestrate(
         self,
-        input_data: Optional[Dict[str, Any]] = None
+        input_data: Dict[str, Any] | None = None
     ) -> Dict[str, Any]:
         """Execute API orchestration.
         
@@ -564,7 +563,7 @@ class APIOrchestrator:
 def create_rest_api_orchestrator(
     base_url: str,
     endpoints: List[Dict[str, Any]],
-    auth_token: Optional[str] = None,
+    auth_token: str | None = None,
     rate_limit: int = 60,
     mode: OrchestrationMode = OrchestrationMode.SEQUENTIAL
 ) -> APIOrchestrator:
@@ -611,7 +610,7 @@ def create_rest_api_orchestrator(
 def create_graphql_orchestrator(
     endpoint: str,
     queries: List[Dict[str, Any]],
-    auth_token: Optional[str] = None,
+    auth_token: str | None = None,
     batch_queries: bool = True
 ) -> APIOrchestrator:
     """Create GraphQL API orchestrator.

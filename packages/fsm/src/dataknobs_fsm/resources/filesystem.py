@@ -1,11 +1,9 @@
 """File system resource provider."""
 
-import io
-import os
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, BinaryIO, Optional, TextIO, Union
+from typing import Any, BinaryIO, TextIO, Union
 
 from dataknobs_fsm.functions.base import ResourceError
 from dataknobs_fsm.resources.base import (
@@ -52,8 +50,8 @@ class FileSystemResource(BaseResourceProvider):
     def __init__(
         self,
         name: str,
-        base_path: Optional[str] = None,
-        temp_dir: Optional[str] = None,
+        base_path: str | None = None,
+        temp_dir: str | None = None,
         **config
     ):
         """Initialize file system resource.
@@ -82,9 +80,9 @@ class FileSystemResource(BaseResourceProvider):
     
     def acquire(
         self,
-        path: Optional[str] = None,
+        path: str | None = None,
         mode: str = "r",
-        encoding: Optional[str] = "utf-8",
+        encoding: str | None = "utf-8",
         temp: bool = False,
         **kwargs
     ) -> FileHandle:
@@ -225,7 +223,7 @@ class FileSystemResource(BaseResourceProvider):
         self,
         path: str,
         mode: str = "r",
-        encoding: Optional[str] = "utf-8",
+        encoding: str | None = "utf-8",
         **kwargs
     ):
         """Context manager for file operations.
@@ -251,7 +249,7 @@ class FileSystemResource(BaseResourceProvider):
         suffix: str = "",
         prefix: str = "tmp_",
         mode: str = "w",
-        encoding: Optional[str] = "utf-8"
+        encoding: str | None = "utf-8"
     ):
         """Context manager for temporary files.
         

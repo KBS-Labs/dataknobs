@@ -12,7 +12,6 @@ import json
 import yaml
 import sys
 from pathlib import Path
-from typing import Optional, Dict, Any, List
 from rich.console import Console
 from rich.table import Table
 from rich.syntax import Syntax
@@ -21,9 +20,8 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 import asyncio
 
 from ..api.simple import SimpleFSM
-from ..api.advanced import AdvancedFSM, ExecutionMode
+from ..api.advanced import AdvancedFSM
 from ..config.loader import ConfigLoader
-from ..config.validator import ConfigValidator
 from ..execution.history import ExecutionHistory
 from ..storage.file import FileStorage
 from ..patterns.etl import create_etl_pipeline, ETLMode
@@ -132,7 +130,7 @@ def create(template: str, output: str, format: str):
             json.dump(config_data, f, indent=2)
     
     console.print(f"[green][/green] Created {template} configuration in {output}")
-    console.print(f"\nConfiguration overview:")
+    console.print("\nConfiguration overview:")
     console.print(f"  Name: {config_data['name']}")
     console.print(f"  States: {len(config_data['states'])}")
     console.print(f"  Arcs: {len(config_data['arcs'])}")
@@ -164,7 +162,7 @@ def validate(config_file: str, verbose: bool):
             progress.stop()
         
         if is_valid:
-            console.print(f"[green][/green] Configuration is valid!")
+            console.print("[green][/green] Configuration is valid!")
             
             if verbose:
                 console.print("\n[bold]Configuration Details:[/bold]")
@@ -185,7 +183,7 @@ def validate(config_file: str, verbose: bool):
                 if config.resources:
                     console.print(f"  Resources: {len(config.resources)}")
         else:
-            console.print(f"[red][/red] Configuration validation failed!")
+            console.print("[red][/red] Configuration validation failed!")
             console.print("\n[bold red]Errors:[/bold red]")
             for error in errors:
                 console.print(f"  {error}")
@@ -330,15 +328,14 @@ def run():
 @click.option('--timeout', '-t', type=float, help='Execution timeout in seconds')
 @click.option('--output', '-o', help='Output file for results')
 @click.option('--verbose', '-v', is_flag=True, help='Show execution details')
-def execute(config_file: str, data: Optional[str], initial_state: Optional[str],
-           timeout: Optional[float], output: Optional[str], verbose: bool):
+def execute(config_file: str, data: str | None, initial_state: str | None,
+           timeout: float | None, output: str | None, verbose: bool):
     """Execute FSM with data"""
-    
     # Parse input data
     input_data = {}
     if data:
         if Path(data).exists():
-            with open(data, 'r') as f:
+            with open(data) as f:
                 input_data = json.load(f)
         else:
             try:
@@ -366,7 +363,7 @@ def execute(config_file: str, data: Optional[str], initial_state: Optional[str],
             progress.stop()
             
             if result.get('success', False):
-                console.print(f"[green][/green] Execution completed successfully!")
+                console.print("[green][/green] Execution completed successfully!")
                 console.print(f"  Final state: {result.get('final_state', 'unknown')}")
                 path = result.get('path', [])
                 console.print(f"  Transitions: {len(path) - 1 if path else 0}")
@@ -390,7 +387,7 @@ def execute(config_file: str, data: Optional[str], initial_state: Optional[str],
                     console.print(f"\n[green]Results saved to {output}[/green]")
                     
             else:
-                console.print(f"[red][/red] Execution failed!")
+                console.print("[red][/red] Execution failed!")
                 console.print(f"  Error: {result.get('error', 'Unknown error')}")
                 sys.exit(1)
                 
@@ -408,11 +405,10 @@ def execute(config_file: str, data: Optional[str], initial_state: Optional[str],
 @click.option('--output', '-o', help='Output file for results')
 @click.option('--progress', '-p', is_flag=True, help='Show progress bar')
 def batch(config_file: str, data_file: str, batch_size: int, workers: int,
-         output: Optional[str], progress: bool):
+         output: str | None, progress: bool):
     """Execute FSM on batch data"""
-    
     # Load batch data
-    with open(data_file, 'r') as f:
+    with open(data_file) as f:
         if data_file.endswith('.jsonl'):
             batch_data = [json.loads(line) for line in f]
         else:
@@ -454,7 +450,7 @@ def batch(config_file: str, data_file: str, batch_size: int, workers: int,
         successful = sum(1 for r in results if r['success'])
         failed = len(results) - successful
         
-        console.print(f"\n[bold]Results:[/bold]")
+        console.print("\n[bold]Results:[/bold]")
         console.print(f"  Total: {len(results)}")
         console.print(f"  [green]Successful: {successful}[/green]")
         if failed > 0:
@@ -476,14 +472,13 @@ def batch(config_file: str, data_file: str, batch_size: int, workers: int,
 @click.option('--sink', '-s', help='Output sink (file path or URL)')
 @click.option('--chunk-size', '-c', type=int, default=100, help='Stream chunk size')
 @click.option('--format', '-f', type=click.Choice(['json', 'csv']), default='json')
-def stream(config_file: str, source: str, sink: Optional[str], 
+def stream(config_file: str, source: str, sink: str | None, 
           chunk_size: int, format: str):
     """Process streaming data through FSM"""
-    
     # Create FSM
     fsm = SimpleFSM(config_file)
     
-    console.print(f"Starting stream processing...")
+    console.print("Starting stream processing...")
     console.print(f"  Source: {source}")
     if sink:
         console.print(f"  Sink: {sink}")
@@ -505,7 +500,7 @@ def stream(config_file: str, source: str, sink: Optional[str],
                 )
                 progress.stop()
                 
-                console.print(f"\n[green][/green] Stream processing completed!")
+                console.print("\n[green][/green] Stream processing completed!")
                 console.print(f"  Records processed: {result.get('total_processed', 0)}")
                 console.print(f"  Chunks: {result.get('chunks_processed', 0)}")
                 if 'errors' in result and result['errors'] > 0:
@@ -531,10 +526,9 @@ def debug():
 @click.option('--breakpoint', '-b', multiple=True, help='Set breakpoint at state')
 @click.option('--trace', '-t', is_flag=True, help='Enable execution tracing')
 @click.option('--profile', '-p', is_flag=True, help='Enable performance profiling')
-def run(config_file: str, data: Optional[str], breakpoint: tuple, 
+def run(config_file: str, data: str | None, breakpoint: tuple, 
        trace: bool, profile: bool):
     """Debug FSM execution with breakpoints and tracing"""
-    
     # Load configuration
     loader = ConfigLoader()
     config = loader.load_from_file(config_file)
@@ -543,7 +537,7 @@ def run(config_file: str, data: Optional[str], breakpoint: tuple,
     input_data = {}
     if data:
         if Path(data).exists():
-            with open(data, 'r') as f:
+            with open(data) as f:
                 input_data = json.load(f)
         else:
             try:
@@ -626,9 +620,8 @@ def history():
 @click.option('--fsm-name', '-n', help='Filter by FSM name')
 @click.option('--limit', '-l', type=int, default=10, help='Number of entries to show')
 @click.option('--format', '-f', type=click.Choice(['table', 'json']), default='table')
-def list_history(fsm_name: Optional[str], limit: int, format: str):
+def list_history(fsm_name: str | None, limit: int, format: str):
     """List execution history"""
-    
     # Create history manager with file backend
     storage = FileStorage(Path.home() / '.fsm' / 'history')
     manager = ExecutionHistory(storage)
@@ -675,7 +668,6 @@ def list_history(fsm_name: Optional[str], limit: int, format: str):
 @click.option('--verbose', '-v', is_flag=True, help='Show detailed information')
 def show(execution_id: str, verbose: bool):
     """Show details of a specific execution"""
-    
     # Create history manager
     storage = FileStorage(Path.home() / '.fsm' / 'history')
     manager = ExecutionHistory(storage)
@@ -687,7 +679,7 @@ def show(execution_id: str, verbose: bool):
         console.print(f"[red]Execution {execution_id} not found[/red]")
         sys.exit(1)
     
-    console.print(f"[bold]Execution Details:[/bold]")
+    console.print("[bold]Execution Details:[/bold]")
     console.print(f"  ID: {entry['execution_id']}")
     console.print(f"  FSM: {entry['fsm_name']}")
     console.print(f"  Start: {entry['start_time']}")
@@ -705,7 +697,7 @@ def show(execution_id: str, verbose: bool):
                 console.print(f"  {arc['from']} � {arc['to']} [{arc['name']}]")
         
         if 'error' in entry:
-            console.print(f"\n[bold red]Error:[/bold red]")
+            console.print("\n[bold red]Error:[/bold red]")
             console.print(f"  {entry['error']}")
 
 
@@ -722,9 +714,8 @@ def pattern():
               default='full')
 @click.option('--batch-size', '-b', type=int, default=1000)
 @click.option('--checkpoint', '-c', help='Resume from checkpoint ID')
-def etl(source: str, target: str, mode: str, batch_size: int, checkpoint: Optional[str]):
+def etl(source: str, target: str, mode: str, batch_size: int, checkpoint: str | None):
     """Run ETL pipeline pattern"""
-    
     console.print("[bold]Starting ETL Pipeline[/bold]")
     console.print(f"  Source: {source}")
     console.print(f"  Target: {target}")
@@ -755,7 +746,7 @@ def etl(source: str, target: str, mode: str, batch_size: int, checkpoint: Option
                 metrics = await pipeline.run(checkpoint_id=checkpoint)
                 progress.stop()
                 
-                console.print(f"\n[green][/green] ETL completed successfully!")
+                console.print("\n[green][/green] ETL completed successfully!")
                 console.print(f"  Records extracted: {metrics['extracted']}")
                 console.print(f"  Records loaded: {metrics['loaded']}")
                 if metrics['errors'] > 0:
@@ -775,10 +766,9 @@ def etl(source: str, target: str, mode: str, batch_size: int, checkpoint: Option
 @click.option('--format', '-f', type=click.Choice(['csv', 'json']), default='csv')
 @click.option('--transform', '-t', multiple=True, help='Transformation functions')
 @click.option('--filter', '-F', multiple=True, help='Filter expressions')
-def process_file(input_file: str, output: Optional[str], format: str,
+def process_file(input_file: str, output: str | None, format: str,
                 transform: tuple, filter: tuple):
     """Process file using FSM pattern"""
-    
     console.print(f"[bold]Processing {format.upper()} file[/bold]")
     console.print(f"  Input: {input_file}")
     if output:
@@ -808,7 +798,7 @@ def process_file(input_file: str, output: Optional[str], format: str,
                 metrics = await processor.process()
                 progress.stop()
                 
-                console.print(f"\n[green][/green] File processing completed!")
+                console.print("\n[green][/green] File processing completed!")
                 console.print(f"  Lines read: {metrics.get('lines_read', 0)}")
                 console.print(f"  Records processed: {metrics['records_processed']}")
                 console.print(f"  Records written: {metrics.get('records_written', 0)}")

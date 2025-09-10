@@ -7,7 +7,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, AsyncIterator, Callable, Dict, Iterator, Optional, Protocol, runtime_checkable
+from typing import Any, AsyncIterator, Callable, Dict, Iterator, Protocol, runtime_checkable
 from uuid import uuid4
 
 
@@ -40,7 +40,7 @@ class StreamConfig:
     parallelism: int = 1
     memory_limit_mb: int = 512
     backpressure_threshold: int = 5000
-    timeout_seconds: Optional[float] = None
+    timeout_seconds: float | None = None
     enable_metrics: bool = True
     retry_on_error: bool = True
     max_retries: int = 3
@@ -85,11 +85,11 @@ class StreamMetrics:
     items_processed: int = 0
     errors_count: int = 0
     retries_count: int = 0
-    start_time: Optional[float] = None
-    end_time: Optional[float] = None
+    start_time: float | None = None
+    end_time: float | None = None
     peak_memory_mb: float = 0.0
     
-    def duration_seconds(self) -> Optional[float]:
+    def duration_seconds(self) -> float | None:
         """Get processing duration in seconds."""
         if self.start_time is None:
             return None
@@ -115,7 +115,7 @@ class StreamMetrics:
 class IStreamSource(Protocol):
     """Interface for stream data sources."""
     
-    def read_chunk(self) -> Optional[StreamChunk]:
+    def read_chunk(self) -> StreamChunk | None:
         """Read the next chunk from the source.
         
         Returns:
@@ -163,7 +163,7 @@ class StreamContext:
     with support for backpressure, parallelism, and metrics.
     """
     
-    def __init__(self, config: Optional[StreamConfig] = None):
+    def __init__(self, config: StreamConfig | None = None):
         """Initialize stream context.
         
         Args:
@@ -174,10 +174,10 @@ class StreamContext:
         self.metrics = StreamMetrics()
         
         # Internal queues for processing
-        self._input_queue: queue.Queue[Optional[StreamChunk]] = queue.Queue(
+        self._input_queue: queue.Queue[StreamChunk | None] = queue.Queue(
             maxsize=self.config.buffer_size
         )
-        self._output_queue: queue.Queue[Optional[StreamChunk]] = queue.Queue(
+        self._output_queue: queue.Queue[StreamChunk | None] = queue.Queue(
             maxsize=self.config.buffer_size
         )
         
@@ -187,7 +187,7 @@ class StreamContext:
         self._workers: list[threading.Thread] = []
         
         # Registered processors
-        self._processors: list[Callable[[StreamChunk], Optional[StreamChunk]]] = []
+        self._processors: list[Callable[[StreamChunk], StreamChunk | None]] = []
         
         # Backpressure management
         self._backpressure_active = False
@@ -195,7 +195,7 @@ class StreamContext:
     
     def add_processor(
         self,
-        processor: Callable[[StreamChunk], Optional[StreamChunk]]
+        processor: Callable[[StreamChunk], StreamChunk | None]
     ) -> None:
         """Add a chunk processor function.
         
@@ -228,7 +228,7 @@ class StreamContext:
                 self._backpressure_active = False
                 self.status = StreamStatus.ACTIVE
     
-    def _process_chunk(self, chunk: StreamChunk) -> Optional[StreamChunk]:
+    def _process_chunk(self, chunk: StreamChunk) -> StreamChunk | None:
         """Process a chunk through all processors.
         
         Args:
@@ -243,7 +243,7 @@ class StreamContext:
                 break
             try:
                 result = processor(result)
-            except Exception as e:
+            except Exception:
                 self.metrics.errors_count += 1
                 if self.config.retry_on_error:
                     # Simple retry logic
@@ -289,7 +289,7 @@ class StreamContext:
                 
             except queue.Empty:
                 continue
-            except Exception as e:
+            except Exception:
                 with self._lock:
                     self.metrics.errors_count += 1
                     self.status = StreamStatus.ERROR
@@ -298,7 +298,7 @@ class StreamContext:
         self,
         source: IStreamSource, 
         sink: IStreamSink,
-        transform: Optional[Callable[[Any], Any]] = None
+        transform: Callable[[Any], Any] | None = None
     ) -> StreamMetrics:
         """Stream data from source to sink with optional transformation.
         
@@ -370,7 +370,7 @@ class StreamContext:
                     
                     if chunk.is_last:
                         break
-            except Exception as e:
+            except Exception:
                 with self._lock:
                     self.metrics.errors_count += 1
                     self.status = StreamStatus.ERROR
@@ -426,7 +426,7 @@ class StreamContext:
 class AsyncStreamContext:
     """Async version of StreamContext for async/await support."""
     
-    def __init__(self, config: Optional[StreamConfig] = None):
+    def __init__(self, config: StreamConfig | None = None):
         """Initialize async stream context.
         
         Args:
@@ -437,21 +437,21 @@ class AsyncStreamContext:
         self.metrics = StreamMetrics()
         
         # Async queues
-        self._input_queue: asyncio.Queue[Optional[StreamChunk]] = asyncio.Queue(
+        self._input_queue: asyncio.Queue[StreamChunk | None] = asyncio.Queue(
             maxsize=self.config.buffer_size
         )
-        self._output_queue: asyncio.Queue[Optional[StreamChunk]] = asyncio.Queue(
+        self._output_queue: asyncio.Queue[StreamChunk | None] = asyncio.Queue(
             maxsize=self.config.buffer_size
         )
         
-        self._processors: list[Callable[[StreamChunk], Optional[StreamChunk]]] = []
+        self._processors: list[Callable[[StreamChunk], StreamChunk | None]] = []
         self._stop_event = asyncio.Event()
     
     async def stream_async(
         self,
         source: AsyncIterator[StreamChunk],
         sink: Callable[[StreamChunk], bool],
-        transform: Optional[Callable[[Any], Any]] = None
+        transform: Callable[[Any], Any] | None = None
     ) -> StreamMetrics:
         """Async streaming from source to sink.
         

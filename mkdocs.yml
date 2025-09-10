@@ -223,7 +223,8 @@ plugins:
             packages/structures/src,
             packages/utils/src,
             packages/xization/src,
-            packages/legacy/src
+            packages/legacy/src,
+            packages/fsm/src
           ]
           options:
             docstring_style: google

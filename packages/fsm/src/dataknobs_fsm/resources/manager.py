@@ -2,7 +2,7 @@
 
 import threading
 from contextlib import contextmanager
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Set
 
 from dataknobs_fsm.functions.base import ResourceError, ResourceConfig
 from dataknobs_fsm.resources.base import (
@@ -31,7 +31,7 @@ class ResourceManager:
         self,
         name: str,
         provider: IResourceProvider,
-        pool_config: Optional[PoolConfig] = None
+        pool_config: PoolConfig | None = None
     ) -> None:
         """Register a resource provider.
         
@@ -74,7 +74,7 @@ class ResourceManager:
         self,
         name: str,
         owner_id: str,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
         **kwargs
     ) -> Any:
         """Acquire a resource.
@@ -181,7 +181,7 @@ class ResourceManager:
             for resource_name in owner_resources:
                 self.release(resource_name, owner_id)
     
-    def get_resource(self, name: str, owner_id: str) -> Optional[Any]:
+    def get_resource(self, name: str, owner_id: str) -> Any | None:
         """Get an acquired resource.
         
         Args:
@@ -229,7 +229,7 @@ class ResourceManager:
             except Exception:
                 return False
     
-    def health_check(self, name: Optional[str] = None) -> Dict[str, ResourceHealth]:
+    def health_check(self, name: str | None = None) -> Dict[str, ResourceHealth]:
         """Check health of resources.
         
         Args:
@@ -255,7 +255,7 @@ class ResourceManager:
             
             return health_status
     
-    def get_metrics(self, name: Optional[str] = None) -> Dict[str, ResourceMetrics]:
+    def get_metrics(self, name: str | None = None) -> Dict[str, ResourceMetrics]:
         """Get resource metrics.
         
         Args:
@@ -287,7 +287,7 @@ class ResourceManager:
         self,
         name: str,
         owner_id: str,
-        timeout: Optional[float] = None,
+        timeout: float | None = None,
         **kwargs
     ):
         """Context manager for resource acquisition.

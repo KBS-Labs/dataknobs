@@ -3,14 +3,14 @@
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union
+from typing import Any, AsyncIterator, List, Tuple, Union
 
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.execution.engine import ExecutionEngine
 from dataknobs_fsm.execution.stream import StreamProgress
-from dataknobs_fsm.streaming.core import StreamChunk, StreamConfig
+from dataknobs_fsm.streaming.core import StreamConfig
 
 
 @dataclass
@@ -38,9 +38,9 @@ class AsyncStreamExecutor:
     def __init__(
         self,
         fsm: FSM,
-        stream_config: Optional[StreamConfig] = None,
+        stream_config: StreamConfig | None = None,
         enable_backpressure: bool = True,
-        progress_callback: Optional[callable] = None
+        progress_callback: callable | None = None
     ):
         """Initialize async stream executor.
         
@@ -66,7 +66,7 @@ class AsyncStreamExecutor:
     async def execute_stream(
         self,
         source: Union[AsyncIterator[Any], List[Any]],
-        sink: Optional[callable] = None,
+        sink: callable | None = None,
         chunk_size: int = 100,
         max_transitions: int = 1000
     ) -> AsyncStreamResult:
@@ -159,7 +159,7 @@ class AsyncStreamExecutor:
         context_template: ExecutionContext,
         max_transitions: int,
         progress: StreamProgress,
-        sink: Optional[callable]
+        sink: callable | None
     ):
         """Process a chunk of items.
         
@@ -273,7 +273,7 @@ class AsyncStreamExecutor:
             yield item
             await asyncio.sleep(0)  # Allow other tasks to run
     
-    def _find_initial_state(self) -> Optional[str]:
+    def _find_initial_state(self) -> str | None:
         """Find initial state in FSM.
         
         Returns:

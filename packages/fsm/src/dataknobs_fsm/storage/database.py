@@ -5,10 +5,9 @@ database backend (SQLite, PostgreSQL, MongoDB, Elasticsearch, S3, etc.) through
 the common AsyncDatabase interface.
 """
 
-import json
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from dataknobs_data.factory import DatabaseFactory
 from dataknobs_data.database import AsyncDatabase
@@ -43,8 +42,8 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
             config: Storage configuration with backend type in connection_params.
         """
         super().__init__(config)
-        self._db: Optional[AsyncDatabase] = None
-        self._steps_db: Optional[AsyncDatabase] = None  # Separate DB for steps if needed
+        self._db: AsyncDatabase | None = None
+        self._steps_db: AsyncDatabase | None = None  # Separate DB for steps if needed
     
     async def _setup_backend(self) -> None:
         """Set up the database backend using dataknobs_data factory."""
@@ -214,7 +213,7 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
     async def save_history(
         self,
         history: ExecutionHistory,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Dict[str, Any] | None = None
     ) -> str:
         """Save execution history to database."""
         if not self._db:
@@ -248,7 +247,7 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         
         return history_id
     
-    async def load_history(self, history_id: str) -> Optional[ExecutionHistory]:
+    async def load_history(self, history_id: str) -> ExecutionHistory | None:
         """Load execution history from database."""
         if not self._db:
             await self.initialize()
@@ -276,7 +275,7 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         self,
         execution_id: str,
         step: ExecutionStep,
-        parent_id: Optional[str] = None
+        parent_id: str | None = None
     ) -> str:
         """Save a single execution step."""
         if not self._steps_db:
@@ -301,7 +300,7 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
     async def load_steps(
         self,
         execution_id: str,
-        filters: Optional[Dict[str, Any]] = None
+        filters: Dict[str, Any] | None = None
     ) -> List[ExecutionStep]:
         """Load execution steps from database."""
         if not self._steps_db:
@@ -420,7 +419,7 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
     
     async def get_statistics(
         self,
-        execution_id: Optional[str] = None
+        execution_id: str | None = None
     ) -> Dict[str, Any]:
         """Get storage statistics."""
         if not self._db:
@@ -466,7 +465,7 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
     
     async def cleanup(
         self,
-        before_timestamp: Optional[float] = None,
+        before_timestamp: float | None = None,
         keep_failed: bool = True
     ) -> int:
         """Clean up old histories."""

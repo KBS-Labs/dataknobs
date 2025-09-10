@@ -1,6 +1,6 @@
 """Core FSM class for managing state machines."""
 
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.core.network import StateNetwork
@@ -24,7 +24,7 @@ class FSM:
         name: str,
         data_mode: ProcessingMode = ProcessingMode.SINGLE,
         transaction_mode: TransactionMode = TransactionMode.NONE,
-        description: Optional[str] = None
+        description: str | None = None
     ):
         """Initialize FSM.
         
@@ -41,7 +41,7 @@ class FSM:
         
         # Networks
         self.networks: Dict[str, StateNetwork] = {}
-        self.main_network: Optional[str] = None
+        self.main_network: str | None = None
         
         # Function registry
         self.function_registry = FunctionRegistry()
@@ -55,8 +55,8 @@ class FSM:
         # Metadata
         self.metadata: Dict[str, Any] = {}
         self.version: str = "1.0.0"
-        self.created_at: Optional[float] = None
-        self.updated_at: Optional[float] = None
+        self.created_at: float | None = None
+        self.updated_at: float | None = None
     
     def add_network(
         self,
@@ -102,7 +102,7 @@ class FSM:
             return True
         return False
     
-    def get_network(self, network_name: Optional[str] = None) -> Optional[StateNetwork]:
+    def get_network(self, network_name: str | None = None) -> StateNetwork | None:
         """Get a network by name.
         
         Args:
@@ -299,7 +299,7 @@ class FSM:
         
         return fsm
     
-    def find_state_definition(self, state_name: str, network_name: Optional[str] = None) -> Optional[StateDefinition]:
+    def find_state_definition(self, state_name: str, network_name: str | None = None) -> StateDefinition | None:
         """Find a state definition by name.
         
         Args:
@@ -322,7 +322,7 @@ class FSM:
         
         return None
     
-    def create_state_instance(self, state_name: str, data: Optional[Dict[str, Any]] = None, network_name: Optional[str] = None) -> StateInstance:
+    def create_state_instance(self, state_name: str, data: Dict[str, Any] | None = None, network_name: str | None = None) -> StateInstance:
         """Create a state instance from a state name.
         
         Args:
@@ -349,7 +349,7 @@ class FSM:
             data=data or {}
         )
     
-    def get_state(self, state_name: str, network_name: Optional[str] = None) -> Optional[StateDefinition]:
+    def get_state(self, state_name: str, network_name: str | None = None) -> StateDefinition | None:
         """Get a state definition by name.
         
         This is an alias for find_state_definition for compatibility.
@@ -363,7 +363,7 @@ class FSM:
         """
         return self.find_state_definition(state_name, network_name)
     
-    def get_start_state(self, network_name: Optional[str] = None) -> Optional[StateDefinition]:
+    def get_start_state(self, network_name: str | None = None) -> StateDefinition | None:
         """Get the start state definition.
         
         Args:
@@ -377,9 +377,7 @@ class FSM:
             network = self.networks.get(network_name)
             if network and hasattr(network, 'states'):
                 for state in network.states.values():
-                    if hasattr(state, 'is_start_state') and state.is_start_state():
-                        return state
-                    elif hasattr(state, 'type') and state.type == StateType.START:
+                    if (hasattr(state, 'is_start_state') and state.is_start_state()) or (hasattr(state, 'type') and state.type == StateType.START):
                         return state
         else:
             # Search main network first
@@ -392,9 +390,7 @@ class FSM:
             for network in self.networks.values():
                 if hasattr(network, 'states'):
                     for state in network.states.values():
-                        if hasattr(state, 'is_start_state') and state.is_start_state():
-                            return state
-                        elif hasattr(state, 'type') and state.type == StateType.START:
+                        if (hasattr(state, 'is_start_state') and state.is_start_state()) or (hasattr(state, 'type') and state.type == StateType.START):
                             return state
         
         # Fallback: look for state named 'start'
