@@ -339,45 +339,33 @@ class ExecutionEngine:
                     return False
                 
                 # Create arc execution (pass current state as source)
-                if hasattr(self.fsm, 'function_registry'):
-                    if hasattr(self.fsm.function_registry, 'functions'):
-                        func_reg = self.fsm.function_registry.functions
-                    else:
-                        func_reg = {}
-                else:
-                    func_reg = {}
-                    
                 arc_exec = ArcExecution(
                     arc,
                     source_state=context.current_state or "",
-                    function_registry=func_reg
+                    function_registry=self.fsm.function_registry
                 )
                 
                 # Execute with resource context
                 result = arc_exec.execute(context, context.data)
-                success = result is not None
+
+                # If no exception was thrown, the arc execution succeeded
+                # Update data with result
+                if result is not None:
+                    context.data = result
                 
-                if success:
-                    # Update data with result
-                    if result is not None:
-                        context.data = result
-                    
-                    # Update state
-                    context.set_state(arc.target_state)
-                    self._transition_count += 1
-                    
-                    # Execute state transforms when entering the new state
-                    self._execute_state_transforms(context, arc.target_state)
-                    
-                    # Fire post-transition hooks
-                    if self.enable_hooks:
-                        for hook in self._post_transition_hooks:
-                            hook(context, arc)
-                    
-                    return True
-                else:
-                    # Transition failed but no exception - don't retry
-                    return False
+                # Update state
+                context.set_state(arc.target_state)
+                self._transition_count += 1
+                
+                # Execute state transforms when entering the new state
+                self._execute_state_transforms(context, arc.target_state)
+                
+                # Fire post-transition hooks
+                if self.enable_hooks:
+                    for hook in self._post_transition_hooks:
+                        hook(context, arc)
+                
+                return True
                 
             except (TypeError, AttributeError, ValueError) as e:
                 # Data type errors - don't retry
@@ -505,35 +493,10 @@ class ExecutionEngine:
                     # Log but don't fail - state validators are optional
                     pass
         
-        # Execute transform functions
-        if hasattr(state_def, 'transform_functions') and state_def.transform_functions:
-            for transform_func in state_def.transform_functions:
-                try:
-                    # Create function context
-                    func_context = FunctionContext(
-                        state_name=state_name,
-                        function_name=getattr(transform_func, '__name__', 'transform'),
-                        metadata={'state': state_name},
-                        resources={}
-                    )
-                    
-                    # Execute the transform
-                    # Create a mock state object for transforms that expect state.data
-                    from types import SimpleNamespace
-                    state_obj = SimpleNamespace(data=context.data)
-                    
-                    # Try calling with state object first (for inline lambdas)
-                    try:
-                        result = transform_func(state_obj)
-                    except (TypeError, AttributeError):
-                        # Fall back to calling with data and context
-                        result = transform_func(context.data, func_context)
-                    
-                    if result is not None:
-                        context.data = result
-                except Exception:
-                    # Log but don't fail - state transforms are optional
-                    pass
+        # NOTE: Transform functions are NOT executed here. They are executed
+        # by _execute_state_transforms when entering a state after a transition.
+        # This method (_execute_state_functions) only executes validators before
+        # evaluating transition conditions.
     
     def _get_available_transitions(
         self,

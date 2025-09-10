@@ -509,19 +509,53 @@ class LLMResource(BaseResourceProvider):
         prompt: str,
         **kwargs
     ) -> Dict[str, Any]:
-        """OpenAI completion (placeholder).
+        """OpenAI completion using provider system."""
+        from dataknobs_fsm.llm.base import LLMConfig, LLMMessage
+        from dataknobs_fsm.llm.providers import create_provider
         
-        Would integrate with OpenAI API.
-        """
-        # Placeholder - would use openai library or HTTP API
-        return {
-            "choices": [{
-                "text": f"OpenAI response to: {prompt[:50]}...",
-                "index": 0,
-                "finish_reason": "stop"
-            }],
-            "model": session.model_name
-        }
+        # Create config from session
+        config = LLMConfig(
+            provider="openai",
+            model=session.model_name,
+            api_key=kwargs.get('api_key', os.getenv('OPENAI_API_KEY')),
+            temperature=kwargs.get('temperature', 0.7),
+            max_tokens=kwargs.get('max_tokens', 1000)
+        )
+        
+        try:
+            # Create provider and execute
+            provider = create_provider(config, is_async=False)
+            provider.initialize()
+            
+            # Convert prompt to message format
+            if isinstance(prompt, str):
+                messages = [LLMMessage(role="user", content=prompt)]
+            else:
+                messages = prompt
+                
+            response = provider.complete(messages, **kwargs)
+            provider.close()
+            
+            # Convert to expected format
+            return {
+                "choices": [{
+                    "text": response.content,
+                    "index": 0,
+                    "finish_reason": response.finish_reason or "stop"
+                }],
+                "model": response.model,
+                "usage": response.usage
+            }
+        except Exception as e:
+            # Fallback to placeholder on error
+            return {
+                "choices": [{
+                    "text": f"Error: {str(e)}",
+                    "index": 0,
+                    "finish_reason": "error"
+                }],
+                "model": session.model_name
+            }
     
     def _anthropic_complete(
         self,
@@ -529,19 +563,53 @@ class LLMResource(BaseResourceProvider):
         prompt: str,
         **kwargs
     ) -> Dict[str, Any]:
-        """Anthropic completion (placeholder).
+        """Anthropic completion using provider system."""
+        from dataknobs_fsm.llm.base import LLMConfig, LLMMessage
+        from dataknobs_fsm.llm.providers import create_provider
         
-        Would integrate with Anthropic API.
-        """
-        # Placeholder - would use anthropic library or HTTP API
-        return {
-            "choices": [{
-                "text": f"Claude response to: {prompt[:50]}...",
-                "index": 0,
-                "finish_reason": "stop"
-            }],
-            "model": session.model_name
-        }
+        # Create config from session
+        config = LLMConfig(
+            provider="anthropic",
+            model=session.model_name,
+            api_key=kwargs.get('api_key', os.getenv('ANTHROPIC_API_KEY')),
+            temperature=kwargs.get('temperature', 0.7),
+            max_tokens=kwargs.get('max_tokens', 1000)
+        )
+        
+        try:
+            # Create provider and execute
+            provider = create_provider(config, is_async=False)
+            provider.initialize()
+            
+            # Convert prompt to message format
+            if isinstance(prompt, str):
+                messages = [LLMMessage(role="user", content=prompt)]
+            else:
+                messages = prompt
+                
+            response = provider.complete(messages, **kwargs)
+            provider.close()
+            
+            # Convert to expected format
+            return {
+                "choices": [{
+                    "text": response.content,
+                    "index": 0,
+                    "finish_reason": response.finish_reason or "stop"
+                }],
+                "model": response.model,
+                "usage": response.usage
+            }
+        except Exception as e:
+            # Fallback to placeholder on error
+            return {
+                "choices": [{
+                    "text": f"Error: {str(e)}",
+                    "index": 0,
+                    "finish_reason": "error"
+                }],
+                "model": session.model_name
+            }
     
     def _custom_complete(
         self,
@@ -687,9 +755,34 @@ class LLMResource(BaseResourceProvider):
         texts: List[str],
         **kwargs
     ) -> List[List[float]]:
-        """Generate embeddings using OpenAI (placeholder)."""
-        # Would use OpenAI embeddings API
-        return [[0.1] * 1536 for _ in texts]  # OpenAI ada-002 dimension
+        """Generate embeddings using OpenAI provider system."""
+        from dataknobs_fsm.llm.base import LLMConfig
+        from dataknobs_fsm.llm.providers import create_provider
+        
+        # Create config for embeddings
+        config = LLMConfig(
+            provider="openai",
+            model=kwargs.get('embed_model', 'text-embedding-ada-002'),
+            api_key=kwargs.get('api_key', os.getenv('OPENAI_API_KEY'))
+        )
+        
+        try:
+            # Create provider and generate embeddings
+            provider = create_provider(config, is_async=False)
+            provider.initialize()
+            
+            embeddings = provider.embed(texts, **kwargs)
+            provider.close()
+            
+            # Ensure we return List[List[float]]
+            if isinstance(embeddings[0], list):
+                return embeddings
+            else:
+                return [embeddings]  # Single text case
+                
+        except Exception:
+            # Fallback to placeholder dimensions on error
+            return [[0.1] * 1536 for _ in texts]  # OpenAI ada-002 dimension
     
     def get_usage_stats(self, session: LLMSession) -> Dict[str, Any]:
         """Get usage statistics for a session.

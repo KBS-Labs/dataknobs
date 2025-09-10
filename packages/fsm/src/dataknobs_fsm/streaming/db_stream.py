@@ -1,7 +1,7 @@
 """Database streaming implementation for FSM."""
 
 import time
-from typing import Any, Dict, Iterator, List, Union
+from typing import Any, Callable, Dict, Iterator, List, Union
 
 from dataknobs_data.database import AsyncDatabase, SyncDatabase
 from dataknobs_data.query import Query
@@ -372,7 +372,7 @@ class DatabaseBulkLoader:
         self,
         source: IStreamSource,
         batch_size: int = 1000,
-        progress_callback: callable | None = None
+        progress_callback: Union[Callable, None] = None
     ) -> Dict[str, Any]:
         """Load data from stream source into database.
         
@@ -426,7 +426,7 @@ class DatabaseBulkLoader:
         sink: IStreamSink,
         query: Query | None = None,
         batch_size: int = 1000,
-        progress_callback: callable | None = None
+        progress_callback: Union[Callable, None] = None
     ) -> Dict[str, Any]:
         """Export data from database to stream sink.
         

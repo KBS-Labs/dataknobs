@@ -4,7 +4,7 @@ import asyncio
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Union
 
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
@@ -79,7 +79,7 @@ class BatchExecutor:
         parallelism: int = 4,
         batch_size: int = 100,
         enable_resource_pooling: bool = True,
-        progress_callback: callable | None = None
+        progress_callback: Union[Callable, None] = None
     ):
         """Initialize batch executor.
         

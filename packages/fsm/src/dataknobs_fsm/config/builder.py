@@ -863,16 +863,36 @@ class FSM:
         Returns:
             Execution result.
         """
-        # TODO: Complete implementation - need to use engine and context for execution
-        # engine = self.get_engine()
-        # context = ExecutionContext(
-        #     data_mode=self.core_fsm.data_mode,
-        #     transaction_mode=self.core_fsm.transaction_mode,
-        # )
+        from dataknobs_fsm.execution.context import ExecutionContext
         
-        # The engine would need to be updated to handle this properly
-        # For now, this is a placeholder that shows the intended API
-        return {"status": "completed", "data": initial_data}
+        try:
+            # Get the execution engine
+            engine = self.get_engine()
+            
+            # Create execution context
+            context = ExecutionContext(
+                data_mode=self.core_fsm.data_mode,
+                transaction_mode=self.core_fsm.transaction_mode,
+                data=initial_data
+            )
+            
+            # Execute the FSM (engine.execute is synchronous)
+            success, result = engine.execute(context, initial_data)
+            
+            return {
+                "status": "completed" if success else "failed",
+                "data": result,
+                "execution_id": context.execution_id if hasattr(context, 'execution_id') else None,
+                "transitions": getattr(context, 'transition_count', 0),
+                "duration": getattr(context, 'duration', None)
+            }
+            
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e),
+                "data": initial_data
+            }
 
     def validate(self) -> bool:
         """Validate the FSM configuration and structure.

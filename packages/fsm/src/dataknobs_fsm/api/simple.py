@@ -5,7 +5,7 @@ abstracting away the complexity of configuration, resource management,
 and execution strategies.
 """
 
-from typing import Any, Dict, List, Union, AsyncIterator
+from typing import Any, Callable, Dict, List, Union, AsyncIterator
 from pathlib import Path
 import asyncio
 from dataknobs_data import Record
@@ -188,7 +188,7 @@ class SimpleFSM:
         data: List[Union[Dict[str, Any], Record]],
         batch_size: int = 10,
         max_workers: int = 4,
-        on_progress: callable | None = None
+        on_progress: Union[Callable, None] = None
     ) -> List[Dict[str, Any]]:
         """Process multiple records in parallel batches.
         
@@ -250,7 +250,7 @@ class SimpleFSM:
         source: Union[str, AsyncIterator[Dict[str, Any]]],
         sink: str | None = None,
         chunk_size: int = 100,
-        on_progress: callable | None = None
+        on_progress: Union[Callable, None] = None
     ) -> Dict[str, Any]:
         """Process a stream of data through the FSM.
         

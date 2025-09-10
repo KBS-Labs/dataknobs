@@ -447,12 +447,15 @@ class TestLLMProviderCreation:
         with pytest.raises(ValueError, match="Unknown provider"):
             create_llm_provider(config)
             
-    def test_sync_provider_not_implemented(self):
-        """Test sync provider creation."""
+    def test_sync_provider_creation(self):
+        """Test sync provider creation using adapter."""
         config = LLMConfig(
             provider="openai",
             model="gpt-3.5-turbo"
         )
         
-        with pytest.raises(NotImplementedError, match="Sync providers"):
-            create_llm_provider(config, is_async=False)
+        # Should now work with our SyncProviderAdapter
+        provider = create_llm_provider(config, is_async=False)
+        assert provider is not None
+        # Should be wrapped in our adapter
+        assert hasattr(provider, 'async_provider')

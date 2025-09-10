@@ -186,6 +186,27 @@ Breakdown by Module:
 - **Solution**: Enhanced config loader to handle format transformations
 - **Result**: Config compatibility improved
 
+### ✅ Fixed: StateTransform vs ArcTransform Execution Pipeline
+- **Issue**: Confusion between StateTransforms and ArcTransforms causing:
+  - ArcTransforms not being executed during transitions
+  - Incorrect function registration patterns
+  - Duplicate StateTransform execution
+- **Root Cause**: 
+  - Execution engine passing dictionary instead of FunctionRegistry to ArcExecution
+  - ArcTransform functions stored in `transforms` registry but engine only looking in `functions`
+  - StateTransforms being executed twice (in state functions + state transforms phases)
+- **Solution**: 
+  - **Clarified Concepts**: StateTransforms (state entry) vs ArcTransforms (arc traversal)
+  - **Fixed Function Registry Access**: Pass FunctionRegistry object to ArcExecution with `get_function()` method
+  - **Maintained Backward Compatibility**: ArcExecution accepts both FunctionRegistry and dict
+  - **Eliminated Duplicate Execution**: Removed transform execution from `_execute_state_functions`
+  - **Enhanced Test Coverage**: Added comprehensive tests for both transform types
+- **Result**: 
+  - Both StateTransforms and ArcTransforms execute correctly in proper sequence
+  - Clear execution order: Input → StateTransform → State Processing → ArcTransform → Next State
+  - No duplicate transform execution
+  - All tests passing including new separation tests
+
 ## Key Architectural Decisions Made
 
 1. **Dual Arc Format Support**: Support both network-level and state-level arc definitions

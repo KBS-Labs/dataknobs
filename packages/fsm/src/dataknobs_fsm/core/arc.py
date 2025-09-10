@@ -80,18 +80,18 @@ class ArcExecution:
         self,
         arc_def: ArcDefinition,
         source_state: str,
-        function_registry: Dict[str, callable] | None = None
+        function_registry
     ):
         """Initialize arc execution.
         
         Args:
             arc_def: Arc definition.
             source_state: Source state name.
-            function_registry: Registry of available functions.
+            function_registry: Registry of available functions (FunctionRegistry or dict).
         """
         self.arc_def = arc_def
         self.source_state = source_state
-        self.function_registry = function_registry or {}
+        self.function_registry = function_registry
         
         # Execution statistics
         self.execution_count = 0
@@ -118,7 +118,17 @@ class ArcExecution:
         if not self.arc_def.pre_test:
             return True
         
-        if self.arc_def.pre_test not in self.function_registry:
+        # Handle both FunctionRegistry and dict for pre-test function lookup
+        if hasattr(self.function_registry, 'get_function'):
+            # FunctionRegistry object
+            pre_test_func = self.function_registry.get_function(self.arc_def.pre_test)
+        elif isinstance(self.function_registry, dict):
+            # Plain dictionary
+            pre_test_func = self.function_registry.get(self.arc_def.pre_test)
+        else:
+            pre_test_func = None
+        
+        if pre_test_func is None:
             raise FunctionError(
                 f"Pre-test function '{self.arc_def.pre_test}' not found",
                 from_state=self.source_state,
@@ -126,8 +136,6 @@ class ArcExecution:
             )
         
         try:
-            # Get pre-test function
-            pre_test_func = self.function_registry[self.arc_def.pre_test]
             
             # Create function context with resources
             func_context = self._create_function_context(context)
@@ -172,14 +180,22 @@ class ArcExecution:
             
             # Execute transform if defined
             if self.arc_def.transform:
-                if self.arc_def.transform not in self.function_registry:
+                # Handle both FunctionRegistry and dict
+                if hasattr(self.function_registry, 'get_function'):
+                    # FunctionRegistry object
+                    transform_func = self.function_registry.get_function(self.arc_def.transform)
+                elif isinstance(self.function_registry, dict):
+                    # Plain dictionary
+                    transform_func = self.function_registry.get(self.arc_def.transform)
+                else:
+                    transform_func = None
+                
+                if transform_func is None:
                     raise FunctionError(
                         f"Transform function '{self.arc_def.transform}' not found",
                         from_state=self.source_state,
                         to_state=self.arc_def.target_state
                     )
-                
-                transform_func = self.function_registry[self.arc_def.transform]
                 
                 # Create function context with resources
                 func_context = self._create_function_context(
@@ -366,10 +382,41 @@ class ArcExecution:
         """
         resources = {}
         
+        # Get resource manager from context
+        resource_manager = getattr(context, 'resource_manager', None)
+        if not resource_manager:
+            # No resource manager available - return empty dict
+            return resources
+        
+        # Generate unique owner ID for this arc execution
+        # Create an arc identifier from source and target states
+        arc_identifier = f"{self.source_state}_to_{self.arc_def.target_state}"
+        owner_id = f"arc_{arc_identifier}_{getattr(context, 'execution_id', 'unknown')}"
+        
         for resource_type, resource_name in self.arc_def.required_resources.items():
-            # This would interface with the resource manager
-            # For now, we just track the requirement
-            resources[resource_type] = resource_name
+            try:
+                # Acquire the resource through the manager
+                resource = resource_manager.acquire(
+                    name=resource_name,
+                    owner_id=owner_id,
+                    timeout=30.0  # 30 second timeout
+                )
+                resources[resource_type] = resource
+                
+                # Track in context for cleanup
+                if not hasattr(context, '_acquired_resources'):
+                    context._acquired_resources = {}
+                context._acquired_resources[resource_name] = owner_id
+                
+            except Exception as e:
+                # Resource acquisition failed - clean up any acquired resources
+                self._release_resources(context, resources)
+                from dataknobs_fsm.functions.base import ResourceError
+                raise ResourceError(
+                    f"Failed to acquire resource '{resource_name}': {e}",
+                    resource_name=resource_name,
+                    operation="acquire"
+                ) from e
         
         return resources
     
@@ -384,9 +431,32 @@ class ArcExecution:
             context: Execution context.
             resources: Resources to release.
         """
-        # This would interface with the resource manager
-        # For now, we just clear the resources
-        pass
+        # Get resource manager from context
+        resource_manager = getattr(context, 'resource_manager', None)
+        if not resource_manager:
+            return
+        
+        # Get acquired resources from context if available
+        acquired_resources = getattr(context, '_acquired_resources', {})
+        
+        # Release each resource
+        for resource_type, resource in resources.items():
+            # Find the resource name for this resource type
+            resource_name = None
+            for rtype, rname in self.arc_def.required_resources.items():
+                if rtype == resource_type:
+                    resource_name = rname
+                    break
+            
+            if resource_name and resource_name in acquired_resources:
+                owner_id = acquired_resources[resource_name]
+                try:
+                    resource_manager.release(resource_name, owner_id)
+                    # Remove from tracking
+                    del acquired_resources[resource_name]
+                except Exception:
+                    # Best effort cleanup - don't propagate release errors
+                    pass
     
     def _execute_streaming(
         self,

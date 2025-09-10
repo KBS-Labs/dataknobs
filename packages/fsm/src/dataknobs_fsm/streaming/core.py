@@ -7,7 +7,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, AsyncIterator, Callable, Dict, Iterator, Protocol, runtime_checkable
+from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Protocol, Union, runtime_checkable
 from uuid import uuid4
 
 
@@ -540,3 +540,165 @@ class AsyncStreamContext:
             self.metrics.end_time = time.time()
         
         return self.metrics
+
+
+class BasicStreamProcessor:
+    """Basic stream processor implementation."""
+    
+    def __init__(
+        self,
+        source: IStreamSource,
+        sink: IStreamSink,
+        transform_func: Union[Callable, None] = None,
+        buffer_size: int = 1000
+    ):
+        """Initialize stream processor.
+        
+        Args:
+            source: Stream source.
+            sink: Stream sink.
+            transform_func: Optional transformation function.
+            buffer_size: Buffer size for processing.
+        """
+        self.source = source
+        self.sink = sink
+        self.transform_func = transform_func
+        self.buffer_size = buffer_size
+        self.processed_chunks = 0
+        self.processed_records = 0
+        self.errors = []
+        
+    def process(self) -> Dict[str, Any]:
+        """Process the entire stream.
+        
+        Returns:
+            Processing statistics.
+        """
+        start_time = time.time()
+        
+        try:
+            # Process all chunks
+            for chunk in self.source:
+                try:
+                    # Apply transformation if provided
+                    if self.transform_func:
+                        transformed_chunk = self.transform_func(chunk)
+                        if transformed_chunk:
+                            chunk = transformed_chunk
+                    
+                    # Write to sink
+                    success = self.sink.write_chunk(chunk)
+                    if success:
+                        self.processed_chunks += 1
+                        self.processed_records += len(chunk.data) if hasattr(chunk.data, '__len__') else 1
+                    else:
+                        self.errors.append(f"Failed to write chunk {self.processed_chunks}")
+                        
+                except Exception as e:
+                    self.errors.append(f"Error processing chunk {self.processed_chunks}: {str(e)}")
+                    continue
+            
+            # Flush sink
+            self.sink.flush()
+            
+        except Exception as e:
+            self.errors.append(f"Stream processing error: {str(e)}")
+        finally:
+            # Clean up
+            self.source.close()
+            self.sink.close()
+            
+        end_time = time.time()
+        
+        return {
+            'processed_chunks': self.processed_chunks,
+            'processed_records': self.processed_records,
+            'duration': end_time - start_time,
+            'errors': self.errors,
+            'success': len(self.errors) == 0
+        }
+    
+    async def process_async(self) -> Dict[str, Any]:
+        """Process the stream asynchronously.
+        
+        Returns:
+            Processing statistics.
+        """
+        # For now, just wrap sync processing
+        # In a real implementation, this would use async iterators
+        import asyncio
+        return await asyncio.get_event_loop().run_in_executor(None, self.process)
+
+
+class MemoryStreamSource:
+    """Simple in-memory stream source for testing."""
+    
+    def __init__(self, data: List[Any], chunk_size: int = 100):
+        """Initialize with data.
+        
+        Args:
+            data: List of data items.
+            chunk_size: Size of each chunk.
+        """
+        self.data = data
+        self.chunk_size = chunk_size
+        self.current_index = 0
+        
+    def read_chunk(self) -> StreamChunk | None:
+        """Read next chunk."""
+        if self.current_index >= len(self.data):
+            return None
+            
+        end_index = min(self.current_index + self.chunk_size, len(self.data))
+        chunk_data = self.data[self.current_index:end_index]
+        
+        chunk = StreamChunk(
+            data=chunk_data,
+            chunk_id=f"chunk_{self.current_index // self.chunk_size}",
+            timestamp=time.time(),
+            is_last=end_index >= len(self.data)
+        )
+        
+        self.current_index = end_index
+        return chunk
+    
+    def __iter__(self) -> Iterator[StreamChunk]:
+        """Iterate over chunks."""
+        while True:
+            chunk = self.read_chunk()
+            if chunk is None:
+                break
+            yield chunk
+    
+    def close(self) -> None:
+        """Close source."""
+        pass
+
+
+class MemoryStreamSink:
+    """Simple in-memory stream sink for testing."""
+    
+    def __init__(self):
+        """Initialize sink."""
+        self.chunks = []
+        self.records = []
+        
+    def write_chunk(self, chunk: StreamChunk) -> bool:
+        """Write chunk to memory."""
+        try:
+            self.chunks.append(chunk)
+            if hasattr(chunk.data, '__iter__'):
+                self.records.extend(chunk.data)
+            else:
+                self.records.append(chunk.data)
+            return True
+        except Exception:
+            return False
+    
+    def flush(self) -> None:
+        """Flush (no-op for memory)."""
+        pass
+    
+    def close(self) -> None:
+        """Close sink."""
+        pass

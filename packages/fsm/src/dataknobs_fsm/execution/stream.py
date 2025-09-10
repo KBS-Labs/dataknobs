@@ -2,7 +2,7 @@
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple, Union
 
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
@@ -74,7 +74,7 @@ class StreamExecutor:
         fsm: FSM,
         stream_config: StreamConfig | None = None,
         enable_backpressure: bool = True,
-        progress_callback: callable | None = None
+        progress_callback: Union[Callable, None] = None
     ):
         """Initialize stream executor.
         

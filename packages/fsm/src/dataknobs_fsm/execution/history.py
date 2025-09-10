@@ -161,6 +161,48 @@ class ExecutionStep:
             'chunks_processed': self.chunks_processed,
             'records_processed': self.records_processed
         }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'ExecutionStep':
+        """Create ExecutionStep from dictionary representation.
+        
+        Args:
+            data: Dictionary with step data.
+            
+        Returns:
+            ExecutionStep instance.
+        """
+        step = cls(
+            step_id=data['step_id'],
+            state_name=data['state_name'],
+            network_name=data['network_name'],
+            timestamp=data['timestamp'],
+            data_mode=DataHandlingMode(data['data_mode']),
+            status=ExecutionStatus(data['status'])
+        )
+        
+        # Restore timing info
+        step.start_time = data.get('start_time')
+        step.end_time = data.get('end_time')
+        
+        # Restore execution details
+        step.arc_taken = data.get('arc_taken')
+        
+        # Restore error (as string - can't fully reconstruct Exception)
+        error_str = data.get('error')
+        if error_str:
+            step.error = Exception(error_str)
+        
+        # Restore metrics and usage
+        step.metrics = data.get('metrics', {})
+        step.resource_usage = data.get('resource_usage', {})
+        
+        # Restore stream progress
+        step.stream_progress = data.get('stream_progress')
+        step.chunks_processed = data.get('chunks_processed', 0)
+        step.records_processed = data.get('records_processed', 0)
+        
+        return step
 
 
 class ExecutionHistory:
@@ -505,6 +547,60 @@ class ExecutionHistory:
                 for mode, steps in self._mode_storage.items()
             }
         }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'ExecutionHistory':
+        """Create ExecutionHistory from dictionary representation.
+        
+        Args:
+            data: Dictionary with history data.
+            
+        Returns:
+            ExecutionHistory instance.
+        """
+        summary = data['summary']
+        
+        # Create history instance
+        history = cls(
+            fsm_name=summary['fsm_name'],
+            execution_id=summary['execution_id'],
+            data_mode=DataHandlingMode(summary['data_mode']),
+            max_depth=None,  # Will be inferred
+            enable_data_snapshots=False  # Will be inferred from data
+        )
+        
+        # Restore properties from summary
+        history.start_time = summary['start_time']
+        history.end_time = summary.get('end_time')
+        history.total_steps = summary['total_steps']
+        history.failed_steps = summary['failed_steps']
+        history.skipped_steps = summary['skipped_steps']
+        
+        # Rebuild tree structure from paths
+        for path_data in data.get('paths', []):
+            parent_node = None
+            for step_dict in path_data:
+                step = ExecutionStep.from_dict(step_dict)
+                
+                # Create tree node
+                if parent_node is None:
+                    # This is a root step
+                    node = Tree(step)
+                    history.tree_roots.append(node)
+                else:
+                    # Child step
+                    node = Tree(step, parent=parent_node)
+                
+                parent_node = node
+                
+                # Track in mode-specific storage
+                history._mode_storage[step.data_mode].append(step)
+            
+            # Set current node to the last node in this path
+            if parent_node:
+                history.current_node = parent_node
+        
+        return history
     
     def _find_node_by_step_id(self, step_id: str) -> Tree | None:
         """Find a node by step ID.

@@ -2,7 +2,7 @@
 
 import asyncio
 import time
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Union
 
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
@@ -28,7 +28,7 @@ class AsyncBatchExecutor:
         parallelism: int = 10,
         batch_size: int = 100,
         enable_transactions: bool = False,
-        progress_callback: callable | None = None
+        progress_callback: Union[Callable, None] = None
     ):
         """Initialize async batch executor.
         

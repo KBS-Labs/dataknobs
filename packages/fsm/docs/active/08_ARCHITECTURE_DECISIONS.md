@@ -301,6 +301,76 @@ Use Click framework for CLI implementation with Rich for enhanced terminal outpu
 
 ---
 
+## ADR-011: StateTransform vs ArcTransform Separation
+
+### Status
+Accepted
+
+### Context
+There was confusion in the implementation about two distinct types of data transformation functions in FSMs:
+1. Transforms that occur when entering a state (StateTransforms)
+2. Transforms that occur during arc traversal (ArcTransforms)
+
+This confusion led to:
+- Incorrect function registration patterns
+- Failed ArcTransform execution
+- Unclear separation of concerns
+
+### Decision
+Clearly separate StateTransforms and ArcTransforms as distinct concepts with different:
+- **Execution timing**: StateTransforms execute when entering a state, ArcTransforms execute during arc traversal
+- **Function signatures**: StateTransforms receive `State` objects, ArcTransforms receive data and context
+- **Purpose**: StateTransforms prepare data for state processing, ArcTransforms modify data during transitions
+- **Configuration**: StateTransforms via `functions.transform`, ArcTransforms via arc `transform` property
+
+### Consequences
+**Positive:**
+- Clear separation of concerns between state entry and transition processing
+- Proper data flow: input → StateTransform → state processing → ArcTransform → next state
+- Correct function execution timing ensures transforms are applied exactly once
+- Better debugging and reasoning about data transformations
+
+**Negative:**
+- More complex mental model for users
+- Need to understand when to use each type
+- Additional documentation and examples required
+
+### Implementation
+- **StateTransforms**: Configured via `state.functions.transform`, executed once when entering state
+- **ArcTransforms**: Configured via `arc.transform`, executed during arc traversal
+- **Function Registry**: Both types stored in FunctionRegistry with proper lookup via `get_function()`
+- **Execution Engine**: Passes FunctionRegistry object to ArcExecution for unified function access
+- **Backward Compatibility**: ArcExecution accepts both FunctionRegistry and dict for function lookup
+
+### Examples
+
+**StateTransform Configuration:**
+```yaml
+states:
+  - name: process_data
+    functions:
+      transform: data_normalizer  # Executes when entering state
+```
+
+**ArcTransform Configuration:**
+```yaml
+states:
+  - name: source_state
+    arcs:
+      - target: target_state
+        transform:
+          type: inline
+          code: arc_transformer  # Executes during transition
+```
+
+### Validation
+- Added comprehensive test coverage for both transform types
+- Fixed monkey patching in tests to ensure proper function registration
+- Verified correct execution order: StateTransform → ArcTransform
+- Confirmed no duplicate execution of transforms
+
+---
+
 ## Future Architecture Considerations
 
 ### Performance Optimization

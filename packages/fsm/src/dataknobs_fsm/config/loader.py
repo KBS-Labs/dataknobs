@@ -459,8 +459,9 @@ class ConfigLoader:
     def _transform_state_functions(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Transform state 'functions' field to proper schema format.
         
-        This converts the legacy 'functions.transform' format to the
-        proper 'transforms' list format expected by the schema.
+        This converts the legacy 'functions' format to the proper schema:
+        - functions.validate -> validators (state validation)
+        - functions.transform -> transforms (state transformation when entering state)
         
         Args:
             config: Configuration dictionary.
@@ -481,15 +482,13 @@ class ConfigLoader:
                             
                             # Convert validate function to validators list
                             if 'validate' in functions:
-                                # Create inline function reference
                                 state['validators'] = [{
                                     'type': 'inline',
                                     'code': functions['validate']
                                 }]
                             
-                            # Convert transform function to transforms list
+                            # Convert transform function to transforms list (StateTransform)
                             if 'transform' in functions:
-                                # Create inline function reference
                                 state['transforms'] = [{
                                     'type': 'inline',
                                     'code': functions['transform']

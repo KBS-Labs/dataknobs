@@ -273,32 +273,8 @@ class BaseHistoryStorage(IHistoryStorage):
             json_str = zlib.decompress(compressed).decode('utf-8')
             data = json.loads(json_str)
         
-        # Reconstruct history
-        summary = data['summary']
-        history = ExecutionHistory(
-            fsm_name=fsm_name,
-            execution_id=execution_id,
-            data_mode=DataHandlingMode(summary['data_mode']),
-            max_depth=None,  # Will be set from data
-            enable_data_snapshots=False  # Will be determined from data
-        )
-        
-        # Restore properties
-        history.start_time = summary['start_time']
-        history.end_time = summary.get('end_time')
-        history.total_steps = summary['total_steps']
-        history.failed_steps = summary['failed_steps']
-        history.skipped_steps = summary['skipped_steps']
-        
-        # Restore steps from paths
-        # This is simplified - full implementation would rebuild the tree
-        for path in data.get('paths', []):
-            for _step_dict in path:
-                # TODO: Convert dict back to ExecutionStep using _step_dict
-                # This would need proper reconstruction logic
-                pass
-        
-        return history
+        # Use ExecutionHistory.from_dict which properly reconstructs the tree
+        return ExecutionHistory.from_dict(data)
     
     def _apply_retention_policy(self, histories: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Apply retention policy to histories.

@@ -3,7 +3,7 @@
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, List, Tuple, Union
+from typing import Any, AsyncIterator, Callable, List, Tuple, Union
 
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
@@ -40,7 +40,7 @@ class AsyncStreamExecutor:
         fsm: FSM,
         stream_config: StreamConfig | None = None,
         enable_backpressure: bool = True,
-        progress_callback: callable | None = None
+        progress_callback: Union[Callable, None] = None
     ):
         """Initialize async stream executor.
         
@@ -66,7 +66,7 @@ class AsyncStreamExecutor:
     async def execute_stream(
         self,
         source: Union[AsyncIterator[Any], List[Any]],
-        sink: callable | None = None,
+        sink: Union[Callable, None] = None,
         chunk_size: int = 100,
         max_transitions: int = 1000
     ) -> AsyncStreamResult:
@@ -159,7 +159,7 @@ class AsyncStreamExecutor:
         context_template: ExecutionContext,
         max_transitions: int,
         progress: StreamProgress,
-        sink: callable | None
+        sink: Union[Callable, None]
     ):
         """Process a chunk of items.
         
