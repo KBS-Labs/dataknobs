@@ -17,7 +17,7 @@ from dataknobs_fsm.patterns.llm_workflow import (
 )
 from dataknobs_fsm.patterns.error_recovery import (
     RecoveryStrategy, BackoffStrategy, RetryConfig, CircuitBreakerConfig,
-    ErrorRecoveryConfig, ErrorRecoveryWorkflow, RetryExecutor,
+    BulkheadConfig, ErrorRecoveryConfig, ErrorRecoveryWorkflow, RetryExecutor,
     CircuitBreaker as ErrorCircuitBreaker, Bulkhead,
     create_retry_workflow, create_circuit_breaker_workflow, create_resilient_workflow
 )
@@ -31,25 +31,25 @@ class TestAPIOrchestration:
     @pytest.mark.asyncio
     async def test_rate_limiter(self):
         """Test rate limiter."""
-        limiter = RateLimiter(rate_limit=5, window=1)  # 5 requests per second
+        limiter = RateLimiter(rate_limit=10, window=0.1)  # 10 requests per 0.1 second
         
-        # Should allow first 5 requests immediately
+        # Should allow first 10 requests immediately
         start = time.time()
-        for _ in range(5):
+        for _ in range(10):
             await limiter.acquire()
         elapsed = time.time() - start
-        assert elapsed < 0.1  # Should be fast
+        assert elapsed < 0.05  # Should be fast
         
-        # 6th request should be delayed
+        # 11th request should be delayed
         start = time.time()
         await limiter.acquire()
         elapsed = time.time() - start
-        assert elapsed >= 0.9  # Should wait about 1 second
+        assert elapsed >= 0.05  # Should wait at least 0.05 seconds
         
     @pytest.mark.asyncio
     async def test_circuit_breaker(self):
         """Test circuit breaker."""
-        breaker = CircuitBreaker(threshold=2, timeout=0.5)
+        breaker = CircuitBreaker(threshold=2, timeout=0.1)
         
         # Successful calls
         async def success():
@@ -75,7 +75,7 @@ class TestAPIOrchestration:
             await breaker.call(success)
             
         # Wait for timeout
-        await asyncio.sleep(0.6)
+        await asyncio.sleep(0.15)
         
         # Should be half-open, success should close it
         result = await breaker.call(success)
@@ -129,8 +129,10 @@ class TestAPIOrchestration:
         )
         
         assert orchestrator is not None
+        assert isinstance(orchestrator, APIOrchestrator)
         assert len(orchestrator.config.endpoints) == 2
         assert orchestrator.config.mode == OrchestrationMode.SEQUENTIAL
+        assert orchestrator.config.global_rate_limit == 60
         
     def test_create_graphql_orchestrator(self):
         """Test GraphQL orchestrator creation."""
@@ -145,8 +147,10 @@ class TestAPIOrchestration:
         )
         
         assert orchestrator is not None
+        assert isinstance(orchestrator, APIOrchestrator)
         # Batched queries result in single endpoint
         assert len(orchestrator.config.endpoints) == 1
+        assert orchestrator.config.endpoints[0].method == 'POST'
 
 
 class TestLLMWorkflow:
@@ -196,8 +200,10 @@ class TestLLMWorkflow:
         )
         
         assert workflow is not None
+        assert isinstance(workflow, LLMWorkflow)
         assert workflow.config.workflow_type == WorkflowType.SIMPLE
         assert len(workflow.config.steps) == 1
+        assert workflow.config.steps[0].name == 'generate'
         
     def test_create_rag_workflow(self):
         """Test RAG workflow creation."""
@@ -209,9 +215,11 @@ class TestLLMWorkflow:
         )
         
         assert workflow is not None
+        assert isinstance(workflow, LLMWorkflow)
         assert workflow.config.workflow_type == WorkflowType.RAG
         assert workflow.config.rag_config is not None
         assert workflow.config.rag_config.top_k == 5
+        assert workflow.config.rag_config.retriever_type == "vector"
         
     def test_create_chain_workflow(self):
         """Test chain workflow creation."""
@@ -227,8 +235,11 @@ class TestLLMWorkflow:
         )
         
         assert workflow is not None
+        assert isinstance(workflow, LLMWorkflow)
         assert workflow.config.workflow_type == WorkflowType.CHAIN
         assert len(workflow.config.steps) == 2
+        assert workflow.config.steps[0].name == "analyze"
+        assert workflow.config.steps[1].name == "summarize"
 
 
 class TestErrorRecovery:
@@ -293,7 +304,7 @@ class TestErrorRecovery:
         config = CircuitBreakerConfig(
             failure_threshold=2,
             success_threshold=1,
-            timeout=0.5
+            timeout=0.1
         )
         breaker = ErrorCircuitBreaker(config)
         
@@ -323,14 +334,14 @@ class TestErrorRecovery:
         """Test bulkhead isolation."""
         config = BulkheadConfig(
             max_concurrent=2,
-            queue_timeout=0.5,
+            queue_timeout=0.1,
             track_metrics=True
         )
         bulkhead = Bulkhead(config)
         
         # Function that takes time
         async def slow_func():
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.01)
             return "done"
             
         # Should handle concurrent executions
@@ -349,8 +360,10 @@ class TestErrorRecovery:
         )
         
         assert workflow is not None
+        assert isinstance(workflow, ErrorRecoveryWorkflow)
         assert workflow.config.primary_strategy == RecoveryStrategy.RETRY
         assert workflow.config.retry_config.max_attempts == 5
+        assert workflow.config.retry_config.backoff_strategy == BackoffStrategy.EXPONENTIAL
         
     def test_create_circuit_breaker_workflow(self):
         """Test circuit breaker workflow creation."""
@@ -360,8 +373,10 @@ class TestErrorRecovery:
         )
         
         assert workflow is not None
+        assert isinstance(workflow, ErrorRecoveryWorkflow)
         assert workflow.config.primary_strategy == RecoveryStrategy.CIRCUIT_BREAKER
         assert workflow.config.circuit_breaker_config.failure_threshold == 3
+        assert workflow.config.circuit_breaker_config.timeout == 60.0
         
     def test_create_resilient_workflow(self):
         """Test resilient workflow creation."""
@@ -373,10 +388,12 @@ class TestErrorRecovery:
         )
         
         assert workflow is not None
+        assert isinstance(workflow, ErrorRecoveryWorkflow)
         assert workflow.config.primary_strategy == RecoveryStrategy.RETRY
         assert workflow.config.circuit_breaker_config is not None
         assert workflow.config.fallback_config is not None
         assert workflow.config.bulkhead_config is None
+        assert RecoveryStrategy.FALLBACK in workflow.config.secondary_strategies
         
     @pytest.mark.asyncio
     async def test_error_recovery_workflow(self):

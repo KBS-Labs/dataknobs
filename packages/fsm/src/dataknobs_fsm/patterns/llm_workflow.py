@@ -186,7 +186,8 @@ class LLMWorkflow:
             
     def _build_fsm(self) -> SimpleFSM:
         """Build FSM for LLM workflow."""
-        states = []
+        # Add start state
+        states = [{'name': 'start', 'type': 'initial', 'is_start': True}]
         arcs = []
         
         if self.config.workflow_type == WorkflowType.SIMPLE:
@@ -243,6 +244,12 @@ class LLMWorkflow:
                 {'from': 'reason', 'to': 'synthesize', 'name': 'reason_to_synthesize'},
                 {'from': 'synthesize', 'to': 'end', 'name': 'synthesis_complete'}
             ])
+        
+        # Add end state
+        states.append({
+            'name': 'end',
+            'type': 'terminal'
+        })
             
         # Build FSM configuration
         fsm_config = {

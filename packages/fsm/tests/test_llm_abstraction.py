@@ -421,7 +421,6 @@ class TestUtilityFunctions:
         assert "5+5" in result
 
 
-@pytest.mark.asyncio
 class TestLLMProviderCreation:
     """Test LLM provider creation."""
     

@@ -116,6 +116,31 @@ nav:
       - packages/utils/elasticsearch.md
       - packages/utils/llm-utils.md
       - packages/utils/api.md
+    - FSM:
+      - packages/fsm/index.md
+      - packages/fsm/quickstart.md
+      - API Reference:
+        - packages/fsm/api/index.md
+        - packages/fsm/api/simple.md
+        - packages/fsm/api/advanced.md
+      - Guides:
+        - packages/fsm/guides/data-modes.md
+        - packages/fsm/guides/resources.md
+        - packages/fsm/guides/streaming.md
+        - packages/fsm/guides/cli.md
+      - Patterns:
+        - packages/fsm/patterns/index.md
+        - packages/fsm/patterns/etl.md
+        - packages/fsm/patterns/file-processing.md
+        - packages/fsm/patterns/api-orchestration.md
+        - packages/fsm/patterns/llm-workflow.md
+        - packages/fsm/patterns/error-recovery.md
+      - Examples:
+        - packages/fsm/examples/index.md
+        - packages/fsm/examples/database-etl.md
+        - packages/fsm/examples/file-processor.md
+        - packages/fsm/examples/api-workflow.md
+        - packages/fsm/examples/llm-chain.md
     - Xization:
       - packages/xization/index.md
       - packages/xization/tokenization.md

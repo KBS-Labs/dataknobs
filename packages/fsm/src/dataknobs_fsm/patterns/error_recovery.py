@@ -397,7 +397,8 @@ class ErrorRecoveryWorkflow:
             
     def _build_fsm(self) -> SimpleFSM:
         """Build FSM for error recovery workflow."""
-        states = []
+        # Add start state
+        states = [{'name': 'start', 'type': 'initial', 'is_start': True}]
         arcs = []
         
         # Main execution state
@@ -407,7 +408,12 @@ class ErrorRecoveryWorkflow:
         # Recovery states based on strategy
         if self.config.primary_strategy == RecoveryStrategy.RETRY:
             states.append({'name': 'retry', 'type': 'task'})
-            arcs.append({'from': 'execute', 'to': 'retry', 'name': 'on_error', 'condition': 'has_error'})
+            arcs.append({
+                'from': 'execute', 
+                'to': 'retry', 
+                'name': 'on_error',
+                'condition': {'type': 'inline', 'code': 'data.get("error") is not None'}
+            })
             arcs.append({'from': 'retry', 'to': 'execute', 'name': 'retry_attempt'})
             arcs.append({'from': 'retry', 'to': 'end', 'name': 'max_retries_reached'})
             
@@ -419,7 +425,12 @@ class ErrorRecoveryWorkflow:
             
         elif self.config.primary_strategy == RecoveryStrategy.FALLBACK:
             states.append({'name': 'fallback', 'type': 'task'})
-            arcs.append({'from': 'execute', 'to': 'fallback', 'name': 'on_error', 'condition': 'has_error'})
+            arcs.append({
+                'from': 'execute', 
+                'to': 'fallback', 
+                'name': 'on_error',
+                'condition': {'type': 'inline', 'code': 'data.get("error") is not None'}
+            })
             arcs.append({'from': 'fallback', 'to': 'end', 'name': 'fallback_complete'})
             
         elif self.config.primary_strategy == RecoveryStrategy.COMPENSATE:
@@ -429,11 +440,27 @@ class ErrorRecoveryWorkflow:
             ])
             arcs.append({'from': 'start', 'to': 'save_state', 'name': 'init'})
             arcs.append({'from': 'save_state', 'to': 'execute', 'name': 'state_saved'})
-            arcs.append({'from': 'execute', 'to': 'compensate', 'name': 'on_error', 'condition': 'has_error'})
+            arcs.append({
+                'from': 'execute', 
+                'to': 'compensate', 
+                'name': 'on_error',
+                'condition': {'type': 'inline', 'code': 'data.get("error") is not None'}
+            })
             arcs.append({'from': 'compensate', 'to': 'end', 'name': 'compensation_complete'})
             
         # Success path
-        arcs.append({'from': 'execute', 'to': 'end', 'name': 'success', 'condition': 'no_error'})
+        arcs.append({
+            'from': 'execute', 
+            'to': 'end', 
+            'name': 'success',
+            'condition': {'type': 'inline', 'code': 'data.get("error") is None'}
+        })
+        
+        # Add end state
+        states.append({
+            'name': 'end',
+            'type': 'terminal'
+        })
         
         # Build FSM configuration
         fsm_config = {

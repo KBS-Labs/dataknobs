@@ -104,25 +104,27 @@ class RateLimiter:
         
     async def acquire(self) -> None:
         """Acquire permission to make a request."""
-        async with self._lock:
-            now = datetime.now()
-            cutoff = now - timedelta(seconds=self.window)
-            
-            # Remove old requests
-            self.requests = [t for t in self.requests if t > cutoff]
-            
-            # Check if we can make a request
-            if len(self.requests) >= self.rate_limit:
+        while True:
+            async with self._lock:
+                now = datetime.now()
+                cutoff = now - timedelta(seconds=self.window)
+                
+                # Remove old requests
+                self.requests = [t for t in self.requests if t > cutoff]
+                
+                # Check if we can make a request
+                if len(self.requests) < self.rate_limit:
+                    # Record this request and return
+                    self.requests.append(now)
+                    return
+                    
                 # Calculate wait time
                 oldest = self.requests[0]
                 wait_time = (oldest + timedelta(seconds=self.window) - now).total_seconds()
-                if wait_time > 0:
-                    await asyncio.sleep(wait_time)
-                    # Retry after waiting
-                    return await self.acquire()
-                    
-            # Record this request
-            self.requests.append(now)
+                
+            # Wait outside the lock
+            if wait_time > 0:
+                await asyncio.sleep(min(wait_time, 0.1))  # Sleep in small increments
 
 
 class CircuitBreaker:
@@ -234,7 +236,8 @@ class APIOrchestrator:
     def _build_fsm(self) -> SimpleFSM:
         """Build FSM for API orchestration."""
         # Create FSM configuration based on orchestration mode
-        states = []
+        # Add start state
+        states = [{'name': 'start', 'type': 'initial', 'is_start': True}]
         arcs = []
         
         if self.config.mode == OrchestrationMode.SEQUENTIAL:
@@ -351,6 +354,12 @@ class APIOrchestrator:
                         'to': 'end',
                         'name': f'{endpoint.name}_complete'
                     })
+        
+        # Add end state
+        states.append({
+            'name': 'end',
+            'type': 'terminal'
+        })
                     
         # Build FSM configuration
         fsm_config = {
