@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Callable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+import re
 from dataknobs_data import Record
 
 from ..api.simple import SimpleFSM
@@ -148,7 +149,8 @@ class FileProcessor:
                     'is_end': True
                 }
             ],
-            'arcs': self._build_arcs()
+            'arcs': self._build_arcs(),
+            'functions': self._build_functions()
         }
         
         return SimpleFSM(fsm_config, data_mode=data_mode)
@@ -230,6 +232,30 @@ class FileProcessor:
         ])
         
         return arcs
+    
+    def _build_functions(self) -> Dict[str, Any]:
+        """Build functions registry for FSM."""
+        functions = {}
+        
+        # Register filter functions
+        if self.config.filters:
+            for i, filter_func in enumerate(self.config.filters):
+                functions[f'filter_{i}'] = filter_func
+        
+        # Register transformation functions  
+        if self.config.transformations:
+            for i, transform_func in enumerate(self.config.transformations):
+                functions[f'transform_{i}'] = transform_func
+        
+        # Register aggregation functions
+        if self.config.aggregations:
+            for agg_name, agg_func in self.config.aggregations.items():
+                functions[f'agg_{agg_name}'] = agg_func
+        
+        # Register parser function
+        functions['parser'] = self._create_parser()
+        
+        return functions
         
     def _get_parser_code(self) -> str:
         """Get parser code for file format."""
@@ -260,29 +286,67 @@ data
         """Get validator code."""
         if not self.config.validation_schema:
             return "True"
-        # For now, return a simple validation
-        return "True"  # TODO: Implement proper schema validation code
+        
+        # Generate validation code based on schema
+        validations = []
+        for field, constraints in self.config.validation_schema.items():
+            if isinstance(constraints, dict):
+                if 'required' in constraints and constraints['required']:
+                    validations.append(f"'{field}' in data")
+                if 'type' in constraints:
+                    python_type = constraints['type']
+                    validations.append(f"isinstance(data.get('{field}'), {python_type})")
+                if 'min' in constraints:
+                    validations.append(f"data.get('{field}', 0) >= {constraints['min']}")
+                if 'max' in constraints:
+                    validations.append(f"data.get('{field}', 0) <= {constraints['max']}")
+                if 'pattern' in constraints:
+                    validations.append(f"re.match(r'{constraints['pattern']}', str(data.get('{field}', '')))")
+            elif constraints is True:  # Required field
+                validations.append(f"'{field}' in data")
+        
+        return " and ".join(validations) if validations else "True"
     
     def _get_filter_code(self) -> str:
         """Get filter code."""
         if not self.config.filters:
             return "True"
-        # For now, return a simple filter
-        return "True"  # TODO: Implement proper filter code
+        
+        # Apply all filters in sequence - data must pass all filters
+        filter_conditions = []
+        for i, filter_func in enumerate(self.config.filters):
+            # Use registered function name
+            filter_conditions.append(f"filter_{i}(data)")
+        
+        return " and ".join(filter_conditions) if filter_conditions else "True"
     
     def _get_transformer_code(self) -> str:
         """Get transformer code."""
         if not self.config.transformations:
             return "data"
-        # For now, return pass-through
-        return "data"  # TODO: Implement proper transformation code
+        
+        # Apply transformations in sequence
+        result_code = "data"
+        for i, transform_func in enumerate(self.config.transformations):
+            # Each transformation receives the result of the previous one
+            result_code = f"transform_{i}({result_code})"
+        
+        return result_code
     
     def _get_aggregator_code(self) -> str:
         """Get aggregator code."""
         if not self.config.aggregations:
             return "data"
-        # For now, return pass-through
-        return "data"  # TODO: Implement proper aggregation code
+        
+        # Apply aggregations to create summary data
+        aggregation_results = []
+        for agg_name, agg_func in self.config.aggregations.items():
+            aggregation_results.append(f"'{agg_name}': agg_{agg_name}(data)")
+        
+        if aggregation_results:
+            return "{" + ", ".join(aggregation_results) + "}"
+        else:
+            return "data"
     
     def _create_parser(self) -> Callable:
         """Create parser for file format."""
