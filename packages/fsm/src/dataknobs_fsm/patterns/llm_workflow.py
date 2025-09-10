@@ -1,0 +1,633 @@
+"""LLM workflow pattern implementation.
+
+This module provides pre-configured FSM patterns for LLM-based workflows,
+including RAG pipelines, chain-of-thought reasoning, and multi-agent systems.
+"""
+
+from typing import Any, Dict, List, Optional, Union, Callable, AsyncIterator
+from dataclasses import dataclass, field
+from enum import Enum
+import asyncio
+
+from ..api.simple import SimpleFSM
+from ..core.data_modes import DataHandlingMode
+from ..llm.base import LLMConfig, LLMMessage, LLMResponse, CompletionMode
+from ..llm.providers import create_llm_provider
+from ..llm.utils import (
+    PromptTemplate, MessageBuilder, ResponseParser,
+    TokenCounter, create_few_shot_prompt
+)
+from ..io.base import IOConfig, IOMode, IOFormat
+from ..io.utils import create_io_provider
+
+
+class WorkflowType(Enum):
+    """LLM workflow types."""
+    SIMPLE = "simple"  # Single LLM call
+    CHAIN = "chain"  # Sequential chain of LLM calls
+    RAG = "rag"  # Retrieval-augmented generation
+    COT = "cot"  # Chain-of-thought reasoning
+    TREE = "tree"  # Tree-of-thought reasoning
+    AGENT = "agent"  # Agent with tools
+    MULTI_AGENT = "multi_agent"  # Multiple cooperating agents
+
+
+@dataclass 
+class LLMStep:
+    """Single step in LLM workflow."""
+    name: str
+    prompt_template: PromptTemplate
+    model_config: Optional[LLMConfig] = None  # Override default
+    
+    # Processing
+    pre_processor: Optional[Callable[[Any], Any]] = None
+    post_processor: Optional[Callable[[LLMResponse], Any]] = None
+    
+    # Validation
+    validator: Optional[Callable[[Any], bool]] = None
+    retry_on_failure: bool = True
+    max_retries: int = 3
+    
+    # Dependencies
+    depends_on: Optional[List[str]] = None
+    pass_context: bool = True  # Pass previous results
+    
+    # Output
+    output_key: Optional[str] = None  # Key in results dict
+    parse_json: bool = False
+    extract_code: bool = False
+
+
+@dataclass
+class RAGConfig:
+    """Configuration for RAG (Retrieval-Augmented Generation)."""
+    retriever_type: str  # 'vector', 'keyword', 'hybrid'
+    index_path: Optional[str] = None
+    embedding_model: Optional[str] = None
+    
+    # Retrieval settings
+    top_k: int = 5
+    similarity_threshold: float = 0.7
+    rerank: bool = False
+    rerank_model: Optional[str] = None
+    
+    # Context settings
+    max_context_length: int = 2000
+    context_template: Optional[PromptTemplate] = None
+    
+    # Chunking settings
+    chunk_size: int = 500
+    chunk_overlap: int = 50
+
+
+@dataclass
+class AgentConfig:
+    """Configuration for agent-based workflows."""
+    agent_name: str
+    role: str
+    capabilities: List[str]
+    
+    # Tools
+    tools: Optional[List[Dict[str, Any]]] = None
+    tool_descriptions: Optional[str] = None
+    
+    # Memory
+    memory_type: Optional[str] = None  # 'buffer', 'summary', 'vector'
+    memory_size: int = 10
+    
+    # Planning
+    planning_enabled: bool = False
+    planning_steps: int = 5
+    
+    # Reflection
+    reflection_enabled: bool = False
+    reflection_prompt: Optional[PromptTemplate] = None
+
+
+@dataclass
+class LLMWorkflowConfig:
+    """Configuration for LLM workflow."""
+    workflow_type: WorkflowType
+    steps: List[LLMStep]
+    default_model_config: LLMConfig
+    
+    # Workflow settings
+    max_iterations: int = 10
+    early_stop_condition: Optional[Callable[[Dict[str, Any]], bool]] = None
+    
+    # RAG settings (if applicable)
+    rag_config: Optional[RAGConfig] = None
+    
+    # Agent settings (if applicable)
+    agent_configs: Optional[List[AgentConfig]] = None
+    
+    # Memory and context
+    maintain_history: bool = True
+    max_history_length: int = 20
+    context_window: int = 4000
+    
+    # Output settings
+    aggregate_outputs: bool = False
+    output_formatter: Optional[Callable[[Dict[str, Any]], Any]] = None
+    
+    # Error handling
+    error_handler: Optional[Callable[[Exception, str], Any]] = None
+    fallback_response: Optional[str] = None
+    
+    # Monitoring
+    log_prompts: bool = False
+    log_responses: bool = False
+    track_tokens: bool = True
+    track_cost: bool = False
+
+
+class VectorRetriever:
+    """Simple vector-based retriever for RAG."""
+    
+    def __init__(self, config: RAGConfig):
+        self.config = config
+        self.documents = []
+        self.embeddings = []
+        
+    async def index_documents(self, documents: List[str]) -> None:
+        """Index documents for retrieval."""
+        # This is a simplified implementation
+        # In production, use a proper vector database
+        self.documents = documents
+        # Generate embeddings (placeholder)
+        self.embeddings = [[0.1] * 768 for _ in documents]
+        
+    async def retrieve(self, query: str, top_k: int = None) -> List[str]:
+        """Retrieve relevant documents."""
+        top_k = top_k or self.config.top_k
+        # Simplified: return first top_k documents
+        return self.documents[:top_k]
+
+
+class LLMWorkflow:
+    """LLM workflow orchestrator using FSM pattern."""
+    
+    def __init__(self, config: LLMWorkflowConfig):
+        """Initialize LLM workflow.
+        
+        Args:
+            config: Workflow configuration
+        """
+        self.config = config
+        self._fsm = self._build_fsm()
+        self._providers = {}
+        self._history = []
+        self._context = {}
+        self._retriever = None
+        
+        # Initialize retriever if RAG
+        if config.workflow_type == WorkflowType.RAG and config.rag_config:
+            self._retriever = VectorRetriever(config.rag_config)
+            
+    def _build_fsm(self) -> SimpleFSM:
+        """Build FSM for LLM workflow."""
+        states = []
+        arcs = []
+        
+        if self.config.workflow_type == WorkflowType.SIMPLE:
+            # Single LLM call
+            states.append({'name': 'llm_call', 'type': 'task'})
+            arcs.append({'from': 'start', 'to': 'llm_call', 'name': 'init'})
+            arcs.append({'from': 'llm_call', 'to': 'end', 'name': 'complete'})
+            
+        elif self.config.workflow_type == WorkflowType.CHAIN:
+            # Sequential chain
+            for i, step in enumerate(self.config.steps):
+                state_name = f"step_{step.name}"
+                states.append({'name': state_name, 'type': 'task'})
+                
+                if i == 0:
+                    arcs.append({'from': 'start', 'to': state_name, 'name': f'init_{step.name}'})
+                else:
+                    prev_state = f"step_{self.config.steps[i-1].name}"
+                    arcs.append({
+                        'from': prev_state,
+                        'to': state_name,
+                        'name': f'{self.config.steps[i-1].name}_to_{step.name}'
+                    })
+                    
+                if i == len(self.config.steps) - 1:
+                    arcs.append({'from': state_name, 'to': 'end', 'name': f'{step.name}_complete'})
+                    
+        elif self.config.workflow_type == WorkflowType.RAG:
+            # RAG pipeline
+            states.extend([
+                {'name': 'retrieve', 'type': 'task'},
+                {'name': 'augment', 'type': 'task'},
+                {'name': 'generate', 'type': 'task'}
+            ])
+            
+            arcs.extend([
+                {'from': 'start', 'to': 'retrieve', 'name': 'init_retrieval'},
+                {'from': 'retrieve', 'to': 'augment', 'name': 'retrieve_to_augment'},
+                {'from': 'augment', 'to': 'generate', 'name': 'augment_to_generate'},
+                {'from': 'generate', 'to': 'end', 'name': 'generation_complete'}
+            ])
+            
+        elif self.config.workflow_type == WorkflowType.COT:
+            # Chain-of-thought reasoning
+            states.extend([
+                {'name': 'decompose', 'type': 'task'},
+                {'name': 'reason', 'type': 'task'},
+                {'name': 'synthesize', 'type': 'task'}
+            ])
+            
+            arcs.extend([
+                {'from': 'start', 'to': 'decompose', 'name': 'init_decompose'},
+                {'from': 'decompose', 'to': 'reason', 'name': 'decompose_to_reason'},
+                {'from': 'reason', 'to': 'synthesize', 'name': 'reason_to_synthesize'},
+                {'from': 'synthesize', 'to': 'end', 'name': 'synthesis_complete'}
+            ])
+            
+        # Build FSM configuration
+        fsm_config = {
+            'name': 'LLM_Workflow',
+            'data_mode': DataHandlingMode.REFERENCE.value,
+            'states': states,
+            'arcs': arcs,
+            'resources': []
+        }
+        
+        return SimpleFSM(fsm_config)
+        
+    async def _get_provider(self, step: Optional[LLMStep] = None):
+        """Get LLM provider for step."""
+        config = step.model_config if step and step.model_config else self.config.default_model_config
+        
+        key = f"{config.provider}_{config.model}"
+        if key not in self._providers:
+            self._providers[key] = create_llm_provider(config, is_async=True)
+            await self._providers[key].initialize()
+            
+        return self._providers[key]
+        
+    async def _execute_step(
+        self,
+        step: LLMStep,
+        input_data: Dict[str, Any]
+    ) -> Any:
+        """Execute a single workflow step.
+        
+        Args:
+            step: Workflow step
+            input_data: Input data with template variables
+            
+        Returns:
+            Step output
+        """
+        # Pre-process input
+        if step.pre_processor:
+            input_data = step.pre_processor(input_data)
+            
+        # Format prompt
+        prompt = step.prompt_template.format(**input_data)
+        
+        # Build messages
+        builder = MessageBuilder()
+        if self.config.default_model_config.system_prompt:
+            builder.system(self.config.default_model_config.system_prompt)
+            
+        # Add history if maintaining
+        if self.config.maintain_history and self._history:
+            for msg in self._history[-self.config.max_history_length:]:
+                builder.messages.append(msg)
+                
+        builder.user(prompt)
+        messages = builder.build()
+        
+        # Get provider and generate
+        provider = await self._get_provider(step)
+        
+        retry_count = 0
+        while retry_count <= step.max_retries:
+            try:
+                # Generate response
+                if self.config.default_model_config.stream:
+                    response_text = ""
+                    async for chunk in provider.stream_complete(messages):
+                        response_text += chunk.delta
+                        if self.config.default_model_config.stream_callback:
+                            self.config.default_model_config.stream_callback(chunk)
+                    response = LLMResponse(content=response_text, model=provider.config.model)
+                else:
+                    response = await provider.complete(messages)
+                    
+                # Validate response
+                if step.validator and not step.validator(response):
+                    if not step.retry_on_failure or retry_count >= step.max_retries:
+                        raise ValueError(f"Validation failed for step {step.name}")
+                    retry_count += 1
+                    continue
+                    
+                # Parse response if needed
+                result = response.content
+                if step.parse_json:
+                    result = ResponseParser.extract_json(response)
+                elif step.extract_code:
+                    result = ResponseParser.extract_code(response)
+                    
+                # Post-process
+                if step.post_processor:
+                    result = step.post_processor(result)
+                    
+                # Update history
+                if self.config.maintain_history:
+                    self._history.append(LLMMessage(role='user', content=prompt))
+                    self._history.append(LLMMessage(role='assistant', content=response.content))
+                    
+                # Track tokens and cost
+                if self.config.track_tokens and response.usage:
+                    self._context['total_tokens'] = self._context.get('total_tokens', 0) + response.usage.get('total_tokens', 0)
+                    
+                return result
+                
+            except Exception as e:
+                if retry_count >= step.max_retries:
+                    if self.config.error_handler:
+                        return self.config.error_handler(e, step.name)
+                    raise
+                retry_count += 1
+                await asyncio.sleep(1.0 * retry_count)  # Exponential backoff
+                
+    async def _execute_rag(self, query: str) -> str:
+        """Execute RAG workflow.
+        
+        Args:
+            query: User query
+            
+        Returns:
+            Generated response
+        """
+        if not self._retriever:
+            raise ValueError("RAG configuration not provided")
+            
+        # Retrieve relevant documents
+        documents = await self._retriever.retrieve(query)
+        
+        # Build augmented prompt
+        context = "\n\n".join(documents)
+        if self.config.rag_config.context_template:
+            augmented_prompt = self.config.rag_config.context_template.format(
+                context=context,
+                query=query
+            )
+        else:
+            augmented_prompt = f"""Context:
+{context}
+
+Question: {query}
+
+Answer based on the context provided:"""
+        
+        # Generate response
+        provider = await self._get_provider()
+        response = await provider.complete(augmented_prompt)
+        
+        return response.content
+        
+    async def _execute_cot(self, problem: str) -> str:
+        """Execute chain-of-thought reasoning.
+        
+        Args:
+            problem: Problem to solve
+            
+        Returns:
+            Solution
+        """
+        provider = await self._get_provider()
+        
+        # Step 1: Decompose problem
+        decompose_prompt = f"""Break down this problem into smaller steps:
+{problem}
+
+List the steps needed to solve this:"""
+        
+        decompose_response = await provider.complete(decompose_prompt)
+        steps = ResponseParser.extract_list(decompose_response)
+        
+        # Step 2: Reason through each step
+        reasoning = []
+        for i, step in enumerate(steps, 1):
+            reason_prompt = f"""Problem: {problem}
+Step {i}: {step}
+
+Explain how to complete this step:"""
+            
+            reason_response = await provider.complete(reason_prompt)
+            reasoning.append(f"Step {i}: {step}\n{reason_response.content}")
+            
+        # Step 3: Synthesize solution
+        synthesis_prompt = f"""Problem: {problem}
+
+Reasoning:
+{chr(10).join(reasoning)}
+
+Based on the reasoning above, provide the final solution:"""
+        
+        synthesis_response = await provider.complete(synthesis_prompt)
+        
+        return synthesis_response.content
+        
+    async def execute(
+        self,
+        input_data: Union[str, Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Execute LLM workflow.
+        
+        Args:
+            input_data: Input data or query
+            
+        Returns:
+            Workflow results
+        """
+        # Normalize input
+        if isinstance(input_data, str):
+            input_data = {'query': input_data}
+            
+        results = {}
+        
+        if self.config.workflow_type == WorkflowType.SIMPLE:
+            # Single step execution
+            if self.config.steps:
+                output = await self._execute_step(self.config.steps[0], input_data)
+                results[self.config.steps[0].output_key or 'output'] = output
+            else:
+                # Direct LLM call
+                provider = await self._get_provider()
+                response = await provider.complete(input_data.get('query', ''))
+                results['output'] = response.content
+                
+        elif self.config.workflow_type == WorkflowType.CHAIN:
+            # Sequential chain execution
+            current_context = input_data.copy()
+            
+            for step in self.config.steps:
+                # Add dependencies to context
+                if step.depends_on:
+                    for dep in step.depends_on:
+                        if dep in results:
+                            current_context[dep] = results[dep]
+                            
+                # Execute step
+                output = await self._execute_step(step, current_context)
+                
+                # Store result
+                output_key = step.output_key or step.name
+                results[output_key] = output
+                
+                # Update context if passing
+                if step.pass_context:
+                    current_context[output_key] = output
+                    
+        elif self.config.workflow_type == WorkflowType.RAG:
+            # RAG pipeline
+            output = await self._execute_rag(input_data.get('query', ''))
+            results['output'] = output
+            
+        elif self.config.workflow_type == WorkflowType.COT:
+            # Chain-of-thought
+            output = await self._execute_cot(input_data.get('problem', input_data.get('query', '')))
+            results['output'] = output
+            
+        # Format output if configured
+        if self.config.output_formatter:
+            results = self.config.output_formatter(results)
+            
+        # Add metadata
+        if self.config.track_tokens:
+            results['_tokens'] = self._context.get('total_tokens', 0)
+            
+        return results
+        
+    async def index_documents(self, documents: List[str]) -> None:
+        """Index documents for RAG.
+        
+        Args:
+            documents: Documents to index
+        """
+        if not self._retriever:
+            raise ValueError("RAG configuration not provided")
+        await self._retriever.index_documents(documents)
+        
+    async def close(self) -> None:
+        """Close all providers."""
+        for provider in self._providers.values():
+            await provider.close()
+
+
+def create_simple_llm_workflow(
+    prompt_template: str,
+    model: str = 'gpt-3.5-turbo',
+    provider: str = 'openai',
+    **kwargs
+) -> LLMWorkflow:
+    """Create simple LLM workflow.
+    
+    Args:
+        prompt_template: Prompt template string
+        model: Model name
+        provider: Provider name
+        **kwargs: Additional configuration
+        
+    Returns:
+        Configured LLM workflow
+    """
+    template = PromptTemplate(prompt_template)
+    
+    config = LLMWorkflowConfig(
+        workflow_type=WorkflowType.SIMPLE,
+        steps=[
+            LLMStep(
+                name='generate',
+                prompt_template=template
+            )
+        ],
+        default_model_config=LLMConfig(
+            provider=provider,
+            model=model,
+            **kwargs
+        )
+    )
+    
+    return LLMWorkflow(config)
+
+
+def create_rag_workflow(
+    model: str = 'gpt-3.5-turbo',
+    provider: str = 'openai',
+    retriever_type: str = 'vector',
+    top_k: int = 5,
+    **kwargs
+) -> LLMWorkflow:
+    """Create RAG workflow.
+    
+    Args:
+        model: Model name
+        provider: Provider name
+        retriever_type: Type of retriever
+        top_k: Number of documents to retrieve
+        **kwargs: Additional configuration
+        
+    Returns:
+        Configured RAG workflow
+    """
+    config = LLMWorkflowConfig(
+        workflow_type=WorkflowType.RAG,
+        steps=[],
+        default_model_config=LLMConfig(
+            provider=provider,
+            model=model,
+            **kwargs
+        ),
+        rag_config=RAGConfig(
+            retriever_type=retriever_type,
+            top_k=top_k
+        )
+    )
+    
+    return LLMWorkflow(config)
+
+
+def create_chain_workflow(
+    steps: List[Dict[str, Any]],
+    model: str = 'gpt-3.5-turbo',
+    provider: str = 'openai',
+    **kwargs
+) -> LLMWorkflow:
+    """Create chain workflow.
+    
+    Args:
+        steps: List of step configurations
+        model: Model name
+        provider: Provider name
+        **kwargs: Additional configuration
+        
+    Returns:
+        Configured chain workflow
+    """
+    llm_steps = []
+    for step_config in steps:
+        llm_steps.append(LLMStep(
+            name=step_config['name'],
+            prompt_template=PromptTemplate(step_config['prompt']),
+            output_key=step_config.get('output_key'),
+            parse_json=step_config.get('parse_json', False),
+            depends_on=step_config.get('depends_on')
+        ))
+        
+    config = LLMWorkflowConfig(
+        workflow_type=WorkflowType.CHAIN,
+        steps=llm_steps,
+        default_model_config=LLMConfig(
+            provider=provider,
+            model=model,
+            **kwargs
+        )
+    )
+    
+    return LLMWorkflow(config)
