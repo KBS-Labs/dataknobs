@@ -102,6 +102,15 @@ class SchemaValidator(IValidationFunction):
             raise FSMValidationError(
                 f"Schema validation failed: {'; '.join(errors)}"
             )
+    
+    def get_validation_rules(self) -> Dict[str, Any]:
+        """Get the validation rules."""
+        if hasattr(self.schema, 'model_json_schema'):
+            return self.schema.model_json_schema()
+        elif hasattr(self.schema, '__annotations__'):
+            return dict(self.schema.__annotations__)
+        else:
+            return {"schema": str(self.schema)}
 
 
 class RangeValidator(IValidationFunction):

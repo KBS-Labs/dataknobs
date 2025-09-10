@@ -129,7 +129,7 @@ class StateConfig(BaseModel):
     """Configuration for a state."""
 
     name: str
-    schema: Optional[Dict[str, Any]] = None
+    data_schema: Optional[Dict[str, Any]] = Field(default=None, alias="schema")
     validators: List[FunctionReference] = Field(default_factory=list)
     transforms: List[FunctionReference] = Field(default_factory=list)
     arcs: List[Union[ArcConfig, PushArcConfig]] = Field(default_factory=list)
@@ -138,6 +138,8 @@ class StateConfig(BaseModel):
     is_start: bool = False
     is_end: bool = False
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    
+    model_config = {"populate_by_name": True}  # Allow both 'schema' and 'data_schema'
 
     @field_validator("arcs", mode="before")
     def validate_arcs(cls, v: List[Any]) -> List[Union[ArcConfig, PushArcConfig]]:

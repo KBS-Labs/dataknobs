@@ -232,17 +232,17 @@ class SimpleFSM:
         for result in results:
             if result.success:
                 formatted_results.append({
-                    'final_state': 'output',  # TODO: Get actual final state from context
+                    'final_state': result.metadata.get('final_state', 'unknown'),
                     'data': result.result,
-                    'path': [],  # TODO: Get path from context
+                    'path': result.metadata.get('path', []),
                     'success': True,
                     'error': None
                 })
             else:
                 formatted_results.append({
-                    'final_state': None,
-                    'data': {},
-                    'path': [],
+                    'final_state': result.metadata.get('final_state', None),
+                    'data': result.result if result.result else {},
+                    'path': result.metadata.get('path', []),
                     'success': False,
                     'error': str(result.error) if result.error else str(result.result)
                 })

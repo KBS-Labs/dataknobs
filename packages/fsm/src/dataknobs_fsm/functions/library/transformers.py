@@ -305,6 +305,11 @@ class DataEnricher(ITransformFunction):
                 result[field] = value
         
         return result
+    
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation."""
+        fields = list(self.enrichments.keys())
+        return f"Enrich data with fields: {', '.join(fields[:3])}{'...' if len(fields) > 3 else ''}"
 
 
 class FieldFilter(ITransformFunction):

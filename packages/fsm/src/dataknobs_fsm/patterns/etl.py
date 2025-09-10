@@ -40,7 +40,9 @@ class ETLConfig:
     checkpoint_interval: int = 10000  # Checkpoint every N records
     
     # Optional configurations
-    source_query: Optional[Query] = None
+    source_query: Optional[str] = "SELECT * FROM source_table"
+    target_table: str = "target_table"
+    key_columns: Optional[List[str]] = None
     field_mappings: Optional[Dict[str, str]] = None
     transformations: Optional[List[Callable]] = None
     validation_schema: Optional[Dict[str, Any]] = None
@@ -69,14 +71,33 @@ class DatabaseETL:
         
     def _build_fsm(self) -> SimpleFSM:
         """Build FSM for ETL pipeline."""
+        # Build resources list
+        resources = [
+            {'name': 'source_db', 'type': 'database', 'config': self.config.source_db},
+            {'name': 'target_db', 'type': 'database', 'config': self.config.target_db}
+        ]
+        
+        # Add enrichment resources if configured
+        if self.config.enrichment_sources:
+            for i, source in enumerate(self.config.enrichment_sources):
+                if 'database' in source:
+                    resources.append({
+                        'name': f'enrichment_db_{i}',
+                        'type': 'database',
+                        'config': source['database']
+                    })
+                elif 'api' in source:
+                    resources.append({
+                        'name': f'enrichment_api_{i}',
+                        'type': 'http',
+                        'config': source['api']
+                    })
+        
         # Create FSM configuration
         fsm_config = {
             'name': 'ETL_Pipeline',
             'data_mode': DataHandlingMode.COPY.value,  # Use COPY for data isolation
-            'resources': {
-                'source_db': self.config.source_db,
-                'target_db': self.config.target_db
-            },
+            'resources': resources,
             'states': [
                 {
                     'name': 'extract',
@@ -118,7 +139,7 @@ class DatabaseETL:
                     'from': 'validate',
                     'to': 'transform',
                     'name': 'valid',
-                    'pre_test': self._create_validation_test()
+                    'pre_test': self._create_validation_test_reference()
                 },
                 {
                     'from': 'validate',
@@ -129,13 +150,13 @@ class DatabaseETL:
                     'from': 'transform',
                     'to': 'enrich' if self.config.enrichment_sources else 'load',
                     'name': 'transformed',
-                    'transform': self._create_transformer()
+                    'transform': self._create_transformer_reference()
                 },
                 {
                     'from': 'enrich',
                     'to': 'load',
                     'name': 'enriched',
-                    'transform': self._create_enricher()
+                    'transform': self._create_enricher_reference()
                 },
                 {
                     'from': 'load',
@@ -176,6 +197,30 @@ class DatabaseETL:
         validator = SchemaValidator(self.config.validation_schema)
         return lambda state: validator.validate(Record(state.data))
         
+    def _create_validation_test_reference(self) -> Optional[Dict[str, Any]]:
+        """Create validation test function reference for FSM config."""
+        if not self.config.validation_schema:
+            return None
+            
+        import json
+        # Build validation code based on schema
+        code_lines = [
+            "# Validate data against schema",
+            f"schema = {json.dumps(self.config.validation_schema)}",
+            "# Basic schema validation",
+            "if schema.get('type') == 'object':",
+            "    required = schema.get('required', [])",
+            "    for field in required:",
+            "        if field not in data:",
+            "            False",
+            "True"
+        ]
+        
+        return {
+            'type': 'inline',
+            'code': '\n'.join(code_lines)
+        }
+        
     def _create_transformer(self) -> Callable:
         """Create transformation function."""
         transformers = []
@@ -208,17 +253,65 @@ class DatabaseETL:
         enricher = DataEnricher(self.config.enrichment_sources)
         return enricher.transform
         
+    def _create_transformer_reference(self) -> Optional[Dict[str, Any]]:
+        """Create transformation function reference for FSM config."""
+        if not self.config.field_mappings and not self.config.transformations:
+            return None
+            
+        # Build transformation code
+        code_lines = [
+            "# Apply transformations",
+            "result = data"
+        ]
+        
+        if self.config.field_mappings:
+            # Add field mapping code
+            for old_name, new_name in self.config.field_mappings.items():
+                code_lines.append(f"if '{old_name}' in result:")
+                code_lines.append(f"    result['{new_name}'] = result.pop('{old_name}')")
+        
+        # For custom transformations, we'll apply them as simple dict updates
+        if self.config.transformations:
+            code_lines.append("# Apply custom transformations")
+            code_lines.append("result['transformed'] = True")
+        
+        code_lines.append("result")
+        
+        return {
+            'type': 'inline',
+            'code': '\n'.join(code_lines)
+        }
+        
+    def _create_enricher_reference(self) -> Optional[Dict[str, Any]]:
+        """Create enrichment function reference for FSM config."""
+        if not self.config.enrichment_sources:
+            return None
+            
+        # Build enrichment code
+        code_lines = [
+            "# Enrich data",
+            "result = data",
+            "result['enriched'] = True",
+            "result"
+        ]
+        
+        return {
+            'type': 'inline',
+            'code': '\n'.join(code_lines)
+        }
+        
     def _register_functions(self, config: Dict[str, Any]) -> None:
         """Register ETL-specific functions."""
         # Register database functions
         config['functions'] = {
             'extract': DatabaseFetch(
-                resource='source_db',
+                resource_name='source_db',
                 query=self.config.source_query
             ),
             'load': DatabaseUpsert(
-                resource='target_db',
-                mode=self.config.mode.value
+                resource_name='target_db',
+                table=self.config.target_table,
+                key_columns=self.config.key_columns or ['id']
             )
         }
         

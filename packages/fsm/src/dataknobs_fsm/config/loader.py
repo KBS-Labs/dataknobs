@@ -10,7 +10,7 @@ This module provides functionality to load FSM configurations from various sourc
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import yaml
 from dataknobs_config import Config as DataknobsConfig
@@ -246,6 +246,9 @@ class ConfigLoader:
         Returns:
             Validated FSMConfig instance.
         """
+        # Transform simple format to network format if needed
+        config = self._transform_simple_to_network(config)
+        
         # Transform network-level arcs to state-level arcs if present
         config = self._transform_network_arcs(config)
         
@@ -254,6 +257,129 @@ class ConfigLoader:
         
         # Validate and return
         return validate_config(config)
+    
+    def _transform_simple_to_network(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Transform simple format to network format if needed.
+        
+        Detects if the config is in simple format (has 'states' and 'arcs' at
+        top level without 'networks') and transforms it to network format.
+        
+        Args:
+            config: Configuration dictionary.
+            
+        Returns:
+            Transformed configuration.
+        """
+        # Check if this is a simple format config
+        if 'states' in config and 'networks' not in config:
+            # Convert states from dict to list format if needed
+            states = config['states']
+            arcs = list(config.get('arcs', []))  # Start with existing arcs if any
+            
+            if isinstance(states, dict):
+                # Convert dict-style states to list-style
+                states_list = []
+                initial_state = config.get('initial_state')
+                
+                for name, state_config in states.items():
+                    state = state_config.copy() if isinstance(state_config, dict) else {}
+                    state['name'] = name
+                    
+                    # Mark initial state if specified
+                    if initial_state and name == initial_state:
+                        state['is_start'] = True
+                    
+                    # Extract inline transitions and convert to arcs
+                    for transition_type in ['on_complete', 'on_error', 'on_timeout']:
+                        if transition_type in state:
+                            transition = state.pop(transition_type)
+                            if isinstance(transition, dict) and 'target' in transition:
+                                arc = {
+                                    'from': name,
+                                    'to': transition['target'],
+                                    'type': transition_type.replace('on_', '')  # on_complete -> complete
+                                }
+                                # Add any conditions or transforms
+                                if 'condition' in transition:
+                                    arc['condition'] = transition['condition']
+                                if 'transform' in transition:
+                                    arc['transform'] = transition['transform']
+                                arcs.append(arc)
+                    
+                    # Mark final states
+                    if state.get('final'):
+                        state['is_end'] = True
+                        state.pop('final')  # Remove the 'final' field as we use 'is_end'
+                    
+                    states_list.append(state)
+                states = states_list
+                
+                # If no initial state was specified, mark the first state as start
+                if not initial_state and states_list:
+                    states_list[0]['is_start'] = True
+            
+            # Transform to network format
+            network_config = {
+                'name': config.get('name', 'default_fsm'),
+                'networks': [{
+                    'name': 'main',
+                    'states': states,
+                    'arcs': self._add_type_to_transforms(arcs)
+                }],
+                'main_network': 'main'
+            }
+            
+            # Handle data_mode transformation
+            if 'data_mode' in config:
+                mode = config['data_mode']
+                if isinstance(mode, str):
+                    # Convert string to proper data_mode config
+                    network_config['data_mode'] = {
+                        'default': mode.lower() if mode.lower() in ['copy', 'reference', 'direct'] else 'copy'
+                    }
+                else:
+                    network_config['data_mode'] = mode
+            else:
+                network_config['data_mode'] = {'default': 'copy'}
+            
+            # Handle initial_state if present
+            if 'initial_state' in config:
+                network_config['networks'][0]['initial_state'] = config['initial_state']
+            
+            # Copy over other top-level fields
+            for key in ['resources', 'templates', 'functions', 'execution', 'metadata']:
+                if key in config:
+                    network_config[key] = config[key]
+            
+            return network_config
+        
+        return config
+    
+    def _add_type_to_transforms(self, arcs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Add type field to arc transforms if missing.
+        
+        Args:
+            arcs: List of arc configurations.
+            
+        Returns:
+            Updated arc configurations.
+        """
+        updated_arcs = []
+        for arc in arcs:
+            arc_copy = arc.copy()
+            if 'transform' in arc_copy and isinstance(arc_copy['transform'], dict):
+                if 'type' not in arc_copy['transform']:
+                    # Infer type from the content
+                    if 'code' in arc_copy['transform']:
+                        arc_copy['transform']['type'] = 'inline'
+                    elif 'lambda' in arc_copy['transform']:
+                        arc_copy['transform']['type'] = 'lambda'
+                    elif 'module' in arc_copy['transform']:
+                        arc_copy['transform']['type'] = 'module'
+                    else:
+                        arc_copy['transform']['type'] = 'inline'
+            updated_arcs.append(arc_copy)
+        return updated_arcs
     
     def _transform_network_arcs(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Transform network-level arcs format to state-level arcs format.

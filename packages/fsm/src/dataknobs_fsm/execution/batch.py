@@ -173,7 +173,13 @@ class BatchExecutor:
             
             # Create context for this item
             context = context_template.clone()
-            context.data = item
+            # Convert Record to dict if needed
+            if hasattr(item, 'to_dict'):
+                context.data = item.to_dict()
+            elif hasattr(item, '__dict__'):
+                context.data = dict(item.__dict__)
+            else:
+                context.data = item
             
             # Reset to initial state
             initial_state = self._find_initial_state()
@@ -184,16 +190,21 @@ class BatchExecutor:
             try:
                 success, result = self.engine.execute(
                     context,
-                    item,
+                    None,  # Data is already in context
                     max_transitions
                 )
+                
+                # Store final state and path in metadata
+                metadata = context.metadata.copy() if context.metadata else {}
+                metadata['final_state'] = context.current_state
+                metadata['path'] = context.history if hasattr(context, 'history') else []
                 
                 batch_result = BatchResult(
                     index=i,
                     success=success,
                     result=result,
                     processing_time=time.time() - start_time,
-                    metadata=context.metadata
+                    metadata=metadata
                 )
                 
                 if success:
@@ -305,7 +316,13 @@ class BatchExecutor:
         
         # Create context for this item
         context = context_template.clone()
-        context.data = item
+        # Convert Record to dict if needed
+        if hasattr(item, 'to_dict'):
+            context.data = item.to_dict()
+        elif hasattr(item, '__dict__'):
+            context.data = dict(item.__dict__)
+        else:
+            context.data = item
         
         # Get resource from pool if available
         if self.enable_resource_pooling:
@@ -320,16 +337,21 @@ class BatchExecutor:
             # Execute
             success, result = self.engine.execute(
                 context,
-                item,
+                None,  # Data is already in context
                 max_transitions
             )
+            
+            # Store final state and path in metadata
+            metadata = context.metadata.copy() if context.metadata else {}
+            metadata['final_state'] = context.current_state
+            metadata['path'] = context.history if hasattr(context, 'history') else []
             
             return BatchResult(
                 index=index,
                 success=success,
                 result=result,
                 processing_time=time.time() - start_time,
-                metadata=context.metadata
+                metadata=metadata
             )
             
         except Exception as e:

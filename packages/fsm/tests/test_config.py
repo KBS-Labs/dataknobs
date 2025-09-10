@@ -433,10 +433,38 @@ class TestFSMBuilder:
         )
         
         builder = FSMBuilder()
-        # This will fail without actual resource implementation
-        # but tests the builder structure
-        with pytest.raises((ImportError, ValueError)):
-            fsm = builder.build(config)
+        # Test that building with valid resources works
+        fsm = builder.build(config)
+        assert fsm is not None
+        assert fsm.name == "test"
+        
+        # Test that custom resource without class raises error
+        invalid_config = FSMConfig(
+            name="test",
+            resources=[
+                ResourceConfig(
+                    name="invalid_resource",
+                    type="custom",  # Custom type requires 'class' in config
+                    config={},  # Missing 'class' should cause error
+                ),
+            ],
+            networks=[
+                NetworkConfig(
+                    name="main",
+                    states=[
+                        StateConfig(
+                            name="start",
+                            is_start=True,
+                            arcs=[],
+                        ),
+                    ],
+                ),
+            ],
+            main_network="main",
+        )
+        
+        with pytest.raises(ValueError, match="Custom resource requires 'class'"):
+            builder.build(invalid_config)
 
     def test_validate_completeness(self):
         """Test FSM completeness validation."""

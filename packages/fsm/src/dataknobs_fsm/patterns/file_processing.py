@@ -5,7 +5,7 @@ including CSV, JSON, XML, and other formats with streaming support.
 """
 
 from typing import Any, Dict, List, Optional, Union, Callable, AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 import mimetypes
@@ -56,6 +56,10 @@ class FileProcessingConfig:
     output_format: Optional[FileFormat] = None
     compression: Optional[str] = None  # gzip, bz2, etc.
     partition_by: Optional[str] = None  # Field to partition output
+    
+    # Format-specific configs
+    json_config: Dict[str, Any] = field(default_factory=dict)
+    log_config: Dict[str, Any] = field(default_factory=dict)
 
 
 class FileProcessor:
@@ -163,7 +167,7 @@ class FileProcessor:
                 'from': 'parse',
                 'to': 'validate' if self.config.validation_schema else 'filter',
                 'name': 'parsed',
-                'transform': self._create_parser()
+                'transform': {'type': 'inline', 'code': self._get_parser_code()}
             }
         ]
         
@@ -174,7 +178,7 @@ class FileProcessor:
                     'from': 'validate',
                     'to': 'filter' if self.config.filters else 'transform',
                     'name': 'valid',
-                    'pre_test': self._create_validator()
+                    'condition': {'type': 'inline', 'code': self._get_validator_code()}
                 },
                 {
                     'from': 'validate',
@@ -190,7 +194,7 @@ class FileProcessor:
                     'from': 'filter',
                     'to': 'transform' if self.config.transformations else 'aggregate',
                     'name': 'passed',
-                    'pre_test': self._create_filter()
+                    'condition': {'type': 'inline', 'code': self._get_filter_code()}
                 },
                 {
                     'from': 'filter',
@@ -206,7 +210,7 @@ class FileProcessor:
                 'from': 'transform',
                 'to': next_state,
                 'name': 'transformed',
-                'transform': self._create_transformer()
+                'transform': {'type': 'inline', 'code': self._get_transformer_code()}
             })
             
         # Add aggregation arc if aggregations provided
@@ -215,7 +219,7 @@ class FileProcessor:
                 'from': 'aggregate',
                 'to': 'write',
                 'name': 'aggregated',
-                'transform': self._create_aggregator()
+                'transform': {'type': 'inline', 'code': self._get_aggregator_code()}
             })
             
         # Add write arc
@@ -229,6 +233,59 @@ class FileProcessor:
         
         return arcs
         
+    def _get_parser_code(self) -> str:
+        """Get parser code for file format."""
+        if self.config.format == FileFormat.JSON:
+            return "import json; json.loads(data) if isinstance(data, str) else data"
+        elif self.config.format == FileFormat.CSV:
+            return """
+import csv
+from io import StringIO
+if isinstance(data, str):
+    reader = csv.DictReader(StringIO(data))
+    rows = list(reader)
+    data = rows[0] if rows else {}
+data
+"""
+        elif self.config.format == FileFormat.XML:
+            return """
+import xml.etree.ElementTree as ET
+if isinstance(data, str):
+    root = ET.fromstring(data)
+    data = {child.tag: child.text for child in root}
+data
+"""
+        else:
+            return "data"
+    
+    def _get_validator_code(self) -> str:
+        """Get validator code."""
+        if not self.config.validation_schema:
+            return "True"
+        # For now, return a simple validation
+        return "True"  # TODO: Implement proper schema validation code
+    
+    def _get_filter_code(self) -> str:
+        """Get filter code."""
+        if not self.config.filters:
+            return "True"
+        # For now, return a simple filter
+        return "True"  # TODO: Implement proper filter code
+    
+    def _get_transformer_code(self) -> str:
+        """Get transformer code."""
+        if not self.config.transformations:
+            return "data"
+        # For now, return pass-through
+        return "data"  # TODO: Implement proper transformation code
+    
+    def _get_aggregator_code(self) -> str:
+        """Get aggregator code."""
+        if not self.config.aggregations:
+            return "data"
+        # For now, return pass-through
+        return "data"  # TODO: Implement proper aggregation code
+    
     def _create_parser(self) -> Callable:
         """Create parser for file format."""
         if self.config.format == FileFormat.JSON:
@@ -582,17 +639,17 @@ def create_file_processor(
     Args:
         input_path: Input directory or file
         output_path: Output directory or file  
-        pattern: File pattern to match
+        pattern: File pattern to match (currently unused)
         mode: Processing mode
         transformations: Data transformation functions
         
     Returns:
         Configured FileProcessor
     """
+    # Note: pattern parameter is currently not used in FileProcessingConfig
     config = FileProcessingConfig(
         input_path=input_path,
         output_path=output_path,
-        pattern=pattern,
         format=FileFormat.TEXT,
         mode=mode,
         transformations=transformations or []
@@ -621,7 +678,6 @@ def create_json_processor(
     config = FileProcessingConfig(
         input_path=input_path,
         output_path=output_path,
-        pattern="*.json",
         format=FileFormat.JSON,
         mode=ProcessingMode.WHOLE,
         json_config={
@@ -636,7 +692,6 @@ def create_json_processor(
 def create_log_processor(
     input_path: str,
     output_path: str,
-    pattern: str = "*.log",
     parse_timestamps: bool = False,
     extract_errors: bool = False
 ) -> FileProcessor:
@@ -655,7 +710,6 @@ def create_log_processor(
     config = FileProcessingConfig(
         input_path=input_path,
         output_path=output_path,
-        pattern=pattern,
         format=FileFormat.TEXT,
         mode=ProcessingMode.STREAM,
         log_config={

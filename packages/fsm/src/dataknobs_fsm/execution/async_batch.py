@@ -123,12 +123,28 @@ class AsyncBatchExecutor:
             
             # Create context for this item
             context = context_template.clone()
-            context.data = item
+            # Convert Record to dict if needed
+            if hasattr(item, 'to_dict'):
+                context.data = item.to_dict()
+            elif hasattr(item, '__dict__'):
+                context.data = dict(item.__dict__)
+            else:
+                context.data = item
             
             # Reset to initial state
             initial_state = self._find_initial_state()
             if initial_state:
                 context.set_state(initial_state)
+            else:
+                # If no initial state found, try to get from first network
+                if self.fsm.networks:
+                    first_network = next(iter(self.fsm.networks.values()))
+                    if hasattr(first_network, 'states') and first_network.states:
+                        # Find a state marked as is_start
+                        for state in first_network.states.values():
+                            if getattr(state, 'is_start', False):
+                                context.set_state(state.name)
+                                break
             
             try:
                 # Execute in thread pool to avoid blocking
@@ -137,16 +153,21 @@ class AsyncBatchExecutor:
                     None,
                     self.engine.execute,
                     context,
-                    item,
+                    None,  # Data is already in context
                     max_transitions
                 )
+                
+                # Store final state and path in metadata
+                metadata = context.metadata.copy() if context.metadata else {}
+                metadata['final_state'] = context.current_state
+                metadata['path'] = context.history if hasattr(context, 'history') else []
                 
                 batch_result = BatchResult(
                     index=index,
                     success=success,
                     result=result,
                     processing_time=time.time() - start_time,
-                    metadata=context.metadata
+                    metadata=metadata
                 )
                 
                 # Update progress
@@ -224,15 +245,16 @@ class AsyncBatchExecutor:
             Initial state name or None.
         """
         # Get main network
-        main_network = getattr(self.fsm, 'main_network', None)
-        if isinstance(main_network, str):
-            if main_network in self.fsm.networks:
-                network = self.fsm.networks[main_network]
-                if hasattr(network, 'initial_states') and network.initial_states:
-                    return next(iter(network.initial_states))
-        elif main_network and hasattr(main_network, 'initial_states'):
-            if main_network.initial_states:
-                return next(iter(main_network.initial_states))
+        main_network_name = getattr(self.fsm, 'main_network', None)
+        if main_network_name and main_network_name in self.fsm.networks:
+            network = self.fsm.networks[main_network_name]
+            # Check for initial_states (set) or get_initial_states() method
+            if hasattr(network, 'initial_states') and network.initial_states:
+                return next(iter(network.initial_states))
+            elif hasattr(network, 'get_initial_states'):
+                initial_states = network.get_initial_states()
+                if initial_states:
+                    return next(iter(initial_states))
         
         # Fallback: check all networks
         for network in self.fsm.networks.values():

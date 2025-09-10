@@ -79,6 +79,10 @@ class DatabaseFetch(ITransformFunction):
         except Exception as e:
             raise TransformError(f"Database query failed: {e}")
 
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation."""
+        return f"Fetch data from {self.resource_name} using query: {self.query[:50]}..."
+
 
 class DatabaseUpsert(ITransformFunction):
     """Upsert data into a database table."""
@@ -148,6 +152,10 @@ class DatabaseUpsert(ITransformFunction):
         
         except Exception as e:
             raise TransformError(f"Database upsert failed: {e}")
+    
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation."""
+        return f"Upsert data into {self.table} table in {self.resource_name}"
 
 
 class BatchCommit(ITransformFunction):
@@ -210,6 +218,10 @@ class BatchCommit(ITransformFunction):
         
         except Exception as e:
             raise TransformError(f"Batch commit failed: {e}")
+    
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation."""
+        return f"Commit batch to {self.resource_name} (batch_size={self.batch_size})"
 
 
 class DatabaseQuery(ITransformFunction):
@@ -269,6 +281,10 @@ class DatabaseQuery(ITransformFunction):
         
         except Exception as e:
             raise TransformError(f"Query execution failed: {e}")
+    
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation."""
+        return f"Execute dynamic query from field '{self.query_field}'"
 
 
 class DatabaseTransaction(ITransformFunction):
@@ -341,6 +357,10 @@ class DatabaseTransaction(ITransformFunction):
         
         except Exception as e:
             raise TransformError(f"Transaction {self.action} failed: {e}")
+    
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation."""
+        return f"Database transaction: {self.action}"
 
 
 class DatabaseBulkInsert(ITransformFunction):
@@ -415,6 +435,10 @@ class DatabaseBulkInsert(ITransformFunction):
         
         except Exception as e:
             raise TransformError(f"Bulk insert failed: {e}")
+    
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation."""
+        return f"Bulk insert into {self.table} table (chunk_size={self.chunk_size})"
 
 
 # Convenience functions for creating database functions

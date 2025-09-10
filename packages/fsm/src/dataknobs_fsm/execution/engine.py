@@ -127,8 +127,9 @@ class ExecutionEngine:
         """
         transitions = 0
         last_state = None
+        last_data_hash = None
         stuck_count = 0
-        max_stuck_iterations = 3  # Max times we can be in same state
+        max_stuck_iterations = 3  # Max times we can be in same state without data changes
         
         while transitions < max_transitions:
             # Check if in final state
@@ -136,13 +137,18 @@ class ExecutionEngine:
                 return True, context.data
             
             # Check for stuck state (infinite loop protection)
-            if context.current_state == last_state:
+            # Only consider it stuck if both state AND data haven't changed
+            import json
+            current_data_hash = json.dumps(context.data, sort_keys=True) if context.data else ""
+            
+            if context.current_state == last_state and current_data_hash == last_data_hash:
                 stuck_count += 1
                 if stuck_count >= max_stuck_iterations:
                     return False, f"Stuck in state '{context.current_state}' - possible infinite loop"
             else:
                 stuck_count = 0
                 last_state = context.current_state
+                last_data_hash = current_data_hash
             
             # Execute state functions (validators and transforms) before evaluating transitions
             # This ensures that state functions can update the data that arc conditions depend on
@@ -606,7 +612,20 @@ class ExecutionEngine:
         )
         
         try:
-            result = func.execute(context.data, func_context)
+            # Call the function appropriately based on its interface
+            if hasattr(func, 'test'):
+                # IStateTestFunction - create state-like object
+                from types import SimpleNamespace
+                state = SimpleNamespace(data=context.data)
+                result = func.test(state)
+            elif hasattr(func, 'execute'):
+                # Legacy function with execute method
+                result = func.execute(context.data, func_context)
+            elif callable(func):
+                # Direct callable
+                result = func(context.data, func_context)
+            else:
+                return False
             return bool(result)
         except Exception:
             return False
@@ -667,11 +686,24 @@ class ExecutionEngine:
         Returns:
             Name of initial state or None.
         """
-        # Get main network
+        # Try to get main_network attribute first (for core FSM)
+        main_network_name = getattr(self.fsm, 'main_network', None)
+        if main_network_name and main_network_name in self.fsm.networks:
+            network = self.fsm.networks[main_network_name]
+            if network.initial_states:
+                return next(iter(network.initial_states))
+        
+        # Fallback to fsm.name (for FSMWrapper compatibility)
         if self.fsm.name in self.fsm.networks:
             network = self.fsm.networks[self.fsm.name]
             if network.initial_states:
                 return next(iter(network.initial_states))
+        
+        # Last resort: check all networks for any initial state
+        for network in self.fsm.networks.values():
+            if network.initial_states:
+                return next(iter(network.initial_states))
+        
         return None
     
     def _is_final_state(self, state_name: Optional[str]) -> bool:
@@ -730,7 +762,13 @@ class ExecutionEngine:
         if context.network_stack:
             network_name = context.network_stack[-1][0]
         else:
-            network_name = self.fsm.name
+            # Get the main network name - handle both wrapper and core FSM
+            if hasattr(self.fsm, 'core_fsm'):
+                # This is a wrapper FSM
+                network_name = self.fsm.core_fsm.main_network
+            else:
+                # This is a core FSM
+                network_name = self.fsm.main_network
         
         return self.fsm.networks.get(network_name)
     

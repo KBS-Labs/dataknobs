@@ -197,7 +197,14 @@ class ArcExecution:
                         func_context
                     )
                 else:
-                    result = transform_func(data, func_context)
+                    # Call the transform function properly
+                    # Check if it has a transform method (wrapped function)
+                    if hasattr(transform_func, 'transform'):
+                        result = transform_func.transform(data, func_context)
+                    elif callable(transform_func):
+                        result = transform_func(data, func_context)
+                    else:
+                        raise ValueError(f"Transform {self.arc_def.transform} is not callable")
             else:
                 # No transform, pass data through
                 result = data

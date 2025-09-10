@@ -20,6 +20,7 @@ from dataknobs_fsm.config.schema import (
     NetworkConfig,
     PushArcConfig,
     ResourceConfig,
+    ResourceType,
     StateConfig,
 )
 from dataknobs_fsm.core.arc import ArcDefinition, PushArc
@@ -256,7 +257,13 @@ class FSMBuilder:
         for state_config in network_config.states:
             state_def = self._build_state(state_config, fsm_config)
             state_defs[state_def.name] = state_def
-            network.add_state(state_def)
+            # Pass initial and final flags based on state type
+            from dataknobs_fsm.core.state import StateType
+            network.add_state(
+                state_def,
+                initial=(state_def.type == StateType.START),
+                final=(state_def.type == StateType.END)
+            )
         
         # Create arcs
         for state_config in network_config.states:
@@ -296,8 +303,8 @@ class FSMBuilder:
         """
         # Build schema if provided
         schema = None
-        if state_config.schema:
-            schema = self._build_schema(state_config.schema)
+        if state_config.data_schema:
+            schema = self._build_schema(state_config.data_schema)
         
         # Resolve validators
         validators = []
@@ -322,8 +329,11 @@ class FSMBuilder:
         state_def.schema = schema
         state_def.validation_functions = validators
         state_def.transform_functions = transforms
+        # Look up actual resource configs from the FSM config
+        resource_map = {res.name: res for res in fsm_config.resources}
         state_def.resource_requirements = [
-            ResourceConfig(name=r) for r in state_config.resources
+            resource_map[r] if r in resource_map else ResourceConfig(name=r, type=ResourceType.CUSTOM)
+            for r in state_config.resources
         ]
         state_def.data_mode = data_mode
         state_def.type = StateType.START if state_config.is_start else (
@@ -363,13 +373,36 @@ class FSMBuilder:
         
         # Create appropriate arc type
         if isinstance(arc_config, PushArcConfig):
+            # For conditions and transforms, use the registered function name
+            pre_test_name = None
+            if condition:
+                if hasattr(condition, 'name'):
+                    pre_test_name = condition.name
+                else:
+                    # Search for the function in the registry
+                    for fname, f in self._function_registry.items():
+                        if f == condition:
+                            pre_test_name = fname
+                            break
+            
+            transform_name = None
+            if transform:
+                if hasattr(transform, 'name'):
+                    transform_name = transform.name
+                else:
+                    # Search for the function in the registry
+                    for fname, f in self._function_registry.items():
+                        if f == transform:
+                            transform_name = fname
+                            break
+            
             # Push arc to another network
             arc = PushArc(
                 target_state=arc_config.target,  # Even push arcs have a target state
                 target_network=arc_config.target_network,
                 return_state=arc_config.return_state,
-                pre_test=condition.name if condition and hasattr(condition, 'name') else None,
-                transform=transform.name if transform and hasattr(transform, 'name') else None,
+                pre_test=pre_test_name,
+                transform=transform_name,
                 priority=arc_config.priority,
                 metadata=arc_config.metadata,
             )
@@ -378,10 +411,33 @@ class FSMBuilder:
             return arc
         else:
             # Regular arc within network
+            # For conditions and transforms, use the registered function name
+            pre_test_name = None
+            if condition:
+                if hasattr(condition, 'name'):
+                    pre_test_name = condition.name
+                else:
+                    # Search for the function in the registry
+                    for fname, f in self._function_registry.items():
+                        if f == condition:
+                            pre_test_name = fname
+                            break
+            
+            transform_name = None
+            if transform:
+                if hasattr(transform, 'name'):
+                    transform_name = transform.name
+                else:
+                    # Search for the function in the registry
+                    for fname, f in self._function_registry.items():
+                        if f == transform:
+                            transform_name = fname
+                            break
+            
             arc = ArcDefinition(
                 target_state=arc_config.target,
-                pre_test=condition.name if condition and hasattr(condition, 'name') else None,
-                transform=transform.name if transform and hasattr(transform, 'name') else None,
+                pre_test=pre_test_name,
+                transform=transform_name,
                 priority=arc_config.priority,
                 metadata=arc_config.metadata,
             )
@@ -507,7 +563,7 @@ class FSMBuilder:
                 # Wrap lambda in assignment to make it accessible
                 exec(f"func = {code}", namespace)
                 func = namespace['func']
-            else:
+            elif 'def ' in code:
                 # Execute code and find function
                 exec(code, namespace)
                 # Find the function in namespace
@@ -515,6 +571,56 @@ class FSMBuilder:
                 if not funcs:
                     raise ValueError("No function found in inline code")
                 func = funcs[0]
+            else:
+                # Assume it's an expression that transforms data
+                # Wrap it in a function
+                
+                # Handle semicolon-separated statements
+                if ';' in code:
+                    statements = [s.strip() for s in code.split(';')]
+                    # Last statement is likely the return value
+                    body_statements = statements[:-1]
+                    return_statement = statements[-1]
+                    
+                    if body_statements:
+                        body = '\n    '.join(body_statements)
+                        func_code = f"""
+def transform(data, context=None):
+    {body}
+    return {return_statement}
+"""
+                    else:
+                        func_code = f"""
+def transform(data, context=None):
+    return {return_statement}
+"""
+                else:
+                    # Check if code ends with a return value (common pattern)
+                    lines = code.strip().split('\n')
+                    if lines and not lines[-1].strip().startswith('return'):
+                        # Last line is likely the return value
+                        if len(lines) > 1:
+                            body = '\n    '.join(lines[:-1])
+                            return_line = lines[-1].strip()
+                            func_code = f"""
+def transform(data, context=None):
+    {body}
+    return {return_line}
+"""
+                        else:
+                            # Single line expression
+                            func_code = f"""
+def transform(data, context=None):
+    return {code}
+"""
+                    else:
+                        # Code already has return statement
+                        func_code = f"""
+def transform(data, context=None):
+    {code}
+"""
+                exec(func_code, namespace)
+                func = namespace['transform']
         
         else:
             raise ValueError(f"Unknown function type: {func_ref.type}")
@@ -570,35 +676,53 @@ class FSMBuilder:
             def __call__(self, *args, **kwargs):
                 return self.func(*args, **kwargs)
         
+        # Helper function to check if function expects data directly
+        import inspect
+        sig = inspect.signature(func)
+        params = list(sig.parameters.keys())
+        expects_data_directly = params and params[0] == 'data'
+        
         # Add interface methods
         if interface == IValidationFunction:
             FunctionWrapper.validate = lambda self, data: self.func(data)
-        elif interface == ITransformFunction:
-            # Create a state-like object for the lambda that has a 'data' attribute
-            def transform_wrapper(self, data, context=None):
-                # Create a simple state object with a data attribute
+        elif interface == ITransformFunction or interface == IStateTestFunction:
+            # Both transform and test functions have similar patterns
+            if expects_data_directly:
+                # Inline function expects data directly
+                if interface == ITransformFunction:
+                    def wrapper(self, data, context=None):
+                        return self.func(data, context)
+                    FunctionWrapper.transform = wrapper
+                else:  # IStateTestFunction
+                    def wrapper(self, state):
+                        # Extract data from state if it's an object
+                        data = state.data if hasattr(state, 'data') else state
+                        return self.func(data, None)
+                    FunctionWrapper.test = wrapper
+                
+                # Common callable for both
+                def call_wrapper(self, data, context=None):
+                    return self.func(data, context)
+                FunctionWrapper.__call__ = call_wrapper
+            else:
+                # Function expects state object
                 class State:
                     def __init__(self, data):
                         self.data = data
-                state = State(data)
-                return self.func(state)
-            FunctionWrapper.transform = transform_wrapper
-            # Also make it callable directly
-            def call_wrapper(self, data, context=None):
-                class State:
-                    def __init__(self, data):
-                        self.data = data
-                state = State(data)
-                return self.func(state)
-            FunctionWrapper.__call__ = call_wrapper
-        elif interface == IStateTestFunction:
-            FunctionWrapper.test = lambda self, state: self.func(state)
-            # Also make it callable directly for the async engine
-            def test_call_wrapper(self, data, context=None):
-                from types import SimpleNamespace
-                state = SimpleNamespace(data=data)
-                return self.func(state)
-            FunctionWrapper.__call__ = test_call_wrapper
+                
+                if interface == ITransformFunction:
+                    def wrapper(self, data, context=None):
+                        return self.func(State(data))
+                    FunctionWrapper.transform = wrapper
+                else:  # IStateTestFunction  
+                    def wrapper(self, state):
+                        return self.func(state)
+                    FunctionWrapper.test = wrapper
+                
+                # Common callable for both
+                def call_wrapper(self, data, context=None):
+                    return self.func(State(data))
+                FunctionWrapper.__call__ = call_wrapper
         
         return FunctionWrapper(func)
 
@@ -678,18 +802,24 @@ class FSM:
             config: FSM configuration.
             resource_manager: Resource manager.
             transaction_manager: Optional transaction manager.
-            function_registry: Optional function registry.
+            function_registry: Optional function registry (dict of callables).
         """
         self.core_fsm = core_fsm
         self.config = config
         self.resource_manager = resource_manager
-        self.function_registry = function_registry or {}
+        # Use the core FSM's FunctionRegistry instead of storing separately
+        self.function_registry = core_fsm.function_registry
         self.transaction_manager = transaction_manager
+        
+        # If additional functions were provided, register them
+        if function_registry:
+            for name, func in function_registry.items():
+                self.function_registry.register(name, func)
         
         # Convenience properties
         self.networks = core_fsm.networks
         self.main_network = self.networks.get(core_fsm.main_network) if core_fsm.main_network else None
-        self.name = core_fsm.main_network  # ExecutionEngine expects this
+        self.name = core_fsm.name  # ExecutionEngine expects this
         
         # Engine will be created on demand
         self._engine: Optional[ExecutionEngine] = None

@@ -68,10 +68,10 @@ def create(template: str, output: str, format: str):
         'etl': {
             'name': 'ETL_Pipeline',
             'data_mode': 'copy',
-            'resources': {
-                'source_db': {'type': 'sqlite', 'path': 'source.db'},
-                'target_db': {'type': 'sqlite', 'path': 'target.db'}
-            },
+            'resources': [
+                {'name': 'source_db', 'type': 'database', 'provider': 'sqlite', 'path': 'source.db'},
+                {'name': 'target_db', 'type': 'database', 'provider': 'sqlite', 'path': 'target.db'}
+            ],
             'states': [
                 {'name': 'extract', 'is_start': True, 'resources': ['source_db']},
                 {'name': 'transform'},
@@ -154,11 +154,12 @@ def validate(config_file: str, verbose: bool):
         ) as progress:
             task = progress.add_task("Loading configuration...", total=None)
             
-            config_dict = loader.load_file(config_file)
+            config = loader.load_from_file(config_file)
             progress.update(task, description="Validating configuration...")
             
-            validator = ConfigValidator()
-            is_valid, errors = validator.validate(config_dict)
+            # Configuration is already validated by loading it
+            is_valid = True
+            errors = []
             
             progress.stop()
         
@@ -167,15 +168,22 @@ def validate(config_file: str, verbose: bool):
             
             if verbose:
                 console.print("\n[bold]Configuration Details:[/bold]")
-                console.print(f"  Name: {config_dict.get('name')}")
-                console.print(f"  Data Mode: {config_dict.get('data_mode')}")
-                console.print(f"  States: {len(config_dict.get('states', []))}")
-                console.print(f"  Arcs: {len(config_dict.get('arcs', []))}")
+                console.print(f"  Name: {config.name}")
+                console.print(f"  Data Mode: {config.data_mode}")
                 
-                if 'resources' in config_dict:
-                    console.print(f"  Resources: {len(config_dict['resources'])}")
-                if 'functions' in config_dict:
-                    console.print(f"  Functions: {len(config_dict['functions'])}")
+                # Count states and arcs across all networks
+                total_states = sum(len(net.states) for net in config.networks)
+                total_arcs = 0
+                for net in config.networks:
+                    for state in net.states:
+                        if hasattr(state, 'arcs') and state.arcs:
+                            total_arcs += len(state.arcs)
+                
+                console.print(f"  States: {total_states}")
+                console.print(f"  Arcs: {total_arcs}")
+                
+                if config.resources:
+                    console.print(f"  Resources: {len(config.resources)}")
         else:
             console.print(f"[red][/red] Configuration validation failed!")
             console.print("\n[bold red]Errors:[/bold red]")
@@ -196,96 +204,111 @@ def show(config_file: str, format: str):
     loader = ConfigLoader()
     
     try:
-        config_dict = loader.load_file(config_file)
+        config = loader.load_from_file(config_file)
         
         if format == 'tree':
-            tree = Tree(f"[bold]{config_dict['name']}[/bold]")
+            tree = Tree(f"[bold]{config.name}[/bold]")
             
-            states_branch = tree.add("States")
-            for state in config_dict.get('states', []):
-                state_label = state['name']
-                if state.get('is_start'):
-                    state_label += " [green](start)[/green]"
-                if state.get('is_end'):
-                    state_label += " [red](end)[/red]"
-                states_branch.add(state_label)
+            # Show networks
+            for network in config.networks:
+                network_branch = tree.add(f"Network: {network.name}")
+                
+                states_branch = network_branch.add("States")
+                for state in network.states:
+                    state_label = state.name
+                    if state.is_start:
+                        state_label += " [green](start)[/green]"
+                    if state.is_end:
+                        state_label += " [red](end)[/red]"
+                    states_branch.add(state_label)
+                
+                arcs_branch = network_branch.add("Arcs")
+                for state in network.states:
+                    if hasattr(state, 'arcs') and state.arcs:
+                        for arc in state.arcs:
+                            arc_label = f"{state.name} → {arc.target}"
+                            if hasattr(arc, 'name') and arc.name:
+                                arc_label += f" [{arc.name}]"
+                            arcs_branch.add(arc_label)
             
-            arcs_branch = tree.add("Arcs")
-            for arc in config_dict.get('arcs', []):
-                arc_label = f"{arc['from']} � {arc['to']} [{arc['name']}]"
-                arcs_branch.add(arc_label)
-            
-            if 'resources' in config_dict:
+            if config.resources:
                 resources_branch = tree.add("Resources")
-                for name, resource in config_dict['resources'].items():
-                    resources_branch.add(f"{name}: {resource.get('type', 'unknown')}")
+                for resource in config.resources:
+                    resources_branch.add(f"{resource.name}: {resource.type}")
             
             console.print(tree)
             
         elif format == 'table':
             # States table
-            states_table = Table(title=f"{config_dict['name']} - States")
+            states_table = Table(title=f"{config.name} - States")
+            states_table.add_column("Network", style="blue")
             states_table.add_column("Name", style="cyan")
             states_table.add_column("Type", style="green")
-            states_table.add_column("Resources")
             
-            for state in config_dict.get('states', []):
-                state_type = []
-                if state.get('is_start'):
-                    state_type.append("Start")
-                if state.get('is_end'):
-                    state_type.append("End")
-                if not state_type:
-                    state_type.append("Normal")
-                
-                resources = ', '.join(state.get('resources', []))
-                states_table.add_row(
-                    state['name'],
-                    ' '.join(state_type),
-                    resources or '-'
-                )
+            for network in config.networks:
+                for state in network.states:
+                    state_type = []
+                    if state.is_start:
+                        state_type.append("Start")
+                    if state.is_end:
+                        state_type.append("End")
+                    if not state_type:
+                        state_type.append("Normal")
+                    
+                    states_table.add_row(
+                        network.name,
+                        state.name,
+                        ' '.join(state_type)
+                    )
             
             console.print(states_table)
             
             # Arcs table
-            arcs_table = Table(title=f"{config_dict['name']} - Arcs")
+            arcs_table = Table(title=f"{config.name} - Arcs")
+            arcs_table.add_column("Network", style="blue")
             arcs_table.add_column("From", style="cyan")
             arcs_table.add_column("To", style="cyan")
             arcs_table.add_column("Name", style="yellow")
-            arcs_table.add_column("Conditions")
             
-            for arc in config_dict.get('arcs', []):
-                conditions = []
-                if 'pre_test' in arc:
-                    conditions.append('pre_test')
-                if 'post_test' in arc:
-                    conditions.append('post_test')
-                if 'transform' in arc:
-                    conditions.append('transform')
-                
-                arcs_table.add_row(
-                    arc['from'],
-                    arc['to'],
-                    arc['name'],
-                    ', '.join(conditions) or '-'
-                )
+            for network in config.networks:
+                for state in network.states:
+                    if hasattr(state, 'arcs') and state.arcs:
+                        for arc in state.arcs:
+                            arc_name = arc.name if hasattr(arc, 'name') and arc.name else '-'
+                            arcs_table.add_row(
+                                network.name,
+                                state.name,
+                                arc.target,
+                                arc_name
+                            )
             
             console.print(arcs_table)
             
         elif format == 'graph':
-            console.print("[yellow]Graph visualization requires graphviz[/yellow]")
-            console.print("\nMermaid diagram:")
-            console.print("```mermaid")
+            console.print("[yellow]Graph visualization (Mermaid format)[/yellow]")
+            console.print("\n```mermaid")
             console.print("graph TD")
             
-            for state in config_dict.get('states', []):
-                shape = "([{}])" if state.get('is_start') else \
-                        "(({}))" if state.get('is_end') else \
-                        "[{}]"
-                console.print(f"    {state['name']}{shape.format(state['name'])}")
-            
-            for arc in config_dict.get('arcs', []):
-                console.print(f"    {arc['from']} -->|{arc['name']}| {arc['to']}")
+            # Process all networks
+            for network in config.networks:
+                if len(config.networks) > 1:
+                    console.print(f"    subgraph {network.name}")
+                
+                for state in network.states:
+                    shape = "([{}])" if state.is_start else \
+                            "(({}))" if state.is_end else \
+                            "[{}]"
+                    console.print(f"    {state.name}{shape.format(state.name)}")
+                
+                # Collect arcs from states
+                for state in network.states:
+                    if hasattr(state, 'arcs') and state.arcs:
+                        for arc in state.arcs:
+                            arc_label = arc.name if hasattr(arc, 'name') and arc.name else "transition"
+                            console.print(f"    {state.name} -->|{arc_label}| {arc.target}")
+                
+                if len(config.networks) > 1:
+                    console.print("    end")
             
             console.print("```")
             
@@ -311,10 +334,6 @@ def execute(config_file: str, data: Optional[str], initial_state: Optional[str],
            timeout: Optional[float], output: Optional[str], verbose: bool):
     """Execute FSM with data"""
     
-    # Load configuration
-    loader = ConfigLoader()
-    config_dict = loader.load_file(config_file)
-    
     # Parse input data
     input_data = {}
     if data:
@@ -329,7 +348,7 @@ def execute(config_file: str, data: Optional[str], initial_state: Optional[str],
                 sys.exit(1)
     
     # Create and run FSM
-    fsm = SimpleFSM(config_dict)
+    fsm = SimpleFSM(config_file)
     
     with Progress(
         SpinnerColumn(),
@@ -346,10 +365,11 @@ def execute(config_file: str, data: Optional[str], initial_state: Optional[str],
             )
             progress.stop()
             
-            if result['success']:
+            if result.get('success', False):
                 console.print(f"[green][/green] Execution completed successfully!")
-                console.print(f"  Final state: {result['final_state']}")
-                console.print(f"  Transitions: {result['transition_count']}")
+                console.print(f"  Final state: {result.get('final_state', 'unknown')}")
+                path = result.get('path', [])
+                console.print(f"  Transitions: {len(path) - 1 if path else 0}")
                 
                 if verbose:
                     console.print("\n[bold]Execution Path:[/bold]")
@@ -391,10 +411,6 @@ def batch(config_file: str, data_file: str, batch_size: int, workers: int,
          output: Optional[str], progress: bool):
     """Execute FSM on batch data"""
     
-    # Load configuration
-    loader = ConfigLoader()
-    config_dict = loader.load_file(config_file)
-    
     # Load batch data
     with open(data_file, 'r') as f:
         if data_file.endswith('.jsonl'):
@@ -406,7 +422,7 @@ def batch(config_file: str, data_file: str, batch_size: int, workers: int,
                 sys.exit(1)
     
     # Create FSM
-    fsm = SimpleFSM(config_dict)
+    fsm = SimpleFSM(config_file)
     
     console.print(f"Processing {len(batch_data)} items...")
     console.print(f"  Batch size: {batch_size}")
@@ -464,12 +480,8 @@ def stream(config_file: str, source: str, sink: Optional[str],
           chunk_size: int, format: str):
     """Process streaming data through FSM"""
     
-    # Load configuration
-    loader = ConfigLoader()
-    config_dict = loader.load_file(config_file)
-    
     # Create FSM
-    fsm = SimpleFSM(config_dict)
+    fsm = SimpleFSM(config_file)
     
     console.print(f"Starting stream processing...")
     console.print(f"  Source: {source}")
@@ -525,7 +537,7 @@ def run(config_file: str, data: Optional[str], breakpoint: tuple,
     
     # Load configuration
     loader = ConfigLoader()
-    config_dict = loader.load_file(config_file)
+    config = loader.load_from_file(config_file)
     
     # Parse input data
     input_data = {}
@@ -610,11 +622,11 @@ def history():
     pass
 
 
-@history.command()
+@history.command(name='list')  # Explicitly set command name
 @click.option('--fsm-name', '-n', help='Filter by FSM name')
 @click.option('--limit', '-l', type=int, default=10, help='Number of entries to show')
 @click.option('--format', '-f', type=click.Choice(['table', 'json']), default='table')
-def list(fsm_name: Optional[str], limit: int, format: str):
+def list_history(fsm_name: Optional[str], limit: int, format: str):
     """List execution history"""
     
     # Create history manager with file backend
