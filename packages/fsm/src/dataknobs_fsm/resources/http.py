@@ -161,7 +161,7 @@ class HTTPServiceResource(BaseResourceProvider):
             raise ResourceError(
                 f"Failed to acquire HTTP session: {e}",
                 resource_name=self.name
-            )
+            ) from e
     
     def release(self, resource: Any) -> None:
         """Release an HTTP session.
@@ -311,7 +311,7 @@ class HTTPServiceResource(BaseResourceProvider):
                         f"HTTP {e.code}: {e.reason}",
                         resource_name=self.name,
                         operation=f"{method} {path}"
-                    )
+                    ) from e
                 # Server error, retry
                 if attempt < session.max_retries - 1:
                     time.sleep(session.retry_delay * (attempt + 1))
@@ -362,8 +362,8 @@ class HTTPServiceResource(BaseResourceProvider):
             Response dictionary.
         """
         if session is None:
-            with self.session_context() as session:
-                return self._request(session, "GET", path, **kwargs)
+            with self.session_context() as ctx_session:
+                return self._request(ctx_session, "GET", path, **kwargs)
         return self._request(session, "GET", path, **kwargs)
     
     def post(
@@ -385,8 +385,8 @@ class HTTPServiceResource(BaseResourceProvider):
             Response dictionary.
         """
         if session is None:
-            with self.session_context() as session:
-                return self._request(session, "POST", path, data, **kwargs)
+            with self.session_context() as ctx_session:
+                return self._request(ctx_session, "POST", path, data, **kwargs)
         return self._request(session, "POST", path, data, **kwargs)
     
     def put(
@@ -408,8 +408,8 @@ class HTTPServiceResource(BaseResourceProvider):
             Response dictionary.
         """
         if session is None:
-            with self.session_context() as session:
-                return self._request(session, "PUT", path, data, **kwargs)
+            with self.session_context() as ctx_session:
+                return self._request(ctx_session, "PUT", path, data, **kwargs)
         return self._request(session, "PUT", path, data, **kwargs)
     
     def delete(
@@ -429,6 +429,6 @@ class HTTPServiceResource(BaseResourceProvider):
             Response dictionary.
         """
         if session is None:
-            with self.session_context() as session:
-                return self._request(session, "DELETE", path, **kwargs)
+            with self.session_context() as ctx_session:
+                return self._request(ctx_session, "DELETE", path, **kwargs)
         return self._request(session, "DELETE", path, **kwargs)

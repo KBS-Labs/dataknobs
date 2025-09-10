@@ -101,8 +101,8 @@ class OpenAIProvider(AsyncLLMProvider):
                 timeout=self.config.timeout
             )
             self._is_initialized = True
-        except ImportError:
-            raise ImportError("openai package not installed. Install with: pip install openai")
+        except ImportError as e:
+            raise ImportError("openai package not installed. Install with: pip install openai") from e
             
     async def close(self) -> None:
         """Close OpenAI client."""
@@ -283,8 +283,8 @@ class AnthropicProvider(AsyncLLMProvider):
                 timeout=self.config.timeout
             )
             self._is_initialized = True
-        except ImportError:
-            raise ImportError("anthropic package not installed. Install with: pip install anthropic")
+        except ImportError as e:
+            raise ImportError("anthropic package not installed. Install with: pip install anthropic") from e
             
     async def close(self) -> None:
         """Close Anthropic client."""
@@ -469,8 +469,8 @@ class OllamaProvider(AsyncLLMProvider):
                 timeout=aiohttp.ClientTimeout(total=self.config.timeout)
             )
             self._is_initialized = True
-        except ImportError:
-            raise ImportError("aiohttp package not installed. Install with: pip install aiohttp")
+        except ImportError as e:
+            raise ImportError("aiohttp package not installed. Install with: pip install aiohttp") from e
             
     async def close(self) -> None:
         """Close Ollama client."""
@@ -690,8 +690,8 @@ class HuggingFaceProvider(AsyncLLMProvider):
                 timeout=aiohttp.ClientTimeout(total=self.config.timeout)
             )
             self._is_initialized = True
-        except ImportError:
-            raise ImportError("aiohttp package not installed. Install with: pip install aiohttp")
+        except ImportError as e:
+            raise ImportError("aiohttp package not installed. Install with: pip install aiohttp") from e
             
     async def close(self) -> None:
         """Close HuggingFace client."""

@@ -142,7 +142,7 @@ class ArcExecution:
                 f"Pre-test execution failed: {e}",
                 from_state=self.source_state,
                 to_state=self.arc_def.target_state
-            )
+            ) from e
     
     def execute(
         self,
@@ -222,7 +222,7 @@ class ArcExecution:
                 f"Arc execution failed: {e}",
                 from_state=self.source_state,
                 to_state=self.arc_def.target_state
-            )
+            ) from e
         finally:
             elapsed = time.time() - start_time
             self.total_execution_time += elapsed

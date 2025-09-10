@@ -56,7 +56,7 @@ class DatabaseResourceAdapter(BaseResourceProvider):
                 f"Failed to initialize database backend '{self.backend}': {e}",
                 resource_name=self.name,
                 operation="initialize"
-            )
+            ) from e
     
     def acquire(self, **kwargs) -> SyncDatabase:
         """Acquire database connection/instance.
@@ -93,7 +93,7 @@ class DatabaseResourceAdapter(BaseResourceProvider):
                 f"Failed to acquire database resource: {e}",
                 resource_name=self.name,
                 operation="acquire"
-            )
+            ) from e
     
     def release(self, resource: Any) -> None:
         """Release database resource.

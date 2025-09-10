@@ -71,7 +71,7 @@ class PromptBuilder(ITransformFunction):
         try:
             prompt = self.template.format(**variables)
         except KeyError as e:
-            raise TransformFunctionError(f"Missing variable for prompt: {e}")
+            raise TransformFunctionError(f"Missing variable for prompt: {e}") from e
         
         # Add format specification if provided
         if self.format_spec:
@@ -168,7 +168,7 @@ class LLMCaller(ITransformFunction):
                 }
         
         except Exception as e:
-            raise TransformFunctionError(f"LLM call failed: {e}")
+            raise TransformFunctionError(f"LLM call failed: {e}") from e
 
 
 class ResponseValidator(IValidationFunction):
@@ -245,7 +245,7 @@ class ResponseValidator(IValidationFunction):
                     try:
                         model(**parsed)
                     except ValidationError as e:
-                        raise ValidationFunctionError(f"Schema validation failed: {e}")
+                        raise ValidationFunctionError(f"Schema validation failed: {e}") from e
                 
                 # Check required fields
                 for field in self.required_fields:
@@ -253,7 +253,7 @@ class ResponseValidator(IValidationFunction):
                         raise ValidationFunctionError(f"Required field missing: {field}")
                 
             except json.JSONDecodeError as e:
-                raise ValidationFunctionError(f"Invalid JSON response: {e}")
+                raise ValidationFunctionError(f"Invalid JSON response: {e}") from e
         
         return True
 
@@ -326,7 +326,7 @@ class FunctionCaller(ITransformFunction):
             }
         
         except Exception as e:
-            raise TransformFunctionError(f"Function call failed: {e}")
+            raise TransformFunctionError(f"Function call failed: {e}") from e
 
 
 class ConversationManager(ITransformFunction):
@@ -458,7 +458,7 @@ class EmbeddingGenerator(ITransformFunction):
             }
         
         except Exception as e:
-            raise TransformFunctionError(f"Embedding generation failed: {e}")
+            raise TransformFunctionError(f"Embedding generation failed: {e}") from e
 
 
 # Convenience functions for creating LLM functions

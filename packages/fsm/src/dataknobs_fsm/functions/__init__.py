@@ -5,7 +5,7 @@ from dataknobs_fsm.functions.base import (
     CompositeFunction,
     ConfigurationError,
     ExecutionResult,
-    FSMException,
+    FSMError,
     Function,
     FunctionContext,
     FunctionError,
@@ -43,7 +43,7 @@ __all__ = [
     # Config classes
     "ResourceConfig",
     # Exceptions
-    "FSMException",
+    "FSMError",
     "ValidationError",
     "TransformError",
     "StateTransitionError",

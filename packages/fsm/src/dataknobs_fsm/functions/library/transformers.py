@@ -220,7 +220,7 @@ class TypeConverter(ITransformFunction):
                 if self.strict:
                     raise TransformError(
                         f"Failed to convert field '{field}': {e}"
-                    )
+                    ) from e
                 # Keep original value if conversion fails and not strict
         
         return result
@@ -300,7 +300,7 @@ class DataEnricher(ITransformFunction):
                 except Exception as e:
                     raise TransformError(
                         f"Failed to compute enrichment for '{field}': {e}"
-                    )
+                    ) from e
             else:
                 result[field] = value
         

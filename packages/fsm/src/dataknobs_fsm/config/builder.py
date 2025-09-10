@@ -33,7 +33,7 @@ from dataknobs_fsm.core.transactions import (
     BatchTransactionManager,
     ManualTransactionManager,
 )
-from dataknobs_fsm.core.fsm import FSM as CoreFSM
+from dataknobs_fsm.core.fsm import FSM as CoreFSMClass
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.execution.engine import ExecutionEngine
 from dataknobs_fsm.functions.base import (
@@ -100,7 +100,7 @@ class FSMBuilder:
         data_mode = CoreDataMode.SINGLE  # Default to SINGLE for now
         transaction_mode = CoreTransactionMode.NONE  # Default to NONE
         
-        fsm = CoreFSM(
+        fsm = CoreFSMClass(
             name=config.name,
             data_mode=data_mode,
             transaction_mode=transaction_mode,
@@ -671,7 +671,7 @@ def transform(data, context=None):
             def __init__(self, func):
                 self.func = func
             
-            def __call__(self, *args, **kwargs):
+            def __call__(self, *args: Any, **kwargs: Any) -> Any:
                 return self.func(*args, **kwargs)
         
         # Helper function to check if function expects data directly
@@ -683,7 +683,7 @@ def transform(data, context=None):
         # Add interface methods
         if interface == IValidationFunction:
             FunctionWrapper.validate = lambda self, data: self.func(data)
-        elif interface == ITransformFunction or interface == IStateTestFunction:
+        elif interface in (ITransformFunction, IStateTestFunction):
             # Both transform and test functions have similar patterns
             if expects_data_directly:
                 # Inline function expects data directly
@@ -787,7 +787,7 @@ class FSM:
 
     def __init__(
         self,
-        core_fsm: CoreFSM,
+        core_fsm: CoreFSMClass,
         config: FSMConfig,
         resource_manager: ResourceManager,
         transaction_manager: TransactionManager | None = None,
@@ -863,13 +863,12 @@ class FSM:
         Returns:
             Execution result.
         """
-        engine = self.get_engine()
-        
-        # Create execution context with initial data
-        context = ExecutionContext(
-            data_mode=self.core_fsm.data_mode,
-            transaction_mode=self.core_fsm.transaction_mode,
-        )
+        # TODO: Complete implementation - need to use engine and context for execution
+        # engine = self.get_engine()
+        # context = ExecutionContext(
+        #     data_mode=self.core_fsm.data_mode,
+        #     transaction_mode=self.core_fsm.transaction_mode,
+        # )
         
         # The engine would need to be updated to handle this properly
         # For now, this is a placeholder that shows the intended API

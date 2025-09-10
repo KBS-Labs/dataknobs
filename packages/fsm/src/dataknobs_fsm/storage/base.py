@@ -293,8 +293,8 @@ class BaseHistoryStorage(IHistoryStorage):
         # Restore steps from paths
         # This is simplified - full implementation would rebuild the tree
         for path in data.get('paths', []):
-            for step_dict in path:
-                # Convert dict back to ExecutionStep
+            for _step_dict in path:
+                # TODO: Convert dict back to ExecutionStep using _step_dict
                 # This would need proper reconstruction logic
                 pass
         

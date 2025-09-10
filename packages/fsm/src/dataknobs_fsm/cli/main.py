@@ -352,7 +352,7 @@ def execute(config_file: str, data: str | None, initial_state: str | None,
         TextColumn("[progress.description]{task.description}"),
         console=console
     ) as progress:
-        task = progress.add_task("Executing FSM...", total=None)
+        progress.add_task("Executing FSM...", total=None)
         
         try:
             result = fsm.process(
@@ -490,7 +490,7 @@ def stream(config_file: str, source: str, sink: str | None,
             TextColumn("[progress.description]{task.description}"),
             console=console
         ) as progress:
-            task = progress.add_task("Processing stream...", total=None)
+            progress.add_task("Processing stream...", total=None)
             
             try:
                 result = await fsm.process_stream(
@@ -547,7 +547,7 @@ def run(config_file: str, data: str | None, breakpoint: tuple,
                 sys.exit(1)
     
     # Create advanced FSM
-    fsm = AdvancedFSM(config_dict)
+    fsm = AdvancedFSM(config)
     
     # Set breakpoints
     for bp in breakpoint:
@@ -600,7 +600,7 @@ def run(config_file: str, data: str | None, breakpoint: tuple,
                 # Interactive debugging
                 from ..api.advanced import FSMDebugger
                 
-                debugger = FSMDebugger(fsm, config_dict)
+                debugger = FSMDebugger(fsm, config)
                 await debugger.start_session(input_data)
                 
         except Exception as e:
@@ -666,7 +666,7 @@ def list_history(fsm_name: str | None, limit: int, format: str):
 @history.command()
 @click.argument('execution_id')
 @click.option('--verbose', '-v', is_flag=True, help='Show detailed information')
-def show(execution_id: str, verbose: bool):
+def show_execution(execution_id: str, verbose: bool):
     """Show details of a specific execution"""
     # Create history manager
     storage = FileStorage(Path.home() / '.fsm' / 'history')
@@ -740,7 +740,7 @@ def etl(source: str, target: str, mode: str, batch_size: int, checkpoint: str | 
             TextColumn("[progress.description]{task.description}"),
             console=console
         ) as progress:
-            task = progress.add_task("Running ETL...", total=None)
+            progress.add_task("Running ETL...", total=None)
             
             try:
                 metrics = await pipeline.run(checkpoint_id=checkpoint)
@@ -792,7 +792,7 @@ def process_file(input_file: str, output: str | None, format: str,
             TextColumn("[progress.description]{task.description}"),
             console=console
         ) as progress:
-            task = progress.add_task("Processing file...", total=None)
+            progress.add_task("Processing file...", total=None)
             
             try:
                 metrics = await processor.process()

@@ -207,7 +207,7 @@ class LLMResource(BaseResourceProvider):
                 f"Failed to initialize {self.provider.value} client: {e}",
                 resource_name=self.name,
                 operation="initialize"
-            )
+            ) from e
     
     def acquire(self, **kwargs) -> LLMSession:
         """Acquire an LLM session.
@@ -262,7 +262,7 @@ class LLMResource(BaseResourceProvider):
                 f"Failed to acquire LLM session: {e}",
                 resource_name=self.name,
                 operation="acquire"
-            )
+            ) from e
     
     def release(self, resource: Any) -> None:
         """Release an LLM session.
@@ -323,9 +323,13 @@ class LLMResource(BaseResourceProvider):
             elif session.provider == LLMProvider.HUGGINGFACE:
                 # For local HF, just check if transformers is available
                 try:
-                    import transformers
-                    self.metrics.record_health_check(True)
-                    return ResourceHealth.HEALTHY
+                    import importlib.util
+                    if importlib.util.find_spec('transformers'):
+                        self.metrics.record_health_check(True)
+                        return ResourceHealth.HEALTHY
+                    else:
+                        self.metrics.record_health_check(False)
+                        return ResourceHealth.UNHEALTHY
                 except ImportError:
                     self.metrics.record_health_check(False)
                     return ResourceHealth.UNHEALTHY
@@ -491,13 +495,13 @@ class LLMResource(BaseResourceProvider):
                 "model": session.model_name
             }
             
-        except ImportError:
+        except ImportError as e:
             raise ResourceError(
                 "HuggingFace transformers library not installed. "
                 "Install with: pip install transformers torch",
                 resource_name=self.name,
                 operation="complete"
-            )
+            ) from e
     
     def _openai_complete(
         self,
@@ -670,12 +674,12 @@ class LLMResource(BaseResourceProvider):
             
             return embeddings
             
-        except ImportError:
+        except ImportError as e:
             raise ResourceError(
                 "HuggingFace transformers library not installed",
                 resource_name=self.name,
                 operation="embed"
-            )
+            ) from e
     
     def _openai_embed(
         self,

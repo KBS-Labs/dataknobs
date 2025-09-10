@@ -6,7 +6,7 @@ This module defines core exception types used throughout the FSM system.
 from typing import Any, Dict
 
 
-class FSMException(Exception):
+class FSMError(Exception):
     """Base exception for all FSM-related errors."""
     
     def __init__(self, message: str, details: Dict[str, Any] | None = None):
@@ -14,12 +14,12 @@ class FSMException(Exception):
         self.details = details or {}
 
 
-class InvalidConfigurationError(FSMException):
+class InvalidConfigurationError(FSMError):
     """Raised when FSM configuration is invalid."""
     pass
 
 
-class StateExecutionError(FSMException):
+class StateExecutionError(FSMError):
     """Raised when state execution fails."""
     
     def __init__(self, state_name: str, message: str, details: Dict[str, Any] | None = None):
@@ -27,7 +27,7 @@ class StateExecutionError(FSMException):
         self.state_name = state_name
 
 
-class TransitionError(FSMException):
+class TransitionError(FSMError):
     """Raised when state transition fails."""
     
     def __init__(self, from_state: str, to_state: str, message: str, details: Dict[str, Any] | None = None):
@@ -36,7 +36,7 @@ class TransitionError(FSMException):
         self.to_state = to_state
 
 
-class ResourceError(FSMException):
+class ResourceError(FSMError):
     """Raised when resource operations fail."""
     
     def __init__(self, resource_id: str, message: str, details: Dict[str, Any] | None = None):
@@ -44,16 +44,16 @@ class ResourceError(FSMException):
         self.resource_id = resource_id
 
 
-class ValidationError(FSMException):
+class ValidationError(FSMError):
     """Raised when data validation fails."""
     pass
 
 
-class TimeoutError(FSMException):
+class TimeoutError(FSMError):
     """Raised when operation times out."""
     pass
 
 
-class ConcurrencyError(FSMException):
+class ConcurrencyError(FSMError):
     """Raised when concurrent execution fails."""
     pass

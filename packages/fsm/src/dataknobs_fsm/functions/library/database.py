@@ -77,7 +77,7 @@ class DatabaseFetch(ITransformFunction):
                 return {"records": result, **data}
         
         except Exception as e:
-            raise TransformError(f"Database query failed: {e}")
+            raise TransformError(f"Database query failed: {e}") from e
 
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
@@ -151,7 +151,7 @@ class DatabaseUpsert(ITransformFunction):
             }
         
         except Exception as e:
-            raise TransformError(f"Database upsert failed: {e}")
+            raise TransformError(f"Database upsert failed: {e}") from e
     
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
@@ -217,7 +217,7 @@ class BatchCommit(ITransformFunction):
             }
         
         except Exception as e:
-            raise TransformError(f"Batch commit failed: {e}")
+            raise TransformError(f"Batch commit failed: {e}") from e
     
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
@@ -280,7 +280,7 @@ class DatabaseQuery(ITransformFunction):
             }
         
         except Exception as e:
-            raise TransformError(f"Query execution failed: {e}")
+            raise TransformError(f"Query execution failed: {e}") from e
     
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
@@ -356,7 +356,7 @@ class DatabaseTransaction(ITransformFunction):
                 raise TransformError(f"Unknown action: {self.action}")
         
         except Exception as e:
-            raise TransformError(f"Transaction {self.action} failed: {e}")
+            raise TransformError(f"Transaction {self.action} failed: {e}") from e
     
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""
@@ -434,7 +434,7 @@ class DatabaseBulkInsert(ITransformFunction):
             }
         
         except Exception as e:
-            raise TransformError(f"Bulk insert failed: {e}")
+            raise TransformError(f"Bulk insert failed: {e}") from e
     
     def get_transform_description(self) -> str:
         """Get a description of the transformation."""

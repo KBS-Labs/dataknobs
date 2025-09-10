@@ -117,7 +117,8 @@ class ResourcePool:
             raise ResourceError("Pool is closed", resource_name=self.provider.name, operation="acquire")
         
         timeout = timeout or self.config.acquire_timeout
-        start_time = datetime.now()
+        # TODO: Use start_time for timeout tracking/metrics
+        # start_time = datetime.now()
         
         # Try to get from pool
         try:
@@ -149,7 +150,7 @@ class ResourcePool:
                 f"Failed to acquire resource within {timeout} seconds",
                 resource_name=self.provider.name,
                 operation="acquire"
-            )
+            ) from None
     
     def release(self, resource: Any) -> None:
         """Return a resource to the pool.
@@ -244,7 +245,7 @@ class ResourcePool:
                 f"Failed to create resource: {e}",
                 resource_name=self.provider.name,
                 operation="create"
-            )
+            ) from e
     
     def _release_pooled_resource(self, pooled: PooledResource) -> None:
         """Release a pooled resource.

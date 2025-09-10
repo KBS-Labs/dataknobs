@@ -344,7 +344,7 @@ class ResourceManager:
                     self.release(name, owner_id)
                 except Exception:
                     pass
-            raise ResourceError(f"Failed to acquire resources: {e}", resource_name="multiple", operation="configure")
+            raise ResourceError(f"Failed to acquire resources: {e}", resource_name="multiple", operation="configure") from e
     
     def close(self) -> None:
         """Close the resource manager and release all resources."""
@@ -352,7 +352,7 @@ class ResourceManager:
         
         with self._lock:
             # Release all acquired resources
-            for owner_id in set(key.split(":")[0] for key in self._resources.keys()):
+            for owner_id in {key.split(":")[0] for key in self._resources.keys()}:
                 self.release_all(owner_id)
             
             # Close all pools

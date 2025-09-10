@@ -453,9 +453,6 @@ class ConfigLoader:
                     # Remove network-level arcs since they've been transformed
                     del network['arcs']
                     
-                    # Debug: Print the transformed states to verify
-                    # for state in network.get('states', []):
-                    #     print(f"State {state['name']} has arcs: {state.get('arcs', [])}")
         
         return config
     

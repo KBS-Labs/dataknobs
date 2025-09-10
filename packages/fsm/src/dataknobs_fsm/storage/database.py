@@ -7,13 +7,14 @@ the common AsyncDatabase interface.
 
 import time
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, TYPE_CHECKING
 
-from dataknobs_data.factory import DatabaseFactory
-from dataknobs_data.database import AsyncDatabase
 from dataknobs_data.records import Record
 from dataknobs_data.query import Query
 from dataknobs_data.schema import DatabaseSchema, FieldSchema
+
+if TYPE_CHECKING:
+    from dataknobs_data.database import AsyncDatabase
 
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.execution.history import ExecutionHistory, ExecutionStep, ExecutionStatus
@@ -59,13 +60,13 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         # Remove 'type' as it's not needed by dataknobs_data
         db_config.pop('type', None)
         
-        # Create database instance using dataknobs_data factory
-        factory = DatabaseFactory()
+        # TODO: Use factory to create database instance
+        # factory = DatabaseFactory()
         # The factory expects 'backend' not 'type'
         db_config['backend'] = backend_type
         
         # For now, use AsyncMemoryDatabase directly to simplify
-        # In production, would use the appropriate async backend
+        # In production, would use the appropriate async backend as specified in the config
         from dataknobs_data.backends.memory import AsyncMemoryDatabase
         
         self._db = AsyncMemoryDatabase(db_config)

@@ -296,7 +296,7 @@ data
             def parse_csv(data):
                 if isinstance(data, str):
                     reader = csv.DictReader(StringIO(data))
-                    return list(reader)[0] if reader else {}
+                    return next(iter(reader)) if reader else {}
                 return data
             return parse_csv
         elif self.config.format == FileFormat.XML:
@@ -325,10 +325,7 @@ data
             return None
             
         def apply_filters(state):
-            for filter_func in self.config.filters:
-                if not filter_func(state.data):
-                    return False
-            return True
+            return all(filter_func(state.data) for filter_func in self.config.filters)
             
         return apply_filters
         
@@ -358,13 +355,13 @@ data
         
         def aggregate(data: Dict[str, Any]) -> Dict[str, Any]:
             # Accumulate values
-            for key, agg_func in self.config.aggregations.items():
+            for key in self.config.aggregations:
                 if key in data:
                     agg_state[key].append(data[key])
                     
             # Return aggregated results
             return {
-                key: agg_func(values)
+                key: self.config.aggregations[key](values)
                 for key, values in agg_state.items()
             }
             

@@ -137,7 +137,7 @@ class NetworkExecutor:
             
             # Process each arc
             transition_made = False
-            for arc_id, arc in available_arcs:
+            for _arc_id, arc in available_arcs:
                 # Check if this is a push arc
                 if isinstance(arc, PushArc):
                     success = self._handle_push_arc(

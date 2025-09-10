@@ -25,8 +25,8 @@ class ConfigValidator:
         errors = []
         
         try:
-            # Try to load and validate the config
-            config = self.loader.load_file(Path(file_path))
+            # Try to load and validate the config - loading validates structure
+            self.loader.load_file(Path(file_path))
             # If we get here, the config is valid
             return errors
             

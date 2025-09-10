@@ -164,7 +164,7 @@ class FileSystemResource(BaseResourceProvider):
                 f"Failed to acquire file resource: {e}",
                 resource_name=self.name,
                 operation="acquire"
-            )
+            ) from e
     
     def release(self, resource: Any) -> None:
         """Release a file handle.

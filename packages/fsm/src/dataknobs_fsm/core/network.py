@@ -600,7 +600,7 @@ class StateNetwork:
         )
         
         # Add states
-        for state_name, state_data in data.get('states', {}).items():
+        for state_name in data.get('states', {}):
             # Create basic state (can be enhanced with proper State deserialization)
             state = State(name=state_name)
             is_initial = state_name == data.get('initial_state')

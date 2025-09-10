@@ -484,7 +484,7 @@ class AdvancedFSM:
                 lines.append(f'  {state.name};')
                 
         # Add arcs
-        for state_name, state in self.fsm.states.items():
+        for state_name in self.fsm.states:
             for arc in self.fsm.get_outgoing_arcs(state_name):
                 label = arc.name if arc.name else ""
                 lines.append(f'  {state_name} -> {arc.target_state} [label="{label}"];')

@@ -143,12 +143,12 @@ class CircuitBreaker:
         self.is_open = False
         self._lock = asyncio.Lock()
         
-    async def call(self, func: Callable, *args, **kwargs) -> Any:
+    async def call(self, func: Callable, *args: Any, **kwargs: Any) -> Any:
         """Call function with circuit breaker protection.
         
         Args:
             func: Function to call
-            *args, **kwargs: Function arguments
+            *args: Any, **kwargs: Any: Function arguments
             
         Returns:
             Function result

@@ -94,7 +94,7 @@ class ContextFactory:
             if hasattr(fsm, 'get_state'):
                 try:
                     state_def = fsm.get_state(state_name)
-                except:
+                except (KeyError, AttributeError):
                     pass
             
             # If not found, search in networks

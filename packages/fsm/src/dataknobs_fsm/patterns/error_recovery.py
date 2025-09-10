@@ -178,7 +178,7 @@ class RetryExecutor:
             
         return min(delay, self.config.max_delay)
         
-    async def execute(self, func: Callable, *args, **kwargs) -> Any:
+    async def execute(self, func: Callable, *args: Any, **kwargs: Any) -> Any:
         """Execute function with retry logic."""
         last_exception = None
         previous_delay = None
@@ -244,7 +244,7 @@ class CircuitBreaker:
         self.window_failures = []
         self._lock = asyncio.Lock()
         
-    async def call(self, func: Callable, *args, **kwargs) -> Any:
+    async def call(self, func: Callable, *args: Any, **kwargs: Any) -> Any:
         """Execute function with circuit breaker protection."""
         async with self._lock:
             # Check state
@@ -329,7 +329,7 @@ class Bulkhead:
             'timeout': 0
         } if config.track_metrics else None
         
-    async def execute(self, func: Callable, *args, **kwargs) -> Any:
+    async def execute(self, func: Callable, *args: Any, **kwargs: Any) -> Any:
         """Execute function with bulkhead isolation."""
         # Try to acquire semaphore
         try:
@@ -340,7 +340,7 @@ class Bulkhead:
         except asyncio.TimeoutError:
             if self.metrics:
                 self.metrics['timeout'] += 1
-            raise Exception("Bulkhead queue timeout")
+            raise Exception("Bulkhead queue timeout") from None
             
         self.active_count += 1
         
@@ -472,14 +472,14 @@ class ErrorRecoveryWorkflow:
         
         return SimpleFSM(fsm_config)
         
-    async def _execute_with_retry(self, func: Callable, *args, **kwargs) -> Any:
+    async def _execute_with_retry(self, func: Callable, *args: Any, **kwargs: Any) -> Any:
         """Execute with retry strategy."""
         if not self._retry_executor:
             self._retry_executor = RetryExecutor(self.config.retry_config or RetryConfig())
             
         return await self._retry_executor.execute(func, *args, **kwargs)
         
-    async def _execute_with_circuit_breaker(self, func: Callable, *args, **kwargs) -> Any:
+    async def _execute_with_circuit_breaker(self, func: Callable, *args: Any, **kwargs: Any) -> Any:
         """Execute with circuit breaker."""
         if not self._circuit_breaker:
             self._circuit_breaker = CircuitBreaker(
@@ -488,7 +488,7 @@ class ErrorRecoveryWorkflow:
             
         return await self._circuit_breaker.call(func, *args, **kwargs)
         
-    async def _execute_with_fallback(self, func: Callable, *args, **kwargs) -> Any:
+    async def _execute_with_fallback(self, func: Callable, *args: Any, **kwargs: Any) -> Any:
         """Execute with fallback."""
         try:
             # Try primary function
@@ -518,7 +518,7 @@ class ErrorRecoveryWorkflow:
                     
             raise
             
-    async def _execute_with_compensation(self, func: Callable, *args, **kwargs) -> Any:
+    async def _execute_with_compensation(self, func: Callable, *args: Any, **kwargs: Any) -> Any:
         """Execute with compensation."""
         # Save state if configured
         saved_state = None
@@ -556,7 +556,7 @@ class ErrorRecoveryWorkflow:
                     
             raise
             
-    async def _execute_with_bulkhead(self, func: Callable, *args, **kwargs) -> Any:
+    async def _execute_with_bulkhead(self, func: Callable, *args: Any, **kwargs: Any) -> Any:
         """Execute with bulkhead isolation."""
         if not self._bulkhead:
             self._bulkhead = Bulkhead(self.config.bulkhead_config or BulkheadConfig())
@@ -566,20 +566,21 @@ class ErrorRecoveryWorkflow:
     async def execute(
         self,
         func: Callable,
-        *args,
-        **kwargs
+        *args: Any,
+        **kwargs: Any
     ) -> Any:
         """Execute function with error recovery.
         
         Args:
             func: Function to execute
-            *args, **kwargs: Function arguments
+            *args: Any, **kwargs: Any: Function arguments
             
         Returns:
             Function result or fallback value
         """
         self._metrics['attempts'] += 1
-        start_time = time.time()
+        # TODO: Use start_time for execution time tracking/metrics
+        # start_time = time.time()
         
         try:
             # Apply primary strategy

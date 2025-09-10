@@ -387,7 +387,7 @@ class BatchExecutor:
             context: Execution context.
         """
         # Release allocated resources back to pool
-        for key, allocation in context.resources.items():
+        for allocation in context.resources.values():
             if allocation.status == 'allocated':
                 resource_type = allocation.resource_type
                 if resource_type in self._resource_pool:

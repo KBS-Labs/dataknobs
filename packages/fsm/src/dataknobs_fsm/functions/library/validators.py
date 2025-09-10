@@ -101,7 +101,7 @@ class SchemaValidator(IValidationFunction):
             
             raise FSMValidationError(
                 f"Schema validation failed: {'; '.join(errors)}"
-            )
+            ) from e
     
     def get_validation_rules(self) -> Dict[str, Any]:
         """Get the validation rules."""
@@ -435,10 +435,9 @@ class DependencyValidator(IValidationFunction):
             if field not in data:
                 continue
             
-            if isinstance(deps, str):
-                deps = [deps]
+            deps_list = deps if isinstance(deps, list) else [deps]
             
-            missing_deps = [dep for dep in deps if dep not in data]
+            missing_deps = [dep for dep in deps_list if dep not in data]
             
             if missing_deps:
                 errors.append(

@@ -49,7 +49,7 @@ class ExecutionResult:
         self.metadata = metadata or {}
     
     @classmethod
-    def success_result(cls, data: Any, metadata: Dict[str, Any] | None = None):
+    def success_result(cls, data: Any, metadata: Dict[str, Any] | None = None) -> 'ExecutionResult':
         """Create a successful result.
         
         Args:
@@ -62,7 +62,7 @@ class ExecutionResult:
         return cls(success=True, data=data, metadata=metadata)
     
     @classmethod
-    def failure_result(cls, error: str, metadata: Dict[str, Any] | None = None):
+    def failure_result(cls, error: str, metadata: Dict[str, Any] | None = None) -> 'ExecutionResult':
         """Create a failure result.
         
         Args:
@@ -271,12 +271,12 @@ class IResource(ABC):
 
 # Exception classes
 
-class FSMException(Exception):
+class FSMError(Exception):
     """Base exception for FSM errors."""
     pass
 
 
-class ValidationError(FSMException):
+class ValidationError(FSMError):
     """Raised when validation fails."""
     
     def __init__(self, message: str, validation_errors: List[str] | None = None):
@@ -290,12 +290,12 @@ class ValidationError(FSMException):
         self.validation_errors = validation_errors or []
 
 
-class TransformError(FSMException):
+class TransformError(FSMError):
     """Raised when transformation fails."""
     pass
 
 
-class StateTransitionError(FSMException):
+class StateTransitionError(FSMError):
     """Raised when state transition fails."""
     
     def __init__(self, message: str, from_state: str, to_state: str | None = None):
@@ -311,7 +311,7 @@ class StateTransitionError(FSMException):
         self.to_state = to_state
 
 
-class ResourceError(FSMException):
+class ResourceError(FSMError):
     """Raised when resource operations fail."""
     
     def __init__(self, message: str, resource_name: str, operation: str):
@@ -327,7 +327,7 @@ class ResourceError(FSMException):
         self.operation = operation
 
 
-class ConfigurationError(FSMException):
+class ConfigurationError(FSMError):
     """Raised when configuration is invalid."""
     pass
 
