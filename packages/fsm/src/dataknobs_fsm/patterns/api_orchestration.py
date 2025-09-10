@@ -162,7 +162,8 @@ class CircuitBreaker:
                 if self.last_failure:
                     elapsed = (datetime.now() - self.last_failure).total_seconds()
                     if elapsed < self.timeout:
-                        raise Exception(f"Circuit breaker is open (wait {self.timeout - elapsed:.1f}s)")
+                        from ..core.exceptions import CircuitBreakerError
+                        raise CircuitBreakerError(wait_time=self.timeout - elapsed)
                 # Try to reset
                 self.is_open = False
                 self.failure_count = 0

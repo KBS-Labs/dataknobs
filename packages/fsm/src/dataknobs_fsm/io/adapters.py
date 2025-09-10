@@ -267,7 +267,7 @@ class DatabaseIOAdapter(IOAdapter):
         """Create database I/O provider."""
         if is_async:
             return AsyncDatabaseProvider(config)
-        raise NotImplementedError("Sync database provider not yet implemented")
+        return SyncDatabaseProvider(config)
 
 
 class AsyncDatabaseProvider(AsyncIOProvider):
@@ -359,6 +359,101 @@ class AsyncDatabaseProvider(AsyncIOProvider):
             await self.db.bulk_upsert(table, batch)
 
 
+class SyncDatabaseProvider(SyncIOProvider):
+    """Synchronous database I/O provider."""
+    
+    def __init__(self, config: IOConfig):
+        super().__init__(config)
+        self.db = None
+        self.adapter = DatabaseIOAdapter()
+        
+    def open(self) -> None:
+        """Open database connection."""
+        import sqlite3
+        # For sync operations, use sqlite3 as a simple fallback
+        db_config = self.adapter.adapt_config(self.config)
+        db_path = db_config.get('path', ':memory:')
+        self.db = sqlite3.connect(db_path)
+        self.db.row_factory = sqlite3.Row  # Enable dict-like access
+        self._is_open = True
+        
+    def close(self) -> None:
+        """Close database connection."""
+        if self.db:
+            self.db.close()
+        self._is_open = False
+        
+    def validate(self) -> bool:
+        """Validate database connection."""
+        try:
+            if self.db:
+                # Test connection with simple query
+                self.db.execute("SELECT 1").fetchone()
+                return True
+        except Exception:
+            return False
+        return False
+        
+    def read(self, query: str = None, **kwargs) -> List[Dict[str, Any]]:
+        """Read data from database."""
+        if not self.db:
+            self.open()
+        if not query:
+            query = "SELECT * FROM data"
+        cursor = self.db.execute(query)
+        return [dict(row) for row in cursor.fetchall()]
+        
+    def write(self, data: Any, table: str = "data", **kwargs) -> None:
+        """Write data to database."""
+        if not self.db:
+            self.open()
+        if isinstance(data, dict):
+            data = [data]
+        for item in data:
+            # Simple upsert using INSERT OR REPLACE
+            columns = ', '.join(item.keys())
+            placeholders = ', '.join(['?' for _ in item.keys()])
+            query = f"INSERT OR REPLACE INTO {table} ({columns}) VALUES ({placeholders})"
+            self.db.execute(query, list(item.values()))
+        self.db.commit()
+            
+    def stream_read(self, query: str = None, **kwargs) -> Iterator[Dict[str, Any]]:
+        """Stream read from database."""
+        if not self.db:
+            self.open()
+        if not query:
+            query = "SELECT * FROM data"
+        cursor = self.db.execute(query)
+        for row in cursor:
+            yield dict(row)
+            
+    def stream_write(self, data_stream: Iterator[Any], table: str = "data", **kwargs) -> None:
+        """Stream write to database."""
+        if not self.db:
+            self.open()
+        for data in data_stream:
+            self.write(data, table, **kwargs)
+            
+    def batch_read(self, query: str = None, batch_size: int | None = None, **kwargs) -> Iterator[List[Dict[str, Any]]]:
+        """Read from database in batches."""
+        batch_size = batch_size or self.config.batch_size
+        batch = []
+        for item in self.stream_read(query, **kwargs):
+            batch.append(item)
+            if len(batch) >= batch_size:
+                yield batch
+                batch = []
+        if batch:
+            yield batch
+            
+    def batch_write(self, batches: Iterator[List[Any]], table: str = "data", **kwargs) -> None:
+        """Write to database in batches."""
+        if not self.db:
+            self.open()
+        for batch in batches:
+            self.write(batch, table, **kwargs)
+
+
 class HTTPIOAdapter(IOAdapter):
     """Adapter for HTTP/API I/O operations."""
     
@@ -383,7 +478,7 @@ class HTTPIOAdapter(IOAdapter):
         """Create HTTP I/O provider."""
         if is_async:
             return AsyncHTTPProvider(config)
-        raise NotImplementedError("Sync HTTP provider not yet implemented")
+        return SyncHTTPProvider(config)
 
 
 class AsyncHTTPProvider(AsyncIOProvider):
@@ -479,6 +574,117 @@ class AsyncHTTPProvider(AsyncIOProvider):
         async for batch in batches:
             # Send batch as single request
             await self.write(batch, **kwargs)
+
+
+class SyncHTTPProvider(SyncIOProvider):
+    """Synchronous HTTP/API I/O provider."""
+    
+    def __init__(self, config: IOConfig):
+        super().__init__(config)
+        self.session = None
+        self.adapter = HTTPIOAdapter()
+        
+    def open(self) -> None:
+        """Open HTTP session."""
+        import requests
+        self.session = requests.Session()
+        if self.config.headers:
+            self.session.headers.update(self.config.headers)
+        self._is_open = True
+        
+    def close(self) -> None:
+        """Close HTTP session."""
+        if self.session:
+            self.session.close()
+        self._is_open = False
+        
+    def validate(self) -> bool:
+        """Validate HTTP endpoint."""
+        try:
+            if self.session:
+                response = self.session.head(
+                    self.config.source,
+                    timeout=self.config.timeout or 30
+                )
+                return response.status_code < 400
+        except Exception:
+            return False
+        return False
+        
+    def read(self, **kwargs) -> Any:
+        """Read data from HTTP endpoint."""
+        if not self.session:
+            self.open()
+        response = self.session.get(
+            self.config.source,
+            timeout=self.config.timeout or 30,
+            **kwargs
+        )
+        response.raise_for_status()
+        
+        if 'json' in response.headers.get('content-type', '').lower():
+            return response.json()
+        return response.text
+            
+    def write(self, data: Any, **kwargs) -> None:
+        """Write data to HTTP endpoint."""
+        if not self.session:
+            self.open()
+        json_data = self.adapter.adapt_data(data, IOMode.WRITE)
+        response = self.session.post(
+            self.config.source,
+            data=json_data,
+            timeout=self.config.timeout or 30,
+            **kwargs
+        )
+        response.raise_for_status()
+            
+    def stream_read(self, **kwargs) -> Iterator[Any]:
+        """Stream read from HTTP endpoint."""
+        if not self.session:
+            self.open()
+        response = self.session.get(
+            self.config.source,
+            stream=True,
+            timeout=self.config.timeout or 30,
+            **kwargs
+        )
+        response.raise_for_status()
+        
+        for line in response.iter_lines():
+            if line:
+                try:
+                    yield json.loads(line.decode('utf-8'))
+                except json.JSONDecodeError:
+                    yield line.decode('utf-8')
+                    
+    def stream_write(self, data_stream: Iterator[Any], **kwargs) -> None:
+        """Stream write to HTTP endpoint."""
+        # For sync HTTP, write each item individually
+        for data in data_stream:
+            self.write(data, **kwargs)
+            
+    def batch_read(self, batch_size: int | None = None, **kwargs) -> Iterator[List[Any]]:
+        """Read from HTTP endpoint in batches (pagination)."""
+        batch_size = batch_size or self.config.batch_size
+        page = 0
+        while True:
+            params = kwargs.get('params', {})
+            params.update({'page': page, 'limit': batch_size})
+            kwargs['params'] = params
+            
+            data = self.read(**kwargs)
+            if not data:
+                break
+                
+            yield data if isinstance(data, list) else [data]
+            page += 1
+            
+    def batch_write(self, batches: Iterator[List[Any]], **kwargs) -> None:
+        """Write to HTTP endpoint in batches."""
+        for batch in batches:
+            # Send batch as single request
+            self.write(batch, **kwargs)
 
 
 class StreamIOAdapter(IOAdapter):

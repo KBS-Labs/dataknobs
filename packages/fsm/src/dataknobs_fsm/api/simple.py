@@ -119,9 +119,18 @@ class SimpleFSM:
         # Execute using the sync engine
         try:
             if timeout:
-                # For sync execution with timeout, we'd need threading
-                # For now, just execute without timeout
-                success, result = self._engine.execute(context)
+                # Implement timeout using concurrent.futures
+                import concurrent.futures
+                import threading
+                
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(self._engine.execute, context)
+                    try:
+                        success, result = future.result(timeout=timeout)
+                    except concurrent.futures.TimeoutError:
+                        # Cancel the future and raise timeout error
+                        future.cancel()
+                        raise TimeoutError(f"FSM execution exceeded timeout of {timeout} seconds")
             else:
                 success, result = self._engine.execute(context)
                 
@@ -400,7 +409,8 @@ def process_file(
     input_file: str,
     output_file: str | None = None,
     format: str = 'json',
-    chunk_size: int = 1000
+    chunk_size: int = 1000,
+    timeout: float | None = None
 ) -> Dict[str, Any]:
     """Process a file through an FSM.
     
@@ -410,6 +420,7 @@ def process_file(
         output_file: Optional output file path
         format: File format (json, csv, etc.)
         chunk_size: Processing chunk size
+        timeout: Optional timeout in seconds for processing
         
     Returns:
         Processing statistics
@@ -417,11 +428,21 @@ def process_file(
     fsm = create_fsm(fsm_config)
     
     try:
-        result = asyncio.run(fsm.process_stream(
-            source=input_file,
-            sink=output_file,
-            chunk_size=chunk_size
-        ))
+        if timeout:
+            result = asyncio.run(asyncio.wait_for(
+                fsm.process_stream(
+                    source=input_file,
+                    sink=output_file,
+                    chunk_size=chunk_size
+                ),
+                timeout=timeout
+            ))
+        else:
+            result = asyncio.run(fsm.process_stream(
+                source=input_file,
+                sink=output_file,
+                chunk_size=chunk_size
+            ))
         return result
     finally:
         fsm.close()
@@ -455,7 +476,8 @@ def batch_process(
     fsm_config: Union[str, Path, Dict[str, Any]],
     data: List[Dict[str, Any]],
     batch_size: int = 10,
-    max_workers: int = 4
+    max_workers: int = 4,
+    timeout: float | None = None
 ) -> List[Dict[str, Any]]:
     """Process multiple records in parallel.
     
@@ -464,6 +486,7 @@ def batch_process(
         data: List of input records
         batch_size: Batch size for processing
         max_workers: Maximum parallel workers
+        timeout: Optional timeout in seconds for entire batch processing
         
     Returns:
         List of processing results
@@ -471,10 +494,27 @@ def batch_process(
     fsm = create_fsm(fsm_config)
     
     try:
-        return fsm.process_batch(
-            data=data,
-            batch_size=batch_size,
-            max_workers=max_workers
-        )
+        if timeout:
+            # Use threading timeout for batch processing
+            import concurrent.futures
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    fsm.process_batch,
+                    data=data,
+                    batch_size=batch_size,
+                    max_workers=max_workers
+                )
+                try:
+                    return future.result(timeout=timeout)
+                except concurrent.futures.TimeoutError:
+                    future.cancel()
+                    raise TimeoutError(f"Batch processing exceeded timeout of {timeout} seconds")
+        else:
+            return fsm.process_batch(
+                data=data,
+                batch_size=batch_size,
+                max_workers=max_workers
+            )
     finally:
         fsm.close()

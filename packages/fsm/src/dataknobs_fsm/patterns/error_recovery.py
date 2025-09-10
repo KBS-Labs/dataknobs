@@ -257,9 +257,11 @@ class CircuitBreaker:
                         if self.config.on_half_open:
                             self.config.on_half_open()
                     else:
-                        raise Exception(f"Circuit breaker is open (wait {self.config.timeout - elapsed:.1f}s)")
+                        from ..core.exceptions import CircuitBreakerError
+                        raise CircuitBreakerError(wait_time=self.config.timeout - elapsed)
                 else:
-                    raise Exception("Circuit breaker is open")
+                    from ..core.exceptions import CircuitBreakerError
+                    raise CircuitBreakerError()
                     
         try:
             # Execute function
@@ -340,7 +342,8 @@ class Bulkhead:
         except asyncio.TimeoutError:
             if self.metrics:
                 self.metrics['timeout'] += 1
-            raise Exception("Bulkhead queue timeout") from None
+            from ..core.exceptions import BulkheadTimeoutError
+            raise BulkheadTimeoutError("Bulkhead queue timeout") from None
             
         self.active_count += 1
         

@@ -57,3 +57,25 @@ class TimeoutError(FSMError):
 class ConcurrencyError(FSMError):
     """Raised when concurrent execution fails."""
     pass
+
+
+class CircuitBreakerError(FSMError):
+    """Raised when circuit breaker is open."""
+    
+    def __init__(self, wait_time: float | None = None, details: Dict[str, Any] | None = None):
+        if wait_time:
+            message = f"Circuit breaker is open (wait {wait_time:.1f}s)"
+        else:
+            message = "Circuit breaker is open"
+        super().__init__(message, details)
+        self.wait_time = wait_time
+
+
+class ETLError(FSMError):
+    """Raised when ETL operations fail."""
+    pass
+
+
+class BulkheadTimeoutError(FSMError):
+    """Raised when bulkhead queue times out."""
+    pass

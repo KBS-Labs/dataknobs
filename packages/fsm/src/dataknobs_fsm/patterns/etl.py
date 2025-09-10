@@ -357,7 +357,8 @@ class DatabaseETL:
                 
                 # Check error threshold
                 if self._check_error_threshold():
-                    raise Exception(f"Error threshold exceeded: {self._metrics['errors']} errors")
+                    from ..core.exceptions import ETLError
+                    raise ETLError(f"Error threshold exceeded: {self._metrics['errors']} errors")
                     
                 # Checkpoint if needed
                 if self._should_checkpoint():
