@@ -11,6 +11,12 @@ from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.state import StateType
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.execution.engine import TraversalStrategy
+from dataknobs_fsm.execution.common import (
+    NetworkSelector,
+    TransitionSelector,
+    TransitionSelectionMode,
+    extract_metrics_from_context
+)
 
 
 class AsyncExecutionEngine:
@@ -26,16 +32,25 @@ class AsyncExecutionEngine:
     def __init__(
         self,
         fsm: FSM,
-        strategy: TraversalStrategy = TraversalStrategy.DEPTH_FIRST
+        strategy: TraversalStrategy = TraversalStrategy.DEPTH_FIRST,
+        selection_mode: TransitionSelectionMode = TransitionSelectionMode.HYBRID
     ):
         """Initialize async execution engine.
         
         Args:
             fsm: FSM to execute.
             strategy: Traversal strategy for execution.
+            selection_mode: Transition selection mode (strategy, scoring, or hybrid).
         """
         self.fsm = fsm
         self.strategy = strategy
+        self.selection_mode = selection_mode
+        
+        # Initialize transition selector
+        self.transition_selector = TransitionSelector(
+            mode=selection_mode,
+            default_strategy=strategy
+        )
         
         # Execution statistics
         self._execution_count = 0
@@ -332,7 +347,7 @@ class AsyncExecutionEngine:
         available: List[ArcDefinition],
         context: ExecutionContext
     ) -> ArcDefinition | None:
-        """Choose transition based on strategy.
+        """Choose transition using common transition selector.
         
         Args:
             available: Available transitions.
@@ -341,12 +356,11 @@ class AsyncExecutionEngine:
         Returns:
             Selected arc or None.
         """
-        if not available:
-            return None
-        
-        # For now, just take the highest priority
-        # In the future, could implement different strategies
-        return available[0]
+        return self.transition_selector.select_transition(
+            available,
+            context,
+            strategy=self.strategy
+        )
     
     async def _execute_transition(
         self,
@@ -544,7 +558,7 @@ class AsyncExecutionEngine:
         self,
         context: ExecutionContext
     ) -> StateNetwork | None:
-        """Get the current network from context.
+        """Get the current network from context using common network selector.
         
         Args:
             context: Execution context.
@@ -552,19 +566,12 @@ class AsyncExecutionEngine:
         Returns:
             Current network or None.
         """
-        # For now, return main network
-        main_network_ref = getattr(self.fsm, 'main_network', None)
-        
-        if hasattr(main_network_ref, 'states'):
-            return main_network_ref
-        elif isinstance(main_network_ref, str) and main_network_ref in self.fsm.networks:
-            return self.fsm.networks[main_network_ref]
-        
-        # Fallback to first network
-        if self.fsm.networks:
-            return next(iter(self.fsm.networks.values()))
-        
-        return None
+        # Use intelligent selection for async engine by default
+        return NetworkSelector.get_current_network(
+            self.fsm,
+            context,
+            enable_intelligent_selection=True
+        )
     
     def get_statistics(self) -> Dict[str, Any]:
         """Get execution statistics.

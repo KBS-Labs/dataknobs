@@ -1,6 +1,7 @@
 """Batch executor for parallel record processing."""
 
 import asyncio
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -181,6 +182,15 @@ class BatchExecutor:
             else:
                 context.data = item
             
+            # Add batch tracking metadata
+            context.batch_id = i
+            context.metadata['batch_info'] = {
+                'batch_id': i,
+                'total_items': len(items),
+                'item_index': i,
+                'processing_mode': 'sequential'
+            }
+            
             # Reset to initial state
             initial_state = self._find_initial_state()
             if initial_state:
@@ -324,6 +334,15 @@ class BatchExecutor:
         else:
             context.data = item
         
+        # Add batch tracking metadata
+        context.batch_id = index
+        context.metadata['batch_info'] = {
+            'batch_id': index,
+            'item_index': index,
+            'processing_mode': 'parallel',
+            'worker_thread': threading.current_thread().name
+        }
+        
         # Get resource from pool if available
         if self.enable_resource_pooling:
             self._acquire_resources(context)
@@ -374,11 +393,20 @@ class BatchExecutor:
         Args:
             context: Execution context.
         """
-        # This would connect to resource pool
-        # For now, just track in context
-        for resource_type in context.resource_limits:
+        # Initialize resource pools if needed
+        for resource_type, limit in context.resource_limits.items():
             if resource_type not in self._resource_pool:
                 self._resource_pool[resource_type] = []
+                self._resource_locks[resource_type] = asyncio.Lock()
+            
+            # Track batch-specific resource allocation
+            if hasattr(context, 'batch_id'):
+                context.metadata[f'batch_{context.batch_id}_resources'] = {
+                    'resource_type': resource_type,
+                    'limit': limit,
+                    'acquired_at': context.metadata.get('start_time'),
+                    'pool_size': len(self._resource_pool[resource_type])
+                }
     
     def _release_resources(self, context: ExecutionContext) -> None:
         """Release resources back to pool.
@@ -394,6 +422,16 @@ class BatchExecutor:
                     self._resource_pool[resource_type].append(
                         allocation.resource_id
                     )
+                    
+                    # Track batch-specific resource release
+                    if hasattr(context, 'batch_id'):
+                        batch_key = f'batch_{context.batch_id}_resources'
+                        if batch_key in context.metadata:
+                            context.metadata[batch_key]['released_at'] = context.metadata.get('end_time')
+                            context.metadata[batch_key]['final_pool_size'] = len(self._resource_pool[resource_type])
+                
+                # Mark as released
+                allocation.status = 'released'
     
     def _find_initial_state(self) -> str | None:
         """Find initial state in FSM.

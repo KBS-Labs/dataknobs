@@ -117,8 +117,7 @@ class ResourcePool:
             raise ResourceError("Pool is closed", resource_name=self.provider.name, operation="acquire")
         
         timeout = timeout or self.config.acquire_timeout
-        # TODO: Use start_time for timeout tracking/metrics
-        # start_time = datetime.now()
+        start_time = datetime.now()
         
         # Try to get from pool
         try:
@@ -137,14 +136,23 @@ class ResourcePool:
             with self._lock:
                 self._active_resources.add(id(pooled.resource))
             
-            self.metrics.record_acquisition()
+            # Track acquisition time
+            acquisition_time = (datetime.now() - start_time).total_seconds()
+            self.metrics.record_acquisition(acquisition_time)
             return pooled.resource
             
         except queue.Empty:
             # Pool is empty, try to create new resource if under max
             with self._lock:
                 if len(self._active_resources) < self.config.max_size:
-                    return self._create_new_resource()
+                    resource = self._create_new_resource()
+                    # Track acquisition time for newly created resource
+                    acquisition_time = (datetime.now() - start_time).total_seconds()
+                    self.metrics.record_acquisition(acquisition_time)
+                    return resource
+            
+            # Record timeout event
+            self.metrics.record_timeout()
             
             raise ResourceError(
                 f"Failed to acquire resource within {timeout} seconds",
@@ -236,7 +244,7 @@ class ResourcePool:
                 self._resource_map[id(resource)] = pooled
                 self._active_resources.add(id(resource))
             
-            self.metrics.record_acquisition()
+            # Note: Acquisition metrics are now tracked in acquire() method with timing
             return resource
             
         except Exception as e:

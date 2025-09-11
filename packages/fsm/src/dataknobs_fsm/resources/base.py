@@ -40,12 +40,27 @@ class ResourceMetrics:
     last_release_time: datetime | None = None
     health_check_failures: int = 0
     last_health_check: datetime | None = None
+    average_acquisition_time: float = 0.0
+    total_timeout_events: int = 0
+    last_timeout_time: datetime | None = None
     
-    def record_acquisition(self) -> None:
-        """Record a resource acquisition."""
+    def record_acquisition(self, acquisition_time: float | None = None) -> None:
+        """Record a resource acquisition.
+        
+        Args:
+            acquisition_time: Time taken to acquire the resource in seconds.
+        """
         self.total_acquisitions += 1
         self.active_connections += 1
         self.last_acquisition_time = datetime.now()
+        
+        # Update average acquisition time if provided
+        if acquisition_time is not None:
+            if self.average_acquisition_time == 0:
+                self.average_acquisition_time = acquisition_time
+            else:
+                # Rolling average
+                self.average_acquisition_time = (self.average_acquisition_time * 0.9) + (acquisition_time * 0.1)
     
     def record_release(self, hold_time: float) -> None:
         """Record a resource release.
@@ -76,6 +91,12 @@ class ResourceMetrics:
         self.last_health_check = datetime.now()
         if not success:
             self.health_check_failures += 1
+    
+    def record_timeout(self) -> None:
+        """Record a timeout event."""
+        self.total_timeout_events += 1
+        self.last_timeout_time = datetime.now()
+        self.failed_acquisitions += 1
 
 
 @runtime_checkable

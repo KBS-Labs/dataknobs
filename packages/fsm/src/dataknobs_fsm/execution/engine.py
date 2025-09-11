@@ -11,6 +11,12 @@ from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.state import StateType
 from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.functions.base import FunctionContext
+from dataknobs_fsm.execution.common import (
+    NetworkSelector,
+    TransitionSelector,
+    TransitionSelectionMode,
+    extract_metrics_from_context
+)
 
 
 class TraversalStrategy(Enum):
@@ -41,7 +47,8 @@ class ExecutionEngine:
         strategy: TraversalStrategy = TraversalStrategy.DEPTH_FIRST,
         max_retries: int = 3,
         retry_delay: float = 1.0,
-        enable_hooks: bool = True
+        enable_hooks: bool = True,
+        selection_mode: TransitionSelectionMode = TransitionSelectionMode.HYBRID
     ):
         """Initialize execution engine.
         
@@ -51,12 +58,20 @@ class ExecutionEngine:
             max_retries: Maximum retry attempts for failures.
             retry_delay: Delay between retries in seconds.
             enable_hooks: Enable execution hooks.
+            selection_mode: Transition selection mode (strategy, scoring, or hybrid).
         """
         self.fsm = fsm
         self.strategy = strategy
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.enable_hooks = enable_hooks
+        self.selection_mode = selection_mode
+        
+        # Initialize transition selector
+        self.transition_selector = TransitionSelector(
+            mode=selection_mode,
+            default_strategy=strategy
+        )
         
         # Execution tracking
         self._execution_count = 0
@@ -597,7 +612,7 @@ class ExecutionEngine:
         transitions: List[ArcDefinition],
         context: ExecutionContext
     ) -> ArcDefinition | None:
-        """Choose next transition based on strategy.
+        """Choose next transition using common transition selector.
         
         Args:
             transitions: Available transitions.
@@ -606,41 +621,11 @@ class ExecutionEngine:
         Returns:
             Chosen arc or None.
         """
-        if not transitions:
-            return None
-        
-        if self.strategy == TraversalStrategy.DEPTH_FIRST:
-            # Take first available (highest priority)
-            return transitions[0]
-        
-        elif self.strategy == TraversalStrategy.BREADTH_FIRST:
-            # Prefer transitions to unvisited states
-            for arc in transitions:
-                if arc.target_state not in context.state_history:
-                    return arc
-            return transitions[0]
-        
-        elif self.strategy == TraversalStrategy.RESOURCE_OPTIMIZED:
-            # Choose transition with least resource requirements
-            best_arc = None
-            min_resources = float('inf')
-            
-            for arc in transitions:
-                resource_count = len(arc.resource_requirements) if hasattr(arc, 'resource_requirements') else 0
-                if resource_count < min_resources:
-                    min_resources = resource_count
-                    best_arc = arc
-            
-            return best_arc or transitions[0]
-        
-        elif self.strategy == TraversalStrategy.STREAM_OPTIMIZED:
-            # Prefer transitions that support streaming
-            for arc in transitions:
-                if hasattr(arc, 'supports_streaming') and arc.supports_streaming:
-                    return arc
-            return transitions[0]
-        
-        return transitions[0]
+        return self.transition_selector.select_transition(
+            transitions,
+            context,
+            strategy=self.strategy
+        )
     
     def _find_initial_state(self) -> str | None:
         """Find the initial state in the FSM.
@@ -712,7 +697,7 @@ class ExecutionEngine:
         self,
         context: ExecutionContext
     ) -> StateNetwork | None:
-        """Get the current network from context.
+        """Get the current network from context using common network selector.
         
         Args:
             context: Execution context.
@@ -720,19 +705,14 @@ class ExecutionEngine:
         Returns:
             Current network or None.
         """
-        # Check if we're in a pushed network
-        if context.network_stack:
-            network_name = context.network_stack[-1][0]
-        else:
-            # Get the main network name - handle both wrapper and core FSM
-            if hasattr(self.fsm, 'core_fsm'):
-                # This is a wrapper FSM
-                network_name = self.fsm.core_fsm.main_network
-            else:
-                # This is a core FSM
-                network_name = self.fsm.main_network
+        # Allow intelligent selection to be controlled by selection_mode
+        enable_intelligent = self.selection_mode != TransitionSelectionMode.STRATEGY_BASED
         
-        return self.fsm.networks.get(network_name)
+        return NetworkSelector.get_current_network(
+            self.fsm,
+            context,
+            enable_intelligent_selection=enable_intelligent
+        )
     
     def add_pre_transition_hook(self, hook: callable) -> None:
         """Add a pre-transition hook.

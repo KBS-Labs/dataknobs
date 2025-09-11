@@ -582,8 +582,7 @@ class ErrorRecoveryWorkflow:
             Function result or fallback value
         """
         self._metrics['attempts'] += 1
-        # TODO: Use start_time for execution time tracking/metrics
-        # start_time = time.time()
+        start_time = time.time()
         
         try:
             # Apply primary strategy
@@ -619,12 +618,26 @@ class ErrorRecoveryWorkflow:
                 self._cache['last_result'] = result
                 self._cache['last_success_time'] = time.time()
                 
+            # Track execution time
+            execution_time = time.time() - start_time
             self._metrics['successes'] += 1
+            self._metrics['last_execution_time'] = execution_time
+            if 'total_execution_time' not in self._metrics:
+                self._metrics['total_execution_time'] = 0
+            self._metrics['total_execution_time'] += execution_time
+            
             return result
             
         except Exception as e:
             self._error_count += 1
             self._metrics['failures'] += 1
+            
+            # Track execution time even on failure
+            execution_time = time.time() - start_time
+            self._metrics['last_execution_time'] = execution_time
+            if 'total_execution_time' not in self._metrics:
+                self._metrics['total_execution_time'] = 0
+            self._metrics['total_execution_time'] += execution_time
             
             # Log error
             if self.config.log_errors:

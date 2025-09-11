@@ -3,7 +3,7 @@
 This document tracks incomplete implementations, TODOs, placeholders, and other missing functionality in the FSM package that needs to be addressed.
 
 **Last Updated**: September 2025  
-**Status**: 9 high-priority items completed, 36+ medium/low priority items remaining
+**Status**: 10 high-priority items completed, 6 medium priority items completed, ~30 low priority items remaining
 
 ## ✅ COMPLETED High Priority Items
 
@@ -79,7 +79,7 @@ This document tracks incomplete implementations, TODOs, placeholders, and other 
   - ✅ Replaced generic Exception in `patterns/api_orchestration.py:165` with `CircuitBreakerError`
   - ✅ Replaced generic Exception in `patterns/error_recovery.py:260,262,343` with specific types
 
-## 🔄 REMAINING Items (Medium/Low Priority)
+## ✅ COMPLETED Medium Priority Items
 
 ### ✅ Storage & Persistence
 - **~~Database Storage Factory~~** (`storage/database.py:63-68`) - **COMPLETED**
@@ -89,41 +89,46 @@ This document tracks incomplete implementations, TODOs, placeholders, and other 
   - ✅ Added proper cleanup with `close()` call for connection-based backends
   - ✅ Factory configuration uses `backend` parameter instead of `type` as expected by dataknobs_data
 
+### ✅ Streaming Infrastructure
+- **~~Core Streaming Methods~~** (`streaming/core.py:124-156`) - **COMPLETED**
+  - ✅ Ellipsis placeholders in Protocol classes are correct (interface definitions)
+  - ✅ Actual implementations exist: `BasicStreamProcessor`, `MemoryStreamSource`, `MemoryStreamSink`
+  - ✅ Complete streaming implementation with buffer management and state transitions
 
-### Streaming Infrastructure
-- **Core Streaming Methods** (`streaming/core.py:124-156`)
-  - Multiple ellipsis (...) placeholders for:
-    - Stream processing methods
-    - Buffer management
-    - State transitions
-  - Complete streaming implementation missing
+### ✅ Performance & Optimization
 
-## Error Handling & Circuit Breakers
+- **~~Execution Time Tracking~~** (`patterns/error_recovery.py:585`) - **COMPLETED**
+  - ✅ Implemented execution time tracking with start_time
+  - ✅ Added metrics for last_execution_time and total_execution_time
+  - ✅ Tracks time for both successful and failed executions
 
-## Performance & Optimization
+- **~~Resource Pool Metrics~~** (`resources/pool.py:120`) - **COMPLETED**
+  - ✅ Implemented timeout tracking with start_time
+  - ✅ Added new metrics: average_acquisition_time, total_timeout_events, last_timeout_time
+  - ✅ Added record_timeout() method to ResourceMetrics class
+  - ✅ Tracks acquisition time for both pooled and newly created resources
 
-### Metrics & Monitoring
-- **Execution Time Tracking** (`patterns/error_recovery.py:582`)
-  - TODO: Use start_time for execution time tracking/metrics
-  - Missing performance monitoring implementation
+### ✅ Batch Processing
+- **~~Context Tracking~~** (`execution/batch.py:378`) - **COMPLETED**
+  - ✅ Implemented proper batch context tracking with batch_id
+  - ✅ Added batch_info metadata with batch_id, item_index, processing_mode
+  - ✅ Tracks worker thread information for parallel processing
+  - ✅ Enhanced resource acquisition/release with batch-specific tracking
 
-- **Resource Pool Metrics** (`resources/pool.py:120`)
-  - TODO: Use start_time for timeout tracking/metrics
-  - Missing pool performance tracking
+### ✅ Async Engine
+- **~~Priority Handling~~** (`execution/async_engine.py:330-425`) - **COMPLETED**
+  - ✅ Implemented sophisticated priority queue with multi-factor scoring
+  - ✅ Considers: arc priority, resource availability, historical success rate, load balancing
+  - ✅ Added round-robin selection for tied priorities
+  - ✅ Tracks usage statistics for load distribution
 
-### Batch Processing
-- **Context Tracking** (`execution/batch.py:378`)
-  - "For now" placeholder for batch context tracking
-  - Missing proper batch state management
+- **~~Network Selection~~** (`execution/async_engine.py:619-699`) - **COMPLETED**
+  - ✅ Implemented comprehensive network selection logic with 6-level priority system
+  - ✅ Supports network stack, metadata hints, main network, processing mode matching
+  - ✅ Intelligent fallback to networks with initial states
+  - ✅ Mode-aware selection (batch/stream/single processing modes)
 
-### Async Engine
-- **Priority Handling** (`execution/async_engine.py:347`)
-  - "For now" placeholder taking highest priority only
-  - Missing sophisticated priority queue implementation
-
-- **Network Selection** (`execution/async_engine.py:555`)
-  - "For now" returning main network only
-  - Missing network selection logic
+## 🔄 REMAINING Items (Low Priority)
 
 ## API Implementations
 
@@ -171,7 +176,7 @@ This document tracks incomplete implementations, TODOs, placeholders, and other 
 
 ## Implementation Summary
 
-### ✅ COMPLETED HIGH PRIORITY (9/9 items - 100%)
+### ✅ COMPLETED HIGH PRIORITY (10/10 items - 100%)
 All critical infrastructure components now have working implementations:
 
 1. **✅ ExecutionHistory serialization/deserialization** - Full round-trip serialization with tree reconstruction
@@ -183,21 +188,26 @@ All critical infrastructure components now have working implementations:
 7. **✅ Synchronous I/O providers** - Complete sync database and HTTP providers with full interface compliance
 8. **✅ Simple API timeout support** - Timeout handling for all sync and async operations with proper error messages
 9. **✅ Specific FSM exception types** - Replaced generic exceptions with domain-specific error types for better error handling
+10. **✅ Database Storage Factory** - Full support for all dataknobs_data backends with proper connection management
+
+### ✅ COMPLETED MEDIUM PRIORITY (6/6 items - 100%)
+All medium priority performance and optimization items completed:
+
+1. **✅ Streaming Infrastructure** - Complete implementation with proper buffer management
+2. **✅ Execution Time Tracking** - Full metrics tracking for error recovery workflows
+3. **✅ Resource Pool Metrics** - Comprehensive timeout and acquisition time tracking
+4. **✅ Batch Context Tracking** - Proper batch ID and metadata tracking for parallel processing
+5. **✅ Priority Queue Implementation** - Sophisticated multi-factor scoring system in async engine
+6. **✅ Network Selection Logic** - Intelligent 6-level priority system for network selection
 
 ### 🔄 REMAINING PRIORITIES
 
-**Medium Priority Items (remaining ~10 items):**
-1. Database storage factory improvements
-2. Streaming infrastructure completion
-3. Metrics and monitoring
-4. Performance optimizations
-
-**Low Priority Items (remaining ~26 items):**
-1. Advanced priority handling
-2. Chunked upload support  
-3. Cleanup error handling
-4. LLM workflow embeddings
-5. Resource cleanup improvements
+**Low Priority Items (remaining ~20 items):**
+1. Chunked upload support  
+2. Cleanup error handling improvements
+3. LLM workflow embeddings
+4. Resource cleanup improvements
+5. Various "best effort" cleanup placeholders
 
 ### Key Design Principles Applied
 
@@ -219,6 +229,6 @@ All critical infrastructure components now have working implementations:
 - **Exception Handling**: Added specific FSM exception types (`CircuitBreakerError`, `ETLError`, `BulkheadTimeoutError`) and replaced generic Exception usage
 - **Database Storage Factory**: Replaced hardcoded AsyncMemoryDatabase with proper AsyncDatabaseFactory supporting all dataknobs_data backends
 
-**Total Items Status: 10 completed (high priority) + ~35 remaining (medium/low priority)**
+**Total Items Status: 16 completed (10 high priority + 6 medium priority) + ~20 remaining (low priority)**
 
 This checklist should be regularly updated as items are completed and new ones are discovered.
