@@ -323,10 +323,12 @@ class TestStorageBackends:
         import os
         
         with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a file path within the directory, not the directory itself
+            file_path = os.path.join(tmpdir, "fsm_history.json")
             config = StorageConfig(
                 backend=StorageBackend.FILE,
                 connection_params={
-                    "path": tmpdir,
+                    "path": file_path,
                     "format": "json"
                 }
             )

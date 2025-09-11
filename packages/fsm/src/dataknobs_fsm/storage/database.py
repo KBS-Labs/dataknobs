@@ -60,16 +60,18 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         # Remove 'type' as it's not needed by dataknobs_data
         db_config.pop('type', None)
         
-        # TODO: Use factory to create database instance
-        # factory = DatabaseFactory()
+        # Use AsyncDatabaseFactory to create database instance
+        from dataknobs_data.factory import AsyncDatabaseFactory
+        factory = AsyncDatabaseFactory()
+        
         # The factory expects 'backend' not 'type'
         db_config['backend'] = backend_type
         
-        # For now, use AsyncMemoryDatabase directly to simplify
-        # In production, would use the appropriate async backend as specified in the config
-        from dataknobs_data.backends.memory import AsyncMemoryDatabase
+        self._db = factory.create(**db_config)
         
-        self._db = AsyncMemoryDatabase(db_config)
+        # Connect to the database if it has a connect method
+        if hasattr(self._db, 'connect'):
+            await self._db.connect()
         
         # For steps, use the same database instance
         # Different backends handle collections/tables differently
@@ -493,6 +495,10 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         for history_id in to_delete:
             if await self.delete_history(history_id):
                 deleted += 1
+        
+        # Close database connection if supported
+        if hasattr(self._db, 'close'):
+            await self._db.close()
         
         return deleted
 

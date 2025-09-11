@@ -81,10 +81,13 @@ This document tracks incomplete implementations, TODOs, placeholders, and other 
 
 ## 🔄 REMAINING Items (Medium/Low Priority)
 
-### Storage & Persistence
-- **Database Storage Factory** (`storage/database.py:63-68`)
-  - TODO: Use factory to create database instance instead of hardcoded AsyncMemoryDatabase
-  - Currently using simplified direct instantiation
+### ✅ Storage & Persistence
+- **~~Database Storage Factory~~** (`storage/database.py:63-68`) - **COMPLETED**
+  - ✅ Replaced hardcoded `AsyncMemoryDatabase` with proper `AsyncDatabaseFactory`
+  - ✅ Now supports all dataknobs_data backends: memory, sqlite, postgres, elasticsearch, s3
+  - ✅ Added proper database connection handling with `connect()` call for backends that require it
+  - ✅ Added proper cleanup with `close()` call for connection-based backends
+  - ✅ Factory configuration uses `backend` parameter instead of `type` as expected by dataknobs_data
 
 
 ### Streaming Infrastructure
@@ -214,7 +217,8 @@ All critical infrastructure components now have working implementations:
 - **I/O Providers**: Added `SyncDatabaseProvider` and `SyncHTTPProvider` with full sync interface support  
 - **Simple API**: Added timeout handling using ThreadPoolExecutor for sync operations and asyncio.wait_for for async operations
 - **Exception Handling**: Added specific FSM exception types (`CircuitBreakerError`, `ETLError`, `BulkheadTimeoutError`) and replaced generic Exception usage
+- **Database Storage Factory**: Replaced hardcoded AsyncMemoryDatabase with proper AsyncDatabaseFactory supporting all dataknobs_data backends
 
-**Total Items Status: 9 completed (high priority) + ~36 remaining (medium/low priority)**
+**Total Items Status: 10 completed (high priority) + ~35 remaining (medium/low priority)**
 
 This checklist should be regularly updated as items are completed and new ones are discovered.
