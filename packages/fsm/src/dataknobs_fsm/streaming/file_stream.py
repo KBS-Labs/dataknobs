@@ -4,6 +4,7 @@ import csv
 import gzip
 import io
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Union
@@ -13,6 +14,8 @@ from dataknobs_fsm.streaming.core import (
     IStreamSource,
     StreamChunk,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class FileFormat:
@@ -377,7 +380,7 @@ class FileStreamSink(IStreamSink):
             return True
             
         except Exception as e:
-            print(f"Error writing chunk: {e}")
+            logger.error(f"Error writing chunk: {e}")
             return False
     
     def _write_csv_chunk(self, data: List[Dict[str, Any]]) -> None:

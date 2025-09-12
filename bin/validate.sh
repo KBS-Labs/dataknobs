@@ -202,7 +202,10 @@ if [[ "$STATS" == true ]]; then
             count=$(grep -c "TODO\|FIXME" "$target" 2>/dev/null || echo 0)
             echo -e "  ${YELLOW}$target:${NC} $count"
         elif [[ -d "$target" ]]; then
+            # Temporarily disable pipefail since grep -c returns exit 1 when count is 0
+            set +o pipefail
             count=$(find "$target" -name "*.py" -exec grep -c "TODO\|FIXME" {} + 2>/dev/null | awk -F: '{sum += $2} END {print sum ? sum : 0}')
+            set -o pipefail
             echo -e "  ${YELLOW}$target:${NC} $count"
         fi
     done
@@ -342,48 +345,122 @@ fi
 # 5. Check for common issues
 echo -e "\n${BLUE}5. Checking for common issues...${NC}"
 
-# Check for print statements (except in __init__.py)
+# Check for print statements (with exceptions for legitimate uses)
 echo -e "${YELLOW}  Checking for print statements...${NC}"
 HAS_PRINTS=false
+PRINT_FILES=()
+
+# Files that are allowed to have print statements
+# CLI tools and debuggers need to output to users
+PRINT_EXCEPTIONS=(
+    "*/cli/main.py"       # CLI interface uses Rich console.print
+    "*/api/advanced.py"   # Debugger class needs user output
+)
+
+# Function to check if a file should be excluded
+should_exclude_file() {
+    local file="$1"
+    for exception in "${PRINT_EXCEPTIONS[@]}"; do
+        if [[ "$file" == $exception ]]; then
+            return 0  # Should exclude (true)
+        fi
+    done
+    return 1  # Should not exclude (false)
+}
+
 for target in "${VALIDATE_TARGETS[@]}"; do
     if [[ -f "$target" ]]; then
         # Single file
-        if [[ "$(basename "$target")" != "__init__.py" ]] && grep -q "print(" "$target"; then
-            echo -e "${RED}    ✗ Found print statement in $target${NC}"
+        if [[ "$(basename "$target")" != "__init__.py" ]] && \
+           [[ "$target" != *test* ]] && \
+           ! should_exclude_file "$target" && \
+           grep -q "print(" "$target"; then
+            PRINT_FILES+=("$target")
             HAS_PRINTS=true
         fi
     elif [[ -d "$target" ]]; then
-        # Directory
-        if find "$target" -name "*.py" ! -name "__init__.py" -exec grep -l "print(" {} \; | grep -v test | head -n 1 > /dev/null; then
-            echo -e "${RED}    ✗ Found print statements in $target (use logging instead)${NC}"
-            HAS_PRINTS=true
-        fi
+        # Directory - find all files with print statements
+        while IFS= read -r file; do
+            # Check if this file should be excluded
+            if ! should_exclude_file "$file"; then
+                PRINT_FILES+=("$file")
+                HAS_PRINTS=true
+            fi
+        done < <(find "$target" -name "*.py" ! -name "__init__.py" ! -path "*/test*" -exec grep -l "print(" {} \; 2>/dev/null)
     fi
 done
 
 if [[ "$HAS_PRINTS" == false ]]; then
     echo -e "${GREEN}    ✓ No print statements found${NC}"
 else
+    echo -e "${RED}    ✗ Found print statements (use logging instead):${NC}"
+    # Show up to 10 files with print statements
+    shown=0
+    for file in "${PRINT_FILES[@]}"; do
+        if [[ $shown -lt 10 ]]; then
+            # Show the file and line numbers where print statements appear
+            echo -e "${RED}      - $file:${NC}"
+            grep -n "print(" "$file" | head -3 | while IFS=: read -r line_num line_content; do
+                # Trim whitespace and show a preview
+                trimmed=$(echo "$line_content" | sed 's/^[[:space:]]*//' | cut -c1-60)
+                echo -e "${RED}        Line $line_num: $trimmed${NC}"
+            done
+            ((shown++))
+        fi
+    done
+    if [[ ${#PRINT_FILES[@]} -gt 10 ]]; then
+        echo -e "${RED}      ... and $((${#PRINT_FILES[@]} - 10)) more files${NC}"
+    fi
     FAILED=true
 fi
 
 # Check for TODO/FIXME comments
 echo -e "${YELLOW}  Checking for TODO/FIXME comments...${NC}"
 TODO_COUNT=0
+TODO_FILES=()
+
 for target in "${VALIDATE_TARGETS[@]}"; do
     if [[ -f "$target" ]]; then
+        # grep -c returns exit 1 when count is 0, so we use || echo 0
         count=$(grep -c "TODO\|FIXME" "$target" 2>/dev/null || echo 0)
-        TODO_COUNT=$((TODO_COUNT + count))
+        if [[ $count -gt 0 ]]; then
+            TODO_FILES+=("$target:$count")
+            TODO_COUNT=$((TODO_COUNT + count))
+        fi
     elif [[ -d "$target" ]]; then
-        count=$(find "$target" -name "*.py" -exec grep -c "TODO\|FIXME" {} + 2>/dev/null | awk -F: '{sum += $2} END {print sum ? sum : 0}')
-        # Ensure count is a valid number
-        count=${count:-0}
-        TODO_COUNT=$((TODO_COUNT + count))
+        # Find files with TODO/FIXME and their counts
+        while IFS=: read -r file count; do
+            if [[ -n "$file" ]] && [[ "$count" -gt 0 ]]; then
+                TODO_FILES+=("$file:$count")
+                TODO_COUNT=$((TODO_COUNT + count))
+            fi
+        done < <(find "$target" -name "*.py" -exec grep -c "TODO\|FIXME" {} + 2>/dev/null | grep -v ":0$")
     fi
 done
 
-if [[ "$TODO_COUNT" -gt 0 ]]; then
-    echo -e "${YELLOW}    ⚠ Found $TODO_COUNT TODO/FIXME comments${NC}"
+if [[ "$TODO_COUNT" -eq 0 ]]; then
+    echo -e "${GREEN}    ✓ No TODO/FIXME comments found${NC}"
+elif [[ "$TODO_COUNT" -gt 0 ]]; then
+    echo -e "${YELLOW}    ⚠ Found $TODO_COUNT TODO/FIXME comments:${NC}"
+    # Show up to 10 files with TODO/FIXME
+    shown=0
+    for file_info in "${TODO_FILES[@]}"; do
+        if [[ $shown -lt 10 ]]; then
+            file="${file_info%:*}"
+            count="${file_info##*:}"
+            echo -e "${YELLOW}      - $file ($count occurrences):${NC}"
+            # Show first 3 TODO/FIXME comments with line numbers
+            grep -n "TODO\|FIXME" "$file" | head -3 | while IFS=: read -r line_num line_content; do
+                # Trim whitespace and show a preview
+                trimmed=$(echo "$line_content" | sed 's/^[[:space:]]*//' | cut -c1-60)
+                echo -e "${YELLOW}        Line $line_num: $trimmed${NC}"
+            done
+            ((shown++))
+        fi
+    done
+    if [[ ${#TODO_FILES[@]} -gt 10 ]]; then
+        echo -e "${YELLOW}      ... and $((${#TODO_FILES[@]} - 10)) more files${NC}"
+    fi
 fi
 
 # Summary

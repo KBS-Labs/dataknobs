@@ -1,5 +1,6 @@
 """Database streaming implementation for FSM."""
 
+import logging
 import time
 from typing import Any, Callable, Dict, Iterator, List, Union
 
@@ -12,6 +13,8 @@ from dataknobs_fsm.streaming.core import (
     IStreamSource,
     StreamChunk,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class DatabaseStreamSource(IStreamSource):
@@ -263,7 +266,7 @@ class DatabaseStreamSink(IStreamSink):
             return True
             
         except Exception as e:
-            print(f"Error writing chunk to database: {e}")
+            logger.error(f"Error writing chunk to database: {e}")
             return False
     
     def _write_batch(self, batch: List[Dict[str, Any]]) -> bool:
@@ -305,7 +308,7 @@ class DatabaseStreamSink(IStreamSink):
             return True
             
         except Exception as e:
-            print(f"Error in batch write: {e}")
+            logger.error(f"Error in batch write: {e}")
             return False
     
     def _commit_transaction(self) -> None:

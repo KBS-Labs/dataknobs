@@ -11,9 +11,12 @@ import asyncio
 import time
 from datetime import datetime
 import random
+import logging
 
 from ..api.simple import SimpleFSM
 from ..core.data_modes import DataHandlingMode
+
+logger = logging.getLogger(__name__)
 
 
 class RecoveryStrategy(Enum):
@@ -552,7 +555,7 @@ class ErrorRecoveryWorkflow:
                     except Exception as comp_error:
                         # Log compensation error
                         if self.config.log_errors:
-                            print(f"Compensation error: {comp_error}")
+                            logger.error(f"Compensation error: {comp_error}")
                             
                 if self.config.compensation_config.on_compensation_complete:
                     self.config.compensation_config.on_compensation_complete()
@@ -641,11 +644,11 @@ class ErrorRecoveryWorkflow:
             
             # Log error
             if self.config.log_errors:
-                print(f"Error in recovery workflow: {e}")
+                logger.error(f"Error in recovery workflow: {e}")
                 
             # Check if should alert
             if self._error_count >= self.config.alert_threshold:
-                print(f"Alert: Error threshold reached ({self._error_count} errors)")
+                logger.warning(f"Alert: Error threshold reached ({self._error_count} errors)")
                 
             # Apply secondary strategies
             if self.config.secondary_strategies:
