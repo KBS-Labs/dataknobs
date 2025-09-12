@@ -6,14 +6,16 @@ transition selection strategies.
 """
 
 import math
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from enum import Enum
 
 from dataknobs_fsm.core.arc import ArcDefinition
 from dataknobs_fsm.core.fsm import FSM, StateNetwork
-from dataknobs_fsm.core.state import StateType
 from dataknobs_fsm.core.modes import ProcessingMode
 from dataknobs_fsm.execution.context import ExecutionContext
+
+if TYPE_CHECKING:
+    from dataknobs_fsm.execution.engine import TraversalStrategy
 
 
 class TransitionSelectionMode(Enum):
@@ -31,7 +33,7 @@ class NetworkSelector:
         fsm: FSM,
         context: ExecutionContext,
         enable_intelligent_selection: bool = True
-    ) -> Optional[StateNetwork]:
+    ) -> StateNetwork | None:
         """Get the current network from context with intelligent selection.
         
         Network selection priority:
@@ -95,7 +97,7 @@ class NetworkSelector:
             network_type = context.metadata.get('preferred_network_type')
             if network_type:
                 # Find networks matching the type
-                for name, network in fsm.networks.items():
+                for network in fsm.networks.values():
                     if hasattr(network, 'type') and network.type == network_type:
                         return network
         
@@ -231,7 +233,7 @@ class TransitionSelector:
         available: List[ArcDefinition],
         context: ExecutionContext,
         strategy: Optional['TraversalStrategy'] = None
-    ) -> Optional[ArcDefinition]:
+    ) -> ArcDefinition | None:
         """Select which transition to take from available options.
         
         Args:
@@ -272,7 +274,7 @@ class TransitionSelector:
         available: List[ArcDefinition],
         context: ExecutionContext,
         strategy: Optional['TraversalStrategy']
-    ) -> Optional[ArcDefinition]:
+    ) -> ArcDefinition | None:
         """Select transition based on traversal strategy.
         
         Args:
@@ -335,7 +337,7 @@ class TransitionSelector:
         self,
         available: List[ArcDefinition],
         context: ExecutionContext
-    ) -> Optional[ArcDefinition]:
+    ) -> ArcDefinition | None:
         """Select transition based on multi-factor scoring.
         
         Args:

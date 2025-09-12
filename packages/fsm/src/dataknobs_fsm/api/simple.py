@@ -121,16 +121,15 @@ class SimpleFSM:
             if timeout:
                 # Implement timeout using concurrent.futures
                 import concurrent.futures
-                import threading
                 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                     future = executor.submit(self._engine.execute, context)
                     try:
                         success, result = future.result(timeout=timeout)
-                    except concurrent.futures.TimeoutError:
+                    except concurrent.futures.TimeoutError as e:
                         # Cancel the future and raise timeout error
                         future.cancel()
-                        raise TimeoutError(f"FSM execution exceeded timeout of {timeout} seconds")
+                        raise TimeoutError(f"FSM execution exceeded timeout of {timeout} seconds") from e
             else:
                 success, result = self._engine.execute(context)
                 
@@ -507,9 +506,9 @@ def batch_process(
                 )
                 try:
                     return future.result(timeout=timeout)
-                except concurrent.futures.TimeoutError:
+                except concurrent.futures.TimeoutError as e:
                     future.cancel()
-                    raise TimeoutError(f"Batch processing exceeded timeout of {timeout} seconds")
+                    raise TimeoutError(f"Batch processing exceeded timeout of {timeout} seconds") from e
         else:
             return fsm.process_batch(
                 data=data,

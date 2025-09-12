@@ -321,7 +321,7 @@ class SyncElasticsearchDatabase(
         try:
             # Use the bulk helper for creation
             # Note: helpers.BulkIndexError may be raised if raise_on_error=True
-            success_count, errors = helpers.bulk(
+            _success_count, errors = helpers.bulk(
                 self.es_client,
                 bulk_operations,
                 refresh=self.refresh,
@@ -402,7 +402,7 @@ class SyncElasticsearchDatabase(
 
         try:
             # Use the bulk helper for deletion
-            success_count, errors = helpers.bulk(
+            _success_count, errors = helpers.bulk(
                 self.es_client,
                 bulk_operations,
                 refresh=self.refresh,
@@ -480,7 +480,7 @@ class SyncElasticsearchDatabase(
 
         try:
             # Use the bulk helper for the update
-            success_count, errors = helpers.bulk(
+            _success_count, errors = helpers.bulk(
                 self.es_client,
                 bulk_operations,
                 refresh=self.refresh,

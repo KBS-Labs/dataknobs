@@ -525,7 +525,7 @@ class VectorTextSynchronizer:
 
         # Create record and sync
         record = Record(id=record_id, data=new_data)
-        success, updated_fields = await self.sync_record(record, force=True)
+        _success, updated_fields = await self.sync_record(record, force=True)
 
         if updated_fields:
             # Update only the vector fields
@@ -569,7 +569,7 @@ class VectorTextSynchronizer:
         if not self.config.auto_embed_on_create:
             return False
 
-        success, updated_fields = await self.sync_record(record)
+        _success, updated_fields = await self.sync_record(record)
 
         if updated_fields:
             # Update the record with vector data

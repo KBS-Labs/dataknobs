@@ -14,8 +14,7 @@ from dataknobs_fsm.functions.base import FunctionContext
 from dataknobs_fsm.execution.common import (
     NetworkSelector,
     TransitionSelector,
-    TransitionSelectionMode,
-    extract_metrics_from_context
+    TransitionSelectionMode
 )
 
 

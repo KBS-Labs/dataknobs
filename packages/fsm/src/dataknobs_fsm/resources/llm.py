@@ -1,6 +1,7 @@
 """LLM resource provider for language model interactions."""
 
 import json
+import os
 import time
 from dataclasses import dataclass, field as dataclass_field
 from typing import Any, Dict, List, Union
@@ -550,7 +551,7 @@ class LLMResource(BaseResourceProvider):
             # Fallback to placeholder on error
             return {
                 "choices": [{
-                    "text": f"Error: {str(e)}",
+                    "text": f"Error: {e!s}",
                     "index": 0,
                     "finish_reason": "error"
                 }],
@@ -604,7 +605,7 @@ class LLMResource(BaseResourceProvider):
             # Fallback to placeholder on error
             return {
                 "choices": [{
-                    "text": f"Error: {str(e)}",
+                    "text": f"Error: {e!s}",
                     "index": 0,
                     "finish_reason": "error"
                 }],

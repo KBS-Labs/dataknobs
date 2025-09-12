@@ -259,7 +259,7 @@ class NetworkExecutor:
             context: Execution context.
         """
         if context.network_stack:
-            network_name, return_state = context.pop_network()
+            _network_name, return_state = context.pop_network()
             
             if return_state:
                 context.set_state(return_state)

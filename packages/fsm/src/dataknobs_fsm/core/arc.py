@@ -440,7 +440,7 @@ class ArcExecution:
         acquired_resources = getattr(context, '_acquired_resources', {})
         
         # Release each resource
-        for resource_type, resource in resources.items():
+        for resource_type in resources.keys():
             # Find the resource name for this resource type
             resource_name = None
             for rtype, rname in self.arc_def.required_resources.items():

@@ -102,7 +102,7 @@ class TransactionManager(ABC):
         self._active_transaction: Transaction | None = None
     
     @classmethod
-    def create(cls, strategy: TransactionStrategy, **config) -> "TransactionManager":
+    def create(cls, strategy: TransactionStrategy, **config) -> "TransactionManager":  # noqa: ARG003
         """Factory method to create appropriate transaction manager.
         
         Args:

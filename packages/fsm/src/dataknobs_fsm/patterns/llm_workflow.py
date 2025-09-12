@@ -156,7 +156,6 @@ class VectorRetriever:
             documents: List of documents to index
         """
         from dataknobs_fsm.llm.providers import get_provider
-        import numpy as np
         
         self.documents = documents
         
@@ -298,7 +297,7 @@ class VectorRetriever:
             vec1 = vec1[:min_len]
             vec2 = vec2[:min_len]
         
-        dot_product = sum(a * b for a, b in zip(vec1, vec2))
+        dot_product = sum(a * b for a, b in zip(vec1, vec2, strict=False))
         return dot_product  # Already normalized
 
 

@@ -212,7 +212,6 @@ ignore = [
     "UP007", # Use `X | Y` for union types
     "UP028", # Replace yield over for loop with yield from
     "UP035", # Deprecated typing imports
-    "UP038", # Use X | Y in isinstance instead of (X, Y)
     
     # Import formatting
     "I001", # Import block is un-sorted or un-formatted - cosmetic
@@ -229,7 +228,6 @@ ignore = [
     # Other style preferences
     "C414", # Unnecessary list() call within sorted()
     "E721", # Use isinstance() instead of type comparison
-    "PD901", # df is a bad variable name (common in data science)
     "RUF005", # Consider unpacking instead of concatenation
     "RUF012", # Mutable class attributes should use ClassVar
     "RUF013", # PEP 484 prohibits implicit Optional

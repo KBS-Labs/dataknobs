@@ -289,21 +289,21 @@ data
         
         # Generate validation code based on schema
         validations = []
-        for field, constraints in self.config.validation_schema.items():
+        for field_name, constraints in self.config.validation_schema.items():
             if isinstance(constraints, dict):
-                if 'required' in constraints and constraints['required']:
-                    validations.append(f"'{field}' in data")
+                if constraints.get('required'):
+                    validations.append(f"'{field_name}' in data")
                 if 'type' in constraints:
                     python_type = constraints['type']
-                    validations.append(f"isinstance(data.get('{field}'), {python_type})")
+                    validations.append(f"isinstance(data.get('{field_name}'), {python_type})")
                 if 'min' in constraints:
-                    validations.append(f"data.get('{field}', 0) >= {constraints['min']}")
+                    validations.append(f"data.get('{field_name}', 0) >= {constraints['min']}")
                 if 'max' in constraints:
-                    validations.append(f"data.get('{field}', 0) <= {constraints['max']}")
+                    validations.append(f"data.get('{field_name}', 0) <= {constraints['max']}")
                 if 'pattern' in constraints:
-                    validations.append(f"re.match(r'{constraints['pattern']}', str(data.get('{field}', '')))")
+                    validations.append(f"re.match(r'{constraints['pattern']}', str(data.get('{field_name}', '')))")
             elif constraints is True:  # Required field
-                validations.append(f"'{field}' in data")
+                validations.append(f"'{field_name}' in data")
         
         return " and ".join(validations) if validations else "True"
     
@@ -314,7 +314,7 @@ data
         
         # Apply all filters in sequence - data must pass all filters
         filter_conditions = []
-        for i, filter_func in enumerate(self.config.filters):
+        for i, _filter_func in enumerate(self.config.filters):
             # Use registered function name
             filter_conditions.append(f"filter_{i}(data)")
         
@@ -327,7 +327,7 @@ data
         
         # Apply transformations in sequence
         result_code = "data"
-        for i, transform_func in enumerate(self.config.transformations):
+        for i, _transform_func in enumerate(self.config.transformations):
             # Each transformation receives the result of the previous one
             result_code = f"transform_{i}({result_code})"
         
@@ -340,7 +340,7 @@ data
         
         # Apply aggregations to create summary data
         aggregation_results = []
-        for agg_name, agg_func in self.config.aggregations.items():
+        for agg_name in self.config.aggregations.keys():
             aggregation_results.append(f"'{agg_name}': agg_{agg_name}(data)")
         
         if aggregation_results:
@@ -660,8 +660,6 @@ def create_log_analyzer(
     Returns:
         Configured FileProcessor
     """
-    import re
-    
     # Create pattern extractors
     transformations = []
     if patterns:

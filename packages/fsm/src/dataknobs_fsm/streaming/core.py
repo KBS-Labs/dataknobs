@@ -581,13 +581,14 @@ class BasicStreamProcessor:
             for chunk in self.source:
                 try:
                     # Apply transformation if provided
+                    chunk_to_write = chunk
                     if self.transform_func:
                         transformed_chunk = self.transform_func(chunk)
                         if transformed_chunk:
-                            chunk = transformed_chunk
+                            chunk_to_write = transformed_chunk
                     
                     # Write to sink
-                    success = self.sink.write_chunk(chunk)
+                    success = self.sink.write_chunk(chunk_to_write)
                     if success:
                         self.processed_chunks += 1
                         self.processed_records += len(chunk.data) if hasattr(chunk.data, '__len__') else 1
@@ -595,14 +596,14 @@ class BasicStreamProcessor:
                         self.errors.append(f"Failed to write chunk {self.processed_chunks}")
                         
                 except Exception as e:
-                    self.errors.append(f"Error processing chunk {self.processed_chunks}: {str(e)}")
+                    self.errors.append(f"Error processing chunk {self.processed_chunks}: {e!s}")
                     continue
             
             # Flush sink
             self.sink.flush()
             
         except Exception as e:
-            self.errors.append(f"Stream processing error: {str(e)}")
+            self.errors.append(f"Stream processing error: {e!s}")
         finally:
             # Clean up
             self.source.close()

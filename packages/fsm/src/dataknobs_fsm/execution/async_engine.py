@@ -14,8 +14,7 @@ from dataknobs_fsm.execution.engine import TraversalStrategy
 from dataknobs_fsm.execution.common import (
     NetworkSelector,
     TransitionSelector,
-    TransitionSelectionMode,
-    extract_metrics_from_context
+    TransitionSelectionMode
 )
 
 

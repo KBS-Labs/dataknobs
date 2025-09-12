@@ -248,7 +248,7 @@ class AdvancedFSM:
         
         # Use the async execution engine to execute one step
         # This ensures consistent execution logic across all FSM types
-        success, result = await self._async_engine.execute(
+        _success, _result = await self._async_engine.execute(
             context=context,
             data=None,  # Don't override context data
             max_transitions=1,  # Execute exactly one transition

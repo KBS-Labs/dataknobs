@@ -399,7 +399,7 @@ class ResourceManager:
             results = await asyncio.gather(*cleanup_tasks, return_exceptions=True)
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
-                    logger.error(f"Error during async cleanup: {result}")
+                    logger.error(f"Error during async cleanup (task {i}): {result}")
         
         # Run sync cleanups in executor to avoid blocking
         if sync_providers:
@@ -567,7 +567,7 @@ class ResourceManager:
                     status["active_count"] = metrics.active_connections
                     status["total_acquires"] = metrics.total_acquisitions
                     status["total_releases"] = metrics.total_acquisitions - metrics.active_connections
-                except:
+                except Exception:
                     pass
             
             return status

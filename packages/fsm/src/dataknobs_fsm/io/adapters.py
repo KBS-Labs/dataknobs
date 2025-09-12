@@ -585,8 +585,10 @@ class AsyncHTTPProvider(AsyncIOProvider):
             """Generate chunks for upload."""
             async for chunk in data_stream:
                 if isinstance(chunk, str):
-                    chunk = chunk.encode('utf-8')
-                yield chunk
+                    encoded_chunk = chunk.encode('utf-8')
+                    yield encoded_chunk
+                else:
+                    yield chunk
         
         async with aiohttp.ClientSession() as session:
             async with session.post(
