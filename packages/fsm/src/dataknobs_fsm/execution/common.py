@@ -9,7 +9,8 @@ import math
 from typing import Any, Dict, List, Tuple, Optional
 from enum import Enum
 
-from dataknobs_fsm.core.fsm import FSM, ArcDefinition, StateNetwork
+from dataknobs_fsm.core.arc import ArcDefinition
+from dataknobs_fsm.core.fsm import FSM, StateNetwork
 from dataknobs_fsm.core.state import StateType
 from dataknobs_fsm.core.modes import ProcessingMode
 from dataknobs_fsm.execution.context import ExecutionContext
@@ -132,6 +133,7 @@ class ArcScorer:
     def score_arc(
         arc: ArcDefinition,
         context: ExecutionContext,
+        source_state: str,
         include_resource_check: bool = True,
         include_history: bool = True,
         include_load_balancing: bool = True
@@ -174,7 +176,7 @@ class ArcScorer:
         
         # Factor 3: Historical success rate from metadata
         if include_history:
-            arc_key = f"arc_{arc.source}_{arc.target}_stats"
+            arc_key = f"arc_{source_state}_{arc.target_state}_stats"
             if arc_key in context.metadata:
                 stats = context.metadata[arc_key]
                 success_rate = stats.get('success_rate', 0.5)
@@ -182,7 +184,7 @@ class ArcScorer:
         
         # Factor 4: Load balancing - penalize frequently used arcs
         if include_load_balancing:
-            usage_key = f"arc_{arc.source}_{arc.target}_usage"
+            usage_key = f"arc_{source_state}_{arc.target_state}_usage"
             if usage_key in context.metadata:
                 usage_count = context.metadata[usage_key]
                 # Logarithmic penalty for overuse
@@ -195,14 +197,15 @@ class ArcScorer:
         return score
     
     @staticmethod
-    def update_arc_usage(arc: ArcDefinition, context: ExecutionContext) -> None:
+    def update_arc_usage(arc: ArcDefinition, context: ExecutionContext, source_state: str) -> None:
         """Update usage statistics for an arc.
         
         Args:
             arc: The arc that was used.
             context: Execution context.
+            source_state: The source state of the arc.
         """
-        usage_key = f"arc_{arc.source}_{arc.target}_usage"
+        usage_key = f"arc_{source_state}_{arc.target_state}_usage"
         context.metadata[usage_key] = context.metadata.get(usage_key, 0) + 1
 
 
@@ -245,7 +248,8 @@ class TransitionSelector:
         # If only one option, return it
         if len(available) == 1:
             selected = available[0]
-            ArcScorer.update_arc_usage(selected, context)
+            state_name = context.current_state or ""
+            ArcScorer.update_arc_usage(selected, context, state_name)
             return selected
         
         # Get the effective strategy
@@ -279,7 +283,7 @@ class TransitionSelector:
         Returns:
             Selected arc or None.
         """
-        from dataknobs_fsm.core.traversal import TraversalStrategy
+        from dataknobs_fsm.execution.engine import TraversalStrategy
         
         selected = None
         
@@ -321,8 +325,9 @@ class TransitionSelector:
             # Default to first available
             selected = available[0]
         
+        state_name = context.current_state or ""
         if selected:
-            ArcScorer.update_arc_usage(selected, context)
+            ArcScorer.update_arc_usage(selected, context, state_name)
         
         return selected
     
@@ -341,9 +346,10 @@ class TransitionSelector:
             Selected arc or None.
         """
         # Score each arc
+        state_name = context.current_state or ""
         arc_scores = []
         for arc in available:
-            score = ArcScorer.score_arc(arc, context)
+            score = ArcScorer.score_arc(arc, context, state_name)
             arc_scores.append((arc, score))
         
         # Sort by score (highest first)
@@ -355,7 +361,8 @@ class TransitionSelector:
         
         if len(tied_arcs) > 1:
             # Use round-robin selection for tied arcs
-            round_robin_key = f"state_{available[0].source}_round_robin"
+            state_name = context.current_state or ""
+            round_robin_key = f"state_{state_name}_round_robin"
             current_index = context.metadata.get(round_robin_key, 0)
             selected_arc = tied_arcs[current_index % len(tied_arcs)]
             context.metadata[round_robin_key] = current_index + 1
@@ -364,7 +371,8 @@ class TransitionSelector:
             selected_arc = arc_scores[0][0]
         
         # Update usage count
-        ArcScorer.update_arc_usage(selected_arc, context)
+        state_name = context.current_state or ""
+        ArcScorer.update_arc_usage(selected_arc, context, state_name)
         
         return selected_arc
 
