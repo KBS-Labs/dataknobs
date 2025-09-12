@@ -872,8 +872,7 @@ class FSM:
             # Create execution context
             context = ExecutionContext(
                 data_mode=self.core_fsm.data_mode,
-                transaction_mode=self.core_fsm.transaction_mode,
-                data=initial_data
+                transaction_mode=self.core_fsm.transaction_mode
             )
             
             # Execute the FSM (engine.execute is synchronous)
