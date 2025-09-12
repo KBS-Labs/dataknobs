@@ -460,7 +460,7 @@ class ExecutionHistory:
                         'steps': []
                     }
                 
-                usage[resource_type]['total_calls'] += 1
+                usage[resource_type]['total_calls'] += 1  # type: ignore
                 if 'duration' in metrics:
                     usage[resource_type]['total_duration'] += metrics['duration']
                 usage[resource_type]['steps'].append(step.step_id)
@@ -687,9 +687,9 @@ class ExecutionHistory:
             # Aggressive pruning - keep only recent history
             # Remove all but the current path
             current_path = self.get_path_to_current()
-            if current_path and len(current_path) > self.max_depth:
+            if current_path and len(current_path) > self.max_depth:  # type: ignore
                 # Keep only last max_depth steps
-                steps_to_keep = current_path[-self.max_depth:]
+                steps_to_keep = current_path[-self.max_depth:]  # type: ignore
                 # Rebuild tree with only these steps
                 self.tree_roots = []
                 self.current_node = None

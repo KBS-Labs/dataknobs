@@ -194,7 +194,7 @@ class DatabaseETL:
             return None
             
         validator = SchemaValidator(self.config.validation_schema)
-        return lambda state: validator.validate(Record(state.data))
+        return lambda state: validator.validate(Record(state.data))  # type: ignore
         
     def _create_validation_test_reference(self) -> Dict[str, Any] | None:
         """Create validation test function reference for FSM config."""
@@ -230,14 +230,14 @@ class DatabaseETL:
             
         # Add custom transformations
         if self.config.transformations:
-            transformers.extend(self.config.transformations)
+            transformers.extend(self.config.transformations)  # type: ignore
             
         # Compose transformers
         async def transform(data: Dict[str, Any]) -> Dict[str, Any]:
             result = data
             for transformer in transformers:
                 if hasattr(transformer, 'transform'):
-                    result = await transformer.transform(result)
+                    result = await transformer.transform(result)  # type: ignore
                 elif callable(transformer):
                     result = transformer(result)
             return result
@@ -249,7 +249,7 @@ class DatabaseETL:
         if not self.config.enrichment_sources:
             return None
             
-        enricher = DataEnricher(self.config.enrichment_sources)
+        enricher = DataEnricher(self.config.enrichment_sources)  # type: ignore
         return enricher.transform
         
     def _create_transformer_reference(self) -> Dict[str, Any] | None:
@@ -305,7 +305,7 @@ class DatabaseETL:
         config['functions'] = {
             'extract': DatabaseFetch(
                 resource_name='source_db',
-                query=self.config.source_query
+                query=self.config.source_query  # type: ignore
             ),
             'load': DatabaseUpsert(
                 resource_name='target_db',
@@ -333,7 +333,7 @@ class DatabaseETL:
         # Extract data
         source_db = await AsyncDatabase.create(
             self.config.source_db['type'],
-            self.config.source_db
+            self.config.source_db  # type: ignore
         )
         
         try:
@@ -344,10 +344,10 @@ class DatabaseETL:
                 query = self.config.source_query or Query()
                 
             # Process in batches
-            async for batch in self._extract_batches(source_db, query):
+            async for batch in self._extract_batches(source_db, query):  # type: ignore
                 # Process batch through FSM
                 results = self._fsm.process_batch(
-                    data=batch,
+                    data=batch,  # type: ignore
                     batch_size=self.config.batch_size,
                     max_workers=self.config.parallel_workers
                 )

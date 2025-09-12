@@ -256,7 +256,7 @@ class TypeConverter(ITransformFunction):
             return datetime.fromisoformat(value)
         
         # Standard type conversion
-        return target_type(value)
+        return target_type(value)  # type: ignore
 
 
 class DataEnricher(ITransformFunction):

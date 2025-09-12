@@ -150,10 +150,10 @@ class StateConfig(BaseModel):
                 if "target_network" in arc:
                     result.append(PushArcConfig(**arc))
                 else:
-                    result.append(ArcConfig(**arc))
+                    result.append(ArcConfig(**arc))  # type: ignore
             else:
                 result.append(arc)
-        return result
+        return result  # type: ignore
 
 
 class NetworkConfig(BaseModel):

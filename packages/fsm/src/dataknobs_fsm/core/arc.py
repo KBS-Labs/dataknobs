@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, TYPE_CHECKING
+from typing import Any, Callable, Dict, TYPE_CHECKING
 
 from dataknobs_fsm.functions.base import FunctionContext, StateTransitionError as FunctionError
 
@@ -460,7 +460,7 @@ class ArcExecution:
     
     def _execute_streaming(
         self,
-        func: callable,
+        func: Callable,
         data: Any,
         context: FunctionContext
     ) -> Any:

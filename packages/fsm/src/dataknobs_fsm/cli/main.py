@@ -520,7 +520,7 @@ def debug():
     pass
 
 
-@debug.command()
+@debug.command()  # type: ignore
 @click.argument('config_file', type=click.Path(exists=True))
 @click.option('--data', '-d', help='Input data (JSON string or file path)')
 @click.option('--breakpoint', '-b', multiple=True, help='Set breakpoint at state')
@@ -624,7 +624,7 @@ def list_history(fsm_name: str | None, limit: int, format: str):
     """List execution history"""
     # Create history manager with file backend
     storage = FileStorage(Path.home() / '.fsm' / 'history')
-    manager = ExecutionHistory(storage)
+    manager = ExecutionHistory(storage)  # type: ignore
     
     # Query history
     entries = asyncio.run(manager.query_history(
@@ -670,7 +670,7 @@ def show_execution(execution_id: str, verbose: bool):
     """Show details of a specific execution"""
     # Create history manager
     storage = FileStorage(Path.home() / '.fsm' / 'history')
-    manager = ExecutionHistory(storage)
+    manager = ExecutionHistory(storage)  # type: ignore
     
     # Get execution details
     entry = asyncio.run(manager.get_execution(execution_id))

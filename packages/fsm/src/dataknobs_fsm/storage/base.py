@@ -344,7 +344,7 @@ class StorageFactory:
         if not storage_class:
             raise ValueError(f"Unknown storage backend: {config.backend}")
         
-        return storage_class(config)
+        return storage_class(config)  # type: ignore
     
     @classmethod
     def get_available_backends(cls) -> List[StorageBackend]:

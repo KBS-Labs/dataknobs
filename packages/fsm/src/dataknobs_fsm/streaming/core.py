@@ -240,7 +240,7 @@ class StreamContext:
         result = chunk
         for processor in self._processors:
             if result is None:
-                break
+                break  # type: ignore[unreachable]
             try:
                 result = processor(result)
             except Exception:

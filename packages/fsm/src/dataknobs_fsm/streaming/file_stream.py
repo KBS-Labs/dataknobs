@@ -7,7 +7,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Union
+from typing import Any, Dict, Iterator, List, Union, TextIO, BinaryIO
 
 from dataknobs_fsm.streaming.core import (
     IStreamSink,
@@ -99,8 +99,8 @@ class FileStreamSource(IStreamSource):
         self.chunk_size = chunk_size
         self.encoding = encoding
         
-        self._file_handle = None
-        self._reader = None
+        self._file_handle: Union[TextIO, BinaryIO, Any, None] = None
+        self._reader: Any | None = None
         self._chunk_count = 0
         self._item_count = 0
         self._bytes_read = 0
@@ -123,10 +123,10 @@ class FileStreamSource(IStreamSource):
         
         # Set up format-specific reader
         if self.format == FileFormat.CSV:
-            self._reader = csv.DictReader(self._file_handle)
+            self._reader = csv.DictReader(self._file_handle)  # type: ignore
         elif self.format == FileFormat.JSON:
             # Load entire JSON file (for array or object)
-            content = self._file_handle.read()
+            content = self._file_handle.read()  # type: ignore
             data = json.loads(content)
             if isinstance(data, list):
                 self._reader = iter(data)
@@ -206,23 +206,23 @@ class FileStreamSource(IStreamSource):
         """
         try:
             if self.format == FileFormat.CSV:
-                return next(self._reader, None)
+                return next(self._reader, None) if self._reader else None
             elif self.format == FileFormat.JSONL:
-                line = next(self._reader, None)
+                line = next(self._reader, None) if self._reader else None
                 if line:
                     return json.loads(line.strip())
                 return None
             elif self.format == FileFormat.TEXT:
-                return next(self._reader, None)
+                return next(self._reader, None) if self._reader else None
             elif self.format == FileFormat.BINARY:
                 # Read in 4KB chunks for binary
-                data = self._reader.read(4096)
+                data = self._reader.read(4096) if self._reader else None
                 if data:
                     return data
                 return None
             else:
                 # For JSON array, already using iterator
-                return next(self._reader, None)
+                return next(self._reader, None) if self._reader else None
         except StopIteration:
             return None
         except Exception:
@@ -277,9 +277,9 @@ class FileStreamSink(IStreamSink):
         self.atomic = atomic
         self.append = append
         
-        self._file_handle = None
-        self._writer = None
-        self._temp_path = None
+        self._file_handle: Any | None = None
+        self._writer: Any | None = None
+        self._temp_path: Path | None = None
         self._chunk_count = 0
         self._item_count = 0
         self._bytes_written = 0
@@ -308,17 +308,17 @@ class FileStreamSink(IStreamSink):
         
         if self.compression == CompressionFormat.GZIP:
             if self.format == FileFormat.BINARY:
-                self._file_handle = gzip.open(target_path, mode + 'b')
+                self._file_handle = gzip.open(str(target_path), mode + 'b')
             else:
                 self._file_handle = gzip.open(
-                    target_path,
+                    str(target_path),
                     mode + 't',
                     encoding=self.encoding
                 )
         elif self.format == FileFormat.BINARY:
-            self._file_handle = open(target_path, mode + 'b')
+            self._file_handle = open(str(target_path), mode + 'b')
         else:
-            self._file_handle = open(target_path, mode, encoding=self.encoding)
+            self._file_handle = open(str(target_path), mode, encoding=self.encoding)
         
         # Set up format-specific writer
         if self.format == FileFormat.CSV:
@@ -396,7 +396,7 @@ class FileStreamSink(IStreamSink):
         if self._writer is None:
             fieldnames = list(data[0].keys())
             self._writer = csv.DictWriter(
-                self._file_handle,
+                self._file_handle,  # type: ignore
                 fieldnames=fieldnames
             )
             if not self.append or self._chunk_count == 0:

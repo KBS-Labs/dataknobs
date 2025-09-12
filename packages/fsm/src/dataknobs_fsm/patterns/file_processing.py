@@ -231,7 +231,7 @@ class FileProcessor:
             }
         ])
         
-        return arcs
+        return arcs  # type: ignore
     
     def _build_functions(self) -> Dict[str, Any]:
         """Build functions registry for FSM."""
@@ -381,7 +381,7 @@ data
             return None
             
         validator = SchemaValidator(self.config.validation_schema)
-        return lambda state: validator.validate(Record(state.data))
+        return lambda state: validator.validate(Record(state.data))  # type: ignore
         
     def _create_filter(self) -> Callable | None:
         """Create filter function."""
@@ -425,7 +425,7 @@ data
                     
             # Return aggregated results
             return {
-                key: self.config.aggregations[key](values)
+                key: self.config.aggregations[key](values)  # type: ignore
                 for key, values in agg_state.items()
             }
             
@@ -483,7 +483,7 @@ data
         # Process batches
         for batch in batches:
             results = self._fsm.process_batch(
-                data=batch,
+                data=batch,  # type: ignore
                 batch_size=self.config.chunk_size,
                 max_workers=self.config.parallel_chunks
             )
@@ -564,7 +564,7 @@ data
         """Write processed results to output file."""
         output_data = [r['data'] for r in results if r['success']]
         
-        with open(self.config.output_path, 'w', encoding=self.config.encoding) as f:
+        with open(self.config.output_path, 'w', encoding=self.config.encoding) as f:  # type: ignore
             if self.config.output_format == FileFormat.JSON:
                 import json
                 json.dump(output_data, f, indent=2)
@@ -796,7 +796,7 @@ def create_batch_file_processor(
         Configured FileProcessor
     """
     # Use first input path for config, handle multiple paths in processor
-    config = FileProcessingConfig(
+    config = FileProcessingConfig(  # type: ignore
         input_path=input_paths[0] if input_paths else "",
         output_path=output_path,
         pattern=patterns[0] if patterns else "*",

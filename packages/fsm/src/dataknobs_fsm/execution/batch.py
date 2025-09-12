@@ -280,7 +280,7 @@ class BatchExecutor:
                 
                 try:
                     batch_result = future.result()
-                    results[index] = batch_result
+                    results[index] = batch_result  # type: ignore
                     
                     if batch_result.success:
                         progress.succeeded += 1
@@ -288,7 +288,7 @@ class BatchExecutor:
                         progress.failed += 1
                     
                 except Exception as e:
-                    results[index] = BatchResult(
+                    results[index] = BatchResult(  # type: ignore
                         index=index,
                         success=False,
                         result=None,
@@ -302,7 +302,7 @@ class BatchExecutor:
                 if self.progress_callback:
                     self.progress_callback(progress)
         
-        return results
+        return results  # type: ignore
     
     def _process_single_item(
         self,

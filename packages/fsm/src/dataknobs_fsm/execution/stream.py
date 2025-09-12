@@ -22,8 +22,8 @@ class StreamPipeline:
     """Pipeline configuration for stream processing."""
     source: IStreamSource
     sink: IStreamSink | None = None
-    transformations: List[callable] = field(default_factory=list)
-    chunk_processors: List[callable] = field(default_factory=list)
+    transformations: List[Callable] = field(default_factory=list)
+    chunk_processors: List[Callable] = field(default_factory=list)
 
 
 @dataclass
@@ -201,7 +201,7 @@ class StreamExecutor:
         self,
         chunk: StreamChunk,
         context_template: ExecutionContext,
-        transformations: List[callable],
+        transformations: List[Callable],
         max_transitions: int,
         progress: StreamProgress
     ) -> List[Any]:

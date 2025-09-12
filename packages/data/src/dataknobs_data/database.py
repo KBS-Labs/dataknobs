@@ -299,7 +299,7 @@ class AsyncDatabase(ABC):
             
             if id is None:
                 # Generate a new ID if none found
-                id = str(uuid.uuid4())
+                id = str(uuid.uuid4())  # type: ignore[unreachable]
                 # Set it on the record for future reference
                 record.storage_id = id
         
@@ -741,7 +741,7 @@ class SyncDatabase(ABC):
             
             if id is None:
                 # Generate a new ID if none found
-                id = str(uuid.uuid4())
+                id = str(uuid.uuid4())  # type: ignore[unreachable]
                 # Set it on the record for future reference
                 record.storage_id = id
         

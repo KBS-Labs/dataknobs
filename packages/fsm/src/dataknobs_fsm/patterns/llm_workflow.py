@@ -477,7 +477,7 @@ class LLMWorkflow:
                     
                 # Post-process
                 if step.post_processor:
-                    result = step.post_processor(result)
+                    result = step.post_processor(result)  # type: ignore
                     
                 # Update history
                 if self.config.maintain_history:

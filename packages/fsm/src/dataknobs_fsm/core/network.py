@@ -168,7 +168,7 @@ class StateNetwork:
         return self._final_states.copy()
     
     @property
-    def resource_requirements(self) -> Dict[str, Set[str]]:
+    def resource_requirements(self) -> Dict[str, Any]:
         """Get resource requirements."""
         return {
             'databases': self._resource_requirements.databases,

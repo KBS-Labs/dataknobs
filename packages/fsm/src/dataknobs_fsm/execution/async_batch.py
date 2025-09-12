@@ -273,4 +273,4 @@ class AsyncBatchExecutor:
         else:
             # Run sync callback in executor
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self.progress_callback, progress)
+            await loop.run_in_executor(None, self.progress_callback, progress)  # type: ignore

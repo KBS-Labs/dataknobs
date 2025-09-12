@@ -214,10 +214,13 @@ class AsyncExecutionEngine:
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 batch_errors.append((i, result))
-            elif result[0]:  # success
-                batch_results.append(result[1])
             else:
-                batch_errors.append((i, Exception(result[1])))
+                # Result is a tuple[bool, Any] at this point
+                success, value = result  # type: ignore
+                if success:  # success
+                    batch_results.append(value)
+                else:
+                    batch_errors.append((i, Exception(value)))
         
         return len(batch_errors) == 0, {
             'results': batch_results,

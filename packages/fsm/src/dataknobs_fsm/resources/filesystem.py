@@ -149,7 +149,7 @@ class FileSystemResource(BaseResourceProvider):
                     handle = open(file_path, mode, encoding=encoding, **kwargs)
             
             # Create wrapper
-            file_handle = FileHandle(file_path, handle, mode)
+            file_handle = FileHandle(file_path, handle, mode)  # type: ignore
             self._open_handles[id(file_handle)] = file_handle
             self._resources.append(file_handle)
             
@@ -198,7 +198,7 @@ class FileSystemResource(BaseResourceProvider):
         if not isinstance(resource, FileHandle):
             return False
         
-        return not resource.closed and resource.handle and not resource.handle.closed
+        return not resource.closed and resource.handle and not resource.handle.closed  # type: ignore
     
     def health_check(self) -> ResourceHealth:
         """Check file system health.

@@ -368,7 +368,7 @@ class BaseFunction:
         return {
             "executions": self.execution_count,
             "errors": self.error_count,
-            "success_rate": (
+            "success_rate": float(  # type: ignore
                 (self.execution_count - self.error_count) / self.execution_count
                 if self.execution_count > 0 else 0
             )

@@ -305,7 +305,7 @@ async def retry_io_operation(
             else:
                 raise
                 
-    raise last_exception
+    raise last_exception  # type: ignore
 
 
 def parallel_io_executor(

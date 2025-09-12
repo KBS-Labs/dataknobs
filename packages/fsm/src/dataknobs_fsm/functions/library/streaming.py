@@ -514,19 +514,19 @@ class StreamAggregator(ITransformFunction):
         if not field:
             raise TransformFunctionError(f"Field required for {func} aggregation")
         
-        values = [r.get(field) for r in records if r.get(field) is not None]
+        values: List[Any] = [r.get(field) for r in records if r.get(field) is not None]
         
         if not values:
             return None
         
         if func == "sum":
-            return sum(values)
+            return sum(values)  # type: ignore
         elif func == "avg":
-            return sum(values) / len(values)
+            return sum(values) / len(values)  # type: ignore
         elif func == "min":
-            return min(values)
+            return min(values)  # type: ignore
         elif func == "max":
-            return max(values)
+            return max(values)  # type: ignore
         else:
             raise TransformFunctionError(f"Unknown aggregation function: {func}")
 

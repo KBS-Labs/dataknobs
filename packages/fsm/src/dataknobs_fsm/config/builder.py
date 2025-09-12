@@ -692,7 +692,7 @@ def transform(data, context=None):
                         return self.func(data, context)
                     FunctionWrapper.transform = wrapper
                 else:  # IStateTestFunction
-                    def wrapper(self, state):
+                    def wrapper(self, state):  # type: ignore
                         # Extract data from state if it's an object
                         data = state.data if hasattr(state, 'data') else state
                         return self.func(data, None)
@@ -713,7 +713,7 @@ def transform(data, context=None):
                         return self.func(State(data))
                     FunctionWrapper.transform = wrapper
                 else:  # IStateTestFunction  
-                    def wrapper(self, state):
+                    def wrapper(self, state):  # type: ignore
                         return self.func(state)
                     FunctionWrapper.test = wrapper
                 

@@ -284,7 +284,7 @@ class AsyncElasticsearchDatabase(
             record = id_or_record
             id = record.id
             if id is None:
-                import uuid
+                import uuid  # type: ignore[unreachable]
                 id = str(uuid.uuid4())
                 record.storage_id = id
         

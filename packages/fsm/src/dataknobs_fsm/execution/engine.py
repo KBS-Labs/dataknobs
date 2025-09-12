@@ -2,7 +2,7 @@
 
 import time
 from enum import Enum
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 from dataknobs_fsm.core.arc import ArcDefinition, ArcExecution
 from dataknobs_fsm.core.fsm import FSM
@@ -78,9 +78,9 @@ class ExecutionEngine:
         self._error_count = 0
         
         # Hooks
-        self._pre_transition_hooks: List[callable] = []
-        self._post_transition_hooks: List[callable] = []
-        self._error_hooks: List[callable] = []
+        self._pre_transition_hooks: List[Callable] = []
+        self._post_transition_hooks: List[Callable] = []
+        self._error_hooks: List[Callable] = []
     
     def execute(
         self,
@@ -713,7 +713,7 @@ class ExecutionEngine:
             enable_intelligent_selection=enable_intelligent
         )
     
-    def add_pre_transition_hook(self, hook: callable) -> None:
+    def add_pre_transition_hook(self, hook: Callable) -> None:
         """Add a pre-transition hook.
         
         Args:
@@ -721,7 +721,7 @@ class ExecutionEngine:
         """
         self._pre_transition_hooks.append(hook)
     
-    def add_post_transition_hook(self, hook: callable) -> None:
+    def add_post_transition_hook(self, hook: Callable) -> None:
         """Add a post-transition hook.
         
         Args:
@@ -729,7 +729,7 @@ class ExecutionEngine:
         """
         self._post_transition_hooks.append(hook)
     
-    def add_error_hook(self, hook: callable) -> None:
+    def add_error_hook(self, hook: Callable) -> None:
         """Add an error hook.
         
         Args:

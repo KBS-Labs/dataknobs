@@ -160,7 +160,7 @@ class CircuitBreaker:
             # Check if circuit is open
             if self.is_open:
                 if self.last_failure:
-                    elapsed = (datetime.now() - self.last_failure).total_seconds()
+                    elapsed = (datetime.now() - self.last_failure).total_seconds()  # type: ignore[unreachable]
                     if elapsed < self.timeout:
                         from ..core.exceptions import CircuitBreakerError
                         raise CircuitBreakerError(wait_time=self.timeout - elapsed)

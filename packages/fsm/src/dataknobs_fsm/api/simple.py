@@ -109,7 +109,7 @@ class SimpleFSM:
         # Create context using factory
         from ..core.modes import ProcessingMode
         context = ContextFactory.create_context(
-            fsm=self._fsm,
+            fsm=self._fsm,  # type: ignore
             data=data,
             initial_state=initial_state,
             data_mode=ProcessingMode.SINGLE,
@@ -164,7 +164,7 @@ class SimpleFSM:
         # Create context using factory
         from ..core.modes import ProcessingMode
         context = ContextFactory.create_context(
-            fsm=self._fsm,
+            fsm=self._fsm,  # type: ignore
             data=data,
             initial_state=initial_state,
             data_mode=ProcessingMode.SINGLE,
@@ -500,7 +500,7 @@ def batch_process(
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(
                     fsm.process_batch,
-                    data=data,
+                    data=data,  # type: ignore
                     batch_size=batch_size,
                     max_workers=max_workers
                 )
@@ -511,7 +511,7 @@ def batch_process(
                     raise TimeoutError(f"Batch processing exceeded timeout of {timeout} seconds") from e
         else:
             return fsm.process_batch(
-                data=data,
+                data=data,  # type: ignore
                 batch_size=batch_size,
                 max_workers=max_workers
             )

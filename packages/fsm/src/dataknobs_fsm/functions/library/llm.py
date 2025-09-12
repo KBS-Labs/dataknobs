@@ -6,7 +6,7 @@ in FSM configurations for AI-powered workflows.
 
 import asyncio
 import json
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 
 from dataknobs_fsm.functions.base import (
     ITransformFunction,
@@ -223,20 +223,20 @@ class ResponseValidator(IValidationFunction):
             text = str(response)
         
         # Check length constraints
-        if self.min_length and len(text) < self.min_length:
+        if self.min_length and len(text) < self.min_length:  # type: ignore
             raise ValidationFunctionError(
-                f"Response too short: {len(text)} < {self.min_length}"
+                f"Response too short: {len(text)} < {self.min_length}"  # type: ignore
             )
         
-        if self.max_length and len(text) > self.max_length:
+        if self.max_length and len(text) > self.max_length:  # type: ignore
             raise ValidationFunctionError(
-                f"Response too long: {len(text)} > {self.max_length}"
+                f"Response too long: {len(text)} > {self.max_length}"  # type: ignore
             )
         
         # Validate format
         if self.format == "json":
             try:
-                parsed = json.loads(text)
+                parsed = json.loads(text)  # type: ignore
                 
                 # Validate against schema if provided
                 if self.schema:
@@ -264,7 +264,7 @@ class FunctionCaller(ITransformFunction):
     def __init__(
         self,
         response_field: str = "llm_response",
-        function_registry: Dict[str, callable] | None = None,
+        function_registry: Dict[str, Callable] | None = None,
         result_field: str = "function_result",
     ):
         """Initialize the function caller.

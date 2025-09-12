@@ -196,10 +196,12 @@ class AsyncStreamExecutor:
                 if isinstance(result, Exception):
                     progress.errors.append((progress.records_processed + i, result))
                 else:
-                    if result[0]:  # success
-                        successful_results.append(result[1])
+                    # Result is a tuple[bool, Any] at this point
+                    success, value = result  # type: ignore
+                    if success:  # success
+                        successful_results.append(value)
                     else:
-                        progress.errors.append((progress.records_processed + i, Exception(result[1])))
+                        progress.errors.append((progress.records_processed + i, Exception(value)))
             
             # Send to sink if provided
             if sink and successful_results:
@@ -308,4 +310,4 @@ class AsyncStreamExecutor:
         else:
             # Run sync callback in executor
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self.progress_callback, progress)
+            await loop.run_in_executor(None, self.progress_callback, progress)  # type: ignore

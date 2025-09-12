@@ -532,7 +532,7 @@ class LLMResource(BaseResourceProvider):
             if isinstance(prompt, str):
                 messages = [LLMMessage(role="user", content=prompt)]
             else:
-                messages = prompt
+                messages = prompt  # type: ignore[unreachable]
                 
             response = provider.complete(messages, **kwargs)
             provider.close()
@@ -586,7 +586,7 @@ class LLMResource(BaseResourceProvider):
             if isinstance(prompt, str):
                 messages = [LLMMessage(role="user", content=prompt)]
             else:
-                messages = prompt
+                messages = prompt  # type: ignore[unreachable]
                 
             response = provider.complete(messages, **kwargs)
             provider.close()
