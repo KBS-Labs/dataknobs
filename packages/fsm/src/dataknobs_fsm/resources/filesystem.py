@@ -366,13 +366,30 @@ class FileSystemResource(BaseResourceProvider):
     
     def cleanup_temp_files(self) -> None:
         """Clean up temporary files."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        cleanup_errors = []
         for temp_file in self._temp_files[:]:
             try:
                 if temp_file.exists():
                     temp_file.unlink()
                 self._temp_files.remove(temp_file)
-            except Exception:
-                pass  # Best effort
+            except PermissionError as e:
+                cleanup_errors.append(f"Permission denied cleaning up {temp_file}: {e}")
+                logger.warning(f"Could not delete temporary file {temp_file}: {e}")
+            except OSError as e:
+                cleanup_errors.append(f"OS error cleaning up {temp_file}: {e}")
+                logger.warning(f"OS error deleting temporary file {temp_file}: {e}")
+            except Exception as e:
+                cleanup_errors.append(f"Unexpected error cleaning up {temp_file}: {e}")
+                logger.error(f"Unexpected error cleaning up {temp_file}: {e}")
+        
+        if cleanup_errors:
+            # Store cleanup errors in metadata for debugging
+            if not hasattr(self, '_cleanup_errors'):
+                self._cleanup_errors = []
+            self._cleanup_errors.extend(cleanup_errors)
     
     def close(self) -> None:
         """Close all open handles and clean up."""

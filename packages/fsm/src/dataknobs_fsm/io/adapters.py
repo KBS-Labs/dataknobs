@@ -547,11 +547,93 @@ class AsyncHTTPProvider(AsyncIOProvider):
                     yield json.loads(line.decode('utf-8'))
                     
     async def stream_write(self, data_stream: AsyncIterator[Any], **kwargs) -> None:
-        """Stream write to HTTP endpoint."""
-        # Implementation depends on specific API requirements
-        # This is a placeholder for chunked upload
+        """Stream write to HTTP endpoint using chunked transfer encoding.
+        
+        This method supports both chunked upload for large files and
+        streaming of multiple records to an API endpoint.
+        
+        Args:
+            data_stream: Async iterator of data chunks or records
+            **kwargs: Additional arguments including:
+                - content_type: Content type for the upload (default: application/octet-stream)
+                - chunk_size: Size of chunks for file uploads (default: 8192)
+                - upload_mode: 'chunked' for file uploads, 'stream' for record streaming
+        """
+        upload_mode = kwargs.pop('upload_mode', 'stream')
+        
+        if upload_mode == 'chunked':
+            await self._chunked_file_upload(data_stream, **kwargs)
+        else:
+            await self._stream_records(data_stream, **kwargs)
+    
+    async def _chunked_file_upload(self, data_stream: AsyncIterator[Any], **kwargs) -> None:
+        """Upload a file using chunked transfer encoding.
+        
+        Args:
+            data_stream: Async iterator yielding file chunks (bytes)
+            **kwargs: Additional arguments
+        """
+        import aiohttp
+        
+        url = kwargs.get('url', self.config.source)
+        headers = kwargs.get('headers', self.config.headers or {})
+        headers['Transfer-Encoding'] = 'chunked'
+        content_type = kwargs.get('content_type', 'application/octet-stream')
+        headers['Content-Type'] = content_type
+        
+        async def chunk_generator():
+            """Generate chunks for upload."""
+            async for chunk in data_stream:
+                if isinstance(chunk, str):
+                    chunk = chunk.encode('utf-8')
+                yield chunk
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                data=chunk_generator(),
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=self.config.timeout)
+            ) as response:
+                response.raise_for_status()
+                return await response.json() if response.content_type == 'application/json' else await response.text()
+    
+    async def _stream_records(self, data_stream: AsyncIterator[Any], **kwargs) -> None:
+        """Stream individual records to an API endpoint.
+        
+        Args:
+            data_stream: Async iterator yielding records
+            **kwargs: Additional arguments
+        """
+        # Existing implementation for streaming individual records
         async for data in data_stream:
             await self.write(data, **kwargs)
+    
+    async def chunked_upload_from_file(self, file_path: str, chunk_size: int = 8192, **kwargs) -> Any:
+        """Upload a file in chunks.
+        
+        Args:
+            file_path: Path to the file to upload
+            chunk_size: Size of each chunk in bytes
+            **kwargs: Additional arguments for the upload
+            
+        Returns:
+            Response from the server
+        """
+        import aiofiles
+        
+        async def read_chunks():
+            """Read file in chunks."""
+            async with aiofiles.open(file_path, 'rb') as f:
+                while True:
+                    chunk = await f.read(chunk_size)
+                    if not chunk:
+                        break
+                    yield chunk
+        
+        kwargs['upload_mode'] = 'chunked'
+        kwargs['chunk_size'] = chunk_size
+        return await self.stream_write(read_chunks(), **kwargs)
             
     async def batch_read(self, batch_size: int | None = None, **kwargs) -> AsyncIterator[List[Any]]:
         """Read from HTTP endpoint in batches (pagination)."""

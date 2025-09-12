@@ -372,11 +372,101 @@ class ResourceManager:
     async def cleanup(self) -> None:
         """Async cleanup of all resource providers.
         
-        This is an alias for close() but provides async interface for compatibility.
+        This method performs async cleanup of resources that support it,
+        while falling back to sync cleanup for those that don't.
         """
-        # For now, just call the sync close method
-        # In the future, this could be made truly async
-        self.close()
+        import asyncio
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        cleanup_tasks = []
+        sync_providers = []
+        
+        # Separate async and sync providers
+        for name, provider in self._providers.items():
+            if hasattr(provider, 'aclose') or hasattr(provider, 'cleanup'):
+                # Provider has async cleanup method
+                if hasattr(provider, 'aclose'):
+                    cleanup_tasks.append(self._async_close_provider(name, provider))
+                elif hasattr(provider, 'cleanup'):
+                    cleanup_tasks.append(self._async_cleanup_provider(name, provider))
+            else:
+                # Provider only has sync cleanup
+                sync_providers.append((name, provider))
+        
+        # Run async cleanups concurrently
+        if cleanup_tasks:
+            results = await asyncio.gather(*cleanup_tasks, return_exceptions=True)
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    logger.error(f"Error during async cleanup: {result}")
+        
+        # Run sync cleanups in executor to avoid blocking
+        if sync_providers:
+            loop = asyncio.get_event_loop()
+            for name, provider in sync_providers:
+                try:
+                    await loop.run_in_executor(None, self._close_provider, name, provider)
+                except Exception as e:
+                    logger.error(f"Error closing sync provider {name}: {e}")
+        
+        # Clear tracking data
+        with self._lock:
+            self._resources.clear()
+            self._resource_owners.clear()
+            self._pools.clear()
+            self._providers.clear()
+    
+    async def _async_close_provider(self, name: str, provider: IResourceProvider) -> None:
+        """Close a provider that has an async close method.
+        
+        Args:
+            name: Provider name
+            provider: Provider instance
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            await provider.aclose()
+            logger.debug(f"Successfully closed async provider {name}")
+        except Exception as e:
+            logger.error(f"Error closing async provider {name}: {e}")
+            raise
+    
+    async def _async_cleanup_provider(self, name: str, provider: IResourceProvider) -> None:
+        """Clean up a provider that has an async cleanup method.
+        
+        Args:
+            name: Provider name  
+            provider: Provider instance
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            await provider.cleanup()
+            logger.debug(f"Successfully cleaned up async provider {name}")
+        except Exception as e:
+            logger.error(f"Error cleaning up async provider {name}: {e}")
+            raise
+    
+    def _close_provider(self, name: str, provider: IResourceProvider) -> None:
+        """Close a sync provider.
+        
+        Args:
+            name: Provider name
+            provider: Provider instance
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            if hasattr(provider, 'close'):
+                provider.close()
+                logger.debug(f"Successfully closed sync provider {name}")
+        except Exception as e:
+            logger.error(f"Error closing sync provider {name}: {e}")
     
     def create_provider_from_dict(self, name: str, config: Dict[str, Any]) -> IResourceProvider:
         """Create a resource provider from a dictionary configuration.

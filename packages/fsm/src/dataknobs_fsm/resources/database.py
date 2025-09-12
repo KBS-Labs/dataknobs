@@ -189,15 +189,30 @@ class DatabaseResourceAdapter(BaseResourceProvider):
     
     def close(self) -> None:
         """Close the database resource and clean up."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         # Release all tracked resources first
         super().close()
         
         # Close the database backend if it has a close method
         if self._database and hasattr(self._database, 'close'):
             try:
+                # Attempt to flush any pending operations
+                if hasattr(self._database, 'flush'):
+                    self._database.flush()
+                
+                # Close the connection
                 self._database.close()
-            except Exception:
-                pass  # Best effort
+                logger.debug(f"Successfully closed database connection for {self.name}")
+            except AttributeError as e:
+                logger.warning(f"Database {self.name} missing expected close method: {e}")
+            except Exception as e:
+                logger.error(f"Error closing database {self.name}: {e}")
+                # Store error for debugging but don't re-raise
+                if not hasattr(self, '_cleanup_errors'):
+                    self._cleanup_errors = []
+                self._cleanup_errors.append(f"Database close error: {e}")
         
         self._database = None
     

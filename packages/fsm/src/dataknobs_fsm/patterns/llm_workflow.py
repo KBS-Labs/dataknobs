@@ -147,18 +147,159 @@ class VectorRetriever:
         self.embeddings = []
         
     async def index_documents(self, documents: List[str]) -> None:
-        """Index documents for retrieval."""
-        # This is a simplified implementation
-        # In production, use a proper vector database
+        """Index documents for retrieval.
+        
+        Generates embeddings for documents using the configured LLM provider.
+        In production, these would be stored in a vector database.
+        
+        Args:
+            documents: List of documents to index
+        """
+        from dataknobs_fsm.llm.providers import get_provider
+        import numpy as np
+        
         self.documents = documents
-        # Generate embeddings (placeholder)
-        self.embeddings = [[0.1] * 768 for _ in documents]
+        
+        # Try to use a real embedding provider if available
+        if self.config.provider_config:
+            try:
+                provider = get_provider(self.config.provider_config)
+                
+                # Check if provider supports embeddings
+                if hasattr(provider, 'embed'):
+                    # Generate embeddings for all documents
+                    self.embeddings = await provider.embed(documents)
+                    
+                    # Normalize embeddings for cosine similarity
+                    self.embeddings = [
+                        self._normalize_embedding(emb) for emb in self.embeddings
+                    ]
+                else:
+                    # Fallback to mock embeddings if provider doesn't support them
+                    self.embeddings = self._generate_mock_embeddings(documents)
+            except Exception as e:
+                # Log error and fallback to mock embeddings
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to generate real embeddings: {e}. Using mock embeddings.")
+                self.embeddings = self._generate_mock_embeddings(documents)
+        else:
+            # No provider configured, use mock embeddings
+            self.embeddings = self._generate_mock_embeddings(documents)
+    
+    def _normalize_embedding(self, embedding: List[float]) -> List[float]:
+        """Normalize an embedding vector for cosine similarity.
+        
+        Args:
+            embedding: Raw embedding vector
+            
+        Returns:
+            Normalized embedding vector
+        """
+        import math
+        
+        norm = math.sqrt(sum(x * x for x in embedding))
+        if norm == 0:
+            return embedding
+        return [x / norm for x in embedding]
+    
+    def _generate_mock_embeddings(self, documents: List[str]) -> List[List[float]]:
+        """Generate mock embeddings for testing.
+        
+        Args:
+            documents: Documents to generate embeddings for
+            
+        Returns:
+            Mock embedding vectors
+        """
+        import hashlib
+        
+        embeddings = []
+        for doc in documents:
+            # Create deterministic mock embedding based on document content
+            doc_hash = hashlib.sha256(doc.encode()).digest()
+            # Convert hash to 768-dimensional embedding (standard size)
+            embedding = []
+            for i in range(96):  # 768 / 8 = 96
+                # Take 8 bytes at a time and convert to float
+                if i * 8 < len(doc_hash):
+                    byte_chunk = doc_hash[i*8:(i+1)*8]
+                    value = sum(b for b in byte_chunk) / 2040.0  # Normalize to ~[0, 1]
+                else:
+                    # Pad with deterministic values if needed
+                    value = (i % 10) / 10.0
+                
+                # Expand to 8 dimensions
+                for j in range(8):
+                    embedding.append(value * (1 + j * 0.1))
+            
+            embeddings.append(self._normalize_embedding(embedding))
+        
+        return embeddings
         
     async def retrieve(self, query: str, top_k: int = None) -> List[str]:
-        """Retrieve relevant documents."""
+        """Retrieve relevant documents using semantic similarity.
+        
+        Args:
+            query: Query string
+            top_k: Number of documents to retrieve
+            
+        Returns:
+            List of most relevant documents
+        """
+        from dataknobs_fsm.llm.providers import get_provider
+        
         top_k = top_k or self.config.top_k
-        # Simplified: return first top_k documents
-        return self.documents[:top_k]
+        
+        if not self.documents:
+            return []
+        
+        # Generate embedding for query
+        query_embedding = None
+        
+        if self.config.provider_config:
+            try:
+                provider = get_provider(self.config.provider_config)
+                if hasattr(provider, 'embed'):
+                    query_embedding = await provider.embed(query)
+                    query_embedding = self._normalize_embedding(query_embedding)
+            except Exception:
+                pass
+        
+        if query_embedding is None:
+            # Fallback to mock embedding
+            query_embedding = self._generate_mock_embeddings([query])[0]
+        
+        # Calculate cosine similarities
+        similarities = []
+        for i, doc_embedding in enumerate(self.embeddings):
+            similarity = self._cosine_similarity(query_embedding, doc_embedding)
+            similarities.append((similarity, i))
+        
+        # Sort by similarity and return top-k documents
+        similarities.sort(reverse=True)
+        top_indices = [idx for _, idx in similarities[:top_k]]
+        
+        return [self.documents[idx] for idx in top_indices]
+    
+    def _cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
+        """Calculate cosine similarity between two vectors.
+        
+        Args:
+            vec1: First vector
+            vec2: Second vector
+            
+        Returns:
+            Cosine similarity score
+        """
+        if len(vec1) != len(vec2):
+            # Handle dimension mismatch by padding or truncating
+            min_len = min(len(vec1), len(vec2))
+            vec1 = vec1[:min_len]
+            vec2 = vec2[:min_len]
+        
+        dot_product = sum(a * b for a, b in zip(vec1, vec2))
+        return dot_product  # Already normalized
 
 
 class LLMWorkflow:

@@ -261,13 +261,24 @@ class ResourcePool:
         Args:
             pooled: The pooled resource to release.
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        resource_id = id(pooled.resource)
         try:
+            # Attempt to properly release the resource
             self.provider.release(pooled.resource)
-        except Exception:
-            pass  # Best effort
+            logger.debug(f"Successfully released pooled resource {resource_id} from pool {self.provider.name}")
+        except AttributeError as e:
+            logger.warning(f"Resource provider {self.provider.name} missing release method: {e}")
+        except Exception as e:
+            logger.error(f"Error releasing pooled resource {resource_id} from pool {self.provider.name}: {e}")
+            # Track the error for debugging
+            self.metrics.record_failure()
+            # Still remove from map even if release failed to prevent memory leak
         
         with self._lock:
-            self._resource_map.pop(id(pooled.resource), None)
+            self._resource_map.pop(resource_id, None)
     
     def size(self) -> int:
         """Get the current pool size.

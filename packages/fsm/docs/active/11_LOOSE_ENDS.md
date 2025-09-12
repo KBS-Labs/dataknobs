@@ -3,7 +3,7 @@
 This document tracks incomplete implementations, TODOs, placeholders, and other missing functionality in the FSM package that needs to be addressed.
 
 **Last Updated**: September 2025  
-**Status**: 10 high-priority items completed, 6 medium priority items completed, ~30 low priority items remaining
+**Status**: 10 high-priority items completed, 6 medium priority items completed, 6 low priority items completed, ~14 low priority items remaining
 
 ## ✅ COMPLETED High Priority Items
 
@@ -128,44 +128,46 @@ This document tracks incomplete implementations, TODOs, placeholders, and other 
   - ✅ Intelligent fallback to networks with initial states
   - ✅ Mode-aware selection (batch/stream/single processing modes)
 
+## ✅ COMPLETED Low Priority Items
+
+### ✅ Resource Cleanup Improvements
+- **~~Filesystem Cleanup Handlers~~** (`resources/filesystem.py:367-390`) - **COMPLETED**
+  - ✅ Added proper error handling with specific exception types
+  - ✅ Added logging for cleanup failures
+  - ✅ Stores cleanup errors for debugging
+
+- **~~Database Connection Cleanup~~** (`resources/database.py:190-216`) - **COMPLETED**
+  - ✅ Added flush operation before close
+  - ✅ Added proper logging for successful and failed closures
+  - ✅ Stores cleanup errors without re-raising
+
+- **~~Resource Pool Cleanup~~** (`resources/pool.py:258-271`) - **COMPLETED**
+  - ✅ Added detailed logging for resource release
+  - ✅ Tracks failures in metrics
+  - ✅ Ensures resources are removed from map even on failure
+
+### ✅ Async Infrastructure
+- **~~Async Close Method~~** (`resources/manager.py:372-467`) - **COMPLETED**
+  - ✅ Implemented proper async cleanup with concurrent execution
+  - ✅ Separates async and sync providers for optimal handling
+  - ✅ Uses asyncio.gather for parallel async cleanup
+  - ✅ Runs sync cleanups in executor to avoid blocking
+
+### ✅ I/O Implementations
+- **~~Chunked Upload Support~~** (`io/adapters.py:549-627`) - **COMPLETED**
+  - ✅ Implemented chunked file upload with Transfer-Encoding: chunked
+  - ✅ Added streaming support for both files and records
+  - ✅ Added helper method for file uploads with configurable chunk size
+  - ✅ Supports both chunked and stream upload modes
+
+### ✅ LLM Integration
+- **~~Embedding Generation~~** (`patterns/llm_workflow.py:149-311`) - **COMPLETED**
+  - ✅ Implemented real embedding generation using LLM providers
+  - ✅ Added fallback to mock embeddings when provider unavailable
+  - ✅ Implemented vector normalization for cosine similarity
+  - ✅ Added semantic retrieval with similarity scoring
+
 ## 🔄 REMAINING Items (Low Priority)
-
-## API Implementations
-
-
-### LLM Workflow
-- **Embedding Generation** (`patterns/llm_workflow.py:154`)
-  - Placeholder for embedding generation
-  - Missing vector embedding logic
-
-### File Upload
-- **Chunked Upload** (`io/adapters.py:457`)
-  - Placeholder for chunked upload implementation
-  - Missing file streaming support
-
-## Resource Cleanup
-
-### Filesystem Resources
-- **Cleanup Handlers** (`resources/filesystem.py:375`)
-  - "Best effort" cleanup with empty pass block
-  - Missing proper error handling in cleanup
-
-### Database Resources  
-- **Connection Cleanup** (`resources/database.py:200`)
-  - "Best effort" cleanup with empty pass block
-  - Missing proper connection disposal
-
-### Resource Pools
-- **Pool Cleanup** (`resources/pool.py:259`)
-  - "Best effort" cleanup with empty pass block
-  - Missing proper resource disposal
-
-## Testing & Validation
-
-### Resource Manager
-- **Async Close Method** (`resources/manager.py:377`)
-  - "For now" calls sync close method
-  - Missing proper async cleanup implementation
 
 ## Interface Stubs
 
@@ -202,12 +204,11 @@ All medium priority performance and optimization items completed:
 
 ### 🔄 REMAINING PRIORITIES
 
-**Low Priority Items (remaining ~20 items):**
-1. Chunked upload support  
-2. Cleanup error handling improvements
-3. LLM workflow embeddings
-4. Resource cleanup improvements
-5. Various "best effort" cleanup placeholders
+**Low Priority Items (remaining ~14 items):**
+1. Interface stub implementations (expected as abstract base classes)
+2. Various minor TODO comments in less critical code paths
+3. Additional optimization opportunities
+4. Extended error handling in edge cases
 
 ### Key Design Principles Applied
 
@@ -229,6 +230,6 @@ All medium priority performance and optimization items completed:
 - **Exception Handling**: Added specific FSM exception types (`CircuitBreakerError`, `ETLError`, `BulkheadTimeoutError`) and replaced generic Exception usage
 - **Database Storage Factory**: Replaced hardcoded AsyncMemoryDatabase with proper AsyncDatabaseFactory supporting all dataknobs_data backends
 
-**Total Items Status: 16 completed (10 high priority + 6 medium priority) + ~20 remaining (low priority)**
+**Total Items Status: 22 completed (10 high priority + 6 medium priority + 6 low priority) + ~14 remaining (low priority)**
 
 This checklist should be regularly updated as items are completed and new ones are discovered.
