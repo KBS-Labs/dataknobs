@@ -6,6 +6,14 @@ import time
 from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime, timedelta
 
+
+@pytest.fixture(scope="function")
+def event_loop():
+    """Create an instance of the default event loop for each test case."""
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
 from dataknobs_fsm.patterns.api_orchestration import (
     OrchestrationMode, APIEndpoint, APIOrchestrationConfig,
     RateLimiter, CircuitBreaker, APIOrchestrator,
