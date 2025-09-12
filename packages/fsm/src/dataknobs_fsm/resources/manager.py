@@ -411,10 +411,9 @@ class ResourceManager:
             
             def get_metrics(self) -> ResourceMetrics:
                 return ResourceMetrics(
-                    total_acquires=0,
-                    total_releases=0,
-                    active_count=1 if self._status == ResourceStatus.BUSY else 0,
-                    error_count=0
+                    total_acquisitions=0,
+                    active_connections=1 if self._status == ResourceStatus.BUSY else 0,
+                    failed_acquisitions=0
                 )
             
             async def get_resource(self):
@@ -454,3 +453,55 @@ class ResourceManager:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Exit context manager."""
         self.close()
+    
+    def get_resource_status(self, name: str) -> Dict[str, Any]:
+        """Get status information for a resource.
+        
+        Args:
+            name: Resource name.
+            
+        Returns:
+            Status dictionary with provider and pool information.
+        """
+        with self._lock:
+            status = {
+                "provider_exists": name in self._providers,
+                "has_pool": name in self._pools,
+                "active_count": 0,
+                "owners": list(self._resource_owners.get(name, set()))
+            }
+            
+            if name in self._providers:
+                try:
+                    metrics = self._providers[name].get_metrics()
+                    status["active_count"] = metrics.active_connections
+                    status["total_acquires"] = metrics.total_acquisitions
+                    status["total_releases"] = metrics.total_acquisitions - metrics.active_connections
+                except:
+                    pass
+            
+            return status
+    
+    def get_all_resources(self) -> Dict[str, Dict[str, Any]]:
+        """Get information about all registered resources.
+        
+        Returns:
+            Dictionary mapping resource names to their status.
+        """
+        with self._lock:
+            all_resources = {}
+            for name in self._providers:
+                all_resources[name] = self.get_resource_status(name)
+            return all_resources
+    
+    def get_resource_owners(self, name: str) -> Set[str]:
+        """Get all owners of a specific resource.
+        
+        Args:
+            name: Resource name.
+            
+        Returns:
+            Set of owner IDs.
+        """
+        with self._lock:
+            return self._resource_owners.get(name, set()).copy()
