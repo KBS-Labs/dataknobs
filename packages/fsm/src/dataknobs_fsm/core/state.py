@@ -135,6 +135,21 @@ class StateDefinition:
         """
         return self.type == StateType.END
     
+    @property
+    def is_start(self) -> bool:
+        """Property alias for is_start_state()."""
+        return self.is_start_state()
+    
+    @property
+    def is_end(self) -> bool:
+        """Property alias for is_end_state()."""
+        return self.is_end_state()
+    
+    @property
+    def arcs(self) -> List["ArcDefinition"]:
+        """Get the outgoing arcs from this state."""
+        return self.outgoing_arcs
+    
     def validate_data(self, data: Dict[str, Any]) -> Tuple[bool, List[str]]:
         """Validate data against state schema.
         

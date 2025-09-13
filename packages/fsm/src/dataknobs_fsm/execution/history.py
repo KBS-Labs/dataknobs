@@ -408,6 +408,26 @@ class ExecutionHistory:
         
         return paths
     
+    @property
+    def steps(self) -> List[ExecutionStep]:
+        """Get all execution steps from the history tree.
+        
+        Returns:
+            List of all execution steps in order.
+        """
+        all_steps = []
+        
+        def collect_steps(node: Tree):
+            all_steps.append(node.data)
+            if node.children:
+                for child in node.children:
+                    collect_steps(child)
+        
+        for root in self.tree_roots:
+            collect_steps(root)
+        
+        return all_steps
+    
     def get_steps_by_state(self, state_name: str) -> List[ExecutionStep]:
         """Get all steps for a specific state.
         

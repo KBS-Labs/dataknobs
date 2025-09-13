@@ -1,6 +1,6 @@
 """Core FSM class for managing state machines."""
 
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple, Optional
 
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.core.network import StateNetwork
@@ -24,7 +24,9 @@ class FSM:
         name: str,
         data_mode: ProcessingMode = ProcessingMode.SINGLE,
         transaction_mode: TransactionMode = TransactionMode.NONE,
-        description: str | None = None
+        description: str | None = None,
+        resource_manager: Optional[Any] = None,
+        transaction_manager: Optional[Any] = None
     ):
         """Initialize FSM.
         
@@ -41,7 +43,7 @@ class FSM:
         
         # Networks
         self.networks: Dict[str, StateNetwork] = {}
-        self.main_network: str | None = None
+        self.main_network_name: str | None = None
         
         # Function registry
         self.function_registry = FunctionRegistry()
@@ -57,6 +59,12 @@ class FSM:
         self.version: str = "1.0.0"
         self.created_at: float | None = None
         self.updated_at: float | None = None
+        
+        # Execution support (from builder FSM wrapper)
+        self.resource_manager = resource_manager
+        self.transaction_manager = transaction_manager
+        self._engine: Optional[Any] = None  # ExecutionEngine
+        self._async_engine: Optional[Any] = None  # AsyncExecutionEngine
     
     def add_network(
         self,
@@ -71,8 +79,8 @@ class FSM:
         """
         self.networks[network.name] = network
         
-        if is_main or self.main_network is None:
-            self.main_network = network.name
+        if is_main or self.main_network_name is None:
+            self.main_network_name = network.name
         
         # Aggregate resource requirements
         for resource_type, requirements in network.resource_requirements.items():
@@ -93,11 +101,11 @@ class FSM:
             del self.networks[network_name]
             
             # Update main network if needed
-            if self.main_network == network_name:
+            if self.main_network_name == network_name:
                 if self.networks:
-                    self.main_network = next(iter(self.networks.keys()))
+                    self.main_network_name = next(iter(self.networks.keys()))
                 else:
-                    self.main_network = None
+                    self.main_network_name = None
             
             return True
         return False
@@ -112,7 +120,7 @@ class FSM:
             Network or None if not found.
         """
         if network_name is None:
-            network_name = self.main_network
+            network_name = self.main_network_name
         
         if network_name:
             return self.networks.get(network_name)
@@ -131,8 +139,8 @@ class FSM:
             errors.append("FSM has no networks")
         
         # Check main network exists
-        if self.main_network and self.main_network not in self.networks:
-            errors.append(f"Main network '{self.main_network}' not found")
+        if self.main_network_name and self.main_network_name not in self.networks:
+            errors.append(f"Main network '{self.main_network_name}' not found")
         
         # Validate each network
         for network_name, network in self.networks.items():
@@ -240,7 +248,7 @@ class FSM:
             # Note: This is a shallow copy - for deep clone would need to implement network.clone()
             clone.networks[network_name] = network
         
-        clone.main_network = self.main_network
+        clone.main_network_name = self.main_network_name
         clone.function_registry = self.function_registry
         clone.resource_requirements = self.resource_requirements.copy()
         clone.config = self.config.copy()
@@ -260,7 +268,7 @@ class FSM:
             'description': self.description,
             'data_mode': self.data_mode.value,
             'transaction_mode': self.transaction_mode.value,
-            'main_network': self.main_network,
+            'main_network': self.main_network_name,
             'networks': list(self.networks.keys()),
             'resource_requirements': {
                 k: list(v) if isinstance(v, set) else v
@@ -288,7 +296,7 @@ class FSM:
             description=data.get('description')
         )
         
-        fsm.main_network = data.get('main_network')
+        fsm.main_network_name = data.get('main_network')
         fsm.config = data.get('config', {})
         fsm.metadata = data.get('metadata', {})
         fsm.version = data.get('version', '1.0.0')
@@ -363,6 +371,40 @@ class FSM:
         """
         return self.find_state_definition(state_name, network_name)
     
+    def is_start_state(self, state_name: str, network_name: str | None = None) -> bool:
+        """Check if a state is a start state.
+        
+        Args:
+            state_name: Name of the state
+            network_name: Optional specific network to check in (defaults to main network)
+            
+        Returns:
+            True if the state is a start state
+        """
+        network_name = network_name or self.main_network_name
+        if network_name:
+            network = self.networks.get(network_name)
+            if network:
+                return network.is_initial_state(state_name)
+        return False
+    
+    def is_end_state(self, state_name: str, network_name: str | None = None) -> bool:
+        """Check if a state is an end state.
+        
+        Args:
+            state_name: Name of the state
+            network_name: Optional specific network to check in (defaults to main network)
+            
+        Returns:
+            True if the state is an end state
+        """
+        network_name = network_name or self.main_network_name
+        if network_name:
+            network = self.networks.get(network_name)
+            if network:
+                return network.is_final_state(state_name)
+        return False
+    
     def get_start_state(self, network_name: str | None = None) -> StateDefinition | None:
         """Get the start state definition.
         
@@ -381,8 +423,8 @@ class FSM:
                         return state
         else:
             # Search main network first
-            if self.main_network:
-                start_state = self.get_start_state(self.main_network)
+            if self.main_network_name:
+                start_state = self.get_start_state(self.main_network_name)
                 if start_state:
                     return start_state
             
@@ -395,3 +437,271 @@ class FSM:
         
         # Fallback: look for state named 'start'
         return self.find_state_definition('start', network_name)
+    
+    @property
+    def main_network(self) -> Optional['StateNetwork']:
+        """Get the main network object.
+        
+        Returns:
+            The main StateNetwork object or None if not set
+        """
+        if self.main_network_name:
+            return self.networks.get(self.main_network_name)
+        return None
+    
+    @property
+    def states(self) -> Dict[str, StateDefinition]:
+        """Get all states from the main network.
+        
+        Returns:
+            Dictionary of state_name -> state_definition for the main network
+        """
+        if not self.main_network_name:
+            return {}
+        
+        network = self.get_network(self.main_network_name)
+        if network and hasattr(network, 'states'):
+            return network.states
+        return {}
+    
+    def get_all_states_dict(self) -> Dict[str, Dict[str, StateDefinition]]:
+        """Get all states from all networks.
+        
+        Returns:
+            Dictionary of network_name -> {state_name -> state_definition}
+        """
+        all_states = {}
+        for network_name, network in self.networks.items():
+            if hasattr(network, 'states'):
+                all_states[network_name] = network.states
+        return all_states
+    
+    def get_outgoing_arcs(self, state_name: str, network_name: str | None = None) -> List[Any]:
+        """Get outgoing arcs from a state.
+        
+        Args:
+            state_name: Name of the state
+            network_name: Optional network name (uses main network if None)
+            
+        Returns:
+            List of outgoing arcs from the state
+        """
+        network_name = network_name or self.main_network_name
+        if not network_name:
+            return []
+        
+        network = self.get_network(network_name)
+        if network:
+            return network.get_arcs_from_state(state_name)
+        return []
+    
+    def get_engine(self, strategy: Optional[str] = None):
+        """Get or create the execution engine.
+        
+        Args:
+            strategy: Optional execution strategy override
+            
+        Returns:
+            ExecutionEngine instance.
+        """
+        if self._engine is None:
+            from dataknobs_fsm.execution.engine import ExecutionEngine, TraversalStrategy
+            
+            # Map strategy strings to enum
+            strategy_map = {
+                "depth_first": TraversalStrategy.DEPTH_FIRST,
+                "breadth_first": TraversalStrategy.BREADTH_FIRST,
+                "resource_optimized": TraversalStrategy.RESOURCE_OPTIMIZED,
+                "stream_optimized": TraversalStrategy.STREAM_OPTIMIZED,
+            }
+            
+            strat = TraversalStrategy.DEPTH_FIRST  # Default
+            if strategy and strategy in strategy_map:
+                strat = strategy_map[strategy]
+            
+            self._engine = ExecutionEngine(
+                fsm=self,
+                strategy=strat,
+            )
+        
+        return self._engine
+    
+    def get_async_engine(self, strategy: Optional[str] = None):
+        """Get or create the async execution engine.
+        
+        Args:
+            strategy: Optional execution strategy override
+            
+        Returns:
+            AsyncExecutionEngine instance.
+        """
+        if self._async_engine is None:
+            from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
+            
+            self._async_engine = AsyncExecutionEngine(fsm=self)
+        
+        return self._async_engine
+    
+    def _prepare_execution_context(self, initial_data: Optional[Dict[str, Any]] = None):
+        """Prepare execution context for FSM execution.
+        
+        Args:
+            initial_data: Initial data for execution.
+            
+        Returns:
+            Configured ExecutionContext instance.
+        """
+        from dataknobs_fsm.execution.context import ExecutionContext
+        from dataknobs_fsm.streaming.core import StreamContext, StreamConfig
+        
+        # Create execution context
+        context = ExecutionContext(
+            data_mode=self.data_mode,
+            transaction_mode=self.transaction_mode
+        )
+        
+        # Set resource and transaction managers if available
+        if self.resource_manager:
+            context.resource_manager = self.resource_manager
+        if self.transaction_manager:
+            context.transaction_manager = self.transaction_manager
+        
+        # Set up context based on data mode
+        if self.data_mode == ProcessingMode.BATCH:
+            # For batch mode, treat input as batch data
+            if initial_data is not None:
+                # If it's not already a list, make it one
+                if not isinstance(initial_data, list):
+                    context.batch_data = [initial_data]
+                else:
+                    context.batch_data = initial_data
+            else:
+                context.batch_data = []
+        elif self.data_mode == ProcessingMode.STREAM:
+            # For stream mode, create a stream context
+            stream_config = StreamConfig()
+            context.stream_context = StreamContext(config=stream_config)
+            
+            # Add initial data as a chunk if provided
+            if initial_data is not None:
+                # Add the data as a single chunk to the stream
+                context.stream_context.add_data(initial_data, is_last=True)
+                # Also set context.data for compatibility
+                context.data = initial_data
+        else:
+            # Single mode - data passed normally
+            pass
+        
+        return context
+    
+    def _format_execution_result(self, success: bool, result: Any, context: Any, 
+                                 duration: float, initial_data: Any = None,
+                                 error: Optional[str] = None) -> Dict[str, Any]:
+        """Format the execution result in a standard format.
+        
+        Args:
+            success: Whether execution succeeded.
+            result: The execution result data.
+            context: The execution context.
+            duration: Time taken for execution.
+            initial_data: Original input data.
+            error: Error message if execution failed.
+            
+        Returns:
+            Formatted result dictionary.
+        """
+        if error:
+            return {
+                "status": "error",
+                "error": error,
+                "data": initial_data,
+                "execution_id": None,
+                "transitions": 0,
+                "duration": None
+            }
+        
+        return {
+            "status": "completed" if success else "failed",
+            "data": result,
+            "execution_id": getattr(context, 'execution_id', None),
+            "transitions": getattr(context, 'transition_count', 0),
+            "duration": duration
+        }
+    
+    async def execute_async(self, initial_data: Optional[Dict[str, Any]] = None) -> Any:
+        """Execute the FSM asynchronously with initial data.
+        
+        Args:
+            initial_data: Initial data for execution.
+            
+        Returns:
+            Execution result.
+        """
+        import time
+        
+        try:
+            # Get the async execution engine
+            engine = self.get_async_engine()
+            
+            # Prepare execution context
+            context = self._prepare_execution_context(initial_data)
+            
+            # Track execution time
+            start_time = time.time()
+            
+            # Execute the FSM
+            success, result = await engine.execute(
+                context, 
+                initial_data if self.data_mode == ProcessingMode.SINGLE else None
+            )
+            
+            # Calculate duration
+            duration = time.time() - start_time
+            
+            return self._format_execution_result(success, result, context, duration)
+            
+        except Exception as e:
+            # Handle any exception that occurs during execution
+            return self._format_execution_result(
+                False, None, None, None, initial_data, str(e)
+            )
+    
+    def execute(self, initial_data: Optional[Dict[str, Any]] = None) -> Any:
+        """Execute the FSM synchronously with initial data.
+        
+        This is a simplified API for running the FSM.
+        
+        Args:
+            initial_data: Initial data for execution.
+            
+        Returns:
+            Execution result.
+        """
+        import time
+        
+        try:
+            # Get the execution engine
+            engine = self.get_engine()
+            
+            # Prepare execution context
+            context = self._prepare_execution_context(initial_data)
+            
+            # Track execution time
+            start_time = time.time()
+            
+            # Execute the FSM
+            success, result = engine.execute(
+                context, 
+                initial_data if self.data_mode == ProcessingMode.SINGLE else None
+            )
+            
+            # Calculate duration
+            duration = time.time() - start_time
+            
+            return self._format_execution_result(success, result, context, duration)
+            
+        except Exception as e:
+            # Handle any exception that occurs during execution
+            return self._format_execution_result(
+                False, None, None, None, initial_data, str(e)
+            )

@@ -244,9 +244,58 @@ class AsyncExecutionEngine:
         if not context.stream_context:
             return False, "No stream context provided"
         
-        # Stream processing would be handled by AsyncStreamExecutor
-        # This is just a placeholder for completeness
-        return False, "Stream mode should use AsyncStreamExecutor"
+        chunks_processed = 0
+        total_records = 0
+        errors = []
+        
+        # Process each chunk
+        while True:
+            # Get next chunk from stream
+            chunk = context.stream_context.get_next_chunk()
+            if not chunk:
+                break
+            
+            context.set_stream_chunk(chunk)
+            
+            # Process chunk data
+            for record in chunk.data:
+                record_context = context.create_child_context(
+                    f"stream_{chunks_processed}_{total_records}"
+                )
+                record_context.data = record
+                
+                # Reset to initial state
+                initial_state = await self._find_initial_state()
+                if initial_state:
+                    record_context.set_state(initial_state)
+                
+                # Execute for this record
+                success, result = await self._execute_single(
+                    record_context,
+                    max_transitions
+                )
+                
+                if not success:
+                    errors.append((total_records, result))
+                
+                # Merge context
+                context.merge_child_context(
+                    f"stream_{chunks_processed}_{total_records}"
+                )
+                
+                total_records += 1
+            
+            chunks_processed += 1
+            
+            # Check if this was the last chunk
+            if chunk.is_last:
+                break
+        
+        return len(errors) == 0, {
+            'chunks_processed': chunks_processed,
+            'records_processed': total_records,
+            'errors': errors
+        }
     
     async def _get_available_transitions(
         self,

@@ -149,6 +149,35 @@ class AdvancedFSM:
             state_name: Name of state to remove breakpoint from
         """
         self._breakpoints.discard(state_name)
+    
+    def clear_breakpoints(self) -> None:
+        """Clear all breakpoints."""
+        self._breakpoints.clear()
+    
+    @property
+    def breakpoints(self) -> set:
+        """Get the current breakpoints."""
+        return self._breakpoints.copy()
+    
+    @property
+    def hooks(self) -> ExecutionHook:
+        """Get the current execution hooks."""
+        return self._hooks
+    
+    @property
+    def history_enabled(self) -> bool:
+        """Check if history tracking is enabled."""
+        return self._history is not None
+    
+    @property
+    def max_history_depth(self) -> int:
+        """Get the maximum history depth."""
+        return self._history.max_depth if self._history else 0
+    
+    @property
+    def execution_history(self) -> list:
+        """Get the execution history steps."""
+        return self._history.steps if self._history else []
         
     def enable_history(
         self,
@@ -177,6 +206,11 @@ class AdvancedFSM:
             max_depth=max_depth
         )
         self._storage = storage
+    
+    def disable_history(self) -> None:
+        """Disable history tracking."""
+        self._history = None
+        self._storage = None
         
     @asynccontextmanager
     async def execution_context(
@@ -379,7 +413,11 @@ class AdvancedFSM:
             state_start = time.time()
             
             while True:
-                current_state_name = context.current_state.definition.name
+                # Get current state name
+                if isinstance(context.current_state, str):
+                    current_state_name = context.current_state
+                else:
+                    current_state_name = context.current_state if context.current_state else "unknown"
                 
                 # Step
                 new_state = await self.step(context)
@@ -390,7 +428,7 @@ class AdvancedFSM:
                     state_times[current_state_name] = []
                 state_times[current_state_name].append(state_duration)
                 
-                if not new_state or new_state.definition.is_end:
+                if not new_state or (hasattr(new_state, 'definition') and new_state.definition.is_end):
                     break
                     
                 transitions += 1
@@ -450,14 +488,18 @@ class AdvancedFSM:
             State configuration details
         """
         state = self.fsm.get_state(state_name)
+        if not state:
+            return {'error': f'State {state_name} not found'}
+        
         return {
             'name': state.name,
-            'is_start': state.is_start,
-            'is_end': state.is_end,
-            'has_schema': state.schema is not None,
-            'has_validator': state.validator is not None,
-            'resources': list(state.resources) if state.resources else [],
-            'metadata': state.metadata
+            'is_start': self.fsm.is_start_state(state_name),
+            'is_end': self.fsm.is_end_state(state_name),
+            'has_transform': len(state.transform_functions) > 0,
+            'has_validator': len(state.validation_functions) > 0,
+            'resources': [r.name for r in state.resource_requirements] if state.resource_requirements else [],
+            'metadata': state.metadata,
+            'arcs': state.arcs
         }
         
     def visualize_fsm(self) -> str:
@@ -612,7 +654,8 @@ class FSMDebugger:
             initial_state=initial_state
         ).__aenter__()
         
-        print(f"Debugger started at state: {self.context.current_state.definition.name}")
+        current_state_name = self.context.current_state if isinstance(self.context.current_state, str) else "unknown"
+        print(f"Debugger started at state: {current_state_name}")
         
     async def step(self) -> None:
         """Execute single step."""
@@ -711,11 +754,13 @@ def create_advanced_fsm(
         from ..config.loader import ConfigLoader
         from ..config.builder import FSMBuilder
         
+        loader = ConfigLoader()
+        
         if isinstance(config, (str, Path)):
-            loader = ConfigLoader()
-            config_dict = loader.load_from_file(str(config))
+            config_obj = loader.load_from_file(str(config))
         else:
-            config_dict = config
+            # Load from dict
+            config_obj = loader.load_from_dict(config)
             
         builder = FSMBuilder()
         
@@ -724,6 +769,6 @@ def create_advanced_fsm(
             for name, func in custom_functions.items():
                 builder.register_function(name, func)
         
-        fsm = builder.build(config_dict)
+        fsm = builder.build(config_obj)
         
     return AdvancedFSM(fsm, **kwargs)
