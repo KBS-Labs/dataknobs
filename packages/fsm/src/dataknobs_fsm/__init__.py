@@ -6,7 +6,45 @@ for building complex data processing workflows.
 
 __version__ = "0.1.0"
 
-# Will be populated as we implement the modules
+# Core FSM components
+from .core.fsm import FSM
+from .core.state import StateDefinition, StateInstance
+from .core.arc import ArcDefinition
+
+# Advanced API
+from .api.advanced import (
+    AdvancedFSM,
+    ExecutionMode,
+    ExecutionHook,
+    StepResult,
+    FSMDebugger,
+    create_advanced_fsm
+)
+
+# Execution context
+from .execution.context import ExecutionContext
+
+# Configuration
+from .config.loader import ConfigLoader
+from .config.builder import FSMBuilder
+
 __all__ = [
     "__version__",
+    # Core
+    "FSM",
+    "StateDefinition",
+    "StateInstance",
+    "ArcDefinition",
+    # Advanced API
+    "AdvancedFSM",
+    "ExecutionMode",
+    "ExecutionHook",
+    "StepResult",
+    "FSMDebugger",
+    "create_advanced_fsm",
+    # Execution
+    "ExecutionContext",
+    # Config
+    "ConfigLoader",
+    "FSMBuilder",
 ]
