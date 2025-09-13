@@ -4,7 +4,7 @@ This module provides advanced interfaces for users who need fine-grained
 control over FSM execution, resource management, and monitoring.
 """
 
-from typing import Any, Dict, List, Union, Callable, Optional
+from typing import Any, Dict, List, Union, Callable
 from pathlib import Path
 from dataclasses import dataclass, field
 from enum import Enum
@@ -60,7 +60,7 @@ class StepResult:
     data_after: Dict[str, Any] = field(default_factory=dict)
     duration: float = 0.0
     success: bool = True
-    error: Optional[str] = None
+    error: str | None = None
     at_breakpoint: bool = False
     is_complete: bool = False
 
@@ -245,10 +245,17 @@ class AdvancedFSM:
             ExecutionContext for manual execution
         """
         # Create context with appropriate data handling
+        # Convert DataHandlingMode to ProcessingMode if necessary
+        processing_mode = ProcessingMode.SINGLE
+        if data_mode == DataHandlingMode.BATCH:
+            processing_mode = ProcessingMode.BATCH
+        elif data_mode == DataHandlingMode.STREAM:
+            processing_mode = ProcessingMode.STREAM
+
         context = ContextFactory.create_context(
             self.fsm,
             data,
-            data_mode=data_mode
+            data_mode=processing_mode
         )
 
         # Set initial state if provided
@@ -338,8 +345,6 @@ class AdvancedFSM:
         Returns:
             New state instance or None if no transition
         """
-        from dataknobs_fsm.core.state import StateInstance
-
         # Store the current state before the transition
         state_before = context.current_state
 
@@ -353,13 +358,14 @@ class AdvancedFSM:
         )
 
         # Check if we actually transitioned to a new state
-        if context.current_state != state_before:
+        if context.current_state != state_before and context.current_state is not None:
             # Update state instance using shared helper
             self._update_state_instance(context, context.current_state)
             new_state = context.current_state_instance
 
             # Track in history using shared helper
-            self._record_history_step(context.current_state, arc_name, context)
+            if context.current_state is not None:
+                self._record_history_step(context.current_state, arc_name, context)
 
             # Add to trace using shared helper (we need to adjust the helper slightly)
             if self.execution_mode == ExecutionMode.TRACE:
@@ -716,7 +722,7 @@ class AdvancedFSM:
                     try:
                         if test_func(context.data, context):
                             transitions.append(arc)
-                    except:
+                    except Exception:
                         pass
             else:
                 # No condition, arc is always available
@@ -836,7 +842,7 @@ class AdvancedFSM:
             context: Execution context
         """
         if self._history:
-            step = self._history.add_step(
+            step = self._history.add_step(  # type: ignore[unreachable]
                 state_name=state_name,
                 network_name=getattr(context, 'network_name', 'main'),
                 data=context.data
@@ -846,7 +852,7 @@ class AdvancedFSM:
     def _call_hook_sync(
         self,
         hook_name: str,
-        *args
+        *args: Any
     ) -> None:
         """Call a hook synchronously if it exists (shared logic).
 
@@ -858,7 +864,7 @@ class AdvancedFSM:
         if hook:
             try:
                 hook(*args)
-            except:
+            except Exception:
                 pass  # Silently ignore hook errors
 
     def _find_initial_state(self) -> str | None:
@@ -1050,7 +1056,7 @@ class AdvancedFSM:
 
         context = self.create_context(data, initial_state=initial_state)
 
-        for step in range(max_steps):
+        for _ in range(max_steps):
             # Execute step (trace recording happens inside execute_step_sync)
             result = self.execute_step_sync(context)
 
@@ -1318,11 +1324,11 @@ class FSMDebugger:
             print("No active debugging session")
             return
 
-        print(f"\n=== State Information ===")
+        print("\n=== State Information ===")
         print(f"Current State: {self.context.current_state}")
         print(f"Previous State: {self.context.previous_state}")
         print(f"Is Complete: {self.context.is_complete()}")
-        print(f"\nData:")
+        print("\nData:")
         data = self.context.get_data_snapshot()
         for key, value in data.items():
             print(f"  {key}: {value}")
@@ -1330,7 +1336,7 @@ class FSMDebugger:
         # Print available transitions
         transitions = self.fsm._get_available_transitions(self.context)
         if transitions:
-            print(f"\nAvailable Transitions:")
+            print("\nAvailable Transitions:")
             for arc in transitions:
                 print(f"  - {arc.name or 'unnamed'} -> {arc.target_state}")
         else:

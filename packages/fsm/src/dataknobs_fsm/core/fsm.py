@@ -25,8 +25,8 @@ class FSM:
         data_mode: ProcessingMode = ProcessingMode.SINGLE,
         transaction_mode: TransactionMode = TransactionMode.NONE,
         description: str | None = None,
-        resource_manager: Optional[Any] = None,
-        transaction_manager: Optional[Any] = None
+        resource_manager: Any | None = None,
+        transaction_manager: Any | None = None
     ):
         """Initialize FSM.
         
@@ -63,8 +63,8 @@ class FSM:
         # Execution support (from builder FSM wrapper)
         self.resource_manager = resource_manager
         self.transaction_manager = transaction_manager
-        self._engine: Optional[Any] = None  # ExecutionEngine
-        self._async_engine: Optional[Any] = None  # AsyncExecutionEngine
+        self._engine: Any | None = None  # ExecutionEngine
+        self._async_engine: Any | None = None  # AsyncExecutionEngine
     
     def add_network(
         self,
@@ -495,7 +495,7 @@ class FSM:
             return network.get_arcs_from_state(state_name)
         return []
     
-    def get_engine(self, strategy: Optional[str] = None):
+    def get_engine(self, strategy: str | None = None):
         """Get or create the execution engine.
         
         Args:
@@ -526,7 +526,7 @@ class FSM:
         
         return self._engine
     
-    def get_async_engine(self, strategy: Optional[str] = None):
+    def get_async_engine(self, strategy: str | None = None):
         """Get or create the async execution engine.
         
         Args:
@@ -542,7 +542,7 @@ class FSM:
         
         return self._async_engine
     
-    def _prepare_execution_context(self, initial_data: Optional[Dict[str, Any]] = None):
+    def _prepare_execution_context(self, initial_data: Dict[str, Any] | None = None):
         """Prepare execution context for FSM execution.
         
         Args:
@@ -571,10 +571,10 @@ class FSM:
             # For batch mode, treat input as batch data
             if initial_data is not None:
                 # If it's not already a list, make it one
-                if not isinstance(initial_data, list):
+                if not isinstance(initial_data, list):  # type: ignore[unreachable]
                     context.batch_data = [initial_data]
                 else:
-                    context.batch_data = initial_data
+                    context.batch_data = initial_data  # type: ignore[unreachable]
             else:
                 context.batch_data = []
         elif self.data_mode == ProcessingMode.STREAM:
@@ -596,7 +596,7 @@ class FSM:
     
     def _format_execution_result(self, success: bool, result: Any, context: Any, 
                                  duration: float, initial_data: Any = None,
-                                 error: Optional[str] = None) -> Dict[str, Any]:
+                                 error: str | None = None) -> Dict[str, Any]:
         """Format the execution result in a standard format.
         
         Args:
@@ -628,7 +628,7 @@ class FSM:
             "duration": duration
         }
     
-    async def execute_async(self, initial_data: Optional[Dict[str, Any]] = None) -> Any:
+    async def execute_async(self, initial_data: Dict[str, Any] | None = None) -> Any:
         """Execute the FSM asynchronously with initial data.
         
         Args:
@@ -663,10 +663,10 @@ class FSM:
         except Exception as e:
             # Handle any exception that occurs during execution
             return self._format_execution_result(
-                False, None, None, None, initial_data, str(e)
+                False, None, None, 0.0, initial_data, str(e)
             )
     
-    def execute(self, initial_data: Optional[Dict[str, Any]] = None) -> Any:
+    def execute(self, initial_data: Dict[str, Any] | None = None) -> Any:
         """Execute the FSM synchronously with initial data.
         
         This is a simplified API for running the FSM.
@@ -703,5 +703,5 @@ class FSM:
         except Exception as e:
             # Handle any exception that occurs during execution
             return self._format_execution_result(
-                False, None, None, None, initial_data, str(e)
+                False, None, None, 0.0, initial_data, str(e)
             )

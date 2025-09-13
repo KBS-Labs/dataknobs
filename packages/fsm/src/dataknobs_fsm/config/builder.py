@@ -35,7 +35,6 @@ from dataknobs_fsm.core.transactions import (
 )
 from dataknobs_fsm.core.fsm import FSM as CoreFSMClass  # noqa: N811
 from dataknobs_fsm.execution.context import ExecutionContext
-from dataknobs_fsm.execution.engine import ExecutionEngine
 from dataknobs_fsm.functions.base import (
     IResource,
     IStateTestFunction,

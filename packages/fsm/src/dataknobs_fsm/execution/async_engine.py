@@ -13,7 +13,6 @@ from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.execution.engine import TraversalStrategy
 from dataknobs_fsm.execution.common import (
     NetworkSelector,
-    TransitionSelector,
     TransitionSelectionMode
 )
 from dataknobs_fsm.execution.base_engine import BaseExecutionEngine
