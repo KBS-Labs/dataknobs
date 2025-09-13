@@ -49,6 +49,28 @@ class ValidationError(FSMError):
     pass
 
 
+class FunctionError(FSMError):
+    """Raised when a function execution fails.
+    
+    This represents deterministic failures in user-defined functions
+    (transforms, validators, conditions) that should not be retried.
+    These are code errors, not transient failures.
+    """
+    
+    def __init__(self, 
+                 message: str, 
+                 function_name: str | None = None,
+                 from_state: str | None = None, 
+                 to_state: str | None = None,
+                 details: Dict[str, Any] | None = None):
+        if function_name:
+            message = f"Function '{function_name}' failed: {message}"
+        super().__init__(message, details)
+        self.function_name = function_name
+        self.from_state = from_state
+        self.to_state = to_state
+
+
 class TimeoutError(FSMError):
     """Raised when operation times out."""
     pass

@@ -115,22 +115,35 @@ class TestSimpleAPITimeout:
             assert "exceeded timeout of 0.5 seconds" in result["error"]
     
     @pytest.mark.asyncio
-    async def test_process_async_with_timeout_success(self, simple_fsm):
-        """Test process_async() completes within timeout."""
-        # Mock the async engine
-        mock_async_engine = Mock()
-        mock_async_engine.execute = asyncio.coroutine(
-            lambda context: (True, {"result": "async_success"})
+    async def test_process_async_with_timeout_success(self):
+        """Test process_async() completes within timeout using real FSM."""
+        # Create a simple FSM that completes quickly
+        config = {
+            "name": "test_fsm",
+            "main_network": "main",
+            "networks": [{
+                "name": "main",
+                "states": [
+                    {"name": "start", "is_start": True},
+                    {"name": "end", "is_end": True}
+                ],
+                "arcs": [
+                    {"from": "start", "to": "end"}
+                ]
+            }]
+        }
+        
+        fsm = SimpleFSM(config)
+        
+        # Process with timeout - should complete quickly
+        result = await fsm.process_async(
+            data={"input": "test"},
+            timeout=5.0
         )
         
-        with patch.object(simple_fsm, '_async_engine', mock_async_engine):
-            result = await simple_fsm.process_async(
-                data={"input": "test"},
-                timeout=5.0
-            )
-            
-            assert result["success"] is True
-            assert "error" not in result or result["error"] is None
+        assert result["success"] is True
+        assert "error" not in result or result["error"] is None
+        assert result["final_state"] == "end"
     
     @pytest.mark.asyncio
     async def test_process_async_with_timeout_exceeded(self, simple_fsm):
@@ -166,14 +179,17 @@ class TestSimpleAPITimeout:
             output_path = Path(output_file.name)
         
         try:
-            # Mock the FSM to process quickly
+            # Use the simple config
             config = self.create_simple_config()
             
             with patch('dataknobs_fsm.api.simple.create_fsm') as mock_create:
                 mock_fsm = Mock()
-                mock_fsm.process_stream = asyncio.coroutine(
-                    lambda **kwargs: {"processed": 2, "errors": 0}
-                )
+                
+                # Create a proper async function instead of using deprecated coroutine
+                async def mock_process_stream(**kwargs):
+                    return {"processed": 2, "errors": 0}
+                
+                mock_fsm.process_stream = mock_process_stream
                 mock_fsm.close = Mock()
                 mock_create.return_value = mock_fsm
                 

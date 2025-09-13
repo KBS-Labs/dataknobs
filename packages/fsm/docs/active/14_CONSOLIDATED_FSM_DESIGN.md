@@ -119,6 +119,60 @@ The FSM supports two distinct types of data transformation functions, clearly se
 Input Data → StateTransform → State Processing → ArcTransform → Next State
 ```
 
+#### Function Types
+
+The FSM supports four types of function references:
+
+1. **inline** - Lambda expressions or code strings
+   - Quick prototyping and simple logic
+   - Defined directly in configuration
+   - Example: `"lambda state: state.data.upper()"`
+
+2. **builtin** - Pre-registered FSM library functions
+   - Common operations provided by the framework
+   - Referenced by name
+   - Example: `{"type": "builtin", "name": "uppercase"}`
+
+3. **custom** - Functions from importable modules
+   - Complex logic in separate Python files
+   - Requires module path
+   - Example: `{"type": "custom", "module": "myapp.transforms", "name": "process"}`
+
+4. **registered** - User-registered functions (Added in v2.0)
+   - Clean Python functions registered at runtime
+   - No module path required
+   - Full IDE support and debugging
+   - Example: `{"type": "registered", "name": "validate_email"}`
+
+#### Custom Function Registration
+
+Custom functions can be registered when creating an FSM instance:
+
+```python
+from dataknobs_fsm.api.simple import SimpleFSM
+
+def validate_email(state):
+    """Custom validation function."""
+    data = state.data.copy()
+    # validation logic here
+    return data
+
+def normalize_data(state):
+    """Custom normalization function."""
+    data = state.data.copy()
+    # normalization logic here
+    return data
+
+# Register functions with FSM
+fsm = SimpleFSM(
+    config,
+    custom_functions={
+        'validate_email': validate_email,
+        'normalize_data': normalize_data
+    }
+)
+```
+
 #### Configuration Examples
 
 **StateTransform Configuration**:
@@ -129,10 +183,11 @@ states:
       transform: 
         type: inline
         code: "lambda state: {'normalized': state.data['raw'].upper()}"
-    # OR
+    # OR with registered function
     functions:
       transform:
-        class: "custom.transformers.DataNormalizer"
+        type: registered
+        name: "normalize_data"
 ```
 
 **ArcTransform Configuration**:
@@ -144,9 +199,10 @@ states:
         transform:
           type: inline
           code: "lambda data, ctx: {'processed': data['value'] * 2}"
-        # OR
+        # OR with registered function
         transform:
-          class: "custom.transformers.DataProcessor"
+          type: registered
+          name: "process_transition"
 ```
 
 This clear separation was formalized in ADR-027 after initial confusion led to execution issues. The architecture ensures each transform type executes exactly once at the appropriate time.
@@ -393,17 +449,52 @@ class IResource(ABC):
 
 ### Error Handling and Recovery
 
-Multi-level error handling strategy:
+Multi-level error handling strategy with clear distinction between error types:
+
+#### Error Classification
+
+1. **Deterministic Errors** (No Retry)
+   - `TypeError`, `AttributeError`, `ValueError`, `SyntaxError`
+   - Code errors in user functions
+   - Schema validation failures
+   - These fail immediately without retry
+
+2. **Potentially Recoverable Errors** (Retry with Backoff)
+   - Network timeouts
+   - Resource temporarily unavailable
+   - Transient service failures
+   - Configurable retry with exponential backoff
+
+3. **Function Errors** (Special Handling)
+   - Custom `FunctionError` exception for user function failures
+   - State transform failures: State marked as failed, execution continues
+   - Arc transform failures: Transition prevented, stays in source state
+
+#### Transform Failure Behavior
+
+**State Transform Failures**:
+- State is marked as failed in context
+- Execution continues to allow recovery paths
+- Failed states tracked in `context.failed_states`
+- Useful for validation pipelines where you want to collect all errors
+
+**Arc Transform Failures**:
+- Transition is prevented
+- FSM remains in source state
+- Alternative arcs may be attempted
+- Returns error result if no valid transitions
 
 #### 1. Function-Level
-- Try-catch with retries
-- Exponential backoff
-- Dead letter queues
+- Try-catch with intelligent retry logic
+- Exponential backoff for recoverable errors
+- No retry for deterministic failures
+- Dead letter queues for persistent failures
 
 #### 2. State-Level
 - Error states for recovery
 - Fallback states
 - Compensation logic
+- Failed state tracking
 
 #### 3. Network-Level
 - Error networks for complex recovery
@@ -806,6 +897,31 @@ A major refactoring was undertaken to eliminate code duplication between the Sim
 - Keep ResourceManager but simplify resource provider creation
 - Provide factory methods for common resources
 - Allow advanced users full control when needed
+
+#### 6. Custom Function Registration
+**Learning**: String-based function definitions are painful for users
+- Users want to write Python functions, not strings
+- IDE support (syntax highlighting, debugging) is crucial
+- Function registration must be simple and intuitive
+
+**Resolution Journey**:
+- Discovered users were forced to write complex lambdas as strings
+- Added `custom_functions` parameter to SimpleFSM
+- Introduced "registered" function type to schema
+- Fixed function name preservation through wrapping process
+- Result: Clean, maintainable, debuggable function definitions
+
+#### 7. Error Handling Granularity
+**Learning**: Different error types need different handling strategies
+- Deterministic errors (code bugs) should never retry
+- Network/resource errors may benefit from retry
+- Transform failures need special handling based on type
+
+**Resolution Journey**:
+- Initially all errors were retried equally
+- Added FunctionError exception for deterministic failures
+- Separated state transform failures (continue execution) from arc transform failures (prevent transition)
+- Result: Intelligent error handling that matches user expectations
 
 ### Common Pitfalls Avoided
 

@@ -35,7 +35,6 @@ from dataknobs_fsm.core.transactions import (
 )
 from dataknobs_fsm.core.fsm import FSM as CoreFSMClass  # noqa: N811
 from dataknobs_fsm.execution.context import ExecutionContext
-from dataknobs_fsm.execution.engine import ExecutionEngine
 from dataknobs_fsm.functions.base import (
     IResource,
     IStateTestFunction,
@@ -60,7 +59,7 @@ class FSMBuilder:
         # Register built-in functions on initialization
         self._register_builtin_functions()
 
-    def build(self, config: FSMConfig) -> "FSM":
+    def build(self, config: FSMConfig) -> CoreFSMClass:
         """Build an FSM instance from configuration.
         
         Args:
@@ -105,7 +104,12 @@ class FSMBuilder:
             data_mode=data_mode,
             transaction_mode=transaction_mode,
             description=config.description,
+            resource_manager=self._resource_manager,
+            transaction_manager=self._transaction_manager,
         )
+        
+        # Store config in FSM for reference
+        fsm.config = config
         
         # Register all functions from builder into core FSM's function registry
         for func_name, func in self._function_registry.items():
@@ -115,14 +119,8 @@ class FSMBuilder:
         for network_name, network in self._networks.items():
             fsm.add_network(network, is_main=(network_name == config.main_network))
         
-        # 7. Create wrapper FSM with execution capabilities
-        return FSM(
-            core_fsm=fsm,
-            config=config,
-            resource_manager=self._resource_manager,
-            transaction_manager=self._transaction_manager,
-            function_registry=self._function_registry,
-        )
+        # Return the core FSM directly
+        return fsm
 
     def register_function(self, name: str, func: Callable) -> None:
         """Register a custom function.
@@ -543,8 +541,14 @@ class FSMBuilder:
                 raise ValueError(f"Built-in function not found: {func_ref.name}")
             func = self._builtin_functions[func_ref.name]
         
+        elif func_ref.type == "registered":
+            # Look up registered function
+            if func_ref.name not in self._function_registry:
+                raise ValueError(f"Registered function not found: {func_ref.name}")
+            func = self._function_registry[func_ref.name]
+        
         elif func_ref.type == "custom":
-            # Check registry first
+            # Check registry first (for backward compatibility)
             if func_ref.name in self._function_registry:
                 func = self._function_registry[func_ref.name]
             else:
@@ -633,7 +637,13 @@ def transform(data, context=None):
         # Validate type if specified
         if expected_type and not isinstance(func, expected_type):
             # Wrap function to match expected interface
-            func = self._wrap_function(func, expected_type)
+            wrapped = self._wrap_function(func, expected_type)
+            # Preserve the original function name if it exists
+            if hasattr(func, 'name'):
+                wrapped.name = func.name
+            elif func_ref.type == "registered" and func_ref.name:
+                wrapped.name = func_ref.name
+            func = wrapped
         
         # For inline functions, generate a unique name and register them
         if func_ref.type == "inline":
@@ -719,7 +729,11 @@ def transform(data, context=None):
                 
                 # Common callable for both
                 def call_wrapper(self, data, context=None):
-                    return self.func(State(data))
+                    # If data already has a 'data' attribute, it's a state-like object
+                    if hasattr(data, 'data'):
+                        return self.func(data)
+                    else:
+                        return self.func(State(data))
                 FunctionWrapper.__call__ = call_wrapper
         
         return FunctionWrapper(func)
@@ -782,173 +796,6 @@ def transform(data, context=None):
         )
 
 
-class FSM:
-    """Executable FSM instance wrapper for easy use."""
-
-    def __init__(
-        self,
-        core_fsm: CoreFSMClass,
-        config: FSMConfig,
-        resource_manager: ResourceManager,
-        transaction_manager: TransactionManager | None = None,
-        function_registry: Dict[str, Callable] | None = None,
-    ):
-        """Initialize FSM wrapper instance.
-        
-        Args:
-            core_fsm: Core FSM instance.
-            config: FSM configuration.
-            resource_manager: Resource manager.
-            transaction_manager: Optional transaction manager.
-            function_registry: Optional function registry (dict of callables).
-        """
-        self.core_fsm = core_fsm
-        self.config = config
-        self.resource_manager = resource_manager
-        # Use the core FSM's FunctionRegistry instead of storing separately
-        self.function_registry = core_fsm.function_registry
-        self.transaction_manager = transaction_manager
-        
-        # If additional functions were provided, register them
-        if function_registry:
-            for name, func in function_registry.items():
-                self.function_registry.register(name, func)
-        
-        # Convenience properties
-        self.networks = core_fsm.networks
-        self.main_network = self.networks.get(core_fsm.main_network) if core_fsm.main_network else None
-        self.name = core_fsm.name  # ExecutionEngine expects this
-        
-        # Engine will be created on demand
-        self._engine: ExecutionEngine | None = None
-
-    def get_engine(self) -> ExecutionEngine:
-        """Get or create the execution engine.
-        
-        Returns:
-            ExecutionEngine instance.
-        """
-        if self._engine is None:
-            # Create engine with the core FSM
-            from dataknobs_fsm.execution.engine import TraversalStrategy
-            
-            # Map config execution strategy to engine strategy
-            strategy_map = {
-                "depth_first": TraversalStrategy.DEPTH_FIRST,
-                "breadth_first": TraversalStrategy.BREADTH_FIRST,
-                "resource_optimized": TraversalStrategy.RESOURCE_OPTIMIZED,
-                "stream_optimized": TraversalStrategy.STREAM_OPTIMIZED,
-            }
-            
-            strategy = strategy_map.get(
-                self.config.execution_strategy.value,
-                TraversalStrategy.DEPTH_FIRST
-            )
-            
-            self._engine = ExecutionEngine(
-                fsm=self.core_fsm,
-                strategy=strategy,
-            )
-        
-        return self._engine
-
-    async def execute(self, initial_data: Dict[str, Any] | None = None) -> Any:
-        """Execute the FSM with initial data.
-        
-        This is a simplified API for running the FSM.
-        
-        Args:
-            initial_data: Initial data for execution.
-            
-        Returns:
-            Execution result.
-        """
-        from dataknobs_fsm.execution.context import ExecutionContext
-        
-        try:
-            # Get the execution engine
-            engine = self.get_engine()
-            
-            # Create execution context
-            context = ExecutionContext(
-                data_mode=self.core_fsm.data_mode,
-                transaction_mode=self.core_fsm.transaction_mode
-            )
-            
-            # Execute the FSM (engine.execute is synchronous)
-            success, result = engine.execute(context, initial_data)
-            
-            return {
-                "status": "completed" if success else "failed",
-                "data": result,
-                "execution_id": context.execution_id if hasattr(context, 'execution_id') else None,
-                "transitions": getattr(context, 'transition_count', 0),
-                "duration": getattr(context, 'duration', None)
-            }
-            
-        except Exception as e:
-            return {
-                "status": "error",
-                "error": str(e),
-                "data": initial_data
-            }
-
-    def validate(self) -> bool:
-        """Validate the FSM configuration and structure.
-        
-        Returns:
-            True if valid, False otherwise.
-        """
-        try:
-            # Validate network consistency
-            for network in self.networks.values():
-                network.validate()
-            return True
-        except Exception:
-            return False
-    
-    def get_start_state(self, network_name: str | None = None):
-        """Get the start state from a network.
-        
-        Args:
-            network_name: Network to get start state from. Uses main network if None.
-            
-        Returns:
-            Start state definition.
-        """
-        if network_name is None:
-            network = self.main_network
-        else:
-            network = self.networks.get(network_name)
-        
-        if not network:
-            raise ValueError(f"Network '{network_name or 'main'}' not found")
-        
-        # Find start state in the network
-        for state in network.states.values():
-            if state.is_start_state():
-                return state
-        
-        raise ValueError(f"No start state found in network '{network.name}'")
-    
-    def get_state(self, state_name: str, network_name: str | None = None):
-        """Get a state definition by name.
-        
-        Args:
-            state_name: Name of the state.
-            network_name: Network to search in. Searches all if None.
-            
-        Returns:
-            State definition.
-        """
-        if network_name:
-            network = self.networks.get(network_name)
-            if network and state_name in network.states:
-                return network.states[state_name]
-        else:
-            # Search all networks
-            for network in self.networks.values():
-                if state_name in network.states:
-                    return network.states[state_name]
-        
-        raise ValueError(f"State '{state_name}' not found")
+# FSM wrapper class removed - functionality moved to core FSM
+# The FSMBuilder now returns the core FSM directly with all
+# execution capabilities integrated

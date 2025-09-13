@@ -228,6 +228,53 @@ class StreamContext:
                 self._backpressure_active = False
                 self.status = StreamStatus.ACTIVE
     
+    def get_next_chunk(self) -> StreamChunk | None:
+        """Get the next chunk from the stream.
+        
+        Returns:
+            Next chunk or None if no more chunks.
+        """
+        try:
+            # Try to get from input queue with a short timeout
+            chunk = self._input_queue.get(timeout=0.001)
+            return chunk
+        except queue.Empty:
+            return None
+    
+    def add_chunk(self, chunk: StreamChunk) -> bool:
+        """Add a chunk to the input queue for processing.
+        
+        Args:
+            chunk: The chunk to add.
+            
+        Returns:
+            True if added successfully, False if queue is full.
+        """
+        try:
+            self._input_queue.put(chunk, timeout=0.001)
+            return True
+        except queue.Full:
+            return False
+    
+    def add_data(self, data: Any, chunk_id: str | None = None, is_last: bool = False) -> bool:
+        """Add data as a chunk to the stream.
+        
+        Args:
+            data: The data to add (will be wrapped in a StreamChunk).
+            chunk_id: Optional chunk ID.
+            is_last: Whether this is the last chunk.
+            
+        Returns:
+            True if added successfully, False if queue is full.
+        """
+        import uuid
+        chunk = StreamChunk(
+            data=data if isinstance(data, list) else [data],
+            chunk_id=chunk_id or str(uuid.uuid4()),
+            is_last=is_last
+        )
+        return self.add_chunk(chunk)
+    
     def _process_chunk(self, chunk: StreamChunk) -> StreamChunk | None:
         """Process a chunk through all processors.
         

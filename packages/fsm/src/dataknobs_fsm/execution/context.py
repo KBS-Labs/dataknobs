@@ -112,6 +112,9 @@ class ExecutionContext:
         self.start_time: float = time.time()
         self.state_timings: Dict[str, float] = {}
         self.function_call_count: Dict[str, int] = {}
+
+        # State instance tracking for debugging
+        self.current_state_instance: Any = None
     
     def push_network(self, network_name: str, return_state: str | None = None) -> None:
         """Push a network onto the execution stack.
@@ -448,3 +451,60 @@ class ExecutionContext:
         clone.variables = self.variables.copy()
         
         return clone
+    
+    def is_complete(self) -> bool:
+        """Check if the FSM execution has reached an end state.
+        
+        Returns:
+            True if in an end state or no current state, False otherwise.
+        """
+        if not self.current_state:
+            return True
+        
+        # Check if current state is marked as ended
+        return self.metadata.get('is_end_state', False)
+    
+    def get_current_state(self) -> str | None:
+        """Get the name of the current state.
+        
+        Returns:
+            Current state name or None if not set.
+        """
+        return self.current_state
+    
+    def get_data_snapshot(self) -> Dict[str, Any]:
+        """Get a snapshot of the current data.
+        
+        Returns:
+            Copy of the current data dictionary.
+        """
+        if isinstance(self.data, dict):
+            return self.data.copy()
+        elif hasattr(self.data, '__dict__'):
+            return vars(self.data).copy()
+        else:
+            return {'value': self.data}
+    
+    def get_execution_stats(self) -> Dict[str, Any]:
+        """Get execution statistics.
+
+        Returns:
+            Dictionary with execution metrics.
+        """
+        return {
+            'states_visited': len(self.state_history),
+            'current_state': self.current_state,
+            'previous_state': self.previous_state,
+            'transition_count': self.transition_count,
+            'execution_id': self.execution_id,
+            'data_mode': self.data_mode.value if self.data_mode else None,
+            'transaction_mode': self.transaction_mode.value if self.transaction_mode else None
+        }
+
+    def get_current_state_instance(self) -> Any:
+        """Get the current state instance object.
+
+        Returns:
+            The StateInstance object for the current state, or None if not set.
+        """
+        return self.current_state_instance

@@ -37,6 +37,14 @@ class Arc:
             self.pre_test == other.pre_test and
             self.transform == other.transform
         )
+    
+    @property
+    def name(self) -> str:
+        """Generate a name for the arc."""
+        # Use metadata name if available, otherwise generate from states
+        if 'name' in self.metadata:
+            return self.metadata['name']
+        return f"{self.source_state}->{self.target_state}"
 
 
 @dataclass
@@ -166,6 +174,28 @@ class StateNetwork:
     def final_states(self) -> Set[str]:
         """Get final states."""
         return self._final_states.copy()
+    
+    def is_initial_state(self, state_name: str) -> bool:
+        """Check if a state is an initial state.
+        
+        Args:
+            state_name: Name of the state to check
+            
+        Returns:
+            True if the state is an initial state
+        """
+        return self._initial_state == state_name
+    
+    def is_final_state(self, state_name: str) -> bool:
+        """Check if a state is a final state.
+        
+        Args:
+            state_name: Name of the state to check
+            
+        Returns:
+            True if the state is a final state
+        """
+        return state_name in self._final_states
     
     @property
     def resource_requirements(self) -> Dict[str, Any]:
