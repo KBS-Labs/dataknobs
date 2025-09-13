@@ -15,7 +15,8 @@ from dataknobs_fsm.core import (
     StateMode,
     StateNetwork,
 )
-from dataknobs_fsm.functions.base import FunctionContext, StateTransitionError as FunctionError
+from dataknobs_fsm.core.exceptions import FunctionError
+from dataknobs_fsm.functions.base import FunctionContext
 
 
 class TestStateNetwork:

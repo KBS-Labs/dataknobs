@@ -543,8 +543,14 @@ class FSMBuilder:
                 raise ValueError(f"Built-in function not found: {func_ref.name}")
             func = self._builtin_functions[func_ref.name]
         
+        elif func_ref.type == "registered":
+            # Look up registered function
+            if func_ref.name not in self._function_registry:
+                raise ValueError(f"Registered function not found: {func_ref.name}")
+            func = self._function_registry[func_ref.name]
+        
         elif func_ref.type == "custom":
-            # Check registry first
+            # Check registry first (for backward compatibility)
             if func_ref.name in self._function_registry:
                 func = self._function_registry[func_ref.name]
             else:
@@ -633,7 +639,13 @@ def transform(data, context=None):
         # Validate type if specified
         if expected_type and not isinstance(func, expected_type):
             # Wrap function to match expected interface
-            func = self._wrap_function(func, expected_type)
+            wrapped = self._wrap_function(func, expected_type)
+            # Preserve the original function name if it exists
+            if hasattr(func, 'name'):
+                wrapped.name = func.name
+            elif func_ref.type == "registered" and func_ref.name:
+                wrapped.name = func_ref.name
+            func = wrapped
         
         # For inline functions, generate a unique name and register them
         if func_ref.type == "inline":

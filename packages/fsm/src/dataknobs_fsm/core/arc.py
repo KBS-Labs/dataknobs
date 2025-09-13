@@ -4,7 +4,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, TYPE_CHECKING
 
-from dataknobs_fsm.functions.base import FunctionContext, StateTransitionError as FunctionError
+from dataknobs_fsm.core.exceptions import FunctionError, ResourceError
+from dataknobs_fsm.functions.base import FunctionContext
 
 if TYPE_CHECKING:
     from dataknobs_fsm.execution.context import ExecutionContext
@@ -411,11 +412,10 @@ class ArcExecution:
             except Exception as e:
                 # Resource acquisition failed - clean up any acquired resources
                 self._release_resources(context, resources)
-                from dataknobs_fsm.functions.base import ResourceError
                 raise ResourceError(
-                    f"Failed to acquire resource '{resource_name}': {e}",
-                    resource_name=resource_name,
-                    operation="acquire"
+                    resource_id=resource_name,
+                    message=f"Failed to acquire resource: {e}",
+                    details={"operation": "acquire", "error": str(e)}
                 ) from e
         
         return resources

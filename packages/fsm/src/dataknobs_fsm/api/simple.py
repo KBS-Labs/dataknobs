@@ -32,7 +32,8 @@ class SimpleFSM:
         self,
         config: Union[str, Path, Dict[str, Any]],
         data_mode: DataHandlingMode = DataHandlingMode.COPY,
-        resources: Dict[str, Any] | None = None
+        resources: Dict[str, Any] | None = None,
+        custom_functions: Dict[str, Callable] | None = None
     ):
         """Initialize SimpleFSM from configuration.
         
@@ -40,9 +41,11 @@ class SimpleFSM:
             config: Path to config file or config dictionary
             data_mode: Default data mode for processing
             resources: Optional resource configurations
+            custom_functions: Optional custom functions to register
         """
         self.data_mode = data_mode
         self._resources = resources or {}
+        self._custom_functions = custom_functions or {}
         
         # Load configuration
         if isinstance(config, (str, Path)):
@@ -52,8 +55,13 @@ class SimpleFSM:
             loader = ConfigLoader()
             self._config = loader.load_from_dict(config)
             
-        # Build FSM
+        # Build FSM with custom functions
         builder = FSMBuilder()
+        
+        # Register custom functions with the builder
+        for name, func in self._custom_functions.items():
+            builder.register_function(name, func)
+            
         self._fsm = builder.build(self._config)
         
         # Initialize resource manager
@@ -387,18 +395,20 @@ class SimpleFSM:
 
 def create_fsm(
     config: Union[str, Path, Dict[str, Any]],
+    custom_functions: Dict[str, Callable] | None = None,
     **kwargs
 ) -> SimpleFSM:
     """Factory function to create a SimpleFSM instance.
     
     Args:
         config: Configuration file path or dictionary
+        custom_functions: Optional custom functions to register
         **kwargs: Additional arguments passed to SimpleFSM
         
     Returns:
         Configured SimpleFSM instance
     """
-    return SimpleFSM(config, **kwargs)
+    return SimpleFSM(config, custom_functions=custom_functions, **kwargs)
 
 
 # Convenience functions for common operations

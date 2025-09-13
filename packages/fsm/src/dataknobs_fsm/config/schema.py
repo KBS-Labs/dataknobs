@@ -43,7 +43,7 @@ class ExecutionStrategy(str, Enum):
 class FunctionReference(BaseModel):
     """Reference to a function."""
 
-    type: Literal["builtin", "custom", "inline"]
+    type: Literal["builtin", "custom", "inline", "registered"]
     name: str | None = None
     module: str | None = None
     code: str | None = None
@@ -58,6 +58,8 @@ class FunctionReference(BaseModel):
             raise ValueError("Custom functions require both 'module' and 'name'")
         if self.type == "inline" and not self.code:
             raise ValueError("Inline functions require 'code'")
+        if self.type == "registered" and not self.name:
+            raise ValueError("Registered functions require a 'name'")
         return self
 
 

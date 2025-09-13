@@ -5,6 +5,7 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Tuple
 
 from dataknobs_fsm.core.arc import ArcDefinition, ArcExecution
+from dataknobs_fsm.core.exceptions import FunctionError
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
 from dataknobs_fsm.core.network import StateNetwork
@@ -381,8 +382,8 @@ class ExecutionEngine:
                 
                 return True
                 
-            except (TypeError, AttributeError, ValueError) as e:
-                # Data type errors - don't retry
+            except (TypeError, AttributeError, ValueError, SyntaxError) as e:
+                # Deterministic errors (code errors, type errors) - don't retry
                 self._error_count += 1
                 
                 # Fire error hooks
@@ -390,10 +391,23 @@ class ExecutionEngine:
                     for hook in self._error_hooks:
                         hook(context, arc, e)
                 
-                # Return false immediately for data errors
+                # Return false immediately for deterministic errors
+                return False
+                
+            except FunctionError as e:
+                # Arc transform or pre-test failed - this is a definitive failure
+                self._error_count += 1
+                
+                # Fire error hooks
+                if self.enable_hooks:
+                    for hook in self._error_hooks:
+                        hook(context, arc, e)
+                
+                # Arc failed, no retry for function errors
                 return False
                 
             except Exception as e:
+                # Other exceptions - may be recoverable (network, resources, etc.)
                 self._error_count += 1
                 
                 # Fire error hooks
@@ -401,6 +415,7 @@ class ExecutionEngine:
                     for hook in self._error_hooks:
                         hook(context, arc, e)
                 
+                # Only retry for potentially recoverable errors
                 retry_count += 1
                 if retry_count <= self.max_retries:
                     time.sleep(self.retry_delay * retry_count)
@@ -452,8 +467,15 @@ class ExecutionEngine:
                     
                     if result is not None:
                         context.data = result
-                except Exception:
-                    # Log but don't fail - state transforms are optional
+                except Exception as e:
+                    # State transform failed - mark state as failed but continue
+                    # State transforms failing doesn't stop the FSM, but marks the state as failed
+                    if not hasattr(context, 'failed_states'):
+                        context.failed_states = set()
+                    context.failed_states.add(state_name)
+                    
+                    # Log the error but don't raise - state is in fail mode but FSM continues
+                    # This follows the design where state transform failures don't halt execution
                     pass
     
     def _execute_state_functions(

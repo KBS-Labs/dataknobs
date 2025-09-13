@@ -443,6 +443,46 @@ class ConfigLoader:
                                         if 'metadata' not in state_arc:
                                             state_arc['metadata'] = {}
                                         state_arc['metadata']['name'] = arc[field]
+                                    elif field == 'condition':
+                                        # Handle condition field
+                                        condition = arc[field]
+                                        if isinstance(condition, dict):
+                                            # Check for simple condition types
+                                            if condition.get('type') == 'success':
+                                                # Transform to check validation success in data
+                                                state_arc['condition'] = {
+                                                    'type': 'inline',
+                                                    'code': 'data.get("valid", True)'
+                                                }
+                                            elif condition.get('type') == 'failure':
+                                                # Transform to check validation failure in data
+                                                state_arc['condition'] = {
+                                                    'type': 'inline',
+                                                    'code': 'not data.get("valid", True)'
+                                                }
+                                            else:
+                                                # Keep as is
+                                                state_arc[field] = condition
+                                        elif isinstance(condition, str):
+                                            # Simple string condition - convert to inline
+                                            if condition == 'success':
+                                                state_arc['condition'] = {
+                                                    'type': 'inline',
+                                                    'code': 'data.get("valid", True)'
+                                                }
+                                            elif condition == 'failure':
+                                                state_arc['condition'] = {
+                                                    'type': 'inline',
+                                                    'code': 'not data.get("valid", True)'
+                                                }
+                                            else:
+                                                # Treat as inline code
+                                                state_arc['condition'] = {
+                                                    'type': 'inline',
+                                                    'code': condition
+                                                }
+                                        else:
+                                            state_arc[field] = condition
                                     else:
                                         state_arc[field] = arc[field]
                             
@@ -482,17 +522,29 @@ class ConfigLoader:
                             
                             # Convert validate function to validators list
                             if 'validate' in functions:
-                                state['validators'] = [{
-                                    'type': 'inline',
-                                    'code': functions['validate']
-                                }]
+                                validate_func = functions['validate']
+                                if isinstance(validate_func, dict):
+                                    # Already a function reference dict
+                                    state['validators'] = [validate_func]
+                                else:
+                                    # String lambda/code
+                                    state['validators'] = [{
+                                        'type': 'inline',
+                                        'code': validate_func
+                                    }]
                             
                             # Convert transform function to transforms list (StateTransform)
                             if 'transform' in functions:
-                                state['transforms'] = [{
-                                    'type': 'inline',
-                                    'code': functions['transform']
-                                }]
+                                transform_func = functions['transform']
+                                if isinstance(transform_func, dict):
+                                    # Already a function reference dict
+                                    state['transforms'] = [transform_func]
+                                else:
+                                    # String lambda/code
+                                    state['transforms'] = [{
+                                        'type': 'inline',
+                                        'code': transform_func
+                                    }]
                             
                             # Remove the functions field as it's not in the schema
                             del state['functions']
