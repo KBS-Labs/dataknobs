@@ -14,7 +14,8 @@ from dataknobs_fsm.llm.providers import (
 )
 from dataknobs_fsm.llm.utils import (
     PromptTemplate, MessageBuilder, ResponseParser,
-    TokenCounter, CostCalculator, create_few_shot_prompt
+    TokenCounter, CostCalculator, create_few_shot_prompt,
+    render_conditional_template
 )
 
 
@@ -394,28 +395,488 @@ class TestCostCalculator:
         assert cost is None
 
 
+class TestRenderConditionalTemplate:
+    """Test render_conditional_template function."""
+
+    def test_basic_variable_substitution(self):
+        """Test basic variable substitution."""
+        template = "Hello {{name}}, welcome!"
+        params = {"name": "Alice"}
+        result = render_conditional_template(template, params)
+        assert result == "Hello Alice, welcome!"
+
+    def test_missing_variable_unchanged(self):
+        """Test that missing variables remain unchanged."""
+        template = "Hello {{name}}, your ID is {{id}}"
+        params = {"name": "Bob"}
+        result = render_conditional_template(template, params)
+        assert result == "Hello Bob, your ID is {{id}}"
+
+    def test_empty_params(self):
+        """Test with empty parameters."""
+        template = "Hello {{name}}"
+        params = {}
+        result = render_conditional_template(template, params)
+        assert result == "Hello {{name}}"
+
+    def test_none_value_substitution(self):
+        """Test substitution with None values."""
+        template = "Value: {{value}}"
+        params = {"value": None}
+        result = render_conditional_template(template, params)
+        assert result == "Value: "
+
+    def test_simple_conditional_section(self):
+        """Test simple conditional section."""
+        template = "Hello {{name}}((, you have {{count}} messages))"
+
+        # With count present
+        params = {"name": "Alice", "count": 5}
+        result = render_conditional_template(template, params)
+        assert result == "Hello Alice, you have 5 messages"
+
+        # Without count
+        params = {"name": "Bob"}
+        result = render_conditional_template(template, params)
+        assert result == "Hello Bob"
+
+    def test_malformed_conditional_with_multiple_variables(self):
+        """Test conditional section with multiple variables."""
+        # Note: template has unmatched parenthesis and never closes the conditional content
+        template = "User: {{user}}(( ({{role}} - {{department}}))"
+
+        # All variables present - no conditional processing, just substitution
+        params = {"user": "John", "role": "Admin", "department": "IT"}
+        result = render_conditional_template(template, params)
+        assert result == "User: John(( (Admin - IT))"
+
+        # Only one conditional variable present - department becomes empty
+        params = {"user": "Jane", "role": "Manager"}
+        result = render_conditional_template(template, params)
+        assert result == "User: Jane(( (Manager - {{department}}))"
+
+        # No conditional variables present
+        params = {"user": "Mike"}
+        result = render_conditional_template(template, params)
+        assert result == "User: Mike(( ({{role}} - {{department}}))"
+
+    def test_conditional_with_multiple_variables(self):
+        """Test conditional section with multiple variables."""
+        # Template has properly balanced conditional: (( content ))
+        template = "User: {{user}}(( ({{role}} - {{department}})))"
+
+        # All variables present - conditional renders with content
+        params = {"user": "John", "role": "Admin", "department": "IT"}
+        result = render_conditional_template(template, params)
+        assert result == "User: John (Admin - IT)"
+
+        # Only one conditional variable present - department becomes empty
+        params = {"user": "Jane", "role": "Manager"}
+        result = render_conditional_template(template, params)
+        assert result == "User: Jane (Manager - )"
+
+        # No conditional variables present - entire conditional removed
+        params = {"user": "Mike"}
+        result = render_conditional_template(template, params)
+        assert result == "User: Mike"
+
+    def test_conditional_all_empty_values(self):
+        """Test conditional section where all values are empty."""
+        template = "Report((: {{status}} - {{details}}))"
+
+        # Empty strings
+        params = {"status": "", "details": ""}
+        result = render_conditional_template(template, params)
+        assert result == "Report"
+
+        # None values
+        params = {"status": None, "details": None}
+        result = render_conditional_template(template, params)
+        assert result == "Report"
+
+    def test_nested_conditionals(self):
+        """Test nested conditional sections."""
+        template = "Start((: outer ((inner {{var}})) text))"
+
+        # Variable present - nested conditional is processed
+        params = {"var": "value"}
+        result = render_conditional_template(template, params)
+        assert result == "Start: outer inner value text"
+
+        # Variable missing - entire outer section removed because
+        # ALL variables in it (including nested) are empty/missing
+        params = {}
+        result = render_conditional_template(template, params)
+        assert result == "Start"
+
+    def test_multiple_conditional_sections(self):
+        """Test multiple conditional sections."""
+        template = "Name: {{name}}((, Age: {{age}}))((, City: {{city}}))"
+
+        # All present
+        params = {"name": "Alice", "age": 30, "city": "NYC"}
+        result = render_conditional_template(template, params)
+        assert result == "Name: Alice, Age: 30, City: NYC"
+
+        # Some missing
+        params = {"name": "Bob", "city": "LA"}
+        result = render_conditional_template(template, params)
+        assert result == "Name: Bob, City: LA"
+
+        # Only required present
+        params = {"name": "Charlie"}
+        result = render_conditional_template(template, params)
+        assert result == "Name: Charlie"
+
+    def test_conditional_without_variables(self):
+        """Test conditional section without any variables."""
+        template = "Text((: static content here))"
+        params = {}
+        result = render_conditional_template(template, params)
+        assert result == "Text: static content here"
+
+    def test_numeric_and_boolean_values(self):
+        """Test with numeric and boolean parameter values."""
+        template = "Count: {{count}}, Active: {{active}}"
+
+        # Numeric
+        params = {"count": 42, "active": True}
+        result = render_conditional_template(template, params)
+        assert result == "Count: 42, Active: True"
+
+        # Zero and False
+        params = {"count": 0, "active": False}
+        result = render_conditional_template(template, params)
+        assert result == "Count: 0, Active: False"
+
+    def test_whitespace_handling(self):
+        """Test handling of whitespace in values."""
+        template = "Value((: '{{value}}'))"
+
+        # Whitespace-only string (should be removed)
+        params = {"value": "   "}
+        result = render_conditional_template(template, params)
+        assert result == "Value"
+
+        # String with content and whitespace (should be kept)
+        params = {"value": "  text  "}
+        result = render_conditional_template(template, params)
+        assert result == "Value: '  text  '"
+
+    def test_whitespace_in_variable_syntax(self):
+        """Test whitespace handling within variable syntax."""
+        # Test with spaces inside curly braces
+        template = "Value: {{ var  }}"
+
+        # When variable is present, preserve whitespace
+        params = {"var": "test"}
+        result = render_conditional_template(template, params)
+        assert result == "Value:  test  "
+
+        # When variable is missing, move whitespace outside
+        params = {}
+        result = render_conditional_template(template, params)
+        assert result == "Value:  {{var}}  "
+
+        # When variable is None, move whitespace outside
+        params = {"var": None}
+        result = render_conditional_template(template, params)
+        assert result == "Value:  {{var}}  "
+
+        # When variable is empty string, preserve whitespace
+        # Total: 1 space before + 2 spaces from template + 1 after = 4 spaces
+        params = {"var": ""}
+        result = render_conditional_template(template, params)
+        assert result == "Value:    "
+
+    def test_whitespace_in_conditionals(self):
+        """Test whitespace handling in conditional sections."""
+        template = "Start((: {{ var1 }} and {{var2}}))"
+
+        # Both variables present
+        params = {"var1": "A", "var2": "B"}
+        result = render_conditional_template(template, params)
+        assert result == "Start:  A  and B"
+
+        # One variable missing - var2 becomes empty string in conditional
+        # but var1 is present, so section is kept
+        params = {"var1": "A"}
+        result = render_conditional_template(template, params)
+        assert result == "Start:  A  and "
+
+        # Variable with empty string (keeps section because var2 has value)
+        # Empty string with whitespace: 1 space + empty + 1 space = 2 spaces
+        params = {"var1": "", "var2": "B"}
+        result = render_conditional_template(template, params)
+        assert result == "Start:    and B"
+
+    def test_complex_real_world_example(self):
+        """Test a complex real-world template example."""
+        template = """User Profile:
+Name: {{name}}
+Email: {{email}}((
+Phone: {{phone}}))((
+Address: {{street}}, {{city}}, {{state}} {{zip}}))((
+
+Notes: {{notes}}))"""
+
+        # Full profile
+        params = {
+            "name": "John Doe",
+            "email": "john@example.com",
+            "phone": "555-1234",
+            "street": "123 Main St",
+            "city": "Anytown",
+            "state": "CA",
+            "zip": "12345",
+            "notes": "VIP customer"
+        }
+        result = render_conditional_template(template, params)
+        assert "Phone: 555-1234" in result
+        assert "Address: 123 Main St, Anytown, CA 12345" in result
+        assert "Notes: VIP customer" in result
+
+        # Minimal profile
+        params = {
+            "name": "Jane Smith",
+            "email": "jane@example.com"
+        }
+        result = render_conditional_template(template, params)
+        assert result == """User Profile:
+Name: Jane Smith
+Email: jane@example.com"""
+
+    def test_unmatched_parentheses(self):
+        """Test handling of unmatched parentheses."""
+        template = "Text (( unmatched"
+        params = {}
+        result = render_conditional_template(template, params)
+        # Should leave unmatched parentheses as-is
+        assert result == "Text (( unmatched"
+
+    def test_edge_case_empty_template(self):
+        """Test empty template."""
+        template = ""
+        params = {"key": "value"}
+        result = render_conditional_template(template, params)
+        assert result == ""
+
+    def test_edge_case_only_conditionals(self):
+        """Test template with only conditional sections."""
+        template = "(({{optional1}}))(({{optional2}}))"
+
+        # With values
+        params = {"optional1": "A", "optional2": "B"}
+        result = render_conditional_template(template, params)
+        assert result == "AB"
+
+        # Without values
+        params = {}
+        result = render_conditional_template(template, params)
+        assert result == ""
+
+    def test_unbalanced_parentheses_in_template(self):
+        """Test template with unbalanced parentheses (extra closing paren).
+
+        This demonstrates the left-to-right parsing behavior: the conditional
+        section ends at the first matching )), leaving the extra ) outside.
+        """
+        # Template has 3 opening and 3 closing parens total, but the conditional
+        # section is (( ... )) with an extra ) after it
+        template = "User: {{user}}(( ({{role}} - {{department}})))"
+
+        # All variables present - conditional renders, extra ) remains
+        params = {"user": "John", "role": "Admin", "department": "IT"}
+        result = render_conditional_template(template, params)
+        assert result == "User: John (Admin - IT)"
+
+        # Only one conditional variable present
+        params = {"user": "Jane", "role": "Manager"}
+        result = render_conditional_template(template, params)
+        assert result == "User: Jane (Manager - )"
+
+        # No conditional variables - section removed, extra ) remains
+        # This shows the template author has an unmatched parenthesis
+        params = {"user": "Mike"}
+        result = render_conditional_template(template, params)
+        assert result == "User: Mike"
+
+        # Empty string for one variable (dept has value, so section kept)
+        params = {"user": "Alice", "role": "", "department": "HR"}
+        result = render_conditional_template(template, params)
+        assert result == "User: Alice ( - HR)"
+
+    def test_balanced_parentheses_in_conditional(self):
+        """Test the correct way to write a conditional with parentheses.
+
+        This shows how to properly balance parentheses within a conditional.
+        """
+        # Correctly balanced: conditional contains "(role - dept)" with balanced parens
+        template = "User: {{user}}(( ({{role}} - {{department}})))"
+
+        # All variables present
+        params = {"user": "John", "role": "Admin", "department": "IT"}
+        result = render_conditional_template(template, params)
+        assert result == "User: John (Admin - IT)"
+
+        # Only one conditional variable present
+        params = {"user": "Jane", "role": "Manager"}
+        result = render_conditional_template(template, params)
+        assert result == "User: Jane (Manager - )"
+
+        # No conditional variables - section cleanly removed
+        params = {"user": "Mike"}
+        result = render_conditional_template(template, params)
+        assert result == "User: Mike"
+
+        # Empty string for one variable
+        params = {"user": "Alice", "role": "", "department": "HR"}
+        result = render_conditional_template(template, params)
+        assert result == "User: Alice ( - HR)"
+
+    def test_nested_optional_subsections(self):
+        """Test nested optional subsections with separate variables."""
+        template = "User: {{user}}(( - ((Role: {{role}})) ((Dept: {{dept}}))))"
+
+        # All variables present
+        params = {"user": "John", "role": "Admin", "dept": "IT"}
+        result = render_conditional_template(template, params)
+        assert result == "User: John - Role: Admin Dept: IT"
+
+        # Only role present - dept section removed, outer kept
+        params = {"user": "Jane", "role": "Manager"}
+        result = render_conditional_template(template, params)
+        assert result == "User: Jane - Role: Manager "
+
+        # Only dept present - role section removed, outer kept
+        params = {"user": "Bob", "dept": "HR"}
+        result = render_conditional_template(template, params)
+        assert result == "User: Bob -  Dept: HR"
+
+        # Neither role nor dept - entire outer section removed
+        # because ALL variables in the outer section are empty/missing
+        params = {"user": "Alice"}
+        result = render_conditional_template(template, params)
+        assert result == "User: Alice"
+
+        # Role is empty string, dept has value - role section removed
+        params = {"user": "Charlie", "role": "", "dept": "Finance"}
+        result = render_conditional_template(template, params)
+        assert result == "User: Charlie -  Dept: Finance"
+
+        # Both role and dept are empty strings - outer section removed
+        params = {"user": "David", "role": "", "dept": ""}
+        result = render_conditional_template(template, params)
+        assert result == "User: David"
+
+    def test_complex_nested_conditionals_with_text(self):
+        """Test complex nested conditionals with intervening text."""
+        template = "Report((: {{title}} ((by {{author}} ))((on {{date}}))))"
+
+        # All present
+        params = {"title": "Analysis", "author": "John", "date": "2024-01-01"}
+        result = render_conditional_template(template, params)
+        assert result == "Report: Analysis by John on 2024-01-01"
+
+        # No author - author section removed
+        params = {"title": "Summary", "date": "2024-01-02"}
+        result = render_conditional_template(template, params)
+        assert result == "Report: Summary on 2024-01-02"
+
+        # No date - date section removed
+        params = {"title": "Review", "author": "Jane"}
+        result = render_conditional_template(template, params)
+        assert result == "Report: Review by Jane "
+
+        # Only title - nested sections removed
+        params = {"title": "Overview"}
+        result = render_conditional_template(template, params)
+        assert result == "Report: Overview "
+
+        # No title but has author/date - outer section kept because it has non-empty variables
+        # Title renders as empty, nested sections with values are kept
+        params = {"author": "Bob", "date": "2024-01-03"}
+        result = render_conditional_template(template, params)
+        assert result == "Report:  by Bob on 2024-01-03"
+
+        # Title is empty string, others present - section kept (empty string for title)
+        params = {"title": "", "author": "Alice", "date": "2024-01-04"}
+        result = render_conditional_template(template, params)
+        assert result == "Report:  by Alice on 2024-01-04"
+
+        # All variables missing - entire section removed
+        params = {}
+        result = render_conditional_template(template, params)
+        assert result == "Report"
+
+    def test_multiple_nested_levels(self):
+        """Test multiple levels of nesting."""
+        # Note: template has extra closing paren at the end
+        template = "Data((: Level1 ((Level2 ((Level3: {{var}})))))))"
+
+        # Variable present - all levels render (extra paren remains)
+        params = {"var": "value"}
+        result = render_conditional_template(template, params)
+        assert result == "Data: Level1 Level2 Level3: value)"
+
+        # Variable missing - entire outer section removed
+        # because the only variable in all nested sections is missing
+        params = {}
+        result = render_conditional_template(template, params)
+        assert result == "Data)"
+
+        # Variable is empty string - entire outer section removed
+        params = {"var": ""}
+        result = render_conditional_template(template, params)
+        assert result == "Data)"
+
+    def test_whitespace_edge_cases(self):
+        """Test edge cases with whitespace in variables."""
+        template = "Val: {{  var1  }}((, {{  var2  }}))"
+
+        # Both with values
+        params = {"var1": "A", "var2": "B"}
+        result = render_conditional_template(template, params)
+        assert result == "Val:   A  ,   B  "
+
+        # var1 present, var2 missing (conditional removed)
+        params = {"var1": "A"}
+        result = render_conditional_template(template, params)
+        assert result == "Val:   A  "
+
+        # var1 None, var2 present (whitespace moved outside)
+        params = {"var1": None, "var2": "B"}
+        result = render_conditional_template(template, params)
+        assert result == "Val:   {{var1}}  ,   B  "
+
+        # Both None
+        params = {"var1": None, "var2": None}
+        result = render_conditional_template(template, params)
+        assert result == "Val:   {{var1}}  "
+
+
 class TestUtilityFunctions:
     """Test utility functions."""
-    
+
     def test_create_few_shot_prompt(self):
         """Test few-shot prompt creation."""
         examples = [
             {"input": "2+2", "output": "4"},
             {"input": "3*3", "output": "9"}
         ]
-        
+
         prompt = create_few_shot_prompt(
             "Calculate the result:",
             examples
         )
-        
+
         assert "Calculate the result:" in prompt.template
         assert "Example 1:" in prompt.template
         assert "2+2" in prompt.template
         assert "4" in prompt.template
         assert "Example 2:" in prompt.template
         assert "{query}" in prompt.template
-        
+
         # Format with query
         result = prompt.format(query="5+5")
         assert "5+5" in result
