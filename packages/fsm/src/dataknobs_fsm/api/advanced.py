@@ -55,13 +55,15 @@ class AdvancedFSM:
     def __init__(
         self,
         fsm: FSM,
-        execution_mode: ExecutionMode = ExecutionMode.STEP_BY_STEP
+        execution_mode: ExecutionMode = ExecutionMode.STEP_BY_STEP,
+        custom_functions: Dict[str, Callable] | None = None
     ):
         """Initialize AdvancedFSM.
         
         Args:
             fsm: Core FSM instance
             execution_mode: Execution mode for advanced control
+            custom_functions: Optional custom functions to register
         """
         self.fsm = fsm
         self.execution_mode = execution_mode
@@ -75,6 +77,7 @@ class AdvancedFSM:
         self._breakpoints = set()
         self._trace_buffer = []
         self._profile_data = {}
+        self._custom_functions = custom_functions or {}
         
     def set_execution_strategy(self, strategy: TraversalStrategy) -> None:
         """Set custom execution strategy.
@@ -689,12 +692,14 @@ class FSMDebugger:
 
 def create_advanced_fsm(
     config: Union[str, Path, Dict[str, Any], FSM],
+    custom_functions: Dict[str, Callable] | None = None,
     **kwargs
 ) -> AdvancedFSM:
     """Factory function to create an AdvancedFSM instance.
     
     Args:
         config: Configuration, FSM instance, or path
+        custom_functions: Optional custom functions to register
         **kwargs: Additional arguments
         
     Returns:
@@ -707,11 +712,18 @@ def create_advanced_fsm(
         from ..config.builder import FSMBuilder
         
         if isinstance(config, (str, Path)):
-            config_dict = ConfigLoader.load_file(str(config))
+            loader = ConfigLoader()
+            config_dict = loader.load_from_file(str(config))
         else:
             config_dict = config
             
         builder = FSMBuilder()
-        fsm = builder.build_from_config(config_dict)
+        
+        # Register custom functions if provided
+        if custom_functions:
+            for name, func in custom_functions.items():
+                builder.register_function(name, func)
+        
+        fsm = builder.build(config_dict)
         
     return AdvancedFSM(fsm, **kwargs)
