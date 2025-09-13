@@ -730,7 +730,11 @@ def transform(data, context=None):
                 
                 # Common callable for both
                 def call_wrapper(self, data, context=None):
-                    return self.func(State(data))
+                    # If data already has a 'data' attribute, it's a state-like object
+                    if hasattr(data, 'data'):
+                        return self.func(data)
+                    else:
+                        return self.func(State(data))
                 FunctionWrapper.__call__ = call_wrapper
         
         return FunctionWrapper(func)

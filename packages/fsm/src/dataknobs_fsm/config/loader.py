@@ -548,7 +548,25 @@ class ConfigLoader:
                             
                             # Remove the functions field as it's not in the schema
                             del state['functions']
-        
+
+                        # Also handle direct 'transform' field (singular) for convenience
+                        if 'transform' in state and 'transforms' not in state:
+                            transform = state['transform']
+                            if isinstance(transform, dict):
+                                state['transforms'] = [transform]
+                            elif isinstance(transform, list):
+                                state['transforms'] = transform
+                            del state['transform']
+
+                        # Similarly handle direct 'validator' field (singular)
+                        if 'validator' in state and 'validators' not in state:
+                            validator = state['validator']
+                            if isinstance(validator, dict):
+                                state['validators'] = [validator]
+                            elif isinstance(validator, list):
+                                state['validators'] = validator
+                            del state['validator']
+
         return config
     
     def _resolve_references(self, config: Dict[str, Any], base_path: Path) -> Dict[str, Any]:

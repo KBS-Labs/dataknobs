@@ -899,6 +899,9 @@ class AdvancedFSM:
                 if initial_state:
                     context.set_state(initial_state)
                     self._update_state_instance(context, initial_state)
+                    # Execute transforms for initial state
+                    if hasattr(self._engine, '_execute_state_transforms'):
+                        self._engine._execute_state_transforms(context, initial_state)
                 else:
                     return StepResult(
                         from_state=from_state,
@@ -949,6 +952,11 @@ class AdvancedFSM:
             # Update state
             context.set_state(arc.target_state)
             self._update_state_instance(context, arc.target_state)
+
+            # Execute state transforms when entering the new state
+            # This is critical for sync execution to match async behavior
+            if hasattr(self._engine, '_execute_state_transforms'):
+                self._engine._execute_state_transforms(context, arc.target_state)
 
             # Check if we hit a breakpoint
             at_breakpoint = arc.target_state in self._breakpoints
@@ -1143,6 +1151,18 @@ class FSMDebugger:
         self.command_history: List[str] = []
         self.step_count: int = 0
         self.execution_history: List[StepResult] = []
+
+    @property
+    def current_state(self) -> str | None:
+        """Get the current state name."""
+        if not self.context:
+            return None
+        return self.context.get_current_state()
+
+    @property
+    def watches(self) -> Dict[str, Any]:
+        """Get current watch variable values."""
+        return self.watch_vars.copy()
 
     def start(
         self,

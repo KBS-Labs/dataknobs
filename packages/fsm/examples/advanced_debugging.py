@@ -29,21 +29,21 @@ from dataknobs_fsm.core.data_modes import DataHandlingMode
 def validate_input(state) -> Dict[str, Any]:
     """Validate input data."""
     data = state.data.copy()
-    
+
     # Simulate validation
     required_fields = ['user_id', 'request_type', 'payload']
     missing = [f for f in required_fields if f not in data]
-    
+
     if missing:
         data['validation_errors'] = f"Missing fields: {missing}"
         data['is_valid'] = False
     else:
         data['is_valid'] = True
         data['validated_at'] = datetime.now().isoformat()
-    
+
     # Simulate some processing time
-    time.sleep(0.1)
-    
+    time.sleep(0.01)  # Reduced for faster demo
+
     return data
 
 
@@ -58,14 +58,14 @@ def process_request(state) -> Dict[str, Any]:
         # Simulate computation
         result = sum(range(1000))
         data['result'] = result
-        time.sleep(0.2)  # Simulate compute time
+        time.sleep(0.02)  # Simulate compute time
     elif request_type == 'query':
         # Simulate database query
         data['result'] = {'records': 42, 'status': 'complete'}
-        time.sleep(0.15)
+        time.sleep(0.015)
     else:
         data['result'] = {'status': 'unknown_type'}
-        time.sleep(0.05)
+        time.sleep(0.005)
     
     data['processed_at'] = datetime.now().isoformat()
     data['processing_complete'] = True
@@ -89,7 +89,7 @@ def enrich_data(state) -> Dict[str, Any]:
         data['has_result'] = True
         data['result_type'] = type(data['result']).__name__
     
-    time.sleep(0.05)
+    time.sleep(0.005)
     
     return data
 
@@ -112,7 +112,7 @@ def format_output(state) -> Dict[str, Any]:
         }
     }
     
-    time.sleep(0.05)
+    time.sleep(0.005)
     
     return data
 
@@ -231,9 +231,9 @@ debug_workflow_config = {
 def demonstrate_step_by_step_execution():
     """Demonstrate step-by-step execution with inspection."""
     print("\n" + "=" * 70)
-    print("📍 STEP-BY-STEP EXECUTION")
+    print("📍 STEP-BY-STEP EXECUTION (SYNCHRONOUS)")
     print("=" * 70)
-    
+
     # Create advanced FSM with custom functions
     fsm = create_advanced_fsm(
         debug_workflow_config,
@@ -247,7 +247,7 @@ def demonstrate_step_by_step_execution():
         },
         execution_mode=ExecutionMode.STEP_BY_STEP
     )
-    
+
     # Initialize with test data
     test_data = {
         'request_id': 'REQ-001',
@@ -255,33 +255,48 @@ def demonstrate_step_by_step_execution():
         'request_type': 'compute',
         'payload': {'data': [1, 2, 3, 4, 5]}
     }
-    
+
     print(f"\nStarting with data: {json.dumps(test_data, indent=2)}")
-    
-    # Execute step by step
+
+    # Create synchronous context
     context = fsm.create_context(test_data)
     steps = []
-    
+
     while not context.is_complete():
         # Get current state
         current = context.get_current_state()
         print(f"\n📍 Current State: {current}")
-        
-        # Execute one step
-        step_result = fsm.execute_step(context)
+
+        # Get available transitions from current state
+        transitions = fsm.get_available_transitions(current)
+        if transitions:
+            print(f"   Available transitions: {[t['name'] for t in transitions]}")
+
+        # Execute one step synchronously
+        step_result = fsm.execute_step_sync(context)
         steps.append(step_result)
-        
+
         # Show what happened
-        print(f"   Executed: {step_result.get('transition', 'N/A')}")
-        print(f"   Next State: {step_result.get('next_state', 'N/A')}")
-        
-        # Inspect data changes
-        if 'data_changes' in step_result:
-            print(f"   Data Changes: {step_result['data_changes']}")
-        
+        print(f"   ✓ Transition: {step_result.transition}")
+        print(f"   → To State: {step_result.to_state}")
+        print(f"   Duration: {step_result.duration:.3f}s")
+
+        # Show if we hit a breakpoint
+        if step_result.at_breakpoint:
+            print(f"   🔴 At breakpoint!")
+
+        # Show data snapshot
+        data_snapshot = context.get_data_snapshot()
+        if 'is_valid' in data_snapshot:
+            print(f"   Data: is_valid={data_snapshot['is_valid']}")
+        if 'processing_complete' in data_snapshot:
+            print(f"   Data: processing_complete={data_snapshot['processing_complete']}")
+        if 'validation_errors' in data_snapshot:
+            print(f"   Data: validation_errors={data_snapshot['validation_errors']}")
+
         # Allow inspection (in real use, could pause here)
-        input("Press Enter to continue...")
-    
+        # input("Press Enter to continue...")
+
     print(f"\n✅ Execution complete!")
     print(f"Final State: {context.get_current_state()}")
     print(f"Total Steps: {len(steps)}")
@@ -290,9 +305,9 @@ def demonstrate_step_by_step_execution():
 def demonstrate_execution_with_breakpoints():
     """Demonstrate execution with breakpoints."""
     print("\n" + "=" * 70)
-    print("🔴 EXECUTION WITH BREAKPOINTS")
+    print("🔴 EXECUTION WITH BREAKPOINTS (SYNCHRONOUS)")
     print("=" * 70)
-    
+
     # Create FSM with breakpoint mode
     fsm = create_advanced_fsm(
         debug_workflow_config,
@@ -306,39 +321,70 @@ def demonstrate_execution_with_breakpoints():
         },
         execution_mode=ExecutionMode.BREAKPOINT
     )
-    
-    # Set breakpoints
-    fsm.set_breakpoint('process')
-    fsm.set_breakpoint('format')
-    
-    print("\nBreakpoints set at: 'process' and 'format' states")
-    
+
+    # Set breakpoints using the API
+    fsm.add_breakpoint('process')
+    fsm.add_breakpoint('format')
+
+    print(f"\nBreakpoints set at: {fsm.breakpoints}")
+
     test_data = {
         'request_id': 'REQ-002',
         'user_id': 'USER-456',
         'request_type': 'query',
         'payload': {'query': 'SELECT * FROM users'}
     }
-    
-    # Execute with breakpoints
+
+    # Execute with breakpoints synchronously
     print(f"\nExecuting with breakpoints...")
-    
-    result = fsm.execute_with_breakpoints(
-        test_data,
-        on_breakpoint=lambda state, data: print(f"\n🔴 BREAKPOINT HIT at '{state}'\n   Data: {json.dumps(data, indent=2)[:200]}...")
-    )
-    
+
+    context = fsm.create_context(test_data)
+    path = []
+
+    # Track initial state
+    current_state = context.get_current_state()
+    if current_state:
+        path.append(current_state)
+
+    while not context.is_complete():
+        # Run until we hit a breakpoint
+        state = fsm.run_until_breakpoint_sync(context)
+
+        if state:
+            current = state.definition.name
+
+            # Check if we're at a breakpoint
+            if current in fsm.breakpoints:
+                print(f"\n🔴 BREAKPOINT HIT at '{current}'")
+                data_snapshot = context.get_data_snapshot()
+                print(f"   Data (truncated): {json.dumps(data_snapshot, indent=2)[:200]}...")
+
+                # Inspect the state
+                state_info = fsm.inspect_state(current)
+                print(f"   Has transform: {state_info.get('has_transform', False)}")
+
+                # Step once to move past the breakpoint
+                step_result = fsm.execute_step_sync(context)
+                if step_result.to_state != current:
+                    path.append(step_result.to_state)
+        else:
+            # No breakpoint hit, execution must be complete
+            final_state = context.get_current_state()
+            if final_state and final_state not in path:
+                path.append(final_state)
+            break
+
     print(f"\nExecution completed!")
-    print(f"Path taken: {' -> '.join(result['path'])}")
+    print(f"Path taken: {' -> '.join(path)}")
 
 
 def demonstrate_execution_tracing():
     """Demonstrate execution tracing and profiling."""
     print("\n" + "=" * 70)
-    print("📊 EXECUTION TRACING & PROFILING")
+    print("📊 EXECUTION TRACING & PROFILING (SYNCHRONOUS)")
     print("=" * 70)
-    
-    # Create FSM with tracing mode
+
+    # Create FSM
     fsm = create_advanced_fsm(
         debug_workflow_config,
         custom_functions={
@@ -348,40 +394,53 @@ def demonstrate_execution_tracing():
             'format_output': format_output,
             'check_validation': check_validation,
             'check_processing': check_processing
-        },
-        execution_mode=ExecutionMode.TRACE
+        }
     )
-    
-    # Enable profiling
-    fsm.enable_profiling()
-    
+
+    # Enable history tracking for detailed tracing
+    fsm.enable_history(max_depth=100)
+
     test_data = {
         'request_id': 'REQ-003',
         'user_id': 'USER-789',
         'request_type': 'compute',
         'payload': {'numbers': list(range(100))}
     }
-    
+
     print(f"\nExecuting with tracing enabled...")
-    
-    # Execute with tracing
+
+    # Execute with tracing synchronously
     start_time = time.time()
-    result = fsm.execute_with_trace(test_data)
+    trace = fsm.trace_execution_sync(test_data)
     end_time = time.time()
-    
+
     print(f"\n✅ Execution completed in {end_time - start_time:.3f} seconds")
-    
-    # Get trace
-    trace = fsm.get_trace()
+
+    # Show trace results
     print(f"\n📊 Execution Trace:")
-    for i, event in enumerate(trace[-10:], 1):  # Show last 10 events
-        print(f"  {i}. {event['timestamp']} - {event['type']}: {event['details']}")
-    
-    # Get profile data
-    profile = fsm.get_profile()
-    print(f"\n⏱️ Performance Profile:")
-    for state, timing in profile.items():
-        print(f"  • {state}: {timing['duration']:.3f}s (calls: {timing['calls']})")
+    for i, event in enumerate(trace[:10], 1):  # Show first 10 events
+        print(f"  {i}. {event['from_state']} -> {event['to_state']}")
+        if 'duration' in event:
+            print(f"     Duration: {event['duration']:.3f}s")
+
+    # Execute with profiling synchronously
+    print(f"\n⏱️ Profiling execution...")
+    profile = fsm.profile_execution_sync(test_data)
+
+    print(f"\nPerformance Profile:")
+    print(f"  Total time: {profile.get('total_time', 0):.3f}s")
+    print(f"  Total transitions: {profile.get('transitions', 0)}")
+
+    if 'state_times' in profile:
+        print(f"\n  State execution times:")
+        for state, timing in profile['state_times'].items():
+            if isinstance(timing, dict):
+                # Handle dict format from profile
+                duration = timing.get('duration', 0)
+                print(f"    • {state}: {duration:.3f}s")
+            else:
+                # Handle direct numeric value
+                print(f"    • {state}: {timing:.3f}s")
 
 
 def demonstrate_execution_hooks():
@@ -438,9 +497,11 @@ def demonstrate_execution_hooks():
     }
     
     print(f"\nExecuting with hooks...")
-    result = fsm.execute(test_data)
-    
+    # Use trace_execution_sync which will trigger hooks
+    result = fsm.trace_execution_sync(test_data)
+
     print(f"\n✅ Execution completed!")
+    print(f"  Transitions executed: {len(result)}")
     if errors:
         print(f"⚠️ Errors encountered: {errors}")
 
@@ -448,9 +509,9 @@ def demonstrate_execution_hooks():
 def demonstrate_fsm_debugger():
     """Demonstrate interactive FSM debugger."""
     print("\n" + "=" * 70)
-    print("🐛 FSM DEBUGGER")
+    print("🐛 FSM DEBUGGER (SYNCHRONOUS API)")
     print("=" * 70)
-    
+
     # Create FSM
     fsm = create_advanced_fsm(
         debug_workflow_config,
@@ -463,52 +524,83 @@ def demonstrate_fsm_debugger():
             'check_processing': check_processing
         }
     )
-    
-    # Create debugger
+
+    # Enable history for debugging
+    fsm.enable_history(max_depth=50)
+
+    # Create debugger with the FSMDebugger class
     debugger = FSMDebugger(fsm)
-    
+
     test_data = {
         'request_id': 'REQ-005',
         'user_id': 'USER-111',
         'request_type': 'query',
         'payload': {'sql': 'SELECT COUNT(*) FROM logs'}
     }
-    
+
     print("\n🐛 Starting FSM Debugger")
-    print("Commands: step, continue, inspect, set_breakpoint <state>, clear_breakpoints, quit")
-    
-    # Simulate debug session (in real use, would be interactive)
-    print("\nSimulating debug session...")
-    
-    # Set initial data
-    debugger.set_data(test_data)
-    
-    # Simulate some debug commands
-    commands = [
-        "inspect",  # Show current state
-        "set_breakpoint process",  # Set breakpoint
-        "step",  # Step once
-        "inspect",  # Show state again
-        "continue",  # Continue to breakpoint
-        "inspect",  # Show at breakpoint
-        "continue"  # Finish execution
-    ]
-    
-    for cmd in commands:
-        print(f"\n> {cmd}")
-        # In real implementation, debugger would process these commands
-        if cmd == "inspect":
-            print(f"  Current State: {debugger.get_current_state()}")
-            print(f"  Data (truncated): {str(debugger.get_data())[:100]}...")
-        elif cmd.startswith("set_breakpoint"):
-            state = cmd.split()[1]
-            print(f"  Breakpoint set at '{state}'")
-        elif cmd == "step":
-            print(f"  Stepped to next state")
-        elif cmd == "continue":
-            print(f"  Continuing execution...")
-    
+    print("Using the synchronous FSMDebugger class")
+
+    # Start the debug session
+    debugger.start(test_data)
+    print(f"\nDebug session started")
+    print(f"Initial state: {debugger.current_state}")
+
+    # Set breakpoints
+    fsm.add_breakpoint('process')
+    fsm.add_breakpoint('format')
+    print(f"Breakpoints: {fsm.breakpoints}")
+
+    # Add watches
+    debugger.watch('validation', 'is_valid')
+    debugger.watch('processing', 'processing_complete')
+
+    # Step through execution
+    print("\n📍 Stepping through execution:")
+
+    step_count = 0
+    while not debugger.context.is_complete() and step_count < 10:
+        step_count += 1
+
+        # Execute a single step
+        result = debugger.step()
+
+        print(f"\nStep {debugger.step_count}:")
+        print(f"  {result.from_state} -> {result.to_state}")
+        print(f"  Transition: {result.transition}")
+        print(f"  Duration: {result.duration:.3f}s")
+
+        # Show watches
+        if debugger.watches:
+            print(f"  Watches:")
+            for name, value in debugger.watches.items():
+                print(f"    {name}: {value}")
+
+        # If at breakpoint, show detailed info
+        if result.at_breakpoint:
+            print(f"\n  🔴 BREAKPOINT HIT at '{result.to_state}'")
+            state_info = debugger.inspect_current_state()
+            print(f"  State info: {state_info}")
+
+            # Continue to next breakpoint
+            print(f"\n  Continuing to next breakpoint...")
+            next_state = debugger.continue_to_breakpoint()
+            if next_state:
+                print(f"  Stopped at: {next_state.definition.name}")
+
+        if result.is_complete:
+            print(f"\n✅ Execution complete!")
+            break
+
+    # Show execution history
+    print("\n📜 Execution History:")
+    history = debugger.get_history(limit=5)
+    for i, step in enumerate(history, 1):
+        print(f"  {i}. {step.from_state} -> {step.to_state} ({step.transition})")
+
     print("\n✅ Debug session complete!")
+    print(f"Total steps: {debugger.step_count}")
+    print(f"Final state: {debugger.current_state}")
 
 
 def main():
@@ -522,8 +614,8 @@ def main():
     print("- Custom execution hooks")
     print("- Interactive debugging")
     
-    # Note: Step-by-step execution is commented out as it requires user input
-    # demonstrate_step_by_step_execution()
+    # Run all demonstrations
+    demonstrate_step_by_step_execution()
     
     # Run automated demonstrations
     demonstrate_execution_with_breakpoints()

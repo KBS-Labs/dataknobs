@@ -16,9 +16,11 @@ from dataknobs_fsm.execution.common import (
     TransitionSelector,
     TransitionSelectionMode
 )
+from dataknobs_fsm.execution.base_engine import BaseExecutionEngine
+from dataknobs_fsm.functions.base import FunctionContext
 
 
-class AsyncExecutionEngine:
+class AsyncExecutionEngine(BaseExecutionEngine):
     """Asynchronous execution engine for FSM.
     
     This engine handles:
@@ -35,27 +37,14 @@ class AsyncExecutionEngine:
         selection_mode: TransitionSelectionMode = TransitionSelectionMode.HYBRID
     ):
         """Initialize async execution engine.
-        
+
         Args:
             fsm: FSM to execute.
             strategy: Traversal strategy for execution.
             selection_mode: Transition selection mode (strategy, scoring, or hybrid).
         """
-        self.fsm = fsm
-        self.strategy = strategy
-        self.selection_mode = selection_mode
-        
-        # Initialize transition selector
-        self.transition_selector = TransitionSelector(
-            mode=selection_mode,
-            default_strategy=strategy
-        )
-        
-        # Execution statistics
-        self._execution_count = 0
-        self._transition_count = 0
-        self._error_count = 0
-        self._total_execution_time = 0.0
+        # Initialize base class (no max_retries/retry_delay needed for async)
+        super().__init__(fsm, strategy, selection_mode, max_retries=3, retry_delay=1.0)
     
     async def execute(
         self,
@@ -88,6 +77,8 @@ class AsyncExecutionEngine:
             if not initial_state:
                 return False, "No initial state found"
             context.set_state(initial_state)
+            # Execute transforms for the initial state
+            await self._execute_state_transforms(context)
         
         try:
             # Execute based on data mode
@@ -130,9 +121,6 @@ class AsyncExecutionEngine:
             # Check if we're in a final state
             if await self._is_final_state(context.current_state):
                 return True, context.data
-            
-            # Execute state transforms when entering a state
-            await self._execute_state_transforms(context)
             
             # Get available transitions
             transitions_available = await self._get_available_transitions(
@@ -454,7 +442,10 @@ class AsyncExecutionEngine:
             
             # Update state (history is automatically tracked by set_state)
             context.set_state(arc.target_state)
-            
+
+            # Execute state transforms when entering the new state
+            await self._execute_state_transforms(context)
+
             return True
             
         except Exception:
@@ -465,27 +456,27 @@ class AsyncExecutionEngine:
         context: ExecutionContext
     ) -> None:
         """Execute state functions (validators and transforms) when in a state.
-        
+
         This should be called before evaluating arc conditions to ensure
         that state functions can update the data that conditions depend on.
-        
+
         Args:
             context: Execution context.
         """
         network = await self._get_current_network(context)
         if not network or context.current_state not in network.states:
             return
-        
+
         state = network.states[context.current_state]
-        
-        # Execute validation functions first
+        state_name = context.current_state
+
+        # Use base class logic to prepare transforms
+        transform_functions, state_obj = self.prepare_state_transform(state, context)
+
+        # Execute validation functions first (async-specific)
         if hasattr(state, 'validation_functions') and state.validation_functions:
             for validator in state.validation_functions:
                 try:
-                    # Create a mock state object for validators that expect state.data
-                    from types import SimpleNamespace
-                    state_obj = SimpleNamespace(data=context.data)
-                    
                     # Handle both async and sync validators
                     if asyncio.iscoroutinefunction(validator.validate):
                         # Try with state object first (for inline lambdas)
@@ -502,84 +493,78 @@ class AsyncExecutionEngine:
                         except (TypeError, AttributeError):
                             # Fall back to standard signature
                             result = await loop.run_in_executor(None, validator.validate, context.data, context)
-                    
+
                     if isinstance(result, dict):
                         # Merge validation results into context data
                         context.data.update(result)
                 except Exception:
                     # Log but don't fail - validators are optional
                     pass
-        
-        # Execute transform functions
-        if hasattr(state, 'transform_functions') and state.transform_functions:
-            for transform in state.transform_functions:
-                try:
-                    # Create a mock state object for transforms that expect state.data
-                    from types import SimpleNamespace
-                    state_obj = SimpleNamespace(data=context.data)
-                    
-                    # Handle both async and sync transforms
-                    if asyncio.iscoroutinefunction(transform.transform):
-                        # Try with state object first (for inline lambdas)
-                        try:
-                            result = await transform.transform(state_obj)
-                        except (TypeError, AttributeError):
-                            # Fall back to standard signature
-                            result = await transform.transform(context.data, context)
-                    else:
-                        # Run sync function in executor
-                        loop = asyncio.get_event_loop()
-                        try:
-                            result = await loop.run_in_executor(None, transform.transform, state_obj)
-                        except (TypeError, AttributeError):
-                            # Fall back to standard signature
-                            result = await loop.run_in_executor(None, transform.transform, context.data, context)
-                    
-                    if result is not None:
-                        context.data = result
-                except Exception:
-                    # Log but don't fail - transforms are optional
-                    pass
+
+        # Execute transform functions using base class helpers
+        for transform_func in transform_functions:
+            try:
+                # Create function context
+                func_context = FunctionContext(
+                    state_name=state_name,
+                    function_name=getattr(transform_func, '__name__', 'transform'),
+                    metadata={'state': state_name},
+                    resources={}
+                )
+
+                # Handle both async and sync transforms
+                if asyncio.iscoroutinefunction(transform_func):
+                    # Try with state object first (for inline lambdas)
+                    try:
+                        result = await transform_func(state_obj)
+                    except (TypeError, AttributeError):
+                        # Fall back to standard signature
+                        result = await transform_func(context.data, func_context)
+                else:
+                    # Run sync function in executor
+                    loop = asyncio.get_event_loop()
+                    try:
+                        result = await loop.run_in_executor(None, transform_func, state_obj)
+                    except (TypeError, AttributeError):
+                        # Fall back to standard signature
+                        result = await loop.run_in_executor(None, transform_func, context.data, func_context)
+
+                # Process result using base class logic
+                self.process_transform_result(result, context, state_name)
+
+            except Exception as e:
+                # Handle error using base class logic
+                self.handle_transform_error(e, context, state_name)
     
     async def _find_initial_state(self) -> str | None:
         """Find initial state in FSM.
-        
+
         Returns:
             Initial state name or None.
         """
-        # Get main network
-        main_network = getattr(self.fsm, 'main_network', None)
-        if isinstance(main_network, str):
-            if main_network in self.fsm.networks:
-                network = self.fsm.networks[main_network]
-                if hasattr(network, 'initial_states') and network.initial_states:
-                    return next(iter(network.initial_states))
-        elif main_network and hasattr(main_network, 'initial_states'):
-            if main_network.initial_states:
-                return next(iter(main_network.initial_states))
-        
-        # Fallback: check all networks
-        for network in self.fsm.networks.values():
-            if hasattr(network, 'initial_states') and network.initial_states:
-                return next(iter(network.initial_states))
-        
-        return None
+        # Use base class implementation (it's synchronous but that's fine)
+        return self.find_initial_state_common()
     
     async def _is_final_state(self, state_name: str | None) -> bool:
         """Check if state is a final state.
-        
+
         Args:
             state_name: Name of state to check.
-            
+
         Returns:
             True if final state.
         """
+        # Use base class implementation
+        return self.is_final_state_common(state_name)
+
+    async def _is_final_state_legacy(self, state_name: str | None) -> bool:
+        """Legacy implementation kept for reference."""
         if not state_name:
             return False
-        
+
         # Get the main network - could be a string or object
         main_network_ref = getattr(self.fsm, 'main_network', None)
-        
+
         if main_network_ref is None:
             # If no main network specified, check all networks
             for network in self.fsm.networks.values():
@@ -588,7 +573,7 @@ class AsyncExecutionEngine:
                     if state.is_end_state() if hasattr(state, 'is_end_state') else state.type == StateType.END:
                         return True
             return False
-        
+
         # Handle case where main_network is already a network object (FSM wrapper)
         if hasattr(main_network_ref, 'states'):
             main_network = main_network_ref

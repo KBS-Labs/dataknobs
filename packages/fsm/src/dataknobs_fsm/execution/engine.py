@@ -17,6 +17,7 @@ from dataknobs_fsm.execution.common import (
     TransitionSelector,
     TransitionSelectionMode
 )
+from dataknobs_fsm.execution.base_engine import BaseExecutionEngine
 
 
 class TraversalStrategy(Enum):
@@ -27,7 +28,7 @@ class TraversalStrategy(Enum):
     STREAM_OPTIMIZED = "stream_optimized"
 
 
-class ExecutionEngine:
+class ExecutionEngine(BaseExecutionEngine):
     """Execution engine for FSM state machines.
     
     This engine handles:
@@ -51,7 +52,7 @@ class ExecutionEngine:
         selection_mode: TransitionSelectionMode = TransitionSelectionMode.HYBRID
     ):
         """Initialize execution engine.
-        
+
         Args:
             fsm: FSM instance to execute.
             strategy: Traversal strategy to use.
@@ -60,25 +61,12 @@ class ExecutionEngine:
             enable_hooks: Enable execution hooks.
             selection_mode: Transition selection mode (strategy, scoring, or hybrid).
         """
-        self.fsm = fsm
-        self.strategy = strategy
-        self.max_retries = max_retries
-        self.retry_delay = retry_delay
+        # Initialize base class
+        super().__init__(fsm, strategy, selection_mode, max_retries, retry_delay)
+
         self.enable_hooks = enable_hooks
-        self.selection_mode = selection_mode
-        
-        # Initialize transition selector
-        self.transition_selector = TransitionSelector(
-            mode=selection_mode,
-            default_strategy=strategy
-        )
-        
-        # Execution tracking
-        self._execution_count = 0
-        self._transition_count = 0
-        self._error_count = 0
-        
-        # Hooks
+
+        # Hooks (specific to sync engine)
         self._pre_transition_hooks: List[Callable] = []
         self._post_transition_hooks: List[Callable] = []
         self._error_hooks: List[Callable] = []
@@ -112,6 +100,8 @@ class ExecutionEngine:
             if not initial_state:
                 return False, "No initial state found"
             context.set_state(initial_state)
+            # Execute transforms for the initial state
+            self._execute_state_transforms(context, initial_state)
         
         # Execute based on data mode
         if context.data_mode == ProcessingMode.SINGLE:
@@ -431,7 +421,7 @@ class ExecutionEngine:
         state_name: str
     ) -> None:
         """Execute transform functions when entering a state.
-        
+
         Args:
             context: Execution context.
             state_name: Name of the state being entered.
@@ -440,43 +430,33 @@ class ExecutionEngine:
         state_def = self.fsm.get_state(state_name)
         if not state_def:
             return
-            
-        # Execute any transform functions defined on the state
-        if hasattr(state_def, 'transform_functions') and state_def.transform_functions:
-            for transform_func in state_def.transform_functions:
+
+        # Use base class logic to prepare and execute transforms
+        transform_functions, state_obj = self.prepare_state_transform(state_def, context)
+
+        for transform_func in transform_functions:
+            try:
+                # Create function context
+                func_context = FunctionContext(
+                    state_name=state_name,
+                    function_name=getattr(transform_func, '__name__', 'transform'),
+                    metadata={'state': state_name},
+                    resources={}
+                )
+
+                # Try calling with state object first (for inline lambdas)
                 try:
-                    # Create function context
-                    func_context = FunctionContext(
-                        state_name=state_name,
-                        function_name=getattr(transform_func, '__name__', 'transform'),
-                        metadata={'state': state_name},
-                        resources={}
-                    )
-                    
-                    # Execute the transform
-                    # Create a mock state object for transforms that expect state.data
-                    from types import SimpleNamespace
-                    state_obj = SimpleNamespace(data=context.data)
-                    
-                    # Try calling with state object first (for inline lambdas)
-                    try:
-                        result = transform_func(state_obj)
-                    except (TypeError, AttributeError):
-                        # Fall back to calling with data and context
-                        result = transform_func(context.data, func_context)
-                    
-                    if result is not None:
-                        context.data = result
-                except Exception as e:
-                    # State transform failed - mark state as failed but continue
-                    # State transforms failing doesn't stop the FSM, but marks the state as failed
-                    if not hasattr(context, 'failed_states'):
-                        context.failed_states = set()
-                    context.failed_states.add(state_name)
-                    
-                    # Log the error but don't raise - state is in fail mode but FSM continues
-                    # This follows the design where state transform failures don't halt execution
-                    pass
+                    result = transform_func(state_obj)
+                except (TypeError, AttributeError):
+                    # Fall back to calling with data and context
+                    result = transform_func(context.data, func_context)
+
+                # Process result using base class logic
+                self.process_transform_result(result, context, state_name)
+
+            except Exception as e:
+                # Handle error using base class logic
+                self.handle_transform_error(e, context, state_name)
     
     def _execute_state_functions(
         self,
@@ -650,42 +630,30 @@ class ExecutionEngine:
     
     def _find_initial_state(self) -> str | None:
         """Find the initial state in the FSM.
-        
+
         Returns:
             Name of initial state or None.
         """
-        # Try to get main_network attribute first (for core FSM)
-        main_network_name = getattr(self.fsm, 'main_network', None)
-        if main_network_name and main_network_name in self.fsm.networks:
-            network = self.fsm.networks[main_network_name]
-            if network.initial_states:
-                return next(iter(network.initial_states))
-        
-        # Fallback to fsm.name (for FSMWrapper compatibility)
-        if self.fsm.name in self.fsm.networks:
-            network = self.fsm.networks[self.fsm.name]
-            if network.initial_states:
-                return next(iter(network.initial_states))
-        
-        # Last resort: check all networks for any initial state
-        for network in self.fsm.networks.values():
-            if network.initial_states:
-                return next(iter(network.initial_states))
-        
-        return None
+        # Use base class implementation
+        return self.find_initial_state_common()
     
     def _is_final_state(self, state_name: str | None) -> bool:
         """Check if state is a final state.
-        
+
         Args:
             state_name: Name of state to check.
-            
+
         Returns:
             True if final state.
         """
+        # Use base class implementation
+        return self.is_final_state_common(state_name)
+
+    def _is_final_state_legacy(self, state_name: str | None) -> bool:
+        """Legacy implementation kept for reference."""
         if not state_name:
             return False
-        
+
         # Get the main network - could be a string or object
         main_network_ref = getattr(self.fsm, 'main_network', None)
         
