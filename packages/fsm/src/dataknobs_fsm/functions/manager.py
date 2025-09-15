@@ -34,6 +34,7 @@ class FunctionSource(Enum):
 class AsyncCallable(Protocol):
     """Protocol for async callable objects."""
     async def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        """Call the async function."""
         ...
 
 
@@ -215,7 +216,7 @@ class InterfaceWrapper:
             param_count = len(sig.parameters)
             # If function takes only 1 param, it likely expects a state object
             expects_state_obj = param_count == 1
-        except:
+        except Exception:
             # Can't determine signature, assume standard (data, context)
             expects_state_obj = False
 
@@ -260,7 +261,7 @@ class InterfaceWrapper:
             param_count = len(sig.parameters)
             # If function takes only 1 param, it likely expects a state object
             expects_state_obj = param_count == 1
-        except:
+        except Exception:
             # Can't determine signature, assume standard (data, context)
             expects_state_obj = False
 
@@ -291,7 +292,7 @@ class InterfaceWrapper:
                 return (bool(result), None)
             return sync_test
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Make the wrapper callable."""
         return self.wrapper(*args, **kwargs)
 
@@ -456,7 +457,7 @@ class FunctionManager:
                     if callable(value) and name not in ['asyncio', '__builtins__']:
                         func = value
                         break
-            except:
+            except Exception:
                 func = None
 
             if not func:
@@ -493,9 +494,9 @@ class FunctionManager:
                     else:
                         # For statements, add them as-is
                         for line in lines:
-                            line = line.strip()
-                            if line:
-                                func_def += f"    {line}\n"
+                            stmt = line.strip()
+                            if stmt:
+                                func_def += f"    {stmt}\n"
 
                         # Ensure we return data if no explicit return (for transforms)
                         if 'return' not in code:
@@ -512,7 +513,7 @@ class FunctionManager:
             logger.error(f"Failed to create inline function: {e}")
             # Return a no-op wrapper
             return FunctionWrapper(
-                lambda data, context=None: data,
+                lambda data, context=None: data,  # noqa: ARG005
                 f"inline_error_{id(code)}",
                 FunctionSource.INLINE
             )

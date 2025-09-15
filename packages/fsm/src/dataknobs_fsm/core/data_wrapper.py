@@ -24,6 +24,9 @@ class FSMData(MutableMapping):
     to user functions unless they explicitly request the wrapper.
     """
 
+    # Explicitly mark as unhashable (mutable mapping)
+    __hash__ = None  # type: ignore[assignment]
+
     def __init__(self, data: Dict[str, Any] | None = None):
         """Initialize FSMData wrapper.
 
@@ -67,7 +70,7 @@ class FSMData(MutableMapping):
         try:
             return self._data[name]
         except KeyError:
-            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'") from None
 
     def __setattr__(self, name: str, value: Any) -> None:
         """Set attribute using dot notation."""
@@ -85,7 +88,7 @@ class FSMData(MutableMapping):
             try:
                 del self._data[name]
             except KeyError:
-                raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+                raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'") from None
 
     # Dict-like methods
     def get(self, key: str, default: Any = None) -> Any:

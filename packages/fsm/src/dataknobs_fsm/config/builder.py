@@ -115,7 +115,7 @@ class FSMBuilder:
         fsm.config = config
         
         # Register all functions from builder into core FSM's function registry
-        for func_name, info in self._function_manager.list_functions().items():
+        for func_name in self._function_manager.list_functions():
             wrapper = self._function_manager.get_function(func_name)
             if wrapper:
                 # The FSM's function registry expects callable functions
@@ -378,7 +378,7 @@ class FSMBuilder:
             return func.wrapper.name
         else:
             # Search for the function in the manager
-            for fname, info in self._function_manager.list_functions().items():
+            for fname in self._function_manager.list_functions():
                 wrapper = self._function_manager.get_function(fname)
                 if wrapper and wrapper.func == func:
                     return fname
