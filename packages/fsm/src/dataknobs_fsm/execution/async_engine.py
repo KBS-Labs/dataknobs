@@ -365,7 +365,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         
         # Execute pre-test function
         pre_test_func = functions[arc.pre_test]
-        
+
         # Check if it's async
         if asyncio.iscoroutinefunction(pre_test_func):
             result = await pre_test_func(context.data, context)
@@ -378,7 +378,10 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 context.data,
                 context
             )
-        
+
+        # Handle tuple return from test functions (bool, reason)
+        if isinstance(result, tuple):
+            return bool(result[0])
         return bool(result)
     
     async def _choose_transition(

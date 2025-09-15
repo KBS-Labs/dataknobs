@@ -8,10 +8,11 @@ This module implements a hybrid solution for data handling in the FSM:
 """
 
 from typing import Any, Dict, Optional, Union, Iterator, KeysView, ValuesView, ItemsView
+from collections.abc import MutableMapping
 import copy
 
 
-class FSMData:
+class FSMData(MutableMapping):
     """A data wrapper that supports both dict-style and attribute access.
 
     This class provides:
@@ -142,6 +143,14 @@ class FSMData:
         """
         return self._data
 
+    def __json__(self) -> Dict[str, Any]:
+        """Support JSON serialization via json.dumps with default handler.
+
+        Returns:
+            The underlying data dictionary for JSON serialization.
+        """
+        return self._data
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'FSMData':
         """Create from dictionary.
@@ -190,10 +199,18 @@ class StateDataWrapper:
         Args:
             data: Data to wrap (dict or FSMData).
         """
+        # Always expose the underlying dict for lambdas
         if isinstance(data, FSMData):
-            self.data = data
+            self.data = data._data  # Expose raw dict
+            self._fsm_data = data
+        elif isinstance(data, dict):
+            self.data = data  # Expose raw dict
+            self._fsm_data = FSMData(data)
         else:
-            self.data = FSMData(data)
+            # Convert to dict
+            data_dict = dict(data) if data else {}
+            self.data = data_dict
+            self._fsm_data = FSMData(data_dict)
 
     def __getattr__(self, name: str) -> Any:
         """Forward attribute access to data."""

@@ -221,14 +221,26 @@ class ArcExecution:
                         result = transform_func(data, func_context)
                     else:
                         raise ValueError(f"Transform {self.arc_def.transform} is not callable")
+
+                    # Handle ExecutionResult objects
+                    from dataknobs_fsm.functions.base import ExecutionResult
+                    if isinstance(result, ExecutionResult):
+                        if result.success:
+                            result = result.data
+                        else:
+                            raise FunctionError(
+                                result.error or "Transform failed",
+                                from_state=self.source_state,
+                                to_state=self.arc_def.target_state
+                            )
             else:
                 # No transform, pass data through
                 result = data
-            
+
             # Update statistics
             self.execution_count += 1
             self.success_count += 1
-            
+
             return result
             
         except Exception as e:

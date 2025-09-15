@@ -583,19 +583,56 @@ FUNCTION_CALL: {{
 
 class OllamaProvider(AsyncLLMProvider):
     """Ollama local LLM provider."""
-    
+
     def __init__(self, config: LLMConfig):
         super().__init__(config)
-        self.base_url = config.api_base or 'http://localhost:11434'
+        # Check for Docker environment and adjust URL accordingly
+        default_url = 'http://localhost:11434'
+        if os.path.exists('/.dockerenv'):
+            # Running in Docker, use host.docker.internal
+            default_url = 'http://host.docker.internal:11434'
+
+        # Allow environment variable override
+        self.base_url = config.api_base or os.environ.get('OLLAMA_BASE_URL', default_url)
         
     async def initialize(self) -> None:
         """Initialize Ollama client."""
         try:
             import aiohttp
             self._session = aiohttp.ClientSession(
-                base_url=self.base_url,
-                timeout=aiohttp.ClientTimeout(total=self.config.timeout)
+                timeout=aiohttp.ClientTimeout(total=self.config.timeout or 30.0)
             )
+
+            # Test connection and verify model availability
+            try:
+                async with self._session.get(f"{self.base_url}/api/tags") as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        models = [m['name'] for m in data.get('models', [])]
+                        if models:
+                            # Check if configured model is available
+                            if self.config.model not in models:
+                                # Try without tag (e.g., 'llama2' instead of 'llama2:latest')
+                                base_model = self.config.model.split(':')[0]
+                                matching_models = [m for m in models if m.startswith(base_model)]
+                                if matching_models:
+                                    # Use first matching model
+                                    self.config.model = matching_models[0]
+                                    import logging
+                                    logging.info(f"Ollama: Using model {self.config.model}")
+                                else:
+                                    import logging
+                                    logging.warning(f"Ollama: Model {self.config.model} not found. Available: {models}")
+                        else:
+                            import logging
+                            logging.warning(f"Ollama: No models found. Please pull a model first.")
+                    else:
+                        import logging
+                        logging.warning(f"Ollama: API returned status {response.status}")
+            except aiohttp.ClientError as e:
+                import logging
+                logging.warning(f"Ollama: Could not connect to {self.base_url}: {e}")
+
             self._is_initialized = True
         except ImportError as e:
             raise ImportError("aiohttp package not installed. Install with: pip install aiohttp") from e
@@ -608,12 +645,19 @@ class OllamaProvider(AsyncLLMProvider):
         
     async def validate_model(self) -> bool:
         """Validate model availability."""
+        if not self._is_initialized or not hasattr(self, '_session'):
+            return False
+
         try:
-            async with self._session.get('/api/tags') as response:
+            async with self._session.get(f"{self.base_url}/api/tags") as response:
                 if response.status == 200:
                     data = await response.json()
                     models = [m['name'] for m in data.get('models', [])]
-                    return self.config.model in models
+                    # Check exact match or base model match
+                    if self.config.model in models:
+                        return True
+                    base_model = self.config.model.split(':')[0]
+                    return any(m.startswith(base_model) for m in models)
         except Exception:
             return False
         return False
@@ -656,15 +700,20 @@ class OllamaProvider(AsyncLLMProvider):
             'stream': False,
             'options': {
                 'temperature': self.config.temperature,
-                'top_p': self.config.top_p,
-                'seed': self.config.seed
+                'top_p': self.config.top_p
             }
         }
-        
+
+        if self.config.seed is not None:
+            payload['options']['seed'] = self.config.seed
+
         if self.config.max_tokens:
             payload['options']['num_predict'] = self.config.max_tokens  # type: ignore
-            
-        async with self._session.post('/api/generate', json=payload) as response:
+
+        if self.config.stop_sequences:
+            payload['options']['stop'] = self.config.stop_sequences  # type: ignore
+
+        async with self._session.post(f"{self.base_url}/api/generate", json=payload) as response:
             response.raise_for_status()
             data = await response.json()
             
@@ -672,12 +721,17 @@ class OllamaProvider(AsyncLLMProvider):
             content=data['response'],
             model=self.config.model,
             finish_reason='stop' if data.get('done') else 'length',
+            usage={
+                'prompt_tokens': data.get('prompt_eval_count', 0),
+                'completion_tokens': data.get('eval_count', 0),
+                'total_tokens': data.get('prompt_eval_count', 0) + data.get('eval_count', 0)
+            } if 'eval_count' in data else None,
             metadata={
-                'eval_count': data.get('eval_count'),
-                'eval_duration': data.get('eval_duration')
+                'eval_duration': data.get('eval_duration'),
+                'total_duration': data.get('total_duration')
             }
         )
-        
+
     async def stream_complete(
         self,
         messages: Union[str, List[LLMMessage]],
@@ -700,15 +754,20 @@ class OllamaProvider(AsyncLLMProvider):
             'stream': True,
             'options': {
                 'temperature': self.config.temperature,
-                'top_p': self.config.top_p,
-                'seed': self.config.seed
+                'top_p': self.config.top_p
             }
         }
-        
+
+        if self.config.seed is not None:
+            payload['options']['seed'] = self.config.seed
+
         if self.config.max_tokens:
             payload['options']['num_predict'] = self.config.max_tokens  # type: ignore
-            
-        async with self._session.post('/api/generate', json=payload) as response:
+
+        if self.config.stop_sequences:
+            payload['options']['stop'] = self.config.stop_sequences  # type: ignore
+
+        async with self._session.post(f"{self.base_url}/api/generate", json=payload) as response:
             response.raise_for_status()
             
             async for line in response.content:
@@ -742,7 +801,7 @@ class OllamaProvider(AsyncLLMProvider):
                 'prompt': text
             }
             
-            async with self._session.post('/api/embeddings', json=payload) as response:
+            async with self._session.post(f"{self.base_url}/api/embeddings", json=payload) as response:
                 response.raise_for_status()
                 data = await response.json()
                 embeddings.append(data['embedding'])

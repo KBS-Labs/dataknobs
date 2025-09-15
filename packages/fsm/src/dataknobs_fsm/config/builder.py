@@ -9,7 +9,7 @@ instances from configuration objects, including:
 """
 
 import importlib
-from typing import Any, Callable, Dict, List, Type
+from typing import Any, Callable, Dict, List, Optional, Type
 
 
 from dataknobs_fsm.config.schema import (
@@ -119,7 +119,12 @@ class FSMBuilder:
         for func_name, info in self._function_manager.list_functions().items():
             wrapper = self._function_manager.get_function(func_name)
             if wrapper:
-                fsm.function_registry.register(func_name, wrapper)
+                # The FSM's function registry expects callable functions
+                # If it's a FunctionWrapper, get the actual function
+                if hasattr(wrapper, 'func'):
+                    fsm.function_registry.register(func_name, wrapper.func)
+                else:
+                    fsm.function_registry.register(func_name, wrapper)
         
         # Add networks to FSM
         for network_name, network in self._networks.items():
@@ -349,6 +354,37 @@ class FSMBuilder:
         
         return state_def
 
+    def _get_function_name(self, func: Any) -> Optional[str]:
+        """Extract the name from a function or wrapped function.
+
+        Args:
+            func: Function or wrapped function
+
+        Returns:
+            Function name or None
+        """
+        if not func:
+            return None
+
+        # Check for various name attributes
+        if hasattr(func, 'name'):
+            return func.name
+        elif hasattr(func, '__name__'):
+            # Skip generic names that would cause collisions
+            name = func.__name__
+            if name not in ['<lambda>', 'inline_func']:
+                return name
+        elif hasattr(func, 'wrapper') and hasattr(func.wrapper, 'name'):
+            # InterfaceWrapper case
+            return func.wrapper.name
+        else:
+            # Search for the function in the manager
+            for fname, info in self._function_manager.list_functions().items():
+                wrapper = self._function_manager.get_function(fname)
+                if wrapper and wrapper.func == func:
+                    return fname
+        return None
+
     def _build_arc(
         self,
         arc_config: ArcConfig,
@@ -357,52 +393,67 @@ class FSMBuilder:
         fsm_config: FSMConfig,
     ) -> ArcDefinition:
         """Build an arc definition from configuration.
-        
+
         Args:
             arc_config: Arc configuration.
             source_state: Source state definition.
             network: Parent network.
             fsm_config: Parent FSM configuration.
-            
+
         Returns:
             ArcDefinition instance.
         """
         # Resolve condition function
         condition = None
+        condition_name = None
         if arc_config.condition:
             condition = self._resolve_function(arc_config.condition, IStateTestFunction)
-        
+            # Get or generate a unique name for the condition
+            condition_name = self._get_function_name(condition)
+            # Lambda functions get the unhelpful name "<lambda>" so we need to generate a unique name
+            if not condition_name or condition_name == "<lambda>":
+                # Generate a unique name based on arc endpoints and code/function id
+                if arc_config.condition.type == "inline" and arc_config.condition.code:
+                    # Use hash of code for uniqueness
+                    condition_name = f"condition_{source_state.name}_{arc_config.target}_{abs(hash(arc_config.condition.code))}"
+                else:
+                    condition_name = f"condition_{source_state.name}_{arc_config.target}_{id(condition)}"
+            # Register the function with the function manager so it gets transferred to FSM later
+            if condition_name and not self._function_manager.has_function(condition_name):
+                # Register the resolved function - if it's an InterfaceWrapper, register it as-is
+                # since InterfaceWrapper is callable and handles the interface correctly
+                if hasattr(condition, 'test'):
+                    # It's an IStateTestFunction interface, register the test method
+                    self._function_manager.register_function(condition_name, condition.test, FunctionSource.INLINE)
+                else:
+                    # Register as-is
+                    self._function_manager.register_function(condition_name, condition, FunctionSource.INLINE)
+
         # Resolve transform function
         transform = None
+        transform_name = None
         if arc_config.transform:
             transform = self._resolve_function(arc_config.transform, ITransformFunction)
+            # Get or generate a unique name for the transform
+            transform_name = self._get_function_name(transform)
+            # Lambda functions get the unhelpful name "<lambda>" so we need to generate a unique name
+            if not transform_name or transform_name == "<lambda>":
+                # Generate a unique name based on arc endpoints and code/function id
+                if arc_config.transform.type == "inline" and arc_config.transform.code:
+                    # Use hash of code for uniqueness
+                    transform_name = f"transform_{source_state.name}_{arc_config.target}_{abs(hash(arc_config.transform.code))}"
+                else:
+                    transform_name = f"transform_{source_state.name}_{arc_config.target}_{id(transform)}"
+            # Register the function with the function manager so it gets transferred to FSM later
+            if transform_name and not self._function_manager.has_function(transform_name):
+                # Register the resolved function - we need the actual callable
+                self._function_manager.register_function(transform_name, transform, FunctionSource.INLINE)
         
         # Create appropriate arc type
         if isinstance(arc_config, PushArcConfig):
-            # For conditions and transforms, use the registered function name
-            pre_test_name = None
-            if condition:
-                if hasattr(condition, 'name'):
-                    pre_test_name = condition.name
-                else:
-                    # Search for the function in the manager
-                    for fname, info in self._function_manager.list_functions().items():
-                        wrapper = self._function_manager.get_function(fname)
-                        if wrapper and wrapper.func == condition:
-                            pre_test_name = fname
-                            break
-            
-            transform_name = None
-            if transform:
-                if hasattr(transform, 'name'):
-                    transform_name = transform.name
-                else:
-                    # Search for the function in the manager
-                    for fname, info in self._function_manager.list_functions().items():
-                        wrapper = self._function_manager.get_function(fname)
-                        if wrapper and wrapper.func == transform:
-                            transform_name = fname
-                            break
+            # Use the names we determined above
+            pre_test_name = condition_name
+            arc_transform_name = transform_name
             
             # Push arc to another network
             arc = PushArc(
@@ -410,7 +461,7 @@ class FSMBuilder:
                 target_network=arc_config.target_network,
                 return_state=arc_config.return_state,
                 pre_test=pre_test_name,
-                transform=transform_name,
+                transform=arc_transform_name,
                 priority=arc_config.priority,
                 metadata=arc_config.metadata,
             )
@@ -419,35 +470,14 @@ class FSMBuilder:
             return arc
         else:
             # Regular arc within network
-            # For conditions and transforms, use the registered function name
-            pre_test_name = None
-            if condition:
-                if hasattr(condition, 'name'):
-                    pre_test_name = condition.name
-                else:
-                    # Search for the function in the manager
-                    for fname, info in self._function_manager.list_functions().items():
-                        wrapper = self._function_manager.get_function(fname)
-                        if wrapper and wrapper.func == condition:
-                            pre_test_name = fname
-                            break
-            
-            transform_name = None
-            if transform:
-                if hasattr(transform, 'name'):
-                    transform_name = transform.name
-                else:
-                    # Search for the function in the manager
-                    for fname, info in self._function_manager.list_functions().items():
-                        wrapper = self._function_manager.get_function(fname)
-                        if wrapper and wrapper.func == transform:
-                            transform_name = fname
-                            break
+            # Use the names we determined above
+            pre_test_name = condition_name
+            arc_transform_name = transform_name
             
             arc = ArcDefinition(
                 target_state=arc_config.target,
                 pre_test=pre_test_name,
-                transform=transform_name,
+                transform=arc_transform_name,
                 priority=arc_config.priority,
                 metadata=arc_config.metadata,
             )

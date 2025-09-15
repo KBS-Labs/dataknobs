@@ -64,15 +64,36 @@ class ExecutionResult:
     @classmethod
     def failure_result(cls, error: str, metadata: Dict[str, Any] | None = None) -> 'ExecutionResult':
         """Create a failure result.
-        
+
         Args:
             error: The error message.
             metadata: Optional metadata.
-            
+
         Returns:
             A failed ExecutionResult.
         """
         return cls(success=False, error=error, metadata=metadata)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization.
+
+        Returns:
+            Dictionary representation of the result.
+        """
+        return {
+            'success': self.success,
+            'data': self.data,
+            'error': self.error,
+            'metadata': self.metadata
+        }
+
+    def __json__(self) -> Dict[str, Any]:
+        """Support JSON serialization.
+
+        Returns:
+            Dictionary representation for JSON.
+        """
+        return self.to_dict()
 
 
 @dataclass

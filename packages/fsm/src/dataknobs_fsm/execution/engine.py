@@ -142,8 +142,8 @@ class ExecutionEngine(BaseExecutionEngine):
             
             # Check for stuck state (infinite loop protection)
             # Only consider it stuck if both state AND data haven't changed
-            import json
-            current_data_hash = json.dumps(context.data, sort_keys=True) if context.data else ""
+            from dataknobs_fsm.utils.json_encoder import dumps
+            current_data_hash = dumps(context.data, sort_keys=True) if context.data else ""
             
             if context.current_state == last_state and current_data_hash == last_data_hash:
                 stuck_count += 1
@@ -606,6 +606,9 @@ class ExecutionEngine(BaseExecutionEngine):
                 result = func(context.data, func_context)
             else:
                 return False
+            # Handle tuple return from test functions (bool, reason)
+            if isinstance(result, tuple):
+                return bool(result[0])
             return bool(result)
         except Exception:
             return False

@@ -9,6 +9,7 @@ This module provides a command-line interface for:
 
 import click
 import json
+from dataknobs_fsm.utils.json_encoder import dumps as json_dumps
 import yaml
 import sys
 from pathlib import Path
@@ -376,7 +377,7 @@ def execute(config_file: str, data: str | None, initial_state: str | None,
                     if 'data' in result:
                         console.print("\n[bold]Final Data:[/bold]")
                         console.print(Syntax(
-                            json.dumps(result['data'], indent=2),
+                            json_dumps(result['data'], indent=2),
                             "json",
                             theme="monokai"
                         ))
@@ -660,7 +661,7 @@ def list_history(fsm_name: str | None, limit: int, format: str):
         
         console.print(table)
     else:
-        console.print(json.dumps(entries, indent=2))
+        console.print(json_dumps(entries, indent=2))
 
 
 @history.command()

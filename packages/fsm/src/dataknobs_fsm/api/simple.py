@@ -321,10 +321,10 @@ class SimpleFSM:
         if sink:
             # Create a simple file writer
             def write_to_file(results):
-                import json
+                from dataknobs_fsm.utils.json_encoder import dumps
                 with open(sink, 'a') as f:
                     for result in results:
-                        f.write(json.dumps(result) + '\n')
+                        f.write(dumps(result) + '\n')
             sink_func = write_to_file
         
         # Execute stream using async executor

@@ -12,6 +12,7 @@ This example demonstrates an FSM-based LLM conversation system with:
 
 import asyncio
 import logging
+import os
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 from enum import Enum
@@ -164,20 +165,21 @@ class IntentAnalyzer:
 class ResponseGenerator:
     """Generates responses using LLM or templates."""
 
-    def __init__(self, llm_config: Optional[LLMConfig] = None):
-        self.llm_config = llm_config
-        self.llm_provider = None
+    def __init__(self, llm_provider=None):
+        """Initialize with an LLM provider.
+
+        Args:
+            llm_provider: An initialized LLM provider (async or sync)
+        """
+        self.llm_provider = llm_provider
+        self.token_usage = {'prompt_tokens': 0, 'completion_tokens': 0, 'total_tokens': 0}
 
     async def initialize(self):
-        """Initialize LLM provider if configured."""
-        if self.llm_config:
-            try:
-                self.llm_provider = create_llm_provider(self.llm_config, is_async=True)
+        """Initialize LLM provider if needed."""
+        if self.llm_provider and hasattr(self.llm_provider, 'initialize'):
+            if not self.llm_provider.is_initialized:
                 await self.llm_provider.initialize()
-                logger.info(f"Initialized LLM provider: {self.llm_config.provider}")
-            except Exception as e:
-                logger.warning(f"Failed to initialize LLM provider: {e}. Using fallback mode.")
-                self.llm_provider = None
+                logger.info(f"Initialized LLM provider")
 
     async def generate(
         self,
@@ -198,7 +200,7 @@ class ResponseGenerator:
         Returns:
             Generated response
         """
-        # Try LLM generation first if available
+        # Try LLM generation if available
         if self.llm_provider:
             try:
                 response = await self._generate_with_llm(intent, input_text, analysis, context)
@@ -242,7 +244,21 @@ Be concise and helpful.""")
 
         # Generate response
         messages = builder.build()
-        response = await self.llm_provider.complete(messages)
+
+        # Convert to LLMMessage objects if provider expects them
+        from dataknobs_fsm.llm.base import LLMMessage
+        llm_messages = [
+            LLMMessage(role=msg['role'], content=msg['content'])
+            for msg in messages
+        ]
+
+        response = await self.llm_provider.complete(llm_messages)
+
+        # Track token usage if available
+        if hasattr(response, 'usage') and response.usage:
+            self.token_usage['prompt_tokens'] += response.usage.get('prompt_tokens', 0)
+            self.token_usage['completion_tokens'] += response.usage.get('completion_tokens', 0)
+            self.token_usage['total_tokens'] += response.usage.get('total_tokens', 0)
 
         return response.content
 
@@ -368,16 +384,16 @@ class ConversationRefinement:
 class LLMConversationFSM:
     """FSM-based LLM conversation system."""
 
-    def __init__(self, llm_config: Optional[LLMConfig] = None):
+    def __init__(self, llm_provider=None):
         """
         Initialize conversation FSM.
 
         Args:
-            llm_config: Optional LLM configuration
+            llm_provider: Optional LLM provider instance
         """
         self.context = ConversationContext(history=[])
         self.analyzer = IntentAnalyzer()
-        self.generator = ResponseGenerator(llm_config)
+        self.generator = ResponseGenerator(llm_provider)
         self.refiner = ConversationRefinement()
         self.fsm = self._create_fsm()  # Create FSM after other components are initialized
 
@@ -620,6 +636,95 @@ class LLMConversationFSM:
         self.context = ConversationContext(history=[])
         logger.info("Context reset")
 
+    def get_token_usage(self) -> Dict[str, int]:
+        """Get token usage statistics."""
+        return self.generator.token_usage.copy()
+
+    async def cleanup(self):
+        """Clean up resources."""
+        if self.generator.llm_provider and hasattr(self.generator.llm_provider, 'close'):
+            await self.generator.llm_provider.close()
+
+
+def get_llm_config_from_env() -> Optional[LLMConfig]:
+    """Get LLM configuration from environment variables.
+
+    Supports:
+    - LLM_PROVIDER: 'ollama', 'openai', 'anthropic', 'huggingface'
+    - OLLAMA_MODEL: Model name for Ollama (default: llama2)
+    - OPENAI_API_KEY: OpenAI API key
+    - OPENAI_MODEL: OpenAI model (default: gpt-3.5-turbo)
+    - ANTHROPIC_API_KEY: Anthropic API key
+    - ANTHROPIC_MODEL: Anthropic model (default: claude-3-sonnet)
+    - HUGGINGFACE_API_KEY: HuggingFace API key
+    - LLM_TEMPERATURE: Temperature (default: 0.7)
+    - LLM_MAX_TOKENS: Max tokens (default: 150)
+    """
+    provider = os.environ.get('LLM_PROVIDER', '').lower()
+
+    if not provider:
+        return None
+
+    # Common parameters
+    temperature = float(os.environ.get('LLM_TEMPERATURE', '0.7'))
+    max_tokens = int(os.environ.get('LLM_MAX_TOKENS', '150'))
+
+    if provider == 'ollama':
+        model = os.environ.get('OLLAMA_MODEL', 'llama2')
+        return LLMConfig(
+            provider='ollama',
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+
+    elif provider == 'openai':
+        api_key = os.environ.get('OPENAI_API_KEY')
+        if not api_key:
+            logger.warning("OpenAI provider selected but OPENAI_API_KEY not set")
+            return None
+
+        return LLMConfig(
+            provider='openai',
+            model=os.environ.get('OPENAI_MODEL', 'gpt-3.5-turbo'),
+            api_key=api_key,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+
+    elif provider == 'anthropic':
+        api_key = os.environ.get('ANTHROPIC_API_KEY')
+        if not api_key:
+            logger.warning("Anthropic provider selected but ANTHROPIC_API_KEY not set")
+            return None
+
+        return LLMConfig(
+            provider='anthropic',
+            model=os.environ.get('ANTHROPIC_MODEL', 'claude-3-sonnet'),
+            api_key=api_key,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+
+    elif provider == 'huggingface':
+        api_key = os.environ.get('HUGGINGFACE_API_KEY')
+        if not api_key:
+            logger.warning("HuggingFace provider selected but HUGGINGFACE_API_KEY not set")
+            return None
+
+        model = os.environ.get('HUGGINGFACE_MODEL', 'gpt2')
+        return LLMConfig(
+            provider='huggingface',
+            model=model,
+            api_key=api_key,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+
+    else:
+        logger.warning(f"Unknown LLM provider: {provider}")
+        return None
+
 
 async def main():
     """Main function demonstrating the conversation system."""
@@ -627,21 +732,49 @@ async def main():
     print("LLM Conversation System Example")
     print("=" * 60)
 
-    # Create LLM configuration (optional - will use templates if not available)
-    llm_config = None
-    try:
-        # Try to use OpenAI if available
-        llm_config = LLMConfig(
-            provider='openai',
-            model='gpt-3.5-turbo',
-            temperature=0.7,
-            max_tokens=150
-        )
-    except Exception:
-        print("Note: LLM provider not configured. Using template-based responses.\n")
+    # Try to configure LLM from environment
+    llm_provider = None
+    llm_config = get_llm_config_from_env()
+
+    if llm_config:
+        print(f"\nUsing {llm_config.provider.upper()} provider")
+        print(f"Model: {llm_config.model}")
+        print(f"Temperature: {llm_config.temperature}")
+        print(f"Max tokens: {llm_config.max_tokens}")
+
+        try:
+            # Create provider
+            llm_provider = create_llm_provider(llm_config, is_async=True)
+            await llm_provider.initialize()
+
+            # Validate model if possible
+            if hasattr(llm_provider, 'validate_model'):
+                valid = await llm_provider.validate_model()
+                if not valid:
+                    logger.warning(f"Model {llm_config.model} may not be available")
+
+            print("LLM provider initialized successfully\n")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize LLM provider: {e}")
+            llm_provider = None
+
+    if not llm_provider:
+        print("\nNo LLM provider configured. Using template-based responses.")
+        print("\nTo use an LLM, set environment variables:")
+        print("  For Ollama (local):")
+        print("    export LLM_PROVIDER=ollama")
+        print("    export OLLAMA_MODEL=llama2  # or any model you have pulled")
+        print("\n  For OpenAI:")
+        print("    export LLM_PROVIDER=openai")
+        print("    export OPENAI_API_KEY=your-key")
+        print("\n  For Anthropic:")
+        print("    export LLM_PROVIDER=anthropic")
+        print("    export ANTHROPIC_API_KEY=your-key")
+        print()
 
     # Create conversation system
-    conversation = LLMConversationFSM(llm_config)
+    conversation = LLMConversationFSM(llm_provider)
     await conversation.initialize()
 
     # Example conversations
@@ -670,6 +803,14 @@ async def main():
     print(f"- Current topic: {conversation.context.current_topic or 'General'}")
     print(f"- Intent distribution: {len(test_messages)} messages processed")
 
+    # Show token usage if available
+    token_usage = conversation.get_token_usage()
+    if token_usage['total_tokens'] > 0:
+        print(f"\nToken Usage:")
+        print(f"- Prompt tokens: {token_usage['prompt_tokens']}")
+        print(f"- Completion tokens: {token_usage['completion_tokens']}")
+        print(f"- Total tokens: {token_usage['total_tokens']}")
+
     # Interactive mode (optional)
     print("\n" + "=" * 60)
     print("Interactive Mode (type 'quit' to exit, 'reset' to clear context)")
@@ -697,6 +838,9 @@ async def main():
             break
         except Exception as e:
             print(f"Error: {e}")
+
+    # Cleanup
+    await conversation.cleanup()
 
 
 if __name__ == "__main__":

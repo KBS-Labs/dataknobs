@@ -253,16 +253,40 @@ class InterfaceWrapper:
 
     def _create_test_method(self):
         """Create a test method that returns (bool, reason)."""
+        # Check if the function expects a single state argument (common for inline lambdas)
+        import inspect
+        func = self.wrapper.func
+        try:
+            sig = inspect.signature(func)
+            param_count = len(sig.parameters)
+            # If function takes only 1 param, it likely expects a state object
+            expects_state_obj = param_count == 1
+        except:
+            # Can't determine signature, assume standard (data, context)
+            expects_state_obj = False
+
         if self.wrapper.is_async:
             async def async_test(data: Any, context: Optional[Dict[str, Any]] = None):
-                result = await self.wrapper.execute_async(data, context)
+                if expects_state_obj:
+                    # Wrap data for functions expecting state.data pattern
+                    from dataknobs_fsm.core.data_wrapper import wrap_for_lambda
+                    state_obj = wrap_for_lambda(data)
+                    result = await self.wrapper.execute_async(state_obj)
+                else:
+                    result = await self.wrapper.execute_async(data, context)
                 if isinstance(result, tuple):
                     return result
                 return (bool(result), None)
             return async_test
         else:
             def sync_test(data: Any, context: Optional[Dict[str, Any]] = None):
-                result = self.wrapper.execute_sync(data, context)
+                if expects_state_obj:
+                    # Wrap data for functions expecting state.data pattern
+                    from dataknobs_fsm.core.data_wrapper import wrap_for_lambda
+                    state_obj = wrap_for_lambda(data)
+                    result = self.wrapper.execute_sync(state_obj)
+                else:
+                    result = self.wrapper.execute_sync(data, context)
                 if isinstance(result, tuple):
                     return result
                 return (bool(result), None)
@@ -452,14 +476,31 @@ class FunctionManager:
 
                     # Add the code as the function body
                     lines = code.split(';') if ';' in code else [code]
-                    for line in lines:
-                        line = line.strip()
-                        if line:
-                            func_def += f"    {line}\n"
 
-                    # Ensure we return data if no explicit return
-                    if 'return' not in code:
-                        func_def += "    return data\n"
+                    # Check if this looks like a simple expression (for conditions)
+                    # Common patterns: comparisons, boolean ops, method calls that return bool
+                    is_expression = (
+                        '==' in code or '!=' in code or '<' in code or '>' in code or
+                        ' and ' in code or ' or ' in code or ' not ' in code or
+                        code.strip().startswith('not ') or
+                        '.get(' in code or
+                        'in ' in code or
+                        code.strip() in ['True', 'False']
+                    )
+
+                    if is_expression and 'return' not in code and len(lines) == 1:
+                        # For expressions, return the expression result
+                        func_def += f"    return {code.strip()}\n"
+                    else:
+                        # For statements, add them as-is
+                        for line in lines:
+                            line = line.strip()
+                            if line:
+                                func_def += f"    {line}\n"
+
+                        # Ensure we return data if no explicit return (for transforms)
+                        if 'return' not in code:
+                            func_def += "    return data\n"
 
                     exec(func_def, namespace)
                     func = namespace['inline_func']
