@@ -88,8 +88,12 @@ class FunctionWrapper:
         # Check for async __call__ method (for callable objects)
         # But not for regular functions which also have __call__
         if callable(func) and not inspect.isfunction(func) and not inspect.ismethod(func):
-            if asyncio.iscoroutinefunction(func.__call__):
-                return True
+            # Check if the __call__ method itself is async
+            try:
+                if asyncio.iscoroutinefunction(func.__call__):  # type: ignore[operator]
+                    return True
+            except AttributeError:
+                pass
 
         return False
 
@@ -380,7 +384,7 @@ class FunctionManager:
         self,
         reference: Union[str, Dict[str, Any], Callable],
         interface: type | None = None
-    ) -> FunctionWrapper | None:
+    ) -> Union[FunctionWrapper, InterfaceWrapper, None]:
         """Resolve a function reference to a wrapper.
 
         Args:
@@ -503,11 +507,15 @@ class FunctionManager:
                             func_def += "    return data\n"
 
                     exec(func_def, namespace)
-                    func = namespace['inline_func']
+                    func = namespace.get('inline_func')
 
-            wrapper = FunctionWrapper(func, f"inline_{id(code)}", FunctionSource.INLINE)
-            self._inline_cache[code] = wrapper
-            return wrapper
+            if func is not None:
+                wrapper = FunctionWrapper(func, f"inline_{id(code)}", FunctionSource.INLINE)
+                self._inline_cache[code] = wrapper
+                return wrapper
+            else:
+                # Failed to create function
+                raise ValueError(f"Failed to create inline function from code: {code}")
 
         except Exception as e:
             logger.error(f"Failed to create inline function: {e}")
@@ -522,7 +530,7 @@ class FunctionManager:
         self,
         wrapper: FunctionWrapper,
         interface: type
-    ) -> InterfaceWrapper:
+    ) -> Union[InterfaceWrapper, FunctionWrapper]:
         """Adapt a wrapper to implement a specific interface.
 
         Args:
@@ -625,7 +633,7 @@ def register_function(
 def resolve_function(
     reference: Union[str, Dict[str, Any], Callable],
     interface: type | None = None
-) -> FunctionWrapper | None:
+) -> Union[FunctionWrapper, InterfaceWrapper, None]:
     """Resolve a function reference.
 
     Args:

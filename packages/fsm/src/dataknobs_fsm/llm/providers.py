@@ -594,6 +594,28 @@ class OllamaProvider(AsyncLLMProvider):
 
         # Allow environment variable override
         self.base_url = config.api_base or os.environ.get('OLLAMA_BASE_URL', default_url)
+
+    def _build_options(self) -> Dict[str, Any]:
+        """Build options dict for Ollama API calls.
+
+        Returns:
+            Dictionary of options for the API request.
+        """
+        options: Dict[str, Any] = {
+            'temperature': self.config.temperature,
+            'top_p': self.config.top_p
+        }
+
+        if self.config.seed is not None:
+            options['seed'] = self.config.seed
+
+        if self.config.max_tokens:
+            options['num_predict'] = self.config.max_tokens  # type: ignore
+
+        if self.config.stop_sequences:
+            options['stop'] = self.config.stop_sequences  # type: ignore
+
+        return options
         
     async def initialize(self) -> None:
         """Initialize Ollama client."""
@@ -698,20 +720,8 @@ class OllamaProvider(AsyncLLMProvider):
             'model': self.config.model,
             'prompt': prompt,
             'stream': False,
-            'options': {
-                'temperature': self.config.temperature,
-                'top_p': self.config.top_p
-            }
+            'options': self._build_options()
         }
-
-        if self.config.seed is not None:
-            payload['options']['seed'] = self.config.seed
-
-        if self.config.max_tokens:
-            payload['options']['num_predict'] = self.config.max_tokens  # type: ignore
-
-        if self.config.stop_sequences:
-            payload['options']['stop'] = self.config.stop_sequences  # type: ignore
 
         async with self._session.post(f"{self.base_url}/api/generate", json=payload) as response:
             response.raise_for_status()
@@ -752,20 +762,8 @@ class OllamaProvider(AsyncLLMProvider):
             'model': self.config.model,
             'prompt': prompt,
             'stream': True,
-            'options': {
-                'temperature': self.config.temperature,
-                'top_p': self.config.top_p
-            }
+            'options': self._build_options()
         }
-
-        if self.config.seed is not None:
-            payload['options']['seed'] = self.config.seed
-
-        if self.config.max_tokens:
-            payload['options']['num_predict'] = self.config.max_tokens  # type: ignore
-
-        if self.config.stop_sequences:
-            payload['options']['stop'] = self.config.stop_sequences  # type: ignore
 
         async with self._session.post(f"{self.base_url}/api/generate", json=payload) as response:
             response.raise_for_status()

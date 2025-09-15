@@ -195,7 +195,10 @@ class StateDataWrapper:
     the expected interface.
     """
 
-    def __init__(self, data: Union[Dict[str, Any], FSMData]):
+    data: Dict[str, Any]  # Always stores the raw dict
+    _fsm_data: FSMData  # The FSMData wrapper
+
+    def __init__(self, data: Union[Dict[str, Any], FSMData, Any] = None):
         """Initialize state wrapper.
 
         Args:
@@ -227,7 +230,7 @@ class StateDataWrapper:
         self.data[key] = value
 
 
-def ensure_dict(data: Union[Dict[str, Any], FSMData, StateDataWrapper]) -> Dict[str, Any]:
+def ensure_dict(data: Union[Dict[str, Any], FSMData, StateDataWrapper, Any]) -> Dict[str, Any]:
     """Ensure data is a plain dictionary.
 
     This utility function converts various data types to a plain dict,
