@@ -7,7 +7,7 @@ in a consistent manner.
 
 import asyncio
 import inspect
-from typing import Any, Callable, Dict, Optional, Union, Protocol, runtime_checkable
+from typing import Any, Callable, Dict, Union, Protocol, runtime_checkable
 from enum import Enum
 import logging
 
@@ -16,8 +16,7 @@ from dataknobs_fsm.functions.base import (
     ITransformFunction,
     IStateTestFunction,
     IEndStateTestFunction,
-    ExecutionResult,
-    FunctionContext
+    ExecutionResult
 )
 
 logger = logging.getLogger(__name__)
@@ -50,7 +49,7 @@ class FunctionWrapper:
         func: Callable,
         name: str,
         source: FunctionSource = FunctionSource.REGISTERED,
-        interface: Optional[type] = None
+        interface: type | None = None
     ):
         """Initialize function wrapper.
 
@@ -87,7 +86,7 @@ class FunctionWrapper:
 
         # Check for async __call__ method (for callable objects)
         # But not for regular functions which also have __call__
-        if hasattr(func, '__call__') and not inspect.isfunction(func) and not inspect.ismethod(func):
+        if callable(func) and not inspect.isfunction(func) and not inspect.ismethod(func):
             if asyncio.iscoroutinefunction(func.__call__):
                 return True
 
@@ -221,7 +220,7 @@ class InterfaceWrapper:
             expects_state_obj = False
 
         if self.wrapper.is_async:
-            async def async_method(data: Any, context: Optional[Dict[str, Any]] = None) -> Any:
+            async def async_method(data: Any, context: Dict[str, Any] | None = None) -> Any:
                 if expects_state_obj:
                     # Wrap data for functions expecting state.data pattern
                     from dataknobs_fsm.core.data_wrapper import wrap_for_lambda
@@ -236,7 +235,7 @@ class InterfaceWrapper:
                 return result
             return async_method
         else:
-            def sync_method(data: Any, context: Optional[Dict[str, Any]] = None) -> Any:
+            def sync_method(data: Any, context: Dict[str, Any] | None = None) -> Any:
                 if expects_state_obj:
                     # Wrap data for functions expecting state.data pattern
                     from dataknobs_fsm.core.data_wrapper import wrap_for_lambda
@@ -266,7 +265,7 @@ class InterfaceWrapper:
             expects_state_obj = False
 
         if self.wrapper.is_async:
-            async def async_test(data: Any, context: Optional[Dict[str, Any]] = None):
+            async def async_test(data: Any, context: Dict[str, Any] | None = None):
                 if expects_state_obj:
                     # Wrap data for functions expecting state.data pattern
                     from dataknobs_fsm.core.data_wrapper import wrap_for_lambda
@@ -279,7 +278,7 @@ class InterfaceWrapper:
                 return (bool(result), None)
             return async_test
         else:
-            def sync_test(data: Any, context: Optional[Dict[str, Any]] = None):
+            def sync_test(data: Any, context: Dict[str, Any] | None = None):
                 if expects_state_obj:
                     # Wrap data for functions expecting state.data pattern
                     from dataknobs_fsm.core.data_wrapper import wrap_for_lambda
@@ -330,7 +329,7 @@ class FunctionManager:
         name: str,
         func: Callable,
         source: FunctionSource = FunctionSource.REGISTERED,
-        interface: Optional[type] = None
+        interface: type | None = None
     ) -> FunctionWrapper:
         """Register a function.
 
@@ -379,8 +378,8 @@ class FunctionManager:
     def resolve_function(
         self,
         reference: Union[str, Dict[str, Any], Callable],
-        interface: Optional[type] = None
-    ) -> Optional[FunctionWrapper]:
+        interface: type | None = None
+    ) -> FunctionWrapper | None:
         """Resolve a function reference to a wrapper.
 
         Args:
@@ -534,7 +533,7 @@ class FunctionManager:
         """
         return InterfaceWrapper(wrapper, interface)
 
-    def get_function(self, name: str) -> Optional[FunctionWrapper]:
+    def get_function(self, name: str) -> FunctionWrapper | None:
         """Get a registered function by name.
 
         Args:
@@ -624,8 +623,8 @@ def register_function(
 
 def resolve_function(
     reference: Union[str, Dict[str, Any], Callable],
-    interface: Optional[type] = None
-) -> Optional[FunctionWrapper]:
+    interface: type | None = None
+) -> FunctionWrapper | None:
     """Resolve a function reference.
 
     Args:

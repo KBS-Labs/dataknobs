@@ -9,7 +9,7 @@ instances from configuration objects, including:
 """
 
 import importlib
-from typing import Any, Callable, Dict, List, Optional, Type
+from typing import Any, Callable, Dict, List, Type
 
 
 from dataknobs_fsm.config.schema import (
@@ -44,8 +44,7 @@ from dataknobs_fsm.functions.base import (
 from dataknobs_fsm.resources.manager import ResourceManager
 from dataknobs_fsm.functions.manager import (
     FunctionManager,
-    FunctionSource,
-    FunctionWrapper
+    FunctionSource
 )
 
 
@@ -354,7 +353,7 @@ class FSMBuilder:
         
         return state_def
 
-    def _get_function_name(self, func: Any) -> Optional[str]:
+    def _get_function_name(self, func: Any) -> str | None:
         """Extract the name from a function or wrapped function.
 
         Args:

@@ -625,7 +625,7 @@ class OllamaProvider(AsyncLLMProvider):
                                     logging.warning(f"Ollama: Model {self.config.model} not found. Available: {models}")
                         else:
                             import logging
-                            logging.warning(f"Ollama: No models found. Please pull a model first.")
+                            logging.warning("Ollama: No models found. Please pull a model first.")
                     else:
                         import logging
                         logging.warning(f"Ollama: API returned status {response.status}")

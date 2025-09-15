@@ -432,7 +432,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
 
                     # Check if it's async - check both the function and its __call__ method
                     is_async = asyncio.iscoroutinefunction(transform_func)
-                    if not is_async and callable(transform_func) and hasattr(transform_func, '__call__'):
+                    if not is_async and callable(transform_func) and callable(transform_func):
                         # Check if the __call__ method is async (for wrapped functions)
                         is_async = asyncio.iscoroutinefunction(transform_func.__call__)
 
@@ -532,7 +532,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
 
                 # Check if it's async - check both the function and its __call__ method
                 is_async = asyncio.iscoroutinefunction(actual_func)
-                if not is_async and callable(actual_func) and hasattr(actual_func, '__call__'):
+                if not is_async and callable(actual_func) and callable(actual_func):
                     # Check if the __call__ method is async (for wrapped functions)
                     is_async = asyncio.iscoroutinefunction(actual_func.__call__)
 

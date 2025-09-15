@@ -12,8 +12,7 @@ from .base import LLMMessage, LLMResponse
 
 
 def render_conditional_template(template: str, params: Dict[str, Any]) -> str:
-    """
-    Render a template with variable substitution and conditional sections.
+    """Render a template with variable substitution and conditional sections.
 
     Variable substitution:
     - {{variable}} syntax for placeholders
@@ -77,7 +76,7 @@ def render_conditional_template(template: str, params: Dict[str, Any]) -> str:
                         return ""
             else:
                 # Preserve whitespace when substituting
-                return f"{prefix_ws}{str(value)}{suffix_ws}"
+                return f"{prefix_ws}{value!s}{suffix_ws}"
 
         return re.sub(var_pattern, replace_var, text)
 

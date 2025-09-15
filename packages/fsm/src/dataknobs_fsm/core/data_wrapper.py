@@ -1,5 +1,4 @@
-"""
-Data wrapper for FSM that provides a consistent interface for data access.
+"""Data wrapper for FSM that provides a consistent interface for data access.
 
 This module implements a hybrid solution for data handling in the FSM:
 - User functions receive raw dict data by default (simple, predictable)
@@ -7,7 +6,7 @@ This module implements a hybrid solution for data handling in the FSM:
 - Internal FSM operations use the wrapper for consistency
 """
 
-from typing import Any, Dict, Optional, Union, Iterator, KeysView, ValuesView, ItemsView
+from typing import Any, Dict, Union, Iterator, KeysView, ValuesView, ItemsView
 from collections.abc import MutableMapping
 import copy
 
@@ -25,7 +24,7 @@ class FSMData(MutableMapping):
     to user functions unless they explicitly request the wrapper.
     """
 
-    def __init__(self, data: Optional[Dict[str, Any]] = None):
+    def __init__(self, data: Dict[str, Any] | None = None):
         """Initialize FSMData wrapper.
 
         Args:
@@ -172,7 +171,7 @@ class FSMData(MutableMapping):
         """String conversion."""
         return str(self._data)
 
-    def __eq__(self, other: Any) -> bool:
+    def __eq__(self, other: object) -> bool:
         """Equality comparison."""
         if isinstance(other, FSMData):
             return self._data == other._data
@@ -245,16 +244,16 @@ def ensure_dict(data: Union[Dict[str, Any], FSMData, StateDataWrapper]) -> Dict[
         return data.data.to_dict()
     elif hasattr(data, '_data'):
         # Handle other wrapper types
-        return getattr(data, '_data')
+        return data._data
     elif hasattr(data, 'data'):
         # Handle objects with data attribute
-        inner = getattr(data, 'data')
+        inner = data.data
         if isinstance(inner, dict):
             return inner
         elif isinstance(inner, FSMData):
             return inner.to_dict()
         elif hasattr(inner, '_data'):
-            return getattr(inner, '_data')
+            return inner._data
     # Last resort - try to convert
     return dict(data) if data else {}
 

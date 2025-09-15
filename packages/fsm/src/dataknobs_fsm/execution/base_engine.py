@@ -10,8 +10,6 @@ from typing import Any, Dict, List, Tuple, TYPE_CHECKING
 from types import SimpleNamespace
 
 from dataknobs_fsm.core.data_wrapper import (
-    FSMData,
-    StateDataWrapper,
     ensure_dict,
     wrap_for_lambda
 )
