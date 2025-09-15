@@ -208,9 +208,27 @@ class InterfaceWrapper:
         Returns:
             Method that calls the wrapped function
         """
+        # Check if the function expects a single state argument (common for inline lambdas)
+        import inspect
+        func = self.wrapper.func
+        try:
+            sig = inspect.signature(func)
+            param_count = len(sig.parameters)
+            # If function takes only 1 param, it likely expects a state object
+            expects_state_obj = param_count == 1
+        except:
+            # Can't determine signature, assume standard (data, context)
+            expects_state_obj = False
+
         if self.wrapper.is_async:
             async def async_method(data: Any, context: Optional[Dict[str, Any]] = None) -> Any:
-                result = await self.wrapper.execute_async(data, context)
+                if expects_state_obj:
+                    # Wrap data for functions expecting state.data pattern
+                    from dataknobs_fsm.core.data_wrapper import wrap_for_lambda
+                    state_obj = wrap_for_lambda(data)
+                    result = await self.wrapper.execute_async(state_obj)
+                else:
+                    result = await self.wrapper.execute_async(data, context)
                 if method_name in ['validate', 'transform']:
                     # Wrap in ExecutionResult if needed
                     if not isinstance(result, ExecutionResult):
@@ -219,7 +237,13 @@ class InterfaceWrapper:
             return async_method
         else:
             def sync_method(data: Any, context: Optional[Dict[str, Any]] = None) -> Any:
-                result = self.wrapper.execute_sync(data, context)
+                if expects_state_obj:
+                    # Wrap data for functions expecting state.data pattern
+                    from dataknobs_fsm.core.data_wrapper import wrap_for_lambda
+                    state_obj = wrap_for_lambda(data)
+                    result = self.wrapper.execute_sync(state_obj)
+                else:
+                    result = self.wrapper.execute_sync(data, context)
                 if method_name in ['validate', 'transform']:
                     # Wrap in ExecutionResult if needed
                     if not isinstance(result, ExecutionResult):
@@ -413,27 +437,32 @@ class FunctionManager:
                 func = None
 
             if not func:
-                # Treat as function body - check if it needs to be async
-                if 'await' in code:
-                    # Create async wrapper
-                    func_def = "async def inline_func(data, context=None):\n"
+                # Check if it's a lambda expression
+                if code.strip().startswith('lambda'):
+                    # Evaluate lambda directly
+                    func = eval(code, namespace)
                 else:
-                    # Create sync wrapper
-                    func_def = "def inline_func(data, context=None):\n"
+                    # Treat as function body - check if it needs to be async
+                    if 'await' in code:
+                        # Create async wrapper
+                        func_def = "async def inline_func(data, context=None):\n"
+                    else:
+                        # Create sync wrapper
+                        func_def = "def inline_func(data, context=None):\n"
 
-                # Add the code as the function body
-                lines = code.split(';') if ';' in code else [code]
-                for line in lines:
-                    line = line.strip()
-                    if line:
-                        func_def += f"    {line}\n"
+                    # Add the code as the function body
+                    lines = code.split(';') if ';' in code else [code]
+                    for line in lines:
+                        line = line.strip()
+                        if line:
+                            func_def += f"    {line}\n"
 
-                # Ensure we return data if no explicit return
-                if 'return' not in code:
-                    func_def += "    return data\n"
+                    # Ensure we return data if no explicit return
+                    if 'return' not in code:
+                        func_def += "    return data\n"
 
-                exec(func_def, namespace)
-                func = namespace['inline_func']
+                    exec(func_def, namespace)
+                    func = namespace['inline_func']
 
             wrapper = FunctionWrapper(func, f"inline_{id(code)}", FunctionSource.INLINE)
             self._inline_cache[code] = wrapper

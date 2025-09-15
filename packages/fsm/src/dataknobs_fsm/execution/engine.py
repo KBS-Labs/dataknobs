@@ -17,6 +17,7 @@ from dataknobs_fsm.execution.common import (
     TransitionSelectionMode
 )
 from dataknobs_fsm.execution.base_engine import BaseExecutionEngine
+from dataknobs_fsm.core.data_wrapper import ensure_dict
 
 
 class TraversalStrategy(Enum):
@@ -448,7 +449,7 @@ class ExecutionEngine(BaseExecutionEngine):
                     result = transform_func(state_obj)
                 except (TypeError, AttributeError):
                     # Fall back to calling with data and context
-                    result = transform_func(context.data, func_context)
+                    result = transform_func(ensure_dict(context.data), func_context)
 
                 # Process result using base class logic
                 self.process_transform_result(result, context, state_name)
@@ -490,20 +491,22 @@ class ExecutionEngine(BaseExecutionEngine):
                     
                     # Execute the validator
                     # Validators typically return a dict with validation results
-                    # Create a mock state object for validators that expect state.data
-                    from types import SimpleNamespace
-                    state_obj = SimpleNamespace(data=context.data)
-                    
+                    # Create a wrapper for validators that expect state.data
+                    from dataknobs_fsm.core.data_wrapper import wrap_for_lambda
+                    state_obj = wrap_for_lambda(context.data)
+
                     # Try calling with state object first (for inline lambdas)
                     try:
                         result = validator_func(state_obj)
                     except (TypeError, AttributeError):
                         # Fall back to calling with data and context
-                        result = validator_func(context.data, func_context)
+                        result = validator_func(ensure_dict(context.data), func_context)
                     
-                    if isinstance(result, dict):
-                        # Merge validation results into context data
-                        context.data.update(result)
+                    if result is not None:
+                        # Ensure result is a dict and merge into context data
+                        result_dict = ensure_dict(result)
+                        if isinstance(result_dict, dict):
+                            context.data.update(result_dict)
                 except Exception:
                     # Log but don't fail - state validators are optional
                     pass

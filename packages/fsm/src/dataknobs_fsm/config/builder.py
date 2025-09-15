@@ -580,6 +580,8 @@ class FSMBuilder:
             if not wrapper:
                 raise ValueError(f"Failed to create inline function from: {func_ref.code}")
             func = wrapper
+            # Mark as already wrapped to avoid double wrapping
+            func._is_wrapped = True
         
         else:
             raise ValueError(f"Unknown function type: {func_ref.type}")
@@ -591,7 +593,8 @@ class FSMBuilder:
             func = functools.partial(func, **func_ref.params)
         
         # Validate type if specified
-        if expected_type and not isinstance(func, expected_type):
+        # Skip wrapping if already wrapped by function manager
+        if expected_type and not isinstance(func, expected_type) and not getattr(func, '_is_wrapped', False):
             # Wrap function to match expected interface
             wrapped = self._wrap_function(func, expected_type)
             # Preserve the original function name if it exists

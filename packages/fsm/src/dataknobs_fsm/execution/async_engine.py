@@ -17,6 +17,7 @@ from dataknobs_fsm.execution.common import (
 )
 from dataknobs_fsm.execution.base_engine import BaseExecutionEngine
 from dataknobs_fsm.functions.base import FunctionContext
+from dataknobs_fsm.core.data_wrapper import ensure_dict
 
 
 class AsyncExecutionEngine(BaseExecutionEngine):
@@ -488,7 +489,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                             result = await validator.validate(state_obj)
                         except (TypeError, AttributeError):
                             # Fall back to standard signature
-                            result = await validator.validate(context.data, context)
+                            result = await validator.validate(ensure_dict(context.data), context)
                     else:
                         # Run sync function in executor
                         loop = asyncio.get_event_loop()
@@ -496,7 +497,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                             result = await loop.run_in_executor(None, validator.validate, state_obj)
                         except (TypeError, AttributeError):
                             # Fall back to standard signature
-                            result = await loop.run_in_executor(None, validator.validate, context.data, context)
+                            result = await loop.run_in_executor(None, validator.validate, ensure_dict(context.data), context)
 
                     if isinstance(result, dict):
                         # Merge validation results into context data
@@ -506,6 +507,10 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                     pass
 
         # Execute transform functions using base class helpers
+        import logging
+        logger = logging.getLogger(__name__)
+        if transform_functions:
+            logger.debug(f"Executing {len(transform_functions)} transform functions for state {state_name}")
         for transform_func in transform_functions:
             try:
                 # Create function context
@@ -538,7 +543,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                         result = await actual_func(state_obj)
                     except (TypeError, AttributeError):
                         # Fall back to standard signature
-                        result = await actual_func(context.data, func_context)
+                        result = await actual_func(ensure_dict(context.data), func_context)
                 else:
                     # Run sync function in executor
                     loop = asyncio.get_event_loop()
@@ -546,7 +551,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                         result = await loop.run_in_executor(None, actual_func, state_obj)
                     except (TypeError, AttributeError):
                         # Fall back to standard signature
-                        result = await loop.run_in_executor(None, actual_func, context.data, func_context)
+                        result = await loop.run_in_executor(None, actual_func, ensure_dict(context.data), func_context)
 
                 # Process result using base class logic
                 self.process_transform_result(result, context, state_name)

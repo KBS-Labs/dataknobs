@@ -32,6 +32,8 @@ The DataKnobs FSM (Finite State Machine) package provides a comprehensive, produ
 - **Resource Management**: Sophisticated pooling, lifecycle management, and cleanup
 - **LLM Integration**: Native support for OpenAI, Anthropic, and HuggingFace providers
 - **Comprehensive Testing**: 90%+ code coverage with unit, integration, and performance tests
+- **Hybrid Data Handling**: Intelligent data format adaptation supporting both dict and attribute access patterns
+- **Unified Function Management**: Single system handling all function types with signature detection and adaptation
 
 ## Core Concepts
 
@@ -710,6 +712,8 @@ The use case analysis validated and refined several key design aspects:
 - Pydantic-based configuration schema
 - Template support and use case patterns
 - Built-in function library (validators, transformers, database, streaming, LLM)
+- Unified FunctionManager with intelligent adaptation
+- Support for inline lambdas and code compilation
 - 25 tests passing
 
 ### Phase 6: History and Storage (Weeks 6-7)
@@ -728,8 +732,12 @@ The use case analysis validated and refined several key design aspects:
 - Zero code duplication achieved
 
 ### Phase 8: Production Readiness (Weeks 8+)
-✅ **Completed** (2025-09-12)
+✅ **Completed** (2025-01-15)
 - All loose ends resolved (22+ items)
+- Technical debt addressed (data handling inconsistency)
+- FSMData wrapper implementation for hybrid data access
+- Function manager enhancements with signature detection
+- Double-wrapping prevention in builder
 - Enterprise patterns fully implemented
 - Comprehensive error handling
 - Performance optimizations
@@ -1481,6 +1489,28 @@ error_handling:
   fallback_states: true
 ```
 
+## Key Learnings
+
+### Implementation Insights
+
+1. **Async Execution Needs True Concurrency**: Using run_in_executor for sync functions in async engine adds overhead without benefits
+2. **Transform Placement Matters**: StateTransforms when entering states, ArcTransforms during transitions
+3. **History Structure Choice**: Trees simpler than graphs for execution history
+4. **Resource Lifecycle Critical**: Proper cleanup prevents resource leaks
+5. **Scoring System Flexibility**: Multi-factor scoring enables sophisticated routing
+6. **Data Format Consistency**: Functions need predictable data formats - mixing dict/object access causes failures
+7. **Signature Detection Value**: Detecting function signatures enables automatic adaptation to different calling patterns
+8. **Wrapper Hierarchy Management**: Clear ownership of wrapping prevents double-wrapping issues
+9. **Inline Function Support**: Supporting inline lambdas critical for configuration simplicity
+10. **Cache Everything**: Function compilation and wrapper creation should be cached for performance
+
+### Technical Debt Resolution
+
+1. **Data Handling Inconsistency**: Resolved through FSMData wrapper and hybrid approach
+2. **Function Double Wrapping**: Fixed by tracking wrapped state
+3. **Signature Mismatch**: Solved with intelligent signature detection
+4. **Type Checking Burden**: Eliminated through consistent data handling
+
 ## Conclusion
 
 The DataKnobs FSM package represents a complete, production-ready implementation of a flexible state machine framework. Through careful design evolution and comprehensive implementation, it now supports:
@@ -1496,7 +1526,7 @@ The DataKnobs FSM package represents a complete, production-ready implementation
 ### Implementation Milestones
 - **8 Phases Completed**: From core foundation to production readiness
 - **300+ Tests Passing**: Expanded from 186 to include loose end validation
-- **28 Architecture Decision Records**: Documenting all major design choices
+- **31 Architecture Decision Records**: Documenting all major design choices (including data handling ADRs)
 - **5 Enterprise Patterns**: Fully implemented and tested
 - **Zero Code Duplication**: After comprehensive API refactoring
 - **22+ Loose Ends Resolved**: All implementation gaps addressed

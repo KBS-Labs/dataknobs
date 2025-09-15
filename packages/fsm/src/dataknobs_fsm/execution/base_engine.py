@@ -9,15 +9,12 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Tuple, TYPE_CHECKING
 from types import SimpleNamespace
 
-
-class StateNamespace:
-    """A namespace that supports both attribute and dict-style access.
-
-    This allows functions to use either state.data.field or state.data['field'].
-    """
-    def __init__(self, data):
-        self.data = data
-
+from dataknobs_fsm.core.data_wrapper import (
+    FSMData,
+    StateDataWrapper,
+    ensure_dict,
+    wrap_for_lambda
+)
 from dataknobs_fsm.core.arc import ArcDefinition
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.network import StateNetwork
@@ -179,8 +176,9 @@ class BaseExecutionEngine(ABC):
         elif hasattr(state_def, 'transform_function') and state_def.transform_function:
             transform_functions = [state_def.transform_function]
 
-        # Create a mock state object for transforms that expect state.data
-        state_obj = StateNamespace(context.data)
+        # Create a wrapper for transforms that expect state.data access pattern
+        # This wrapper provides both dict and attribute access
+        state_obj = wrap_for_lambda(context.data)
 
         return transform_functions, state_obj
 
@@ -202,7 +200,8 @@ class BaseExecutionEngine(ABC):
             from dataknobs_fsm.functions.base import ExecutionResult
             if isinstance(result, ExecutionResult):
                 if result.success:
-                    context.data = result.data
+                        # Ensure we store plain dict data
+                    context.data = ensure_dict(result.data)
                 else:
                     # Transform failed - handle the error
                     self.handle_transform_error(
@@ -211,7 +210,8 @@ class BaseExecutionEngine(ABC):
                         state_name
                     )
             else:
-                context.data = result
+                # Ensure we always store plain dict data, not wrappers
+                context.data = ensure_dict(result)
 
     def handle_transform_error(
         self,
