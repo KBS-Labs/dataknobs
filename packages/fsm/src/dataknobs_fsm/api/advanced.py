@@ -245,12 +245,8 @@ class AdvancedFSM:
             ExecutionContext for manual execution
         """
         # Create context with appropriate data handling
-        # Convert DataHandlingMode to ProcessingMode if necessary
+        # Use SINGLE processing mode as default
         processing_mode = ProcessingMode.SINGLE
-        if data_mode == DataHandlingMode.BATCH:
-            processing_mode = ProcessingMode.BATCH
-        elif data_mode == DataHandlingMode.STREAM:
-            processing_mode = ProcessingMode.STREAM
 
         context = ContextFactory.create_context(
             self.fsm,

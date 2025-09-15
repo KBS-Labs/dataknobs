@@ -47,12 +47,18 @@ class SimpleFSM:
         self._resources = resources or {}
         self._custom_functions = custom_functions or {}
         
+        # Create loader with knowledge of custom functions
+        loader = ConfigLoader()
+
+        # Tell the loader about registered function names
+        if self._custom_functions:
+            for name in self._custom_functions.keys():
+                loader.add_registered_function(name)
+
         # Load configuration
         if isinstance(config, (str, Path)):
-            loader = ConfigLoader()
             self._config = loader.load_from_file(Path(config))
         else:
-            loader = ConfigLoader()
             self._config = loader.load_from_dict(config)
             
         # Build FSM with custom functions

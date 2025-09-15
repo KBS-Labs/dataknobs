@@ -42,6 +42,11 @@ from dataknobs_fsm.functions.base import (
     IValidationFunction,
 )
 from dataknobs_fsm.resources.manager import ResourceManager
+from dataknobs_fsm.functions.manager import (
+    FunctionManager,
+    FunctionSource,
+    FunctionWrapper
+)
 
 
 class FSMBuilder:
@@ -50,12 +55,11 @@ class FSMBuilder:
     def __init__(self):
         """Initialize the FSMBuilder."""
         self._resource_manager = ResourceManager()
-        self._function_registry: Dict[str, Callable] = {}
-        self._builtin_functions: Dict[str, Callable] = {}
+        self._function_manager = FunctionManager()
         self._networks: Dict[str, StateNetwork] = {}
         self._data_handlers: Dict[DataHandlingMode, DataHandler] = {}
         self._transaction_manager: TransactionManager | None = None
-        
+
         # Register built-in functions on initialization
         self._register_builtin_functions()
 
@@ -112,8 +116,10 @@ class FSMBuilder:
         fsm.config = config
         
         # Register all functions from builder into core FSM's function registry
-        for func_name, func in self._function_registry.items():
-            fsm.function_registry.register(func_name, func)
+        for func_name, info in self._function_manager.list_functions().items():
+            wrapper = self._function_manager.get_function(func_name)
+            if wrapper:
+                fsm.function_registry.register(func_name, wrapper)
         
         # Add networks to FSM
         for network_name, network in self._networks.items():
@@ -129,7 +135,7 @@ class FSMBuilder:
             name: Function name for reference in configuration.
             func: Function implementation.
         """
-        self._function_registry[name] = func
+        self._function_manager.register_function(name, func, FunctionSource.REGISTERED)
 
     def _register_builtin_functions(self) -> None:
         """Register built-in functions from the library."""
@@ -142,14 +148,18 @@ class FSMBuilder:
                 if not name.startswith("_"):
                     obj = getattr(validators, name)
                     if callable(obj):
-                        self._builtin_functions[f"validators.{name}"] = obj
+                        self._function_manager.register_function(
+                            f"validators.{name}", obj, FunctionSource.BUILTIN
+                        )
             
             # Register transformers
             for name in dir(transformers):
                 if not name.startswith("_"):
                     obj = getattr(transformers, name)
                     if callable(obj):
-                        self._builtin_functions[f"transformers.{name}"] = obj
+                        self._function_manager.register_function(
+                            f"transformers.{name}", obj, FunctionSource.BUILTIN
+                        )
         
         except ImportError:
             # Built-in functions not yet implemented
@@ -314,9 +324,8 @@ class FSMBuilder:
         for func_ref in state_config.transforms:
             transform = self._resolve_function(func_ref, ITransformFunction)
             transforms.append(transform)
-            # Register transform in function registry for potential arc use
-            func_name = f"{state_config.name}_transform"
-            self._function_registry[func_name] = transform
+            # Don't re-register wrapped functions - they're already in the manager
+            # The transform is already an InterfaceWrapper with proper async handling
         
         # Determine data mode
         data_mode = state_config.data_mode or fsm_config.data_mode.default
@@ -376,9 +385,10 @@ class FSMBuilder:
                 if hasattr(condition, 'name'):
                     pre_test_name = condition.name
                 else:
-                    # Search for the function in the registry
-                    for fname, f in self._function_registry.items():
-                        if f == condition:
+                    # Search for the function in the manager
+                    for fname, info in self._function_manager.list_functions().items():
+                        wrapper = self._function_manager.get_function(fname)
+                        if wrapper and wrapper.func == condition:
                             pre_test_name = fname
                             break
             
@@ -387,9 +397,10 @@ class FSMBuilder:
                 if hasattr(transform, 'name'):
                     transform_name = transform.name
                 else:
-                    # Search for the function in the registry
-                    for fname, f in self._function_registry.items():
-                        if f == transform:
+                    # Search for the function in the manager
+                    for fname, info in self._function_manager.list_functions().items():
+                        wrapper = self._function_manager.get_function(fname)
+                        if wrapper and wrapper.func == transform:
                             transform_name = fname
                             break
             
@@ -414,9 +425,10 @@ class FSMBuilder:
                 if hasattr(condition, 'name'):
                     pre_test_name = condition.name
                 else:
-                    # Search for the function in the registry
-                    for fname, f in self._function_registry.items():
-                        if f == condition:
+                    # Search for the function in the manager
+                    for fname, info in self._function_manager.list_functions().items():
+                        wrapper = self._function_manager.get_function(fname)
+                        if wrapper and wrapper.func == condition:
                             pre_test_name = fname
                             break
             
@@ -425,9 +437,10 @@ class FSMBuilder:
                 if hasattr(transform, 'name'):
                     transform_name = transform.name
                 else:
-                    # Search for the function in the registry
-                    for fname, f in self._function_registry.items():
-                        if f == transform:
+                    # Search for the function in the manager
+                    for fname, info in self._function_manager.list_functions().items():
+                        wrapper = self._function_manager.get_function(fname)
+                        if wrapper and wrapper.func == transform:
                             transform_name = fname
                             break
             
@@ -537,93 +550,36 @@ class FSMBuilder:
         """
         if func_ref.type == "builtin":
             # Look up built-in function
-            if func_ref.name not in self._builtin_functions:
+            wrapper = self._function_manager.get_function(func_ref.name)
+            if not wrapper:
                 raise ValueError(f"Built-in function not found: {func_ref.name}")
-            func = self._builtin_functions[func_ref.name]
+            func = wrapper
         
         elif func_ref.type == "registered":
             # Look up registered function
-            if func_ref.name not in self._function_registry:
+            wrapper = self._function_manager.get_function(func_ref.name)
+            if not wrapper:
                 raise ValueError(f"Registered function not found: {func_ref.name}")
-            func = self._function_registry[func_ref.name]
+            func = wrapper
         
         elif func_ref.type == "custom":
-            # Check registry first (for backward compatibility)
-            if func_ref.name in self._function_registry:
-                func = self._function_registry[func_ref.name]
+            # Check manager first
+            wrapper = self._function_manager.get_function(func_ref.name)
+            if wrapper:
+                func = wrapper
             else:
                 # Import custom function
                 module = importlib.import_module(func_ref.module)
                 func = getattr(module, func_ref.name)
+                # Register it for future use
+                self._function_manager.register_function(func_ref.name, func, FunctionSource.REGISTERED)
         
         elif func_ref.type == "inline":
-            # Compile inline code
-            namespace = {}
-            
-            # Check if the code is a lambda expression
-            code = func_ref.code.strip()
-            if code.startswith('lambda'):
-                # Wrap lambda in assignment to make it accessible
-                exec(f"func = {code}", namespace)
-                func = namespace['func']
-            elif 'def ' in code:
-                # Execute code and find function
-                exec(code, namespace)
-                # Find the function in namespace
-                funcs = [v for v in namespace.values() if callable(v)]
-                if not funcs:
-                    raise ValueError("No function found in inline code")
-                func = funcs[0]
-            else:
-                # Assume it's an expression that transforms data
-                # Wrap it in a function
-                
-                # Handle semicolon-separated statements
-                if ';' in code:
-                    statements = [s.strip() for s in code.split(';')]
-                    # Last statement is likely the return value
-                    body_statements = statements[:-1]
-                    return_statement = statements[-1]
-                    
-                    if body_statements:
-                        body = '\n    '.join(body_statements)
-                        func_code = f"""
-def transform(data, context=None):
-    {body}
-    return {return_statement}
-"""
-                    else:
-                        func_code = f"""
-def transform(data, context=None):
-    return {return_statement}
-"""
-                else:
-                    # Check if code ends with a return value (common pattern)
-                    lines = code.strip().split('\n')
-                    if lines and not lines[-1].strip().startswith('return'):
-                        # Last line is likely the return value
-                        if len(lines) > 1:
-                            body = '\n    '.join(lines[:-1])
-                            return_line = lines[-1].strip()
-                            func_code = f"""
-def transform(data, context=None):
-    {body}
-    return {return_line}
-"""
-                        else:
-                            # Single line expression
-                            func_code = f"""
-def transform(data, context=None):
-    return {code}
-"""
-                    else:
-                        # Code already has return statement
-                        func_code = f"""
-def transform(data, context=None):
-    {code}
-"""
-                exec(func_code, namespace)
-                func = namespace['transform']
+            # Use function manager's inline handling
+            wrapper = self._function_manager.resolve_function(func_ref.code, expected_type)
+            if not wrapper:
+                raise ValueError(f"Failed to create inline function from: {func_ref.code}")
+            func = wrapper
         
         else:
             raise ValueError(f"Unknown function type: {func_ref.type}")
@@ -645,98 +601,26 @@ def transform(data, context=None):
                 wrapped.name = func_ref.name
             func = wrapped
         
-        # For inline functions, generate a unique name and register them
-        if func_ref.type == "inline":
-            import hashlib
-            
-            # Generate a unique name based on the code content
-            code_hash = hashlib.md5(func_ref.code.encode()).hexdigest()[:8]
-            func_name = f"inline_{expected_type.__name__.lower()}_{code_hash}"
-            
-            # Ensure uniqueness
-            counter = 0
-            base_name = func_name
-            while func_name in self._function_registry:
-                counter += 1
-                func_name = f"{base_name}_{counter}"
-            
-            # Register the function and add name attribute
-            self._function_registry[func_name] = func
-            func.name = func_name
+        # For inline functions, ensure they have a name
+        if func_ref.type == "inline" and hasattr(func, 'name'):
+            # Name already set by function manager
+            pass
         
         return func
 
     def _wrap_function(self, func: Callable, interface: Type) -> Any:
-        """Wrap a function to match an expected interface.
-        
+        """Wrap a function to match an expected interface using unified manager.
+
         Args:
             func: Function to wrap.
             interface: Expected interface type.
-            
+
         Returns:
             Wrapped function implementing the interface.
         """
-        # Create a wrapper class that implements the interface
-        class FunctionWrapper:
-            def __init__(self, func):
-                self.func = func
-            
-            def __call__(self, *args: Any, **kwargs: Any) -> Any:
-                return self.func(*args, **kwargs)
-        
-        # Helper function to check if function expects data directly
-        import inspect
-        sig = inspect.signature(func)
-        params = list(sig.parameters.keys())
-        expects_data_directly = params and params[0] == 'data'
-        
-        # Add interface methods
-        if interface == IValidationFunction:
-            FunctionWrapper.validate = lambda self, data: self.func(data)
-        elif interface in (ITransformFunction, IStateTestFunction):
-            # Both transform and test functions have similar patterns
-            if expects_data_directly:
-                # Inline function expects data directly
-                if interface == ITransformFunction:
-                    def wrapper(self, data, context=None):
-                        return self.func(data, context)
-                    FunctionWrapper.transform = wrapper
-                else:  # IStateTestFunction
-                    def wrapper(self, state):  # type: ignore
-                        # Extract data from state if it's an object
-                        data = state.data if hasattr(state, 'data') else state
-                        return self.func(data, None)
-                    FunctionWrapper.test = wrapper
-                
-                # Common callable for both
-                def call_wrapper(self, data, context=None):
-                    return self.func(data, context)
-                FunctionWrapper.__call__ = call_wrapper
-            else:
-                # Function expects state object
-                class State:
-                    def __init__(self, data):
-                        self.data = data
-                
-                if interface == ITransformFunction:
-                    def wrapper(self, data, context=None):
-                        return self.func(State(data))
-                    FunctionWrapper.transform = wrapper
-                else:  # IStateTestFunction  
-                    def wrapper(self, state):  # type: ignore
-                        return self.func(state)
-                    FunctionWrapper.test = wrapper
-                
-                # Common callable for both
-                def call_wrapper(self, data, context=None):
-                    # If data already has a 'data' attribute, it's a state-like object
-                    if hasattr(data, 'data'):
-                        return self.func(data)
-                    else:
-                        return self.func(State(data))
-                FunctionWrapper.__call__ = call_wrapper
-        
-        return FunctionWrapper(func)
+        # Resolve the function through the unified manager
+        wrapper = self._function_manager.resolve_function(func, interface)
+        return wrapper
 
     def _validate_completeness(self, config: FSMConfig) -> None:
         """Validate that the FSM configuration is complete and consistent.

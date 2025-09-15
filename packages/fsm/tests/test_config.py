@@ -403,7 +403,7 @@ class TestFSMBuilder:
         builder = FSMBuilder()
         builder.register_function("custom_validator", custom_validator)
         
-        assert "custom_validator" in builder._function_registry
+        assert builder._function_manager.has_function("custom_validator")
 
     def test_build_with_resources(self):
         """Test building FSM with resources."""

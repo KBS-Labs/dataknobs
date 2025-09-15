@@ -9,6 +9,15 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Tuple, TYPE_CHECKING
 from types import SimpleNamespace
 
+
+class StateNamespace:
+    """A namespace that supports both attribute and dict-style access.
+
+    This allows functions to use either state.data.field or state.data['field'].
+    """
+    def __init__(self, data):
+        self.data = data
+
 from dataknobs_fsm.core.arc import ArcDefinition
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.network import StateNetwork
@@ -171,7 +180,7 @@ class BaseExecutionEngine(ABC):
             transform_functions = [state_def.transform_function]
 
         # Create a mock state object for transforms that expect state.data
-        state_obj = SimpleNamespace(data=context.data)
+        state_obj = StateNamespace(context.data)
 
         return transform_functions, state_obj
 
@@ -189,7 +198,20 @@ class BaseExecutionEngine(ABC):
             state_name: Name of current state.
         """
         if result is not None:
-            context.data = result
+            # Handle ExecutionResult objects from unified function manager
+            from dataknobs_fsm.functions.base import ExecutionResult
+            if isinstance(result, ExecutionResult):
+                if result.success:
+                    context.data = result.data
+                else:
+                    # Transform failed - handle the error
+                    self.handle_transform_error(
+                        Exception(result.error or "Transform failed"),
+                        context,
+                        state_name
+                    )
+            else:
+                context.data = result
 
     def handle_transform_error(
         self,

@@ -425,9 +425,14 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 
                 if arc.transform in functions:
                     transform_func = functions[arc.transform]
-                    
-                    # Check if it's async
-                    if asyncio.iscoroutinefunction(transform_func):
+
+                    # Check if it's async - check both the function and its __call__ method
+                    is_async = asyncio.iscoroutinefunction(transform_func)
+                    if not is_async and callable(transform_func) and hasattr(transform_func, '__call__'):
+                        # Check if the __call__ method is async (for wrapped functions)
+                        is_async = asyncio.iscoroutinefunction(transform_func.__call__)
+
+                    if is_async:
                         context.data = await transform_func(context.data, context)
                     else:
                         # Run sync function in executor
@@ -512,21 +517,36 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 )
 
                 # Handle both async and sync transforms
-                if asyncio.iscoroutinefunction(transform_func):
+                # For InterfaceWrapper objects, use the transform method
+                actual_func = transform_func
+                if hasattr(transform_func, 'transform'):
+                    actual_func = transform_func.transform
+
+                # Check if it's async - check both the function and its __call__ method
+                is_async = asyncio.iscoroutinefunction(actual_func)
+                if not is_async and callable(actual_func) and hasattr(actual_func, '__call__'):
+                    # Check if the __call__ method is async (for wrapped functions)
+                    is_async = asyncio.iscoroutinefunction(actual_func.__call__)
+
+                # Also check for _is_async attribute (for wrapped functions)
+                if not is_async and hasattr(transform_func, '_is_async'):
+                    is_async = transform_func._is_async
+
+                if is_async:
                     # Try with state object first (for inline lambdas)
                     try:
-                        result = await transform_func(state_obj)
+                        result = await actual_func(state_obj)
                     except (TypeError, AttributeError):
                         # Fall back to standard signature
-                        result = await transform_func(context.data, func_context)
+                        result = await actual_func(context.data, func_context)
                 else:
                     # Run sync function in executor
                     loop = asyncio.get_event_loop()
                     try:
-                        result = await loop.run_in_executor(None, transform_func, state_obj)
+                        result = await loop.run_in_executor(None, actual_func, state_obj)
                     except (TypeError, AttributeError):
                         # Fall back to standard signature
-                        result = await loop.run_in_executor(None, transform_func, context.data, func_context)
+                        result = await loop.run_in_executor(None, actual_func, context.data, func_context)
 
                 # Process result using base class logic
                 self.process_transform_result(result, context, state_name)

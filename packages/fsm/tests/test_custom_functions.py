@@ -19,8 +19,10 @@ class TestCustomFunctionRegistration:
         builder = FSMBuilder()
         builder.register_function("my_custom_func", custom_func)
         
-        assert "my_custom_func" in builder._function_registry
-        assert builder._function_registry["my_custom_func"] == custom_func
+        assert builder._function_manager.has_function("my_custom_func")
+        wrapper = builder._function_manager.get_function("my_custom_func")
+        assert wrapper is not None
+        assert wrapper.func == custom_func
     
     def test_resolve_registered_function(self):
         """Test resolving a registered function."""
@@ -36,7 +38,17 @@ class TestCustomFunctionRegistration:
         )
         
         resolved = builder._resolve_function(func_ref)
-        assert resolved == custom_func
+        # The new function manager returns a wrapper
+        assert resolved is not None
+        # Check if it's a wrapper with the original function
+        if hasattr(resolved, 'func'):
+            assert resolved.func == custom_func
+        elif hasattr(resolved, 'wrapper') and hasattr(resolved.wrapper, 'func'):
+            # InterfaceWrapper case
+            assert resolved.wrapper.func == custom_func
+        else:
+            # Direct function (shouldn't happen with new system but handle it)
+            assert resolved == custom_func
     
     def test_resolve_unregistered_function_fails(self):
         """Test that resolving an unregistered function raises error."""

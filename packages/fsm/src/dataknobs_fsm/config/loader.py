@@ -10,7 +10,7 @@ This module provides functionality to load FSM configurations from various sourc
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Set, Union
 
 import yaml
 from dataknobs_config import Config as DataknobsConfig
@@ -36,6 +36,47 @@ class ConfigLoader:
         self.use_dataknobs_config = use_dataknobs_config
         self._env_prefix = "FSM_"
         self._included_configs: Dict[str, Dict[str, Any]] = {}
+        self._registered_functions: Set[str] = set()
+
+    def add_registered_function(self, name: str) -> None:
+        """Add a function name to the set of registered functions.
+
+        Args:
+            name: Function name that has been registered.
+        """
+        self._registered_functions.add(name)
+
+    def _convert_to_function_reference(self, value: Any) -> Dict[str, Any]:
+        """Convert a value to a function reference dictionary.
+
+        Args:
+            value: The value to convert (string, dict, etc.)
+
+        Returns:
+            Function reference dictionary with 'type' and appropriate fields.
+        """
+        if isinstance(value, dict):
+            # Already a function reference
+            return value
+        elif isinstance(value, str):
+            # Check if it's a registered function
+            if value in self._registered_functions:
+                return {
+                    'type': 'registered',
+                    'name': value
+                }
+            else:
+                # Treat as inline code
+                return {
+                    'type': 'inline',
+                    'code': value
+                }
+        else:
+            # Convert to string and treat as inline code
+            return {
+                'type': 'inline',
+                'code': str(value)
+            }
 
     def load_from_file(
         self,
@@ -424,16 +465,10 @@ class ConfigLoader:
                                 pre_test = arc['pre_test']
                                 if isinstance(pre_test, dict) and 'test' in pre_test:
                                     # Convert pre_test.test to condition
-                                    state_arc['condition'] = {
-                                        'type': 'inline',
-                                        'code': pre_test['test']
-                                    }
+                                    state_arc['condition'] = self._convert_to_function_reference(pre_test['test'])
                                 elif isinstance(pre_test, str):
-                                    # Direct function reference
-                                    state_arc['condition'] = {
-                                        'type': 'inline',
-                                        'code': pre_test
-                                    }
+                                    # Direct function reference or inline code
+                                    state_arc['condition'] = self._convert_to_function_reference(pre_test)
                             
                             # Copy optional fields
                             for field in ['name', 'condition', 'transform', 'priority', 'metadata']:
@@ -464,7 +499,7 @@ class ConfigLoader:
                                                 # Keep as is
                                                 state_arc[field] = condition
                                         elif isinstance(condition, str):
-                                            # Simple string condition - convert to inline
+                                            # Simple string condition
                                             if condition == 'success':
                                                 state_arc['condition'] = {
                                                     'type': 'inline',
@@ -476,11 +511,8 @@ class ConfigLoader:
                                                     'code': 'not data.get("valid", True)'
                                                 }
                                             else:
-                                                # Treat as inline code
-                                                state_arc['condition'] = {
-                                                    'type': 'inline',
-                                                    'code': condition
-                                                }
+                                                # Check if registered function or inline code
+                                                state_arc['condition'] = self._convert_to_function_reference(condition)
                                         else:
                                             state_arc[field] = condition
                                     else:
@@ -523,28 +555,12 @@ class ConfigLoader:
                             # Convert validate function to validators list
                             if 'validate' in functions:
                                 validate_func = functions['validate']
-                                if isinstance(validate_func, dict):
-                                    # Already a function reference dict
-                                    state['validators'] = [validate_func]
-                                else:
-                                    # String lambda/code
-                                    state['validators'] = [{
-                                        'type': 'inline',
-                                        'code': validate_func
-                                    }]
+                                state['validators'] = [self._convert_to_function_reference(validate_func)]
                             
                             # Convert transform function to transforms list (StateTransform)
                             if 'transform' in functions:
                                 transform_func = functions['transform']
-                                if isinstance(transform_func, dict):
-                                    # Already a function reference dict
-                                    state['transforms'] = [transform_func]
-                                else:
-                                    # String lambda/code
-                                    state['transforms'] = [{
-                                        'type': 'inline',
-                                        'code': transform_func
-                                    }]
+                                state['transforms'] = [self._convert_to_function_reference(transform_func)]
                             
                             # Remove the functions field as it's not in the schema
                             del state['functions']
@@ -552,19 +568,19 @@ class ConfigLoader:
                         # Also handle direct 'transform' field (singular) for convenience
                         if 'transform' in state and 'transforms' not in state:
                             transform = state['transform']
-                            if isinstance(transform, dict):
-                                state['transforms'] = [transform]
-                            elif isinstance(transform, list):
+                            if isinstance(transform, list):
                                 state['transforms'] = transform
+                            else:
+                                state['transforms'] = [self._convert_to_function_reference(transform)]
                             del state['transform']
 
                         # Similarly handle direct 'validator' field (singular)
                         if 'validator' in state and 'validators' not in state:
                             validator = state['validator']
-                            if isinstance(validator, dict):
-                                state['validators'] = [validator]
-                            elif isinstance(validator, list):
+                            if isinstance(validator, list):
                                 state['validators'] = validator
+                            else:
+                                state['validators'] = [self._convert_to_function_reference(validator)]
                             del state['validator']
 
         return config
