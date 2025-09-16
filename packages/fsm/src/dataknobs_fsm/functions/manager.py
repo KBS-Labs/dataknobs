@@ -449,17 +449,29 @@ class FunctionManager:
 
         # Compile and create function
         try:
-            # Create a namespace for execution
+            # Create a namespace for execution with registered functions
             namespace = {'asyncio': asyncio}
+
+            # Add all registered functions to namespace so inline code can call them
+            for name, wrapper in self._functions.items():
+                # Add the actual function, not the wrapper
+                namespace[name] = wrapper.func if hasattr(wrapper, 'func') else wrapper
 
             # First try to exec the code directly (might be a full function definition)
             try:
+                # Store the initial set of names
+                initial_names = set(namespace.keys())
+
                 exec(code, namespace)
-                # Find any defined function
+
+                # Find any newly defined function
                 func = None
-                for name, value in namespace.items():
-                    if callable(value) and name not in ['asyncio', '__builtins__']:
-                        func = value
+                new_names = set(namespace.keys()) - initial_names
+
+                # Look through newly defined names for a callable
+                for name in new_names:
+                    if callable(namespace[name]):
+                        func = namespace[name]
                         break
             except Exception:
                 func = None

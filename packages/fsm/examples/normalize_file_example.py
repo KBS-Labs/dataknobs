@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Example of using SimpleFSM to normalize text files."""
 
-import asyncio
 import yaml
 from pathlib import Path
-from dataknobs_fsm.api.simple import SimpleFSM, create_fsm
+from dataknobs_fsm.api.simple import SimpleFSM, process_file
 
 
 # FSM workflow for normalizing text lines from a file
@@ -50,8 +49,8 @@ arcs:
 WORKFLOW_CONFIG = yaml.safe_load(NORMALIZE_FILE_WORKFLOW_YAML)
 
 
-# Method 1: Using SimpleFSM directly with process_stream
-async def normalize_file_streaming(input_file: str, output_file: str):
+# Method 1: Using SimpleFSM directly with process_stream (synchronous)
+def normalize_file_streaming(input_file: str, output_file: str):
     """Normalize a text file using SimpleFSM with streaming."""
 
     # Initialize FSM with the workflow config dictionary
@@ -59,7 +58,7 @@ async def normalize_file_streaming(input_file: str, output_file: str):
 
     try:
         # Process the file with streaming for large files
-        results = await fsm.process_stream(
+        results = fsm.process_stream(
             source=input_file,
             sink=output_file,
             input_format='text',      # Read as text lines
@@ -76,20 +75,18 @@ async def normalize_file_streaming(input_file: str, output_file: str):
         print(f"  Throughput: {results['throughput']:.2f} items/second")
 
     finally:
-        # In async context, use await for cleanup
-        await fsm.aclose()
+        fsm.close()
 
 
-# Method 2: Using the synchronous convenience method
+# Method 2: Using the convenience function
 def normalize_file_simple(input_file: str, output_file: str):
-    """Normalize a text file using the synchronous convenience method."""
+    """Normalize a text file using the convenience function."""
 
-    fsm = SimpleFSM(WORKFLOW_CONFIG)
-
-    # Use the synchronous wrapper that handles async context automatically
-    results = fsm.run_process_stream(
-        source=input_file,
-        sink=output_file,
+    # Use the convenience function that handles FSM lifecycle
+    results = process_file(
+        fsm_config=WORKFLOW_CONFIG,
+        input_file=input_file,
+        output_file=output_file,
         input_format='text',       # Auto-detect or specify format
         text_field_name='text',    # Field name for text lines
         chunk_size=5000,           # Larger chunks for better performance
@@ -129,11 +126,7 @@ def normalize_lines(lines: list[str]) -> list[str]:
 
 # Method 4: Batch processing for medium-sized datasets
 def normalize_batch(input_lines: list[str]) -> list[str]:
-    """Process multiple lines in batches (synchronous version).
-
-    Note: This will raise an error if called from async context.
-    Use normalize_batch_async() in async contexts.
-    """
+    """Process multiple lines in batches."""
 
     fsm = SimpleFSM(WORKFLOW_CONFIG)
 
@@ -141,7 +134,7 @@ def normalize_batch(input_lines: list[str]) -> list[str]:
         # Convert lines to the expected format
         data = [{'text': line} for line in input_lines]
 
-        # Process in batches
+        # Process in batches - works in both sync and async contexts now
         results = fsm.process_batch(
             data=data,
             batch_size=100,
@@ -163,40 +156,13 @@ def normalize_batch(input_lines: list[str]) -> list[str]:
         fsm.close()
 
 
-# Async version for use in async contexts
-async def normalize_batch_async(input_lines: list[str]) -> list[str]:
-    """Process multiple lines in batches (async version)."""
-
-    fsm = SimpleFSM(WORKFLOW_CONFIG)
-
-    try:
-        # Convert lines to the expected format
-        data = [{'text': line} for line in input_lines]
-
-        # Process in batches using async version
-        results = await fsm.process_batch_async(
-            data=data,
-            batch_size=100,
-            max_workers=4
-        )
-
-        # Extract normalized text from results
-        normalized = []
-        for i, result in enumerate(results):
-            if result['success']:
-                normalized.append(result['data'].get('text', input_lines[i]))
-            else:
-                print(f"Failed item {i}: {result.get('error')}")
-                normalized.append(input_lines[i])
-
-        return normalized
-
-    finally:
-        await fsm.aclose()
-
-
 # Example usage
 if __name__ == "__main__":
+    import os
+
+    # Create tmp directory if it doesn't exist
+    os.makedirs("tmp", exist_ok=True)
+
     # Create a sample input file
     input_path = "tmp/sample_input.txt"
     output_path = "tmp/normalized_output.txt"
@@ -212,8 +178,8 @@ if __name__ == "__main__":
     print("=" * 60)
     print("Example 1: Streaming file processing")
     print("=" * 60)
-    # Run async streaming example
-    asyncio.run(normalize_file_streaming(input_path, output_path))
+    # Run streaming example
+    normalize_file_streaming(input_path, output_path)
 
     # Show results
     print("\nNormalized output:")

@@ -1,218 +1,182 @@
 """Simple API for common FSM operations.
 
-This module provides a simplified interface for common FSM use cases,
-abstracting away the complexity of configuration, resource management,
-and execution strategies.
+This module provides a simplified synchronous interface for common FSM use cases,
+wrapping the async-first AsyncSimpleFSM implementation.
 """
 
-from typing import Any, Callable, Dict, List, Union, AsyncIterator
-from pathlib import Path
 import asyncio
+import threading
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
 from dataknobs_data import Record
 
 from ..core.data_modes import DataHandlingMode
-from ..core.context_factory import ContextFactory
-from ..core.result_formatter import ResultFormatter
-from ..execution.engine import ExecutionEngine
-from ..execution.async_engine import AsyncExecutionEngine
-from ..config.loader import ConfigLoader
-from ..config.builder import FSMBuilder
-from ..resources.manager import ResourceManager
+from .async_simple import AsyncSimpleFSM
 
 
 class SimpleFSM:
-    """Simplified FSM interface for common operations.
-    
-    This class provides an easy-to-use API for processing data through
-    an FSM without requiring detailed knowledge of the underlying
-    components.
+    """Synchronous FSM interface wrapping AsyncSimpleFSM.
+
+    This class provides a purely synchronous API for FSM operations,
+    internally using AsyncSimpleFSM with a dedicated event loop.
     """
-    
+
     def __init__(
         self,
-        config: Union[str, Path, Dict[str, Any]],
+        config: str | Path | dict[str, Any],
         data_mode: DataHandlingMode = DataHandlingMode.COPY,
-        resources: Dict[str, Any] | None = None,
-        custom_functions: Dict[str, Callable] | None = None
+        resources: dict[str, Any] | None = None,
+        custom_functions: dict[str, Callable] | None = None
     ):
         """Initialize SimpleFSM from configuration.
-        
+
         Args:
             config: Path to config file or config dictionary
             data_mode: Default data mode for processing
             resources: Optional resource configurations
             custom_functions: Optional custom functions to register
         """
+        # Store data_mode for compatibility
         self.data_mode = data_mode
-        self._resources = resources or {}
-        self._custom_functions = custom_functions or {}
-        
-        # Create loader with knowledge of custom functions
-        loader = ConfigLoader()
 
-        # Tell the loader about registered function names
-        if self._custom_functions:
-            for name in self._custom_functions.keys():
-                loader.add_registered_function(name)
+        # Create the async FSM
+        self._async_fsm = AsyncSimpleFSM(
+            config=config,
+            data_mode=data_mode,
+            resources=resources,
+            custom_functions=custom_functions
+        )
 
-        # Load configuration
-        if isinstance(config, (str, Path)):
-            self._config = loader.load_from_file(Path(config))
-        else:
-            self._config = loader.load_from_dict(config)
-            
-        # Build FSM with custom functions
-        builder = FSMBuilder()
-        
-        # Register custom functions with the builder
-        for name, func in self._custom_functions.items():
-            builder.register_function(name, func)
-            
-        self._fsm = builder.build(self._config)
-        
-        # Initialize resource manager
-        self._resource_manager = ResourceManager()
-        self._setup_resources()
-        
-        # Create execution engines
+        # Expose internal attributes for compatibility
+        self._fsm = self._async_fsm._fsm
+        self._resource_manager = self._async_fsm._resource_manager
+        self._async_engine = self._async_fsm._async_engine
+
+        # Create synchronous engine for compatibility
+        from ..execution.engine import ExecutionEngine
         self._engine = ExecutionEngine(self._fsm)
-        self._async_engine = AsyncExecutionEngine(self._fsm)
-        
-    def _setup_resources(self) -> None:
-        """Set up resources from configuration."""
-        # Register resources from config
-        if hasattr(self._config, 'resources'):
-            for resource_config in self._config.resources:
-                try:
-                    resource = self._create_resource_provider(resource_config)
-                    self._resource_manager.register_provider(resource_config.name, resource)
-                except Exception:
-                    # Continue if resource creation fails - this is for simplified API
-                    pass
-                
-        # Register additional resources passed to constructor
-        for name, resource_config in self._resources.items():
-            try:
-                # Use ResourceManager factory method
-                self._resource_manager.register_from_dict(name, resource_config)
-            except Exception:
-                # Continue if resource creation fails
-                pass
-    
+
+        # Create a dedicated event loop for sync operations
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._loop_thread: threading.Thread | None = None
+        self._setup_event_loop()
+
+    def _setup_event_loop(self) -> None:
+        """Set up a dedicated event loop in a separate thread."""
+        self._loop = asyncio.new_event_loop()
+
+        def run_loop() -> None:
+            asyncio.set_event_loop(self._loop)
+            self._loop.run_forever()
+
+        self._loop_thread = threading.Thread(target=run_loop, daemon=True)
+        self._loop_thread.start()
+
+    def _run_async(self, coro: Any) -> Any:
+        """Run an async operation in the dedicated event loop.
+
+        Args:
+            coro: Coroutine to run
+
+        Returns:
+            The result of the coroutine
+        """
+        if not self._loop or not self._loop.is_running():
+            self._setup_event_loop()
+
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return future.result()
+
     def process(
         self,
-        data: Union[Dict[str, Any], Record],
+        data: dict[str, Any] | Record,
         initial_state: str | None = None,
         timeout: float | None = None
-    ) -> Dict[str, Any]:
-        """Process a single data record through the FSM.
-        
+    ) -> dict[str, Any]:
+        """Process a single record through the FSM synchronously.
+
         Args:
             data: Input data to process
             initial_state: Optional starting state (defaults to FSM start state)
             timeout: Optional timeout in seconds
-            
+
         Returns:
-            Dict containing:
-                - final_state: Name of the final state reached
-                - data: Processed data from final state
-                - path: List of states traversed
-                - success: Whether processing completed successfully
-                - error: Error message if processing failed
+            Dict containing the processed result with fields:
+            - final_state: Name of the final state reached
+            - data: The transformed data
+            - path: List of states traversed
+            - success: Whether processing succeeded
+            - error: Any error message (None if successful)
         """
-        # Create context using factory
-        from ..core.modes import ProcessingMode
-        context = ContextFactory.create_context(
-            fsm=self._fsm,  # type: ignore
-            data=data,
-            initial_state=initial_state,
-            data_mode=ProcessingMode.SINGLE,
-            resource_manager=self._resource_manager
-        )
-        
-        # Execute using the sync engine
-        try:
-            if timeout:
-                # Implement timeout using concurrent.futures
-                import concurrent.futures
-                
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    future = executor.submit(self._engine.execute, context)
-                    try:
-                        success, result = future.result(timeout=timeout)
-                    except concurrent.futures.TimeoutError as e:
-                        # Cancel the future and raise timeout error
-                        future.cancel()
-                        raise TimeoutError(f"FSM execution exceeded timeout of {timeout} seconds") from e
+        # Create the coroutine with the async process method
+        async def _process():
+            # Import here to avoid circular dependency
+            from ..core.context_factory import ContextFactory
+            from ..core.modes import ProcessingMode
+            from ..core.result_formatter import ResultFormatter
+
+            # Convert to Record if needed
+            if isinstance(data, dict):
+                from dataknobs_data import Record
+                record = Record(data)
             else:
-                success, result = self._engine.execute(context)
-                
-            # Format result using ResultFormatter
-            return ResultFormatter.format_single_result(
-                context=context,
-                success=success,
-                result=result
+                record = data
+
+            # Create context
+            context = ContextFactory.create_context(
+                fsm=self._fsm,
+                data=record,
+                initial_state=initial_state,
+                data_mode=ProcessingMode.SINGLE,
+                resource_manager=self._resource_manager
             )
-        except Exception as e:
-            return ResultFormatter.format_error_result(
-                context=context,
-                error=e
-            )
-    
-    async def process_async(
-        self,
-        data: Union[Dict[str, Any], Record],
-        initial_state: str | None = None,
-        timeout: float | None = None
-    ) -> Dict[str, Any]:
-        """Process a single data record through the FSM asynchronously.
-        
-        Args:
-            data: Input data to process
-            initial_state: Optional starting state (defaults to FSM start state)
-            timeout: Optional timeout in seconds
-            
-        Returns:
-            Dict containing processing results
-        """
-        # Create context using factory
-        from ..core.modes import ProcessingMode
-        context = ContextFactory.create_context(
-            fsm=self._fsm,  # type: ignore
-            data=data,
-            initial_state=initial_state,
-            data_mode=ProcessingMode.SINGLE,
-            resource_manager=self._resource_manager
-        )
-        
-        try:
-            if timeout:
-                success, result = await asyncio.wait_for(
-                    self._async_engine.execute(context),
-                    timeout=timeout
-                )
-            else:
+
+            try:
+                # Execute FSM asynchronously
                 success, result = await self._async_engine.execute(context)
-                
-            return ResultFormatter.format_async_result(
-                context=context,
-                success=success,
-                result=result
-            )
-        except Exception as e:
-            return ResultFormatter.format_error_result(
-                context=context,
-                error=e
-            )
-    
+
+                # Format result
+                return ResultFormatter.format_single_result(
+                    context=context,
+                    success=success,
+                    result=result
+                )
+            except Exception as e:
+                return ResultFormatter.format_error_result(
+                    context=context,
+                    error=e
+                )
+
+        if timeout:
+            # Use threading for timeout support
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(self._run_async, _process())
+                try:
+                    return future.result(timeout=timeout)
+                except concurrent.futures.TimeoutError:
+                    future.cancel()
+                    # Return an error result instead of raising
+                    return {
+                        'success': False,
+                        'error': f"FSM execution exceeded timeout of {timeout} seconds",
+                        'final_state': None,
+                        'data': data if isinstance(data, dict) else data.data,
+                        'path': []
+                    }
+        else:
+            return self._run_async(_process())
+
     def process_batch(
         self,
-        data: List[Union[Dict[str, Any], Record]],
+        data: list[dict[str, Any] | Record],
         batch_size: int = 10,
         max_workers: int = 4,
-        on_progress: Union[Callable, None] = None
-    ) -> List[Dict[str, Any]]:
-        """Process multiple records in parallel batches.
+        on_progress: Callable | None = None
+    ) -> list[dict[str, Any]]:
+        """Process multiple records in parallel batches synchronously.
 
         Args:
             data: List of input records to process
@@ -223,70 +187,22 @@ class SimpleFSM:
         Returns:
             List of results for each input record
         """
-        from ..execution.async_batch import AsyncBatchExecutor
-
-        batch_executor = AsyncBatchExecutor(
-            fsm=self._fsm,
-            parallelism=max_workers,
-            batch_size=batch_size,
-            progress_callback=on_progress
-        )
-
-        # Convert to Records
-        records = []
-        for item in data:
-            if isinstance(item, dict):
-                records.append(Record(item))
-            else:
-                records.append(item)
-
-        # Execute batch using async executor
-        async def _execute():
-            return await batch_executor.execute_batch(items=records)
-
-        try:
-            # Check if we're in an async context
-            asyncio.get_running_loop()
-            # We're in an async context, can't use asyncio.run
-            raise RuntimeError(
-                "process_batch cannot be called from async context. "
-                "Use 'await process_batch_async()' instead."
+        return self._run_async(
+            self._async_fsm.process_batch(
+                data=data,
+                batch_size=batch_size,
+                max_workers=max_workers,
+                on_progress=on_progress
             )
-        except RuntimeError as e:
-            if "cannot be called from async context" in str(e):
-                raise
-            # No running loop, safe to use asyncio.run
-            results = asyncio.run(_execute())
-        
-        # Format results
-        formatted_results = []
-        for result in results:
-            if result.success:
-                formatted_results.append({
-                    'final_state': result.metadata.get('final_state', 'unknown'),
-                    'data': result.result,
-                    'path': result.metadata.get('path', []),
-                    'success': True,
-                    'error': None
-                })
-            else:
-                formatted_results.append({
-                    'final_state': result.metadata.get('final_state', None),
-                    'data': result.result if result.result else {},
-                    'path': result.metadata.get('path', []),
-                    'success': False,
-                    'error': str(result.error) if result.error else str(result.result)
-                })
-
-        return formatted_results
+        )
 
     async def process_batch_async(
         self,
-        data: List[Union[Dict[str, Any], Record]],
+        data: list[dict[str, Any] | Record],
         batch_size: int = 10,
         max_workers: int = 4,
-        on_progress: Union[Callable, None] = None
-    ) -> List[Dict[str, Any]]:
+        on_progress: Callable | None = None
+    ) -> list[dict[str, Any]]:
         """Async version of process_batch for use in async contexts.
 
         Args:
@@ -298,65 +214,92 @@ class SimpleFSM:
         Returns:
             List of results for each input record
         """
-        from ..execution.async_batch import AsyncBatchExecutor
-
-        batch_executor = AsyncBatchExecutor(
-            fsm=self._fsm,
-            parallelism=max_workers,
+        return await self._async_fsm.process_batch(
+            data=data,
             batch_size=batch_size,
-            progress_callback=on_progress
+            max_workers=max_workers,
+            on_progress=on_progress
         )
 
-        # Convert to Records
-        records = []
-        for item in data:
-            if isinstance(item, dict):
-                records.append(Record(item))
-            else:
-                records.append(item)
-
-        # Execute batch
-        results = await batch_executor.execute_batch(items=records)
-
-        # Format results
-        formatted_results = []
-        for result in results:
-            if result.success:
-                formatted_results.append({
-                    'final_state': result.metadata.get('final_state', 'unknown'),
-                    'data': result.result,
-                    'path': result.metadata.get('path', []),
-                    'success': True,
-                    'error': None
-                })
-            else:
-                formatted_results.append({
-                    'final_state': result.metadata.get('final_state', None),
-                    'data': result.result if result.result else {},
-                    'path': result.metadata.get('path', []),
-                    'success': False,
-                    'error': str(result.error) if result.error else str(result.result)
-                })
-
-        return formatted_results
-
-    async def process_stream(
+    def process_async(
         self,
-        source: Union[str, AsyncIterator[Dict[str, Any]]],
+        data: dict[str, Any] | Record,
+        initial_state: str | None = None,
+        timeout: float | None = None
+    ):
+        """Async-compatible version of process for backwards compatibility.
+
+        This method returns a coroutine that can be awaited.
+        """
+        # Import here to avoid circular dependency
+        from ..core.context_factory import ContextFactory
+        from ..core.modes import ProcessingMode
+        from ..core.result_formatter import ResultFormatter
+
+        async def _process():
+            # Convert to Record if needed
+            if isinstance(data, dict):
+                from dataknobs_data import Record
+                record = Record(data)
+            else:
+                record = data
+
+            # Create context
+            context = ContextFactory.create_context(
+                fsm=self._fsm,
+                data=record,
+                initial_state=initial_state,
+                data_mode=ProcessingMode.SINGLE,
+                resource_manager=self._resource_manager
+            )
+
+            try:
+                # Execute FSM asynchronously
+                if timeout:
+                    success, result = await asyncio.wait_for(
+                        self._async_engine.execute(context),
+                        timeout=timeout
+                    )
+                else:
+                    success, result = await self._async_engine.execute(context)
+
+                # Format result
+                return ResultFormatter.format_single_result(
+                    context=context,
+                    success=success,
+                    result=result
+                )
+            except asyncio.TimeoutError:
+                # Return error result instead of raising
+                return ResultFormatter.format_error_result(
+                    context=context,
+                    error=TimeoutError(f"FSM execution exceeded timeout of {timeout} seconds")
+                )
+            except Exception as e:
+                return ResultFormatter.format_error_result(
+                    context=context,
+                    error=e
+                )
+
+        return _process()
+
+    def process_stream(
+        self,
+        source: str | Any,
         sink: str | None = None,
         chunk_size: int = 100,
-        on_progress: Union[Callable, None] = None,
+        on_progress: Callable | None = None,
         input_format: str = 'auto',
         text_field_name: str = 'text',
         csv_delimiter: str = ',',
         csv_has_header: bool = True,
         skip_empty_lines: bool = True,
         use_streaming: bool = False
-    ) -> Dict[str, Any]:
-        """Process a stream of data through the FSM.
+    ) -> dict[str, Any]:
+        """Process a stream of data through the FSM synchronously.
 
         Args:
-            source: Data source (file path or async iterator)
+            source: Data source file path or async iterator
             sink: Optional output destination
             chunk_size: Size of processing chunks
             on_progress: Optional progress callback
@@ -370,218 +313,90 @@ class SimpleFSM:
         Returns:
             Dict containing stream processing statistics
         """
-        from ..execution.async_stream import AsyncStreamExecutor
-        from ..streaming.core import StreamConfig as CoreStreamConfig
-
-        # Configure streaming
-        stream_config = CoreStreamConfig(
-            chunk_size=chunk_size,
-            parallelism=4,
-            memory_limit_mb=1024
-        )
-
-        # Create async stream executor
-        stream_executor = AsyncStreamExecutor(
-            fsm=self._fsm,
-            stream_config=stream_config,
-            progress_callback=on_progress
-        )
-
-        # Choose between streaming and regular mode
-        if use_streaming and isinstance(source, str):
-            # Use memory-efficient streaming for large files
-            from ..utils.streaming_file_utils import (
-                create_streaming_file_reader,
-                create_streaming_file_writer
-            )
-
-            stream_source = create_streaming_file_reader(
-                file_path=source,
-                config=stream_config,
-                input_format=input_format,
-                text_field_name=text_field_name,
-                csv_delimiter=csv_delimiter,
-                csv_has_header=csv_has_header,
-                skip_empty_lines=skip_empty_lines
-            )
-
-            # Handle sink for streaming mode
-            sink_func = None
-            cleanup_func = None
-            if sink:
-                sink_func, cleanup_func = await create_streaming_file_writer(
-                    file_path=sink,
-                    config=stream_config
-                )
-        else:
-            # Use regular mode (loads full chunks into memory)
-            from ..utils.file_utils import create_file_reader, create_file_writer
-
-            # Handle file source
-            if isinstance(source, str):
-                stream_source = create_file_reader(
-                    file_path=source,
+        # If source is a string (file path), use the async version directly
+        if isinstance(source, str):
+            return self._run_async(
+                self._async_fsm.process_stream(
+                    source=source,
+                    sink=sink,
+                    chunk_size=chunk_size,
+                    on_progress=on_progress,
                     input_format=input_format,
                     text_field_name=text_field_name,
                     csv_delimiter=csv_delimiter,
                     csv_has_header=csv_has_header,
-                    skip_empty_lines=skip_empty_lines
+                    skip_empty_lines=skip_empty_lines,
+                    use_streaming=use_streaming
                 )
-            else:
-                # Already an async iterator
-                stream_source = source
-
-            # Handle sink for regular mode
-            sink_func = None
-            cleanup_func = None
-            if sink:
-                sink_func, cleanup_func = create_file_writer(sink)
-
-        try:
-            # Execute stream using async executor
-            result = await stream_executor.execute_stream(
-                source=stream_source,
-                sink=sink_func,
-                chunk_size=chunk_size
             )
+        else:
+            # Source is an async iterator, need to handle it properly
+            async def _process():
+                return await self._async_fsm.process_stream(
+                    source=source,
+                    sink=sink,
+                    chunk_size=chunk_size,
+                    on_progress=on_progress,
+                    input_format=input_format,
+                    text_field_name=text_field_name,
+                    csv_delimiter=csv_delimiter,
+                    csv_has_header=csv_has_header,
+                    skip_empty_lines=skip_empty_lines,
+                    use_streaming=use_streaming
+                )
+            return self._run_async(_process())
 
-            return {
-                'total_processed': result.total_processed,
-                'successful': result.successful,
-                'failed': result.failed,
-                'duration': result.duration,
-                'throughput': result.throughput
-            }
-        finally:
-            # Clean up any resources (e.g., close files)
-            if cleanup_func:
-                if asyncio.iscoroutinefunction(cleanup_func):
-                    await cleanup_func()
-                else:
-                    cleanup_func()
-    
-    def validate(self, data: Union[Dict[str, Any], Record]) -> Dict[str, Any]:
-        """Validate data against FSM's start state schema.
-        
+    def validate(self, data: dict[str, Any] | Record) -> dict[str, Any]:
+        """Validate data against FSM's start state schema synchronously.
+
         Args:
             data: Data to validate
-            
+
         Returns:
             Dict containing validation results
         """
-        # Convert to Record if needed
-        if isinstance(data, dict):
-            record = Record(data)
-        else:
-            record = data
-            
-        # Get start state
-        start_state = self._fsm.get_start_state()
-        
-        # Validate against schema
-        if start_state.schema:
-            validation_result = start_state.schema.validate(record)
-            return {
-                'valid': validation_result.valid,
-                'errors': validation_result.errors if not validation_result.valid else []
-            }
-        else:
-            return {
-                'valid': True,
-                'errors': []
-            }
-    
-    def get_states(self) -> List[str]:
+        return self._run_async(self._async_fsm.validate(data))
+
+    def get_states(self) -> list[str]:
         """Get list of all state names in the FSM."""
-        states = []
-        # The FSM has networks, and each network has states
-        for network in self._fsm.networks.values():
-            for state in network.states.values():
-                states.append(state.name)
-        return states
-    
-    def get_resources(self) -> List[str]:
+        return self._async_fsm.get_states()
+
+    def get_resources(self) -> list[str]:
         """Get list of registered resource names."""
-        return list(self._resource_manager._resources.keys())
-    
+        return self._async_fsm.get_resources()
+
+    @property
+    def config(self) -> Any:
+        """Get the FSM configuration object."""
+        return self._async_fsm._config
+
     def close(self) -> None:
-        """Clean up resources and close connections."""
-        try:
-            # Check if we're in an existing event loop
-            loop = asyncio.get_running_loop()
-            # If we are, we can't use asyncio.run, so schedule the cleanup as a task
-            # Note: This means cleanup happens asynchronously
-            asyncio.create_task(self._resource_manager.cleanup())
-        except RuntimeError:
-            # No running loop, safe to use asyncio.run
-            asyncio.run(self._resource_manager.cleanup())
+        """Clean up resources and close connections synchronously."""
+        self._run_async(self._async_fsm.close())
+
+        # Shut down the event loop
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._loop.stop)
+            if self._loop_thread and self._loop_thread.is_alive():
+                self._loop_thread.join(timeout=1.0)
 
     async def aclose(self) -> None:
         """Async version of close for use in async contexts."""
-        await self._resource_manager.cleanup()
-
-    def run_process_stream(
-        self,
-        source: Union[str, AsyncIterator[Dict[str, Any]]],
-        sink: str | None = None,
-        **kwargs
-    ) -> Dict[str, Any]:
-        """Synchronous wrapper for process_stream that handles async context.
-
-        This method automatically detects if it's being called from an async
-        context and handles it appropriately.
-
-        Args:
-            source: Data source (file path or async iterator)
-            sink: Optional output destination
-            **kwargs: Additional arguments for process_stream
-
-        Returns:
-            Dict containing stream processing statistics
-        """
-        try:
-            # Check if we're in an async context
-            asyncio.get_running_loop()
-            # We're in an async context, return a coroutine
-            import warnings
-            warnings.warn(
-                "run_process_stream called from async context - use await process_stream() directly",
-                RuntimeWarning,
-                stacklevel=2
-            )
-            return asyncio.create_task(self.process_stream(source, sink, **kwargs))
-        except RuntimeError:
-            # No running loop, safe to use asyncio.run
-            async def _run():
-                try:
-                    return await self.process_stream(source, sink, **kwargs)
-                finally:
-                    await self.aclose()
-
-            result = asyncio.run(_run())
-            return result
-
-    def _create_resource_provider(self, resource_config):
-        """Create a resource provider from ResourceConfig."""
-        # Use the same logic as FSMBuilder
-        from ..config.builder import FSMBuilder
-        builder = FSMBuilder()
-        return builder._create_resource(resource_config)
-    
+        await self._async_fsm.close()
 
 
 def create_fsm(
-    config: Union[str, Path, Dict[str, Any]],
-    custom_functions: Dict[str, Callable] | None = None,
+    config: str | Path | dict[str, Any],
+    custom_functions: dict[str, Callable] | None = None,
     **kwargs
 ) -> SimpleFSM:
     """Factory function to create a SimpleFSM instance.
-    
+
     Args:
         config: Configuration file path or dictionary
         custom_functions: Optional custom functions to register
         **kwargs: Additional arguments passed to SimpleFSM
-        
+
     Returns:
         Configured SimpleFSM instance
     """
@@ -591,7 +406,7 @@ def create_fsm(
 # Convenience functions for common operations
 
 def process_file(
-    fsm_config: Union[str, Path, Dict[str, Any]],
+    fsm_config: str | Path | dict[str, Any],
     input_file: str,
     output_file: str | None = None,
     input_format: str = 'auto',
@@ -602,7 +417,7 @@ def process_file(
     csv_has_header: bool = True,
     skip_empty_lines: bool = True,
     use_streaming: bool = False
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Process a file through an FSM with automatic format detection.
 
     Args:
@@ -635,8 +450,12 @@ def process_file(
 
     try:
         if timeout:
-            result = asyncio.run(asyncio.wait_for(
-                fsm.process_stream(
+            # Use threading timeout
+            import concurrent.futures
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    fsm.process_stream,
                     source=input_file,
                     sink=output_file,
                     chunk_size=chunk_size,
@@ -646,11 +465,14 @@ def process_file(
                     csv_has_header=csv_has_header,
                     skip_empty_lines=skip_empty_lines,
                     use_streaming=use_streaming
-                ),
-                timeout=timeout
-            ))
+                )
+                try:
+                    result = future.result(timeout=timeout)
+                except concurrent.futures.TimeoutError as e:
+                    future.cancel()
+                    raise TimeoutError(f"File processing exceeded timeout of {timeout} seconds") from e
         else:
-            result = asyncio.run(fsm.process_stream(
+            result = fsm.process_stream(
                 source=input_file,
                 sink=output_file,
                 chunk_size=chunk_size,
@@ -660,27 +482,27 @@ def process_file(
                 csv_has_header=csv_has_header,
                 skip_empty_lines=skip_empty_lines,
                 use_streaming=use_streaming
-            ))
+            )
         return result
     finally:
         fsm.close()
 
 
 def validate_data(
-    fsm_config: Union[str, Path, Dict[str, Any]],
-    data: List[Dict[str, Any]]
-) -> List[Dict[str, Any]]:
+    fsm_config: str | Path | dict[str, Any],
+    data: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     """Validate multiple data records against FSM schema.
-    
+
     Args:
         fsm_config: FSM configuration
         data: List of data records to validate
-        
+
     Returns:
         List of validation results
     """
     fsm = create_fsm(fsm_config)
-    
+
     try:
         results = []
         for record in data:
@@ -691,35 +513,35 @@ def validate_data(
 
 
 def batch_process(
-    fsm_config: Union[str, Path, Dict[str, Any]],
-    data: List[Dict[str, Any]],
+    fsm_config: str | Path | dict[str, Any],
+    data: list[dict[str, Any]],
     batch_size: int = 10,
     max_workers: int = 4,
     timeout: float | None = None
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Process multiple records in parallel.
-    
+
     Args:
         fsm_config: FSM configuration
         data: List of input records
         batch_size: Batch size for processing
         max_workers: Maximum parallel workers
         timeout: Optional timeout in seconds for entire batch processing
-        
+
     Returns:
         List of processing results
     """
     fsm = create_fsm(fsm_config)
-    
+
     try:
         if timeout:
             # Use threading timeout for batch processing
             import concurrent.futures
-            
+
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(
                     fsm.process_batch,
-                    data=data,  # type: ignore
+                    data=data,
                     batch_size=batch_size,
                     max_workers=max_workers
                 )
@@ -730,7 +552,7 @@ def batch_process(
                     raise TimeoutError(f"Batch processing exceeded timeout of {timeout} seconds") from e
         else:
             return fsm.process_batch(
-                data=data,  # type: ignore
+                data=data,
                 batch_size=batch_size,
                 max_workers=max_workers
             )

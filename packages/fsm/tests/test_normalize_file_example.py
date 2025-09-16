@@ -16,7 +16,6 @@ from examples.normalize_file_example import (
     normalize_file_simple,
     normalize_lines,
     normalize_batch,
-    normalize_batch_async,
 )
 
 
@@ -75,8 +74,7 @@ class TestWorkflowConfiguration:
 class TestNormalizeFileStreaming:
     """Test the streaming file normalization function."""
 
-    @pytest.mark.asyncio
-    async def test_normalize_file_streaming_basic(self, tmp_path):
+    def test_normalize_file_streaming_basic(self, tmp_path):
         """Test basic streaming file normalization."""
         # Create input file
         input_file = tmp_path / "input.txt"
@@ -95,7 +93,7 @@ class TestNormalizeFileStreaming:
                 f.write(line + '\n')
 
         # Process the file - no mocking needed, lambda function handles it
-        await normalize_file_streaming(str(input_file), str(output_file))
+        normalize_file_streaming(str(input_file), str(output_file))
 
         # Check output
         assert output_file.exists()
@@ -120,8 +118,7 @@ class TestNormalizeFileStreaming:
             # Check that text was normalized (lowercase and stripped)
             assert result['text'] == expected[i]
 
-    @pytest.mark.asyncio
-    async def test_normalize_file_streaming_empty_file(self, tmp_path):
+    def test_normalize_file_streaming_empty_file(self, tmp_path):
         """Test streaming normalization with empty file."""
         input_file = tmp_path / "empty.txt"
         output_file = tmp_path / "output.jsonl"
@@ -129,7 +126,7 @@ class TestNormalizeFileStreaming:
         # Create empty file
         input_file.touch()
 
-        await normalize_file_streaming(str(input_file), str(output_file))
+        normalize_file_streaming(str(input_file), str(output_file))
 
         # Output should exist but be empty or have no content
         assert output_file.exists()
@@ -276,8 +273,7 @@ class TestNormalizeBatch:
 class TestIntegration:
     """Integration tests using multiple methods."""
 
-    @pytest.mark.asyncio
-    async def test_all_methods_produce_consistent_results(self, tmp_path):
+    def test_all_methods_produce_consistent_results(self, tmp_path):
         """Test that all methods produce consistent results."""
         test_lines = [
             "  CONSISTENT TEST  ",
@@ -293,20 +289,17 @@ class TestIntegration:
             for line in test_lines:
                 f.write(line + '\n')
 
-        await normalize_file_streaming(str(input_file), str(output_stream))
+        normalize_file_streaming(str(input_file), str(output_stream))
 
-        # Method 2: Simple - this returns a task in async context
+        # Method 2: Simple
         output_simple = tmp_path / "output_simple.jsonl"
-        result = normalize_file_simple(str(input_file), str(output_simple))
-        # If it's a coroutine/task, await it
-        if asyncio.iscoroutine(result) or asyncio.isfuture(result):
-            await result
+        normalize_file_simple(str(input_file), str(output_simple))
 
         # Method 3: Individual lines
         normalized_lines = normalize_lines(test_lines)
 
-        # Method 4: Batch - use async version in async context
-        normalized_batch = await normalize_batch_async(test_lines)
+        # Method 4: Batch
+        normalized_batch = normalize_batch(test_lines)
 
         # All methods should produce the same normalized text
         expected = [
@@ -349,8 +342,7 @@ class TestErrorHandling:
         assert normalized[0] == "good line"
         assert normalized[1] == "problematic line"
 
-    @pytest.mark.asyncio
-    async def test_streaming_with_malformed_input(self, tmp_path):
+    def test_streaming_with_malformed_input(self, tmp_path):
         """Test streaming with malformed input."""
         input_file = tmp_path / "malformed.txt"
         output_file = tmp_path / "output.jsonl"
@@ -362,7 +354,7 @@ class TestErrorHandling:
             f.write("normal line\n")
             f.write("\t\t\n")  # Tabs only
 
-        await normalize_file_streaming(str(input_file), str(output_file))
+        normalize_file_streaming(str(input_file), str(output_file))
 
         assert output_file.exists()
 
@@ -378,8 +370,7 @@ class TestErrorHandling:
         assert results[1]['text'] == "normal line"
         assert results[2]['text'] == ""  # Tabs only becomes empty string
 
-    @pytest.mark.asyncio
-    async def test_streaming_with_empty_lines_included(self, tmp_path):
+    def test_streaming_with_empty_lines_included(self, tmp_path):
         """Test streaming with skip_empty_lines=False."""
         input_file = tmp_path / "with_empty.txt"
         output_file = tmp_path / "output.jsonl"
@@ -396,7 +387,7 @@ class TestErrorHandling:
         fsm = SimpleFSM(WORKFLOW_CONFIG)
 
         try:
-            results = await fsm.process_stream(
+            results = fsm.process_stream(
                 source=str(input_file),
                 sink=str(output_file),
                 input_format='text',
@@ -409,7 +400,7 @@ class TestErrorHandling:
             assert results['total_processed'] == 4  # All 4 lines should be processed
 
         finally:
-            await fsm.aclose()
+            fsm.close()
 
         assert output_file.exists()
 

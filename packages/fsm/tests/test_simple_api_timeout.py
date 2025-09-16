@@ -79,36 +79,39 @@ class TestSimpleAPITimeout:
     
     def test_process_with_timeout_success(self, simple_fsm):
         """Test process() completes within timeout."""
-        # Mock the engine to return quickly
-        mock_engine = Mock(spec=ExecutionEngine)
-        mock_engine.execute.return_value = (True, {"result": "success"})
-        
-        with patch.object(simple_fsm, '_engine', mock_engine):
+        # Mock the async engine to return quickly
+        async def quick_execute(context):
+            return (True, {"result": "success"})
+
+        mock_engine = Mock()
+        mock_engine.execute = Mock(side_effect=quick_execute)
+
+        with patch.object(simple_fsm, '_async_engine', mock_engine):
             result = simple_fsm.process(
                 data={"input": "test"},
                 timeout=5.0  # 5 second timeout
             )
-            
+
             assert result["success"] is True
             assert "error" not in result or result["error"] is None
             mock_engine.execute.assert_called_once()
     
     def test_process_with_timeout_exceeded(self, simple_fsm):
         """Test process() handles timeout properly."""
-        # Mock the engine to take longer than timeout
-        def slow_execute(context):
-            time.sleep(2)  # Sleep for 2 seconds
+        # Mock the async engine to take longer than timeout
+        async def slow_execute(context):
+            await asyncio.sleep(2)  # Sleep for 2 seconds
             return (True, {"result": "success"})
-        
-        mock_engine = Mock(spec=ExecutionEngine)
-        mock_engine.execute.side_effect = slow_execute
-        
-        with patch.object(simple_fsm, '_engine', mock_engine):
+
+        mock_engine = Mock()
+        mock_engine.execute = Mock(side_effect=slow_execute)
+
+        with patch.object(simple_fsm, '_async_engine', mock_engine):
             result = simple_fsm.process(
                 data={"input": "test"},
                 timeout=0.5  # 0.5 second timeout (will be exceeded)
             )
-            
+
             # TimeoutError should be caught and returned as error result
             assert result["success"] is False
             assert "error" in result
@@ -185,10 +188,10 @@ class TestSimpleAPITimeout:
             with patch('dataknobs_fsm.api.simple.create_fsm') as mock_create:
                 mock_fsm = Mock()
                 
-                # Create a proper async function instead of using deprecated coroutine
-                async def mock_process_stream(**kwargs):
+                # SimpleFSM.process_stream returns a dict directly, not a coroutine
+                def mock_process_stream(**kwargs):
                     return {"processed": 2, "errors": 0}
-                
+
                 mock_fsm.process_stream = mock_process_stream
                 mock_fsm.close = Mock()
                 mock_create.return_value = mock_fsm
@@ -332,16 +335,16 @@ class TestSimpleAPITimeout:
     def test_timeout_error_messages(self, simple_fsm):
         """Test that timeout errors have appropriate messages."""
         # Test process() timeout message
-        def slow_execute(context):
-            time.sleep(1)
+        async def slow_execute(context):
+            await asyncio.sleep(1)
             return (True, {})
-        
-        mock_engine = Mock(spec=ExecutionEngine)
-        mock_engine.execute.side_effect = slow_execute
-        
-        with patch.object(simple_fsm, '_engine', mock_engine):
+
+        mock_engine = Mock()
+        mock_engine.execute = Mock(side_effect=slow_execute)
+
+        with patch.object(simple_fsm, '_async_engine', mock_engine):
             result = simple_fsm.process({"test": "data"}, timeout=0.1)
-            
+
             # Check error message format
             assert result["success"] is False
             error_msg = result["error"]
@@ -367,33 +370,38 @@ class TestSimpleAPITimeout:
         
         resource_manager.cleanup = tracked_cleanup
         
+        # Patch both resource managers (SimpleFSM keeps a reference, but async_fsm has the real one)
         with patch.object(simple_fsm, '_resource_manager', resource_manager):
-            # Mock slow engine
-            def slow_execute(context):
-                time.sleep(1)
-                return (True, {})
-            
-            mock_engine = Mock(spec=ExecutionEngine)
-            mock_engine.execute.side_effect = slow_execute
-            
-            with patch.object(simple_fsm, '_engine', mock_engine):
-                # Process with timeout (will fail but not raise)
-                result = simple_fsm.process({"test": "data"}, timeout=0.1)
-                assert result["success"] is False  # Verify timeout occurred
-                
-                # Ensure close() cleans up resources even after timeout
-                simple_fsm.close()
-                assert len(cleanup_called) == 1  # Verify cleanup was called
+            with patch.object(simple_fsm._async_fsm, '_resource_manager', resource_manager):
+                # Mock slow engine
+                async def slow_execute(context):
+                    await asyncio.sleep(1)
+                    return (True, {})
+
+                mock_engine = Mock()
+                mock_engine.execute = Mock(side_effect=slow_execute)
+
+                with patch.object(simple_fsm, '_async_engine', mock_engine):
+                    # Process with timeout (will fail but not raise)
+                    result = simple_fsm.process({"test": "data"}, timeout=0.1)
+                    assert result["success"] is False  # Verify timeout occurred
+
+                    # Ensure close() cleans up resources even after timeout
+                    simple_fsm.close()
+                    assert len(cleanup_called) == 1  # Verify cleanup was called
     
     def test_process_without_timeout(self, simple_fsm):
         """Test that process() works without timeout parameter."""
-        mock_engine = Mock(spec=ExecutionEngine)
-        mock_engine.execute.return_value = (True, {"result": "success"})
-        
-        with patch.object(simple_fsm, '_engine', mock_engine):
+        async def quick_execute(context):
+            return (True, {"result": "success"})
+
+        mock_engine = Mock()
+        mock_engine.execute = Mock(side_effect=quick_execute)
+
+        with patch.object(simple_fsm, '_async_engine', mock_engine):
             # Should work fine without timeout
             result = simple_fsm.process({"input": "test"})
-            
+
             assert result["success"] is True
             mock_engine.execute.assert_called_once()
             # Should not use ThreadPoolExecutor when no timeout

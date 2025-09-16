@@ -145,7 +145,7 @@ class SimpleFSM:
 - [ ] Create async examples using AsyncSimpleFSM
 - [ ] Update existing examples to use SimpleFSM correctly
 - [ ] Remove complex context detection from examples
-- [ ] Add migration guide for existing users
+- [ ] Update mkdocs documentation of examples and quickstart guides to use SimpleFSM correctly
 - [ ] Update API documentation
 
 **Files to Update:**

@@ -8,6 +8,7 @@ import tempfile
 import json
 
 from dataknobs_fsm.api.simple import SimpleFSM, create_fsm, process_file, validate_data, batch_process
+from dataknobs_fsm.api.async_simple import AsyncSimpleFSM
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_data import Record
 
@@ -110,8 +111,8 @@ class TestSimpleFSMInitialization:
         
         # Test basic properties
         assert fsm.data_mode == DataHandlingMode.COPY
-        assert fsm._config.name == simple_fsm_config['name']
-        assert fsm._config.main_network == simple_fsm_config['main_network']
+        assert fsm.config.name == simple_fsm_config['name']
+        assert fsm.config.main_network == simple_fsm_config['main_network']
         assert fsm._fsm is not None
         assert fsm._engine is not None
         assert fsm._resource_manager is not None
@@ -253,33 +254,64 @@ class TestSimpleFSMBatchProcessing:
 
 class TestSimpleFSMStreamProcessing:
     """Test SimpleFSM stream processing capabilities."""
-    
-    @pytest.mark.asyncio
-    async def test_process_stream_from_iterator(self, processing_fsm_config):
-        """Test stream processing from async iterator."""
+
+    def test_process_stream_from_file(self, processing_fsm_config, tmp_path):
+        """Test stream processing from file."""
         fsm = SimpleFSM(processing_fsm_config)
-        
-        # Create async iterator
-        async def data_generator():
+
+        # Create a test file with data
+        test_file = tmp_path / "test_data.jsonl"
+        with open(test_file, 'w') as f:
             for i in range(3):
-                yield {'value': i}
-        
-        result = await fsm.process_stream(
-            source=data_generator(),
+                json.dump({'value': i}, f)
+                f.write('\n')
+
+        result = fsm.process_stream(
+            source=str(test_file),
             chunk_size=2
         )
-        
+
         # Verify stream processing results
         assert 'total_processed' in result
         assert 'successful' in result
         assert 'failed' in result
         assert 'duration' in result
         assert 'throughput' in result
-        
+
         # Basic sanity checks
         assert isinstance(result['total_processed'], int)
         assert isinstance(result['successful'], int)
         assert isinstance(result['failed'], int)
+
+    @pytest.mark.asyncio
+    async def test_process_stream_from_iterator(self, processing_fsm_config):
+        """Test stream processing from async iterator using AsyncSimpleFSM."""
+        fsm = AsyncSimpleFSM(processing_fsm_config)
+
+        # Create async iterator
+        async def data_generator():
+            for i in range(3):
+                yield {'value': i}
+
+        result = await fsm.process_stream(
+            source=data_generator(),
+            chunk_size=2
+        )
+
+        # Verify stream processing results
+        assert 'total_processed' in result
+        assert 'successful' in result
+        assert 'failed' in result
+        assert 'duration' in result
+        assert 'throughput' in result
+
+        # Basic sanity checks
+        assert isinstance(result['total_processed'], int)
+        assert isinstance(result['successful'], int)
+        assert isinstance(result['failed'], int)
+
+        # Clean up
+        await fsm.close()
 
 
 class TestSimpleFSMUtilityMethods:

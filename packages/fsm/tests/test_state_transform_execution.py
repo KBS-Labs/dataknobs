@@ -62,20 +62,11 @@ class TestStateTransformExecution:
             }]
         }
         
-        # Monkey patch the function resolution to include our counting function
-        from dataknobs_fsm.config.builder import FSMBuilder
-        original_resolve_function = FSMBuilder._resolve_function
-        
-        def patched_resolve_function(self, func_ref, expected_type=None):
-            if func_ref.type == "inline" and func_ref.code == "counting_transform":
-                return counting_transform
-            return original_resolve_function(self, func_ref, expected_type)
-        
-        FSMBuilder._resolve_function = patched_resolve_function
-        
+        # Create FSM with the custom function
         try:
-            # Create FSM and execute
-            fsm = SimpleFSM(config)
+            fsm = SimpleFSM(config, custom_functions={
+                'counting_transform': counting_transform
+            })
             result = fsm.process({'value': 42})
             
             # Verify the transform was called exactly once
@@ -91,9 +82,8 @@ class TestStateTransformExecution:
             assert result['final_state'] == 'output'
             assert result['path'] == ['input', 'transform_state', 'output']
             
-        finally:
-            # Restore original function
-            FSMBuilder._resolve_function = original_resolve_function
+        except Exception as e:
+            raise e
 
     def test_state_transform_with_chained_transformations(self):
         """Test that StateTransforms work correctly in a chain of transformations."""
@@ -143,22 +133,12 @@ class TestStateTransformExecution:
             }]
         }
         
-        # Monkey patch the function resolution
-        from dataknobs_fsm.config.builder import FSMBuilder
-        original_resolve_function = FSMBuilder._resolve_function
-        
-        def patched_resolve_function(self, func_ref, expected_type=None):
-            if func_ref.type == "inline":
-                if func_ref.code == "first_transform":
-                    return first_transform
-                elif func_ref.code == "second_transform":
-                    return second_transform
-            return original_resolve_function(self, func_ref, expected_type)
-        
-        FSMBuilder._resolve_function = patched_resolve_function
-        
+        # Create FSM with the custom functions
         try:
-            fsm = SimpleFSM(config)
+            fsm = SimpleFSM(config, custom_functions={
+                'first_transform': first_transform,
+                'second_transform': second_transform
+            })
             result = fsm.process({'value': 5})
             
             # Verify each transform was called exactly once with correct data
@@ -174,9 +154,9 @@ class TestStateTransformExecution:
             assert result['success'] is True
             assert result['data'] == {'step2': 45}  # (5 + 10) * 3 = 45
             assert result['path'] == ['start', 'first_transform_state', 'second_transform_state', 'end']
-            
-        finally:
-            FSMBuilder._resolve_function = original_resolve_function
+
+        except Exception as e:
+            raise e
 
     def test_state_transform_vs_arc_transform_separation(self):
         """Test that StateTransforms and ArcTransforms are properly separated."""
@@ -227,32 +207,12 @@ class TestStateTransformExecution:
             }]
         }
         
-        # Monkey patch the function resolution
-        from dataknobs_fsm.config.builder import FSMBuilder
-        original_resolve_function = FSMBuilder._resolve_function
-        
-        def patched_resolve_function(self, func_ref, expected_type=None):
-            if func_ref.type == "inline":
-                if func_ref.code == "state_transform":
-                    # Call original to handle registration, then replace the function
-                    result = original_resolve_function(self, func_ref, expected_type)
-                    if hasattr(result, 'name') and result.name in self._function_registry:
-                        self._function_registry[result.name] = state_transform
-                        state_transform.name = result.name
-                    return state_transform
-                elif func_ref.code == "arc_transform":
-                    # Call original to handle registration, then replace the function
-                    result = original_resolve_function(self, func_ref, expected_type)
-                    if hasattr(result, 'name') and result.name in self._function_registry:
-                        self._function_registry[result.name] = arc_transform
-                        arc_transform.name = result.name
-                    return arc_transform
-            return original_resolve_function(self, func_ref, expected_type)
-        
-        FSMBuilder._resolve_function = patched_resolve_function
-        
+        # Create FSM with the custom functions
         try:
-            fsm = SimpleFSM(config)
+            fsm = SimpleFSM(config, custom_functions={
+                'state_transform': state_transform,
+                'arc_transform': arc_transform
+            })
             result = fsm.process({'value': 7})
             
             # Verify execution order and data flow
@@ -270,9 +230,9 @@ class TestStateTransformExecution:
             # changes the data, the arc transform gets the state-transformed data.
             
             assert result['success'] is True
-            
-        finally:
-            FSMBuilder._resolve_function = original_resolve_function
+
+        except Exception as e:
+            raise e
 
     def test_state_transform_not_executed_on_state_validation(self):
         """Test that StateTransforms are not executed during state validation phase."""
@@ -323,22 +283,12 @@ class TestStateTransformExecution:
             }]
         }
         
-        # Monkey patch the function resolution
-        from dataknobs_fsm.config.builder import FSMBuilder
-        original_resolve_function = FSMBuilder._resolve_function
-        
-        def patched_resolve_function(self, func_ref, expected_type=None):
-            if func_ref.type == "inline":
-                if func_ref.code == "test_validator":
-                    return test_validator
-                elif func_ref.code == "test_transform":
-                    return test_transform
-            return original_resolve_function(self, func_ref, expected_type)
-        
-        FSMBuilder._resolve_function = patched_resolve_function
-        
+        # Register the functions with SimpleFSM
         try:
-            fsm = SimpleFSM(config)
+            fsm = SimpleFSM(config, custom_functions={
+                'test_validator': test_validator,
+                'test_transform': test_transform
+            })
             result = fsm.process({'test': 'data'})
             
             # Validator should be called during state evaluation
@@ -349,6 +299,6 @@ class TestStateTransformExecution:
             
             assert result['success'] is True
             assert result['data'] == {'transformed': True}
-            
-        finally:
-            FSMBuilder._resolve_function = original_resolve_function
+
+        except Exception as e:
+            raise e

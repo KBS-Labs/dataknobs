@@ -67,48 +67,34 @@ class TestDuplicateStateTransformFix:
             }]
         }
         
-        # Monkey patch function resolution
-        from dataknobs_fsm.config.builder import FSMBuilder
-        original_resolve_function = FSMBuilder._resolve_function
-        
-        def patched_resolve_function(self, func_ref, expected_type=None):
-            if func_ref.type == "inline" and func_ref.code == "tracking_transform":
-                return tracking_transform
-            return original_resolve_function(self, func_ref, expected_type)
-        
-        FSMBuilder._resolve_function = patched_resolve_function
-        
-        try:
-            # Execute the FSM
-            fsm = SimpleFSM(config)
-            result = fsm.process({'value': 5})
-            
-            # CRITICAL ASSERTION: Transform should be called exactly once
-            assert len(transform_calls) == 1, (
-                f"StateTransform should be called exactly once, but was called "
-                f"{len(transform_calls)} times with data: {transform_calls}"
-            )
-            
-            # Verify the single call received the correct input
-            assert transform_calls[0] == {'value': 5}, (
-                f"Transform should receive original input {{'value': 5}}, "
-                f"but received {transform_calls[0]}"
-            )
-            
-            # Verify the final result is correct (5 * 2 = 10, not 1 * 2 = 2)
-            assert result['success'] is True
-            assert result['data'] == {'result': 10}, (
-                f"Final result should be {{'result': 10}} (5 * 2), "
-                f"but got {result['data']}"
-            )
-            
-            # Verify full execution path
-            assert result['final_state'] == 'output'
-            assert result['path'] == ['input', 'multiply', 'output']
-            
-        finally:
-            # Restore original function
-            FSMBuilder._resolve_function = original_resolve_function
+        # Execute the FSM with custom function
+        fsm = SimpleFSM(config, custom_functions={
+            'tracking_transform': tracking_transform
+        })
+        result = fsm.process({'value': 5})
+
+        # CRITICAL ASSERTION: Transform should be called exactly once
+        assert len(transform_calls) == 1, (
+            f"StateTransform should be called exactly once, but was called "
+            f"{len(transform_calls)} times with data: {transform_calls}"
+        )
+
+        # Verify the single call received the correct input
+        assert transform_calls[0] == {'value': 5}, (
+            f"Transform should receive original input {{'value': 5}}, "
+            f"but received {transform_calls[0]}"
+        )
+
+        # Verify the final result is correct (5 * 2 = 10, not 1 * 2 = 2)
+        assert result['success'] is True
+        assert result['data'] == {'result': 10}, (
+            f"Final result should be {{'result': 10}} (5 * 2), "
+            f"but got {result['data']}"
+        )
+
+        # Verify full execution path
+        assert result['final_state'] == 'output'
+        assert result['path'] == ['input', 'multiply', 'output']
 
     def test_state_transform_with_various_input_values(self):
         """
@@ -152,56 +138,43 @@ class TestDuplicateStateTransformFix:
             }]
         }
         
-        # Monkey patch function resolution
-        from dataknobs_fsm.config.builder import FSMBuilder
-        original_resolve_function = FSMBuilder._resolve_function
-        
-        def patched_resolve_function(self, func_ref, expected_type=None):
-            if func_ref.type == "inline" and func_ref.code == "value_doubler":
-                return value_doubler
-            return original_resolve_function(self, func_ref, expected_type)
-        
-        FSMBuilder._resolve_function = patched_resolve_function
-        
-        try:
-            fsm = SimpleFSM(config)
-            
-            # Test with different input values
-            test_cases = [
-                ({'number': 1}, {'doubled': 2}),
-                ({'number': 10}, {'doubled': 20}),
-                ({'number': 0}, {'doubled': 0}),
-                ({'number': -5}, {'doubled': -10}),
-                ({'other': 'data'}, {'doubled': 0}),  # Missing 'number' key
-            ]
-            
-            for i, (input_data, expected_output) in enumerate(test_cases):
-                # Reset call tracking for each test
-                transform_calls.clear()
-                
-                result = fsm.process(input_data)
-                
-                # Verify single call for each execution
-                assert len(transform_calls) == 1, (
-                    f"Test case {i}: Transform should be called once, "
-                    f"got {len(transform_calls)} calls"
-                )
-                
-                # Verify correct input received
-                assert transform_calls[0] == input_data, (
-                    f"Test case {i}: Transform should receive {input_data}, "
-                    f"got {transform_calls[0]}"
-                )
-                
-                # Verify correct output
-                assert result['success'] is True
-                assert result['data'] == expected_output, (
-                    f"Test case {i}: Expected {expected_output}, "
-                    f"got {result['data']}"
-                )
-                
-        finally:
-            FSMBuilder._resolve_function = original_resolve_function
+        # Create FSM with custom function
+        fsm = SimpleFSM(config, custom_functions={
+            'value_doubler': value_doubler
+        })
+        # Test with different input values
+        test_cases = [
+            ({'number': 1}, {'doubled': 2}),
+            ({'number': 10}, {'doubled': 20}),
+            ({'number': 0}, {'doubled': 0}),
+            ({'number': -5}, {'doubled': -10}),
+            ({'other': 'data'}, {'doubled': 0}),  # Missing 'number' key
+        ]
+
+        for i, (input_data, expected_output) in enumerate(test_cases):
+            # Reset call tracking for each test
+            transform_calls.clear()
+
+            result = fsm.process(input_data)
+
+            # Verify single call for each execution
+            assert len(transform_calls) == 1, (
+                f"Test case {i}: Transform should be called once, "
+                f"got {len(transform_calls)} calls"
+            )
+
+            # Verify correct input received
+            assert transform_calls[0] == input_data, (
+                f"Test case {i}: Transform should receive {input_data}, "
+                f"got {transform_calls[0]}"
+            )
+
+            # Verify correct output
+            assert result['success'] is True
+            assert result['data'] == expected_output, (
+                f"Test case {i}: Expected {expected_output}, "
+                f"got {result['data']}"
+            )
 
     def test_multiple_states_with_transforms(self):
         """
@@ -261,49 +234,34 @@ class TestDuplicateStateTransformFix:
             }]
         }
         
-        # Monkey patch function resolution
-        from dataknobs_fsm.config.builder import FSMBuilder
-        original_resolve_function = FSMBuilder._resolve_function
-        
-        def patched_resolve_function(self, func_ref, expected_type=None):
-            if func_ref.type == "inline":
-                if func_ref.code == "first_transform":
-                    return first_transform
-                elif func_ref.code == "second_transform":
-                    return second_transform
-                elif func_ref.code == "third_transform":
-                    return third_transform
-            return original_resolve_function(self, func_ref, expected_type)
-        
-        FSMBuilder._resolve_function = patched_resolve_function
-        
-        try:
-            fsm = SimpleFSM(config)
-            result = fsm.process({'value': 10})
-            
-            # Verify exactly 3 transform calls (one per transform state)
-            assert len(all_transform_calls) == 3, (
-                f"Should have exactly 3 transform calls, got {len(all_transform_calls)}: "
-                f"{all_transform_calls}"
-            )
-            
-            # Verify each transform was called with correct data
-            expected_calls = [
-                ('first', {'value': 10}),
-                ('second', {'step1': 110}),  # 10 + 100
-                ('third', {'step2': 330})    # 110 * 3
-            ]
-            
-            assert all_transform_calls == expected_calls, (
-                f"Transform calls don't match expected sequence.\n"
-                f"Expected: {expected_calls}\n"
-                f"Actual: {all_transform_calls}"
-            )
-            
-            # Verify final result
-            assert result['success'] is True
-            assert result['data'] == {'final': 280}  # (10 + 100) * 3 - 50 = 280
-            assert result['path'] == ['start', 'transform1', 'transform2', 'transform3', 'end']
-            
-        finally:
-            FSMBuilder._resolve_function = original_resolve_function
+        # Create FSM with custom functions
+        fsm = SimpleFSM(config, custom_functions={
+            'first_transform': first_transform,
+            'second_transform': second_transform,
+            'third_transform': third_transform
+        })
+        result = fsm.process({'value': 10})
+
+        # Verify exactly 3 transform calls (one per transform state)
+        assert len(all_transform_calls) == 3, (
+            f"Should have exactly 3 transform calls, got {len(all_transform_calls)}: "
+            f"{all_transform_calls}"
+        )
+
+        # Verify each transform was called with correct data
+        expected_calls = [
+            ('first', {'value': 10}),
+            ('second', {'step1': 110}),  # 10 + 100
+            ('third', {'step2': 330})    # 110 * 3
+        ]
+
+        assert all_transform_calls == expected_calls, (
+            f"Transform calls don't match expected sequence.\n"
+            f"Expected: {expected_calls}\n"
+            f"Actual: {all_transform_calls}"
+        )
+
+        # Verify final result
+        assert result['success'] is True
+        assert result['data'] == {'final': 280}  # (10 + 100) * 3 - 50 = 280
+        assert result['path'] == ['start', 'transform1', 'transform2', 'transform3', 'end']
