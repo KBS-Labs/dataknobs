@@ -30,10 +30,10 @@ from dataknobs_fsm.core.data_modes import DataHandlingMode
 config = {
     "name": "simple_processor",
     "states": [
-        {"name": "start", "initial": True},
+        {"name": "start", "is_start": True},
         {"name": "validate"},
         {"name": "process"},
-        {"name": "complete", "terminal": True}
+        {"name": "complete", "is_end": True}
     ],
     "arcs": [
         {
@@ -73,7 +73,7 @@ fsm = SimpleFSM(config, data_mode=DataHandlingMode.COPY)
 # Process data through the FSM
 result = fsm.process({"value": 10})
 print(result)
-# Output: {'final_state': 'complete', 'data': {'value': 10, 'validated': True, 'result': 20}, 'success': True, 'path': ['start', 'validate', 'process', 'complete']}
+# Output: {'final_state': 'complete', 'data': {'value': 10, 'validated': True, 'result': 20}, 'path': ['start', 'validate', 'process', 'complete'], 'success': True, 'error': None, 'metadata': {'arc_start_validate_usage': 1, 'arc_validate_process_usage': 1, 'arc_process_complete_usage': 1}}
 ```
 
 ## Using Configuration Files
@@ -87,7 +87,7 @@ description: A simple data processing workflow
 
 states:
   - name: start
-    initial: true
+    is_start: true
     
   - name: fetch_data
     metadata:
@@ -98,7 +98,7 @@ states:
   - name: save
     
   - name: complete
-    terminal: true
+    is_end: true
 
 arcs:
   - from: start
@@ -106,14 +106,14 @@ arcs:
     
   - from: fetch_data
     to: transform
-    function:
+    transform:
       type: python
       module: myapp.transformers
       name: clean_data
       
   - from: transform
     to: save
-    function:
+    transform:
       type: lambda
       code: |
         lambda data: {

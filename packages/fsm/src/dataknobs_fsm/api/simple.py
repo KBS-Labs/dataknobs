@@ -213,25 +213,25 @@ class SimpleFSM:
         on_progress: Union[Callable, None] = None
     ) -> List[Dict[str, Any]]:
         """Process multiple records in parallel batches.
-        
+
         Args:
             data: List of input records to process
             batch_size: Number of records per batch
             max_workers: Maximum parallel workers
             on_progress: Optional callback for progress updates
-            
+
         Returns:
             List of results for each input record
         """
         from ..execution.async_batch import AsyncBatchExecutor
-        
+
         batch_executor = AsyncBatchExecutor(
             fsm=self._fsm,
             parallelism=max_workers,
             batch_size=batch_size,
             progress_callback=on_progress
         )
-        
+
         # Convert to Records
         records = []
         for item in data:
@@ -239,11 +239,24 @@ class SimpleFSM:
                 records.append(Record(item))
             else:
                 records.append(item)
-                
+
         # Execute batch using async executor
-        results = asyncio.run(batch_executor.execute_batch(
-            items=records
-        ))
+        async def _execute():
+            return await batch_executor.execute_batch(items=records)
+
+        try:
+            # Check if we're in an async context
+            asyncio.get_running_loop()
+            # We're in an async context, can't use asyncio.run
+            raise RuntimeError(
+                "process_batch cannot be called from async context. "
+                "Use 'await process_batch_async()' instead."
+            )
+        except RuntimeError as e:
+            if "cannot be called from async context" in str(e):
+                raise
+            # No running loop, safe to use asyncio.run
+            results = asyncio.run(_execute())
         
         # Format results
         formatted_results = []
@@ -264,83 +277,188 @@ class SimpleFSM:
                     'success': False,
                     'error': str(result.error) if result.error else str(result.result)
                 })
-                
+
         return formatted_results
-    
+
+    async def process_batch_async(
+        self,
+        data: List[Union[Dict[str, Any], Record]],
+        batch_size: int = 10,
+        max_workers: int = 4,
+        on_progress: Union[Callable, None] = None
+    ) -> List[Dict[str, Any]]:
+        """Async version of process_batch for use in async contexts.
+
+        Args:
+            data: List of input records to process
+            batch_size: Number of records per batch
+            max_workers: Maximum parallel workers
+            on_progress: Optional callback for progress updates
+
+        Returns:
+            List of results for each input record
+        """
+        from ..execution.async_batch import AsyncBatchExecutor
+
+        batch_executor = AsyncBatchExecutor(
+            fsm=self._fsm,
+            parallelism=max_workers,
+            batch_size=batch_size,
+            progress_callback=on_progress
+        )
+
+        # Convert to Records
+        records = []
+        for item in data:
+            if isinstance(item, dict):
+                records.append(Record(item))
+            else:
+                records.append(item)
+
+        # Execute batch
+        results = await batch_executor.execute_batch(items=records)
+
+        # Format results
+        formatted_results = []
+        for result in results:
+            if result.success:
+                formatted_results.append({
+                    'final_state': result.metadata.get('final_state', 'unknown'),
+                    'data': result.result,
+                    'path': result.metadata.get('path', []),
+                    'success': True,
+                    'error': None
+                })
+            else:
+                formatted_results.append({
+                    'final_state': result.metadata.get('final_state', None),
+                    'data': result.result if result.result else {},
+                    'path': result.metadata.get('path', []),
+                    'success': False,
+                    'error': str(result.error) if result.error else str(result.result)
+                })
+
+        return formatted_results
+
     async def process_stream(
         self,
         source: Union[str, AsyncIterator[Dict[str, Any]]],
         sink: str | None = None,
         chunk_size: int = 100,
-        on_progress: Union[Callable, None] = None
+        on_progress: Union[Callable, None] = None,
+        input_format: str = 'auto',
+        text_field_name: str = 'text',
+        csv_delimiter: str = ',',
+        csv_has_header: bool = True,
+        skip_empty_lines: bool = True,
+        use_streaming: bool = False
     ) -> Dict[str, Any]:
         """Process a stream of data through the FSM.
-        
+
         Args:
             source: Data source (file path or async iterator)
             sink: Optional output destination
             chunk_size: Size of processing chunks
             on_progress: Optional progress callback
-            
+            input_format: Input file format ('auto', 'jsonl', 'json', 'csv', 'text')
+            text_field_name: Field name for text lines when converting to dict
+            csv_delimiter: CSV delimiter character
+            csv_has_header: Whether CSV file has header row
+            skip_empty_lines: Skip empty lines in text files
+            use_streaming: Use memory-efficient streaming for large files
+
         Returns:
             Dict containing stream processing statistics
         """
         from ..execution.async_stream import AsyncStreamExecutor
         from ..streaming.core import StreamConfig as CoreStreamConfig
-        
+
         # Configure streaming
         stream_config = CoreStreamConfig(
             chunk_size=chunk_size,
             parallelism=4,
             memory_limit_mb=1024
         )
-        
+
         # Create async stream executor
         stream_executor = AsyncStreamExecutor(
             fsm=self._fsm,
             stream_config=stream_config,
             progress_callback=on_progress
         )
-        
-        # Handle file source
-        if isinstance(source, str):
-            # Read file and convert to async iterator
-            async def file_reader():
-                import json
-                with open(source) as f:
-                    for line in f:
-                        if line.strip():
-                            yield json.loads(line)
-            stream_source = file_reader()
+
+        # Choose between streaming and regular mode
+        if use_streaming and isinstance(source, str):
+            # Use memory-efficient streaming for large files
+            from ..utils.streaming_file_utils import (
+                create_streaming_file_reader,
+                create_streaming_file_writer
+            )
+
+            stream_source = create_streaming_file_reader(
+                file_path=source,
+                config=stream_config,
+                input_format=input_format,
+                text_field_name=text_field_name,
+                csv_delimiter=csv_delimiter,
+                csv_has_header=csv_has_header,
+                skip_empty_lines=skip_empty_lines
+            )
+
+            # Handle sink for streaming mode
+            sink_func = None
+            cleanup_func = None
+            if sink:
+                sink_func, cleanup_func = await create_streaming_file_writer(
+                    file_path=sink,
+                    config=stream_config
+                )
         else:
-            # Already an async iterator
-            stream_source = source
-        
-        # Handle sink
-        sink_func = None
-        if sink:
-            # Create a simple file writer
-            def write_to_file(results):
-                from dataknobs_fsm.utils.json_encoder import dumps
-                with open(sink, 'a') as f:
-                    for result in results:
-                        f.write(dumps(result) + '\n')
-            sink_func = write_to_file
-        
-        # Execute stream using async executor
-        result = await stream_executor.execute_stream(
-            source=stream_source,
-            sink=sink_func,
-            chunk_size=chunk_size
-        )
-        
-        return {
-            'total_processed': result.total_processed,
-            'successful': result.successful,
-            'failed': result.failed,
-            'duration': result.duration,
-            'throughput': result.throughput
-        }
+            # Use regular mode (loads full chunks into memory)
+            from ..utils.file_utils import create_file_reader, create_file_writer
+
+            # Handle file source
+            if isinstance(source, str):
+                stream_source = create_file_reader(
+                    file_path=source,
+                    input_format=input_format,
+                    text_field_name=text_field_name,
+                    csv_delimiter=csv_delimiter,
+                    csv_has_header=csv_has_header,
+                    skip_empty_lines=skip_empty_lines
+                )
+            else:
+                # Already an async iterator
+                stream_source = source
+
+            # Handle sink for regular mode
+            sink_func = None
+            cleanup_func = None
+            if sink:
+                sink_func, cleanup_func = create_file_writer(sink)
+
+        try:
+            # Execute stream using async executor
+            result = await stream_executor.execute_stream(
+                source=stream_source,
+                sink=sink_func,
+                chunk_size=chunk_size
+            )
+
+            return {
+                'total_processed': result.total_processed,
+                'successful': result.successful,
+                'failed': result.failed,
+                'duration': result.duration,
+                'throughput': result.throughput
+            }
+        finally:
+            # Clean up any resources (e.g., close files)
+            if cleanup_func:
+                if asyncio.iscoroutinefunction(cleanup_func):
+                    await cleanup_func()
+                else:
+                    cleanup_func()
     
     def validate(self, data: Union[Dict[str, Any], Record]) -> Dict[str, Any]:
         """Validate data against FSM's start state schema.
@@ -388,8 +506,61 @@ class SimpleFSM:
     
     def close(self) -> None:
         """Clean up resources and close connections."""
-        asyncio.run(self._resource_manager.cleanup())
-    
+        try:
+            # Check if we're in an existing event loop
+            loop = asyncio.get_running_loop()
+            # If we are, we can't use asyncio.run, so schedule the cleanup as a task
+            # Note: This means cleanup happens asynchronously
+            asyncio.create_task(self._resource_manager.cleanup())
+        except RuntimeError:
+            # No running loop, safe to use asyncio.run
+            asyncio.run(self._resource_manager.cleanup())
+
+    async def aclose(self) -> None:
+        """Async version of close for use in async contexts."""
+        await self._resource_manager.cleanup()
+
+    def run_process_stream(
+        self,
+        source: Union[str, AsyncIterator[Dict[str, Any]]],
+        sink: str | None = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Synchronous wrapper for process_stream that handles async context.
+
+        This method automatically detects if it's being called from an async
+        context and handles it appropriately.
+
+        Args:
+            source: Data source (file path or async iterator)
+            sink: Optional output destination
+            **kwargs: Additional arguments for process_stream
+
+        Returns:
+            Dict containing stream processing statistics
+        """
+        try:
+            # Check if we're in an async context
+            asyncio.get_running_loop()
+            # We're in an async context, return a coroutine
+            import warnings
+            warnings.warn(
+                "run_process_stream called from async context - use await process_stream() directly",
+                RuntimeWarning,
+                stacklevel=2
+            )
+            return asyncio.create_task(self.process_stream(source, sink, **kwargs))
+        except RuntimeError:
+            # No running loop, safe to use asyncio.run
+            async def _run():
+                try:
+                    return await self.process_stream(source, sink, **kwargs)
+                finally:
+                    await self.aclose()
+
+            result = asyncio.run(_run())
+            return result
+
     def _create_resource_provider(self, resource_config):
         """Create a resource provider from ResourceConfig."""
         # Use the same logic as FSMBuilder
@@ -423,32 +594,58 @@ def process_file(
     fsm_config: Union[str, Path, Dict[str, Any]],
     input_file: str,
     output_file: str | None = None,
-    format: str = 'json',
+    input_format: str = 'auto',
     chunk_size: int = 1000,
-    timeout: float | None = None
+    timeout: float | None = None,
+    text_field_name: str = 'text',
+    csv_delimiter: str = ',',
+    csv_has_header: bool = True,
+    skip_empty_lines: bool = True,
+    use_streaming: bool = False
 ) -> Dict[str, Any]:
-    """Process a file through an FSM.
-    
+    """Process a file through an FSM with automatic format detection.
+
     Args:
         fsm_config: FSM configuration
         input_file: Path to input file
-        output_file: Optional output file path
-        format: File format (json, csv, etc.)
+        output_file: Optional output file path (format auto-detected from extension)
+        input_format: Input format ('auto', 'jsonl', 'json', 'csv', 'text')
         chunk_size: Processing chunk size
         timeout: Optional timeout in seconds for processing
-        
+        text_field_name: Field name for text lines when converting to dict
+        csv_delimiter: CSV delimiter character
+        csv_has_header: Whether CSV file has header row
+        skip_empty_lines: Skip empty lines in text files
+        use_streaming: Use memory-efficient streaming for large files
+
     Returns:
         Processing statistics
+
+    Examples:
+        # Process plain text file
+        results = process_file('config.yaml', 'input.txt', 'output.jsonl')
+
+        # Process large CSV file with streaming
+        results = process_file('config.yaml', 'large_data.csv', 'results.json', use_streaming=True)
+
+        # Process with custom text field name
+        results = process_file('config.yaml', 'input.txt', text_field_name='content')
     """
     fsm = create_fsm(fsm_config)
-    
+
     try:
         if timeout:
             result = asyncio.run(asyncio.wait_for(
                 fsm.process_stream(
                     source=input_file,
                     sink=output_file,
-                    chunk_size=chunk_size
+                    chunk_size=chunk_size,
+                    input_format=input_format,
+                    text_field_name=text_field_name,
+                    csv_delimiter=csv_delimiter,
+                    csv_has_header=csv_has_header,
+                    skip_empty_lines=skip_empty_lines,
+                    use_streaming=use_streaming
                 ),
                 timeout=timeout
             ))
@@ -456,7 +653,13 @@ def process_file(
             result = asyncio.run(fsm.process_stream(
                 source=input_file,
                 sink=output_file,
-                chunk_size=chunk_size
+                chunk_size=chunk_size,
+                input_format=input_format,
+                text_field_name=text_field_name,
+                csv_delimiter=csv_delimiter,
+                csv_has_header=csv_has_header,
+                skip_empty_lines=skip_empty_lines,
+                use_streaming=use_streaming
             ))
         return result
     finally:

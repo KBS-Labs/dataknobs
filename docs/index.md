@@ -51,13 +51,14 @@ Dataknobs is a collection of Python packages designed to facilitate the developm
 
 | Package | Description | Version |
 |---------|-------------|---------|
-| `dataknobs-data` | Data abstraction layer with multiple backend support | 1.0.0 |
-| `dataknobs-fsm` | Finite State Machine framework for building workflows | 1.0.0 |
-| `dataknobs-structures` | Core data structures (Tree, Document, RecordStore) | 1.0.0 |
-| `dataknobs-utils` | Utility functions for JSON, files, and integrations | 1.0.0 |
-| `dataknobs-xization` | Text processing, tokenization, and normalization | 1.0.0 |
-| `dataknobs-common` | Shared components and base classes | 1.0.0 |
-| `dataknobs` | Legacy compatibility package (deprecated) | 0.0.15 |
+| [dataknobs-data](data/index.md) | Data abstraction layer with multiple backend support | 1.0.0 |
+| [dataknobs-config](config/index.md) | Flexible and modular configuration management | 0.2.0 |
+| [dataknobs-fsm](fsm/index.md) | Finite State Machine framework for building workflows | 0.1.0 |
+| [dataknobs-structures](structures/index.md) | Core data structures (Tree, Document, RecordStore) | 1.0.0 |
+| [dataknobs-utils](utils/index.md) | Utility functions for JSON, files, and integrations | 1.0.0 |
+| [dataknobs-xization](xization/index.md) | Text processing, tokenization, and normalization | 1.0.0 |
+| [dataknobs-common](common/index.md) | Shared components and base classes | 1.0.0 |
+| [dataknobs](legacy/index.md) | Legacy compatibility package (deprecated) | 0.0.15 |
 
 ## Quick Installation
 

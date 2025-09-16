@@ -85,8 +85,9 @@ class AsyncStreamExecutor:
         start_time = time.time()
         
         # Create base context
+        # Use SINGLE mode since we process items individually
         context_template = ExecutionContext(
-            data_mode=ProcessingMode.STREAM,
+            data_mode=ProcessingMode.SINGLE,
             transaction_mode=TransactionMode.NONE
         )
         
@@ -106,20 +107,34 @@ class AsyncStreamExecutor:
             chunk_num = 0
             
             async for item in stream:
-                chunk.append(item)
-                
-                if len(chunk) >= chunk_size:
-                    # Process chunk
+                # Handle both individual items and pre-chunked lists
+                if isinstance(item, list):
+                    # Already chunked (e.g., from streaming file reader)
                     await self._process_chunk(
-                        chunk,
+                        item,
                         chunk_num,
                         context_template,
                         max_transitions,
                         progress,
                         sink
                     )
-                    chunk = []
                     chunk_num += 1
+                else:
+                    # Individual item - accumulate into chunks
+                    chunk.append(item)
+
+                    if len(chunk) >= chunk_size:
+                        # Process chunk
+                        await self._process_chunk(
+                            chunk,
+                            chunk_num,
+                            context_template,
+                            max_transitions,
+                            progress,
+                            sink
+                        )
+                        chunk = []
+                        chunk_num += 1
                     
                     # Apply backpressure if needed
                     if self.enable_backpressure and self._pending_chunks >= self._backpressure_threshold:

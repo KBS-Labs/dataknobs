@@ -121,8 +121,9 @@ class StreamExecutor:
         
         # Create base context
         if context_template is None:
+            # Use SINGLE mode since we process items individually
             context_template = ExecutionContext(
-                data_mode=ProcessingMode.STREAM,
+                data_mode=ProcessingMode.SINGLE,
                 transaction_mode=TransactionMode.NONE
             )
         
