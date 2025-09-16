@@ -1,48 +1,58 @@
 # ETL Pattern
 
-The ETL (Extract, Transform, Load) pattern provides a robust framework for building data processing pipelines. It handles data extraction from various sources, applies transformations, and loads the results into target systems.
+**Important**: This pattern is implemented as `DatabaseETL` class, not `ETLPattern`. The pattern focuses on database-to-database ETL operations using the AsyncDatabase abstraction from dataknobs_data.
+
+The ETL (Extract, Transform, Load) pattern provides a robust framework for building database-focused data processing pipelines. It handles data extraction from source databases, applies transformations, and loads the results into target databases.
 
 ## Overview
 
-The ETL pattern creates an FSM with three main stages:
-1. **Extract**: Read data from source systems
+The ETL pattern creates an FSM with stages for:
+1. **Extract**: Read data from source database
 2. **Transform**: Apply business logic and data transformations
-3. **Load**: Write processed data to target systems
+3. **Load**: Write processed data to target database
 
 ## Basic Usage
 
 ```python
-from dataknobs_fsm.patterns import ETLPattern
+from dataknobs_fsm.patterns.etl import DatabaseETL, ETLConfig, ETLMode
 
-# Create ETL pipeline
-etl = ETLPattern(
-    name="customer_etl",
-    source_config={
-        "type": "database",
+# Using the class directly
+config = ETLConfig(
+    source_db={
         "provider": "postgresql",
         "connection": "postgresql://source_db/customers"
     },
-    target_config={
-        "type": "database",
+    target_db={
         "provider": "postgresql",
         "connection": "postgresql://warehouse/customers_dim"
-    }
+    },
+    mode=ETLMode.FULL_REFRESH,
+    source_query="SELECT * FROM customers WHERE created_at > '2024-01-01'",
+    target_table="dim_customers",
+    transformations=[lambda row: {
+        **row,
+        "full_name": f"{row['first_name']} {row['last_name']}",
+        "processed_at": datetime.now()
+    }]
 )
 
-# Add transformations
-etl.add_transformation(lambda row: {
-    **row,
-    "full_name": f"{row['first_name']} {row['last_name']}",
-    "processed_at": datetime.now()
-})
+etl = DatabaseETL(config)
 
 # Execute pipeline
-result = etl.run({
-    "source_query": "SELECT * FROM customers WHERE created_at > '2024-01-01'",
-    "target_table": "dim_customers"
-})
-
+import asyncio
+result = asyncio.run(etl.run())
 print(f"Processed {result['records_processed']} records")
+
+# Or use the factory function
+from dataknobs_fsm.patterns.etl import create_etl_pipeline
+
+etl = create_etl_pipeline(
+    source={"provider": "postgresql", "connection": "postgresql://source/db"},
+    target={"provider": "postgresql", "connection": "postgresql://target/db"},
+    mode=ETLMode.INCREMENTAL,
+    transformations=[...]
+)
+result = asyncio.run(etl.run())
 ```
 
 ## Configuration
@@ -108,167 +118,162 @@ monitoring:
 ### Python Configuration
 
 ```python
-from dataknobs_fsm.patterns import ETLPattern
+from dataknobs_fsm.patterns.etl import DatabaseETL, ETLConfig, ETLMode
 
-etl = ETLPattern.from_config({
-    "name": "product_etl",
-    "source": {
-        "type": "file",
-        "format": "csv",
-        "path": "/data/products.csv"
-    },
-    "target": {
-        "type": "database",
+config = ETLConfig(
+    source_db={
         "provider": "sqlite",
-        "database": "products.db"
+        "database": "source.db"
     },
-    "transformations": [
-        {"type": "validate", "schema": {...}},
-        {"type": "clean", "remove_nulls": True},
-        {"type": "normalize", "fields": ["price", "quantity"]}
-    ],
-    "options": {
-        "batch_size": 1000,
-        "error_threshold": 0.05  # Allow 5% errors
-    }
-})
+    target_db={
+        "provider": "sqlite",
+        "database": "target.db"
+    },
+    mode=ETLMode.UPSERT,
+    source_query="SELECT * FROM products",
+    target_table="products_transformed",
+    key_columns=["product_id"],
+    field_mappings={
+        "id": "product_id",
+        "name": "product_name",
+        "price": "unit_price"
+    },
+    batch_size=1000,
+    error_threshold=0.05  # Allow 5% errors
+)
+
+etl = DatabaseETL(config)
 ```
 
-## Data Sources
+## ETL Modes
 
-### Database Sources
+### Available Modes
 
 ```python
-# PostgreSQL
-etl = ETLPattern(
-    source_config={
-        "type": "database",
+from dataknobs_fsm.patterns.etl import ETLMode
+
+# Full refresh - replace all data
+ETLMode.FULL_REFRESH
+
+# Incremental - process only new/changed data
+ETLMode.INCREMENTAL
+
+# Upsert - update existing, insert new
+ETLMode.UPSERT
+
+# Append - always append, no updates
+ETLMode.APPEND
+```
+
+## Factory Functions
+
+### create_etl_pipeline
+
+```python
+from dataknobs_fsm.patterns.etl import create_etl_pipeline, ETLMode
+
+etl = create_etl_pipeline(
+    source={
         "provider": "postgresql",
-        "config": {
-            "host": "localhost",
-            "database": "mydb",
-            "user": "user",
-            "password": "pass"
-        }
-    }
+        "host": "localhost",
+        "database": "source_db",
+        "user": "user",
+        "password": "pass"
+    },
+    target={
+        "provider": "postgresql",
+        "host": "localhost",
+        "database": "target_db"
+    },
+    mode=ETLMode.INCREMENTAL,
+    transformations=[...]
 )
 
-# MySQL
-etl = ETLPattern(
-    source_config={
-        "type": "database",
+# Run the ETL pipeline
+import asyncio
+result = asyncio.run(etl.run())
+```
+
+### create_database_sync
+
+```python
+from dataknobs_fsm.patterns.etl import create_database_sync
+
+# Synchronize two databases
+sync = create_database_sync(
+    source={
         "provider": "mysql",
-        "config": {...}
-    }
+        "host": "source.example.com",
+        "database": "production"
+    },
+    target={
+        "provider": "postgresql",
+        "host": "target.example.com",
+        "database": "analytics"
+    },
+    tables=["users", "orders", "products"],
+    sync_mode="incremental",
+    timestamp_column="updated_at"
 )
 
-# MongoDB
-etl = ETLPattern(
-    source_config={
-        "type": "database",
-        "provider": "mongodb",
-        "config": {
-            "connection_string": "mongodb://localhost:27017",
-            "database": "mydb",
-            "collection": "mycollection"
-        }
-    }
-)
+result = asyncio.run(sync.run())
 ```
 
-### File Sources
+### create_data_migration
 
 ```python
-# CSV
-etl = ETLPattern(
-    source_config={
-        "type": "file",
-        "format": "csv",
-        "path": "/data/input.csv",
-        "options": {
-            "delimiter": ",",
-            "header": True,
-            "encoding": "utf-8"
-        }
-    }
+from dataknobs_fsm.patterns.etl import create_data_migration
+
+# Migrate data with field mappings
+migration = create_data_migration(
+    source={
+        "provider": "sqlite",
+        "database": "old.db",
+        "table": "customers"
+    },
+    target={
+        "provider": "postgresql",
+        "connection": "postgresql://new_db",
+        "table": "customers_v2"
+    },
+    field_mappings={
+        "customer_id": "id",
+        "customer_name": "name",
+        "customer_email": "email"
+    },
+    transformations=[...]
 )
 
-# JSON
-etl = ETLPattern(
-    source_config={
-        "type": "file",
-        "format": "json",
-        "path": "/data/input.json",
-        "options": {
-            "lines": True  # JSONL format
-        }
-    }
-)
-
-# Parquet
-etl = ETLPattern(
-    source_config={
-        "type": "file",
-        "format": "parquet",
-        "path": "/data/input.parquet"
-    }
-)
-```
-
-### API Sources
-
-```python
-etl = ETLPattern(
-    source_config={
-        "type": "api",
-        "base_url": "https://api.example.com",
-        "endpoint": "/data",
-        "auth": {
-            "type": "bearer",
-            "token": "${API_TOKEN}"
-        },
-        "pagination": {
-            "type": "offset",
-            "limit": 100
-        }
-    }
-)
+result = asyncio.run(migration.run())
 ```
 
 ## Transformations
 
-### Built-in Transformations
+Transformations are applied as a list of callable functions:
 
-#### Filter
 ```python
-etl.add_transformation({
-    "type": "filter",
-    "condition": lambda row: row["age"] >= 18
-})
-```
+from dataknobs_fsm.patterns.etl import DatabaseETL, ETLConfig
 
-#### Map/Rename
-```python
-etl.add_transformation({
-    "type": "map",
-    "fields": {
-        "customer_id": "id",
-        "full_name": lambda r: f"{r['first']} {r['last']}"
-    }
-})
-```
+config = ETLConfig(
+    source_db={...},
+    target_db={...},
+    transformations=[
+        # Filter rows
+        lambda row: row if row["age"] >= 18 else None,
 
-#### Aggregate
-```python
-etl.add_transformation({
-    "type": "aggregate",
-    "group_by": ["category"],
-    "aggregations": {
-        "total": "sum(amount)",
-        "average": "avg(amount)",
-        "count": "count(*)"
-    }
-})
+        # Transform fields
+        lambda row: {
+            **row,
+            "full_name": f"{row['first_name']} {row['last_name']}",
+            "age_group": "adult" if row["age"] >= 18 else "minor"
+        },
+
+        # Clean data
+        lambda row: {k: v for k, v in row.items() if v is not None}
+    ]
+)
+
+etl = DatabaseETL(config)
 ```
 
 #### Join/Enrich
@@ -306,84 +311,68 @@ def custom_transform(row):
     row["segment"] = determine_segment(row)
     return row
 
-etl.add_transformation(custom_transform)
-
 # Or use a class
 class DataEnricher:
     def __init__(self, lookup_service):
         self.lookup = lookup_service
-    
+
     def __call__(self, row):
         enriched = self.lookup.enrich(row["id"])
         return {**row, **enriched}
 
-etl.add_transformation(DataEnricher(lookup_service))
-```
-
-## Data Targets
-
-### Database Targets
-
-```python
-# Insert mode
-etl = ETLPattern(
-    target_config={
-        "type": "database",
-        "provider": "postgresql",
-        "config": {...},
-        "mode": "insert",
-        "table": "target_table"
-    }
-)
-
-# Upsert mode
-etl = ETLPattern(
-    target_config={
-        "type": "database",
-        "provider": "postgresql",
-        "config": {...},
-        "mode": "upsert",
-        "table": "target_table",
-        "key_columns": ["id"]
-    }
-)
-
-# Replace mode
-etl = ETLPattern(
-    target_config={
-        "type": "database",
-        "provider": "postgresql",
-        "config": {...},
-        "mode": "replace",
-        "table": "target_table"
-    }
+# Add transformations to config
+config = ETLConfig(
+    source_db={...},
+    target_db={...},
+    transformations=[
+        custom_transform,
+        DataEnricher(lookup_service)
+    ]
 )
 ```
 
-### File Targets
+## Configuration Options
+
+### ETLConfig Parameters
 
 ```python
-# CSV output
-etl = ETLPattern(
-    target_config={
-        "type": "file",
-        "format": "csv",
-        "path": "/output/data.csv",
-        "options": {
-            "header": True,
-            "compression": "gzip"
-        }
-    }
-)
+from dataknobs_fsm.patterns.etl import ETLConfig, ETLMode
 
-# Parquet output with partitioning
-etl = ETLPattern(
-    target_config={
-        "type": "file",
-        "format": "parquet",
-        "path": "/output/data",
-        "partitions": ["year", "month"]
-    }
+config = ETLConfig(
+    # Required parameters
+    source_db={"provider": "postgresql", "connection": "..."},
+    target_db={"provider": "postgresql", "connection": "..."},
+
+    # Mode selection
+    mode=ETLMode.UPSERT,  # FULL_REFRESH, INCREMENTAL, UPSERT, APPEND
+
+    # Query configuration
+    source_query="SELECT * FROM source_table WHERE active = true",
+    target_table="destination_table",
+    key_columns=["id"],  # For upsert mode
+
+    # Field mappings
+    field_mappings={
+        "src_id": "dest_id",
+        "src_name": "dest_name"
+    },
+
+    # Performance options
+    batch_size=5000,
+    parallel_workers=4,
+
+    # Error handling
+    error_threshold=0.05,  # Max 5% errors
+    checkpoint_interval=10000,  # Checkpoint every 10k records
+
+    # Transformations
+    transformations=[...],
+
+    # Validation
+    validation_schema={...},
+
+    # Enrichment sources
+    enrichment_sources=[...]
 )
 ```
 
@@ -392,43 +381,46 @@ etl = ETLPattern(
 ### Batch Processing
 
 ```python
-etl = ETLPattern(
-    name="batch_etl",
-    source_config={...},
-    target_config={...},
-    batch_config={
-        "size": 10000,
-        "parallel": True,
-        "workers": 4,
-        "memory_limit": "2GB"
-    }
+from dataknobs_fsm.patterns.etl import DatabaseETL, ETLConfig
+
+config = ETLConfig(
+    source_db={...},
+    target_db={...},
+    batch_size=10000,
+    parallel_workers=4,
+    mode=ETLMode.FULL_REFRESH
 )
 
-# Process with progress callback
-def on_batch_complete(batch_num, records_processed):
-    print(f"Batch {batch_num}: {records_processed} records")
+etl = DatabaseETL(config)
 
-result = etl.run(on_batch=on_batch_complete)
+# Run with async context
+import asyncio
+result = asyncio.run(etl.run())
+print(f"Processed {result['records_processed']} records in batches")
 ```
 
 ### Incremental Processing
 
 ```python
-etl = ETLPattern(
-    name="incremental_etl",
-    source_config={
-        "type": "database",
-        "provider": "postgresql",
-        "incremental": {
-            "column": "updated_at",
-            "start": "2024-01-01",
-            "checkpoint": True
-        }
-    }
+config = ETLConfig(
+    source_db={...},
+    target_db={...},
+    mode=ETLMode.INCREMENTAL,
+    source_query="""
+        SELECT * FROM source_table
+        WHERE updated_at > :last_checkpoint
+        ORDER BY updated_at
+    """,
+    checkpoint_interval=1000
 )
 
-# Run incremental load
-result = etl.run()  # Processes only new/changed records
+etl = DatabaseETL(config)
+
+# Resume from checkpoint if available
+if etl.has_checkpoint():
+    result = asyncio.run(etl.resume())
+else:
+    result = asyncio.run(etl.run())
 ```
 
 ### Error Handling
@@ -671,4 +663,5 @@ def test_etl_transformation():
 - [File Processing Pattern](file-processing.md) for file-specific operations
 - [Error Recovery Pattern](error-recovery.md) for advanced error handling
 - [Examples](../examples/database-etl.md) for real-world use cases
-- [Performance Guide](../guides/performance.md) for optimization tips
+- [CLI Guide](../guides/cli.md) for optimization tips
+

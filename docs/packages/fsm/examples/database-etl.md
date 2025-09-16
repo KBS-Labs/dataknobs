@@ -1,16 +1,17 @@
 # Database ETL Pipeline Example
 
-This example demonstrates how to build a production-ready ETL (Extract, Transform, Load) pipeline using the DataKnobs FSM framework. The pipeline extracts data from a source database, applies multiple transformation stages, and loads the processed data into a target database.
+This example demonstrates how to build a production-ready ETL (Extract, Transform, Load) pipeline using the DataKnobs FSM framework with SimpleFSM and COPY mode for transaction safety. The pipeline extracts data from a source database, applies multiple transformation stages, and loads the processed data into a target database.
 
 ## Overview
 
 The example showcases:
 
-- **Multi-stage data transformations** including cleaning, validation, enrichment, and metrics calculation
-- **Error handling and recovery** with configurable error thresholds
-- **Progress monitoring** with real-time feedback
-- **Flexible configuration** supporting different database types
-- **Production-ready features** like batch processing and checkpointing
+- **COPY mode** for transaction safety and rollback capability
+- **Multi-stage data extraction, transformation, and loading**
+- **Custom function registration** for ETL operations
+- **Error handling** with proper routing to rollback states
+- **Batch processing** with configurable size
+- **Data validation and quality checks**
 
 ## Source Code
 
@@ -18,136 +19,190 @@ The complete example is available at: [`packages/fsm/examples/database_etl.py`](
 
 ## Implementation Details
 
-### SalesETLPipeline Class
+### FSM Configuration
 
-The main pipeline class encapsulates all ETL functionality:
+The example uses SimpleFSM with custom functions registered for each ETL stage:
 
 ```python
-class SalesETLPipeline:
-    """Production-ready ETL pipeline for sales data."""
-    
-    def __init__(self, source_config: Dict[str, Any], target_config: Dict[str, Any]):
-        self.source_config = source_config
-        self.target_config = target_config
-        self.etl = None
-        self.stats = {
-            "start_time": None,
-            "end_time": None, 
-            "records_extracted": 0,
-            "records_transformed": 0,
-            "records_loaded": 0,
-            "errors": []
+from dataknobs_fsm.api.simple import SimpleFSM
+from dataknobs_fsm.core.data_modes import DataHandlingMode
+
+def create_etl_fsm() -> SimpleFSM:
+    """Create and configure the ETL FSM."""
+    config = {
+        "name": "database_etl_pipeline",
+        "states": [
+            {"name": "start", "initial": True},
+            {"name": "initialize"},
+            {"name": "extract"},
+            {"name": "validate"},
+            {"name": "transform"},
+            {"name": "enrich"},
+            {"name": "load"},
+            {"name": "complete", "terminal": True},
+            {"name": "rollback"},
+            {"name": "error", "terminal": True}
+        ],
+        "arcs": [...]
+    }
+
+    # Create FSM with COPY mode for transaction safety
+    fsm = SimpleFSM(
+        config,
+        data_mode=DataHandlingMode.COPY,
+        custom_functions={
+            "initialize_etl": initialize_etl,
+            "extract_data": extract_data,
+            "validate_data": validate_data,
+            "transform_data": transform_data,
+            "enrich_data": enrich_data,
+            "load_data": load_data,
+            "finalize_etl": finalize_etl,
+            "rollback_transaction": rollback_transaction
         }
+    )
+
+    return fsm
 ```
 
-### Transformation Stages
+### ETL Functions
 
-The pipeline implements four transformation stages:
+The pipeline implements several key functions:
 
-#### 1. Data Cleaning (`clean_data`)
-- Removes whitespace from string fields
-- Standardizes date formats
-- Handles missing values with defaults
+#### 1. Initialize ETL (`initialize_etl`)
+Sets up ETL metadata and statistics tracking:
 
 ```python
-def clean_data(self, row: Dict[str, Any]) -> Dict[str, Any]:
-    # Remove whitespace
-    for key, value in row.items():
-        if isinstance(value, str):
-            row[key] = value.strip()
-    
-    # Standardize date formats
-    if 'order_date' in row and row['order_date']:
-        if isinstance(row['order_date'], str):
-            row['order_date'] = datetime.fromisoformat(row['order_date'])
-    
-    # Handle missing values
-    row['customer_segment'] = row.get('customer_segment', 'Unknown')
-    row['region'] = row.get('region', 'Unknown')
-    
-    return row
+def initialize_etl(state) -> Dict[str, Any]:
+    """Initialize ETL pipeline with configuration and statistics."""
+    data = state.data.copy()
+
+    # Initialize ETL metadata
+    data['etl_metadata'] = {
+        'start_time': datetime.now().isoformat(),
+        'batch_id': f"batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        'source_table': data.get('source_table', 'sales_raw'),
+        'target_table': data.get('target_table', 'sales_fact'),
+        'batch_size': data.get('batch_size', 100),
+        'mode': data.get('mode', 'incremental')
+    }
+
+    # Initialize statistics
+    data['statistics'] = {
+        'records_extracted': 0,
+        'records_transformed': 0,
+        'records_validated': 0,
+        'records_loaded': 0,
+        'records_failed': 0
+    }
+
+    return data
 ```
 
-#### 2. Data Validation (`validate_data`)
-- Checks for required fields
-- Validates data types and ranges
-- Enforces business rules
+#### 2. Extract Data (`extract_data`)
+Extracts data from the source database:
 
 ```python
-def validate_data(self, row: Dict[str, Any]) -> Dict[str, Any]:
-    # Check required fields
-    required_fields = ['order_id', 'customer_id', 'order_date', 'amount']
-    for field in required_fields:
-        if field not in row or row[field] is None:
-            raise ValueError(f"Missing required field: {field}")
-    
-    # Validate ranges
-    if row['amount'] < 0:
-        raise ValueError(f"Invalid amount: {row['amount']}")
-    
-    # Business rules
-    if row['order_date'] > datetime.now():
-        raise ValueError(f"Future order date: {row['order_date']}")
-    
-    row['_validated'] = True
-    return row
+def extract_data(state) -> Dict[str, Any]:
+    """Extract data from source database."""
+    data = state.data.copy()
+    source_db = data['source_db']
+
+    conn = sqlite3.connect(source_db)
+    cursor = conn.cursor()
+
+    # Build and execute query
+    query = f"SELECT * FROM {data['etl_metadata']['source_table']}"
+    if data['etl_metadata']['mode'] == 'incremental':
+        query += f" WHERE updated_at > '{data['last_sync_time']}'"
+
+    cursor.execute(query)
+    records = cursor.fetchall()
+
+    # Convert to list of dictionaries
+    columns = [desc[0] for desc in cursor.description]
+    data['extracted_records'] = [
+        dict(zip(columns, row)) for row in records
+    ]
+
+    data['statistics']['records_extracted'] = len(data['extracted_records'])
+    conn.close()
+
+    return data
 ```
 
-#### 3. Data Enrichment (`enrich_data`)
-- Adds time-based dimensions (year, quarter, month, week)
-- Calculates derived financial metrics
-- Adds processing metadata
+#### 3. Transform Data (`transform_data`)
+Applies business transformations to the data:
 
 ```python
-def enrich_data(self, row: Dict[str, Any]) -> Dict[str, Any]:
-    # Add time dimensions
-    order_date = row['order_date']
-    row['year'] = order_date.year
-    row['quarter'] = f"Q{(order_date.month - 1) // 3 + 1}"
-    row['month'] = order_date.month
-    row['week'] = order_date.isocalendar()[1]
-    row['day_of_week'] = order_date.strftime('%A')
-    
-    # Calculate financial metrics
-    row['revenue'] = row['amount'] * 1.1  # Add tax
-    row['discount_amount'] = row.get('discount_pct', 0) * row['amount'] / 100
-    row['net_amount'] = row['amount'] - row['discount_amount']
-    
-    # Add metadata
-    row['etl_timestamp'] = datetime.now()
-    row['etl_batch_id'] = f"batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    
-    return row
+def transform_data(state) -> Dict[str, Any]:
+    """Apply business transformations to the data."""
+    data = state.data.copy()
+
+    transformed_records = []
+    for record in data['validated_records']:
+        # Clean string fields
+        for key, value in record.items():
+            if isinstance(value, str):
+                record[key] = value.strip().upper()
+
+        # Calculate derived fields
+        record['total_amount'] = record['amount'] * (1 + record.get('tax_rate', 0.1))
+        record['profit'] = record['total_amount'] * 0.2  # 20% margin
+
+        # Categorize order size
+        if record['amount'] > 1000:
+            record['order_category'] = 'LARGE'
+        elif record['amount'] > 100:
+            record['order_category'] = 'MEDIUM'
+        else:
+            record['order_category'] = 'SMALL'
+
+        transformed_records.append(record)
+
+    data['transformed_records'] = transformed_records
+    data['statistics']['records_transformed'] = len(transformed_records)
+
+    return data
 ```
 
-#### 4. Metrics Calculation (`calculate_metrics`)
-- Classifies customer value based on order history
-- Categorizes order sizes
-- Adds seasonality indicators
+#### 4. Load Data (`load_data`)
+Loads transformed data into the target database:
 
 ```python
-def calculate_metrics(self, row: Dict[str, Any]) -> Dict[str, Any]:
-    # Customer value classification
-    if row.get('total_orders', 0) > 10:
-        row['customer_value'] = 'High'
-    elif row.get('total_orders', 0) > 5:
-        row['customer_value'] = 'Medium'
-    else:
-        row['customer_value'] = 'Low'
-    
-    # Order size classification
-    if row['amount'] > 1000:
-        row['order_size'] = 'Large'
-    elif row['amount'] > 100:
-        row['order_size'] = 'Medium'
-    else:
-        row['order_size'] = 'Small'
-    
-    # Seasonality
-    month = row['month']
-    if month in [11, 12]:
-        row['season'] = 'Holiday'
-    elif month in [6, 7, 8]:
+def load_data(state) -> Dict[str, Any]:
+    """Load transformed data into target database."""
+    data = state.data.copy()
+    target_db = data['target_db']
+
+    conn = sqlite3.connect(target_db)
+    cursor = conn.cursor()
+
+    # Prepare for bulk insert
+    records = data['enriched_records']
+    if records:
+        # Get columns from first record
+        columns = list(records[0].keys())
+        placeholders = ','.join(['?' for _ in columns])
+
+        # Build insert query
+        insert_query = f"""
+            INSERT INTO {data['etl_metadata']['target_table']}
+            ({','.join(columns)})
+            VALUES ({placeholders})
+        """
+
+        # Execute bulk insert
+        for record in records:
+            values = [record.get(col) for col in columns]
+            cursor.execute(insert_query, values)
+
+        conn.commit()
+        data['statistics']['records_loaded'] = len(records)
+
+    conn.close()
+    return data
+```
         row['season'] = 'Summer'
     elif month in [3, 4, 5]:
         row['season'] = 'Spring'

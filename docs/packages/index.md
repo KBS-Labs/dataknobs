@@ -8,6 +8,7 @@ Dataknobs is organized as a collection of modular packages, each serving a speci
 |---------|---------|--------------|
 | [dataknobs-data](data/index.md) | Data abstraction layer | Records, Fields, Multiple backends, Async support |
 | [dataknobs-config](config/index.md) | Configuration management | Modular configs, Environment overrides, Cross-references |
+| [dataknobs-fsm](fsm/index.md) | Finite State Machine framework | Workflow orchestration, State management, Resource handling |
 | [dataknobs-structures](structures/index.md) | Core data structures | Tree, Document, RecordStore, ConditionalDict |
 | [dataknobs-utils](utils/index.md) | Utility functions | JSON, File, Elasticsearch, LLM utilities |
 | [dataknobs-xization](xization/index.md) | Text processing | Tokenization, Normalization, Masking |
@@ -20,11 +21,12 @@ Install the packages you need:
 
 ```bash
 # Install all main packages
-pip install dataknobs-data dataknobs-config dataknobs-structures dataknobs-utils dataknobs-xization
+pip install dataknobs-data dataknobs-config dataknobs-fsm dataknobs-structures dataknobs-utils dataknobs-xization
 
 # Or install individually
 pip install dataknobs-data
 pip install dataknobs-config
+pip install dataknobs-fsm
 pip install dataknobs-structures
 ```
 
@@ -49,6 +51,7 @@ graph TD
 
 - **dataknobs-data**: For data abstraction with multiple backend support (memory, file, PostgreSQL, Elasticsearch, S3)
 - **dataknobs-config**: For configuration management with environment overrides
+- **dataknobs-fsm**: For building workflow orchestration and state machine-based processes
 - **dataknobs-structures**: If you need tree structures, documents, or record storage
 - **dataknobs-utils**: For JSON processing, file operations, or integrations
 - **dataknobs-xization**: For text processing, tokenization, or normalization

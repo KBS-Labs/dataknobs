@@ -1,40 +1,52 @@
 # FSM API Reference
 
-The FSM package provides two main APIs for different use cases:
+The FSM package provides two main APIs for different use cases, plus core components for direct use:
 
 ## SimpleFSM API
 
-The [SimpleFSM](simple.md) class provides a high-level, user-friendly interface for creating and running finite state machines. It's perfect for:
+The [SimpleFSM](simple.md) class provides a high-level, configuration-driven interface for creating and running finite state machines. It's perfect for:
 
-- Quick prototyping
-- Simple workflows
-- Learning the FSM concepts
-- Scripts and small applications
+- Configuration-based FSM creation
+- Simple to moderate complexity workflows
+- Both sync and async processing
+- Batch and stream operations
 
 **Key Features:**
-- Fluent API for building FSMs
+- Configuration-driven (YAML/JSON or dict)
+- Custom function registration
 - Automatic resource management
-- Built-in error handling
-- Support for both sync and async execution
+- Built-in batch and stream processing
+- Support for all three data handling modes
+
+**Import:**
+```python
+from dataknobs_fsm.api.simple import SimpleFSM
+```
 
 [View SimpleFSM Documentation →](simple.md)
 
 ## AdvancedFSM API
 
-The [AdvancedFSM](advanced.md) class offers fine-grained control over FSM execution and advanced features. Use it for:
+The [AdvancedFSM](advanced.md) class offers fine-grained control over FSM execution with debugging and monitoring capabilities. Use it for:
 
-- Production applications
-- Complex workflows
-- Performance-critical systems
-- Custom execution strategies
+- Step-by-step execution and debugging
+- Production monitoring with hooks
+- Performance profiling
+- Complex state machine inspection
 
 **Key Features:**
-- Full control over execution engines
-- Custom resource providers
-- Advanced data modes (COPY, REFERENCE, DIRECT)
-- Network-based FSM composition
-- Transaction support
-- Streaming capabilities
+- Step-by-step execution control
+- Breakpoint debugging
+- Execution tracing and profiling
+- Custom execution hooks
+- History tracking and persistence
+- Network visualization
+- Transaction configuration
+
+**Import:**
+```python
+from dataknobs_fsm import AdvancedFSM, ExecutionMode, ExecutionHook
+```
 
 [View AdvancedFSM Documentation →](advanced.md)
 
@@ -42,106 +54,214 @@ The [AdvancedFSM](advanced.md) class offers fine-grained control over FSM execut
 
 | Feature | SimpleFSM | AdvancedFSM |
 |---------|-----------|--------------|
-| **Ease of Use** | Very Easy | Moderate |
-| **Configuration Support** | Yes | Yes |
-| **Async Support** | Yes | Yes |
-| **Batch Processing** | Yes | Yes |
-| **Stream Processing** | Limited | Full |
-| **Resource Management** | Automatic | Manual/Custom |
-| **Data Modes** | Automatic | Configurable |
-| **Network Support** | No | Yes |
-| **Transaction Support** | Basic | Advanced |
-| **Performance** | Good | Excellent |
-| **Customization** | Limited | Extensive |
+| **Primary Use Case** | Processing data | Debugging & monitoring |
+| **Configuration Support** | Yes (required) | Yes |
+| **Async Support** | Yes (`process_async`) | Yes (multiple methods) |
+| **Batch Processing** | Yes (`process_batch`) | Via execution strategies |
+| **Stream Processing** | Yes (`process_stream`) | Via execution strategies |
+| **Step-by-step Execution** | No | Yes |
+| **Debugging Features** | No | Breakpoints, tracing |
+| **Profiling** | No | Yes |
+| **Execution Hooks** | No | Yes |
+| **History Management** | No | Yes |
+| **Custom Functions** | Yes (registered) | Yes |
 
 ## Core Components
 
-Both APIs build on these core components:
+Both APIs build on these core components that can also be used directly:
 
-### States
-Represent discrete points in the FSM workflow:
-- **Initial State**: Entry point of the FSM
-- **Terminal State**: Exit points of the FSM
-- **Intermediate States**: Processing stages
+### FSM Core
+```python
+from dataknobs_fsm import FSM, StateDefinition, StateInstance, ArcDefinition
+```
 
-### Arcs (Transitions)
-Define connections between states:
-- **Source**: Starting state
-- **Target**: Destination state
-- **Function**: Processing logic
-- **Condition**: Optional guard condition
-- **Metadata**: Additional configuration
+- **FSM**: Core finite state machine class
+- **StateDefinition**: Template for states with schemas and validation
+- **StateInstance**: Runtime state instances with data and context
+- **ArcDefinition**: Transition definitions with optional transforms
 
-### Execution Context
-Manages FSM execution state:
-- Current state
-- Data payload
-- Execution history
-- Resource references
+### Execution Components
+```python
+from dataknobs_fsm import ExecutionContext
+from dataknobs_fsm.execution.engine import ExecutionEngine
+from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
+```
 
-### Resources
-External services and connections:
-- Databases
-- File systems
-- HTTP clients
-- LLM providers
-- Custom resources
+- **ExecutionContext**: Manages execution state, history, and resources
+- **ExecutionEngine**: Synchronous execution with strategy support
+- **AsyncExecutionEngine**: Asynchronous execution with concurrency
+
+### Configuration & Building
+```python
+from dataknobs_fsm import ConfigLoader, FSMBuilder
+```
+
+- **ConfigLoader**: Load FSM configurations from YAML/JSON
+- **FSMBuilder**: Build FSM instances from configurations
+
+### Data Handling Modes
+```python
+from dataknobs_fsm.core.data_modes import DataHandlingMode
+```
+
+- **DataHandlingMode.COPY**: Safe concurrent processing (default)
+- **DataHandlingMode.REFERENCE**: Memory-efficient with locking
+- **DataHandlingMode.DIRECT**: High-performance in-place operations
+
+### Processing Modes
+```python
+from dataknobs_fsm.core.modes import ProcessingMode
+```
+
+- **ProcessingMode.SINGLE**: Process one record at a time
+- **ProcessingMode.BATCH**: Process multiple records in batches
+- **ProcessingMode.STREAM**: Process continuous streams of data
 
 ## Usage Examples
 
-### Simple Workflow (SimpleFSM)
+### Configuration-Driven Workflow (SimpleFSM)
 
 ```python
-from dataknobs_fsm import SimpleFSM
+from dataknobs_fsm.api.simple import SimpleFSM
+from dataknobs_fsm.core.data_modes import DataHandlingMode
 
-fsm = SimpleFSM()
-fsm.add_state("start", initial=True)
-fsm.add_state("end", terminal=True)
-fsm.add_transition("start", "end", 
-    function=lambda x: {"result": x["value"] * 2})
+config = {
+    "name": "simple_workflow",
+    "states": [
+        {"name": "start", "initial": True},
+        {"name": "process"},
+        {"name": "end", "terminal": True}
+    ],
+    "arcs": [
+        {
+            "from": "start",
+            "to": "process",
+            "transform": {
+                "type": "inline",
+                "code": "lambda data, ctx: {**data, 'processed': True}"
+            }
+        },
+        {"from": "process", "to": "end"}
+    ]
+}
 
-result = fsm.run({"value": 5})
-# {"result": 10}
+fsm = SimpleFSM(config, data_mode=DataHandlingMode.COPY)
+result = fsm.process({"value": 5})
+print(result["data"])  # {'value': 5, 'processed': True}
 ```
 
-### Advanced Workflow (AdvancedFSM)
+### Debugging Workflow (AdvancedFSM)
 
 ```python
-from dataknobs_fsm import AdvancedFSM
-from dataknobs_fsm.core import DataMode
+from dataknobs_fsm import AdvancedFSM, ExecutionMode, ExecutionHook
 
+class DebugHook(ExecutionHook):
+    def on_state_enter(self, state, data):
+        print(f"Entering: {state.name}")
+
+    def on_arc_traverse(self, arc, data):
+        print(f"Traversing: {arc.source} -> {arc.target}")
+
+# Create FSM with debugging
 fsm = AdvancedFSM(
-    name="advanced_workflow",
-    data_mode=DataMode.REFERENCE  # Efficient for large data
+    "workflow.yaml",
+    execution_mode=ExecutionMode.DEBUG
 )
 
-# Configure resources
-fsm.add_resource("db", {
-    "type": "database",
-    "provider": "postgresql",
-    "config": {...}
-})
+# Set debugging hooks
+fsm.set_hooks([DebugHook()])
 
-# Build complex workflow
-fsm.add_network("main", states=[...], arcs=[...])
+# Add breakpoint
+fsm.add_breakpoint("process")
 
-# Execute with custom engine
-from dataknobs_fsm.execution import AsyncEngine
-engine = AsyncEngine(max_concurrent=10)
-result = await fsm.execute({"input": "data"}, engine=engine)
+# Step through execution
+import asyncio
+
+async def debug_run():
+    context = fsm.create_context({"input": "data"})
+
+    # Run until breakpoint
+    await fsm.run_until_breakpoint(context)
+    print(f"Stopped at: {context.current_state}")
+
+    # Continue execution
+    await fsm.step(context)
+
+asyncio.run(debug_run())
 ```
+
+## API Methods Summary
+
+### SimpleFSM Key Methods
+
+- `process(data, initial_state=None, timeout=None)` - Process single record
+- `process_async(data, initial_state=None, timeout=None)` - Async processing
+- `process_batch(data, batch_size=10, max_workers=4)` - Batch processing
+- `process_stream(source, sink=None, chunk_size=100)` - Stream processing
+- `validate(data)` - Validate data against schema
+- `get_states()` - Get all state names
+- `get_resources()` - Get resource names
+
+### AdvancedFSM Key Methods
+
+**Execution Control:**
+- `create_context(data, data_mode, initial_state)` - Create execution context
+- `step(context, arc_name=None)` - Execute single transition
+- `run_until_breakpoint(context, max_steps=1000)` - Run to breakpoint
+
+**Debugging:**
+- `add_breakpoint(state_name)` - Add debugging breakpoint
+- `trace_execution(data, initial_state=None)` - Full execution trace
+- `profile_execution(data, initial_state=None)` - Performance profiling
+
+**Inspection:**
+- `get_available_transitions(state_name)` - Get valid transitions
+- `inspect_state(state_name)` - Inspect state configuration
+- `visualize_fsm()` - Generate visualization
+- `validate_network()` - Validate FSM consistency
 
 ## API Stability
 
 The FSM package follows semantic versioning:
 
 - **SimpleFSM**: Stable API, backward compatible within major versions
-- **AdvancedFSM**: Stable core API, some advanced features may evolve
+- **AdvancedFSM**: Stable API, exported at package level
 - **Core Components**: Very stable, minimal changes expected
+- **Data/Processing Modes**: Stable enums, but require direct import
+
+## Import Reference
+
+```python
+# Core components (exported at package level)
+from dataknobs_fsm import (
+    FSM, StateDefinition, StateInstance, ArcDefinition,
+    ExecutionContext, ConfigLoader, FSMBuilder
+)
+
+# Advanced API (exported at package level)
+from dataknobs_fsm import (
+    AdvancedFSM, ExecutionMode, ExecutionHook,
+    StepResult, FSMDebugger, create_advanced_fsm
+)
+
+# Simple API (direct import required)
+from dataknobs_fsm.api.simple import SimpleFSM
+
+# Data modes (direct import required)
+from dataknobs_fsm.core.data_modes import DataHandlingMode
+from dataknobs_fsm.core.modes import ProcessingMode
+
+# Execution engines (if needed directly)
+from dataknobs_fsm.execution.engine import ExecutionEngine
+from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
+```
 
 ## Getting Help
 
 - Check the [Examples](../examples/index.md) for real-world usage
 - Read the [Patterns Guide](../patterns/index.md) for common scenarios
-- Review the [Guides](../guides/index.md) for specific topics
+- Review the [Guides](../guides/index.md) for specific topics:
+  - [Data Modes Guide](../guides/data-modes.md) - Understanding data handling modes
+  - [Resource Management](../guides/resources.md) - Managing external resources
+  - [Streaming Guide](../guides/streaming.md) - Stream processing
 - See the [FAQ](../faq.md) for common questions

@@ -4,10 +4,18 @@ Get started with the FSM package in just a few minutes! This guide will walk you
 
 ## Installation
 
-Install the FSM package as part of dataknobs:
+```bash
+pip install dataknobs-fsm
+```
+
+Or with optional dependencies:
 
 ```bash
-pip install dataknobs
+# With database support
+pip install dataknobs-fsm[database]
+
+# With LLM provider support
+pip install dataknobs-fsm[llm]
 ```
 
 ## Your First FSM
@@ -15,38 +23,57 @@ pip install dataknobs
 Let's create a simple FSM that processes data through multiple stages:
 
 ```python
-from dataknobs_fsm import SimpleFSM
+from dataknobs_fsm.api.simple import SimpleFSM
+from dataknobs_fsm.core.data_modes import DataHandlingMode
 
-# Create an FSM instance
-fsm = SimpleFSM()
+# Define FSM configuration
+config = {
+    "name": "simple_processor",
+    "states": [
+        {"name": "start", "initial": True},
+        {"name": "validate"},
+        {"name": "process"},
+        {"name": "complete", "terminal": True}
+    ],
+    "arcs": [
+        {
+            "from": "start",
+            "to": "validate",
+            "transform": {
+                "type": "inline",
+                "code": "lambda data, ctx: {**data, 'validated': False}"
+            }
+        },
+        {
+            "from": "validate",
+            "to": "process",
+            "transform": {
+                "type": "inline",
+                "code": "lambda data, ctx: {**data, 'validated': True}"
+            },
+            "pre_test": {
+                "type": "inline",
+                "code": "lambda data, ctx: data.get('value', 0) > 0"
+            }
+        },
+        {
+            "from": "process",
+            "to": "complete",
+            "transform": {
+                "type": "inline",
+                "code": "lambda data, ctx: {**data, 'result': data['value'] * 2}"
+            }
+        }
+    ]
+}
 
-# Define states
-fsm.add_state("start", initial=True)
-fsm.add_state("validate")
-fsm.add_state("process")
-fsm.add_state("complete", terminal=True)
+# Create FSM instance
+fsm = SimpleFSM(config, data_mode=DataHandlingMode.COPY)
 
-# Define transitions with processing functions
-fsm.add_transition(
-    "start", "validate",
-    function=lambda data: {**data, "validated": False}
-)
-
-fsm.add_transition(
-    "validate", "process",
-    function=lambda data: {**data, "validated": True},
-    condition=lambda data: data.get("value", 0) > 0
-)
-
-fsm.add_transition(
-    "process", "complete",
-    function=lambda data: {**data, "result": data["value"] * 2}
-)
-
-# Run the FSM
-result = fsm.run({"value": 10})
+# Process data through the FSM
+result = fsm.process({"value": 10})
 print(result)
-# Output: {"value": 10, "validated": True, "result": 20}
+# Output: {'final_state': 'complete', 'data': {'value': 10, 'validated': True, 'result': 20}, 'success': True, 'path': ['start', 'validate', 'process', 'complete']}
 ```
 
 ## Using Configuration Files
@@ -102,13 +129,16 @@ arcs:
 Load and run the configuration:
 
 ```python
-from dataknobs_fsm import SimpleFSM
+from dataknobs_fsm.api.simple import SimpleFSM
 
-# Load FSM from configuration
-fsm = SimpleFSM.from_config("workflow.yaml")
+# Load FSM from configuration file
+fsm = SimpleFSM("workflow.yaml")
 
-# Run with input data
-result = fsm.run({"source": "api", "records": 100})
+# Process input data
+result = fsm.process({"source": "api", "records": 100})
+print(f"Final state: {result['final_state']}")
+print(f"Success: {result['success']}")
+print(f"Processed data: {result['data']}")
 ```
 
 ## Async Execution
@@ -117,33 +147,64 @@ For I/O-bound operations, use async execution:
 
 ```python
 import asyncio
-from dataknobs_fsm import SimpleFSM
+from dataknobs_fsm.api.simple import SimpleFSM
 
-async def fetch_data(data):
-    # Simulate async API call
+# Define async processing functions
+async def fetch_data(state):
+    """Simulate async API call."""
     await asyncio.sleep(1)
-    return {**data, "fetched": True}
+    data = state.data.copy()
+    data["fetched"] = True
+    return data
 
-async def save_data(data):
-    # Simulate async database save
+async def save_data(state):
+    """Simulate async database save."""
     await asyncio.sleep(0.5)
-    return {**data, "saved": True}
+    data = state.data.copy()
+    data["saved"] = True
+    return data
+
+# Configuration with registered functions
+config = {
+    "name": "async_workflow",
+    "states": [
+        {"name": "start", "initial": True},
+        {"name": "fetch"},
+        {"name": "save"},
+        {"name": "done", "terminal": True}
+    ],
+    "arcs": [
+        {
+            "from": "start",
+            "to": "fetch",
+            "transform": {"type": "registered", "name": "fetch_data"}
+        },
+        {
+            "from": "fetch",
+            "to": "save",
+            "transform": {"type": "registered", "name": "save_data"}
+        },
+        {
+            "from": "save",
+            "to": "done"
+        }
+    ]
+}
 
 # Create FSM with async functions
-fsm = SimpleFSM()
-fsm.add_state("start", initial=True)
-fsm.add_state("fetch")
-fsm.add_state("save")
-fsm.add_state("done", terminal=True)
-
-fsm.add_transition("start", "fetch", function=fetch_data)
-fsm.add_transition("fetch", "save", function=save_data)
-fsm.add_transition("save", "done")
+fsm = SimpleFSM(
+    config,
+    custom_functions={
+        "fetch_data": fetch_data,
+        "save_data": save_data
+    }
+)
 
 # Run asynchronously
 async def main():
-    result = await fsm.run_async({"id": 123})
-    print(result)
+    result = await fsm.process_async({"id": 123})
+    print(f"Success: {result['success']}")
+    print(f"Data: {result['data']}")
 
 asyncio.run(main())
 ```
@@ -153,56 +214,93 @@ asyncio.run(main())
 Manage external resources like databases and APIs:
 
 ```python
-from dataknobs_fsm import SimpleFSM
+from dataknobs_fsm.api.simple import SimpleFSM
+
+# Configuration with resources
+config = {
+    "name": "resource_workflow",
+    "resources": [
+        {
+            "name": "db",
+            "type": "database",
+            "provider": "sqlite",
+            "config": {"database": "myapp.db"}
+        }
+    ],
+    "states": [
+        {"name": "start", "initial": True},
+        {
+            "name": "query",
+            "resources": ["db"]  # This state requires the database resource
+        },
+        {"name": "done", "terminal": True}
+    ],
+    "arcs": [
+        {
+            "from": "start",
+            "to": "query"
+        },
+        {
+            "from": "query",
+            "to": "done",
+            "transform": {
+                "type": "registered",
+                "name": "process_query_result"
+            }
+        }
+    ]
+}
+
+# Custom function that uses resources
+def process_query_result(state):
+    """Process database query results."""
+    # In actual implementation, resources are accessed via context
+    data = state.data.copy()
+    data["processed"] = True
+    return data
 
 # Create FSM with resources
-fsm = SimpleFSM()
+fsm = SimpleFSM(
+    config,
+    custom_functions={"process_query_result": process_query_result}
+)
 
-# Add a database resource
-fsm.add_resource("db", {
-    "type": "database",
-    "provider": "sqlite",
-    "config": {"database": "myapp.db"}
-})
-
-# Add states
-fsm.add_state("start", initial=True)
-fsm.add_state("query")
-fsm.add_state("done", terminal=True)
-
-# Use resource in transition
-async def query_database(data, resources):
-    db = resources["db"]
-    async with db.connect() as conn:
-        result = await conn.execute("SELECT * FROM users WHERE id = ?", [data["user_id"]])
-        return {**data, "user": await result.fetchone()}
-
-fsm.add_transition("start", "query", function=query_database)
-fsm.add_transition("query", "done")
-
-# Run with resource management
-result = fsm.run({"user_id": 1})
+# Process with resource management
+result = fsm.process({"user_id": 1})
+print(f"Result: {result}")
 ```
 
 ## Batch Processing
 
-Process multiple items in parallel:
+Process multiple items efficiently:
 
 ```python
-from dataknobs_fsm import SimpleFSM
+from dataknobs_fsm.api.simple import SimpleFSM
+from dataknobs_fsm.core.modes import ProcessingMode
 
-fsm = SimpleFSM()
+# Configuration for batch processing
+config = {
+    "name": "batch_processor",
+    "states": [
+        {"name": "start", "initial": True},
+        {"name": "process"},
+        {"name": "done", "terminal": True}
+    ],
+    "arcs": [
+        {
+            "from": "start",
+            "to": "process",
+            "transform": {
+                "type": "inline",
+                "code": "lambda data, ctx: {**data, 'processed': True}"
+            }
+        },
+        {"from": "process", "to": "done"}
+    ]
+}
 
-# Define a simple processing pipeline
-fsm.add_state("start", initial=True)
-fsm.add_state("process")
-fsm.add_state("done", terminal=True)
-
-fsm.add_transition(
-    "start", "process",
-    function=lambda data: {**data, "processed": True}
-)
-fsm.add_transition("process", "done")
+# Create FSM for batch processing
+fsm = SimpleFSM(config)
 
 # Process batch of items
 items = [
@@ -211,66 +309,114 @@ items = [
     {"id": 3, "value": 30}
 ]
 
-results = fsm.run_batch(items, max_workers=3)
+# Use process_batch method
+results = fsm.process_batch(
+    items,
+    max_workers=3,
+    processing_mode=ProcessingMode.BATCH
+)
+
 for result in results:
-    print(result)
+    print(f"Item {result['data']['id']}: Success={result['success']}")
 ```
 
 ## Error Handling
 
-Add error handling and retries:
+Implement error handling with the AdvancedFSM:
 
 ```python
-from dataknobs_fsm import SimpleFSM
+from dataknobs_fsm import AdvancedFSM, ExecutionMode
+import random
 
-fsm = SimpleFSM()
-
-# Configure with retry logic
-fsm.add_state("start", initial=True)
-fsm.add_state("process")
-fsm.add_state("error")
-fsm.add_state("done", terminal=True)
-
-def risky_operation(data):
-    import random
+def risky_operation(state):
+    """Operation that might fail."""
     if random.random() < 0.5:
         raise ValueError("Random failure")
-    return {**data, "processed": True}
+    data = state.data.copy()
+    data["processed"] = True
+    return data
 
-# Add transitions with error handling
-fsm.add_transition(
-    "start", "process",
-    function=risky_operation,
-    on_error="error"
+# Configuration with error handling
+config = {
+    "name": "error_handler",
+    "states": [
+        {"name": "start", "initial": True},
+        {"name": "process"},
+        {"name": "error"},
+        {"name": "done", "terminal": True}
+    ],
+    "arcs": [
+        {
+            "from": "start",
+            "to": "process",
+            "transform": {
+                "type": "registered",
+                "name": "risky_operation"
+            },
+            "error_handler": {
+                "target_state": "error",
+                "max_retries": 3
+            }
+        },
+        {
+            "from": "error",
+            "to": "process",
+            "transform": {
+                "type": "inline",
+                "code": "lambda data, ctx: {**data, 'retry': True}"
+            }
+        },
+        {"from": "process", "to": "done"}
+    ]
+}
+
+# Create FSM with error handling
+fsm = AdvancedFSM(
+    config,
+    execution_mode=ExecutionMode.DEBUG,
+    custom_functions={"risky_operation": risky_operation}
 )
 
-fsm.add_transition(
-    "error", "process",
-    function=lambda data: {**data, "retry": True}
-)
-
-fsm.add_transition("process", "done")
-
-# Run with automatic retries
-result = fsm.run({"input": "data"}, max_retries=3)
+# Run with automatic error recovery
+result = fsm.run({"input": "data"})
+print(f"Success after retries: {result['success']}")
+print(f"Final data: {result['data']}")
 ```
 
-## Using the CLI
+## Advanced Features with AdvancedFSM
 
-The FSM package includes a CLI tool for interactive use:
+For debugging and step-by-step execution:
 
-```bash
-# List available FSMs
-fsm list
+```python
+from dataknobs_fsm import AdvancedFSM, ExecutionMode, ExecutionHook
 
-# Run an FSM from configuration
-fsm run workflow.yaml --input '{"key": "value"}'
+class DebugHook(ExecutionHook):
+    """Custom hook for debugging."""
 
-# Validate configuration
-fsm validate workflow.yaml
+    def on_state_enter(self, state, data):
+        print(f"→ Entering: {state.name}")
+        print(f"  Data: {data}")
 
-# Visualize FSM structure
-fsm visualize workflow.yaml --output workflow.png
+    def on_state_exit(self, state, data):
+        print(f"← Exiting: {state.name}")
+
+# Create FSM with debugging
+fsm = AdvancedFSM(
+    "workflow.yaml",
+    execution_mode=ExecutionMode.STEP_BY_STEP,
+    hooks=[DebugHook()]
+)
+
+# Step through execution
+for step in fsm.step_through({"input": "data"}):
+    print(f"\nCurrent State: {step.current_state}")
+    if input("Continue? (y/n): ").lower() != 'y':
+        break
+
+# Or run with profiling
+result, profile = fsm.run_with_profile({"input": "data"})
+print(f"\nExecution took {profile.total_time:.2f}s")
+print(f"States visited: {profile.states_visited}")
 ```
 
 ## Next Steps

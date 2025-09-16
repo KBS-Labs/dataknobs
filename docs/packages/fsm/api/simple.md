@@ -1,227 +1,142 @@
 # SimpleFSM API Reference
 
-The `SimpleFSM` class provides a high-level, user-friendly interface for creating and executing finite state machines.
+The `SimpleFSM` class provides a simplified, configuration-driven interface for executing finite state machines. It abstracts away the complexity of configuration, resource management, and execution strategies.
 
 ## Class Definition
 
 ```python
-from dataknobs_fsm import SimpleFSM
+from dataknobs_fsm.api.simple import SimpleFSM
 
 class SimpleFSM:
-    """High-level API for creating and running finite state machines."""
+    """Simplified FSM interface for common operations."""
 ```
 
 ## Constructor
 
 ```python
 SimpleFSM(
-    name: str = "simple_fsm",
-    description: str = "",
-    metadata: Dict[str, Any] = None
+    config: Union[str, Path, Dict[str, Any]],
+    data_mode: DataHandlingMode = DataHandlingMode.COPY,
+    resources: Dict[str, Any] | None = None,
+    custom_functions: Dict[str, Callable] | None = None
 )
 ```
 
 **Parameters:**
-- `name`: Name of the FSM (default: "simple_fsm")
-- `description`: Optional description
-- `metadata`: Additional metadata dictionary
+- `config`: Path to YAML/JSON config file or config dictionary
+- `data_mode`: Default data handling mode (COPY, REFERENCE, or DIRECT)
+- `resources`: Optional resource configurations
+- `custom_functions`: Optional custom functions to register
 
 **Example:**
 ```python
+from dataknobs_fsm.api.simple import SimpleFSM
+from dataknobs_fsm.core.data_modes import DataHandlingMode
+
+# From configuration file
+fsm = SimpleFSM("workflow.yaml")
+
+# From dictionary with custom functions
+config = {
+    "name": "order_processor",
+    "states": [...],
+    "arcs": [...]
+}
+
 fsm = SimpleFSM(
-    name="order_processor",
-    description="Processes customer orders",
-    metadata={"version": "1.0", "author": "team"}
+    config,
+    data_mode=DataHandlingMode.COPY,
+    custom_functions={"validate": validate_order}
 )
 ```
 
-## Core Methods
+## Processing Methods
 
-### add_state
-
-```python
-add_state(
-    name: str,
-    initial: bool = False,
-    terminal: bool = False,
-    metadata: Dict[str, Any] = None
-) -> None
-```
-
-Add a state to the FSM.
-
-**Parameters:**
-- `name`: Unique state name
-- `initial`: Whether this is the initial state (only one allowed)
-- `terminal`: Whether this is a terminal state (multiple allowed)
-- `metadata`: Additional state metadata
-
-**Example:**
-```python
-fsm.add_state("start", initial=True)
-fsm.add_state("process", metadata={"timeout": 30})
-fsm.add_state("complete", terminal=True)
-```
-
-### add_transition
+### process
 
 ```python
-add_transition(
-    from_state: str,
-    to_state: str,
-    function: Optional[Callable] = None,
-    condition: Optional[Callable] = None,
-    on_error: Optional[str] = None,
-    metadata: Dict[str, Any] = None
-) -> None
-```
-
-Add a transition between states.
-
-**Parameters:**
-- `from_state`: Source state name
-- `to_state`: Target state name
-- `function`: Processing function (sync or async)
-- `condition`: Guard condition function
-- `on_error`: Error state to transition to on failure
-- `metadata`: Additional transition metadata
-
-**Example:**
-```python
-def process_data(data):
-    return {**data, "processed": True}
-
-def is_valid(data):
-    return data.get("value", 0) > 0
-
-fsm.add_transition(
-    "start", "process",
-    function=process_data,
-    condition=is_valid,
-    on_error="error_state"
-)
-```
-
-### add_resource
-
-```python
-add_resource(
-    name: str,
-    config: Dict[str, Any],
-    shared: bool = False
-) -> None
-```
-
-Add a resource to the FSM.
-
-**Parameters:**
-- `name`: Resource identifier
-- `config`: Resource configuration including `type` and provider details
-- `shared`: Whether the resource is shared across executions
-
-**Supported Resource Types:**
-- `database`: Database connections
-- `filesystem`: File system access
-- `http`: HTTP client
-- `llm`: LLM providers
-- `cache`: Caching systems
-
-**Example:**
-```python
-fsm.add_resource("db", {
-    "type": "database",
-    "provider": "sqlite",
-    "config": {"database": "app.db"}
-})
-
-fsm.add_resource("api", {
-    "type": "http",
-    "config": {
-        "base_url": "https://api.example.com",
-        "timeout": 30
-    }
-})
-```
-
-## Execution Methods
-
-### run
-
-```python
-run(
-    input_data: Dict[str, Any] = None,
-    max_steps: int = 100,
-    max_retries: int = 0,
-    timeout: Optional[float] = None
+process(
+    data: Union[Dict[str, Any], Record],
+    initial_state: str | None = None,
+    timeout: float | None = None
 ) -> Dict[str, Any]
 ```
 
-Execute the FSM synchronously.
+Process a single data record through the FSM synchronously.
 
 **Parameters:**
-- `input_data`: Initial data dictionary
-- `max_steps`: Maximum execution steps (prevents infinite loops)
-- `max_retries`: Number of retries on error
-- `timeout`: Overall execution timeout in seconds
+- `data`: Input data to process
+- `initial_state`: Optional starting state (defaults to FSM start state)
+- `timeout`: Optional timeout in seconds
 
-**Returns:** Final data dictionary after execution
+**Returns:** Dict containing:
+- `final_state`: Name of the final state reached
+- `data`: Processed data from final state
+- `path`: List of states traversed
+- `success`: Whether processing completed successfully
+- `error`: Error message if processing failed (optional)
 
 **Example:**
 ```python
-result = fsm.run(
+result = fsm.process(
     {"order_id": 123, "amount": 99.99},
-    max_steps=50,
-    max_retries=3,
     timeout=60.0
 )
+
+if result["success"]:
+    print(f"Final state: {result['final_state']}")
+    print(f"Processed data: {result['data']}")
+else:
+    print(f"Error: {result['error']}")
 ```
 
-### run_async
+### process_async
 
 ```python
-async run_async(
-    input_data: Dict[str, Any] = None,
-    max_steps: int = 100,
-    max_retries: int = 0,
-    timeout: Optional[float] = None
+async process_async(
+    data: Union[Dict[str, Any], Record],
+    initial_state: str | None = None,
+    timeout: float | None = None
 ) -> Dict[str, Any]
 ```
 
-Execute the FSM asynchronously.
+Process a single data record through the FSM asynchronously.
 
-**Parameters:** Same as `run()`
+**Parameters:** Same as `process()`
+
+**Returns:** Same as `process()`
 
 **Example:**
 ```python
 import asyncio
 
 async def main():
-    result = await fsm.run_async({"data": "value"})
+    result = await fsm.process_async({"data": "value"})
     print(result)
 
 asyncio.run(main())
 ```
 
-### run_batch
+### process_batch
 
 ```python
-run_batch(
-    items: List[Dict[str, Any]],
+process_batch(
+    data: List[Union[Dict[str, Any], Record]],
+    batch_size: int = 10,
     max_workers: int = 4,
-    max_retries: int = 0,
-    stop_on_error: bool = False
+    on_progress: Union[Callable, None] = None
 ) -> List[Dict[str, Any]]
 ```
 
-Process multiple items in parallel.
+Process multiple records in parallel batches.
 
 **Parameters:**
-- `items`: List of input data dictionaries
-- `max_workers`: Number of parallel workers
-- `max_retries`: Retries per item
-- `stop_on_error`: Stop processing on first error
+- `data`: List of input records to process
+- `batch_size`: Number of records per batch
+- `max_workers`: Maximum parallel workers
+- `on_progress`: Optional callback for progress updates
 
-**Returns:** List of results in the same order as inputs
+**Returns:** List of results for each input record
 
 **Example:**
 ```python
@@ -231,267 +146,293 @@ items = [
     {"id": 3, "value": 30}
 ]
 
-results = fsm.run_batch(items, max_workers=3)
-```
-
-## Configuration Methods
-
-### from_config
-
-```python
-@classmethod
-from_config(
-    config_path: str,
-    overrides: Dict[str, Any] = None
-) -> SimpleFSM
-```
-
-Create an FSM from a configuration file.
-
-**Parameters:**
-- `config_path`: Path to YAML or JSON configuration
-- `overrides`: Override configuration values
-
-**Example:**
-```python
-fsm = SimpleFSM.from_config("workflow.yaml")
-
-# With overrides
-fsm = SimpleFSM.from_config(
-    "workflow.yaml",
-    overrides={"timeout": 120}
+results = fsm.process_batch(
+    items,
+    batch_size=10,
+    max_workers=3
 )
+
+for result in results:
+    print(f"ID {result['data']['id']}: {result['success']}")
 ```
 
-### to_config
+## Streaming Methods
+
+### process_stream
 
 ```python
-to_config() -> Dict[str, Any]
+async process_stream(
+    source: AsyncIterator[Union[Dict[str, Any], Record]],
+    sink: Optional[Callable] = None,
+    buffer_size: int = 100
+) -> AsyncIterator[Dict[str, Any]]
 ```
 
-Export FSM as configuration dictionary.
-
-**Example:**
-```python
-config = fsm.to_config()
-print(config)
-```
-
-### save_config
-
-```python
-save_config(path: str) -> None
-```
-
-Save FSM configuration to file.
-
-**Example:**
-```python
-fsm.save_config("my_fsm.yaml")
-```
-
-## Utility Methods
-
-### validate
-
-```python
-validate() -> List[str]
-```
-
-Validate FSM structure and return any issues.
-
-**Returns:** List of validation errors (empty if valid)
-
-**Example:**
-```python
-errors = fsm.validate()
-if errors:
-    print("Validation errors:", errors)
-else:
-    print("FSM is valid")
-```
-
-### visualize
-
-```python
-visualize(
-    output_path: str = None,
-    format: str = "png"
-) -> str
-```
-
-Generate a visual representation of the FSM.
+Process a stream of records asynchronously.
 
 **Parameters:**
-- `output_path`: Save location (optional)
-- `format`: Output format (png, svg, pdf, dot)
+- `source`: Async iterator providing input records
+- `sink`: Optional callback to handle each result
+- `buffer_size`: Size of internal buffer for backpressure
 
-**Returns:** Path to generated file or DOT string
-
-**Example:**
-```python
-# Save as PNG
-fsm.visualize("workflow.png")
-
-# Get DOT format
-dot_string = fsm.visualize(format="dot")
-```
-
-### get_state
-
-```python
-get_state(name: str) -> State
-```
-
-Get a state by name.
+**Returns:** Async iterator of results
 
 **Example:**
 ```python
-state = fsm.get_state("process")
-print(state.metadata)
+async def record_generator():
+    for i in range(100):
+        yield {"id": i, "value": i * 10}
+
+async def main():
+    async for result in fsm.process_stream(record_generator()):
+        print(f"Processed: {result['data']}")
+
+asyncio.run(main())
 ```
 
-### get_transitions
+## Configuration Format
 
-```python
-get_transitions(from_state: str = None) -> List[Arc]
+### YAML Configuration
+
+```yaml
+name: order_processor
+states:
+  - name: start
+    initial: true
+  - name: validate
+  - name: process
+  - name: complete
+    terminal: true
+
+arcs:
+  - from: start
+    to: validate
+    transform:
+      type: registered
+      name: validate_order
+  - from: validate
+    to: process
+    pre_test:
+      type: inline
+      code: "lambda data, ctx: data.get('valid', False)"
+  - from: process
+    to: complete
+
+resources:
+  - name: db
+    type: database
+    provider: postgresql
+    config:
+      connection_string: ${DATABASE_URL}
 ```
 
-Get transitions, optionally filtered by source state.
+### Dictionary Configuration
 
-**Example:**
 ```python
-# All transitions
-all_transitions = fsm.get_transitions()
-
-# From specific state
-from_start = fsm.get_transitions("start")
+config = {
+    "name": "order_processor",
+    "states": [
+        {"name": "start", "initial": True},
+        {"name": "validate"},
+        {"name": "process"},
+        {"name": "complete", "terminal": True}
+    ],
+    "arcs": [
+        {
+            "from": "start",
+            "to": "validate",
+            "transform": {
+                "type": "registered",
+                "name": "validate_order"
+            }
+        },
+        {
+            "from": "validate",
+            "to": "process",
+            "pre_test": {
+                "type": "inline",
+                "code": "lambda data, ctx: data.get('valid', False)"
+            }
+        },
+        {"from": "process", "to": "complete"}
+    ]
+}
 ```
 
-## Properties
+## Custom Functions
 
-### states
+### Registering Custom Functions
 
-```python
-@property
-states() -> List[str]
-```
-
-Get list of all state names.
-
-### initial_state
+Custom functions can be registered when creating the FSM:
 
 ```python
-@property
-initial_state() -> str
-```
-
-Get the initial state name.
-
-### terminal_states
-
-```python
-@property
-terminal_states() -> List[str]
-```
-
-Get list of terminal state names.
-
-### resources
-
-```python
-@property
-resources() -> Dict[str, ResourceProvider]
-```
-
-Get configured resources.
-
-## Complete Example
-
-```python
-from dataknobs_fsm import SimpleFSM
-
-# Create FSM
-fsm = SimpleFSM(name="order_workflow")
-
-# Define states
-fsm.add_state("received", initial=True)
-fsm.add_state("validated")
-fsm.add_state("processed")
-fsm.add_state("shipped", terminal=True)
-fsm.add_state("cancelled", terminal=True)
-
-# Add resource
-fsm.add_resource("db", {
-    "type": "database",
-    "provider": "sqlite",
-    "config": {"database": "orders.db"}
-})
-
-# Define processing functions
-def validate_order(data):
+def validate_order(state):
+    """Custom validation function."""
+    data = state.data
     if data.get("amount", 0) <= 0:
         raise ValueError("Invalid amount")
     return {**data, "valid": True}
 
-async def process_payment(data, resources):
-    db = resources["db"]
-    # Process payment logic
-    return {**data, "paid": True}
+def calculate_tax(state):
+    """Calculate tax on order."""
+    data = state.data
+    amount = data.get("amount", 0)
+    tax = amount * 0.08  # 8% tax
+    return {**data, "tax": tax, "total": amount + tax}
 
-def ship_order(data):
-    return {**data, "tracking_number": "TRK123456"}
+# Register functions
+fsm = SimpleFSM(
+    "order_workflow.yaml",
+    custom_functions={
+        "validate_order": validate_order,
+        "calculate_tax": calculate_tax
+    }
+)
+```
 
-# Add transitions
-fsm.add_transition(
-    "received", "validated",
-    function=validate_order,
-    on_error="cancelled"
+### Using Custom Functions in Configuration
+
+```yaml
+arcs:
+  - from: start
+    to: validate
+    transform:
+      type: registered  # Use registered function
+      name: validate_order
+  - from: validate
+    to: calculate
+    transform:
+      type: registered
+      name: calculate_tax
+```
+
+## Complete Example
+
+```python
+from dataknobs_fsm.api.simple import SimpleFSM
+from dataknobs_fsm.core.data_modes import DataHandlingMode
+
+# Define custom functions
+def validate_order(state):
+    """Validate order data."""
+    data = state.data
+    if data.get("amount", 0) <= 0:
+        raise ValueError("Invalid amount")
+    return {**data, "valid": True}
+
+def process_payment(state):
+    """Process payment."""
+    data = state.data
+    # Simulate payment processing
+    return {**data, "paid": True, "transaction_id": "TXN123"}
+
+def ship_order(state):
+    """Ship the order."""
+    data = state.data
+    return {**data, "tracking_number": "TRK123456", "shipped": True}
+
+# Define configuration
+config = {
+    "name": "order_workflow",
+    "states": [
+        {"name": "received", "initial": True},
+        {"name": "validated"},
+        {"name": "processed"},
+        {"name": "shipped", "terminal": True},
+        {"name": "cancelled", "terminal": True}
+    ],
+    "arcs": [
+        {
+            "from": "received",
+            "to": "validated",
+            "transform": {
+                "type": "registered",
+                "name": "validate_order"
+            }
+        },
+        {
+            "from": "validated",
+            "to": "processed",
+            "transform": {
+                "type": "registered",
+                "name": "process_payment"
+            }
+        },
+        {
+            "from": "processed",
+            "to": "shipped",
+            "transform": {
+                "type": "registered",
+                "name": "ship_order"
+            }
+        },
+        {
+            "from": "received",
+            "to": "cancelled",
+            "pre_test": {
+                "type": "inline",
+                "code": "lambda data, ctx: data.get('cancel_requested', False)"
+            }
+        }
+    ],
+    "resources": [
+        {
+            "name": "db",
+            "type": "database",
+            "provider": "sqlite",
+            "config": {"database": "orders.db"}
+        }
+    ]
+}
+
+# Create FSM with custom functions
+fsm = SimpleFSM(
+    config,
+    data_mode=DataHandlingMode.COPY,
+    custom_functions={
+        "validate_order": validate_order,
+        "process_payment": process_payment,
+        "ship_order": ship_order
+    }
 )
 
-fsm.add_transition(
-    "validated", "processed",
-    function=process_payment
-)
+# Process an order
+result = fsm.process({
+    "order_id": "ORD-001",
+    "amount": 99.99,
+    "customer": "john@example.com"
+})
 
-fsm.add_transition(
-    "processed", "shipped",
-    function=ship_order
-)
-
-# Validate and run
-errors = fsm.validate()
-if not errors:
-    result = fsm.run({
-        "order_id": "ORD-001",
-        "amount": 99.99,
-        "customer": "john@example.com"
-    })
-    print(f"Order shipped: {result['tracking_number']}")
+if result["success"]:
+    print(f"Order shipped: {result['data']['tracking_number']}")
+    print(f"Transaction ID: {result['data']['transaction_id']}")
+else:
+    print(f"Order processing failed: {result.get('error')}")
 ```
 
 ## Error Handling
 
-SimpleFSM provides automatic error handling:
+SimpleFSM provides error handling through:
 
-1. **Transition Errors**: Use `on_error` parameter to specify error states
-2. **Retries**: Use `max_retries` in execution methods
-3. **Timeouts**: Set `timeout` to prevent hanging
-4. **Validation**: Call `validate()` before execution
+1. **Try-Catch in Functions**: Handle errors within custom functions
+2. **Result Status**: Check `success` field in results
+3. **Timeouts**: Set `timeout` parameter in process methods
+4. **Configuration Validation**: Errors during config loading are reported
 
 ## Best Practices
 
-1. **Always validate** FSMs before execution
+1. **Configuration-First**: Define FSMs in YAML/JSON for maintainability
 2. **Use meaningful state names** that describe the workflow stage
 3. **Keep functions pure** when possible (no side effects)
-4. **Handle errors explicitly** with error states
+4. **Handle errors explicitly** in custom functions
 5. **Use resources** for external dependencies
-6. **Test thoroughly** with different input scenarios
-7. **Document complex transitions** with metadata
+6. **Choose appropriate data mode**: COPY for safety, REFERENCE for large data, DIRECT for performance
+7. **Test thoroughly** with different input scenarios
 
 ## See Also
 
-- [AdvancedFSM API](advanced.md) for more control
+- [AdvancedFSM API](advanced.md) for debugging and monitoring features
 - [Examples](../examples/index.md) for real-world usage
-- [Patterns](../patterns/index.md) for common scenarios
-- [Configuration Guide](../guides/configuration.md) for YAML/JSON format
+- [Patterns](../patterns/index.md) for pre-built workflows
+- [Data Modes Guide](../guides/data-modes.md) for understanding DataHandlingMode vs ProcessingMode
+- [Quick Start](../quickstart.md) for getting started
