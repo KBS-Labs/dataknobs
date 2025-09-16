@@ -125,7 +125,7 @@ class TestBasicETLExample:
         }
 
         fsm = SimpleFSM(config)
-        result = await fsm.process_async({"input": "test_data"})
+        result = fsm.process({"input": "test_data"})
 
         assert result['success'] is True
         assert result['final_state'] == 'complete'

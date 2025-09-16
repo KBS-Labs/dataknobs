@@ -118,8 +118,8 @@ class TestSimpleAPITimeout:
             assert "exceeded timeout of 0.5 seconds" in result["error"]
     
     @pytest.mark.asyncio
-    async def test_process_async_with_timeout_success(self):
-        """Test process_async() completes within timeout using real FSM."""
+    async def test_process_with_timeout_success2(self):
+        """Test process() completes within timeout using real FSM."""
         # Create a simple FSM that completes quickly
         config = {
             "name": "test_fsm",
@@ -139,7 +139,7 @@ class TestSimpleAPITimeout:
         fsm = SimpleFSM(config)
         
         # Process with timeout - should complete quickly
-        result = await fsm.process_async(
+        result = fsm.process(
             data={"input": "test"},
             timeout=5.0
         )
@@ -149,8 +149,8 @@ class TestSimpleAPITimeout:
         assert result["final_state"] == "end"
     
     @pytest.mark.asyncio
-    async def test_process_async_with_timeout_exceeded(self, simple_fsm):
-        """Test process_async() handles timeout properly."""
+    async def test_process_with_timeout_exceeded2(self, simple_fsm):
+        """Test process() handles timeout properly."""
         # Mock the async engine to take longer than timeout
         async def slow_async_execute(context):
             await asyncio.sleep(2)  # Sleep for 2 seconds
@@ -160,8 +160,8 @@ class TestSimpleAPITimeout:
         mock_async_engine.execute = slow_async_execute
         
         with patch.object(simple_fsm, '_async_engine', mock_async_engine):
-            # process_async likely catches the timeout and returns error result
-            result = await simple_fsm.process_async(
+            # process likely catches the timeout and returns error result
+            result = simple_fsm.process(
                 data={"input": "test"},
                 timeout=0.5  # 0.5 second timeout (will be exceeded)
             )

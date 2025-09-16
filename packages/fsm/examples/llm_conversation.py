@@ -615,7 +615,7 @@ class LLMConversationFSM:
         """
         # Process through FSM using async method
         try:
-            result = await self.fsm.process_async({'input': message})
+            result = self.fsm.process({'input': message})
             logger.debug(f"FSM result: {result}")
 
             # Handle different result formats
@@ -790,7 +790,7 @@ async def main():
 
     for message in test_messages:
         print(f"User: {message}")
-        response = await conversation.process_message(message)
+        response = conversation.process_message(message)
         print(f"Assistant: {response}")
         print("-" * 40)
 
@@ -830,7 +830,7 @@ async def main():
             elif not user_input:
                 continue
 
-            response = await conversation.process_message(user_input)
+            response = conversation.process_message(user_input)
             print(f"Assistant: {response}")
 
         except KeyboardInterrupt:

@@ -681,7 +681,7 @@ class TestAsyncCLIOperations:
         """Test async FSM execution directly."""
         # SimpleFSM expects a file path, not a config object
         fsm = SimpleFSM(temp_config_file)
-        result = await fsm.process_async({'test': 'data'})
+        result = fsm.process({'test': 'data'})
         
         assert 'final_state' in result
         assert result['final_state'] == 'end'

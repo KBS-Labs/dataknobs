@@ -138,7 +138,7 @@ class FunctionWrapper:
         if self._is_async:
             raise RuntimeError(
                 f"Cannot execute async function '{self.name}' synchronously. "
-                "Use execute_async or process_async instead."
+                "Use execute_async instead."
             )
 
         return self.func(*args, **kwargs)

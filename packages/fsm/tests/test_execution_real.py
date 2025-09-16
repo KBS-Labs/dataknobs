@@ -514,7 +514,7 @@ class TestAdvancedExecutionReal:
             import asyncio
             
             async def run_test():
-                result = await fsm.process_async({'test': 'data'})
+                result = fsm.process({'test': 'data'})
                 return result
 
             result = asyncio.run(run_test())

@@ -143,6 +143,12 @@ class SimpleFSM:
                     success=success,
                     result=result
                 )
+            except asyncio.TimeoutError:
+                # Return error result instead of raising
+                return ResultFormatter.format_error_result(
+                    context=context,
+                    error=TimeoutError(f"FSM execution exceeded timeout of {timeout} seconds")
+                )
             except Exception as e:
                 return ResultFormatter.format_error_result(
                     context=context,
@@ -195,93 +201,6 @@ class SimpleFSM:
                 on_progress=on_progress
             )
         )
-
-    async def process_batch_async(
-        self,
-        data: list[dict[str, Any] | Record],
-        batch_size: int = 10,
-        max_workers: int = 4,
-        on_progress: Callable | None = None
-    ) -> list[dict[str, Any]]:
-        """Async version of process_batch for use in async contexts.
-
-        Args:
-            data: List of input records to process
-            batch_size: Number of records per batch
-            max_workers: Maximum parallel workers
-            on_progress: Optional callback for progress updates
-
-        Returns:
-            List of results for each input record
-        """
-        return await self._async_fsm.process_batch(
-            data=data,
-            batch_size=batch_size,
-            max_workers=max_workers,
-            on_progress=on_progress
-        )
-
-    def process_async(
-        self,
-        data: dict[str, Any] | Record,
-        initial_state: str | None = None,
-        timeout: float | None = None
-    ):
-        """Async-compatible version of process for backwards compatibility.
-
-        This method returns a coroutine that can be awaited.
-        """
-        # Import here to avoid circular dependency
-        from ..core.context_factory import ContextFactory
-        from ..core.modes import ProcessingMode
-        from ..core.result_formatter import ResultFormatter
-
-        async def _process():
-            # Convert to Record if needed
-            if isinstance(data, dict):
-                from dataknobs_data import Record
-                record = Record(data)
-            else:
-                record = data
-
-            # Create context
-            context = ContextFactory.create_context(
-                fsm=self._fsm,
-                data=record,
-                initial_state=initial_state,
-                data_mode=ProcessingMode.SINGLE,
-                resource_manager=self._resource_manager
-            )
-
-            try:
-                # Execute FSM asynchronously
-                if timeout:
-                    success, result = await asyncio.wait_for(
-                        self._async_engine.execute(context),
-                        timeout=timeout
-                    )
-                else:
-                    success, result = await self._async_engine.execute(context)
-
-                # Format result
-                return ResultFormatter.format_single_result(
-                    context=context,
-                    success=success,
-                    result=result
-                )
-            except asyncio.TimeoutError:
-                # Return error result instead of raising
-                return ResultFormatter.format_error_result(
-                    context=context,
-                    error=TimeoutError(f"FSM execution exceeded timeout of {timeout} seconds")
-                )
-            except Exception as e:
-                return ResultFormatter.format_error_result(
-                    context=context,
-                    error=e
-                )
-
-        return _process()
 
     def process_stream(
         self,
