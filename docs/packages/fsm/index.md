@@ -56,7 +56,8 @@ Production-ready patterns for:
 
 ### API Design
 
-- **SimpleFSM**: For straightforward workflows
+- **SimpleFSM**: Synchronous API for straightforward workflows (works in all contexts)
+- **AsyncSimpleFSM**: Native async API for async/await contexts
 - **AdvancedFSM**: For debugging, stepping, and hooks
 
 ## Quick Links
@@ -91,8 +92,9 @@ pip install dataknobs-fsm[all]
 
 ```python
 from dataknobs_fsm.api.simple import SimpleFSM
+from datetime import datetime
 
-# Create an FSM with custom functions
+# Create custom functions
 def validate_data(state):
     """Custom validation function."""
     if 'required_field' not in state.data:
@@ -106,37 +108,44 @@ def process_data(state):
     data['timestamp'] = datetime.now().isoformat()
     return data
 
+# Define FSM configuration
+config = {
+    "name": "data_processor",
+    "states": [
+        {"name": "start", "is_start": True},
+        {"name": "validate"},
+        {"name": "process"},
+        {"name": "end", "is_end": True}
+    ],
+    "arcs": [
+        {
+            "from": "start",
+            "to": "validate",
+            "transform": {"type": "registered", "name": "validate"}
+        },
+        {
+            "from": "validate",
+            "to": "process",
+            "transform": {"type": "registered", "name": "process"}
+        },
+        {"from": "process", "to": "end"}
+    ]
+}
+
 # Initialize FSM with custom functions
 fsm = SimpleFSM(
+    config,
     custom_functions={
         'validate': validate_data,
         'process': process_data
     }
 )
 
-# Add states with validation
-fsm.add_state("start", initial=True)
-fsm.add_state("validate")
-fsm.add_state("process")
-fsm.add_state("end", terminal=True)
-
-# Add transitions with custom functions
-fsm.add_transition(
-    "start", "validate",
-    function={"type": "registered", "name": "validate"}
+# Execute the FSM
+result = fsm.process(
+    {"required_field": "value", "input": "data"}
 )
-fsm.add_transition(
-    "validate", "process",
-    function={"type": "registered", "name": "process"}
-)
-fsm.add_transition("process", "end")
-
-# Execute with data mode selection
-result = fsm.run(
-    {"required_field": "value", "input": "data"},
-    data_mode="COPY"  # or "REFERENCE" or "DIRECT"
-)
-print(result)  # {"required_field": "value", "input": "data", "processed": True, "timestamp": "..."}
+print(result)  # {"final_state": "end", "data": {"required_field": "value", "input": "data", "processed": True, "timestamp": "..."}, ...}
 ```
 
 ### Using AdvancedFSM API
@@ -188,7 +197,7 @@ execution_strategy: DEPTH_FIRST  # or BREADTH_FIRST, RESOURCE_OPTIMIZED, STREAM_
 
 states:
   - name: start
-    initial: true
+    is_start: true
   - name: validate
     functions:
       state_test:
@@ -210,7 +219,7 @@ states:
       - type: database
         name: main_db
   - name: end
-    terminal: true
+    is_end: true
 
 arcs:
   - from: start

@@ -90,32 +90,6 @@ else:
     print(f"Error: {result['error']}")
 ```
 
-### process_async
-
-```python
-async process_async(
-    data: Union[Dict[str, Any], Record],
-    initial_state: str | None = None,
-    timeout: float | None = None
-) -> Dict[str, Any]
-```
-
-Process a single data record through the FSM asynchronously.
-
-**Parameters:** Same as `process()`
-
-**Returns:** Same as `process()`
-
-**Example:**
-```python
-import asyncio
-
-async def main():
-    result = await fsm.process_async({"data": "value"})
-    print(result)
-
-asyncio.run(main())
-```
 
 ### process_batch
 
@@ -198,11 +172,11 @@ asyncio.run(main())
 name: order_processor
 states:
   - name: start
-    initial: true
+    is_start: true
   - name: validate
   - name: process
   - name: complete
-    terminal: true
+    is_end: true
 
 arcs:
   - from: start
@@ -232,10 +206,10 @@ resources:
 config = {
     "name": "order_processor",
     "states": [
-        {"name": "start", "initial": True},
+        {"name": "start", "is_start": True},
         {"name": "validate"},
         {"name": "process"},
-        {"name": "complete", "terminal": True}
+        {"name": "complete", "is_end": True}
     ],
     "arcs": [
         {
@@ -338,8 +312,8 @@ config = {
         {"name": "received", "initial": True},
         {"name": "validated"},
         {"name": "processed"},
-        {"name": "shipped", "terminal": True},
-        {"name": "cancelled", "terminal": True}
+        {"name": "shipped", "is_end": True},
+        {"name": "cancelled", "is_end": True}
     ],
     "arcs": [
         {

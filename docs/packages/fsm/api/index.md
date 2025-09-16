@@ -4,11 +4,11 @@ The FSM package provides two main APIs for different use cases, plus core compon
 
 ## SimpleFSM API
 
-The [SimpleFSM](simple.md) class provides a high-level, configuration-driven interface for creating and running finite state machines. It's perfect for:
+The [SimpleFSM](simple.md) class provides a high-level, configuration-driven interface for creating and running finite state machines synchronously. It's perfect for:
 
 - Configuration-based FSM creation
 - Simple to moderate complexity workflows
-- Both sync and async processing
+- Synchronous processing contexts
 - Batch and stream operations
 
 **Key Features:**
@@ -17,6 +17,7 @@ The [SimpleFSM](simple.md) class provides a high-level, configuration-driven int
 - Automatic resource management
 - Built-in batch and stream processing
 - Support for all three data handling modes
+- Synchronous-only operation
 
 **Import:**
 ```python
@@ -24,6 +25,29 @@ from dataknobs_fsm.api.simple import SimpleFSM
 ```
 
 [View SimpleFSM Documentation →](simple.md)
+
+## AsyncSimpleFSM API
+
+The [AsyncSimpleFSM](async_simple.md) class provides a native async/await interface for creating and running finite state machines asynchronously. It's designed for:
+
+- Async/await contexts
+- High-concurrency applications
+- I/O-bound operations
+- Integration with async frameworks
+
+**Key Features:**
+- Native async/await support
+- Configuration-driven (YAML/JSON or dict)
+- Async custom function support
+- Efficient async batch and stream processing
+- Full async resource management
+
+**Import:**
+```python
+from dataknobs_fsm.api.async_simple import AsyncSimpleFSM
+```
+
+[View AsyncSimpleFSM Documentation →](async_simple.md)
 
 ## AdvancedFSM API
 
@@ -52,19 +76,20 @@ from dataknobs_fsm import AdvancedFSM, ExecutionMode, ExecutionHook
 
 ## Quick Comparison
 
-| Feature | SimpleFSM | AdvancedFSM |
-|---------|-----------|--------------|
-| **Primary Use Case** | Processing data | Debugging & monitoring |
-| **Configuration Support** | Yes (required) | Yes |
-| **Async Support** | Yes (`process_async`) | Yes (multiple methods) |
-| **Batch Processing** | Yes (`process_batch`) | Via execution strategies |
-| **Stream Processing** | Yes (`process_stream`) | Via execution strategies |
-| **Step-by-step Execution** | No | Yes |
-| **Debugging Features** | No | Breakpoints, tracing |
-| **Profiling** | No | Yes |
-| **Execution Hooks** | No | Yes |
-| **History Management** | No | Yes |
-| **Custom Functions** | Yes (registered) | Yes |
+| Feature | SimpleFSM | AsyncSimpleFSM | AdvancedFSM |
+|---------|-----------|----------------|--------------|
+| **Primary Use Case** | Sync processing | Async processing | Debugging & monitoring |
+| **Context** | Synchronous | Asynchronous | Both |
+| **Configuration Support** | Yes (required) | Yes (required) | Yes |
+| **Native Async** | No | Yes | Yes (multiple methods) |
+| **Batch Processing** | Yes (`process_batch`) | Yes (`process_batch`) | Via execution strategies |
+| **Stream Processing** | Yes (`process_stream`) | Yes (`process_stream`) | Via execution strategies |
+| **Step-by-step Execution** | No | No | Yes |
+| **Debugging Features** | No | No | Breakpoints, tracing |
+| **Profiling** | No | No | Yes |
+| **Execution Hooks** | No | No | Yes |
+| **History Management** | No | No | Yes |
+| **Custom Functions** | Yes (registered) | Yes (async preferred) | Yes |
 
 ## Core Components
 
@@ -128,9 +153,9 @@ from dataknobs_fsm.core.data_modes import DataHandlingMode
 config = {
     "name": "simple_workflow",
     "states": [
-        {"name": "start", "initial": True},
+        {"name": "start", "is_start": True},
         {"name": "process"},
-        {"name": "end", "terminal": True}
+        {"name": "end", "is_end": True}
     ],
     "arcs": [
         {
@@ -194,8 +219,7 @@ asyncio.run(debug_run())
 
 ### SimpleFSM Key Methods
 
-- `process(data, initial_state=None, timeout=None)` - Process single record
-- `process_async(data, initial_state=None, timeout=None)` - Async processing
+- `process(data, initial_state=None, timeout=None)` - Process single record synchronously
 - `process_batch(data, batch_size=10, max_workers=4)` - Batch processing
 - `process_stream(source, sink=None, chunk_size=100)` - Stream processing
 - `validate(data)` - Validate data against schema
@@ -224,7 +248,8 @@ asyncio.run(debug_run())
 
 The FSM package follows semantic versioning:
 
-- **SimpleFSM**: Stable API, backward compatible within major versions
+- **SimpleFSM**: Stable synchronous API, backward compatible within major versions
+- **AsyncSimpleFSM**: Stable async API, backward compatible within major versions
 - **AdvancedFSM**: Stable API, exported at package level
 - **Core Components**: Very stable, minimal changes expected
 - **Data/Processing Modes**: Stable enums, but require direct import
@@ -244,8 +269,9 @@ from dataknobs_fsm import (
     StepResult, FSMDebugger, create_advanced_fsm
 )
 
-# Simple API (direct import required)
-from dataknobs_fsm.api.simple import SimpleFSM
+# Simple APIs (direct import required)
+from dataknobs_fsm.api.simple import SimpleFSM  # For synchronous contexts
+from dataknobs_fsm.api.async_simple import AsyncSimpleFSM  # For async contexts
 
 # Data modes (direct import required)
 from dataknobs_fsm.core.data_modes import DataHandlingMode

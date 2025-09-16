@@ -143,10 +143,11 @@ print(f"Processed data: {result['data']}")
 
 ## Async Execution
 
-For I/O-bound operations, use async execution:
+The FSM package provides both synchronous and asynchronous APIs. For I/O-bound operations or when working in async contexts, use the AsyncSimpleFSM:
 
 ```python
 import asyncio
+from dataknobs_fsm.api.async_simple import AsyncSimpleFSM
 from dataknobs_fsm.api.simple import SimpleFSM
 
 # Define async processing functions
@@ -168,10 +169,10 @@ async def save_data(state):
 config = {
     "name": "async_workflow",
     "states": [
-        {"name": "start", "initial": True},
+        {"name": "start", "is_start": True},
         {"name": "fetch"},
         {"name": "save"},
-        {"name": "done", "terminal": True}
+        {"name": "done", "is_end": True}
     ],
     "arcs": [
         {
@@ -191,22 +192,25 @@ config = {
     ]
 }
 
-# Create FSM with async functions
-fsm = SimpleFSM(
-    config,
-    custom_functions={
-        "fetch_data": fetch_data,
-        "save_data": save_data
-    }
-)
-
-# Run asynchronously
+# Use AsyncSimpleFSM for native async support
 async def main():
-    result = await fsm.process_async({"id": 123})
+    fsm = AsyncSimpleFSM(
+        config,
+        custom_functions={
+            "fetch_data": fetch_data,
+            "save_data": save_data
+        }
+    )
+    result = await fsm.process({"id": 123})
     print(f"Success: {result['success']}")
     print(f"Data: {result['data']}")
+    await fsm.close()
 
+# Run the async FSM
 asyncio.run(main())
+
+# Note: SimpleFSM is for synchronous contexts only.
+# Use AsyncSimpleFSM when working with async/await.
 ```
 
 ## Using Resources
@@ -228,12 +232,12 @@ config = {
         }
     ],
     "states": [
-        {"name": "start", "initial": True},
+        {"name": "start", "is_start": True},
         {
             "name": "query",
             "resources": ["db"]  # This state requires the database resource
         },
-        {"name": "done", "terminal": True}
+        {"name": "done", "is_end": True}
     ],
     "arcs": [
         {
@@ -276,15 +280,13 @@ Process multiple items efficiently:
 
 ```python
 from dataknobs_fsm.api.simple import SimpleFSM
-from dataknobs_fsm.core.modes import ProcessingMode
-
 # Configuration for batch processing
 config = {
     "name": "batch_processor",
     "states": [
-        {"name": "start", "initial": True},
+        {"name": "start", "is_start": True},
         {"name": "process"},
-        {"name": "done", "terminal": True}
+        {"name": "done", "is_end": True}
     ],
     "arcs": [
         {
@@ -312,8 +314,8 @@ items = [
 # Use process_batch method
 results = fsm.process_batch(
     items,
-    max_workers=3,
-    processing_mode=ProcessingMode.BATCH
+    batch_size=10,
+    max_workers=3
 )
 
 for result in results:
@@ -340,10 +342,10 @@ def risky_operation(state):
 config = {
     "name": "error_handler",
     "states": [
-        {"name": "start", "initial": True},
+        {"name": "start", "is_start": True},
         {"name": "process"},
         {"name": "error"},
-        {"name": "done", "terminal": True}
+        {"name": "done", "is_end": True}
     ],
     "arcs": [
         {
