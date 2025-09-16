@@ -59,6 +59,29 @@ An FSM-based conversational AI system.
 - Intent recognition states
 - Response generation workflow
 
+#### 6. [Text Normalization with Regex](regex-transformations.md) (`normalize_file_example.py`, `normalize_file_with_regex.py`)
+Powerful text processing using regular expressions directly in YAML configurations.
+
+**Key Features:**
+- Regular expressions in inline transforms
+- Field preservation pattern
+- Whitespace and punctuation normalization
+- Email and URL pattern matching
+- Phone number and SSN masking
+- Duplicate word removal
+- Multiple format conversions (snake_case, kebab-case, CamelCase)
+- Pattern extraction and detection
+
+#### 7. Regex Transform Configurations (`regex_transforms.yaml`, `regex_workflow.yaml`)
+Ready-to-use YAML configurations for text processing.
+
+**Key Features:**
+- Field-by-field transformations
+- All-in-one transform patterns
+- Sensitive data masking
+- Pattern extraction (emails, URLs, hashtags, mentions)
+- Format standardization
+
 ### Documentation Examples (Guides)
 
 #### [File Processing Workflow](file-processor.md)
@@ -85,9 +108,9 @@ from dataknobs_fsm.core.data_modes import DataHandlingMode
 config = {
     "name": "simple_example",
     "states": [
-        {"name": "start", "initial": True},
+        {"name": "start", "is_start": True},
         {"name": "process"},
-        {"name": "end", "terminal": True}
+        {"name": "end", "is_end": True}
     ],
     "arcs": [
         {
@@ -154,19 +177,28 @@ Examples are located in the `packages/fsm/examples/` directory:
 cd packages/fsm
 
 # Run the database ETL example
-python examples/database_etl.py
+uv run python examples/database_etl.py
 
 # Run the data validation pipeline
-python examples/data_validation_pipeline.py
+uv run python examples/data_validation_pipeline.py
 
 # Run the large file processor
-python examples/large_file_processor.py
+uv run python examples/large_file_processor.py
 
 # Run advanced debugging example
-python examples/advanced_debugging.py
+uv run python examples/advanced_debugging.py
 
 # Run LLM conversation example
-python examples/llm_conversation.py
+uv run python examples/llm_conversation.py
+
+# Run text normalization example
+uv run python examples/normalize_file_example.py
+
+# Run regex transformation examples
+uv run python examples/normalize_file_with_regex.py
+
+# Test regex YAML configurations
+uv run python examples/test_regex_yaml.py
 ```
 
 ### Running with Custom Parameters
@@ -175,13 +207,16 @@ Most examples accept command-line arguments:
 
 ```bash
 # Database ETL with custom batch size
-python examples/database_etl.py --batch-size 500
+uv run python examples/database_etl.py --batch-size 500
 
 # File processor with specific input
-python examples/large_file_processor.py --input data.csv --output processed.json
+uv run python examples/large_file_processor.py --input data.csv --output processed.json
 
 # Debugging with specific config
-python examples/advanced_debugging.py --config custom_fsm.yaml
+uv run python examples/advanced_debugging.py --config custom_fsm.yaml
+
+# Process file with regex transformations
+uv run python examples/normalize_file_example.py
 ```
 
 ## Prerequisites
@@ -254,6 +289,25 @@ config = {
         }
     ]
 }
+```
+
+### Regular Expressions in YAML
+```yaml
+# Use regex directly in inline transforms
+arcs:
+  - from: start
+    to: normalize
+    transform:
+      type: inline
+      code: |
+        lambda data, ctx: {
+            **data,
+            'normalized': __import__('re').sub(
+                r'\\s+',           # Pattern: multiple spaces
+                ' ',               # Replacement: single space
+                data.get('text', '')
+            ).strip()
+        }
 ```
 
 ## Learn More
