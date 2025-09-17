@@ -7,7 +7,7 @@ in the context of FSM stream processing.
 import csv
 import json
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Union
+from typing import Any, AsyncIterator, Callable, Dict, List, Union
 
 
 def detect_format(file_path: Union[str, Path], for_output: bool = False) -> str:
@@ -181,15 +181,15 @@ async def read_text_file(
     """
     with open(file_path) as f:
         for line in f:
-            line = line.rstrip('\n\r')
-            if line or not skip_empty:
-                yield {field_name: line}
+            sline = line.rstrip('\n\r')
+            if sline or not skip_empty:
+                yield {field_name: sline}
 
 
 def create_file_writer(
     file_path: Union[str, Path],
-    output_format: Optional[str] = None
-) -> tuple[Callable[[List[Dict[str, Any]]], None], Optional[Callable[[], None]]]:
+    output_format: str | None = None
+) -> tuple[Callable[[List[Dict[str, Any]]], None], Callable[[], None] | None]:
     """Create a file writer function for the specified format.
 
     Args:
@@ -252,8 +252,8 @@ def create_csv_writer(
     Returns:
         Tuple of (writer_function, cleanup_function)
     """
-    csv_writer: Optional[csv.DictWriter] = None
-    csv_file: Optional[Any] = None
+    csv_writer: csv.DictWriter | None = None
+    csv_file: Any | None = None
 
     def write_csv(results: List[Dict[str, Any]]) -> None:
         nonlocal csv_writer, csv_file

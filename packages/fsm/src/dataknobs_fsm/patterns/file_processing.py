@@ -463,7 +463,7 @@ data
             )
             
         # Process stream
-        result = await self._fsm.process_stream(
+        result = self._fsm.process_stream(
             source=source,
             sink=sink,
             chunk_size=self.config.chunk_size,

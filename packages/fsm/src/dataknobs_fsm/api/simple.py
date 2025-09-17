@@ -86,6 +86,9 @@ class SimpleFSM:
         if not self._loop or not self._loop.is_running():
             self._setup_event_loop()
 
+        if self._loop is None:
+            raise RuntimeError("Failed to setup event loop")
+
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
         return future.result()
 
@@ -433,7 +436,7 @@ def validate_data(
 
 def batch_process(
     fsm_config: str | Path | dict[str, Any],
-    data: list[dict[str, Any]],
+    data: list[dict[str, Any] | Record],
     batch_size: int = 10,
     max_workers: int = 4,
     timeout: float | None = None

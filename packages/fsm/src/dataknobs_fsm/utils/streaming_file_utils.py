@@ -8,9 +8,8 @@ import asyncio
 import csv
 import json
 from collections import deque
-from io import StringIO
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, AsyncIterator, Callable, Dict, List, Tuple, Union
 
 from dataknobs_fsm.streaming.core import StreamChunk, StreamConfig, StreamMetrics
 from dataknobs_fsm.utils.file_utils import detect_format, get_csv_delimiter
@@ -91,8 +90,8 @@ class StreamingFileReader:
         """Read JSONL file in chunks."""
         chunk_data = []
 
-        with open(self.file_path, 'r') as f:
-            for line_num, line in enumerate(f, 1):
+        with open(self.file_path) as f:
+            for line in f:
                 if line.strip():
                     try:
                         record = json.loads(line)
@@ -143,7 +142,7 @@ class StreamingFileReader:
             except (ijson.JSONError, ValueError):
                 # Not an array or empty, try as single object
                 f.seek(0)
-                with open(self.file_path, 'r') as text_f:
+                with open(self.file_path) as text_f:
                     data = json.load(text_f)
 
                 if isinstance(data, list):
@@ -164,7 +163,7 @@ class StreamingFileReader:
         chunk_data = []
         total_rows = 0
 
-        with open(self.file_path, 'r', newline='') as f:
+        with open(self.file_path, newline='') as f:
             if self.csv_has_header:
                 reader = csv.DictReader(f, delimiter=self.csv_delimiter)
             else:
@@ -197,11 +196,11 @@ class StreamingFileReader:
         """Read text file in chunks."""
         chunk_data = []
 
-        with open(self.file_path, 'r') as f:
+        with open(self.file_path) as f:
             for line in f:
-                line = line.rstrip('\n\r')
-                if line or not self.skip_empty_lines:
-                    chunk_data.append({self.text_field_name: line})
+                sline = line.rstrip('\n\r')
+                if sline or not self.skip_empty_lines:
+                    chunk_data.append({self.text_field_name: sline})
                     self.metrics.items_processed += 1
 
                     if len(chunk_data) >= self.chunk_size:
@@ -235,7 +234,7 @@ class StreamingFileWriter:
     def __init__(
         self,
         file_path: Union[str, Path],
-        output_format: Optional[str] = None,
+        output_format: str | None = None,
         buffer_size: int = 1000,
         flush_interval: float = 1.0
     ):
@@ -255,8 +254,8 @@ class StreamingFileWriter:
         self.format = output_format or detect_format(self.file_path, for_output=True)
 
         self._buffer: deque = deque()
-        self._file_handle: Optional[Any] = None
-        self._csv_writer: Optional[csv.DictWriter] = None
+        self._file_handle: Any | None = None
+        self._csv_writer: csv.DictWriter | None = None
         self._last_flush_time = asyncio.get_event_loop().time()
         self._is_first_write = True
         self.metrics = StreamMetrics()
@@ -397,10 +396,10 @@ class StreamingFileProcessor:
         self,
         input_path: Union[str, Path],
         output_path: Union[str, Path],
-        transform_fn: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
+        transform_fn: Callable[[Dict[str, Any]], Dict[str, Any]] | None = None,
         chunk_size: int = 1000,
         input_format: str = 'auto',
-        output_format: Optional[str] = None
+        output_format: str | None = None
     ):
         """Initialize streaming file processor.
 
@@ -424,7 +423,7 @@ class StreamingFileProcessor:
         )
         self.transform_fn = transform_fn or (lambda x: x)
 
-    async def process(self, progress_callback: Optional[Callable[[int, int], None]] = None) -> StreamMetrics:
+    async def process(self, progress_callback: Callable[[int, int], None] | None = None) -> StreamMetrics:
         """Process the file with streaming.
 
         Args:
@@ -444,7 +443,7 @@ class StreamingFileProcessor:
                         transformed = self.transform_fn(record)
                         if transformed is not None:
                             transformed_data.append(transformed)
-                    except Exception as e:
+                    except Exception:
                         self.reader.metrics.errors_count += 1
                         continue
 

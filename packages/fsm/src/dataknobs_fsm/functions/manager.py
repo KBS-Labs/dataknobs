@@ -521,7 +521,7 @@ class FunctionManager:
                     exec(func_def, namespace)
                     func = namespace.get('inline_func')
 
-            if func is not None:
+            if func is not None and callable(func):
                 wrapper = FunctionWrapper(func, f"inline_{id(code)}", FunctionSource.INLINE)
                 self._inline_cache[code] = wrapper
                 return wrapper
