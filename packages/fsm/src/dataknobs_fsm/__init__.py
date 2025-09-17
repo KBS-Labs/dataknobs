@@ -11,6 +11,10 @@ from .core.fsm import FSM
 from .core.state import StateDefinition, StateInstance
 from .core.arc import ArcDefinition
 
+# Simple API
+from .api.simple import SimpleFSM
+from .api.async_simple import AsyncSimpleFSM
+
 # Advanced API
 from .api.advanced import (
     AdvancedFSM,
@@ -35,6 +39,9 @@ __all__ = [
     "StateDefinition",
     "StateInstance",
     "ArcDefinition",
+    # Simple API
+    "SimpleFSM",
+    "AsyncSimpleFSM",
     # Advanced API
     "AdvancedFSM",
     "ExecutionMode",

@@ -119,11 +119,15 @@ nav:
     - FSM:
       - packages/fsm/index.md
       - packages/fsm/quickstart.md
+      - packages/fsm/faq.md
       - API Reference:
         - packages/fsm/api/index.md
         - packages/fsm/api/simple.md
+        - packages/fsm/api/async_simple.md
         - packages/fsm/api/advanced.md
       - Guides:
+        - packages/fsm/guides/index.md
+        - packages/fsm/guides/configuration.md
         - packages/fsm/guides/data-modes.md
         - packages/fsm/guides/resources.md
         - packages/fsm/guides/streaming.md
@@ -139,6 +143,9 @@ nav:
         - packages/fsm/examples/index.md
         - packages/fsm/examples/database-etl.md
         - packages/fsm/examples/file-processor.md
+        - packages/fsm/examples/end-to-end-streaming.md
+        - packages/fsm/examples/llm-conversation.md
+        - packages/fsm/examples/regex-transformations.md
         - packages/fsm/examples/api-workflow.md
         - packages/fsm/examples/llm-chain.md
     - Xization:

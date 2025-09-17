@@ -8,6 +8,12 @@ This section contains comprehensive guides for using the DataKnobs FSM package e
 
 ### Core Concepts
 
+- **[Configuration Guide](configuration.md)** - Complete guide to FSM configuration:
+  - State and arc definitions
+  - Function types and transforms
+  - Data modes and networks
+  - Common patterns and best practices
+
 - **[Data Modes Guide](data-modes.md)** - Understanding the two types of modes:
   - **DataHandlingMode**: How data is managed within states (COPY, REFERENCE, DIRECT)
   - **ProcessingMode**: How many records to process (SINGLE, BATCH, STREAM)
@@ -36,10 +42,11 @@ This section contains comprehensive guides for using the DataKnobs FSM package e
 
 If you're new to DataKnobs FSM, we recommend reading the guides in this order:
 
-1. **[Data Modes Guide](data-modes.md)** - Understand the critical distinction between DataHandlingMode (memory safety) and ProcessingMode (throughput)
-2. **[Resources Guide](resources.md)** - Learn how to manage databases, APIs, and other external dependencies
-3. **[CLI Guide](cli.md)** - Use the `fsm` command-line tool for development and debugging
-4. **[Streaming Guide](streaming.md)** - Handle large datasets that don't fit in memory
+1. **[Configuration Guide](configuration.md)** - Learn how to define states, arcs, and functions
+2. **[Data Modes Guide](data-modes.md)** - Understand the critical distinction between DataHandlingMode (memory safety) and ProcessingMode (throughput)
+3. **[Resources Guide](resources.md)** - Learn how to manage databases, APIs, and other external dependencies
+4. **[CLI Guide](cli.md)** - Use the `fsm` command-line tool for development and debugging
+5. **[Streaming Guide](streaming.md)** - Handle large datasets that don't fit in memory
 
 ## Key Topics Covered
 

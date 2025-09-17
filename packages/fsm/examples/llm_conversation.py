@@ -790,7 +790,7 @@ async def main():
 
     for message in test_messages:
         print(f"User: {message}")
-        response = conversation.process_message(message)
+        response = await conversation.process_message(message)
         print(f"Assistant: {response}")
         print("-" * 40)
 

@@ -30,7 +30,19 @@ Demonstrates a validation pipeline for data quality assurance.
 - Error collection and reporting
 - Configurable validation rules
 
-#### 3. Large File Processor (`large_file_processor.py`)
+#### 3. [End-to-End Streaming](end-to-end-streaming.md) (`end_to_end_streaming.py`)
+Comprehensive demonstration of FSM's streaming capabilities for processing large datasets.
+
+**Key Features:**
+- True end-to-end streaming through FSM states
+- File-to-file streaming with transformations
+- Real-time stream processing from generators
+- Multi-stage streaming pipelines
+- Memory-efficient chunk-based processing
+- Automatic backpressure management
+- Progress tracking and monitoring
+
+#### 4. Large File Processor (`large_file_processor.py`)
 Shows how to process large files efficiently using streaming.
 
 **Key Features:**
@@ -39,7 +51,7 @@ Shows how to process large files efficiently using streaming.
 - Progress tracking
 - Error recovery for partial failures
 
-#### 4. Advanced Debugging Examples (`advanced_debugging.py`, `advanced_debugging_simple.py`)
+#### 5. Advanced Debugging Examples (`advanced_debugging.py`, `advanced_debugging_simple.py`)
 Demonstrates the `AdvancedFSM` debugging capabilities.
 
 **Key Features:**
@@ -49,7 +61,7 @@ Demonstrates the `AdvancedFSM` debugging capabilities.
 - State inspection
 - Performance profiling
 
-#### 5. LLM Conversation System (`llm_conversation.py`)
+#### 6. LLM Conversation System (`llm_conversation.py`)
 An FSM-based conversational AI system.
 
 **Key Features:**
@@ -59,7 +71,7 @@ An FSM-based conversational AI system.
 - Intent recognition states
 - Response generation workflow
 
-#### 6. [Text Normalization with Regex](regex-transformations.md) (`normalize_file_example.py`, `normalize_file_with_regex.py`)
+#### 7. [Text Normalization with Regex](regex-transformations.md) (`normalize_file_example.py`, `normalize_file_with_regex.py`)
 Powerful text processing using regular expressions directly in YAML configurations.
 
 **Key Features:**
@@ -72,7 +84,7 @@ Powerful text processing using regular expressions directly in YAML configuratio
 - Multiple format conversions (snake_case, kebab-case, CamelCase)
 - Pattern extraction and detection
 
-#### 7. Regex Transform Configurations (`regex_transforms.yaml`, `regex_workflow.yaml`)
+#### 8. Regex Transform Configurations (`regex_transforms.yaml`, `regex_workflow.yaml`)
 Ready-to-use YAML configurations for text processing.
 
 **Key Features:**
