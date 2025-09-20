@@ -15,21 +15,21 @@ class ConfigValidator:
     
     def validate_file(self, file_path: str) -> List[str]:
         """Validate configuration file.
-        
+
         Args:
             file_path: Path to configuration file
-            
+
         Returns:
             List of validation errors (empty if valid)
         """
         errors = []
-        
+
         try:
             # Try to load and validate the config - loading validates structure
-            self.loader.load_file(Path(file_path))
+            self.loader.load_from_file(Path(file_path))
             # If we get here, the config is valid
             return errors
-            
+
         except Exception as e:
             errors.append(str(e))
             return errors

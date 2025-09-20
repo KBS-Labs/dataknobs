@@ -20,7 +20,18 @@ A comprehensive example showing how to build a production-ready ETL pipeline usi
 - Data validation and quality checks
 - Business metrics calculation (revenue, customer segments)
 
-#### 2. Data Validation Pipeline (`data_validation_pipeline.py`)
+#### 2. [Data Processing Pipeline](data-pipeline.md) (`data_pipeline_example.py`)
+A robust data processing pipeline demonstrating validation, enrichment, and aggregation.
+
+**Key Features:**
+- Custom transform functions (ITransformFunction interface)
+- Data validation with required fields and type checking
+- Data enrichment with computed fields and categorization
+- Resource management for tracking processing statistics
+- Error handling and recovery patterns
+- Single record and batch processing modes
+
+#### 3. Data Validation Pipeline (`data_validation_pipeline.py`)
 Demonstrates a validation pipeline for data quality assurance.
 
 **Key Features:**
@@ -30,7 +41,7 @@ Demonstrates a validation pipeline for data quality assurance.
 - Error collection and reporting
 - Configurable validation rules
 
-#### 3. [End-to-End Streaming](end-to-end-streaming.md) (`end_to_end_streaming.py`)
+#### 4. [End-to-End Streaming](end-to-end-streaming.md) (`end_to_end_streaming.py`)
 Comprehensive demonstration of FSM's streaming capabilities for processing large datasets.
 
 **Key Features:**
@@ -42,7 +53,7 @@ Comprehensive demonstration of FSM's streaming capabilities for processing large
 - Automatic backpressure management
 - Progress tracking and monitoring
 
-#### 4. Large File Processor (`large_file_processor.py`)
+#### 5. Large File Processor (`large_file_processor.py`)
 Shows how to process large files efficiently using streaming.
 
 **Key Features:**
@@ -51,7 +62,7 @@ Shows how to process large files efficiently using streaming.
 - Progress tracking
 - Error recovery for partial failures
 
-#### 5. Advanced Debugging Examples (`advanced_debugging.py`, `advanced_debugging_simple.py`)
+#### 6. Advanced Debugging Examples (`advanced_debugging.py`, `advanced_debugging_simple.py`)
 Demonstrates the `AdvancedFSM` debugging capabilities.
 
 **Key Features:**
@@ -61,7 +72,7 @@ Demonstrates the `AdvancedFSM` debugging capabilities.
 - State inspection
 - Performance profiling
 
-#### 6. LLM Conversation System (`llm_conversation.py`)
+#### 7. LLM Conversation System (`llm_conversation.py`)
 An FSM-based conversational AI system.
 
 **Key Features:**
@@ -71,7 +82,7 @@ An FSM-based conversational AI system.
 - Intent recognition states
 - Response generation workflow
 
-#### 7. [Text Normalization with Regex](regex-transformations.md) (`normalize_file_example.py`, `normalize_file_with_regex.py`)
+#### 8. [Text Normalization with Regex](regex-transformations.md) (`normalize_file_example.py`, `normalize_file_with_regex.py`)
 Powerful text processing using regular expressions directly in YAML configurations.
 
 **Key Features:**
@@ -84,7 +95,7 @@ Powerful text processing using regular expressions directly in YAML configuratio
 - Multiple format conversions (snake_case, kebab-case, CamelCase)
 - Pattern extraction and detection
 
-#### 8. Regex Transform Configurations (`regex_transforms.yaml`, `regex_workflow.yaml`)
+#### 9. Regex Transform Configurations (`regex_transforms.yaml`, `regex_workflow.yaml`)
 Ready-to-use YAML configurations for text processing.
 
 **Key Features:**
@@ -190,6 +201,9 @@ cd packages/fsm
 
 # Run the database ETL example
 uv run python examples/database_etl.py
+
+# Run the data processing pipeline
+uv run python examples/data_pipeline_example.py
 
 # Run the data validation pipeline
 uv run python examples/data_validation_pipeline.py

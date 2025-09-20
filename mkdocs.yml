@@ -142,6 +142,7 @@ nav:
       - Examples:
         - packages/fsm/examples/index.md
         - packages/fsm/examples/database-etl.md
+        - packages/fsm/examples/data-pipeline.md
         - packages/fsm/examples/file-processor.md
         - packages/fsm/examples/end-to-end-streaming.md
         - packages/fsm/examples/llm-conversation.md
