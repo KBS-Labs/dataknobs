@@ -316,7 +316,118 @@ flowchart LR
 3. Append to state history for debugging
 4. Trigger state entry processing for new state
 
-### 6. Complete Execution Loop
+### 6. Push Arc Execution Flow
+
+When a push arc is encountered during execution, a special subnetwork execution process is triggered:
+
+```mermaid
+flowchart TD
+    StateA[Current State] --> EvalCond[Evaluate Push Arc Condition]
+    EvalCond -->|Condition Met| PrepPush[Prepare for Push]
+    EvalCond -->|Condition Failed| NextArc[Try Next Arc]
+
+    PrepPush --> CheckDepth[Check Max Depth]
+    CheckDepth -->|OK| SaveRes[Save Parent State Resources]
+    CheckDepth -->|Exceeded| Error[Throw DepthError]
+
+    SaveRes --> ParseTarget[Parse target_network:initial_state]
+    ParseTarget --> PushStack[Push to Network Stack]
+    PushStack --> CreateContext[Create Sub-Context]
+
+    CreateContext --> ExecSub[Execute Subnetwork]
+    ExecSub --> SubDone{Subnetwork Complete?}
+
+    SubDone -->|Success| UpdateData[Update Parent Data]
+    SubDone -->|Failure| PopStack[Pop Network Stack]
+
+    UpdateData --> ReturnState{Return State Specified?}
+    ReturnState -->|Yes| EnterReturn[Enter Return State]
+    ReturnState -->|No| Continue[Continue Normal Flow]
+
+    EnterReturn --> Continue
+    PopStack --> Fail[Return Failure]
+```
+
+#### Detailed Push Arc Process
+
+**1. Arc Condition Evaluation**
+- Push arcs support the same conditional logic as regular arcs
+- Condition functions receive current data and context
+- If condition fails, push arc is skipped and next available arc is tried
+
+**2. Depth Limit Check**
+- Maximum network stack depth is enforced (default: 10 levels)
+- Prevents infinite recursion in network hierarchies
+- Throws `StateTransitionError` if depth exceeded
+
+**3. Resource Context Preservation**
+- Parent state resources are saved before pushing
+- These resources become available to all subnetwork states
+- Resources are accessed via `context.metadata['parent_state_resources']`
+
+**4. Target Network Parsing**
+- Supports `"network_name"` format (uses default initial state)
+- Supports `"network_name:initial_state"` format (custom entry point)
+- Validates that specified initial state exists in target network
+
+**5. Network Stack Management**
+- Current network context is pushed onto stack: `[(network_name, return_state)]`
+- Stack enables proper return to parent network after subnetwork completion
+- Stack is automatically popped when subnetwork reaches end state
+
+**6. Context Isolation Modes**
+- **COPY** (default): Creates new ExecutionContext with copied data
+- **PARTIAL**: Clones context with shared variables
+- **REFERENCE**: Uses same context (no isolation)
+- Resource manager and variables are preserved across isolation modes
+
+**7. Subnetwork Execution**
+- Subnetwork executes with its own state machine logic
+- Initial state can be overridden using `network_name:initial_state` syntax
+- Normal state entry processing applies (pre-validators, transforms, etc.)
+- Subnetwork continues until reaching an end state
+
+**8. Result Integration**
+- Successful subnetwork execution updates parent context data
+- Failed execution preserves original parent data
+- Data transformations in subnetwork are reflected in final result
+
+**9. Return State Processing**
+- If `return_state` specified: execution continues at that state in parent network
+- If no return state: execution continues from push arc's original target
+- Return state entry includes full state processing (resources, validators, transforms)
+
+**10. Resource Cleanup**
+- Parent state resources are restored/cleaned up appropriately
+- Subnetwork-specific resources are released
+- Resource inheritance attributes are removed from context
+
+#### Push Arc Error Handling
+
+```mermaid
+flowchart TD
+    PushArc[Execute Push Arc] --> TryPush[Attempt Push]
+    TryPush --> CheckErrors{Errors?}
+
+    CheckErrors -->|Network Not Found| PopReturn[Pop Stack & Return False]
+    CheckErrors -->|State Not Found| PopReturn
+    CheckErrors -->|Depth Exceeded| ThrowError[Throw StateTransitionError]
+    CheckErrors -->|Context Error| PopReturn
+    CheckErrors -->|Subnetwork Failed| UpdateFailed[Update with Failure Result]
+    CheckErrors -->|Success| UpdateSuccess[Update with Success Result]
+
+    PopReturn --> Cleanup[Cleanup Resources]
+    UpdateFailed --> Cleanup
+    UpdateSuccess --> ReturnSuccess[Return True]
+```
+
+**Error Recovery**:
+- Network stack is properly unwound on failures
+- Resources are cleaned up even on error conditions
+- Parent context remains intact after failed subnetwork execution
+- Execution can continue with alternative arcs if push arc fails
+
+### 7. Complete Execution Loop
 
 The complete execution loop combines all phases:
 
