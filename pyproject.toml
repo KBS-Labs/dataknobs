@@ -16,8 +16,8 @@ dependencies = [
     "dataknobs",
 ]
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "hatchling>=1.21.0",
     "editables>=0.3",
     "pytest>=8.3.5",
