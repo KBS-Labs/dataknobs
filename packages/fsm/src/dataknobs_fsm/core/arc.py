@@ -157,13 +157,16 @@ class ArcExecution:
             )
         
         try:
-            
+
             # Create function context with resources
             func_context = self._create_function_context(context)
-            
+
             # Execute pre-test
             result = pre_test_func(data, func_context)
-            
+
+            # Handle tuple return from InterfaceWrapper (returns (result, error))
+            if isinstance(result, tuple) and len(result) == 2:
+                return bool(result[0])
             return bool(result)
             
         except Exception as e:

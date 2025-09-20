@@ -6,7 +6,7 @@ for testing FSM resource management and as an example of custom resources.
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from dataknobs_fsm.resources.base import BaseResourceProvider, ResourceStatus, ResourceHealth
 from dataknobs_fsm.functions.base import ResourceError
 

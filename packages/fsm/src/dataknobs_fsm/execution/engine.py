@@ -571,7 +571,7 @@ class ExecutionEngine(BaseExecutionEngine):
             logger.debug(f"State has resource_requirements: {state_def.resource_requirements if hasattr(state_def, 'resource_requirements') else 'NO ATTRIBUTE'}")
 
         if not state_def or not state_def.resource_requirements:
-            logger.debug(f"Returning early - no state def or no requirements")
+            logger.debug("Returning early - no state def or no requirements")
             return resources
 
         resource_manager = getattr(context, 'resource_manager', None)

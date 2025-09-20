@@ -49,7 +49,8 @@ class NetworkExecutor:
         network_name: str,
         context: ExecutionContext | None = None,
         data: Any = None,
-        max_transitions: int = 1000
+        max_transitions: int = 1000,
+        initial_state: str | None = None
     ) -> Tuple[bool, Any]:
         """Execute a specific network.
         
@@ -81,15 +82,23 @@ class NetworkExecutor:
         try:
             # For subnetworks, we always need to set the initial state
             # regardless of what was in the parent context
-            if network.initial_states:
-                initial_state = next(iter(network.initial_states))
-                # Clear any previous state and set the subnetwork's initial state
-                context.current_state = None  # Clear first
-                # Use the engine's public enter_state method for consistent state entry
-                if not self.engine.enter_state(context, initial_state, run_validators=False):
-                    return False, f"Failed to enter initial state: {initial_state}"
+            if initial_state:
+                # Use the provided initial state override
+                # First verify it exists in the network
+                if initial_state not in network.states:
+                    return False, f"State '{initial_state}' not found in network '{network_name}'"
+                state_to_enter = initial_state
+            elif network.initial_states:
+                # Use the network's default initial state
+                state_to_enter = next(iter(network.initial_states))
             else:
                 return False, f"No initial state in network: {network_name}"
+
+            # Clear any previous state and set the subnetwork's initial state
+            context.current_state = None  # Clear first
+            # Use the engine's public enter_state method for consistent state entry
+            if not self.engine.enter_state(context, state_to_enter, run_validators=False):
+                return False, f"Failed to enter initial state: {state_to_enter}"
 
             # Execute the network
             result = self._execute_network_internal(
@@ -143,6 +152,19 @@ class NetworkExecutor:
             # Process each arc
             transition_made = False
             for _arc_id, arc in available_arcs:
+                # Evaluate arc condition/pre_test first (for all arc types including PushArcs)
+                if hasattr(arc, 'pre_test') and arc.pre_test:
+                    # Arc has a condition (stored as pre_test)
+                    # Need to evaluate it using the function registry
+                    from dataknobs_fsm.core.arc import ArcExecution
+                    arc_exec = ArcExecution(
+                        arc,
+                        context.current_state or "",
+                        self.fsm.function_registry
+                    )
+                    if not arc_exec.can_execute(context, context.data):
+                        continue  # Skip this arc if condition is not met
+
                 # Check if this is a push arc
                 if isinstance(arc, PushArc):
                     # Debug: print push arc detection
@@ -213,14 +235,23 @@ class NetworkExecutor:
         # Save parent state resources before pushing
         parent_state_resources = getattr(context, 'current_state_resources', None)
 
+        # Parse target network and optional initial state
+        # Using Syntax: "network_name" or "network_name:initial_state"
+        if ':' in arc.target_network:
+            network_name, initial_state = arc.target_network.split(':', 1)
+            override_initial_state = initial_state.strip()
+        else:
+            network_name = arc.target_network
+            override_initial_state = None
+
         # Push current network
         context.push_network(
-            arc.target_network,
+            network_name,
             arc.return_state
         )
 
         # Get target network
-        target_network = self.fsm.networks.get(arc.target_network)
+        target_network = self.fsm.networks.get(network_name)
         if not target_network:
             context.pop_network()
             return False
@@ -252,8 +283,6 @@ class NetworkExecutor:
                     sub_context.resource_manager = context.resource_manager
         else:
             # No isolation - use same context
-            # We still need to save the parent state to restore later
-            parent_state_saved = context.current_state
             sub_context = context
             if parent_state_resources:
                 context.parent_state_resources = parent_state_resources
@@ -263,11 +292,13 @@ class NetworkExecutor:
         
         # Execute target network (which will handle initial state and transforms)
         import logging
-        logging.debug(f"Executing sub-network {arc.target_network} with context type {type(sub_context)}")
+        logging.debug(f"Executing sub-network {network_name} with context type {type(sub_context)}")
+        # Pass the override initial state if specified
         # Don't pass data parameter - sub_context already has the correctly transformed data
         success, result = self.execute_network(
-            arc.target_network,
-            sub_context
+            network_name,
+            sub_context,
+            initial_state=override_initial_state
         )
         logging.debug(f"Sub-network execution result: success={success}, result={result}")
 

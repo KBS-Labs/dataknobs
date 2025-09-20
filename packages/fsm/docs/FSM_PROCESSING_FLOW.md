@@ -43,10 +43,10 @@ States are the fundamental building blocks of an FSM network. Each state represe
 
 Arcs define transitions between states and control the flow of execution through:
 
-- **Pre-test Conditions**: Functions that determine if a transition is valid
+- **Pre-test Conditions**: Functions that determine if a transition is valid (applies to both regular arcs and push arcs)
 - **Transform Functions**: Functions that modify data during transition
 - **Priority**: Determines arc evaluation order
-- **Target State**: The destination state for the transition
+- **Target State**: The destination state for the transition (regular arcs) or target network for push arcs
 
 ### Networks
 
@@ -865,6 +865,40 @@ arcs:
     priority: 10                           # Arc priority
 ```
 
+#### Custom Initial State Specification
+
+Push arcs support specifying a custom initial state in the target network using the `network_name:initial_state` syntax:
+
+```yaml
+arcs:
+  # Standard push arc - uses target network's default initial state
+  - target_network: "validation_subnet"
+    return_state: "continue_processing"
+
+  # Push arc with custom initial state - skip to specific state
+  - target_network: "validation_subnet:advanced_validation"
+    return_state: "continue_processing"
+    condition:
+      type: "inline"
+      code: "lambda state: state.data.get('requires_advanced_validation')"
+```
+
+**Syntax**: `"<network_name>:<initial_state>"`
+- `network_name`: Name of the target subnetwork
+- `initial_state`: Specific state to start execution at (bypasses default initial state)
+
+**Use Cases**:
+- **Conditional Entry Points**: Different entry points based on data conditions
+- **Workflow Optimization**: Skip initial setup states when not needed
+- **Error Recovery**: Jump to specific recovery states in subnetworks
+- **Multi-Phase Processing**: Enter subnetworks at different stages
+
+**Important Notes**:
+- The specified initial state must exist in the target network
+- Normal state entry processing applies (pre-validators, transforms, etc.)
+- If the initial state doesn't exist, execution fails with an error
+- Backward compatible: existing `target_network` without colon syntax continues to work
+
 ### Data Flow in Push Arcs
 
 ```mermaid
@@ -1377,11 +1411,13 @@ context.function_call_count = {
 4. **Stream Buffering**: Optimize chunk sizes
 5. **Parallel Paths**: Execute independent branches concurrently
 
-## Practical Example
+## Practical Examples
+
+### Example 1: Simple Data Validation and Enrichment
 
 Consider a simple data validation and enrichment FSM:
 
-### Configuration Example
+#### Configuration Example
 
 ```yaml
 # Using simplified format for clarity
@@ -1458,6 +1494,94 @@ arcs:
    - End state reached
    - Return final data
 ```
+
+### Example 2: Conditional Push Arcs with Custom Initial States
+
+This example demonstrates conditional execution with different entry points in a subnetwork:
+
+#### Configuration Example
+
+```yaml
+name: "order_processing_fsm"
+networks:
+  - name: "main"
+    states:
+      - name: "start"
+        is_start: true
+        arcs:
+          # Path 1: Standard customer orders
+          - target: "standard_processing"
+            condition:
+              type: "inline"
+              code: "lambda state: state.data.get('customer_type') == 'standard'"
+          # Path 2: Premium customer orders
+          - target: "premium_processing"
+            condition:
+              type: "inline"
+              code: "lambda state: state.data.get('customer_type') == 'premium'"
+
+      - name: "standard_processing"
+        arcs:
+          # Push to validation network at basic validation state
+          - target_network: "validation:basic_validation"
+            return_state: "fulfillment"
+
+      - name: "premium_processing"
+        arcs:
+          # Push to validation network at premium validation state (skips basic)
+          - target_network: "validation:premium_validation"
+            return_state: "priority_fulfillment"
+
+      - name: "fulfillment"
+        is_end: true
+
+      - name: "priority_fulfillment"
+        is_end: true
+
+  - name: "validation"
+    states:
+      - name: "basic_validation"
+        is_start: true  # Default entry point
+        arcs:
+          - target: "premium_validation"
+        transforms:
+          - type: "inline"
+            code: "lambda state: {**state.data, 'basic_validated': True}"
+
+      - name: "premium_validation"
+        is_end: true
+        transforms:
+          - type: "inline"
+            code: "lambda state: {**state.data, 'premium_validated': True}"
+```
+
+#### Execution Flow Examples
+
+**Standard Customer Path**:
+```
+1. Input: {'customer_type': 'standard', 'order_id': 123}
+2. start → standard_processing (condition: customer_type == 'standard')
+3. Push to validation:basic_validation (enters at basic_validation state)
+4. validation: basic_validation → premium_validation → end
+5. Return to main:fulfillment
+6. Final result: {'customer_type': 'standard', 'order_id': 123, 'basic_validated': True, 'premium_validated': True}
+```
+
+**Premium Customer Path**:
+```
+1. Input: {'customer_type': 'premium', 'order_id': 456}
+2. start → premium_processing (condition: customer_type == 'premium')
+3. Push to validation:premium_validation (skips basic_validation, enters directly at premium_validation)
+4. validation: premium_validation → end
+5. Return to main:priority_fulfillment
+6. Final result: {'customer_type': 'premium', 'order_id': 456, 'premium_validated': True}
+```
+
+**Key Benefits**:
+- **Efficiency**: Premium customers skip basic validation steps
+- **Flexibility**: Different workflows based on data conditions
+- **Modularity**: Validation logic contained in reusable subnetwork
+- **Conditional Entry**: Push arcs support conditional execution with custom initial states
 
 ## Summary
 
