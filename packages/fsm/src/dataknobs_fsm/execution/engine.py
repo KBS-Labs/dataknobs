@@ -1,5 +1,6 @@
 """Execution engine for FSM state machines."""
 
+import logging
 import time
 from enum import Enum
 from typing import Any, Callable, Dict, List, Tuple
@@ -18,6 +19,8 @@ from dataknobs_fsm.execution.common import (
 )
 from dataknobs_fsm.execution.base_engine import BaseExecutionEngine
 from dataknobs_fsm.core.data_wrapper import ensure_dict
+
+logger = logging.getLogger(__name__)
 
 
 class TraversalStrategy(Enum):
@@ -93,15 +96,22 @@ class ExecutionEngine(BaseExecutionEngine):
         # Only override context.data if data was explicitly provided
         if data is not None:
             context.data = data
-        
+
+        # Ensure context has resource_manager from FSM
+        if context.resource_manager is None and self.fsm.resource_manager is not None:
+            context.resource_manager = self.fsm.resource_manager
+
         # Initialize state if needed
         if not context.current_state:
             initial_state = self._find_initial_state()
             if not initial_state:
                 return False, "No initial state found"
-            context.set_state(initial_state)
-            # Execute transforms for the initial state
-            self._execute_state_transforms(context, initial_state)
+
+            # Use the common state entry method
+            if not self.enter_state(context, initial_state):
+                # Return specific error if available, otherwise generic message
+                error_msg = getattr(context, 'last_error', "Failed to enter initial state")
+                return False, error_msg
         
         # Execute based on data mode
         if context.data_mode == ProcessingMode.SINGLE:
@@ -218,7 +228,8 @@ class ExecutionEngine(BaseExecutionEngine):
             # Reset to initial state for each item
             initial_state = self._find_initial_state()
             if initial_state:
-                item_context.set_state(initial_state)
+                # Use the common state entry method
+                self.enter_state(item_context, initial_state, run_validators=False)
             
             # Execute for this item
             success, result = self._execute_single(
@@ -286,7 +297,8 @@ class ExecutionEngine(BaseExecutionEngine):
                 # Reset to initial state
                 initial_state = self._find_initial_state()
                 if initial_state:
-                    record_context.set_state(initial_state)
+                    # Use the common state entry method
+                    self.enter_state(record_context, initial_state, run_validators=False)
                 
                 # Execute for this record
                 success, result = self._execute_single(
@@ -316,6 +328,72 @@ class ExecutionEngine(BaseExecutionEngine):
             'errors': errors
         }
     
+    def enter_state(
+        self,
+        context: ExecutionContext,
+        state_name: str,
+        run_validators: bool = True
+    ) -> bool:
+        """Public method to handle entering a state with all necessary setup.
+
+        This method handles the complete state entry process including:
+        - Setting the current state
+        - Allocating resources
+        - Running pre-validators (optional)
+        - Executing transforms
+        - Setting up state tracking
+
+        Args:
+            context: Execution context.
+            state_name: Name of the state to enter.
+            run_validators: Whether to run pre-validators (default True).
+
+        Returns:
+            True if state entry was successful, False otherwise.
+        """
+        # Set the current state
+        context.set_state(state_name)
+
+        # Allocate state resources
+        state_resources = self._allocate_state_resources(context, state_name)
+
+        # Store in context for cleanup tracking
+        context.current_state_resources = state_resources
+
+        # Execute pre-validators if requested
+        if run_validators:
+            if not self._execute_pre_validators(context, state_name, state_resources):
+                # Clean up resources if validation fails
+                self._release_state_resources(context, state_name, state_resources)
+                # Store error information in context for better error reporting
+                if not hasattr(context, 'last_error'):
+                    context.last_error = f"Pre-validation failed for state '{state_name}'"
+                return False
+
+        # Execute state transforms
+        self._execute_state_transforms(context, state_name, state_resources)
+
+        return True
+
+    def exit_state(
+        self,
+        context: ExecutionContext,
+        state_name: str
+    ) -> None:
+        """Public method to handle exiting a state with cleanup.
+
+        This method handles:
+        - Releasing state resources
+        - Any other cleanup needed when leaving a state
+
+        Args:
+            context: Execution context.
+            state_name: Name of the state being exited.
+        """
+        if hasattr(context, 'current_state_resources') and context.current_state_resources:
+            self._release_state_resources(context, state_name, context.current_state_resources)
+            context.current_state_resources = {}
+
     def _execute_transition(
         self,
         context: ExecutionContext,
@@ -358,12 +436,11 @@ class ExecutionEngine(BaseExecutionEngine):
                 if result is not None:
                     context.data = result
                 
-                # Update state
-                context.set_state(arc.target_state)
+                # Use the common state entry method
+                if not self.enter_state(context, arc.target_state):
+                    return False
+
                 self._transition_count += 1
-                
-                # Execute state transforms when entering the new state
-                self._execute_state_transforms(context, arc.target_state)
                 
                 # Fire post-transition hooks
                 if self.enable_hooks:
@@ -415,34 +492,190 @@ class ExecutionEngine(BaseExecutionEngine):
         
         return False
     
-    def _execute_state_transforms(
+    def _execute_pre_validators(
+        self,
+        context: ExecutionContext,
+        state_name: str,
+        state_resources: Dict[str, Any] | None = None
+    ) -> bool:
+        """Execute pre-validation functions when entering a state.
+
+        Args:
+            context: Execution context.
+            state_name: Name of the state.
+            state_resources: Already allocated state resources.
+
+        Returns:
+            True if validation passes, False otherwise.
+        """
+        state_def = self.fsm.get_state(state_name)
+        if not state_def:
+            return True
+
+        # Use provided resources or empty dict
+        resources = state_resources if state_resources is not None else {}
+
+        if hasattr(state_def, 'pre_validation_functions') and state_def.pre_validation_functions:
+            for validator_func in state_def.pre_validation_functions:
+                try:
+                    # Execute validator with state resources
+                    func_context = FunctionContext(
+                        state_name=state_name,
+                        function_name=getattr(validator_func, '__name__', 'validate'),
+                        metadata={'state': state_name, 'phase': 'pre_validation'},
+                        resources=resources,  # Pass state resources
+                        variables=context.variables  # Pass shared variables
+                    )
+                    result = validator_func(ensure_dict(context.data), func_context)
+
+                    if result is False:
+                        return False
+                    # Update context.data if result is a dict
+                    if isinstance(result, dict):
+                        context.data.update(result)
+                except Exception:
+                    # Log error and fail validation
+                    return False
+        return True
+
+    def _allocate_state_resources(
         self,
         context: ExecutionContext,
         state_name: str
+    ) -> Dict[str, Any]:
+        """Allocate resources required by a state.
+
+        Args:
+            context: Execution context.
+            state_name: Name of the state.
+
+        Returns:
+            Dictionary of allocated resources.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.debug(f"_allocate_state_resources called for state: {state_name}")
+
+        # Start with parent state resources if in subnetwork
+        parent_resources = getattr(context, 'parent_state_resources', None)
+        if parent_resources:
+            resources = dict(parent_resources)  # Copy parent resources
+            logger.debug(f"Starting with parent resources: {list(parent_resources.keys())}")
+        else:
+            resources = {}
+            logger.debug("No parent resources")
+
+        state_def = self.fsm.get_state(state_name)
+        logger.debug(f"State def found: {state_def is not None}")
+        if state_def:
+            logger.debug(f"State has resource_requirements: {state_def.resource_requirements if hasattr(state_def, 'resource_requirements') else 'NO ATTRIBUTE'}")
+
+        if not state_def or not state_def.resource_requirements:
+            logger.debug(f"Returning early - no state def or no requirements")
+            return resources
+
+        resource_manager = getattr(context, 'resource_manager', None)
+        logger.debug(f"Resource manager available: {resource_manager is not None}")
+        if not resource_manager:
+            logger.debug("No resource manager - returning empty")
+            return resources
+
+        # Generate owner ID for state resource allocation
+        owner_id = f"state_{state_name}_{getattr(context, 'execution_id', 'unknown')}"
+
+        for resource_config in state_def.resource_requirements:
+            # Skip if resource already inherited from parent
+            if resource_config.name in resources:
+                logger.info(f"Resource '{resource_config.name}' inherited from parent state")
+                continue
+
+            try:
+                # ResourceConfig from schema has timeout_seconds, not timeout
+                timeout = getattr(resource_config, 'timeout_seconds', 30)
+                resource = resource_manager.acquire(
+                    name=resource_config.name,
+                    owner_id=owner_id,
+                    timeout=timeout
+                )
+                resources[resource_config.name] = resource
+            except Exception as e:
+                # Log error but continue with other resources
+                logger.error(f"Failed to acquire resource {resource_config.name}: {e}")
+
+        return resources
+
+    def _release_state_resources(
+        self,
+        context: ExecutionContext,
+        state_name: str,
+        resources: Dict[str, Any]
+    ) -> None:
+        """Release state-allocated resources.
+
+        Args:
+            context: Execution context.
+            state_name: Name of the state.
+            resources: Resources to release.
+        """
+        resource_manager = getattr(context, 'resource_manager', None)
+        if not resource_manager:
+            return
+
+        # Get parent resources to avoid releasing them
+        parent_resources = getattr(context, 'parent_state_resources', {})
+
+        owner_id = f"state_{state_name}_{getattr(context, 'execution_id', 'unknown')}"
+
+        for resource_name in resources.keys():
+            # Skip releasing if this is a parent-inherited resource
+            if resource_name in parent_resources:
+                logger.info(f"Skipping release of inherited resource '{resource_name}'")
+                continue
+
+            try:
+                resource_manager.release(resource_name, owner_id)
+            except Exception as e:
+                # Log error but continue
+                logger.error(f"Failed to release resource {resource_name}: {e}")
+
+    def _execute_state_transforms(
+        self,
+        context: ExecutionContext,
+        state_name: str,
+        state_resources: Dict[str, Any] | None = None
     ) -> None:
         """Execute transform functions when entering a state.
 
         Args:
             context: Execution context.
             state_name: Name of the state being entered.
+            state_resources: Already allocated state resources.
         """
         # Get the state definition
         state_def = self.fsm.get_state(state_name)
         if not state_def:
             return
 
+        # Use provided resources or empty dict
+        resources = state_resources if state_resources is not None else {}
+
         # Use base class logic to prepare and execute transforms
         transform_functions, state_obj = self.prepare_state_transform(state_def, context)
 
         for transform_func in transform_functions:
             try:
-                # Create function context
+                # Create function context with resources and variables
                 func_context = FunctionContext(
                     state_name=state_name,
                     function_name=getattr(transform_func, '__name__', 'transform'),
                     metadata={'state': state_name},
-                    resources={}
+                    resources=resources,  # Pass state resources
+                    variables=context.variables  # Pass shared variables
                 )
+
+                # Add parent_state_resources to metadata if available
+                if hasattr(context, 'parent_state_resources') and context.parent_state_resources:
+                    func_context.metadata['parent_state_resources'] = context.parent_state_resources
 
                 # Try calling with state object first (for inline lambdas)
                 try:
@@ -481,12 +714,13 @@ class ExecutionEngine(BaseExecutionEngine):
         if hasattr(state_def, 'validation_functions') and state_def.validation_functions:
             for validator_func in state_def.validation_functions:
                 try:
-                    # Create function context
+                    # Create function context with variables
                     func_context = FunctionContext(
                         state_name=state_name,
                         function_name=getattr(validator_func, '__name__', 'validate'),
                         metadata={'state': state_name},
-                        resources={}
+                        resources={},
+                        variables=context.variables  # Pass shared variables
                     )
                     
                     # Execute the validator
@@ -558,7 +792,9 @@ class ExecutionEngine(BaseExecutionEngine):
                     available.append(arc)
         
         # Sort by priority
-        available.sort(key=lambda x: x.priority, reverse=True)
+        # Sort by priority (descending) then by definition order (ascending)
+        # This ensures stable ordering when priorities are equal
+        available.sort(key=lambda x: (-x.priority, x.definition_order))
         
         return available
     

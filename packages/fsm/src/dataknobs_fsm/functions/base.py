@@ -103,6 +103,8 @@ class FunctionContext:
     function_name: str
     metadata: Dict[str, Any] = field(default_factory=dict)
     resources: Dict[str, Any] = field(default_factory=dict)
+    variables: Dict[str, Any] = field(default_factory=dict)  # Shared variables
+    network_name: str | None = None  # Current network for scoping
 
 
 class IValidationFunction(ABC):

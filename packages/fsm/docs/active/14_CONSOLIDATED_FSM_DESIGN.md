@@ -29,11 +29,14 @@ The DataKnobs FSM (Finite State Machine) package provides a comprehensive, produ
 - **Complete Implementation**: All high, medium, and low priority features implemented
 - **Dual Execution Modes**: Full support for both sync and async execution with configurable strategies
 - **Enterprise Patterns**: 15+ production-ready patterns including ETL, API orchestration, and error recovery
-- **Resource Management**: Sophisticated pooling, lifecycle management, and cleanup
+- **Resource Management**: Sophisticated pooling, lifecycle management, and cleanup with state/arc merging
 - **LLM Integration**: Native support for OpenAI, Anthropic, and HuggingFace providers
 - **Comprehensive Testing**: 90%+ code coverage with unit, integration, and performance tests
 - **Hybrid Data Handling**: Intelligent data format adaptation supporting both dict and attribute access patterns
 - **Unified Function Management**: Single system handling all function types with signature detection and adaptation
+- **Enhanced Validation**: Pre and post validators with proper execution ordering
+- **Shared Variables**: Cross-state communication and data caching capabilities
+- **Deterministic Arc Selection**: Priority-based with definition order as tiebreaker
 
 ## Core Concepts
 
@@ -61,9 +64,10 @@ Each state definition includes:
 
 - **Name**: String identifier (e.g., "validate", "process", "complete")
 - **Input Schema**: Expected data structure using dataknobs_data.Field definitions
-- **Validity Test**: Function to validate input data meets requirements
+- **Pre-Validators**: Functions that validate incoming data before transforms are applied
+- **StateTransform Functions**: Optional data transformations executed when entering the state
+- **Post-Validators**: Functions that validate data after transforms, before arc evaluation
 - **State Test**: Boolean function validating if data meets state conditions
-- **StateTransform Function**: Optional data transformation executed when entering the state
 - **Start/End Designation**: Boolean flags for start/end states
 - **End State Test**: For end states, returns one of:
   - CANNOT_END: State cannot terminate
@@ -81,22 +85,48 @@ First-class objects defining transitions:
 - **Pre-test Function**: Optional validation before transition
 - **ArcTransform Function**: Optional data transformation during arc traversal
 - **Priority**: Numeric priority for arc selection (0-100)
-- **Resource Requirements**: Arc-specific resource needs
+- **Definition Order**: Order in which arc was defined (for stable sorting when priorities are equal)
+- **Resource Requirements**: Arc-specific resource needs (additive to state resources)
 - **Push Arc Type**: Special arc that:
   - Executes another state network
   - Returns control to specified state upon completion
   - Supports nested execution contexts
   - Maintains parent-child history relationships
 
-### 5. Transform Functions
+### 5. Validation Functions
+
+The FSM supports two types of validators that execute at different points in the state lifecycle:
+
+#### Pre-Validators
+- **When**: Executed immediately upon entering a state, before transforms
+- **Purpose**: Validate incoming data meets state requirements
+- **Signature**: `validate(data: Dict[str, Any], context: FunctionContext) -> bool`
+- **Configuration**: Via `state.pre_validators`
+- **Behavior**: If any pre-validator returns False, transforms are skipped and transition fails
+- **Example Use Cases**:
+  - Check required fields are present
+  - Validate data types and formats
+  - Ensure business rules are met before processing
+
+#### Post-Validators
+- **When**: Executed after transforms, before arc evaluation
+- **Purpose**: Validate transformed data before determining next state
+- **Signature**: `validate(data: Dict[str, Any], context: FunctionContext) -> bool`
+- **Configuration**: Via `state.validators`
+- **Example Use Cases**:
+  - Verify transform results are valid
+  - Ensure data meets exit criteria
+  - Validate consistency after modifications
+
+### 6. Transform Functions
 
 The FSM supports two distinct types of data transformation functions, clearly separated in purpose and execution:
 
 #### StateTransforms
-- **When**: Executed when entering a state (before state processing)
+- **When**: Executed after pre-validators pass, when entering a state
 - **Purpose**: Prepare/normalize data for state operations
 - **Signature**: `transform(state: State) -> Dict[str, Any]`
-- **Configuration**: Via `state.functions.transform`
+- **Configuration**: Via `state.transforms`
 - **Example Use Cases**:
   - Data normalization and validation
   - Format conversion (JSON to internal format)
@@ -104,7 +134,7 @@ The FSM supports two distinct types of data transformation functions, clearly se
   - Data enrichment from external sources
   - Preparing data for state-specific operations
 
-#### ArcTransforms  
+#### ArcTransforms
 - **When**: Executed during arc traversal (transition between states)
 - **Purpose**: Transform data as it flows between states
 - **Signature**: `transform(data: Any, context: FunctionContext) -> Any`
@@ -116,10 +146,19 @@ The FSM supports two distinct types of data transformation functions, clearly se
   - Data routing and splitting
   - Inter-state data flow transformations
 
-#### Transform Execution Pipeline
+#### Complete Execution Pipeline
 ```
-Input Data → StateTransform → State Processing → ArcTransform → Next State
+Enter State → Allocate Resources → Pre-Validators → StateTransform → Post-Validators → Arc Evaluation → ArcTransform → Next State
 ```
+
+##### Detailed State Entry Flow:
+1. **Resource Allocation**: State resources are allocated once on entry
+2. **Pre-Validation**: Validate incoming data (failure skips transforms)
+3. **State Transforms**: Process/normalize data (if pre-validators pass)
+4. **Post-Validation**: Validate transformed data before arc evaluation
+5. **Arc Selection**: Evaluate arc conditions (sorted by priority, then definition order)
+6. **Arc Execution**: Apply arc transforms with merged state+arc resources
+7. **State Transition**: Move to next state and repeat
 
 #### Function Types
 
@@ -209,7 +248,7 @@ states:
 
 This clear separation was formalized in ADR-027 after initial confusion led to execution issues. The architecture ensures each transform type executes exactly once at the appropriate time.
 
-### 6. Execution Context
+### 7. Execution Context
 
 Maintains execution environment and state:
 
@@ -217,11 +256,36 @@ Maintains execution environment and state:
 - **Input Data**: Original and transformed data
 - **Resource Manager**: Handles resource acquisition/release
 - **Execution History**: Complete audit trail
-- **Variables**: Runtime variable storage
+- **Shared Variables**: Cross-state communication and data caching
+  - Accessible via `context.variables` dictionary
+  - Persists across state transitions
+  - Available to all functions via `FunctionContext.variables`
+  - Supports network-scoped variables for sub-FSMs
 - **Error Stack**: Error tracking and recovery
 - **Metrics**: Performance and usage statistics
 
-### 7. Execution History
+### 8. Function Context
+
+Context passed to all FSM functions providing access to execution environment:
+
+```python
+@dataclass
+class FunctionContext:
+    state_name: str              # Current state name
+    function_name: str           # Function being executed
+    metadata: Dict[str, Any]     # Function metadata
+    resources: Dict[str, Any]    # Allocated resources (state + arc)
+    variables: Dict[str, Any]    # Shared variables for cross-state communication
+    network_name: str | None     # Current network for variable scoping
+```
+
+Key features:
+- **Unified Interface**: All functions receive the same context structure
+- **Resource Access**: Functions can access allocated resources
+- **Variable Sharing**: Enable data caching and inter-state communication
+- **Network Awareness**: Support for scoped variables in sub-networks
+
+### 9. Execution History
 
 Comprehensive tracking system:
 
@@ -444,10 +508,12 @@ class IResource(ABC):
 - Metrics tracking
 
 #### Lifecycle Management
-- Automatic acquisition on state entry
-- Release on state exit
-- Cleanup on error
-- Graceful shutdown
+- **State Resources**: Allocated once when entering a state, shared by all state functions
+- **Arc Resources**: Allocated during arc execution, additive to state resources
+- **Resource Merging**: Arc resources complement (don't replace) state resources
+- **Automatic Cleanup**: Resources released on state exit or error
+- **Conflict Resolution**: State resources take precedence when names conflict
+- **Graceful Shutdown**: All resources properly released on FSM termination
 
 ### Error Handling and Recovery
 

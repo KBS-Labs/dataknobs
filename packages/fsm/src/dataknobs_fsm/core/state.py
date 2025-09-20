@@ -27,10 +27,11 @@ if TYPE_CHECKING:
 
 class StateType(Enum):
     """Type of state in the FSM."""
-    
+
     NORMAL = "normal"  # Regular processing state
     START = "start"  # Entry point state
     END = "end"  # Terminal state
+    START_END = "start_end"  # Both entry and terminal state (for simple FSMs)
     ERROR = "error"  # Error handling state
     CHOICE = "choice"  # Decision/branching state
     WAIT = "wait"  # Waiting/pause state
@@ -107,6 +108,7 @@ class StateDefinition:
     resource_requirements: List[ResourceConfig] = dataclass_field(default_factory=list)
     
     # Functions
+    pre_validation_functions: List[IValidationFunction] = dataclass_field(default_factory=list)
     validation_functions: List[IValidationFunction] = dataclass_field(default_factory=list)
     transform_functions: List[ITransformFunction] = dataclass_field(default_factory=list)
     end_test_function: IEndStateTestFunction | None = None
@@ -163,9 +165,17 @@ class StateDefinition:
             return True, []
         return self.schema.validate(data)
     
+    def add_pre_validation_function(self, func: IValidationFunction) -> None:
+        """Add a pre-validation function.
+
+        Args:
+            func: Pre-validation function to add.
+        """
+        self.pre_validation_functions.append(func)
+
     def add_validation_function(self, func: IValidationFunction) -> None:
         """Add a validation function.
-        
+
         Args:
             func: Validation function to add.
         """

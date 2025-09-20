@@ -87,6 +87,9 @@ class ExecutionContext:
         # Resource management
         self.resources: Dict[str, ResourceAllocation] = {}
         self.resource_limits: Dict[str, Any] = resources or {}
+        self.resource_manager: Any = None  # ResourceManager instance
+        self.current_state_resources: Dict[str, Any] = {}  # Resources allocated to current state
+        self.parent_state_resources: Dict[str, Any] = {}  # Resources from parent state (in subnetworks)
         
         # Transaction management
         self.database = database

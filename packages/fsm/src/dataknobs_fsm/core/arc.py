@@ -1,5 +1,6 @@
 """Arc implementation for FSM state transitions."""
 
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, TYPE_CHECKING
@@ -9,6 +10,8 @@ from dataknobs_fsm.functions.base import FunctionContext
 
 if TYPE_CHECKING:
     from dataknobs_fsm.execution.context import ExecutionContext
+
+logger = logging.getLogger(__name__)
 
 
 class DataIsolationMode(Enum):
@@ -21,17 +24,18 @@ class DataIsolationMode(Enum):
 @dataclass
 class ArcDefinition:
     """Definition of an arc between states.
-    
+
     This class defines the static properties of an arc,
     including the transition logic and resource requirements.
     """
-    
+
     target_state: str
     pre_test: str | None = None
     transform: str | None = None
     priority: int = 0  # Higher priority arcs are evaluated first
+    definition_order: int = 0  # Track definition order for stable sorting
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
     # Resource requirements for this arc
     required_resources: Dict[str, str] = field(default_factory=dict)
     # e.g., {'database': 'main_db', 'llm': 'gpt4'}
@@ -84,7 +88,7 @@ class ArcExecution:
         function_registry
     ):
         """Initialize arc execution.
-        
+
         Args:
             arc_def: Arc definition.
             source_state: Source state name.
@@ -93,12 +97,28 @@ class ArcExecution:
         self.arc_def = arc_def
         self.source_state = source_state
         self.function_registry = function_registry
-        
+
         # Execution statistics
         self.execution_count = 0
         self.success_count = 0
         self.failure_count = 0
         self.total_execution_time = 0.0
+
+    def _log_warning(self, message: str) -> None:
+        """Log a warning message.
+
+        Args:
+            message: Warning message to log.
+        """
+        logger.warning(message)
+
+    def _log_error(self, message: str) -> None:
+        """Log an error message.
+
+        Args:
+            message: Error message to log.
+        """
+        logger.error(message)
     
     def can_execute(
         self,
@@ -176,8 +196,11 @@ class ArcExecution:
         start_time = time.time()
         
         try:
-            # Allocate required resources
-            resources = self._allocate_resources(context)
+            # Get state resources from context if available
+            state_resources = getattr(context, 'current_state_resources', None)
+
+            # Allocate required resources (merging with state resources)
+            resources = self._allocate_resources(context, state_resources)
             
             # Execute transform if defined
             if self.arc_def.transform:
@@ -383,54 +406,92 @@ class ArcExecution:
     
     def _allocate_resources(
         self,
-        context: "ExecutionContext"
+        context: "ExecutionContext",
+        state_resources: Dict[str, Any] | None = None
     ) -> Dict[str, Any]:
-        """Allocate required resources for arc execution.
-        
+        """Allocate required resources for arc execution, merging with state resources.
+
         Args:
             context: Execution context.
-            
+            state_resources: Already allocated state resources to merge with.
+
         Returns:
-            Dictionary of allocated resources.
+            Dictionary of merged resources (state + arc-specific).
         """
-        resources = {}
-        
+        # Start with state resources if provided
+        resources = dict(state_resources) if state_resources else {}
+
         # Get resource manager from context
         resource_manager = getattr(context, 'resource_manager', None)
         if not resource_manager:
-            # No resource manager available - return empty dict
+            # No resource manager available - return existing resources
             return resources
-        
+
         # Generate unique owner ID for this arc execution
         # Create an arc identifier from source and target states
         arc_identifier = f"{self.source_state}_to_{self.arc_def.target_state}"
         owner_id = f"arc_{arc_identifier}_{getattr(context, 'execution_id', 'unknown')}"
-        
+
         for resource_type, resource_name in self.arc_def.required_resources.items():
+            # Skip if already have this resource from state
+            if resource_type in resources:
+                self._log_warning(
+                    f"Arc resource '{resource_type}' already allocated by state, skipping"
+                )
+                continue
+
             try:
-                # Acquire the resource through the manager
+                # Acquire arc-specific resource
                 resource = resource_manager.acquire(
                     name=resource_name,
                     owner_id=owner_id,
                     timeout=30.0  # 30 second timeout
                 )
                 resources[resource_type] = resource
-                
-                # Track in context for cleanup
-                if not hasattr(context, '_acquired_resources'):
-                    context._acquired_resources = {}
-                context._acquired_resources[resource_name] = owner_id
-                
+
+                # Track for cleanup (only arc-specific resources)
+                if not hasattr(context, '_arc_acquired_resources'):
+                    context._arc_acquired_resources = {}
+                context._arc_acquired_resources[resource_name] = owner_id
+
             except Exception as e:
-                # Resource acquisition failed - clean up any acquired resources
-                self._release_resources(context, resources)
+                # Resource acquisition failed - clean up only arc-specific resources
+                self._release_arc_resources(context, getattr(context, '_arc_acquired_resources', {}))
                 raise ResourceError(
                     resource_id=resource_name,
-                    message=f"Failed to acquire resource: {e}",
+                    message=f"Failed to acquire arc resource: {e}",
                     details={"operation": "acquire", "error": str(e)}
                 ) from e
-        
+
         return resources
+
+    def _release_arc_resources(
+        self,
+        context: "ExecutionContext",
+        arc_resources: Dict[str, str]
+    ) -> None:
+        """Release only arc-specific resources, not state resources.
+
+        Args:
+            context: Execution context.
+            arc_resources: Map of resource_name -> owner_id for arc resources only.
+        """
+        if not arc_resources:
+            return
+
+        resource_manager = getattr(context, 'resource_manager', None)
+        if not resource_manager:
+            return
+
+        for resource_name, owner_id in arc_resources.items():
+            try:
+                resource_manager.release(resource_name, owner_id)
+            except Exception as e:
+                self._log_error(f"Failed to release arc resource {resource_name}: {e}")
+
+        # Clear arc resources tracking
+        if hasattr(context, '_arc_acquired_resources'):
+            context._arc_acquired_resources = {}
     
     def _release_resources(
         self,

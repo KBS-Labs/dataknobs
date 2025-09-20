@@ -131,6 +131,7 @@ class StateConfig(BaseModel):
 
     name: str
     data_schema: Dict[str, Any] | None = Field(default=None, alias="schema")
+    pre_validators: List[FunctionReference] = Field(default_factory=list)
     validators: List[FunctionReference] = Field(default_factory=list)
     transforms: List[FunctionReference] = Field(default_factory=list)
     arcs: List[Union[ArcConfig, PushArcConfig]] = Field(default_factory=list)

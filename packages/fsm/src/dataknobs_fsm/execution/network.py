@@ -77,15 +77,20 @@ class NetworkExecutor:
         
         # Track this network
         self._active_networks[network_name] = context
-        
+
         try:
-            # Find and set initial state
+            # For subnetworks, we always need to set the initial state
+            # regardless of what was in the parent context
             if network.initial_states:
                 initial_state = next(iter(network.initial_states))
-                context.set_state(initial_state)
+                # Clear any previous state and set the subnetwork's initial state
+                context.current_state = None  # Clear first
+                # Use the engine's public enter_state method for consistent state entry
+                if not self.engine.enter_state(context, initial_state, run_validators=False):
+                    return False, f"Failed to enter initial state: {initial_state}"
             else:
                 return False, f"No initial state in network: {network_name}"
-            
+
             # Execute the network
             result = self._execute_network_internal(
                 network,
@@ -140,6 +145,9 @@ class NetworkExecutor:
             for _arc_id, arc in available_arcs:
                 # Check if this is a push arc
                 if isinstance(arc, PushArc):
+                    # Debug: print push arc detection
+                    import logging
+                    logging.debug(f"Detected PushArc from {context.current_state} to network {arc.target_network}")
                     success = self._handle_push_arc(
                         arc,
                         context
@@ -186,11 +194,11 @@ class NetworkExecutor:
         context: ExecutionContext
     ) -> bool:
         """Handle a push arc to another network.
-        
+
         Args:
             arc: Push arc to execute.
             context: Execution context.
-            
+
         Returns:
             True if successful.
         """
@@ -201,19 +209,22 @@ class NetworkExecutor:
                 to_state=arc.target_network,
                 message="Maximum network depth exceeded"
             )
-        
+
+        # Save parent state resources before pushing
+        parent_state_resources = getattr(context, 'current_state_resources', None)
+
         # Push current network
         context.push_network(
             arc.target_network,
             arc.return_state
         )
-        
+
         # Get target network
         target_network = self.fsm.networks.get(arc.target_network)
         if not target_network:
             context.pop_network()
             return False
-        
+
         # Create isolated context if requested
         if hasattr(arc, 'isolation_mode') and arc.isolation_mode == DataIsolationMode.COPY:
             # Full isolation - new context
@@ -223,28 +234,53 @@ class NetworkExecutor:
                 resources=context.resource_limits
             )
             sub_context.data = context.data
-        elif arc.data_isolation_mode == 'partial':
+            sub_context.variables = context.variables  # Share variables for tracking
+            # Preserve resource manager in new context
+            if hasattr(context, 'resource_manager'):
+                sub_context.resource_manager = context.resource_manager
+            # Preserve parent state resources in new context
+            if parent_state_resources:
+                sub_context.parent_state_resources = parent_state_resources
+        elif hasattr(arc, 'data_isolation_mode') and arc.data_isolation_mode == 'partial':
             # Partial isolation - clone context
             sub_context = context.clone()
+            # Preserve parent state resources - this needs to be accessible to all subnetwork states
+            if parent_state_resources:
+                sub_context.parent_state_resources = parent_state_resources
+                # Also ensure resource_manager is available
+                if hasattr(context, 'resource_manager'):
+                    sub_context.resource_manager = context.resource_manager
         else:
             # No isolation - use same context
+            # We still need to save the parent state to restore later
+            parent_state_saved = context.current_state
             sub_context = context
+            if parent_state_resources:
+                context.parent_state_resources = parent_state_resources
+            # Ensure resource_manager is available in subcontext
+            if hasattr(context, 'resource_manager') and not hasattr(sub_context, 'resource_manager'):
+                sub_context.resource_manager = context.resource_manager
         
-        # Execute target network
+        # Execute target network (which will handle initial state and transforms)
+        import logging
+        logging.debug(f"Executing sub-network {arc.target_network} with context type {type(sub_context)}")
+        # Don't pass data parameter - sub_context already has the correctly transformed data
         success, result = self.execute_network(
             arc.target_network,
-            sub_context,
-            context.data
+            sub_context
         )
-        
+        logging.debug(f"Sub-network execution result: success={success}, result={result}")
+
         if success:
             # Update main context with result
             context.data = result
-            
-            # Return to specified state
+
+            # Return to specified state and execute its entry logic
             if arc.return_state:
-                context.set_state(arc.return_state)
-            
+                # Use the engine's public enter_state method to properly enter the return state
+                if not self.engine.enter_state(context, arc.return_state, run_validators=False):
+                    return False
+
             return True
         
         return False
@@ -254,13 +290,17 @@ class NetworkExecutor:
         context: ExecutionContext
     ) -> None:
         """Handle returning from a pushed network.
-        
+
         Args:
             context: Execution context.
         """
         if context.network_stack:
             _network_name, return_state = context.pop_network()
-            
+
+            # Clean up parent_state_resources attribute if it was added
+            if hasattr(context, 'parent_state_resources'):
+                delattr(context, 'parent_state_resources')
+
             if return_state:
                 context.set_state(return_state)
     
@@ -270,25 +310,29 @@ class NetworkExecutor:
         state_name: str | None
     ) -> List[Tuple[str, Any]]:
         """Get available arcs from a state.
-        
+
         Args:
             network: Network containing arcs.
             state_name: Current state name.
-            
+
         Returns:
             List of (arc_id, arc) tuples.
         """
         if not state_name:
             return []
-        
+
+        # Get the state definition to access actual arc objects (including PushArcs)
+        state_def = network.get_state(state_name)
+        if not state_def:
+            return []
+
         available = []
-        for arc_id, arc in network.arcs.items():
-            # Parse source state from arc_id
-            if ':' in arc_id:
-                source = arc_id.split(':')[0]
-                if source == state_name:
-                    available.append((arc_id, arc))
-        
+        # Use the state's outgoing_arcs which have the proper arc types
+        for i, arc in enumerate(state_def.outgoing_arcs):
+            # Create an arc_id for tracking
+            arc_id = f"{state_name}:{arc.target_state}:{i}"
+            available.append((arc_id, arc))
+
         return available
     
     def execute_parallel_networks(

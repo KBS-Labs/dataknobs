@@ -51,6 +51,8 @@ During documentation, we discovered that while states can define `resources` in 
 
 This needs to be fixed alongside the pre-validator implementation.
 
+NOTE: A detail that must be considered and resolved is how resources are managed through the execution of subnetworks through push arcs.
+
 ## Implementation Checklist
 
 ### 1. Schema Updates

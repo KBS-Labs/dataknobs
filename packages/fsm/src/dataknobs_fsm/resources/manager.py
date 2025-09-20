@@ -53,7 +53,7 @@ class ResourceManager:
     
     def unregister_provider(self, name: str) -> None:
         """Unregister a resource provider.
-        
+
         Args:
             name: Resource name.
         """
@@ -62,13 +62,34 @@ class ResourceManager:
             if name in self._pools:
                 self._pools[name].close()
                 del self._pools[name]
-            
+
             # Remove provider
             if name in self._providers:
                 provider = self._providers[name]
                 if hasattr(provider, 'close'):
                     provider.close()
                 del self._providers[name]
+
+    def get_provider(self, name: str) -> IResourceProvider | None:
+        """Get a resource provider by name.
+
+        Args:
+            name: Resource name.
+
+        Returns:
+            The resource provider or None if not found.
+        """
+        with self._lock:
+            return self._providers.get(name)
+
+    def get_all_providers(self) -> Dict[str, IResourceProvider]:
+        """Get all registered resource providers.
+
+        Returns:
+            Dictionary of resource name to provider.
+        """
+        with self._lock:
+            return dict(self._providers)
     
     def acquire(
         self,

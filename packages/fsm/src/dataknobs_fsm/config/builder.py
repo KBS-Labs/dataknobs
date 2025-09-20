@@ -272,15 +272,17 @@ class FSMBuilder:
             from dataknobs_fsm.core.state import StateType
             network.add_state(
                 state_def,
-                initial=(state_def.type == StateType.START),
-                final=(state_def.type == StateType.END)
+                initial=(state_def.type in [StateType.START, StateType.START_END]),
+                final=(state_def.type in [StateType.END, StateType.START_END])
             )
         
-        # Create arcs
+        # Create arcs with definition order tracking
+        arc_definition_order = 0
         for state_config in network_config.states:
             state_def = state_defs[state_config.name]
             for arc_config in state_config.arcs:
-                arc = self._build_arc(arc_config, state_def, network, fsm_config)
+                arc = self._build_arc(arc_config, state_def, network, fsm_config, arc_definition_order)
+                arc_definition_order += 1
                 # Add arc to both the state definition and the network
                 state_def.outgoing_arcs.append(arc)
                 # Also register the arc with the network for execution
@@ -317,6 +319,12 @@ class FSMBuilder:
         if state_config.data_schema:
             schema = self._build_schema(state_config.data_schema)
         
+        # Resolve pre-validators
+        pre_validators = []
+        for func_ref in state_config.pre_validators:
+            pre_validator = self._resolve_function(func_ref, IValidationFunction)
+            pre_validators.append(pre_validator)
+
         # Resolve validators
         validators = []
         for func_ref in state_config.validators:
@@ -337,6 +345,7 @@ class FSMBuilder:
         # Create state definition with correct field names
         state_def = StateDefinition(name=state_config.name)
         state_def.schema = schema
+        state_def.pre_validation_functions = pre_validators
         state_def.validation_functions = validators
         state_def.transform_functions = transforms
         # Look up actual resource configs from the FSM config
@@ -346,9 +355,15 @@ class FSMBuilder:
             for r in state_config.resources
         ]
         state_def.data_mode = data_mode
-        state_def.type = StateType.START if state_config.is_start else (
-            StateType.END if state_config.is_end else StateType.NORMAL
-        )
+        # Handle states that are both start and end
+        if state_config.is_start and state_config.is_end:
+            state_def.type = StateType.START_END
+        elif state_config.is_start:
+            state_def.type = StateType.START
+        elif state_config.is_end:
+            state_def.type = StateType.END
+        else:
+            state_def.type = StateType.NORMAL
         state_def.metadata = state_config.metadata
         
         return state_def
@@ -390,6 +405,7 @@ class FSMBuilder:
         source_state: StateDefinition,
         network: StateNetwork,
         fsm_config: FSMConfig,
+        definition_order: int = 0,
     ) -> ArcDefinition:
         """Build an arc definition from configuration.
 
@@ -398,6 +414,7 @@ class FSMBuilder:
             source_state: Source state definition.
             network: Parent network.
             fsm_config: Parent FSM configuration.
+            definition_order: Order in which this arc was defined.
 
         Returns:
             ArcDefinition instance.
@@ -462,6 +479,7 @@ class FSMBuilder:
                 pre_test=pre_test_name,
                 transform=arc_transform_name,
                 priority=arc_config.priority,
+                definition_order=definition_order,
                 metadata=arc_config.metadata,
             )
             # Store resources separately if needed
@@ -478,6 +496,7 @@ class FSMBuilder:
                 pre_test=pre_test_name,
                 transform=arc_transform_name,
                 priority=arc_config.priority,
+                definition_order=definition_order,
                 metadata=arc_config.metadata,
             )
             # Store resources separately if needed
