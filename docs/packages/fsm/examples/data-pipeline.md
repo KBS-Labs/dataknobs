@@ -274,7 +274,6 @@ To extend this example for your use case:
 
 ## API References
 
-- [ITransformFunction](../api/functions.md#itransformfunction) - Transform function interface
-- [FunctionManager](../api/functions.md#functionmanager) - Function registration and management
-- [ResourceManager](../api/resources.md#resourcemanager) - Resource lifecycle management
-- [ExecutionEngine](../api/execution.md#executionengine) - FSM execution engine
+- [SimpleFSM](../api/simple.md) - Simple FSM API for basic workflows
+- [AdvancedFSM](../api/advanced.md) - Advanced FSM with debugging capabilities
+- [API Index](../api/index.md) - Complete API documentation

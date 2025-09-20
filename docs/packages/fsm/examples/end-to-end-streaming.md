@@ -398,9 +398,9 @@ uv run pytest tests/test_end_to_end_streaming_example.py -v
 ## Related Documentation
 
 - [FSM Configuration Guide](../guides/configuration.md) - Complete guide to FSM configuration
-- [Streaming API Reference](../api/streaming.md) - Detailed streaming API documentation
-- [Performance Tuning](../guides/performance.md) - Optimize streaming performance
-- [Error Handling](../guides/error-handling.md) - Handle streaming errors effectively
+- [SimpleFSM API](../api/simple.md) - Simple FSM API documentation
+- [AdvancedFSM API](../api/advanced.md) - Advanced FSM with debugging capabilities
+- [API Index](../api/index.md) - Complete API documentation
 
 ## Summary
 

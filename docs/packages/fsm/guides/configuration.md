@@ -3,7 +3,7 @@
 This guide provides comprehensive documentation for creating and understanding FSM configurations in the DataKnobs FSM framework.
 
 !!! note "Complete Configuration Reference"
-    For the full configuration guide with all options and examples, see the [FSM_CONFIG_GUIDE.md](https://github.com/your-repo/dataknobs/blob/main/packages/fsm/docs/FSM_CONFIG_GUIDE.md) in the FSM package documentation.
+    For the full configuration guide with all options and examples, see the FSM package documentation.
 
 ## Quick Reference
 
@@ -261,7 +261,7 @@ etl_pipeline = {
 ## API References
 
 - [SimpleFSM API](../api/simple.md) - Simple synchronous API
-- [AsyncSimpleFSM API](../api/async-simple.md) - Async API for streaming
+- [AsyncSimpleFSM API](../api/async_simple.md) - Async API for streaming
 - [AdvancedFSM API](../api/advanced.md) - Advanced features and debugging
 
 ## Full Documentation
@@ -274,4 +274,4 @@ For complete details including:
 - Resource management
 - Streaming configuration
 
-See the complete [FSM Configuration Guide](../../../../packages/fsm/docs/FSM_CONFIG_GUIDE.md).
+See the [API documentation](../api/index.md) for complete details.
