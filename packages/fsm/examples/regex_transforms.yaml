@@ -1,0 +1,153 @@
+# Example FSM workflow using regex transformations with field tracking
+name: regex_field_transforms
+description: Apply regex transformations and track results in separate fields
+
+states:
+  - name: start
+    is_start: true
+    metadata:
+      description: Entry point - expects record with 'text' field
+
+  - name: normalize_whitespace
+    metadata:
+      description: Normalize whitespace in text
+
+  - name: mask_sensitive
+    metadata:
+      description: Mask sensitive information like SSN, phone numbers
+
+  - name: extract_patterns
+    metadata:
+      description: Extract and tag specific patterns
+
+  - name: complete
+    is_end: true
+    metadata:
+      description: All transformations complete
+
+arcs:
+  - from: start
+    to: normalize_whitespace
+    transform:
+      type: inline
+      code: |
+        lambda data, ctx: {
+            **data,
+            'original': data.get('text', ''),
+            'whitespace_normalized': __import__('re').sub(
+                r'\s+', ' ',
+                data.get('text', '')
+            ).strip()
+        }
+
+  - from: normalize_whitespace
+    to: mask_sensitive
+    transform:
+      type: inline
+      code: |
+        lambda data, ctx: (lambda re, text: {
+            **data,
+            'phone_masked': re.sub(
+                r'\b(\d{3})[-.\s]?(\d{3})[-.\s]?(\d{4})\b',
+                '[PHONE]',
+                text
+            ),
+            'ssn_masked': re.sub(
+                r'\b(\d{3})[-.\s]?(\d{2})[-.\s]?(\d{4})\b',
+                '[SSN]',
+                re.sub(
+                    r'\b(\d{3})[-.\s]?(\d{3})[-.\s]?(\d{4})\b',
+                    '[PHONE]',
+                    text
+                )
+            ),
+            'credit_card_masked': re.sub(
+                r'\b\d{4}[-.\s]?\d{4}[-.\s]?\d{4}[-.\s]?\d{4}\b',
+                '[CARD]',
+                text
+            )
+        })(__import__('re'), data.get('whitespace_normalized', ''))
+
+  - from: mask_sensitive
+    to: extract_patterns
+    transform:
+      type: inline
+      code: |
+        lambda data, ctx: (lambda re, text: {
+            **data,
+            'emails_found': re.findall(
+                r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
+                text
+            ),
+            'urls_found': re.findall(
+                r'https?://[^\s]+',
+                text
+            ),
+            'hashtags_found': re.findall(
+                r'#\w+',
+                text
+            ),
+            'mentions_found': re.findall(
+                r'@\w+',
+                text
+            )
+        })(__import__('re'), data.get('original', ''))
+
+  - from: extract_patterns
+    to: complete
+    transform:
+      type: inline
+      code: |
+        lambda data, ctx: {
+            **data,
+            'processing_complete': True,
+            'transformations_applied': [
+                'whitespace_normalized',
+                'phone_masked',
+                'ssn_masked',
+                'credit_card_masked',
+                'patterns_extracted'
+            ]
+        }
+
+---
+# Alternative: Single-step multi-transform with explicit field naming
+name: all_in_one_regex
+description: Apply all regex transforms in one step with clear field names
+
+states:
+  - name: start
+    is_start: true
+  - name: transform_all
+  - name: complete
+    is_end: true
+
+arcs:
+  - from: start
+    to: transform_all
+    transform:
+      type: inline
+      code: |
+        lambda data, ctx: (lambda re, text: {
+            **data,
+            'original_text': text,
+            'lowercase': text.lower(),
+            'uppercase': text.upper(),
+            'title_case': text.title(),
+            'no_punctuation': re.sub(r'[^\w\s]', '', text),
+            'no_digits': re.sub(r'\d+', '', text),
+            'alphanumeric_only': re.sub(r'[^a-zA-Z0-9\s]', '', text),
+            'words_only': re.sub(r'[^a-zA-Z\s]', '', text),
+            'compressed_spaces': re.sub(r'\s+', ' ', text).strip(),
+            'snake_case': re.sub(r'\s+', '_', text.lower()),
+            'kebab_case': re.sub(r'\s+', '-', text.lower()),
+            'camel_case': ''.join(word.capitalize() for word in text.split()),
+            'word_count': len(text.split()),
+            'char_count': len(text),
+            'has_email': bool(re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text)),
+            'has_url': bool(re.search(r'https?://[^\s]+', text)),
+            'has_phone': bool(re.search(r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b', text))
+        })(__import__('re'), data.get('text', ''))
+
+  - from: transform_all
+    to: complete

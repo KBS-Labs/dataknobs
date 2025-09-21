@@ -25,6 +25,7 @@ class Operator(Enum):
     IN = "in"  # In list
     NOT_IN = "not_in"  # Not in list
     LIKE = "like"  # String pattern matching (SQL LIKE)
+    NOT_LIKE = "not_like"  # String pattern not matching (SQL NOT LIKE)
     REGEX = "regex"  # Regular expression matching
     EXISTS = "exists"  # Field exists
     NOT_EXISTS = "not_exists"  # Field does not exist
@@ -95,6 +96,13 @@ class Filter:
 
             pattern = self.value.replace("%", ".*").replace("_", ".")
             return bool(re.match(f"^{pattern}$", record_value))
+        elif self.operator == Operator.NOT_LIKE:
+            if not isinstance(record_value, str):
+                return False
+            import re
+
+            pattern = self.value.replace("%", ".*").replace("_", ".")
+            return not bool(re.match(f"^{pattern}$", record_value))
         elif self.operator == Operator.REGEX:
             if not isinstance(record_value, str):
                 return False

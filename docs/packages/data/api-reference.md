@@ -54,7 +54,7 @@ db.close()
 - `update(id: str, record: Record) -> bool`: Update an existing record
 - `delete(id: str) -> bool`: Delete a record
 - `exists(id: str) -> bool`: Check if a record exists
-- `upsert(id: str, record: Record) -> str`: Update or insert a record
+- `upsert(id_or_record: str | Record, record: Record | None = None) -> str`: Update or insert a record (enhanced to accept just a Record)
 - `search(query: Query) -> List[Record]`: Search for records
 - `count(query: Query | None) -> int`: Count matching records
 - `clear() -> int`: Delete all records
@@ -91,6 +91,43 @@ if record.has_field("email"):
 # Convert to dict
 data_dict = record.to_dict()
 ```
+
+### Enhanced Upsert (New)
+
+The `upsert` method now supports a more intuitive API that can accept just a Record object, leveraging the Record's built-in ID management:
+
+```python
+from dataknobs_data import Database, Record
+
+async def example():
+    db = await Database.create("memory")
+    
+    # Traditional usage (still supported)
+    record = Record({"name": "Alice", "age": 30})
+    await db.upsert("user-123", record)
+    
+    # New: Upsert with record that has an ID field
+    record_with_id = Record({"id": "user-456", "name": "Bob", "age": 25})
+    await db.upsert(record_with_id)  # Uses record's ID
+    
+    # New: Auto-generate ID if record has no ID
+    record_no_id = Record({"name": "Charlie", "age": 35})
+    generated_id = await db.upsert(record_no_id)  # Returns generated UUID
+    print(f"Generated ID: {generated_id}")
+    
+    # ID Priority (when using new signature):
+    # 1. record.storage_id (if set)
+    # 2. record.id (from 'id' field in data)
+    # 3. Generated UUID
+```
+
+This enhancement is available across all database backends:
+- Memory (AsyncMemoryDatabase, SyncMemoryDatabase)
+- File (AsyncFileDatabase, SyncFileDatabase)
+- SQLite (AsyncSQLiteDatabase, SyncSQLiteDatabase)
+- PostgreSQL (AsyncPostgresDatabase, SyncPostgresDatabase)
+- Elasticsearch (AsyncElasticsearchDatabase, SyncElasticsearchDatabase)
+- S3 (AsyncS3Database)
 
 ### Query
 

@@ -1,0 +1,196 @@
+[project]
+name = "dataknobs-fsm"
+version = "0.1.0"
+description = "Finite State Machine framework with data modes, resource management, and streaming support"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "DataKnobs Team", email = "team@dataknobs.com"}
+]
+keywords = ["fsm", "state-machine", "workflow", "orchestration", "data-processing"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "pydantic>=2.0.0",
+    "dataknobs-data>=0.2.0",
+    "dataknobs-structures>=0.1.0",
+    "dataknobs-utils>=0.1.0",
+    "dataknobs-config>=0.1.0",
+    "typing-extensions>=4.8.0",
+    "aiofiles>=23.0.0",
+    "click>=8.1.0",
+    "rich>=13.0.0",
+    "pyyaml>=6.0.0",
+    "ijson>=3.2.0",
+]
+
+[project.optional-dependencies]
+llm = [
+    "openai>=1.0.0",
+    "anthropic>=0.7.0",
+    "langchain>=0.1.0",
+]
+http = [
+    "httpx>=0.25.0",
+    "aiohttp>=3.9.0",
+]
+vector = [
+    "pgvector>=0.2.0",
+    "faiss-cpu>=1.7.4",
+    "chromadb>=0.4.0",
+]
+all = [
+    "dataknobs-fsm[llm,http,vector]",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-mock>=3.11.0",
+    "black>=24.0.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.0.0",
+]
+
+[project.scripts]
+fsm = "dataknobs_fsm.cli:main"
+
+[project.urls]
+"Homepage" = "https://github.com/dataknobs/dataknobs"
+"Bug Tracker" = "https://github.com/dataknobs/dataknobs/issues"
+"Documentation" = "https://dataknobs.readthedocs.io"
+
+[tool.uv.sources]
+dataknobs-data = { workspace = true }
+dataknobs-structures = { workspace = true }
+dataknobs-utils = { workspace = true }
+dataknobs-config = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest-asyncio>=1.1.0",
+    "pytest-cov>=6.2.1",
+    "ruff>=0.12.8",
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.0.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dataknobs_fsm"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "--cov=dataknobs_fsm",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+    "--cov-report=xml",
+    "-v",
+]
+asyncio_mode = "auto"
+markers = [
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+    "slow: marks tests as slow running",
+    "database: marks tests that require database",
+    "llm: marks tests that require LLM services",
+    "streaming: marks tests for streaming functionality",
+]
+
+[tool.coverage.run]
+source = ["src/dataknobs_fsm"]
+omit = [
+    "*/tests/*",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+    "pandas.*",
+    "openai.*",
+    "anthropic.*",
+    "langchain.*",
+    "httpx.*",
+    "aiohttp.*",
+    "chromadb.*",
+    "faiss.*",
+]
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "D",    # pydocstyle
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+    "TCH",  # flake8-type-checking
+    "RUF",  # Ruff-specific rules
+]
+
+ignore = [
+    "D100", # Missing docstring in public module
+    "D104", # Missing docstring in public package
+    "D203", # 1 blank line required before class docstring
+    "D213", # Multi-line docstring summary should start at the second line
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["D104", "F401"]
+"tests/*" = ["D100", "D101", "D102", "D103", "S101"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["dataknobs_fsm", "dataknobs_data", "dataknobs_structures", "dataknobs_utils", "dataknobs_config"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"

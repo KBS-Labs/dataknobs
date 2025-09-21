@@ -265,6 +265,24 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         finally:
             cursor.close()
 
+    def clear(self) -> int:
+        """Clear all records from the database."""
+        self._check_connection()
+        
+        cursor = self.conn.cursor()
+        try:
+            # Get count before clearing
+            cursor.execute(f"SELECT COUNT(*) FROM {self.table_manager.table_name}")
+            count = cursor.fetchone()[0]
+            
+            # Clear the table
+            cursor.execute(f"DELETE FROM {self.table_manager.table_name}")
+            self.conn.commit()
+            
+            return count
+        finally:
+            cursor.close()
+    
     def search(self, query: Query | ComplexQuery) -> list[Record]:
         """Search for records matching a query."""
         self._check_connection()

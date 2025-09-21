@@ -429,8 +429,11 @@ class SQLQueryBuilder:
             order_parts = []
             for sort_spec in query.sort_specs:
                 direction = "DESC" if sort_spec.order == SortOrder.DESC else "ASC"
+                # Special handling for 'id' field - it's in a separate column
+                if sort_spec.field == 'id':
+                    order_parts.append(f"id {direction}")
                 # Use JSON extraction based on dialect
-                if self.dialect == "postgres":
+                elif self.dialect == "postgres":
                     order_parts.append(f"data->'{sort_spec.field}' {direction}")
                 elif self.dialect == "sqlite":
                     order_parts.append(f"json_extract(data, '$.{sort_spec.field}') {direction}")
@@ -624,8 +627,12 @@ class SQLQueryBuilder:
         op = filter_spec.operator
         value = filter_spec.value
 
+        # Special handling for 'id' field - it's in a separate column
+        if field == 'id':
+            field_expr = 'id'
+            param_placeholder = self._get_param_placeholder(param_start)
         # JSON field extraction with type casting for PostgreSQL
-        if self.dialect == "postgres":
+        elif self.dialect == "postgres":
             # For PostgreSQL, we need to cast JSONB text to appropriate types for comparisons
             base_field_expr = f"data->>'{field}'"
 
@@ -675,6 +682,8 @@ class SQLQueryBuilder:
             return f"{field_expr} <= {param_placeholder}", [value]
         elif op == Operator.LIKE:
             return f"{field_expr} LIKE {param_placeholder}", [value]
+        elif op == Operator.NOT_LIKE:
+            return f"{field_expr} NOT LIKE {param_placeholder}", [value]
         elif op == Operator.IN:
             placeholders = ", ".join([self._get_param_placeholder(i) for i in range(param_start, param_start + len(value))])
             return f"{field_expr} IN ({placeholders})", list(value)

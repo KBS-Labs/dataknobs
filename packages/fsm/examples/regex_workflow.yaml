@@ -1,0 +1,163 @@
+# Example FSM workflow using regular expressions in inline transforms
+name: text_normalization_with_regex
+description: Normalize text using regex patterns directly in YAML configuration
+
+states:
+  - name: start
+    is_start: true
+    metadata:
+      description: Entry point for text processing
+
+  - name: clean_whitespace
+    metadata:
+      description: Normalize all whitespace characters
+
+  - name: normalize_case
+    metadata:
+      description: Apply case normalization rules
+
+  - name: clean_punctuation
+    metadata:
+      description: Clean up punctuation issues
+
+  - name: format_special
+    metadata:
+      description: Format special patterns like URLs, emails, phones
+
+  - name: complete
+    is_end: true
+    metadata:
+      description: Text normalization complete
+
+arcs:
+  # Step 1: Clean whitespace
+  - from: start
+    to: clean_whitespace
+    transform:
+      type: inline
+      # Replace multiple whitespace chars with single space
+      code: |
+        lambda data, ctx: {
+            **data,
+            'text': __import__('re').sub(r'\s+', ' ', data.get('text', '')).strip()
+        }
+
+  # Step 2: Normalize case for specific patterns
+  - from: clean_whitespace
+    to: normalize_case
+    transform:
+      type: inline
+      # Convert emails to lowercase, preserve other text
+      code: |
+        lambda data, ctx: {
+            **data,
+            'text': __import__('re').sub(
+                r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
+                lambda m: m.group(0).lower(),
+                data.get('text', '')
+            )
+        }
+
+  # Step 3: Clean punctuation
+  - from: normalize_case
+    to: clean_punctuation
+    transform:
+      type: inline
+      # Remove duplicate punctuation, fix spacing around punctuation
+      code: |
+        lambda data, ctx: (lambda re, text: {
+            **data,
+            'text': re.sub(
+                r'\s+([,.!?;:])',  # Remove space before punctuation
+                r'\1',
+                re.sub(
+                    r'([,.!?;:])\s*\1+',  # Remove duplicate punctuation
+                    r'\1',
+                    re.sub(
+                        r'([,.!?;:])(?!\s)',  # Add space after punctuation if missing
+                        r'\1 ',
+                        text
+                    )
+                )
+            ).rstrip()
+        })(__import__('re'), data.get('text', ''))
+
+  # Step 4: Format special patterns
+  - from: clean_punctuation
+    to: format_special
+    transform:
+      type: inline
+      # Format phone numbers, SSNs, URLs
+      code: |
+        lambda data, ctx: (lambda re, text: {
+            **data,
+            'text': re.sub(
+                r'\b(\d{3})[-.\s]?(\d{3})[-.\s]?(\d{4})\b',  # Phone numbers
+                r'(\1) \2-\3',
+                re.sub(
+                    r'\b(\d{3})[-\s]?(\d{2})[-\s]?(\d{4})\b',  # SSN
+                    r'XXX-XX-\3',  # Mask SSN for privacy
+                    re.sub(
+                        r'(https?://)([^\s]+)',  # URLs
+                        lambda m: m.group(1) + m.group(2).lower(),
+                        text
+                    )
+                )
+            )
+        })(__import__('re'), data.get('text', ''))
+
+  # Step 5: Final pass
+  - from: format_special
+    to: complete
+    transform:
+      type: inline
+      # Capitalize first letter of sentences
+      code: |
+        lambda data, ctx: {
+            **data,
+            'text': __import__('re').sub(
+                r'(^|[.!?]\s+)([a-z])',
+                lambda m: m.group(1) + m.group(2).upper(),
+                data.get('text', '')
+            ),
+            'normalized': True,
+            'processing_complete': True
+        }
+
+# Alternative simpler configuration for basic normalization
+---
+name: simple_regex_normalize
+description: Simple one-step regex normalization
+
+states:
+  - name: start
+    is_start: true
+  - name: normalize
+  - name: complete
+    is_end: true
+
+arcs:
+  - from: start
+    to: normalize
+    transform:
+      type: inline
+      # All-in-one normalization using regex
+      code: |
+        lambda data, ctx: (lambda re: {
+            **data,
+            'original': data.get('text', ''),
+            'text': re.sub(r'\s+', ' ',           # Normalize whitespace
+                re.sub(r'[^\w\s.,!?-]', '',       # Remove special chars
+                    re.sub(r'\.{2,}', '.',         # Fix multiple periods
+                        data.get('text', '').lower() # Lowercase everything
+                    )
+                )
+            ).strip()
+        })(__import__('re'))
+
+  - from: normalize
+    to: complete
+    pre_test:
+      type: inline
+      # Only proceed if text was actually normalized
+      code: "lambda data, ctx: data.get('text') != data.get('original', '')"

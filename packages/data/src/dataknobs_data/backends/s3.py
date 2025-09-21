@@ -371,10 +371,17 @@ class SyncS3Database(  # type: ignore[misc]
         if query.sort_specs:
             for sort_spec in reversed(query.sort_specs):
                 reverse = sort_spec.order.value == "desc"
-                records.sort(
-                    key=lambda r: r.get_value(sort_spec.field, ""),
-                    reverse=reverse
-                )
+                # Special handling for 'id' field
+                if sort_spec.field == 'id':
+                    records.sort(
+                        key=lambda r: r.id or "",
+                        reverse=reverse
+                    )
+                else:
+                    records.sort(
+                        key=lambda r: r.get_value(sort_spec.field, ""),
+                        reverse=reverse
+                    )
 
         # Apply offset and limit
         if query.offset_value:
@@ -398,7 +405,11 @@ class SyncS3Database(  # type: ignore[misc]
 
             # Apply filters
             for filter in query.filters:
-                field_value = record.get_value(filter.field)
+                # Special handling for 'id' field
+                if filter.field == 'id':
+                    field_value = record.id
+                else:
+                    field_value = record.get_value(filter.field)
                 if not filter.matches(field_value):
                     return None
 

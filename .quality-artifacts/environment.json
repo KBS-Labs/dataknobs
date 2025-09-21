@@ -1,11 +1,11 @@
 {
-  "timestamp": "2025-09-01T18:53:29Z",
+  "timestamp": "2025-09-21T00:43:51Z",
   "python_version": "Python 3.10.18",
-  "uv_version": "uv 0.8.11",
-  "os": "Linux",
-  "os_version": "6.10.14-linuxkit",
-  "git_branch": "sbk/skip-tests-missing-services",
-  "git_commit": "49749913ac86137b45e42a859c7ece7e5de9513f",
-  "docker_container": "true",
+  "uv_version": "uv 0.8.19 (Homebrew 2025-09-19)",
+  "os": "Darwin",
+  "os_version": "24.6.0",
+  "git_branch": "sbk/fsm-package",
+  "git_commit": "4bda6e858420e22446369dd1e5d28146ae45a41a",
+  "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

@@ -288,13 +288,14 @@ class TestSyncMemoryDatabaseStreaming:
         
         # Add test records
         self.records = []
+        self.record_ids = []
         for i in range(100):
-            record = Record()
-            record.set_field("id", i)
+            record = Record(id=str(i).zfill(3))  # Use zero-padded IDs for consistent string comparison
             record.set_field("value", i * 10)
             record.set_field("category", "A" if i % 2 == 0 else "B")
-            self.db.create(record)
+            record_id = self.db.create(record)
             self.records.append(record)
+            self.record_ids.append(record_id)
     
     def test_stream_read_all(self):
         """Test streaming all records."""
@@ -392,7 +393,7 @@ class TestSyncMemoryDatabaseStreaming:
                 return new_record
             return None  # Filter out category B
         
-        query = Query().filter("id", "<", 20)
+        query = Query().filter("id", "<", "020")  # Use string comparison with zero-padded value
         config = StreamConfig(batch_size=5)
         
         transformed = list(self.db.stream_transform(

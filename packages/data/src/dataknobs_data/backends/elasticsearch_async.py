@@ -266,9 +266,28 @@ class AsyncElasticsearchDatabase(
             id=id
         )
 
-    async def upsert(self, id: str, record: Record) -> str:
-        """Update or insert a record with a specific ID."""
+    async def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+        """Update or insert a record.
+        
+        Can be called as:
+        - upsert(id, record) - explicit ID and record
+        - upsert(record) - extract ID from record using Record's built-in logic
+        """
         self._check_connection()
+        
+        # Determine ID and record based on arguments
+        if isinstance(id_or_record, str):
+            id = id_or_record
+            if record is None:
+                raise ValueError("Record required when ID is provided")
+        else:
+            record = id_or_record
+            id = record.id
+            if id is None:
+                import uuid  # type: ignore[unreachable]
+                id = str(uuid.uuid4())
+                record.storage_id = id
+        
         doc = self._record_to_doc(record)
 
         await self._client.index(

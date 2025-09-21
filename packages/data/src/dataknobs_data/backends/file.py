@@ -465,8 +465,26 @@ class AsyncFileDatabase(  # type: ignore[misc]
             data = await self._load_data()
             return id in data
 
-    async def upsert(self, id: str, record: Record) -> str:
-        """Update or insert a record with the specified ID."""
+    async def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+        """Update or insert a record.
+        
+        Can be called as:
+        - upsert(id, record) - explicit ID and record
+        - upsert(record) - extract ID from record using Record's built-in logic
+        """
+        # Determine ID and record based on arguments
+        if isinstance(id_or_record, str):
+            id = id_or_record
+            if record is None:
+                raise ValueError("Record required when ID is provided")
+        else:
+            record = id_or_record
+            id = record.id
+            if id is None:
+                import uuid  # type: ignore[unreachable]
+                id = str(uuid.uuid4())
+                record.storage_id = id
+        
         async with self._lock:
             data = await self._load_data()
             data[id] = record.copy(deep=True)
@@ -483,7 +501,11 @@ class AsyncFileDatabase(  # type: ignore[misc]
                 # Apply filters
                 matches = True
                 for filter in query.filters:
-                    field_value = record.get_value(filter.field)
+                    # Special handling for 'id' field
+                    if filter.field == 'id':
+                        field_value = record_id
+                    else:
+                        field_value = record.get_value(filter.field)
                     if not filter.matches(field_value):
                         matches = False
                         break
@@ -751,8 +773,26 @@ class SyncFileDatabase(  # type: ignore[misc]
             data = self._load_data()
             return id in data
 
-    def upsert(self, id: str, record: Record) -> str:
-        """Update or insert a record with the specified ID."""
+    def upsert(self, id_or_record: str | Record, record: Record | None = None) -> str:
+        """Update or insert a record.
+        
+        Can be called as:
+        - upsert(id, record) - explicit ID and record
+        - upsert(record) - extract ID from record using Record's built-in logic
+        """
+        # Determine ID and record based on arguments
+        if isinstance(id_or_record, str):
+            id = id_or_record
+            if record is None:
+                raise ValueError("Record required when ID is provided")
+        else:
+            record = id_or_record
+            id = record.id
+            if id is None:
+                import uuid  # type: ignore[unreachable]
+                id = str(uuid.uuid4())
+                record.storage_id = id
+        
         with self._lock:
             data = self._load_data()
             data[id] = record.copy(deep=True)
@@ -769,7 +809,11 @@ class SyncFileDatabase(  # type: ignore[misc]
                 # Apply filters
                 matches = True
                 for filter in query.filters:
-                    field_value = record.get_value(filter.field)
+                    # Special handling for 'id' field
+                    if filter.field == 'id':
+                        field_value = record_id
+                    else:
+                        field_value = record.get_value(filter.field)
                     if not filter.matches(field_value):
                         matches = False
                         break

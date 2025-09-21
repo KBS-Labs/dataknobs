@@ -43,6 +43,12 @@ uv.lock
 test-env/
 .uv-cache/
 
+# Temporary files
+*.tmp
+*.temp
+temp.*
+tmp/
+
 # MkDocs documentation
 site/
 

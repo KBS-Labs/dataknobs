@@ -1,0 +1,62 @@
+{
+  "001": {
+    "fields": {
+      "value": {
+        "name": "value",
+        "value": 1,
+        "type": "integer",
+        "metadata": {}
+      }
+    },
+    "id": "001",
+    "metadata": {}
+  },
+  "002": {
+    "fields": {
+      "value": {
+        "name": "value",
+        "value": 2,
+        "type": "integer",
+        "metadata": {}
+      }
+    },
+    "id": "002",
+    "metadata": {}
+  },
+  "010": {
+    "fields": {
+      "value": {
+        "name": "value",
+        "value": 10,
+        "type": "integer",
+        "metadata": {}
+      }
+    },
+    "id": "010",
+    "metadata": {}
+  },
+  "020": {
+    "fields": {
+      "value": {
+        "name": "value",
+        "value": 20,
+        "type": "integer",
+        "metadata": {}
+      }
+    },
+    "id": "020",
+    "metadata": {}
+  },
+  "100": {
+    "fields": {
+      "value": {
+        "name": "value",
+        "value": 100,
+        "type": "integer",
+        "metadata": {}
+      }
+    },
+    "id": "100",
+    "metadata": {}
+  }
+}
