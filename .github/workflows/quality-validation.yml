@@ -144,11 +144,8 @@ jobs:
     - name: Set up Python
       run: uv python install 3.12
 
-    - name: Install build dependencies
-      run: uv pip install --system hatchling
-
     - name: Install dependencies
-      run: uv sync --all-packages --no-build-isolation
+      run: uv sync --all-packages
     
     - name: Run quick unit tests
       run: |
