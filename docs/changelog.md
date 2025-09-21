@@ -6,18 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## Unreleased
+## Release - 2025-09-20
 
-### dataknobs-data
+### dataknobs-fsm [0.1.0]
+- Initial Release
+
+### dataknobs-data [0.3.0]
 
 #### Added
+- Fixed ID management in filters; added 'NOT_LIKE' operator
 - Enhanced `upsert` method signature to accept just a Record object
   - All database backends now support `upsert(record)` in addition to `upsert(id, record)`
   - Automatically uses Record's built-in ID management (storage_id > id field > generated UUID)
   - Maintains full backward compatibility with existing code
-  - Simplifies FSM storage implementation and other use cases
 
-## New Releases - 2025-08-31
+#### Changed
+- Enhanced upsert to take just a record and use its ID
+
+#### Fixed
+- Fixed to properly skip tests in the absence of services.
+- Fixed to properly address services from within the development docker container.
+
+## Releases - 2025-08-31
 
 ### Dataknobs project
 
