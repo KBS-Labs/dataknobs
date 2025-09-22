@@ -6,8 +6,12 @@ Practical examples of using Dataknobs packages.
 
 ### Finite State Machines
 - [Simple FSM Pipeline](../packages/fsm/examples/file-processor.md)
+- [Data Pipeline](../packages/fsm/examples/data-pipeline.md)
 - [ETL with FSM](../packages/fsm/examples/database-etl.md)
 - [Streaming Data Processing](../packages/fsm/examples/end-to-end-streaming.md)
+- [API Workflow Orchestration](../packages/fsm/examples/api-workflow.md)
+- [LLM Conversation Flow](../packages/fsm/examples/llm-conversation.md)
+- [LLM Chain Processing](../packages/fsm/examples/llm-chain.md)
 - [Debugging FSMs](../packages/fsm/guides/cli.md)
 
 ### Data Structures
