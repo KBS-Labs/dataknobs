@@ -13,6 +13,7 @@ The project is organized as a monorepo with the following packages:
 
 - **[dataknobs-config](packages/config/)**: Modular configuration system with environment variable substitution, factory registration, and cross-references
 - **[dataknobs-data](packages/data/)**: Unified data abstraction layer supporting Memory, File, PostgreSQL, Elasticsearch, and S3 backends
+- **[dataknobs-fsm](packages/fsm/)**: Finite State Machine framework with data modes, resource management, and streaming support
 - **[dataknobs-structures](packages/structures/)**: Data structures for AI knowledge bases (trees, documents, record stores)
 - **[dataknobs-utils](packages/utils/)**: Utility functions (file I/O, JSON processing, pandas helpers, web requests)
 - **[dataknobs-xization](packages/xization/)**: Text normalization and tokenization tools
@@ -28,12 +29,14 @@ Install only the packages you need:
 ```bash
 # Install specific packages
 pip install dataknobs-config
+pip install dataknobs-data
+pip install dataknobs-fsm
 pip install dataknobs-structures
 pip install dataknobs-utils
 pip install dataknobs-xization
 
 # Or install multiple packages
-pip install dataknobs-config dataknobs-structures dataknobs-utils
+pip install dataknobs-config dataknobs-data dataknobs-fsm dataknobs-structures
 ```
 
 ### For Existing Projects
@@ -54,6 +57,7 @@ pip install dataknobs
 # Import from specific packages
 from dataknobs_config import Config
 from dataknobs_data import Record, Query, database_factory
+from dataknobs_fsm import SimpleFSM, DataHandlingMode
 from dataknobs_structures import Tree, Document
 from dataknobs_utils import json_utils, file_utils
 from dataknobs_xization import MaskingTokenizer
@@ -76,6 +80,24 @@ from dataknobs_data import DatabaseFactory
 factory = DatabaseFactory()
 s3_db = factory.create(backend="s3", bucket="my-bucket")
 memory_db = factory.create(backend="memory")
+
+# Create and run a Finite State Machine
+fsm_config = {
+    "name": "data_pipeline",
+    "states": [
+        {"name": "start", "is_start": True},
+        {"name": "validate"},
+        {"name": "transform"},
+        {"name": "end", "is_end": True}
+    ],
+    "arcs": [
+        {"from": "start", "to": "validate"},
+        {"from": "validate", "to": "transform"},
+        {"from": "transform", "to": "end"}
+    ]
+}
+fsm = SimpleFSM(fsm_config, data_mode=DataHandlingMode.COPY)
+result = fsm.process({"input": "data"})
 
 # Create a tree structure
 tree = Tree("root")
