@@ -5,10 +5,10 @@ Practical examples of using Dataknobs packages.
 ## Quick Examples
 
 ### Finite State Machines
-- [Simple FSM Pipeline](fsm-simple.md)
-- [ETL with FSM](fsm-etl.md)
-- [Streaming Data Processing](fsm-streaming.md)
-- [Debugging FSMs](fsm-debugging.md)
+- [Simple FSM Pipeline](../packages/fsm/examples/file-processor.md)
+- [ETL with FSM](../packages/fsm/examples/database-etl.md)
+- [Streaming Data Processing](../packages/fsm/examples/end-to-end-streaming.md)
+- [Debugging FSMs](../packages/fsm/guides/cli.md)
 
 ### Data Structures
 - [Basic Tree Operations](basic-tree.md)
@@ -16,11 +16,11 @@ Practical examples of using Dataknobs packages.
 
 ### Text Processing
 - [Text Normalization](text-normalization.md)
-- [Regex Transformations](regex-transforms.md)
+- [Regex Transformations](../packages/fsm/examples/regex-transformations.md)
 
 ### Integrations
 - [Elasticsearch Integration](elasticsearch-integration.md)
-- [Database Operations](database-operations.md)
+- [Database Operations](../packages/fsm/examples/database-etl.md)
 
 ## Complete Applications
 

@@ -4,7 +4,7 @@ Complete API documentation for all Dataknobs packages.
 
 ## Package APIs
 
-- [dataknobs-fsm](dataknobs-fsm.md) - Finite State Machine framework API
+- [dataknobs-fsm](../packages/fsm/api/index.md) - Finite State Machine framework API
 - [dataknobs-data](dataknobs-data.md) - Data abstraction API
 - [dataknobs-config](dataknobs-config.md) - Configuration management API
 - [dataknobs-structures](dataknobs-structures.md) - Core data structures API

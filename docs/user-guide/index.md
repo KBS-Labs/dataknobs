@@ -11,10 +11,10 @@ Welcome to the Dataknobs User Guide. This section provides detailed information 
 ## Core Components
 
 ### Finite State Machines
-- [FSM Basics](fsm-basics.md) - Introduction to the FSM framework
-- [Data Handling Modes](fsm-data-modes.md) - Understanding COPY, REFERENCE, and DIRECT modes
-- [Streaming Workflows](fsm-streaming.md) - Building streaming data pipelines
-- [Debugging FSMs](fsm-debugging.md) - Using AdvancedFSM for debugging
+- [FSM Basics](../packages/fsm/quickstart.md) - Introduction to the FSM framework
+- [Data Handling Modes](../packages/fsm/guides/data-modes.md) - Understanding COPY, REFERENCE, and DIRECT modes
+- [Streaming Workflows](../packages/fsm/guides/streaming.md) - Building streaming data pipelines
+- [Debugging FSMs](../packages/fsm/guides/cli.md) - Using AdvancedFSM for debugging
 
 ### Data Processing
 - Working with Tree Structures
