@@ -4,14 +4,21 @@ Complete API documentation for all Dataknobs packages.
 
 ## Package APIs
 
+- [dataknobs-fsm](../packages/fsm/api/index.md) - Finite State Machine framework API
 - [dataknobs-data](dataknobs-data.md) - Data abstraction API
 - [dataknobs-config](dataknobs-config.md) - Configuration management API
 - [dataknobs-structures](dataknobs-structures.md) - Core data structures API
-- [dataknobs-utils](dataknobs-utils.md) - Utility functions API  
+- [dataknobs-utils](dataknobs-utils.md) - Utility functions API
 - [dataknobs-xization](dataknobs-xization.md) - Text processing API
 - [dataknobs-common](dataknobs-common.md) - Common components API
 
 ## Quick Reference
+
+### FSM
+```python
+from dataknobs_fsm import SimpleFSM, AdvancedFSM, AsyncSimpleFSM
+from dataknobs_fsm.core.data_modes import DataHandlingMode
+```
 
 ### Data
 - See [dataknobs-data API reference](../packages/data/api-reference.md) documentation

@@ -62,17 +62,19 @@ If you're new to Dataknobs development:
 
 ```
 dataknobs/
-├── packages/                 # Individual packages
-│   ├── common/              # Shared utilities
-│   ├── structures/          # Core data structures
-│   ├── utils/              # Utility functions
-│   ├── xization/           # Text processing
-│   └── legacy/             # Legacy compatibility
-├── docs/                   # Documentation
-├── tests/                  # Integration tests
-├── docker/                 # Docker configurations
-├── bin/                    # Scripts and tools
-└── resources/             # Shared resources
+├── packages/          # Individual packages
+│   ├── common/          # Shared utilities
+│   ├── structures/      # Core data structures
+│   ├── utils/           # Utility functions
+│   ├── xization/        # Text processing
+│   ├── data/            # Database abstractions
+│   ├── fsm/             # FSM processing
+│   └── legacy/          # Legacy compatibility
+├── docs/              # Documentation
+├── tests/             # Integration tests
+├── docker/            # Docker configurations
+├── bin/               # Scripts and tools
+└── resources/         # Shared resources
 ```
 
 ## Development Environment
@@ -137,6 +139,38 @@ For more details, see the [UV Virtual Environment Guide](uv-environment.md) and 
 - Common configuration management
 - Standardized logging
 - Error handling framework
+
+### dataknobs-config
+**Purpose**: Modular configuration system with environment variable support.
+
+**Key Components**:
+- YAML/JSON configuration loading
+- Environment variable substitution (`${VAR:default}`)
+- Factory registration for dynamic object creation
+- Cross-reference resolution
+- Layered configuration merging
+
+### dataknobs-data
+**Purpose**: Unified data abstraction layer for consistent operations across storage backends.
+
+**Key Components**:
+- Multiple backend support (Memory, File, PostgreSQL, Elasticsearch, S3)
+- Unified `Record` and `Query` abstractions
+- Factory pattern for dynamic backend selection
+- Transaction management (Single, Batch, Manual)
+- Vector store integration
+- Streaming support for large datasets
+
+### dataknobs-fsm
+**Purpose**: Finite State Machine framework for workflow orchestration and data processing.
+
+**Key Components**:
+- Three API levels: SimpleFSM (sync), AsyncSimpleFSM (async), AdvancedFSM (debugging)
+- Data handling modes (COPY, REFERENCE, DIRECT) for different performance/safety tradeoffs
+- Built-in resource management (databases, files, HTTP, LLMs, vector stores)
+- Streaming support with backpressure handling
+- YAML/JSON configuration with inline transforms
+- Step-by-step debugging with breakpoints and execution hooks
 
 ### dataknobs-structures
 **Purpose**: Core data structures for hierarchical and document-based data.

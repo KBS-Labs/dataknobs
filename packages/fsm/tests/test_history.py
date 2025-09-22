@@ -1,6 +1,7 @@
 """Tests for execution history and storage."""
 
 import asyncio
+import tempfile
 import time
 from typing import Any, Dict, List
 
@@ -546,10 +547,14 @@ class TestStorageFactory:
         storage = StorageFactory.create(config)
         assert isinstance(storage, InMemoryStorage)
         
-        # File backend
-        config = StorageConfig(backend=StorageBackend.FILE)
-        storage = StorageFactory.create(config)
-        assert isinstance(storage, FileStorage)
+        # File backend with temporary file
+        with tempfile.NamedTemporaryFile(suffix='.json', delete=True) as tmp:
+            config = StorageConfig(
+                backend=StorageBackend.FILE,
+                connection_params={"path": tmp.name}
+            )
+            storage = StorageFactory.create(config)
+            assert isinstance(storage, FileStorage)
         
         # Database backends all use UnifiedDatabaseStorage
         for backend in [StorageBackend.SQLITE, StorageBackend.POSTGRES]:

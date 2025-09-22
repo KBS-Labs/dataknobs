@@ -13,11 +13,14 @@ graph TB
     end
     
     subgraph "Dataknobs Packages"
-        LEGACY[dataknobs-legacy<br/>Compatibility Layer]
+        FSM[dataknobs-fsm<br/>Finite State Machine]
+        DATA[dataknobs-data<br/>Data Abstraction Layer]
+        CONFIG[dataknobs-config<br/>Configuration Management]
         STRUCT[dataknobs-structures<br/>Core Data Structures]
         UTILS[dataknobs-utils<br/>Utility Functions]
         XIZ[dataknobs-xization<br/>Text Processing]
         COMMON[dataknobs-common<br/>Shared Components]
+        LEGACY[dataknobs-legacy<br/>Compatibility Layer]
     end
     
     subgraph "External Services"
@@ -26,15 +29,27 @@ graph TB
         FS[File System]
     end
     
-    APP --> LEGACY
+    APP --> FSM
+    APP --> DATA
+    APP --> CONFIG
     APP --> STRUCT
     APP --> UTILS
     APP --> XIZ
-    
+    APP --> LEGACY
+
+    FSM --> DATA
+    FSM --> CONFIG
+    FSM --> COMMON
+
+    DATA --> CONFIG
+    DATA --> COMMON
+
+    CONFIG --> COMMON
+
     LEGACY --> STRUCT
     LEGACY --> UTILS
     LEGACY --> XIZ
-    
+
     STRUCT --> COMMON
     UTILS --> COMMON
     XIZ --> COMMON
@@ -64,6 +79,32 @@ graph TB
   - Type definitions
   - Shared constants
   - Common utilities
+
+#### dataknobs-fsm
+- **Purpose**: Finite State Machine framework for workflow orchestration
+- **Key Components**:
+  - `SimpleFSM`: Synchronous state machine
+  - `AsyncSimpleFSM`: Asynchronous state machine
+  - `AdvancedFSM`: Debugging and advanced features
+  - Data handling modes (COPY, REFERENCE, DIRECT)
+  - Resource management
+  - Streaming support
+
+#### dataknobs-data
+- **Purpose**: Unified data abstraction layer
+- **Key Components**:
+  - Database backends (Memory, File, PostgreSQL, S3, Elasticsearch)
+  - `Record` and `Query` abstractions
+  - Factory pattern for backend selection
+  - Transaction support
+
+#### dataknobs-config
+- **Purpose**: Configuration management with environment variables
+- **Key Components**:
+  - YAML/JSON configuration loading
+  - Environment variable substitution
+  - Factory registration
+  - Cross-references
 
 #### dataknobs-structures
 - **Purpose**: Core data structures for knowledge representation
@@ -136,6 +177,33 @@ index = elasticsearch_utils.ElasticsearchIndex(...)
 index.index_document(doc)
 ```
 
+### FSM-Based Processing Pipeline
+
+```python
+# Example: FSM-based ETL pipeline
+from dataknobs_fsm import SimpleFSM
+from dataknobs_data import DatabaseFactory
+from dataknobs_config import Config
+
+# Load configuration
+config = Config("etl_config.yaml")
+
+# Create FSM for orchestration
+fsm = SimpleFSM(config.get("fsm_definition"))
+
+# Setup database connections
+db_factory = DatabaseFactory()
+source_db = db_factory.create(backend="postgresql", **config.get("source_db"))
+target_db = db_factory.create(backend="elasticsearch", **config.get("target_db"))
+
+# Run ETL pipeline through FSM
+result = fsm.process({
+    "source": source_db,
+    "target": target_db,
+    "batch_size": 1000
+})
+```
+
 ## Deployment Architecture
 
 ### Monorepo Structure
@@ -144,6 +212,9 @@ index.index_document(doc)
 dataknobs/
 ├── packages/           # Independent packages
 │   ├── common/
+│   ├── config/
+│   ├── data/
+│   ├── fsm/
 │   ├── structures/
 │   ├── utils/
 │   ├── xization/
