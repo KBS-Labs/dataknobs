@@ -349,7 +349,22 @@ class AsyncFileDatabase(  # type: ignore[misc]
 
     def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config)
-        self.filepath = self.config.get("path", "data.json")
+
+        # If no path specified, use a temporary file instead of polluting CWD
+        if "path" not in self.config:
+            # Create a unique temporary file that won't conflict
+            temp_file = tempfile.NamedTemporaryFile(
+                prefix="dataknobs_async_db_",
+                suffix=".json",
+                delete=False
+            )
+            self.filepath = temp_file.name
+            temp_file.close()
+            self._is_temp_file = True
+        else:
+            self.filepath = self.config["path"]
+            self._is_temp_file = False
+
         self.format = self.config.get("format")
         self.compression = self.config.get("compression", None)
         self._lock = asyncio.Lock()
@@ -626,6 +641,20 @@ class AsyncFileDatabase(  # type: ignore[misc]
             **kwargs
         )
 
+    async def close(self) -> None:
+        """Close the database and clean up temporary files if needed."""
+        # Clean up temporary file if it was created
+        if getattr(self, '_is_temp_file', False) and self.filepath:
+            try:
+                if os.path.exists(self.filepath):
+                    os.unlink(self.filepath)
+                # Also remove lock file if it exists
+                lock_file = self.filepath + ".lock"
+                if os.path.exists(lock_file):
+                    os.unlink(lock_file)
+            except OSError:
+                pass  # Best effort cleanup
+
 
 class SyncFileDatabase(  # type: ignore[misc]
     SyncDatabase,
@@ -649,7 +678,22 @@ class SyncFileDatabase(  # type: ignore[misc]
 
     def __init__(self, config: dict[str, Any] | None = None):
         super().__init__(config)
-        self.filepath = self.config.get("path", "data.json")
+
+        # If no path specified, use a temporary file instead of polluting CWD
+        if "path" not in self.config:
+            # Create a unique temporary file that won't conflict
+            temp_file = tempfile.NamedTemporaryFile(
+                prefix="dataknobs_sync_db_",
+                suffix=".json",
+                delete=False
+            )
+            self.filepath = temp_file.name
+            temp_file.close()
+            self._is_temp_file = True
+        else:
+            self.filepath = self.config["path"]
+            self._is_temp_file = False
+
         self.format = self.config.get("format")
         self.compression = self.config.get("compression", None)
         self._lock = threading.RLock()
@@ -982,3 +1026,17 @@ class SyncFileDatabase(  # type: ignore[misc]
             metric=metric,
             **kwargs
         )
+
+    def close(self) -> None:
+        """Close the database and clean up temporary files if needed."""
+        # Clean up temporary file if it was created
+        if getattr(self, '_is_temp_file', False) and self.filepath:
+            try:
+                if os.path.exists(self.filepath):
+                    os.unlink(self.filepath)
+                # Also remove lock file if it exists
+                lock_file = self.filepath + ".lock"
+                if os.path.exists(lock_file):
+                    os.unlink(lock_file)
+            except OSError:
+                pass  # Best effort cleanup

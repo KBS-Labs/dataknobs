@@ -21,7 +21,7 @@ class TestIdFieldFilteringAllBackends:
         elif backend == "file":
             # Use temporary file database
             file_path = tmp_path / "test.json"
-            db = SyncDatabase.from_backend(backend, config={"file_path": str(file_path)})
+            db = SyncDatabase.from_backend(backend, config={"path": str(file_path)})
         else:
             # Memory backend
             db = SyncDatabase.from_backend(backend)
