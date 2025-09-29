@@ -150,7 +150,7 @@ jobs:
     - name: Run quick unit tests
       run: |
         echo "🚀 Running quick unit tests (no external services)..."
-        source .venv/bin/activate && pytest packages/*/tests/ -v -m "not integration" --maxfail=3 || true
+        bin/dk testquick
     
     - name: Add PR comment with test status
       if: always() && github.event_name == 'pull_request'
