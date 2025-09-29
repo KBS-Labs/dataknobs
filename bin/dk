@@ -79,7 +79,7 @@ ${BOLD}${BLUE}Detailed Commands:${NC}
     unit [pkg]       Run unit tests only
     int [pkg]        Run integration tests only
     testlast         Re-run failed tests
-    testquick [pkg]  Tests without coverage
+    testquick [pkg]  Tests without services, integration, or coverage report
     
   ${BOLD}Fixing Issues:${NC}
     fix              Auto-fix style issues
@@ -245,11 +245,11 @@ main() {
                 "$SCRIPT_DIR/test.sh" -- --lf "$@"
             ;;
         testquick|tq)
-            export TEST_S3=true
-            export TEST_ELASTICSEARCH=true
-            export TEST_POSTGRES=true
+            export TEST_S3=false
+            export TEST_ELASTICSEARCH=false
+            export TEST_POSTGRES=false
             run_command "Running tests without coverage" \
-                "$SCRIPT_DIR/test.sh" --no-cov "$@"
+                "$SCRIPT_DIR/test.sh" -n --skip-integration --no-cov "$@"
             ;;
         unit|u)
             # Unit tests don't need integration services
