@@ -26,13 +26,21 @@ from dataknobs_data.vector import VectorTextSynchronizer, ChangeTracker, VectorM
 
 class TestEmbedding:
     """Real embedding implementation for testing without external dependencies."""
-    
+
+    @staticmethod
+    def _deterministic_hash(text: str) -> int:
+        """Generate a deterministic hash from text using character codes."""
+        result = 0
+        for char in text:
+            result = (result * 31 + ord(char)) & 0xFFFFFFFF
+        return result
+
     @staticmethod
     def generate(text: str, dimensions: int = 384) -> List[float]:
         """Generate deterministic embeddings that simulate real semantic similarity."""
         # Tokenize and create word-based features
         words = text.lower().split()
-        
+
         # Common words and their "semantic" weights
         semantic_weights = {
             'machine': 1.0, 'learning': 1.0, 'ai': 1.0, 'artificial': 0.95,
@@ -41,31 +49,33 @@ class TestEmbedding:
             'science': 0.6, 'algorithm': 0.8, 'model': 0.75, 'training': 0.7,
             'database': 0.4, 'sql': 0.3, 'web': 0.1, 'javascript': 0.05, 'html': 0.05
         }
-        
+
         # Create embedding
         embedding = []
         for i in range(dimensions):
             value = 0.1  # Base value
-            
+
             # Add semantic contribution from each word
             for word in words:
                 if word in semantic_weights:
                     # Use word weight and position to create variation
-                    contribution = semantic_weights[word] * (1 + np.sin(i * 0.1 + hash(word) % 10))
+                    word_hash = TestEmbedding._deterministic_hash(word)
+                    contribution = semantic_weights[word] * (1 + np.sin(i * 0.1 + word_hash % 10))
                     value += contribution / 10
                 else:
-                    # Unknown words get small random contribution
-                    value += (hash(word + str(i)) % 100) / 10000
-            
+                    # Unknown words get small deterministic contribution
+                    combined_hash = TestEmbedding._deterministic_hash(word + str(i))
+                    value += (combined_hash % 100) / 10000
+
             # Normalize to [0, 1]
             value = min(1.0, max(0.0, value / (len(words) + 1)))
             embedding.append(value)
-        
+
         # Normalize the vector
         norm = np.linalg.norm(embedding)
         if norm > 0:
             embedding = [v / norm for v in embedding]
-        
+
         return embedding
 
 
