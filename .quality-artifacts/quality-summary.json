@@ -1,6 +1,6 @@
 {
-  "timestamp": "2025-10-08T21:51:02Z",
-  "overall_status": "FAIL",
+  "timestamp": "2025-10-08T22:02:42Z",
+  "overall_status": "PASS",
   "environment": "host",
   "packages": "all",
   "checks": {
@@ -15,8 +15,8 @@
       "skipped": false
     },
     "unit_tests": {
-      "status": "fail",
-      "exit_code": 1,
+      "status": "pass",
+      "exit_code": 0,
       "skipped": false
     },
     "integration_tests": {
