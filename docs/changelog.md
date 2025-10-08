@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## Release - 2025-10-08
+
+### dataknobs-data [0.3.1]
+
+#### Changed
+- Dependency security updates
+- Fixed psql backend construction to accept connection_string
+- Fixed sql search results to include record storage_id
+- various lint and test fixes 
+
+### dataknobs-fsm [0.1.1]
+
+#### Changed
+- Dependency security updates
+
+#### Fixed
+- updated documentation
+
+
 ## Release - 2025-09-20
 
 ### dataknobs-fsm [0.1.0]
