@@ -61,7 +61,7 @@ pip install -e .
 
 ```bash
 # Check CLI installation
-fsm --version  # Shows 0.1.0
+fsm --version  # Shows 0.1.1
 
 # Test Python imports (note different import paths)
 python -c "from dataknobs_fsm.api.simple import SimpleFSM; print('SimpleFSM OK')"
