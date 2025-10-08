@@ -647,11 +647,11 @@ class AsyncFileDatabase(  # type: ignore[misc]
         if getattr(self, '_is_temp_file', False) and self.filepath:
             try:
                 if os.path.exists(self.filepath):
-                    os.unlink(self.filepath)
+                    Path(self.filepath).unlink()
                 # Also remove lock file if it exists
                 lock_file = self.filepath + ".lock"
                 if os.path.exists(lock_file):
-                    os.unlink(lock_file)
+                    Path(lock_file).unlink()
             except OSError:
                 pass  # Best effort cleanup
 
@@ -1033,10 +1033,10 @@ class SyncFileDatabase(  # type: ignore[misc]
         if getattr(self, '_is_temp_file', False) and self.filepath:
             try:
                 if os.path.exists(self.filepath):
-                    os.unlink(self.filepath)
+                    Path(self.filepath).unlink()
                 # Also remove lock file if it exists
                 lock_file = self.filepath + ".lock"
                 if os.path.exists(lock_file):
-                    os.unlink(lock_file)
+                    Path(lock_file).unlink()
             except OSError:
                 pass  # Best effort cleanup

@@ -213,7 +213,15 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
             cursor.close()
 
     def update(self, id: str, record: Record) -> bool:
-        """Update an existing record."""
+        """Update an existing record.
+
+        Args:
+            id: The record ID to update
+            record: The record data to update with
+
+        Returns:
+            True if the record was updated, False if no record with the given ID exists
+        """
         self._check_connection()
 
         # Update vector dimensions tracking if needed
@@ -233,7 +241,12 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
         try:
             cursor.execute(query, params)
             self.conn.commit()
-            return cursor.rowcount > 0
+            rows_affected = cursor.rowcount
+
+            if rows_affected == 0:
+                logger.warning(f"Update affected 0 rows for id={id}. Record may not exist.")
+
+            return rows_affected > 0
         finally:
             cursor.close()
 
@@ -299,7 +312,15 @@ class SyncSQLiteDatabase(  # type: ignore[misc]
             cursor.execute(sql_query, params)
             rows = cursor.fetchall()
 
-            records = [self.row_to_record(dict(row)) for row in rows]
+            records = []
+            for row in rows:
+                row_dict = dict(row)
+                record = self.row_to_record(row_dict)
+
+                # Populate storage_id from database ID
+                record.storage_id = str(row_dict['id'])
+
+                records.append(record)
 
             # Apply field projection if specified
             if query.fields:

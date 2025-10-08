@@ -183,14 +183,27 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
             return None
 
     async def update(self, id: str, record: Record) -> bool:
-        """Update an existing record."""
+        """Update an existing record.
+
+        Args:
+            id: The record ID to update
+            record: The record data to update with
+
+        Returns:
+            True if the record was updated, False if no record with the given ID exists
+        """
         self._check_connection()
 
         query, params = self.query_builder.build_update_query(id, record)
 
         cursor = await self.db.execute(query, params)
         await self.db.commit()
-        return cursor.rowcount > 0
+        rows_affected = cursor.rowcount
+
+        if rows_affected == 0:
+            logger.warning(f"Update affected 0 rows for id={id}. Record may not exist.")
+
+        return rows_affected > 0
 
     async def delete(self, id: str) -> bool:
         """Delete a record by ID."""
@@ -225,7 +238,15 @@ class AsyncSQLiteDatabase(  # type: ignore[misc]
         async with self.db.execute(sql_query, params) as cursor:
             rows = await cursor.fetchall()
 
-            records = [SQLQueryBuilder.row_to_record(dict(row)) for row in rows]
+            records = []
+            for row in rows:
+                row_dict = dict(row)
+                record = SQLQueryBuilder.row_to_record(row_dict)
+
+                # Populate storage_id from database ID
+                record.storage_id = str(row_dict['id'])
+
+                records.append(record)
 
             # Apply field projection if specified
             if query.fields:

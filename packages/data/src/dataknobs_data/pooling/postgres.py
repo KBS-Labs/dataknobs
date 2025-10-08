@@ -31,13 +31,45 @@ class PostgresPoolConfig(BasePoolConfig):
 
     @classmethod
     def from_dict(cls, config: dict) -> PostgresPoolConfig:
-        """Create from configuration dictionary."""
+        """Create from configuration dictionary.
+
+        Supports either a connection_string parameter or individual parameters.
+
+        Args:
+            config: Configuration dict with either:
+                - connection_string: PostgreSQL connection string (postgresql://user:pass@host:port/db)
+                - OR individual parameters: host, port, database, user, password
+
+        Returns:
+            PostgresPoolConfig instance
+        """
+        # Check if connection_string is provided
+        connection_string = config.get("connection_string")
+
+        if connection_string:
+            from urllib.parse import urlparse
+            parsed = urlparse(connection_string)
+
+            # Extract connection parameters from connection string
+            host = parsed.hostname or "localhost"
+            port = parsed.port or 5432
+            database = parsed.path[1:] if parsed.path and len(parsed.path) > 1 else "postgres"
+            user = parsed.username or "postgres"
+            password = parsed.password or ""
+        else:
+            # Use individual parameters
+            host = config.get("host", "localhost")
+            port = config.get("port", 5432)
+            database = config.get("database", "postgres")
+            user = config.get("user", "postgres")
+            password = config.get("password", "")
+
         return cls(
-            host=config.get("host", "localhost"),
-            port=config.get("port", 5432),
-            database=config.get("database", "postgres"),
-            user=config.get("user", "postgres"),
-            password=config.get("password", ""),
+            host=host,
+            port=port,
+            database=database,
+            user=user,
+            password=password,
             min_size=config.get("min_pool_size", 2),
             max_size=config.get("max_pool_size", 5),
             command_timeout=config.get("command_timeout"),
