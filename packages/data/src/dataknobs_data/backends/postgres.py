@@ -205,7 +205,15 @@ class SyncPostgresDatabase(
         return self._row_to_record(row)
 
     def update(self, id: str, record: Record) -> bool:
-        """Update an existing record."""
+        """Update an existing record.
+
+        Args:
+            id: The record ID to update
+            record: The record data to update with
+
+        Returns:
+            True if the record was updated, False if no record with the given ID exists
+        """
         self._check_connection()
         row = self._record_to_row(record, id)
 
@@ -215,8 +223,14 @@ class SyncPostgresDatabase(
         WHERE id = %(id)s
         """
         result = self.db.execute(sql, row)
+
         # PostgresDB.execute returns number of affected rows
-        return result > 0 if isinstance(result, int) else False
+        rows_affected = result if isinstance(result, int) else 0
+
+        if rows_affected == 0:
+            logger.warning(f"Update affected 0 rows for id={id}. Record may not exist.")
+
+        return rows_affected > 0
 
     def delete(self, id: str) -> bool:
         """Delete a record by ID."""
@@ -296,7 +310,11 @@ class SyncPostgresDatabase(
         # Convert to records
         records = []
         for _, row in df.iterrows():
-            record = self._row_to_record(row.to_dict())
+            row_dict = row.to_dict()
+            record = self._row_to_record(row_dict)
+
+            # Populate storage_id from database ID
+            record.storage_id = str(row_dict['id'])
 
             # Apply field projection if specified
             if query.fields:
@@ -958,7 +976,15 @@ class AsyncPostgresDatabase(
         return self._row_to_record(row)
 
     async def update(self, id: str, record: Record) -> bool:
-        """Update an existing record."""
+        """Update an existing record.
+
+        Args:
+            id: The record ID to update
+            record: The record data to update with
+
+        Returns:
+            True if the record was updated, False if no record with the given ID exists
+        """
         self._check_connection()
         row = self._record_to_row(record, id)
 
@@ -972,7 +998,12 @@ class AsyncPostgresDatabase(
             result = await conn.execute(sql, row["id"], row["data"], row["metadata"])
 
         # Returns UPDATE n where n is rows affected
-        return result.split()[-1] != "0"
+        rows_affected = int(result.split()[-1])
+
+        if rows_affected == 0:
+            logger.warning(f"Update affected 0 rows for id={id}. Record may not exist.")
+
+        return rows_affected > 0
 
     async def delete(self, id: str) -> bool:
         """Delete a record by ID."""
@@ -1062,6 +1093,9 @@ class AsyncPostgresDatabase(
         records = []
         for row in rows:
             record = self._row_to_record(row)
+
+            # Populate storage_id from database ID
+            record.storage_id = str(row['id'])
 
             # Apply field projection if specified
             if query.fields:
