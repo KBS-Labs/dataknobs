@@ -9,11 +9,8 @@ on:
       - 'packages/*/src/**/*.py'
       - 'mkdocs.yml'
       - '.github/workflows/docs.yml'
-  pull_request:
-    branches:
-      - main
-    types:
-      - closed
+      - 'uv.lock'
+      - 'pyproject.toml'
   workflow_dispatch:
 
 permissions:
@@ -64,9 +61,7 @@ jobs:
   deploy-docs:
     needs: build-docs
     runs-on: ubuntu-latest
-    if: |
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'pull_request' && github.event.pull_request.merged == true && github.event.pull_request.head.ref == 'update-dependencies')
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     
     environment:
       name: github-pages
