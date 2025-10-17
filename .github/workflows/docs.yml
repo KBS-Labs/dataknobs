@@ -44,7 +44,7 @@ jobs:
         run: |
           uv pip install --system mkdocs mkdocs-material mkdocstrings[python] \
             mkdocs-monorepo-plugin mkdocs-awesome-pages-plugin \
-            mkdocs-git-revision-date-localized-plugin
+            mkdocs-git-revision-date-localized-plugin ruff
           uv pip install --system -e packages/common
           uv pip install --system -e packages/config
           uv pip install --system -e packages/data
