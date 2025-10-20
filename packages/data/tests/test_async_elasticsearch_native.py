@@ -66,41 +66,58 @@ async def mock_es_client():
 @pytest_asyncio.fixture
 async def es_db():
     """Create an Elasticsearch database instance."""
+    # Clear the global pool manager state to ensure fresh connections for each test
+    from dataknobs_data.backends.elasticsearch_async import _client_manager
+    await _client_manager.close_all()
+
     config = {
         "hosts": ["localhost:9200"],
         "index": "test_index"
     }
     db = AsyncElasticsearchDatabase(config)
-    return db
+    yield db
+
+    # Cleanup after test
+    if db._connected:
+        await db.close()
+    await _client_manager.close_all()
 
 
 @pytest.mark.asyncio
-async def test_connect_creates_client(es_db, mock_es_client):
+async def test_connect_creates_client(es_db):
     """Test that connect creates and validates Elasticsearch client."""
+    # Create a fresh mock client for this test
+    mock_client = AsyncMock()
+    mock_client.indices.exists = AsyncMock(return_value=True)
+    mock_client.indices.create = AsyncMock()
+
     with patch('dataknobs_data.backends.elasticsearch_async.create_async_elasticsearch_client',
                new_callable=AsyncMock) as mock_create:
-        mock_create.return_value = mock_es_client
-        
+        mock_create.return_value = mock_client
+
         await es_db.connect()
-        
+
         assert es_db._connected is True
         assert es_db._client is not None
-        mock_es_client.indices.exists.assert_called_once_with(index="test_index")
+        mock_client.indices.exists.assert_called_once_with(index="test_index")
 
 
 @pytest.mark.asyncio
-async def test_connect_creates_index_if_missing(es_db, mock_es_client):
+async def test_connect_creates_index_if_missing(es_db):
     """Test that connect creates index if it doesn't exist."""
-    mock_es_client.indices.exists.return_value = False
-    
+    # Create a fresh mock client with index not existing
+    mock_client = AsyncMock()
+    mock_client.indices.exists = AsyncMock(return_value=False)
+    mock_client.indices.create = AsyncMock()
+
     with patch('dataknobs_data.backends.elasticsearch_async.create_async_elasticsearch_client',
                new_callable=AsyncMock) as mock_create:
-        mock_create.return_value = mock_es_client
-        
+        mock_create.return_value = mock_client
+
         await es_db.connect()
-        
-        mock_es_client.indices.create.assert_called_once()
-        call_args = mock_es_client.indices.create.call_args
+
+        mock_client.indices.create.assert_called_once()
+        call_args = mock_client.indices.create.call_args
         assert call_args.kwargs['index'] == "test_index"
         assert 'mappings' in call_args.kwargs
 
@@ -323,29 +340,41 @@ async def test_stream_write(es_db, mock_es_client):
 @pytest.mark.asyncio
 async def test_connection_pooling():
     """Test that connection pooling works across event loops."""
+    # Clean up any existing pool state first
+    from dataknobs_data.backends.elasticsearch_async import _client_manager
+    await _client_manager.close_all()
+
     config = {
         "hosts": ["localhost:9200"],
         "index": "test_index"
     }
-    
+
     with patch('dataknobs_data.backends.elasticsearch_async._client_manager') as mock_manager:
         mock_pool = AsyncMock()
         mock_manager.get_pool = AsyncMock(return_value=mock_pool)
-        
+        mock_manager.close_all = AsyncMock()
+
         # Create two databases
         db1 = AsyncElasticsearchDatabase(config)
         db2 = AsyncElasticsearchDatabase(config)
-        
+
         # Connect both
         await db1.connect()
         await db2.connect()
-        
+
         # Should use the same pool for same config
         assert mock_manager.get_pool.call_count == 2
-        
+
         # Verify pool config is passed correctly
         calls = mock_manager.get_pool.call_args_list
         assert calls[0][0][0] == calls[1][0][0]  # Same config
+
+        # Cleanup
+        await db1.close()
+        await db2.close()
+
+    # Cleanup real manager state after test
+    await _client_manager.close_all()
 
 
 @pytest.mark.asyncio
