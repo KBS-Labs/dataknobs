@@ -154,6 +154,8 @@ nav:
       - packages/xization/tokenization.md
       - packages/xization/normalization.md
       - packages/xization/masking.md
+      - Markdown Chunking:
+        - packages/xization/markdown-chunking.md
       - packages/xization/api.md
     - Legacy:
       - packages/legacy/index.md
@@ -221,6 +223,7 @@ nav:
       - examples/elasticsearch-integration.md
     - Xization Examples:
       - examples/text-normalization.md
+      - examples/markdown-chunking.md
   
   - Changelog: changelog.md
   - License: license.md
