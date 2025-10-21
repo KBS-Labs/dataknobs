@@ -10,6 +10,7 @@ dependencies = [
     "dataknobs-data",
     "dataknobs-fsm",
     "dataknobs-kv",
+    "dataknobs-llm",
     "dataknobs-structures",
     "dataknobs-utils",
     "dataknobs-xization",
@@ -51,6 +52,7 @@ dataknobs-config = { workspace = true }
 dataknobs-data = { workspace = true }
 dataknobs-fsm = { workspace = true }
 dataknobs-kv = { workspace = true }
+dataknobs-llm = { workspace = true }
 dataknobs-structures = { workspace = true }
 dataknobs-utils = { workspace = true }
 dataknobs-xization = { workspace = true }
@@ -72,7 +74,7 @@ warn_unreachable = true
 strict_equality = true
 namespace_packages = true
 explicit_package_bases = true
-mypy_path = "packages/common/src:packages/config/src:packages/data/src:packages/kv/src:packages/structures/src:packages/utils/src:packages/xization/src"
+mypy_path = "packages/common/src:packages/config/src:packages/data/src:packages/kv/src:packages/llm/src:packages/structures/src:packages/utils/src:packages/xization/src"
 cache_dir = ".mypy_cache"
 incremental = true
 # Note: For focused type checking that suppresses less critical errors,
@@ -256,7 +258,7 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 # Configure import sorting
 combine-as-imports = true
 force-wrap-aliases = true
-known-first-party = ["dataknobs", "dataknobs_common", "dataknobs_config", "dataknobs_data", "dataknobs_kv", "dataknobs_structures", "dataknobs_utils", "dataknobs_xization"]
+known-first-party = ["dataknobs", "dataknobs_common", "dataknobs_config", "dataknobs_data", "dataknobs_kv", "dataknobs_llm", "dataknobs_structures", "dataknobs_utils", "dataknobs_xization"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"  # Use Google docstring convention
