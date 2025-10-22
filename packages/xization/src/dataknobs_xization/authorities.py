@@ -653,7 +653,7 @@ class RegexAuthority(Authority):
         :return: The added Annotations
         """
         for match in re.finditer(self.regex, text_obj.text):
-            ann_dicts = list()
+            ann_dicts = []
             if match.lastindex is not None:
                 if len(self.regex.groupindex) > 0:  # we have named groups
                     for group_name, group_num in self.regex.groupindex.items():
@@ -735,7 +735,7 @@ class AuthoritiesBundle(Authority):
             anns_validator=anns_validator,
             parent_auth=parent_auth,
         )
-        self.auths = auths.copy() if auths is not None else list()
+        self.auths = auths.copy() if auths is not None else []
 
     def add(self, auth: Authority):
         """Add the authority to this bundle

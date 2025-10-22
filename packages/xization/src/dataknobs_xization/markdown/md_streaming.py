@@ -89,7 +89,7 @@ class StreamingMarkdownProcessor:
         Yields:
             Chunk objects
         """
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, encoding='utf-8') as f:
             yield from self.process_stream(f)
 
     def process_string(self, content: str) -> Iterator[Chunk]:
@@ -159,7 +159,6 @@ class AdaptiveStreamingProcessor(StreamingMarkdownProcessor):
         # Build tree incrementally with memory monitoring
         root = Tree(MarkdownNode(text="ROOT", level=0, node_type="root", line_number=0))
         current_parent = root
-        current_level = 0
         line_number = 0
 
         lines = self.parser._get_line_iterator(source)
@@ -198,13 +197,12 @@ class AdaptiveStreamingProcessor(StreamingMarkdownProcessor):
                     line_number=line_number,
                 )
 
-                current_parent, current_level = self.parser._find_heading_parent(
+                current_parent, _ = self.parser._find_heading_parent(
                     root, current_parent, level
                 )
 
                 heading_node = current_parent.add_child(node_data)
                 current_parent = heading_node
-                current_level = level
 
             else:
                 # Body text

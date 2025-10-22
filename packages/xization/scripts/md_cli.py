@@ -8,12 +8,11 @@ chunks suitable for RAG applications.
 import argparse
 import json
 import sys
-from pathlib import Path
 from typing import TextIO
 
 from dataknobs_xization.markdown.md_chunker import ChunkFormat, HeadingInclusion
 from dataknobs_xization.markdown.md_parser import parse_markdown
-from dataknobs_xization.markdown.md_streaming import stream_markdown_file, stream_markdown_string
+from dataknobs_xization.markdown.md_streaming import stream_markdown_string
 
 
 def parse_args() -> argparse.Namespace:
@@ -142,7 +141,7 @@ def get_input_content(input_path: str) -> str:
     if input_path == "-":
         return sys.stdin.read()
     else:
-        with open(input_path, "r", encoding="utf-8") as f:
+        with open(input_path, encoding="utf-8") as f:
             return f.read()
 
 

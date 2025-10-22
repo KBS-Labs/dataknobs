@@ -56,7 +56,7 @@ class LexicalExpander:
             variations = {self.normalize_fn(v) for v in variations}
         # Add a mapping from each variation to its original term
         if variations is not None and len(variations) > 0:
-            more_itertools.consume(map(lambda v: self.v2t[v].add(term), variations))
+            more_itertools.consume(self.v2t[v].add(term) for v in variations)
         return variations
 
     def normalize(self, input_term: str) -> str:
@@ -92,7 +92,7 @@ class TokenMatch:
 
         self.varparts = var.split()
         self.matches = True
-        self.tokens = list()
+        self.tokens = []
         t = token
         for v in self.varparts:
             if t is not None and v == t.norm_text:
@@ -133,7 +133,7 @@ class TokenAligner:
     def __init__(self, first_token: dk_tok.Token, authority: dk_auth.LexicalAuthority):
         self.first_token = first_token
         self.auth = authority
-        self.annotations = list()  # List[Dict[str, Any]]
+        self.annotations = []  # List[Dict[str, Any]]
         self._processed_idx = set()
         self._process(self.first_token)
 
@@ -147,7 +147,7 @@ class TokenAligner:
             self._process(token.next_token)
 
     def _get_token_matches(self, token):
-        token_matches = list()
+        token_matches = []
         vs = self.auth.find_variations(token.norm_text, starts_with=True)
         if len(vs) > 0:
             for val_idx, var in vs.items():
@@ -169,7 +169,7 @@ class DataframeAuthority(dk_auth.LexicalAuthority):
         authdata: dk_auth.AuthorityData,
         auth_anns_builder: dk_auth.AuthorityAnnotationsBuilder = None,
         field_groups: dk_auth.DerivedFieldGroups = None,
-        anns_validator: Callable[["Authority", Dict[str, Any]], bool] = None,
+        anns_validator: Callable[[dk_auth.Authority, Dict[str, Any]], bool] = None,
         parent_auth: dk_auth.Authority = None,
     ):
         """Initialize with the name, values, and associated ids of the authority;
@@ -351,7 +351,7 @@ class CorrelatedAuthorityData(dk_auth.AuthorityData):
 
     def __init__(self, df: pd.DataFrame, name: str):
         super().__init__(df, name)
-        self._authority_data = dict()
+        self._authority_data = {}
 
     def sub_authority_names(self) -> List[str]:
         """Get the "sub" authority names."""
@@ -406,7 +406,7 @@ class MultiAuthorityData(CorrelatedAuthorityData):
 
     def __init__(self, df: pd.DataFrame, name: str):
         super().__init__(df, name)
-        self._authority_data = dict()
+        self._authority_data = {}
 
     @abstractmethod
     def build_authority_data(self, name: str) -> dk_auth.AuthorityData:

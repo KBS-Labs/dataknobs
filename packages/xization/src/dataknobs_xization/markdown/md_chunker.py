@@ -108,8 +108,8 @@ class Chunk:
 
         # Build heading hierarchy
         lines = []
-        for i, (heading, level) in enumerate(
-            zip(self.metadata.headings, self.metadata.heading_levels)
+        for heading, level in zip(
+            self.metadata.headings, self.metadata.heading_levels
         ):
             lines.append(f"{'#' * level} {heading}")
 

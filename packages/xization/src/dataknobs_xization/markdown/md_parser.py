@@ -139,7 +139,6 @@ class MarkdownParser:
 
         # Track current position in tree
         current_parent = root
-        current_level = 0
         self._current_line = 0
 
         # State tracking for multi-line constructs
@@ -174,13 +173,12 @@ class MarkdownParser:
                     line_number=self._current_line,
                 )
 
-                current_parent, current_level = self._find_heading_parent(
+                current_parent, _ = self._find_heading_parent(
                     root, current_parent, level
                 )
 
                 heading_node = current_parent.add_child(node_data)
                 current_parent = heading_node
-                current_level = level
                 i += 1
                 continue
 
@@ -550,7 +548,7 @@ class MarkdownParser:
         sentences = re.split(r'([.!?]+\s+)', text)
         current_chunk = ""
 
-        for i, segment in enumerate(sentences):
+        for segment in sentences:
             if len(current_chunk) + len(segment) <= self.max_line_length:
                 current_chunk += segment
             else:
