@@ -241,7 +241,7 @@ The package includes a CLI for testing and demonstration.
 #### `info` - Show document information
 
 ```bash
-uv run python -m dataknobs_xization.md_cli info document.md
+uv run python packages/xization/scripts/md_cli.py info document.md
 ```
 
 Output:
@@ -263,17 +263,17 @@ Heading levels:
 
 ```bash
 # Basic chunking
-uv run python -m dataknobs_xization.md_cli chunk document.md
+uv run python packages/xization/scripts/md_cli.py chunk document.md
 
 # With custom parameters
-uv run python -m dataknobs_xization.md_cli chunk document.md \
+uv run python packages/xization/scripts/md_cli.py chunk document.md \
   --max-size 500 \
   --overlap 50 \
   --headings both \
   --show-metadata
 
 # Output as JSON
-uv run python -m dataknobs_xization.md_cli chunk document.md \
+uv run python packages/xization/scripts/md_cli.py chunk document.md \
   --output-format json \
   --output chunks.json
 ```
@@ -281,7 +281,7 @@ uv run python -m dataknobs_xization.md_cli chunk document.md \
 #### `parse` - Parse and show tree structure
 
 ```bash
-uv run python -m dataknobs_xization.md_cli parse document.md --show-tree
+uv run python packages/xization/scripts/md_cli.py parse document.md --show-tree
 ```
 
 ### CLI Options

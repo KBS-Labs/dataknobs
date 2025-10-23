@@ -325,16 +325,16 @@ Use the CLI for quick analysis and testing:
 
 ```bash
 # Analyze document structure
-uv run python -m dataknobs_xization.markdown.md_cli info my_doc.md
+uv run python packages/xization/scripts/md_cli.py info my_doc.md
 
 # Generate chunks and inspect
-uv run python -m dataknobs_xization.markdown.md_cli chunk my_doc.md \
+uv run python packages/xization/scripts/md_cli.py chunk my_doc.md \
   --max-size 500 \
   --show-metadata \
   | head -100
 
 # Export for loading into vector store
-uv run python -m dataknobs_xization.markdown.md_cli chunk my_doc.md \
+uv run python packages/xization/scripts/md_cli.py chunk my_doc.md \
   --output-format json \
   --headings metadata \
   --output chunks.json
