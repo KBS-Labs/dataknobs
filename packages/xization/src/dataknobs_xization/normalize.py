@@ -113,7 +113,7 @@ def get_hyphen_slash_expansions_fn(
     if do_split:
         # add each word separately
         tokens = set(hyphen_slash_re.split(text))
-        if not max(map(lambda t: len(t) < min_split_token_len, tokens)):
+        if not max(len(t) < min_split_token_len for t in tokens):
             variations.update(tokens)
     return variations
 
@@ -348,7 +348,7 @@ def year_variations_fn(
     variations.update(zero_pad_variations(remainder, 2, 3))
 
     if century > 0:
-        remainder_texts = list()
+        remainder_texts = []
         if remainder > 0:
             if remainder < 10:
                 if not numeric_only:

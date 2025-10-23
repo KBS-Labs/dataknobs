@@ -84,7 +84,7 @@ class CharacterFeatures(ABC):
         :return: A list of token instances
         """
         token = self.build_first_token(normalize_fn)
-        tokens = list()
+        tokens = []
         while token is not None:
             tokens.append(token)
             token = token.next_token
