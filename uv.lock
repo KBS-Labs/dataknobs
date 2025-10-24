@@ -1642,6 +1642,7 @@ source = { editable = "packages/llm" }
 dependencies = [
     { name = "dataknobs-common" },
     { name = "dataknobs-config" },
+    { name = "pyyaml" },
 ]
 
 [package.dev-dependencies]
@@ -1657,6 +1658,7 @@ dev = [
 requires-dist = [
     { name = "dataknobs-common", editable = "packages/common" },
     { name = "dataknobs-config", editable = "packages/config" },
+    { name = "pyyaml", specifier = ">=6.0" },
 ]
 
 [package.metadata.requires-dev]

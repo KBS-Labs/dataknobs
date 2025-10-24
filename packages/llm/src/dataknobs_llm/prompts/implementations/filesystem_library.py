@@ -31,14 +31,9 @@ File Format (YAML):
 
 import json
 import logging
+import yaml
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
-
-try:
-    import yaml
-    HAS_YAML = True
-except ImportError:
-    HAS_YAML = False
 
 from ..base import (
     BasePromptLibrary,
@@ -92,13 +87,6 @@ class FileSystemPromptLibrary(BasePromptLibrary):
 
         if not self.prompt_dir.is_dir():
             raise ValueError(f"Prompt path is not a directory: {self.prompt_dir}")
-
-        # Check YAML support if needed
-        if any(ext in [".yaml", ".yml"] for ext in self.file_extensions) and not HAS_YAML:
-            logger.warning(
-                "YAML file extensions specified but PyYAML not installed. "
-                "Install with: pip install pyyaml"
-            )
 
         # Auto-load prompts if requested
         if auto_load:
@@ -275,11 +263,6 @@ class FileSystemPromptLibrary(BasePromptLibrary):
                 content = f.read()
 
             if file_path.suffix in [".yaml", ".yml"]:
-                if not HAS_YAML:
-                    raise ValueError(
-                        f"PyYAML not installed, cannot load {file_path}. "
-                        "Install with: pip install pyyaml"
-                    )
                 return yaml.safe_load(content) or {}
 
             elif file_path.suffix == ".json":

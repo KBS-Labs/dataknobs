@@ -2,6 +2,7 @@
 
 import json
 import pytest
+import yaml
 from pathlib import Path
 
 from dataknobs_llm.prompts import (
@@ -83,17 +84,8 @@ class TestFileSystemSystemPrompts:
         assert template["defaults"]["language"] == "python"
         assert template["metadata"]["author"] == "test"
 
-    @pytest.mark.skipif(
-        condition=True,
-        reason="Skip YAML tests if PyYAML not installed"
-    )
     def test_load_yaml_system_prompt(self, temp_prompts_dir):
         """Test loading system prompt from YAML file."""
-        try:
-            import yaml
-        except ImportError:
-            pytest.skip("PyYAML not installed")
-
         prompt_file = temp_prompts_dir / "system" / "greet.yaml"
         prompt_data = {
             "template": "Hello {{name}}!",
