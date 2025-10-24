@@ -65,11 +65,19 @@ class PromptTemplate(TypedDict, total=False):
         defaults: Default values for template parameters
         validation: Validation configuration for this template
         metadata: Additional metadata (author, version, etc.)
+        sections: Section definitions for template composition
+        extends: Name of base template to inherit from
+        rag_config_refs: References to standalone RAG configurations
+        rag_configs: Inline RAG configurations
     """
     template: str
     defaults: Dict[str, Any]
     validation: ValidationConfig
     metadata: Dict[str, Any]
+    sections: Dict[str, str]
+    extends: str
+    rag_config_refs: List[str]
+    rag_configs: List['RAGConfig']
 
 
 class RAGConfig(TypedDict, total=False):

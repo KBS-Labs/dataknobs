@@ -4,11 +4,11 @@ This module provides BasePromptLibrary, a concrete implementation of
 AbstractPromptLibrary that includes caching and common utilities.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 import logging
 
 from .abstract_prompt_library import AbstractPromptLibrary
-from .types import PromptTemplate, MessageIndex, RAGConfig
+from .types import PromptTemplate, MessageIndex, RAGConfig, ValidationConfig, ValidationLevel
 
 logger = logging.getLogger(__name__)
 
@@ -223,6 +223,186 @@ class BasePromptLibrary(AbstractPromptLibrary):
         """
         if self._enable_cache:
             self._prompt_rag_cache[(prompt_name, prompt_type, index)] = configs
+
+    # ===== Common Parsing Methods =====
+
+    def _parse_validation_config(self, data: Union[Dict, ValidationConfig]) -> ValidationConfig:
+        """Parse validation configuration from dict or ValidationConfig.
+
+        This method is shared by all library implementations for consistent
+        validation config parsing.
+
+        Args:
+            data: Validation data (dict or ValidationConfig instance)
+
+        Returns:
+            ValidationConfig instance
+
+        Raises:
+            ValueError: If data type is invalid
+        """
+        if isinstance(data, ValidationConfig):
+            return data
+
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"Invalid validation config: expected dict or ValidationConfig, "
+                f"got {type(data)}"
+            )
+
+        # Parse level
+        level = None
+        if "level" in data:
+            level_data = data["level"]
+            if isinstance(level_data, str):
+                level = ValidationLevel(level_data.lower())
+            elif isinstance(level_data, ValidationLevel):
+                level = level_data
+
+        # Parse params
+        required_params = data.get("required_params", [])
+        optional_params = data.get("optional_params", [])
+
+        return ValidationConfig(
+            level=level,
+            required_params=required_params,
+            optional_params=optional_params
+        )
+
+    def _parse_rag_config(self, data: Dict[str, Any]) -> RAGConfig:
+        """Parse RAG configuration from dict.
+
+        This method is shared by all library implementations for consistent
+        RAG config parsing.
+
+        Args:
+            data: RAG config data dictionary
+
+        Returns:
+            RAGConfig dictionary
+        """
+        rag_config: RAGConfig = {
+            "adapter_name": data.get("adapter_name", ""),
+            "query": data.get("query", ""),
+        }
+
+        # Add optional fields
+        if "k" in data:
+            rag_config["k"] = data["k"]
+
+        if "filters" in data:
+            rag_config["filters"] = data["filters"]
+
+        if "placeholder" in data:
+            rag_config["placeholder"] = data["placeholder"]
+
+        if "header" in data:
+            rag_config["header"] = data["header"]
+
+        if "item_template" in data:
+            rag_config["item_template"] = data["item_template"]
+
+        return rag_config
+
+    def _parse_prompt_template(self, data: Any) -> PromptTemplate:
+        """Parse prompt template from various formats.
+
+        This method is shared by all library implementations for consistent
+        template parsing. Supports:
+        - String templates (converted to {"template": string})
+        - Dict with "template" key
+        - Dict with "extends" key but no "template" (template inherited)
+        - Empty dict (treated as {"template": ""})
+
+        Args:
+            data: Prompt template data (string or dict)
+
+        Returns:
+            PromptTemplate dictionary
+
+        Raises:
+            ValueError: If data format is invalid
+        """
+        # If just a string, treat as template
+        if isinstance(data, str):
+            return {"template": data}
+
+        # If empty dict, treat as empty template
+        if isinstance(data, dict) and len(data) == 0:
+            return {"template": ""}
+
+        # If dict with template field
+        if isinstance(data, dict) and "template" in data:
+            template: PromptTemplate = {
+                "template": data["template"],
+            }
+
+            # Add optional fields
+            if "defaults" in data:
+                template["defaults"] = data["defaults"]
+
+            if "validation" in data:
+                template["validation"] = self._parse_validation_config(data["validation"])
+
+            if "metadata" in data:
+                template["metadata"] = data["metadata"]
+
+            # Add composition fields
+            if "sections" in data:
+                template["sections"] = data["sections"]
+
+            if "extends" in data:
+                template["extends"] = data["extends"]
+
+            # Add RAG configuration fields
+            if "rag_config_refs" in data:
+                template["rag_config_refs"] = data["rag_config_refs"]
+
+            if "rag_configs" in data:
+                template["rag_configs"] = [
+                    self._parse_rag_config(rag_data)
+                    for rag_data in data["rag_configs"]
+                ]
+
+            return template
+
+        # If dict with extends field but no template (template will be inherited)
+        elif isinstance(data, dict) and "extends" in data:
+            template: PromptTemplate = {}
+
+            # Template will be inherited from base
+            template["extends"] = data["extends"]
+
+            # Add optional override fields
+            if "defaults" in data:
+                template["defaults"] = data["defaults"]
+
+            if "validation" in data:
+                template["validation"] = self._parse_validation_config(data["validation"])
+
+            if "metadata" in data:
+                template["metadata"] = data["metadata"]
+
+            if "sections" in data:
+                template["sections"] = data["sections"]
+
+            # Add RAG configuration fields
+            if "rag_config_refs" in data:
+                template["rag_config_refs"] = data["rag_config_refs"]
+
+            if "rag_configs" in data:
+                template["rag_configs"] = [
+                    self._parse_rag_config(rag_data)
+                    for rag_data in data["rag_configs"]
+                ]
+
+            return template
+
+        else:
+            raise ValueError(
+                f"Invalid prompt template data: expected dict with 'template' or 'extends' key, "
+                f"or string, got {type(data)}"
+            )
 
     # ===== Abstract Methods (must be implemented by subclasses) =====
 

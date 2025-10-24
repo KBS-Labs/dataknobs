@@ -155,42 +155,8 @@ class ConfigPromptLibrary(BasePromptLibrary):
             except Exception as e:
                 logger.error(f"Error loading RAG config {name}: {e}")
 
-    def _parse_prompt_template(self, data: Any) -> PromptTemplate:
-        """Parse prompt template from config data.
-
-        Args:
-            data: Prompt template data (dict or PromptTemplate)
-
-        Returns:
-            PromptTemplate dictionary
-        """
-        # If already a PromptTemplate, return as-is
-        if isinstance(data, dict) and "template" in data:
-            template: PromptTemplate = {
-                "template": data["template"],
-            }
-
-            # Add optional fields
-            if "defaults" in data:
-                template["defaults"] = data["defaults"]
-
-            if "validation" in data:
-                template["validation"] = self._parse_validation_config(data["validation"])
-
-            if "metadata" in data:
-                template["metadata"] = data["metadata"]
-
-            return template
-
-        # If just a string, treat as template
-        elif isinstance(data, str):
-            return {"template": data}
-
-        else:
-            raise ValueError(
-                f"Invalid prompt template data: expected dict with 'template' key "
-                f"or string, got {type(data)}"
-            )
+    # Note: _parse_prompt_template(), _parse_validation_config(), and
+    # _parse_rag_config() are now inherited from BasePromptLibrary
 
     def _parse_message_index(self, data: Dict[str, Any]) -> MessageIndex:
         """Parse message index from config data.
@@ -216,75 +182,6 @@ class ConfigPromptLibrary(BasePromptLibrary):
             message_index["metadata"] = data["metadata"]
 
         return message_index
-
-    def _parse_rag_config(self, data: Dict[str, Any]) -> RAGConfig:
-        """Parse RAG configuration from config data.
-
-        Args:
-            data: RAG config data
-
-        Returns:
-            RAGConfig dictionary
-        """
-        rag_config: RAGConfig = {
-            "adapter_name": data.get("adapter_name", ""),
-            "query": data.get("query", ""),
-        }
-
-        # Add optional fields
-        if "k" in data:
-            rag_config["k"] = data["k"]
-
-        if "filters" in data:
-            rag_config["filters"] = data["filters"]
-
-        if "placeholder" in data:
-            rag_config["placeholder"] = data["placeholder"]
-
-        if "header" in data:
-            rag_config["header"] = data["header"]
-
-        if "item_template" in data:
-            rag_config["item_template"] = data["item_template"]
-
-        return rag_config
-
-    def _parse_validation_config(self, data: Any) -> ValidationConfig:
-        """Parse validation configuration from config data.
-
-        Args:
-            data: Validation data (dict or ValidationConfig)
-
-        Returns:
-            ValidationConfig instance
-        """
-        if isinstance(data, ValidationConfig):
-            return data
-
-        if not isinstance(data, dict):
-            raise ValueError(
-                f"Invalid validation config: expected dict or ValidationConfig, "
-                f"got {type(data)}"
-            )
-
-        # Parse level
-        level = None
-        if "level" in data:
-            level_str = data["level"]
-            if isinstance(level_str, str):
-                level = ValidationLevel(level_str.lower())
-            elif isinstance(level_str, ValidationLevel):
-                level = level_str
-
-        # Parse params
-        required_params = data.get("required_params", [])
-        optional_params = data.get("optional_params", [])
-
-        return ValidationConfig(
-            level=level,
-            required_params=required_params,
-            optional_params=optional_params
-        )
 
     def get_system_prompt(self, name: str, **kwargs) -> Optional[PromptTemplate]:
         """Get a system prompt by name.

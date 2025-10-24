@@ -75,6 +75,17 @@ from .implementations import (
     CompositePromptLibrary,
 )
 
+# Prompt builders
+from .builders import (
+    PromptBuilder,
+    AsyncPromptBuilder,
+)
+
+# Template composition
+from .utils import (
+    TemplateComposer,
+)
+
 # Version info
 __version__ = "1.0.0"
 
@@ -115,4 +126,11 @@ __all__ = [
     "FileSystemPromptLibrary",
     "ConfigPromptLibrary",
     "CompositePromptLibrary",
+
+    # Builders
+    "PromptBuilder",
+    "AsyncPromptBuilder",
+
+    # Template composition
+    "TemplateComposer",
 ]

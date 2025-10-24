@@ -1,10 +1,12 @@
 """Utility functions for prompt management.
 
-This module will contain utility classes and functions:
-- MessageIndexParser: Parse and validate message index definitions
+This module contains utility classes and functions:
 - TemplateComposer: Support template composition and inheritance
-
-To be implemented in Phase 5.
+- MessageIndexParser: Parse and validate message index definitions (future)
 """
 
-__all__ = []
+from .template_composition import TemplateComposer
+
+__all__ = [
+    "TemplateComposer",
+]

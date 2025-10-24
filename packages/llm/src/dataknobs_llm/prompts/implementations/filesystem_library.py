@@ -214,22 +214,9 @@ class FileSystemPromptLibrary(BasePromptLibrary):
         """
         data = self._load_file(file_path)
 
-        # Build PromptTemplate
-        template: PromptTemplate = {
-            "template": data.get("template", ""),
-        }
-
-        # Add optional fields if present
-        if "defaults" in data:
-            template["defaults"] = data["defaults"]
-
-        if "validation" in data:
-            template["validation"] = self._parse_validation_config(data["validation"])
-
-        if "metadata" in data:
-            template["metadata"] = data["metadata"]
-
-        return template
+        # Use inherited _parse_prompt_template for consistent parsing
+        # This supports templates with 'extends' but no 'template' field
+        return self._parse_prompt_template(data)
 
     def _load_message_index(self, file_path: Path) -> MessageIndex:
         """Load a message index from a file.
@@ -304,65 +291,8 @@ class FileSystemPromptLibrary(BasePromptLibrary):
         except Exception as e:
             raise ValueError(f"Error loading file {file_path}: {e}")
 
-    def _parse_validation_config(self, data: Union[Dict, ValidationConfig]) -> ValidationConfig:
-        """Parse validation configuration from file data.
-
-        Args:
-            data: Validation data from file or ValidationConfig instance
-
-        Returns:
-            ValidationConfig instance
-        """
-        if isinstance(data, ValidationConfig):
-            return data
-
-        # Parse level
-        level = None
-        if "level" in data:
-            level_str = data["level"].lower()
-            level = ValidationLevel(level_str)
-
-        # Parse params
-        required_params = data.get("required_params", [])
-        optional_params = data.get("optional_params", [])
-
-        return ValidationConfig(
-            level=level,
-            required_params=required_params,
-            optional_params=optional_params
-        )
-
-    def _parse_rag_config(self, data: Dict[str, Any]) -> RAGConfig:
-        """Parse RAG configuration from file data.
-
-        Args:
-            data: RAG config data from file
-
-        Returns:
-            RAGConfig dictionary
-        """
-        rag_config: RAGConfig = {
-            "adapter_name": data.get("adapter_name", ""),
-            "query": data.get("query", ""),
-        }
-
-        # Add optional fields
-        if "k" in data:
-            rag_config["k"] = data["k"]
-
-        if "filters" in data:
-            rag_config["filters"] = data["filters"]
-
-        if "placeholder" in data:
-            rag_config["placeholder"] = data["placeholder"]
-
-        if "header" in data:
-            rag_config["header"] = data["header"]
-
-        if "item_template" in data:
-            rag_config["item_template"] = data["item_template"]
-
-        return rag_config
+    # Note: _parse_prompt_template(), _parse_validation_config(), and
+    # _parse_rag_config() are now inherited from BasePromptLibrary
 
     def get_system_prompt(self, name: str, **kwargs) -> Optional[PromptTemplate]:
         """Get a system prompt by name.
