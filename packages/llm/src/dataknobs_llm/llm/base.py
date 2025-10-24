@@ -8,9 +8,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
     Any, Dict, List, Union, AsyncIterator, Iterator,
-    Callable, Protocol
+    Callable, Protocol, Optional
 )
 from datetime import datetime
+
+# Import prompt builder types - clean one-way dependency (llm depends on prompts)
+from dataknobs_llm.prompts import AsyncPromptBuilder, PromptBuilder
 
 
 class CompletionMode(Enum):
@@ -224,46 +227,92 @@ def normalize_llm_config(config: Union["LLMConfig", "Config", Dict[str, Any]]) -
 class LLMProvider(ABC):
     """Base LLM provider interface."""
 
-    def __init__(self, config: Union[LLMConfig, "Config", Dict[str, Any]]):
+    def __init__(
+        self,
+        config: Union[LLMConfig, "Config", Dict[str, Any]],
+        prompt_builder: Optional[Union[PromptBuilder, AsyncPromptBuilder]] = None
+    ):
         """Initialize provider with configuration.
 
         Args:
             config: Configuration as LLMConfig, dataknobs Config object, or dict
+            prompt_builder: Optional prompt builder for integrated prompting
         """
         self.config = normalize_llm_config(config)
+        self.prompt_builder = prompt_builder
         self._client = None
         self._is_initialized = False
-        
+
+    def _validate_prompt_builder(self, expected_type: type) -> None:
+        """Validate that prompt builder is configured and of correct type.
+
+        Args:
+            expected_type: Expected builder type (PromptBuilder or AsyncPromptBuilder)
+
+        Raises:
+            ValueError: If prompt_builder not configured
+            TypeError: If prompt_builder is wrong type
+        """
+        if not self.prompt_builder:
+            raise ValueError(
+                "No prompt_builder configured. Pass prompt_builder to __init__() "
+                "or use complete() directly with pre-rendered messages."
+            )
+
+        if not isinstance(self.prompt_builder, expected_type):
+            raise TypeError(
+                f"{self.__class__.__name__} requires {expected_type.__name__}, "
+                f"got {type(self.prompt_builder).__name__}"
+            )
+
+    def _validate_render_params(
+        self,
+        prompt_type: str
+    ) -> None:
+        """Validate render parameters.
+
+        Args:
+            prompt_type: Type of prompt to render
+
+        Raises:
+            ValueError: If prompt_type is invalid
+        """
+        if prompt_type not in ("system", "user", "both"):
+            raise ValueError(
+                f"Invalid prompt_type: {prompt_type}. "
+                f"Must be 'system', 'user', or 'both'"
+            )
+
     @abstractmethod
     def initialize(self) -> None:
         """Initialize the LLM client."""
         pass
-        
+
     @abstractmethod
     def close(self) -> None:
         """Close the LLM client."""
         pass
-        
+
     @abstractmethod
     def validate_model(self) -> bool:
         """Validate that the model is available."""
         pass
-        
+
     @abstractmethod
     def get_capabilities(self) -> List[ModelCapability]:
         """Get model capabilities."""
         pass
-        
+
     @property
     def is_initialized(self) -> bool:
         """Check if provider is initialized."""
         return self._is_initialized
-        
+
     def __enter__(self):
         """Context manager entry."""
         self.initialize()
         return self
-        
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit."""
         self.close()
@@ -271,7 +320,7 @@ class LLMProvider(ABC):
 
 class AsyncLLMProvider(LLMProvider):
     """Async LLM provider interface."""
-    
+
     @abstractmethod
     async def complete(
         self,
@@ -279,15 +328,151 @@ class AsyncLLMProvider(LLMProvider):
         **kwargs
     ) -> LLMResponse:
         """Generate completion asynchronously.
-        
+
         Args:
             messages: Input messages or prompt
             **kwargs: Additional parameters
-            
+
         Returns:
             LLM response
         """
         pass
+
+    async def render_and_complete(
+        self,
+        prompt_name: str,
+        params: Optional[Dict[str, Any]] = None,
+        prompt_type: str = "user",
+        index: int = 0,
+        include_rag: bool = True,
+        **llm_kwargs
+    ) -> LLMResponse:
+        """Render prompt from library and execute LLM completion.
+
+        This is a convenience method for one-off interactions that combines
+        prompt rendering with LLM execution. For multi-turn conversations,
+        use ConversationManager instead.
+
+        Args:
+            prompt_name: Name of prompt in library
+            params: Parameters for template rendering
+            prompt_type: Type of prompt ("system", "user", or "both")
+            index: Prompt variant index (for user prompts)
+            include_rag: Whether to execute RAG searches
+            **llm_kwargs: Additional arguments passed to complete()
+
+        Returns:
+            LLM response
+
+        Raises:
+            ValueError: If prompt_builder not configured or invalid prompt_type
+            TypeError: If prompt_builder is not AsyncPromptBuilder
+
+        Example:
+            >>> llm = OpenAIProvider(config, prompt_builder=builder)
+            >>> result = await llm.render_and_complete(
+            ...     "analyze_code",
+            ...     params={"code": code, "language": "python"}
+            ... )
+        """
+        # Validate
+        from dataknobs_llm.prompts import AsyncPromptBuilder
+        self._validate_prompt_builder(AsyncPromptBuilder)
+        self._validate_render_params(prompt_type)
+
+        # Render messages
+        messages = await self._render_messages(
+            prompt_name, params, prompt_type, index, include_rag
+        )
+
+        # Execute LLM
+        return await self.complete(messages, **llm_kwargs)
+
+    async def render_and_stream(
+        self,
+        prompt_name: str,
+        params: Optional[Dict[str, Any]] = None,
+        prompt_type: str = "user",
+        index: int = 0,
+        include_rag: bool = True,
+        **llm_kwargs
+    ) -> AsyncIterator[LLMStreamResponse]:
+        """Render prompt and stream LLM response.
+
+        Same as render_and_complete() but returns streaming response.
+
+        Args:
+            prompt_name: Name of prompt in library
+            params: Parameters for template rendering
+            prompt_type: Type of prompt ("system", "user", or "both")
+            index: Prompt variant index
+            include_rag: Whether to execute RAG searches
+            **llm_kwargs: Additional arguments passed to stream_complete()
+
+        Yields:
+            Streaming response chunks
+
+        Raises:
+            ValueError: If prompt_builder not configured or invalid prompt_type
+            TypeError: If prompt_builder is not AsyncPromptBuilder
+
+        Example:
+            >>> async for chunk in llm.render_and_stream("analyze_code", params={"code": code}):
+            ...     print(chunk.delta, end="")
+        """
+        # Validate
+        from dataknobs_llm.prompts import AsyncPromptBuilder
+        self._validate_prompt_builder(AsyncPromptBuilder)
+        self._validate_render_params(prompt_type)
+
+        # Render messages
+        messages = await self._render_messages(
+            prompt_name, params, prompt_type, index, include_rag
+        )
+
+        # Stream LLM response
+        async for chunk in self.stream_complete(messages, **llm_kwargs):
+            yield chunk
+
+    async def _render_messages(
+        self,
+        prompt_name: str,
+        params: Optional[Dict[str, Any]],
+        prompt_type: str,
+        index: int,
+        include_rag: bool
+    ) -> List[LLMMessage]:
+        """Render messages from prompt library (async version).
+
+        Args:
+            prompt_name: Name of prompt in library
+            params: Parameters for template rendering
+            prompt_type: Type of prompt ("system", "user", or "both")
+            index: Prompt variant index
+            include_rag: Whether to execute RAG searches
+
+        Returns:
+            List of rendered LLM messages
+        """
+        from dataknobs_llm.prompts import AsyncPromptBuilder
+        builder: AsyncPromptBuilder = self.prompt_builder  # type: ignore
+
+        messages: List[LLMMessage] = []
+        params = params or {}
+
+        if prompt_type in ("system", "both"):
+            result = await builder.render_system_prompt(
+                prompt_name, params=params, include_rag=include_rag
+            )
+            messages.append(LLMMessage(role="system", content=result.content))
+
+        if prompt_type in ("user", "both"):
+            result = await builder.render_user_prompt(
+                prompt_name, index=index, params=params, include_rag=include_rag
+            )
+            messages.append(LLMMessage(role="user", content=result.content))
+
+        return messages
         
     @abstractmethod
     async def stream_complete(
@@ -362,7 +547,7 @@ class AsyncLLMProvider(LLMProvider):
 
 class SyncLLMProvider(LLMProvider):
     """Synchronous LLM provider interface."""
-    
+
     @abstractmethod
     def complete(
         self,
@@ -370,16 +555,152 @@ class SyncLLMProvider(LLMProvider):
         **kwargs
     ) -> LLMResponse:
         """Generate completion synchronously.
-        
+
         Args:
             messages: Input messages or prompt
             **kwargs: Additional parameters
-            
+
         Returns:
             LLM response
         """
         pass
-        
+
+    def render_and_complete(
+        self,
+        prompt_name: str,
+        params: Optional[Dict[str, Any]] = None,
+        prompt_type: str = "user",
+        index: int = 0,
+        include_rag: bool = True,
+        **llm_kwargs
+    ) -> LLMResponse:
+        """Render prompt from library and execute LLM completion.
+
+        This is a convenience method for one-off interactions that combines
+        prompt rendering with LLM execution. For multi-turn conversations,
+        use ConversationManager instead.
+
+        Args:
+            prompt_name: Name of prompt in library
+            params: Parameters for template rendering
+            prompt_type: Type of prompt ("system", "user", or "both")
+            index: Prompt variant index (for user prompts)
+            include_rag: Whether to execute RAG searches
+            **llm_kwargs: Additional arguments passed to complete()
+
+        Returns:
+            LLM response
+
+        Raises:
+            ValueError: If prompt_builder not configured or invalid prompt_type
+            TypeError: If prompt_builder is not PromptBuilder
+
+        Example:
+            >>> llm = SyncOpenAIProvider(config, prompt_builder=builder)
+            >>> result = llm.render_and_complete(
+            ...     "analyze_code",
+            ...     params={"code": code, "language": "python"}
+            ... )
+        """
+        # Validate
+        from dataknobs_llm.prompts import PromptBuilder
+        self._validate_prompt_builder(PromptBuilder)
+        self._validate_render_params(prompt_type)
+
+        # Render messages
+        messages = self._render_messages(
+            prompt_name, params, prompt_type, index, include_rag
+        )
+
+        # Execute LLM
+        return self.complete(messages, **llm_kwargs)
+
+    def render_and_stream(
+        self,
+        prompt_name: str,
+        params: Optional[Dict[str, Any]] = None,
+        prompt_type: str = "user",
+        index: int = 0,
+        include_rag: bool = True,
+        **llm_kwargs
+    ) -> Iterator[LLMStreamResponse]:
+        """Render prompt and stream LLM response.
+
+        Same as render_and_complete() but returns streaming response.
+
+        Args:
+            prompt_name: Name of prompt in library
+            params: Parameters for template rendering
+            prompt_type: Type of prompt ("system", "user", or "both")
+            index: Prompt variant index
+            include_rag: Whether to execute RAG searches
+            **llm_kwargs: Additional arguments passed to stream_complete()
+
+        Yields:
+            Streaming response chunks
+
+        Raises:
+            ValueError: If prompt_builder not configured or invalid prompt_type
+            TypeError: If prompt_builder is not PromptBuilder
+
+        Example:
+            >>> for chunk in llm.render_and_stream("analyze_code", params={"code": code}):
+            ...     print(chunk.delta, end="")
+        """
+        # Validate
+        from dataknobs_llm.prompts import PromptBuilder
+        self._validate_prompt_builder(PromptBuilder)
+        self._validate_render_params(prompt_type)
+
+        # Render messages
+        messages = self._render_messages(
+            prompt_name, params, prompt_type, index, include_rag
+        )
+
+        # Stream LLM response
+        for chunk in self.stream_complete(messages, **llm_kwargs):
+            yield chunk
+
+    def _render_messages(
+        self,
+        prompt_name: str,
+        params: Optional[Dict[str, Any]],
+        prompt_type: str,
+        index: int,
+        include_rag: bool
+    ) -> List[LLMMessage]:
+        """Render messages from prompt library (sync version).
+
+        Args:
+            prompt_name: Name of prompt in library
+            params: Parameters for template rendering
+            prompt_type: Type of prompt ("system", "user", or "both")
+            index: Prompt variant index
+            include_rag: Whether to execute RAG searches
+
+        Returns:
+            List of rendered LLM messages
+        """
+        from dataknobs_llm.prompts import PromptBuilder
+        builder: PromptBuilder = self.prompt_builder  # type: ignore
+
+        messages: List[LLMMessage] = []
+        params = params or {}
+
+        if prompt_type in ("system", "both"):
+            result = builder.render_system_prompt(
+                prompt_name, params=params, include_rag=include_rag
+            )
+            messages.append(LLMMessage(role="system", content=result.content))
+
+        if prompt_type in ("user", "both"):
+            result = builder.render_user_prompt(
+                prompt_name, index=index, params=params, include_rag=include_rag
+            )
+            messages.append(LLMMessage(role="user", content=result.content))
+
+        return messages
+
     @abstractmethod
     def stream_complete(
         self,
@@ -387,11 +708,11 @@ class SyncLLMProvider(LLMProvider):
         **kwargs
     ) -> Iterator[LLMStreamResponse]:
         """Generate streaming completion synchronously.
-        
+
         Args:
             messages: Input messages or prompt
             **kwargs: Additional parameters
-            
+
         Yields:
             Streaming response chunks
         """

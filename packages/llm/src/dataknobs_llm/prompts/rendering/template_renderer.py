@@ -1,6 +1,6 @@
 """Template renderer with validation support.
 
-This module wraps the CONDITIONAL template strategy from dataknobs_llm.llm.utils
+This module wraps the CONDITIONAL template strategy from dataknobs_llm.template_utils
 and adds validation capabilities for missing parameters.
 """
 
@@ -8,7 +8,7 @@ import re
 import logging
 from typing import Any, Dict, List, Optional, Set
 
-from dataknobs_llm.llm.utils import render_conditional_template
+from dataknobs_llm.template_utils import render_conditional_template
 from ..base.types import (
     ValidationLevel,
     ValidationConfig,

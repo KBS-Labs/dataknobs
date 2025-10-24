@@ -7,13 +7,16 @@ Supports both direct instantiation and dataknobs Config-based factory pattern.
 import os
 import json
 import hashlib
-from typing import Any, Dict, List, Union, AsyncIterator, Type
+from typing import Any, Dict, List, Union, AsyncIterator, Type, Optional
 
 from .base import (
     LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
     AsyncLLMProvider, SyncLLMProvider, ModelCapability,
     LLMAdapter, normalize_llm_config
 )
+
+# Import prompt builder types - clean one-way dependency (llm depends on prompts)
+from dataknobs_llm.prompts import AsyncPromptBuilder
 
 
 class SyncProviderAdapter:
@@ -212,10 +215,14 @@ class OpenAIAdapter(LLMAdapter):
 class OpenAIProvider(AsyncLLMProvider):
     """OpenAI LLM provider."""
 
-    def __init__(self, config: Union[LLMConfig, "Config", Dict[str, Any]]):
+    def __init__(
+        self,
+        config: Union[LLMConfig, "Config", Dict[str, Any]],
+        prompt_builder: Optional[AsyncPromptBuilder] = None
+    ):
         # Normalize config first
         llm_config = normalize_llm_config(config)
-        super().__init__(llm_config)
+        super().__init__(llm_config, prompt_builder=prompt_builder)
         self.adapter = OpenAIAdapter()
         
     async def initialize(self) -> None:
@@ -403,10 +410,14 @@ class AnthropicProvider(AsyncLLMProvider):
     - Streaming responses
     """
 
-    def __init__(self, config: Union[LLMConfig, "Config", Dict[str, Any]]):
+    def __init__(
+        self,
+        config: Union[LLMConfig, "Config", Dict[str, Any]],
+        prompt_builder: Optional[AsyncPromptBuilder] = None
+    ):
         # Normalize config first
         llm_config = normalize_llm_config(config)
-        super().__init__(llm_config)
+        super().__init__(llm_config, prompt_builder=prompt_builder)
         
     async def initialize(self) -> None:
         """Initialize Anthropic client."""
@@ -685,10 +696,14 @@ class OllamaProvider(AsyncLLMProvider):
     - Embeddings
     """
 
-    def __init__(self, config: Union[LLMConfig, "Config", Dict[str, Any]]):
+    def __init__(
+        self,
+        config: Union[LLMConfig, "Config", Dict[str, Any]],
+        prompt_builder: Optional[AsyncPromptBuilder] = None
+    ):
         # Normalize config first
         llm_config = normalize_llm_config(config)
-        super().__init__(llm_config)
+        super().__init__(llm_config, prompt_builder=prompt_builder)
 
         # Check for Docker environment and adjust URL accordingly
         default_url = 'http://localhost:11434'
@@ -1087,10 +1102,14 @@ To call a function, respond with JSON:
 class HuggingFaceProvider(AsyncLLMProvider):
     """HuggingFace Inference API provider."""
 
-    def __init__(self, config: Union[LLMConfig, "Config", Dict[str, Any]]):
+    def __init__(
+        self,
+        config: Union[LLMConfig, "Config", Dict[str, Any]],
+        prompt_builder: Optional[AsyncPromptBuilder] = None
+    ):
         # Normalize config first
         llm_config = normalize_llm_config(config)
-        super().__init__(llm_config)
+        super().__init__(llm_config, prompt_builder=prompt_builder)
         self.base_url = llm_config.api_base or 'https://api-inference.huggingface.co/models'
         
     async def initialize(self) -> None:
@@ -1251,10 +1270,14 @@ class EchoProvider(AsyncLLMProvider):
     - Instant responses
     """
 
-    def __init__(self, config: Union[LLMConfig, "Config", Dict[str, Any]]):
+    def __init__(
+        self,
+        config: Union[LLMConfig, "Config", Dict[str, Any]],
+        prompt_builder: Optional[AsyncPromptBuilder] = None
+    ):
         # Normalize config first
         llm_config = normalize_llm_config(config)
-        super().__init__(llm_config)
+        super().__init__(llm_config, prompt_builder=prompt_builder)
 
         # Echo-specific configuration from options
         self.echo_prefix = llm_config.options.get('echo_prefix', 'Echo: ')

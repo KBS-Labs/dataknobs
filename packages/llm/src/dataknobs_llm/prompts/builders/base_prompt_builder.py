@@ -69,7 +69,7 @@ class BasePromptBuilder(ABC):
         Returns:
             Rendered query string
         """
-        from dataknobs_llm.llm.utils import render_conditional_template
+        from dataknobs_llm.template_utils import render_conditional_template
         return render_conditional_template(query_template, params)
 
     def _format_rag_results(
