@@ -1,0 +1,462 @@
+"""Configuration-based prompt library implementation.
+
+This module provides a prompt library that loads prompts from Python dictionaries.
+Useful for programmatic prompt definition and testing.
+
+Example:
+    config = {
+        "system": {
+            "analyze_code": {
+                "template": "Analyze this {{language}} code:\\n{{code}}",
+                "defaults": {"language": "python"},
+                "validation": {
+                    "level": "error",
+                    "required_params": ["code"]
+                }
+            }
+        },
+        "user": {
+            "code_analysis": {
+                0: {
+                    "template": "Please analyze the following code..."
+                },
+                1: {
+                    "template": "Additionally, check for..."
+                }
+            }
+        }
+    }
+
+    library = ConfigPromptLibrary(config)
+    template = library.get_system_prompt("analyze_code")
+"""
+
+import logging
+from typing import Any, Dict, List, Optional
+
+from ..base import (
+    BasePromptLibrary,
+    PromptTemplate,
+    RAGConfig,
+    MessageIndex,
+    ValidationConfig,
+    ValidationLevel,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class ConfigPromptLibrary(BasePromptLibrary):
+    """Prompt library that loads prompts from configuration dictionaries.
+
+    Features:
+    - Direct in-memory configuration
+    - No filesystem dependencies
+    - Useful for testing and programmatic definition
+    - Supports all prompt types (system, user, messages, RAG)
+
+    Example:
+        >>> config = {
+        ...     "system": {"greet": {"template": "Hello {{name}}!"}},
+        ...     "user": {"ask": {0: {"template": "Tell me about {{topic}}"}}}
+        ... }
+        >>> library = ConfigPromptLibrary(config)
+        >>> template = library.get_system_prompt("greet")
+    """
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        """Initialize configuration-based prompt library.
+
+        Args:
+            config: Configuration dictionary with structure:
+                {
+                    "system": {name: PromptTemplate, ...},
+                    "user": {name: {index: PromptTemplate, ...}, ...},
+                    "messages": {name: MessageIndex, ...},
+                    "rag": {name: RAGConfig, ...}
+                }
+        """
+        super().__init__()
+        self._config = config or {}
+
+        # Load prompts from config
+        self._load_from_config()
+
+    def _load_from_config(self) -> None:
+        """Load all prompts from the configuration dictionary."""
+        self._load_system_prompts()
+        self._load_user_prompts()
+        self._load_message_indexes()
+        self._load_rag_configs()  # Load standalone RAG configs
+
+    def _load_system_prompts(self) -> None:
+        """Load system prompts from config."""
+        system_config = self._config.get("system", {})
+
+        for name, data in system_config.items():
+            try:
+                template = self._parse_prompt_template(data)
+                self._cache_system_prompt(name, template)
+                logger.debug(f"Loaded system prompt from config: {name}")
+            except Exception as e:
+                logger.error(f"Error loading system prompt {name}: {e}")
+
+    def _load_user_prompts(self) -> None:
+        """Load user prompts from config."""
+        user_config = self._config.get("user", {})
+
+        for name, indexes in user_config.items():
+            if not isinstance(indexes, dict):
+                logger.warning(
+                    f"User prompt '{name}' should be a dict of {{index: template}}, "
+                    f"got {type(indexes)}"
+                )
+                continue
+
+            for index, data in indexes.items():
+                try:
+                    # Ensure index is int
+                    if isinstance(index, str) and index.isdigit():
+                        index = int(index)
+                    elif not isinstance(index, int):
+                        logger.warning(
+                            f"User prompt index for '{name}' should be int, "
+                            f"got {type(index)}: {index}"
+                        )
+                        continue
+
+                    template = self._parse_prompt_template(data)
+                    self._cache_user_prompt(name, index, template)
+                    logger.debug(f"Loaded user prompt from config: {name}[{index}]")
+                except Exception as e:
+                    logger.error(f"Error loading user prompt {name}[{index}]: {e}")
+
+    def _load_message_indexes(self) -> None:
+        """Load message indexes from config."""
+        messages_config = self._config.get("messages", {})
+
+        for name, data in messages_config.items():
+            try:
+                message_index = self._parse_message_index(data)
+                self._cache_message_index(name, message_index)
+                logger.debug(f"Loaded message index from config: {name}")
+            except Exception as e:
+                logger.error(f"Error loading message index {name}: {e}")
+
+    def _load_rag_configs(self) -> None:
+        """Load RAG configurations from config."""
+        rag_config = self._config.get("rag", {})
+
+        for name, data in rag_config.items():
+            try:
+                rag = self._parse_rag_config(data)
+                self._cache_rag_config(name, rag)
+                logger.debug(f"Loaded RAG config from config: {name}")
+            except Exception as e:
+                logger.error(f"Error loading RAG config {name}: {e}")
+
+    def _parse_prompt_template(self, data: Any) -> PromptTemplate:
+        """Parse prompt template from config data.
+
+        Args:
+            data: Prompt template data (dict or PromptTemplate)
+
+        Returns:
+            PromptTemplate dictionary
+        """
+        # If already a PromptTemplate, return as-is
+        if isinstance(data, dict) and "template" in data:
+            template: PromptTemplate = {
+                "template": data["template"],
+            }
+
+            # Add optional fields
+            if "defaults" in data:
+                template["defaults"] = data["defaults"]
+
+            if "validation" in data:
+                template["validation"] = self._parse_validation_config(data["validation"])
+
+            if "metadata" in data:
+                template["metadata"] = data["metadata"]
+
+            return template
+
+        # If just a string, treat as template
+        elif isinstance(data, str):
+            return {"template": data}
+
+        else:
+            raise ValueError(
+                f"Invalid prompt template data: expected dict with 'template' key "
+                f"or string, got {type(data)}"
+            )
+
+    def _parse_message_index(self, data: Dict[str, Any]) -> MessageIndex:
+        """Parse message index from config data.
+
+        Args:
+            data: Message index data
+
+        Returns:
+            MessageIndex dictionary
+        """
+        message_index: MessageIndex = {
+            "messages": data.get("messages", []),
+        }
+
+        # Add optional fields
+        if "rag_configs" in data:
+            message_index["rag_configs"] = [
+                self._parse_rag_config(rag_data)
+                for rag_data in data["rag_configs"]
+            ]
+
+        if "metadata" in data:
+            message_index["metadata"] = data["metadata"]
+
+        return message_index
+
+    def _parse_rag_config(self, data: Dict[str, Any]) -> RAGConfig:
+        """Parse RAG configuration from config data.
+
+        Args:
+            data: RAG config data
+
+        Returns:
+            RAGConfig dictionary
+        """
+        rag_config: RAGConfig = {
+            "adapter_name": data.get("adapter_name", ""),
+            "query": data.get("query", ""),
+        }
+
+        # Add optional fields
+        if "k" in data:
+            rag_config["k"] = data["k"]
+
+        if "filters" in data:
+            rag_config["filters"] = data["filters"]
+
+        if "placeholder" in data:
+            rag_config["placeholder"] = data["placeholder"]
+
+        if "header" in data:
+            rag_config["header"] = data["header"]
+
+        if "item_template" in data:
+            rag_config["item_template"] = data["item_template"]
+
+        return rag_config
+
+    def _parse_validation_config(self, data: Any) -> ValidationConfig:
+        """Parse validation configuration from config data.
+
+        Args:
+            data: Validation data (dict or ValidationConfig)
+
+        Returns:
+            ValidationConfig instance
+        """
+        if isinstance(data, ValidationConfig):
+            return data
+
+        if not isinstance(data, dict):
+            raise ValueError(
+                f"Invalid validation config: expected dict or ValidationConfig, "
+                f"got {type(data)}"
+            )
+
+        # Parse level
+        level = None
+        if "level" in data:
+            level_str = data["level"]
+            if isinstance(level_str, str):
+                level = ValidationLevel(level_str.lower())
+            elif isinstance(level_str, ValidationLevel):
+                level = level_str
+
+        # Parse params
+        required_params = data.get("required_params", [])
+        optional_params = data.get("optional_params", [])
+
+        return ValidationConfig(
+            level=level,
+            required_params=required_params,
+            optional_params=optional_params
+        )
+
+    def get_system_prompt(self, name: str, **kwargs) -> Optional[PromptTemplate]:
+        """Get a system prompt by name.
+
+        Args:
+            name: System prompt name
+            **kwargs: Additional arguments (unused)
+
+        Returns:
+            PromptTemplate if found, None otherwise
+        """
+        return self._get_cached_system_prompt(name)
+
+    def get_user_prompt(self, name: str, index: int = 0, **kwargs) -> Optional[PromptTemplate]:
+        """Get a user prompt by name and index.
+
+        Args:
+            name: User prompt name
+            index: Prompt index (default: 0)
+            **kwargs: Additional arguments (unused)
+
+        Returns:
+            PromptTemplate if found, None otherwise
+        """
+        return self._get_cached_user_prompt(name, index)
+
+    def get_message_index(self, name: str, **kwargs) -> Optional[MessageIndex]:
+        """Get a message index by name.
+
+        Args:
+            name: Message index name
+            **kwargs: Additional arguments (unused)
+
+        Returns:
+            MessageIndex if found, None otherwise
+        """
+        return self._get_cached_message_index(name)
+
+    def get_rag_config(self, name: str, **kwargs) -> Optional[RAGConfig]:
+        """Get a standalone RAG configuration by name.
+
+        Args:
+            name: RAG config name
+            **kwargs: Additional arguments (unused)
+
+        Returns:
+            RAGConfig if found, None otherwise
+        """
+        return self._get_cached_rag_config(name)
+
+    def get_prompt_rag_configs(
+        self,
+        prompt_name: str,
+        prompt_type: str = "user",
+        index: int = 0,
+        **kwargs
+    ) -> List[RAGConfig]:
+        """Get RAG configurations for a specific prompt.
+
+        Resolves both inline RAG configs and references to standalone configs.
+
+        Args:
+            prompt_name: Prompt name
+            prompt_type: Type of prompt ("user" or "system")
+            index: Prompt index (for user prompts)
+            **kwargs: Additional arguments (unused)
+
+        Returns:
+            List of RAGConfig (empty if none defined)
+        """
+        # Get the prompt template
+        if prompt_type == "system":
+            template = self.get_system_prompt(prompt_name)
+        else:
+            template = self.get_user_prompt(prompt_name, index)
+
+        if template is None:
+            return []
+
+        configs = []
+
+        # Get inline RAG configs from template
+        if "rag_configs" in template:
+            configs.extend(template["rag_configs"])
+
+        # Resolve RAG config references
+        if "rag_config_refs" in template:
+            for ref_name in template["rag_config_refs"]:
+                ref_config = self.get_rag_config(ref_name)
+                if ref_config:
+                    configs.append(ref_config)
+                else:
+                    logger.warning(
+                        f"RAG config reference '{ref_name}' not found "
+                        f"for prompt '{prompt_name}'"
+                    )
+
+        return configs
+
+    def add_system_prompt(self, name: str, template: PromptTemplate) -> None:
+        """Add or update a system prompt.
+
+        Args:
+            name: System prompt name
+            template: Prompt template to add
+        """
+        self._cache_system_prompt(name, template)
+        logger.debug(f"Added/updated system prompt: {name}")
+
+    def add_user_prompt(self, name: str, index: int, template: PromptTemplate) -> None:
+        """Add or update a user prompt.
+
+        Args:
+            name: User prompt name
+            index: Prompt index
+            template: Prompt template to add
+        """
+        self._cache_user_prompt(name, index, template)
+        logger.debug(f"Added/updated user prompt: {name}[{index}]")
+
+    def add_message_index(self, name: str, message_index: MessageIndex) -> None:
+        """Add or update a message index.
+
+        Args:
+            name: Message index name
+            message_index: Message index to add
+        """
+        self._cache_message_index(name, message_index)
+        logger.debug(f"Added/updated message index: {name}")
+
+    def add_rag_config(self, name: str, rag_config: RAGConfig) -> None:
+        """Add or update a RAG configuration.
+
+        Args:
+            name: RAG config name
+            rag_config: RAG configuration to add
+        """
+        self._cache_rag_config(name, rag_config)
+        logger.debug(f"Added/updated RAG config: {name}")
+
+    def list_system_prompts(self) -> List[str]:
+        """List all available system prompt names.
+
+        Returns:
+            List of system prompt identifiers
+        """
+        return list(self._system_prompt_cache.keys())
+
+    def list_user_prompts(self, name: Optional[str] = None) -> List[str]:
+        """List available user prompts.
+
+        Args:
+            name: If provided, list indices for this specific prompt
+
+        Returns:
+            List of user prompt names or indices
+        """
+        if name is None:
+            # Return unique prompt names
+            return list(set(key[0] for key in self._user_prompt_cache.keys()))
+        else:
+            # Return indices for this specific prompt
+            indices = [
+                str(key[1]) for key in self._user_prompt_cache.keys()
+                if key[0] == name
+            ]
+            return sorted(indices, key=int)
+
+    def list_message_indexes(self) -> List[str]:
+        """List all available message index names.
+
+        Returns:
+            List of message index identifiers
+        """
+        return list(self._message_index_cache.keys())
