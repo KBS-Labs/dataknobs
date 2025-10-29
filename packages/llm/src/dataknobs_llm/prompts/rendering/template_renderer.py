@@ -6,7 +6,8 @@ and adds validation capabilities for missing parameters.
 
 import re
 import logging
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
+from dataclasses import dataclass
 
 from dataknobs_llm.template_utils import render_conditional_template
 from ..base.types import (
@@ -17,6 +18,23 @@ from ..base.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class TemplateSyntaxError:
+    """Represents a template syntax error with location information."""
+    message: str
+    line: int
+    column: int
+    snippet: str
+    error_type: str  # 'unmatched_brace', 'unmatched_conditional', 'malformed_variable'
+
+    def __str__(self) -> str:
+        """Format error message with location."""
+        return (
+            f"{self.error_type} at line {self.line}, column {self.column}: {self.message}\n"
+            f"  {self.snippet}"
+        )
 
 
 class TemplateRenderer:
@@ -200,8 +218,159 @@ class TemplateRenderer:
         return variables
 
     @staticmethod
+    def _get_line_col(template: str, position: int) -> Tuple[int, int]:
+        """Get line and column number for a position in the template.
+
+        Args:
+            template: Template string
+            position: Character position in template
+
+        Returns:
+            Tuple of (line_number, column_number) (1-indexed)
+        """
+        lines = template[:position].split('\n')
+        line = len(lines)
+        column = len(lines[-1]) + 1
+        return line, column
+
+    @staticmethod
+    def _get_snippet(template: str, position: int, context: int = 20) -> str:
+        """Get a snippet of text around a position.
+
+        Args:
+            template: Template string
+            position: Character position
+            context: Number of characters to show before/after
+
+        Returns:
+            Snippet with error position marked
+        """
+        start = max(0, position - context)
+        end = min(len(template), position + context)
+        snippet = template[start:end]
+
+        # Replace newlines for better display
+        snippet = snippet.replace('\n', '\\n')
+
+        # Mark the error position
+        error_pos = min(position - start, len(snippet))
+        if error_pos < len(snippet):
+            snippet = snippet[:error_pos] + '⮜HERE⮞' + snippet[error_pos:]
+
+        return snippet
+
+    @staticmethod
+    def validate_template_syntax_detailed(template: str) -> List[TemplateSyntaxError]:
+        """Validate template syntax and return detailed errors with locations.
+
+        Args:
+            template: Template string to validate
+
+        Returns:
+            List of TemplateSyntaxError objects (empty if valid)
+        """
+        errors = []
+
+        # Check for unmatched braces
+        brace_pattern = r'(?<!\{)\{(?!\{)|(?<!\})\}(?!\})'
+        for match in re.finditer(brace_pattern, template):
+            position = match.start()
+            line, col = TemplateRenderer._get_line_col(template, position)
+            snippet = TemplateRenderer._get_snippet(template, position)
+
+            errors.append(TemplateSyntaxError(
+                message="Unmatched brace. Use {{ }} for variables, not { }.",
+                line=line,
+                column=col,
+                snippet=snippet,
+                error_type="unmatched_brace"
+            ))
+
+        # Check for unmatched conditional sections
+        open_positions = [m.start() for m in re.finditer(r'\(\(', template)]
+        close_positions = [m.start() for m in re.finditer(r'\)\)', template)]
+
+        # Simple stack-based matching
+        stack = []
+        all_positions = sorted(
+            [(pos, 'open') for pos in open_positions] +
+            [(pos, 'close') for pos in close_positions]
+        )
+
+        for position, bracket_type in all_positions:
+            if bracket_type == 'open':
+                stack.append(position)
+            else:  # close
+                if not stack:
+                    # Closing without opening
+                    line, col = TemplateRenderer._get_line_col(template, position)
+                    snippet = TemplateRenderer._get_snippet(template, position)
+                    errors.append(TemplateSyntaxError(
+                        message="Closing ')) without matching opening '(('.",
+                        line=line,
+                        column=col,
+                        snippet=snippet,
+                        error_type="unmatched_conditional"
+                    ))
+                else:
+                    stack.pop()
+
+        # Remaining unclosed openings
+        for position in stack:
+            line, col = TemplateRenderer._get_line_col(template, position)
+            snippet = TemplateRenderer._get_snippet(template, position)
+            errors.append(TemplateSyntaxError(
+                message="Opening '((' without matching closing '))'.",
+                line=line,
+                column=col,
+                snippet=snippet,
+                error_type="unmatched_conditional"
+            ))
+
+        # Check for malformed variable patterns
+        # Look for {{ }} that don't contain valid variable names
+        var_pattern = r'\{\{[^}]*\}\}'
+        for match in re.finditer(var_pattern, template):
+            var_content = match.group(0)[2:-2].strip()  # Remove {{ }}
+
+            # Valid variable: only word characters (letters, digits, underscores)
+            if var_content and not re.match(r'^\w+$', var_content):
+                position = match.start()
+                line, col = TemplateRenderer._get_line_col(template, position)
+                snippet = TemplateRenderer._get_snippet(template, position, context=30)
+
+                errors.append(TemplateSyntaxError(
+                    message=(
+                        f"Malformed variable '{{{{' {var_content} '}}}}'. "
+                        "Variables should contain only letters, numbers, and underscores."
+                    ),
+                    line=line,
+                    column=col,
+                    snippet=snippet,
+                    error_type="malformed_variable"
+                ))
+            elif not var_content:
+                # Empty variable {{}}
+                position = match.start()
+                line, col = TemplateRenderer._get_line_col(template, position)
+                snippet = TemplateRenderer._get_snippet(template, position)
+
+                errors.append(TemplateSyntaxError(
+                    message="Empty variable {{}}. Variables must have a name.",
+                    line=line,
+                    column=col,
+                    snippet=snippet,
+                    error_type="malformed_variable"
+                ))
+
+        return errors
+
+    @staticmethod
     def validate_template_syntax(template: str) -> List[str]:
-        """Validate template syntax and return any issues.
+        """Validate template syntax and return error messages.
+
+        This is a convenience wrapper around validate_template_syntax_detailed()
+        that returns simple string messages instead of detailed error objects.
 
         Args:
             template: Template string to validate
@@ -209,38 +378,8 @@ class TemplateRenderer:
         Returns:
             List of error messages (empty if valid)
         """
-        errors = []
-
-        # Check for unmatched braces
-        # Match single braces that are not part of {{ or }}
-        brace_pattern = r'(?<!\{)\{(?!\{)|(?<!\})\}(?!\})'
-        unmatched = re.findall(brace_pattern, template)
-        if unmatched:
-            errors.append(
-                f"Found {len(unmatched)} unmatched brace(s). "
-                "Use {{ }} for variables, not { }."
-            )
-
-        # Check for unmatched conditional sections
-        open_count = template.count('((')
-        close_count = template.count('))')
-        if open_count != close_count:
-            errors.append(
-                f"Unmatched conditional sections: {open_count} '((' vs "
-                f"{close_count} '))'."
-            )
-
-        # Check for malformed variable patterns
-        # Variables should be \w+ (word characters only)
-        malformed_pattern = r'\{\{[^}]*[^}\w\s][^}]*\}\}'
-        malformed = re.findall(malformed_pattern, template)
-        if malformed:
-            errors.append(
-                f"Found {len(malformed)} malformed variable(s). "
-                "Variables should contain only letters, numbers, and underscores."
-            )
-
-        return errors
+        detailed_errors = TemplateRenderer.validate_template_syntax_detailed(template)
+        return [str(error) for error in detailed_errors]
 
 
 # Convenience functions for one-off rendering

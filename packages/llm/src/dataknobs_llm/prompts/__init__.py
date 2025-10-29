@@ -64,6 +64,7 @@ from .adapters import (
 # Template rendering
 from .rendering import (
     TemplateRenderer,
+    TemplateSyntaxError,
     render_template,
     render_template_strict,
 )
@@ -119,6 +120,7 @@ __all__ = [
 
     # Rendering
     "TemplateRenderer",
+    "TemplateSyntaxError",
     "render_template",
     "render_template_strict",
 

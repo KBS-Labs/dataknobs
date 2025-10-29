@@ -141,7 +141,8 @@ class TestTemplateRenderer:
             "Hello ((name"
         )
         assert len(errors) > 0
-        assert "unmatched conditional" in errors[0].lower()
+        # Check for either space or underscore version (new format uses underscore)
+        assert "unmatched" in errors[0].lower() and "conditional" in errors[0].lower()
 
     def test_render_prompt_template_with_defaults(self):
         """Test rendering a PromptTemplate dict with default values."""
