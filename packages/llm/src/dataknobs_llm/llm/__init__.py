@@ -6,6 +6,8 @@ including OpenAI, Anthropic, Ollama, and others.
 
 from .base import (
     LLMProvider,
+    AsyncLLMProvider,
+    SyncLLMProvider,
     LLMConfig,
     LLMMessage,
     LLMResponse,
@@ -36,6 +38,8 @@ from .utils import (
 __all__ = [
     # Base classes
     'LLMProvider',
+    'AsyncLLMProvider',
+    'SyncLLMProvider',
     'LLMConfig',
     'LLMMessage',
     'LLMResponse',

@@ -1,142 +1,17 @@
-"""Unit tests for dataknobs backend resource adapters."""
+"""Unit tests for dataknobs backend resource adapters.
+
+Tests use MemoryDatabase backends which support text search via LIKE operator.
+The adapter uses Filter(field=text_field, operator=Operator.LIKE, value="%query%")
+for text search, which works with all dataknobs backends.
+"""
 
 import pytest
-from typing import List, Optional, Any
-from collections import OrderedDict
 from dataknobs_llm.prompts import (
     DataknobsBackendAdapter,
     AsyncDataknobsBackendAdapter,
 )
-
-
-# Mock dataknobs data structures for testing
-class MockField:
-    """Mock Field class from dataknobs_data."""
-
-    def __init__(self, name: str, value: Any):
-        self.name = name
-        self.value = value
-
-
-class MockRecord:
-    """Mock Record class from dataknobs_data."""
-
-    def __init__(self, data: dict, storage_id: Optional[str] = None):
-        self.fields = OrderedDict()
-        self.metadata = {}
-        self.storage_id = storage_id
-
-        for key, value in data.items():
-            if key == "_metadata":
-                self.metadata = value
-            else:
-                self.fields[key] = MockField(key, value)
-
-    def get_value(self, name: str, default: Any = None) -> Any:
-        """Get field value with dot-notation support."""
-        if '.' in name:
-            parts = name.split('.')
-            value = self
-            for part in parts:
-                if hasattr(value, 'fields') and part in value.fields:
-                    value = value.fields[part].value
-                elif isinstance(value, dict) and part in value:
-                    value = value[part]
-                else:
-                    return default
-            return value
-        else:
-            if name in self.fields:
-                return self.fields[name].value
-            return default
-
-    def to_dict(self, include_metadata: bool = False) -> dict:
-        """Convert record to dictionary."""
-        result = {name: field.value for name, field in self.fields.items()}
-        if include_metadata:
-            result["_metadata"] = self.metadata
-        return result
-
-
-class MockQuery:
-    """Mock Query class from dataknobs_data."""
-
-    def __init__(self, query_text: str, limit: int = 5, **kwargs):
-        self.query_text = query_text
-        self.limit = limit
-        self.kwargs = kwargs
-
-
-class MockSyncDatabase:
-    """Mock SyncDatabase for testing."""
-
-    def __init__(self):
-        self._records = {}
-
-    def add_record(self, record_id: str, record: MockRecord):
-        """Add a record to the mock database."""
-        self._records[record_id] = record
-
-    def read(self, id: str) -> Optional[MockRecord]:
-        """Read a record by ID."""
-        return self._records.get(id)
-
-    def search(self, query: MockQuery) -> List[MockRecord]:
-        """Search records matching query."""
-        results = []
-        for record in self._records.values():
-            # Simple text search across all field values
-            record_text = " ".join(
-                str(field.value) for field in record.fields.values()
-            )
-            if query.query_text.lower() in record_text.lower():
-                results.append(record)
-                if len(results) >= query.limit:
-                    break
-        return results
-
-
-class MockAsyncDatabase:
-    """Mock AsyncDatabase for testing."""
-
-    def __init__(self):
-        self._records = {}
-
-    def add_record(self, record_id: str, record: MockRecord):
-        """Add a record to the mock database."""
-        self._records[record_id] = record
-
-    async def read(self, id: str) -> Optional[MockRecord]:
-        """Read a record by ID (async)."""
-        return self._records.get(id)
-
-    async def search(self, query: MockQuery) -> List[MockRecord]:
-        """Search records matching query (async)."""
-        results = []
-        for record in self._records.values():
-            # Simple text search across all field values
-            record_text = " ".join(
-                str(field.value) for field in record.fields.values()
-            )
-            if query.query_text.lower() in record_text.lower():
-                results.append(record)
-                if len(results) >= query.limit:
-                    break
-        return results
-
-
-# Patch the imports in the adapter module
-import sys
-from unittest.mock import MagicMock
-
-# Create mock modules for dataknobs_data
-mock_query_module = MagicMock()
-mock_query_module.Query = MockQuery
-
-sys.modules['dataknobs_data'] = MagicMock()
-sys.modules['dataknobs_data.database'] = MagicMock()
-sys.modules['dataknobs_data.records'] = MagicMock()
-sys.modules['dataknobs_data.query'] = mock_query_module
+from dataknobs_data import Record
+from dataknobs_data.backends.memory import SyncMemoryDatabase, AsyncMemoryDatabase
 
 
 class TestDataknobsBackendAdapter:
@@ -144,7 +19,7 @@ class TestDataknobsBackendAdapter:
 
     def test_initialization(self):
         """Test basic initialization."""
-        db = MockSyncDatabase()
+        db = SyncMemoryDatabase()
         adapter = DataknobsBackendAdapter(db, name="test_db")
         assert adapter.name == "test_db"
         assert adapter._database == db
@@ -152,7 +27,7 @@ class TestDataknobsBackendAdapter:
 
     def test_initialization_with_custom_fields(self):
         """Test initialization with custom field names."""
-        db = MockSyncDatabase()
+        db = SyncMemoryDatabase()
         adapter = DataknobsBackendAdapter(
             db,
             name="custom_db",
@@ -164,12 +39,12 @@ class TestDataknobsBackendAdapter:
 
     def test_get_value_full_record(self):
         """Test getting full record by ID."""
-        db = MockSyncDatabase()
-        record = MockRecord({
-            "content": "Hello world",
-            "author": "Alice"
-        }, storage_id="rec_1")
-        db.add_record("rec_1", record)
+        db = SyncMemoryDatabase()
+        record = Record(
+            data={"content": "Hello world", "author": "Alice"},
+            storage_id="rec_1"
+        )
+        db.create(record)
 
         adapter = DataknobsBackendAdapter(db)
         result = adapter.get_value("rec_1")
@@ -180,13 +55,12 @@ class TestDataknobsBackendAdapter:
 
     def test_get_value_specific_field(self):
         """Test getting specific field from record."""
-        db = MockSyncDatabase()
-        record = MockRecord({
-            "content": "Hello world",
-            "author": "Alice",
-            "score": 95
-        }, storage_id="rec_1")
-        db.add_record("rec_1", record)
+        db = SyncMemoryDatabase()
+        record = Record(
+            data={"content": "Hello world", "author": "Alice", "score": 95},
+            storage_id="rec_1"
+        )
+        db.create(record)
 
         adapter = DataknobsBackendAdapter(db)
 
@@ -196,7 +70,7 @@ class TestDataknobsBackendAdapter:
 
     def test_get_value_missing_record(self):
         """Test getting value for non-existent record."""
-        db = MockSyncDatabase()
+        db = SyncMemoryDatabase()
         adapter = DataknobsBackendAdapter(db)
 
         result = adapter.get_value("missing_id", default="not_found")
@@ -204,9 +78,9 @@ class TestDataknobsBackendAdapter:
 
     def test_get_value_missing_field(self):
         """Test getting missing field from record."""
-        db = MockSyncDatabase()
-        record = MockRecord({"content": "Hello"}, storage_id="rec_1")
-        db.add_record("rec_1", record)
+        db = SyncMemoryDatabase()
+        record = Record(data={"content": "Hello"}, storage_id="rec_1")
+        db.create(record)
 
         adapter = DataknobsBackendAdapter(db)
         result = adapter.get_value("rec_1.missing_field", default="default")
@@ -214,30 +88,24 @@ class TestDataknobsBackendAdapter:
 
     def test_search_basic(self):
         """Test basic search functionality."""
-        db = MockSyncDatabase()
+        db = SyncMemoryDatabase()
 
         # Add test records
-        record1 = MockRecord(
-            {"content": "Alice in Wonderland"},
+        db.create(Record(
+            data={"content": "Alice in Wonderland"},
+            metadata={"score": 0.9},
             storage_id="rec_1"
-        )
-        record1.metadata["score"] = 0.9
-
-        record2 = MockRecord(
-            {"content": "Bob's adventure"},
+        ))
+        db.create(Record(
+            data={"content": "Bob's adventure"},
+            metadata={"score": 0.8},
             storage_id="rec_2"
-        )
-        record2.metadata["score"] = 0.8
-
-        record3 = MockRecord(
-            {"content": "Alice in Paris"},
+        ))
+        db.create(Record(
+            data={"content": "Alice in Paris"},
+            metadata={"score": 0.85},
             storage_id="rec_3"
-        )
-        record3.metadata["score"] = 0.85
-
-        db.add_record("rec_1", record1)
-        db.add_record("rec_2", record2)
-        db.add_record("rec_3", record3)
+        ))
 
         adapter = DataknobsBackendAdapter(db)
 
@@ -248,16 +116,15 @@ class TestDataknobsBackendAdapter:
 
     def test_search_with_k_limit(self):
         """Test search with k parameter limiting results."""
-        db = MockSyncDatabase()
+        db = SyncMemoryDatabase()
 
         # Add multiple records
         for i in range(10):
-            record = MockRecord(
-                {"content": f"test item {i}"},
+            db.create(Record(
+                data={"content": f"test item {i}"},
+                metadata={"score": 1.0},
                 storage_id=f"rec_{i}"
-            )
-            record.metadata["score"] = 1.0
-            db.add_record(f"rec_{i}", record)
+            ))
 
         adapter = DataknobsBackendAdapter(db)
 
@@ -266,15 +133,13 @@ class TestDataknobsBackendAdapter:
 
     def test_search_result_structure(self):
         """Test that search results have correct structure."""
-        db = MockSyncDatabase()
+        db = SyncMemoryDatabase()
 
-        record = MockRecord(
-            {"content": "Hello world"},
+        db.create(Record(
+            data={"content": "Hello world"},
+            metadata={"score": 0.95, "author": "Alice"},
             storage_id="rec_1"
-        )
-        record.metadata["score"] = 0.95
-        record.metadata["author"] = "Alice"
-        db.add_record("rec_1", record)
+        ))
 
         adapter = DataknobsBackendAdapter(db)
         results = adapter.search("Hello")
@@ -292,14 +157,13 @@ class TestDataknobsBackendAdapter:
 
     def test_search_with_custom_text_field(self):
         """Test search using custom text field."""
-        db = MockSyncDatabase()
+        db = SyncMemoryDatabase()
 
-        record = MockRecord(
-            {"text": "Custom text field", "content": "Ignored"},
+        db.create(Record(
+            data={"text": "Custom text field", "content": "Ignored"},
+            metadata={"score": 1.0},
             storage_id="rec_1"
-        )
-        record.metadata["score"] = 1.0
-        db.add_record("rec_1", record)
+        ))
 
         adapter = DataknobsBackendAdapter(db, text_field="text")
         results = adapter.search("Custom")
@@ -309,14 +173,13 @@ class TestDataknobsBackendAdapter:
 
     def test_search_with_metadata_field(self):
         """Test search with metadata field extraction."""
-        db = MockSyncDatabase()
+        db = SyncMemoryDatabase()
 
-        record = MockRecord(
-            {"content": "Hello", "category": "greeting"},
+        db.create(Record(
+            data={"content": "Hello", "category": "greeting"},
+            metadata={"score": 1.0},
             storage_id="rec_1"
-        )
-        record.metadata["score"] = 1.0
-        db.add_record("rec_1", record)
+        ))
 
         adapter = DataknobsBackendAdapter(
             db,
@@ -330,16 +193,18 @@ class TestDataknobsBackendAdapter:
 
     def test_search_with_min_score(self):
         """Test search with minimum score filter."""
-        db = MockSyncDatabase()
+        db = SyncMemoryDatabase()
 
-        record1 = MockRecord({"content": "High score"}, storage_id="rec_1")
-        record1.metadata["score"] = 0.9
-
-        record2 = MockRecord({"content": "Low score"}, storage_id="rec_2")
-        record2.metadata["score"] = 0.3
-
-        db.add_record("rec_1", record1)
-        db.add_record("rec_2", record2)
+        db.create(Record(
+            data={"content": "High score"},
+            metadata={"score": 0.9},
+            storage_id="rec_1"
+        ))
+        db.create(Record(
+            data={"content": "Low score"},
+            metadata={"score": 0.3},
+            storage_id="rec_2"
+        ))
 
         adapter = DataknobsBackendAdapter(db)
 
@@ -354,13 +219,10 @@ class TestDataknobsBackendAdapter:
 
     def test_batch_get_values(self):
         """Test batch getting multiple record fields."""
-        db = MockSyncDatabase()
+        db = SyncMemoryDatabase()
 
-        record1 = MockRecord({"content": "Value 1"}, storage_id="rec_1")
-        record2 = MockRecord({"content": "Value 2"}, storage_id="rec_2")
-
-        db.add_record("rec_1", record1)
-        db.add_record("rec_2", record2)
+        db.create(Record(data={"content": "Value 1"}, storage_id="rec_1"))
+        db.create(Record(data={"content": "Value 2"}, storage_id="rec_2"))
 
         adapter = DataknobsBackendAdapter(db)
 
@@ -379,7 +241,7 @@ class TestAsyncDataknobsBackendAdapter:
 
     def test_initialization(self):
         """Test basic initialization."""
-        db = MockAsyncDatabase()
+        db = AsyncMemoryDatabase()
         adapter = AsyncDataknobsBackendAdapter(db, name="test_async_db")
         assert adapter.name == "test_async_db"
         assert adapter._database == db
@@ -387,12 +249,12 @@ class TestAsyncDataknobsBackendAdapter:
     @pytest.mark.asyncio
     async def test_get_value_full_record(self):
         """Test getting full record by ID (async)."""
-        db = MockAsyncDatabase()
-        record = MockRecord({
-            "content": "Hello async",
-            "author": "Bob"
-        }, storage_id="rec_1")
-        db.add_record("rec_1", record)
+        db = AsyncMemoryDatabase()
+        record = Record(
+            data={"content": "Hello async", "author": "Bob"},
+            storage_id="rec_1"
+        )
+        await db.create(record)
 
         adapter = AsyncDataknobsBackendAdapter(db)
         result = await adapter.get_value("rec_1")
@@ -404,12 +266,12 @@ class TestAsyncDataknobsBackendAdapter:
     @pytest.mark.asyncio
     async def test_get_value_specific_field(self):
         """Test getting specific field from record (async)."""
-        db = MockAsyncDatabase()
-        record = MockRecord({
-            "content": "Hello",
-            "author": "Charlie"
-        }, storage_id="rec_1")
-        db.add_record("rec_1", record)
+        db = AsyncMemoryDatabase()
+        record = Record(
+            data={"content": "Hello", "author": "Charlie"},
+            storage_id="rec_1"
+        )
+        await db.create(record)
 
         adapter = AsyncDataknobsBackendAdapter(db)
         assert await adapter.get_value("rec_1.author") == "Charlie"
@@ -417,7 +279,7 @@ class TestAsyncDataknobsBackendAdapter:
     @pytest.mark.asyncio
     async def test_get_value_missing_record(self):
         """Test getting value for non-existent record (async)."""
-        db = MockAsyncDatabase()
+        db = AsyncMemoryDatabase()
         adapter = AsyncDataknobsBackendAdapter(db)
 
         result = await adapter.get_value("missing", default="not_found")
@@ -426,22 +288,18 @@ class TestAsyncDataknobsBackendAdapter:
     @pytest.mark.asyncio
     async def test_search_basic(self):
         """Test basic search functionality (async)."""
-        db = MockAsyncDatabase()
+        db = AsyncMemoryDatabase()
 
-        record1 = MockRecord(
-            {"content": "Async search test"},
+        await db.create(Record(
+            data={"content": "Async search test"},
+            metadata={"score": 1.0},
             storage_id="rec_1"
-        )
-        record1.metadata["score"] = 1.0
-
-        record2 = MockRecord(
-            {"content": "Another test"},
+        ))
+        await db.create(Record(
+            data={"content": "Another test"},
+            metadata={"score": 0.9},
             storage_id="rec_2"
-        )
-        record2.metadata["score"] = 0.9
-
-        db.add_record("rec_1", record1)
-        db.add_record("rec_2", record2)
+        ))
 
         adapter = AsyncDataknobsBackendAdapter(db)
         results = await adapter.search("test")
@@ -452,15 +310,14 @@ class TestAsyncDataknobsBackendAdapter:
     @pytest.mark.asyncio
     async def test_search_with_k_limit(self):
         """Test search with k limit (async)."""
-        db = MockAsyncDatabase()
+        db = AsyncMemoryDatabase()
 
         for i in range(10):
-            record = MockRecord(
-                {"content": f"async item {i}"},
+            await db.create(Record(
+                data={"content": f"async item {i}"},
+                metadata={"score": 1.0},
                 storage_id=f"rec_{i}"
-            )
-            record.metadata["score"] = 1.0
-            db.add_record(f"rec_{i}", record)
+            ))
 
         adapter = AsyncDataknobsBackendAdapter(db)
         results = await adapter.search("async", k=3)
@@ -470,13 +327,10 @@ class TestAsyncDataknobsBackendAdapter:
     @pytest.mark.asyncio
     async def test_batch_get_values(self):
         """Test async batch getting multiple values."""
-        db = MockAsyncDatabase()
+        db = AsyncMemoryDatabase()
 
-        record1 = MockRecord({"content": "Async 1"}, storage_id="rec_1")
-        record2 = MockRecord({"content": "Async 2"}, storage_id="rec_2")
-
-        db.add_record("rec_1", record1)
-        db.add_record("rec_2", record2)
+        await db.create(Record(data={"content": "Async 1"}, storage_id="rec_1"))
+        await db.create(Record(data={"content": "Async 2"}, storage_id="rec_2"))
 
         adapter = AsyncDataknobsBackendAdapter(db)
 
@@ -495,7 +349,7 @@ class TestDataknobsAdapterEdgeCases:
 
     def test_empty_database(self):
         """Test adapter with empty database."""
-        db = MockSyncDatabase()
+        db = SyncMemoryDatabase()
         adapter = DataknobsBackendAdapter(db)
 
         assert adapter.get_value("any_id") is None
@@ -503,11 +357,13 @@ class TestDataknobsAdapterEdgeCases:
 
     def test_search_with_no_results(self):
         """Test search that matches no records."""
-        db = MockSyncDatabase()
+        db = SyncMemoryDatabase()
 
-        record = MockRecord({"content": "Hello"}, storage_id="rec_1")
-        record.metadata["score"] = 1.0
-        db.add_record("rec_1", record)
+        db.create(Record(
+            data={"content": "Hello"},
+            metadata={"score": 1.0},
+            storage_id="rec_1"
+        ))
 
         adapter = DataknobsBackendAdapter(db)
         results = adapter.search("NonExistent")
@@ -516,11 +372,12 @@ class TestDataknobsAdapterEdgeCases:
 
     def test_record_with_missing_score(self):
         """Test handling records without score in metadata."""
-        db = MockSyncDatabase()
+        db = SyncMemoryDatabase()
 
-        record = MockRecord({"content": "No score"}, storage_id="rec_1")
-        # No score in metadata
-        db.add_record("rec_1", record)
+        db.create(Record(
+            data={"content": "No score"},
+            storage_id="rec_1"
+        ))
 
         adapter = DataknobsBackendAdapter(db)
         results = adapter.search("score")
@@ -531,11 +388,13 @@ class TestDataknobsAdapterEdgeCases:
 
     def test_record_with_alternative_score_field(self):
         """Test using _score field as alternative to score."""
-        db = MockSyncDatabase()
+        db = SyncMemoryDatabase()
 
-        record = MockRecord({"content": "Alternative score"}, storage_id="rec_1")
-        record.metadata["_score"] = 0.75
-        db.add_record("rec_1", record)
+        db.create(Record(
+            data={"content": "Alternative score"},
+            metadata={"_score": 0.75},
+            storage_id="rec_1"
+        ))
 
         adapter = DataknobsBackendAdapter(db)
         results = adapter.search("score")

@@ -112,17 +112,16 @@ class DataknobsBackendAdapter(ResourceAdapter):
     ) -> List[Dict[str, Any]]:
         """Perform search using database backend.
 
-        Creates a Query object and executes search via database.search().
+        Creates a Query object with LIKE filter for text search.
         Results are formatted according to BaseSearchLogic standards.
 
         Args:
-            query: Search query string
+            query: Search query string (searches text_field using LIKE)
             k: Maximum number of results to return
-            filters: Optional filters for the search
+            filters: Optional additional filters for the search
             **kwargs: Additional search options:
                 - min_score: Minimum relevance score (default: 0.0)
                 - deduplicate: Whether to deduplicate results (default: False)
-                - query_type: Type of query ("text", "vector", etc.)
 
         Returns:
             List of search results with structure:
@@ -133,13 +132,20 @@ class DataknobsBackendAdapter(ResourceAdapter):
             }
         """
         try:
-            from dataknobs_data.query import Query
+            from dataknobs_data.query import Query, Filter, Operator
 
-            # Build query object
+            # Build filter for text search using LIKE operator
+            # This searches for the query string anywhere in the text field
+            search_filter = Filter(
+                field=self._text_field,
+                operator=Operator.LIKE,
+                value=f"%{query}%"
+            )
+
+            # Build query object with filter and limit
             query_obj = Query(
-                query_text=query,
-                limit=k,
-                **kwargs
+                filters=[search_filter],
+                limit_value=k
             )
 
             # Execute search
@@ -278,13 +284,19 @@ class AsyncDataknobsBackendAdapter(AsyncResourceAdapter):
         See DataknobsBackendAdapter.search for details.
         """
         try:
-            from dataknobs_data.query import Query
+            from dataknobs_data.query import Query, Filter, Operator
 
-            # Build query object
+            # Build filter for text search using LIKE operator
+            search_filter = Filter(
+                field=self._text_field,
+                operator=Operator.LIKE,
+                value=f"%{query}%"
+            )
+
+            # Build query object with filter and limit
             query_obj = Query(
-                query_text=query,
-                limit=k,
-                **kwargs
+                filters=[search_filter],
+                limit_value=k
             )
 
             # Execute search
