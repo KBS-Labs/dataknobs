@@ -45,6 +45,8 @@ from dataknobs_llm.conversations.storage import (
     ConversationStorage,
     DataknobsConversationStorage,
     StorageError,
+    SchemaVersionError,
+    SCHEMA_VERSION,
     calculate_node_id,
     get_node_by_id,
     get_messages_for_llm,
@@ -67,6 +69,8 @@ __all__ = [
     "ConversationStorage",
     "DataknobsConversationStorage",
     "StorageError",
+    "SchemaVersionError",
+    "SCHEMA_VERSION",
 
     # Manager
     "ConversationManager",

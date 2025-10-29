@@ -6,15 +6,29 @@ This module provides:
 - ConversationStorage: Abstract storage interface
 - DataknobsConversationStorage: Storage adapter for dataknobs backends
 - Helper functions for node ID management and tree navigation
+
+Schema Versioning:
+    The storage format uses semantic versioning (MAJOR.MINOR.PATCH):
+    - MAJOR: Incompatible changes requiring migration
+    - MINOR: Backward-compatible additions
+    - PATCH: Bug fixes, no schema changes
+
+    Current schema version: 1.0.0
 """
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+import logging
 
 from dataknobs_structures.tree import Tree
 from dataknobs_llm.llm.base import LLMMessage
+
+# Current schema version - increment when making schema changes
+SCHEMA_VERSION = "1.0.0"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -199,6 +213,7 @@ class ConversationState:
         metadata: Additional conversation metadata
         created_at: Conversation creation timestamp
         updated_at: Last update timestamp
+        schema_version: Version of the storage schema used
 
     Example:
         >>> # Create conversation with system message
@@ -228,6 +243,7 @@ class ConversationState:
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
+    schema_version: str = SCHEMA_VERSION
 
     def get_current_node(self) -> Optional[Tree]:
         """Get the current tree node."""
@@ -241,6 +257,7 @@ class ConversationState:
         """Convert state to dictionary for storage.
 
         The tree is serialized as a list of edges (parent_id, child_id, node_data).
+        Includes schema_version for backward compatibility.
         """
         # Collect all nodes and their data
         nodes = []
@@ -258,6 +275,7 @@ class ConversationState:
                     edges.append([parent_id, child_id])
 
         return {
+            "schema_version": self.schema_version,
             "conversation_id": self.conversation_id,
             "nodes": nodes,
             "edges": edges,
@@ -272,7 +290,19 @@ class ConversationState:
         """Create state from dictionary.
 
         Reconstructs the tree from nodes and edges.
+        Handles schema version migration if needed.
         """
+        # Check schema version
+        stored_version = data.get("schema_version", "0.0.0")  # Default to 0.0.0 if missing
+
+        # Apply migrations if needed
+        if stored_version != SCHEMA_VERSION:
+            logger.info(
+                f"Migrating conversation {data['conversation_id']} "
+                f"from schema {stored_version} to {SCHEMA_VERSION}"
+            )
+            data = cls._migrate_schema(data, stored_version, SCHEMA_VERSION)
+
         # Create nodes indexed by ID
         nodes_by_id: Dict[str, ConversationNode] = {}
         for node_data in data["nodes"]:
@@ -309,8 +339,76 @@ class ConversationState:
             current_node_id=data["current_node_id"],
             metadata=data["metadata"],
             created_at=datetime.fromisoformat(data["created_at"]),
-            updated_at=datetime.fromisoformat(data["updated_at"])
+            updated_at=datetime.fromisoformat(data["updated_at"]),
+            schema_version=SCHEMA_VERSION  # Always use current version after migration
         )
+
+    @staticmethod
+    def _migrate_schema(
+        data: Dict[str, Any],
+        from_version: str,
+        to_version: str
+    ) -> Dict[str, Any]:
+        """Migrate data from one schema version to another.
+
+        This method applies migrations sequentially to transform data from
+        an older schema version to the current version.
+
+        Args:
+            data: Data in old schema format
+            from_version: Source schema version
+            to_version: Target schema version
+
+        Returns:
+            Data in new schema format
+
+        Raises:
+            SchemaVersionError: If migration path is not supported
+        """
+        # Parse version strings
+        from_major, from_minor, from_patch = map(int, from_version.split("."))
+        to_major, to_minor, to_patch = map(int, to_version.split("."))
+
+        # No migration needed if versions match
+        if from_version == to_version:
+            return data
+
+        # Apply migrations based on version transitions
+        # Future migrations will be added here as needed
+
+        # Example migration patterns:
+        # if from_version == "0.0.0" and to_version >= "1.0.0":
+        #     data = cls._migrate_0_to_1(data)
+        # if from_version < "1.1.0" and to_version >= "1.1.0":
+        #     data = cls._migrate_1_0_to_1_1(data)
+
+        # For now, version 0.0.0 (no version field) to 1.0.0 is a no-op
+        # because the schema didn't change, we just added versioning
+        if from_version == "0.0.0":
+            logger.debug("Migrating from unversioned schema to 1.0.0 (no changes needed)")
+            data["schema_version"] = "1.0.0"
+            return data
+
+        # If we get here and versions still don't match, it's unsupported
+        if from_major > to_major:
+            raise SchemaVersionError(
+                f"Cannot downgrade from schema {from_version} to {to_version}"
+            )
+
+        logger.warning(
+            f"No migration path defined from {from_version} to {to_version}. "
+            "Using data as-is."
+        )
+        data["schema_version"] = to_version
+        return data
+
+    # Future migration methods will be added here as needed:
+    # @staticmethod
+    # def _migrate_1_0_to_1_1(data: Dict[str, Any]) -> Dict[str, Any]:
+    #     """Migrate from schema 1.0 to 1.1."""
+    #     # Add new field with default value
+    #     data["new_field"] = "default_value"
+    #     return data
 
 
 class ConversationStorage(ABC):
@@ -510,4 +608,9 @@ class DataknobsConversationStorage(ConversationStorage):
 
 class StorageError(Exception):
     """Exception raised for storage operation errors."""
+    pass
+
+
+class SchemaVersionError(Exception):
+    """Exception raised for schema version incompatibilities."""
     pass
