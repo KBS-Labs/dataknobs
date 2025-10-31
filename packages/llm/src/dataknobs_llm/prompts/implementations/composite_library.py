@@ -143,28 +143,26 @@ class CompositePromptLibrary(AbstractPromptLibrary):
     def get_user_prompt(
         self,
         name: str,
-        index: int = 0,
         **kwargs
     ) -> Optional[PromptTemplate]:
-        """Get a user prompt by name and index, searching libraries in order.
+        """Get a user prompt by name, searching libraries in order.
 
         Args:
             name: User prompt name
-            index: Prompt index (default: 0)
             **kwargs: Additional arguments passed to libraries
 
         Returns:
             PromptTemplate from first library that has it, or None
         """
         for lib, lib_name in zip(self._libraries, self._names):
-            template = lib.get_user_prompt(name, index, **kwargs)
+            template = lib.get_user_prompt(name, **kwargs)
             if template is not None:
                 logger.debug(
-                    f"Found user prompt '{name}[{index}]' in library '{lib_name}'"
+                    f"Found user prompt '{name}' in library '{lib_name}'"
                 )
                 return template
 
-        logger.debug(f"User prompt '{name}[{index}]' not found in any library")
+        logger.debug(f"User prompt '{name}' not found in any library")
         return None
 
     def get_message_index(self, name: str, **kwargs) -> Optional[MessageIndex]:
@@ -209,7 +207,6 @@ class CompositePromptLibrary(AbstractPromptLibrary):
         self,
         prompt_name: str,
         prompt_type: str = "user",
-        index: int = 0,
         **kwargs
     ) -> List[RAGConfig]:
         """Get RAG configurations for a prompt, searching libraries in order.
@@ -217,14 +214,13 @@ class CompositePromptLibrary(AbstractPromptLibrary):
         Args:
             prompt_name: Prompt name
             prompt_type: Type of prompt ("user" or "system")
-            index: Prompt index (for user prompts)
             **kwargs: Additional arguments passed to libraries
 
         Returns:
             List of RAGConfig from first library that has the prompt
         """
         for lib, lib_name in zip(self._libraries, self._names):
-            configs = lib.get_prompt_rag_configs(prompt_name, prompt_type, index, **kwargs)
+            configs = lib.get_prompt_rag_configs(prompt_name, prompt_type, **kwargs)
             if configs:
                 logger.debug(
                     f"Found {len(configs)} RAG config(s) for prompt '{prompt_name}' "

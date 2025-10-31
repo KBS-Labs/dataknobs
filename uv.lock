@@ -1642,6 +1642,7 @@ source = { editable = "packages/llm" }
 dependencies = [
     { name = "dataknobs-common" },
     { name = "dataknobs-config" },
+    { name = "dataknobs-data" },
     { name = "jinja2" },
     { name = "pyyaml" },
 ]
@@ -1660,6 +1661,7 @@ dev = [
 requires-dist = [
     { name = "dataknobs-common", editable = "packages/common" },
     { name = "dataknobs-config", editable = "packages/config" },
+    { name = "dataknobs-data", editable = "packages/data" },
     { name = "jinja2", specifier = ">=3.1.0" },
     { name = "pyyaml", specifier = ">=6.0" },
 ]

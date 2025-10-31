@@ -166,8 +166,7 @@ prompts/
 ├── system/
 │   └── helpful_assistant.yaml
 ├── user/
-│   ├── ask_question_0.yaml
-│   └── ask_question_1.yaml
+│   └── ask_question.yaml
 └── rag/
     └── docs_search.yaml
 ```
@@ -182,7 +181,7 @@ validation:
   required_params: []
 ```
 
-**user/ask_question_0.yaml**:
+**user/ask_question.yaml**:
 ```yaml
 template: "{{question}}"
 validation:
@@ -227,10 +226,9 @@ result = await builder.render_system_prompt(
 )
 print(result.content)
 
-# Render user prompt with index
+# Render user prompt
 result = await builder.render_user_prompt(
     "ask_question",
-    index=0,
     params={"question": "What is async/await?"}
 )
 print(result.content)
@@ -494,6 +492,59 @@ for branch in branches:
     print(f"  Content: {branch['message'].content[:50]}...")
 ```
 
+### RAG Caching
+
+When using prompts with RAG (Retrieval-Augmented Generation), you can enable caching to improve performance and reduce costs:
+
+```python
+manager = await ConversationManager.create(
+    llm=llm,
+    prompt_builder=builder,
+    storage=storage,
+    system_prompt_name="assistant",
+    cache_rag_results=True,        # Store RAG metadata in conversation nodes
+    reuse_rag_on_branch=True       # Reuse cached RAG when branching
+)
+
+# First message executes RAG search
+await manager.add_message(
+    role="user",
+    prompt_name="code_question",
+    params={"language": "python", "topic": "decorators"}
+)
+await manager.complete()
+
+# Branch back to earlier point
+await manager.switch_to_node("0")
+
+# This reuses cached RAG results (same query parameters!)
+await manager.add_message(
+    role="user",
+    prompt_name="code_question",
+    params={"language": "python", "topic": "decorators"}  # Same params = cache hit
+)
+```
+
+**How it works:**
+- `cache_rag_results=True` stores RAG metadata (queries, results, hashes) in conversation nodes
+- `reuse_rag_on_branch=True` searches the conversation tree for cached results before executing new RAG searches
+- Cache matching uses query hashes to ensure identical queries reuse results
+
+**Inspecting RAG metadata:**
+
+```python
+# Get RAG metadata from current node
+metadata = manager.get_rag_metadata()
+
+if metadata:
+    for placeholder, rag_data in metadata.items():
+        print(f"Query: {rag_data['query']}")
+        print(f"Results: {len(rag_data['results'])}")
+        print(f"Timestamp: {rag_data['timestamp']}")
+```
+
+For detailed information about RAG caching, including cache matching logic, best practices, and troubleshooting, see [RAG_CACHING.md](RAG_CACHING.md).
+
 ### Persistence and Resumption
 
 ```python
@@ -662,7 +713,7 @@ manager = await ConversationManager.create(
 # If auto_retry=True, response.metadata["retry_requested"] = True
 ```
 
-**Validation prompt example** (user/validate_response_0.yaml):
+**Validation prompt example** (user/validate_response.yaml):
 ```yaml
 template: |
   Check if this response is appropriate and helpful:
@@ -1168,7 +1219,7 @@ print("Available user prompts:", prompts)
 
 ```python
 # Check what parameters are required
-prompt = library.get_user_prompt("prompt_name", index=0)
+prompt = library.get_user_prompt("prompt_name")
 if prompt and "validation" in prompt:
     print("Required params:", prompt["validation"].get("required_params", []))
 

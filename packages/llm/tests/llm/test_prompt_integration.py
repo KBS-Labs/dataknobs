@@ -31,16 +31,16 @@ def prompt_config():
         },
         "user": {
             "greeting": {
-                0: {"template": "Hello! My name is {{name}}."},
-                1: {"template": "Hi there! I'm {{name}}, nice to meet you."}
+                "template": "Hello! My name is {{name}}."
+            },
+            "greeting_alt": {
+                "template": "Hi there! I'm {{name}}, nice to meet you."
             },
             "analyze_code": {
-                0: {
-                    "template": "Please analyze this {{language}} code:\n{{code}}"
-                }
+                "template": "Please analyze this {{language}} code:\n{{code}}"
             },
             "question": {
-                0: {"template": "What is {{topic}}?"}
+                "template": "What is {{topic}}?"
             }
         },
         "rag": {
@@ -178,27 +178,25 @@ class TestAsyncRenderAndComplete:
         assert "Python" in result.content
 
     @pytest.mark.asyncio
-    async def test_render_and_complete_with_index(
+    async def test_render_and_complete_with_different_prompts(
         self,
         echo_config,
         async_prompt_builder
     ):
-        """Test rendering user prompt with different index."""
+        """Test rendering different user prompts."""
         llm = EchoProvider(echo_config, prompt_builder=async_prompt_builder)
 
-        # Index 0
+        # Greeting prompt
         result0 = await llm.render_and_complete(
             "greeting",
-            params={"name": "Charlie"},
-            index=0
+            params={"name": "Charlie"}
         )
         assert "Hello!" in result0.content
 
-        # Index 1
+        # Alternative greeting prompt
         result1 = await llm.render_and_complete(
-            "greeting",
-            params={"name": "Charlie"},
-            index=1
+            "greeting_alt",
+            params={"name": "Charlie"}
         )
         assert "Hi there!" in result1.content
 
@@ -317,7 +315,6 @@ class TestAsyncWithRAG:
         library = async_prompt_builder_with_rag.library
         library.add_user_prompt(
             "search_docs",
-            0,
             {
                 "template": "Question: {{question}}\n\nDocs: {{RAG_CONTENT}}",
                 "rag_configs": [{
@@ -351,7 +348,6 @@ class TestAsyncWithRAG:
         library = async_prompt_builder_with_rag.library
         library.add_user_prompt(
             "search_docs_norag",
-            0,
             {
                 "template": "Question: {{question}}\n\nDocs: {{RAG_CONTENT}}",
                 "rag_configs": [{
@@ -467,9 +463,7 @@ class TestEndToEndIntegration:
             },
             "user": {
                 "explain_code": {
-                    0: {
-                        "template": "Explain this {{language}} code:\n{{code}}"
-                    }
+                    "template": "Explain this {{language}} code:\n{{code}}"
                 }
             }
         }
@@ -503,12 +497,10 @@ class TestEndToEndIntegration:
         config = {
             "user": {
                 "analyze": {
-                    0: {
-                        "template": "Analyze: {{data}}",
-                        "validation": {
-                            "level": "error",
-                            "required_params": ["data"]
-                        }
+                    "template": "Analyze: {{data}}",
+                    "validation": {
+                        "level": "error",
+                        "required_params": ["data"]
                     }
                 }
             }
@@ -534,11 +526,9 @@ class TestEndToEndIntegration:
         config = {
             "user": {
                 "greet": {
-                    0: {
-                        "template": "Hello {{name}} from {{country}}!",
-                        "defaults": {
-                            "country": "USA"
-                        }
+                    "template": "Hello {{name}} from {{country}}!",
+                    "defaults": {
+                        "country": "USA"
                     }
                 }
             }

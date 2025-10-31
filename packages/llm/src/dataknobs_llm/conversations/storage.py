@@ -154,7 +154,10 @@ def get_node_by_id(tree: Tree, node_id: str) -> Optional[Tree]:
         return tree  # Root node
 
     # Split into child indexes
-    indexes = [int(i) for i in node_id.split(".")]
+    try:
+        indexes = [int(i) for i in node_id.split(".")]
+    except ValueError:
+        return None  # Invalid node_id format
 
     # Navigate down the tree
     current = tree

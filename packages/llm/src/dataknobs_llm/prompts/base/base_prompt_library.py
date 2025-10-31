@@ -42,10 +42,10 @@ class BasePromptLibrary(AbstractPromptLibrary):
 
         # Caches for loaded prompts and indexes
         self._system_prompt_cache: Dict[str, PromptTemplate] = {}
-        self._user_prompt_cache: Dict[tuple, PromptTemplate] = {}  # (name, index)
+        self._user_prompt_cache: Dict[str, PromptTemplate] = {}
         self._message_index_cache: Dict[str, MessageIndex] = {}
         self._rag_config_cache: Dict[str, RAGConfig] = {}  # Standalone RAG configs
-        self._prompt_rag_cache: Dict[tuple, List[RAGConfig]] = {}  # (name, type, index)
+        self._prompt_rag_cache: Dict[tuple, List[RAGConfig]] = {}  # (name, type)
 
     # ===== Cache Management =====
 
@@ -106,39 +106,28 @@ class BasePromptLibrary(AbstractPromptLibrary):
         if self._enable_cache:
             self._system_prompt_cache[name] = template
 
-    def _get_cached_user_prompt(
-        self,
-        name: str,
-        index: int
-    ) -> Optional[PromptTemplate]:
+    def _get_cached_user_prompt(self, name: str) -> Optional[PromptTemplate]:
         """Get user prompt from cache if caching is enabled.
 
         Args:
             name: User prompt identifier
-            index: Prompt variant index
 
         Returns:
             Cached PromptTemplate if found, None otherwise
         """
         if not self._enable_cache:
             return None
-        return self._user_prompt_cache.get((name, index))
+        return self._user_prompt_cache.get(name)
 
-    def _cache_user_prompt(
-        self,
-        name: str,
-        index: int,
-        template: PromptTemplate
-    ) -> None:
+    def _cache_user_prompt(self, name: str, template: PromptTemplate) -> None:
         """Cache a user prompt if caching is enabled.
 
         Args:
             name: User prompt identifier
-            index: Prompt variant index
             template: PromptTemplate to cache
         """
         if self._enable_cache:
-            self._user_prompt_cache[(name, index)] = template
+            self._user_prompt_cache[name] = template
 
     def _get_cached_message_index(self, name: str) -> Optional[MessageIndex]:
         """Get message index from cache if caching is enabled.
@@ -189,28 +178,25 @@ class BasePromptLibrary(AbstractPromptLibrary):
     def _get_cached_prompt_rag_configs(
         self,
         prompt_name: str,
-        prompt_type: str,
-        index: int
+        prompt_type: str
     ) -> Optional[List[RAGConfig]]:
         """Get prompt RAG configs from cache if caching is enabled.
 
         Args:
             prompt_name: Prompt identifier
             prompt_type: Type of prompt ("user" or "system")
-            index: Prompt variant index
 
         Returns:
             Cached list of RAGConfig if found, None otherwise
         """
         if not self._enable_cache:
             return None
-        return self._prompt_rag_cache.get((prompt_name, prompt_type, index))
+        return self._prompt_rag_cache.get((prompt_name, prompt_type))
 
     def _cache_prompt_rag_configs(
         self,
         prompt_name: str,
         prompt_type: str,
-        index: int,
         configs: List[RAGConfig]
     ) -> None:
         """Cache prompt RAG configurations if caching is enabled.
@@ -218,11 +204,10 @@ class BasePromptLibrary(AbstractPromptLibrary):
         Args:
             prompt_name: Prompt identifier
             prompt_type: Type of prompt ("user" or "system")
-            index: Prompt variant index
             configs: List of RAGConfig to cache
         """
         if self._enable_cache:
-            self._prompt_rag_cache[(prompt_name, prompt_type, index)] = configs
+            self._prompt_rag_cache[(prompt_name, prompt_type)] = configs
 
     # ===== Common Parsing Methods =====
 

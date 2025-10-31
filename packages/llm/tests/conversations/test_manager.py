@@ -27,17 +27,17 @@ def create_test_prompts(prompt_dir: Path):
         yaml.dump({"template": "You are an AI assistant"})
     )
 
-    # User prompts (must be in format name_index.yaml)
+    # User prompts
     user_dir = prompt_dir / "user"
     user_dir.mkdir(parents=True, exist_ok=True)
 
-    (user_dir / "question_0.yaml").write_text(
+    (user_dir / "question.yaml").write_text(
         yaml.dump({"template": "What is {{topic}}?"})
     )
-    (user_dir / "question_1.yaml").write_text(
+    (user_dir / "followup_question.yaml").write_text(
         yaml.dump({"template": "Tell me more about {{topic}}."})
     )
-    (user_dir / "greeting_0.yaml").write_text(
+    (user_dir / "greeting.yaml").write_text(
         yaml.dump({"template": "Hello!"})
     )
 
@@ -451,30 +451,3 @@ class TestConversationManager:
         with pytest.raises(ValueError, match="Either content or prompt_name"):
             await manager.add_message(role="user")
 
-    @pytest.mark.asyncio
-    async def test_user_prompt_index_calculation(self, test_components):
-        """Test that user prompt index is calculated correctly."""
-        manager = await ConversationManager.create(
-            llm=test_components["llm"],
-            prompt_builder=test_components["builder"],
-            storage=test_components["storage"],
-            system_prompt_name="helpful",
-        )
-
-        # Add first user message using prompt
-        await manager.add_message(
-            role="user", prompt_name="question", params={"topic": "Python"}
-        )
-
-        # Add assistant response
-        await manager.complete()
-
-        # Add second user message using same prompt
-        await manager.add_message(
-            role="user", prompt_name="question", params={"topic": "JavaScript"}
-        )
-
-        # Verify both used the same prompt (index increments internally)
-        history = await manager.get_history()
-        assert "Python" in history[1].content
-        assert "JavaScript" in history[3].content

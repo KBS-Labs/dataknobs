@@ -51,14 +51,12 @@ class AbstractPromptLibrary(ABC):
     def get_user_prompt(
         self,
         name: str,
-        index: int = 0,
         **kwargs: Any
     ) -> Optional[PromptTemplate]:
-        """Retrieve a user prompt template by name and index.
+        """Retrieve a user prompt template by name.
 
         Args:
             name: User prompt identifier
-            index: Prompt variant index (default: 0)
             **kwargs: Additional library-specific parameters
 
         Returns:
@@ -67,14 +65,11 @@ class AbstractPromptLibrary(ABC):
         pass
 
     @abstractmethod
-    def list_user_prompts(self, name: Optional[str] = None) -> List[str]:
+    def list_user_prompts(self) -> List[str]:
         """List available user prompts.
 
-        Args:
-            name: If provided, list variants for this specific prompt
-
         Returns:
-            List of user prompt identifiers (or variant indices if name provided)
+            List of user prompt identifiers
         """
         pass
 
@@ -132,7 +127,6 @@ class AbstractPromptLibrary(ABC):
         self,
         prompt_name: str,
         prompt_type: str = "user",
-        index: int = 0,
         **kwargs: Any
     ) -> List[RAGConfig]:
         """Retrieve RAG configurations for a specific prompt.
@@ -142,7 +136,6 @@ class AbstractPromptLibrary(ABC):
         Args:
             prompt_name: Name of the prompt
             prompt_type: Type of prompt ("user" or "system")
-            index: Prompt variant index (for user prompts)
             **kwargs: Additional library-specific parameters
 
         Returns:

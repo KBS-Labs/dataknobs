@@ -9,8 +9,8 @@ Directory Structure:
             analyze_code.yaml
             review_pr.yaml
         user/
-            code_analysis_0.yaml
-            code_analysis_1.yaml
+            code_question.yaml
+            followup_question.yaml
         messages/
             conversation.yaml
 
@@ -119,9 +119,9 @@ class FileSystemPromptLibrary(BasePromptLibrary):
     def _load_user_prompts(self) -> None:
         """Load all user prompts from user/ directory.
 
-        User prompts are indexed by name and number. Files should be named:
-        - prompt_name_0.yaml (index 0)
-        - prompt_name_1.yaml (index 1)
+        User prompts are loaded by name. Files should be named:
+        - question.yaml
+        - followup_question.yaml
         - etc.
         """
         user_dir = self.prompt_dir / "user"
@@ -131,31 +131,13 @@ class FileSystemPromptLibrary(BasePromptLibrary):
 
         for file_path in user_dir.iterdir():
             if file_path.is_file() and file_path.suffix in self.file_extensions:
-                # Parse name and index from filename
-                # Expected format: name_index.ext (e.g., code_analysis_0.yaml)
-                stem = file_path.stem
-                if '_' in stem:
-                    parts = stem.rsplit('_', 1)
-                    if len(parts) == 2 and parts[1].isdigit():
-                        name = parts[0]
-                        index = int(parts[1])
-
-                        try:
-                            template = self._load_prompt_template(file_path)
-                            self._cache_user_prompt(name, index, template)
-                            logger.debug(f"Loaded user prompt: {name}[{index}]")
-                        except Exception as e:
-                            logger.error(f"Error loading user prompt {name}[{index}]: {e}")
-                    else:
-                        logger.warning(
-                            f"User prompt file does not match expected format "
-                            f"'name_index.ext': {file_path.name}"
-                        )
-                else:
-                    logger.warning(
-                        f"User prompt file does not match expected format "
-                        f"'name_index.ext': {file_path.name}"
-                    )
+                name = file_path.stem
+                try:
+                    template = self._load_prompt_template(file_path)
+                    self._cache_user_prompt(name, template)
+                    logger.debug(f"Loaded user prompt: {name}")
+                except Exception as e:
+                    logger.error(f"Error loading user prompt {name}: {e}")
 
     def _load_message_indexes(self) -> None:
         """Load all message indexes from messages/ directory."""
@@ -289,18 +271,17 @@ class FileSystemPromptLibrary(BasePromptLibrary):
         """
         return self._get_cached_system_prompt(name)
 
-    def get_user_prompt(self, name: str, index: int = 0, **kwargs) -> Optional[PromptTemplate]:
-        """Get a user prompt by name and index.
+    def get_user_prompt(self, name: str, **kwargs) -> Optional[PromptTemplate]:
+        """Get a user prompt by name.
 
         Args:
             name: User prompt name
-            index: Prompt index (default: 0)
             **kwargs: Additional arguments (unused in filesystem library)
 
         Returns:
             PromptTemplate if found, None otherwise
         """
-        return self._get_cached_user_prompt(name, index)
+        return self._get_cached_user_prompt(name)
 
     def get_message_index(self, name: str, **kwargs) -> Optional[MessageIndex]:
         """Get a message index by name.
@@ -330,7 +311,6 @@ class FileSystemPromptLibrary(BasePromptLibrary):
         self,
         prompt_name: str,
         prompt_type: str = "user",
-        index: int = 0,
         **kwargs
     ) -> List[RAGConfig]:
         """Get RAG configurations for a specific prompt.
@@ -340,7 +320,6 @@ class FileSystemPromptLibrary(BasePromptLibrary):
         Args:
             prompt_name: Prompt name
             prompt_type: Type of prompt ("user" or "system")
-            index: Prompt index (for user prompts)
             **kwargs: Additional arguments (unused)
 
         Returns:
@@ -350,7 +329,7 @@ class FileSystemPromptLibrary(BasePromptLibrary):
         if prompt_type == "system":
             template = self.get_system_prompt(prompt_name)
         else:
-            template = self.get_user_prompt(prompt_name, index)
+            template = self.get_user_prompt(prompt_name)
 
         if template is None:
             return []
@@ -383,25 +362,13 @@ class FileSystemPromptLibrary(BasePromptLibrary):
         """
         return list(self._system_prompt_cache.keys())
 
-    def list_user_prompts(self, name: Optional[str] = None) -> List[str]:
+    def list_user_prompts(self) -> List[str]:
         """List available user prompts.
 
-        Args:
-            name: If provided, list indices for this specific prompt
-
         Returns:
-            List of user prompt names or indices
+            List of user prompt names
         """
-        if name is None:
-            # Return unique prompt names
-            return list(set(key[0] for key in self._user_prompt_cache.keys()))
-        else:
-            # Return indices for this specific prompt
-            indices = [
-                str(key[1]) for key in self._user_prompt_cache.keys()
-                if key[0] == name
-            ]
-            return sorted(indices, key=int)
+        return list(self._user_prompt_cache.keys())
 
     def list_message_indexes(self) -> List[str]:
         """List all available message index names.

@@ -161,12 +161,15 @@ class RenderResult:
         params_missing: Required parameters that were missing
         validation_warnings: List of validation warnings (if level=WARN)
         metadata: Additional metadata about the rendering
+        rag_metadata: Optional RAG metadata (if return_rag_metadata=True)
+                    Contains details about RAG searches executed during rendering
     """
     content: str
     params_used: Dict[str, Any] = field(default_factory=dict)
     params_missing: List[str] = field(default_factory=list)
     validation_warnings: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    rag_metadata: Optional[Dict[str, Any]] = None
 
 
 # Type aliases for convenience

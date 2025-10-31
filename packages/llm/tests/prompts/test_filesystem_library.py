@@ -147,59 +147,62 @@ class TestFileSystemSystemPrompts:
 class TestFileSystemUserPrompts:
     """Test suite for user prompts in FileSystemPromptLibrary."""
 
-    def test_load_user_prompt_single_index(self, temp_prompts_dir):
-        """Test loading user prompt with single index."""
-        prompt_file = temp_prompts_dir / "user" / "question_0.json"
+    def test_load_user_prompt_simple(self, temp_prompts_dir):
+        """Test loading simple user prompt."""
+        prompt_file = temp_prompts_dir / "user" / "question.json"
         prompt_data = {"template": "What is {{topic}}?"}
         prompt_file.write_text(json.dumps(prompt_data))
 
         library = FileSystemPromptLibrary(temp_prompts_dir)
-        template = library.get_user_prompt("question", index=0)
+        template = library.get_user_prompt("question")
 
         assert template is not None
         assert template["template"] == "What is {{topic}}?"
 
-    def test_load_user_prompt_multiple_indexes(self, temp_prompts_dir):
-        """Test loading user prompts with multiple indexes."""
-        # Create multiple indexed prompts
-        for i in range(3):
-            prompt_file = temp_prompts_dir / "user" / f"question_{i}.json"
-            prompt_data = {"template": f"Question {i} about {{{{topic}}}}"}
-            prompt_file.write_text(json.dumps(prompt_data))
+    def test_load_user_prompt_multiple_variants(self, temp_prompts_dir):
+        """Test loading multiple user prompt variants."""
+        # Create multiple named prompts
+        prompt_file1 = temp_prompts_dir / "user" / "question.json"
+        prompt_data1 = {"template": "Question about {{topic}}"}
+        prompt_file1.write_text(json.dumps(prompt_data1))
+
+        prompt_file2 = temp_prompts_dir / "user" / "followup.json"
+        prompt_data2 = {"template": "Follow-up about {{topic}}"}
+        prompt_file2.write_text(json.dumps(prompt_data2))
+
+        prompt_file3 = temp_prompts_dir / "user" / "clarification.json"
+        prompt_data3 = {"template": "Clarification about {{topic}}"}
+        prompt_file3.write_text(json.dumps(prompt_data3))
 
         library = FileSystemPromptLibrary(temp_prompts_dir)
 
-        template0 = library.get_user_prompt("question", index=0)
-        template1 = library.get_user_prompt("question", index=1)
-        template2 = library.get_user_prompt("question", index=2)
+        template0 = library.get_user_prompt("question")
+        template1 = library.get_user_prompt("followup")
+        template2 = library.get_user_prompt("clarification")
 
-        assert "Question 0" in template0["template"]
-        assert "Question 1" in template1["template"]
-        assert "Question 2" in template2["template"]
+        assert "Question about" in template0["template"]
+        assert "Follow-up about" in template1["template"]
+        assert "Clarification about" in template2["template"]
 
     def test_user_prompt_naming_format(self, temp_prompts_dir):
-        """Test that user prompts must follow name_index.ext format."""
-        # Valid format
-        valid_file = temp_prompts_dir / "user" / "valid_0.json"
-        valid_file.write_text(json.dumps({"template": "Valid"}))
+        """Test that user prompts can be any valid name."""
+        # Valid formats
+        valid_file1 = temp_prompts_dir / "user" / "valid.json"
+        valid_file1.write_text(json.dumps({"template": "Valid"}))
 
-        # Invalid format (no index)
-        invalid_file = temp_prompts_dir / "user" / "invalid.json"
-        invalid_file.write_text(json.dumps({"template": "Invalid"}))
+        valid_file2 = temp_prompts_dir / "user" / "also_valid.json"
+        valid_file2.write_text(json.dumps({"template": "Also valid"}))
 
         library = FileSystemPromptLibrary(temp_prompts_dir)
 
-        # Valid should be loaded
-        assert library.get_user_prompt("valid", index=0) is not None
-
-        # Invalid should not be loaded (warning logged)
-        assert library.get_user_prompt("invalid", index=0) is None
+        # Both should be loaded
+        assert library.get_user_prompt("valid") is not None
+        assert library.get_user_prompt("also_valid") is not None
 
     def test_user_prompt_not_found(self, temp_prompts_dir):
         """Test retrieving non-existent user prompt."""
         library = FileSystemPromptLibrary(temp_prompts_dir)
         assert library.get_user_prompt("nonexistent") is None
-        assert library.get_user_prompt("nonexistent", index=5) is None
 
 
 class TestFileSystemMessageIndexes:

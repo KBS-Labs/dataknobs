@@ -199,9 +199,7 @@ class TestPromptBuilderUserPrompts:
         config = {
             "user": {
                 "ask": {
-                    0: {
-                        "template": "Tell me about {{topic}}"
-                    }
+                    "template": "Tell me about {{topic}}"
                 }
             }
         }
@@ -210,30 +208,26 @@ class TestPromptBuilderUserPrompts:
 
         result = builder.render_user_prompt(
             "ask",
-            index=0,
             params={"topic": "Python"}
         )
 
         assert result.content == "Tell me about Python"
-        assert result.metadata["index"] == 0
 
     def test_render_user_prompt_multiple_variants(self):
         """Test rendering different user prompt variants."""
         config = {
             "user": {
-                "ask": {
-                    0: {"template": "First: {{question}}"},
-                    1: {"template": "Follow-up: {{question}}"}
-                }
+                "ask": {"template": "First: {{question}}"},
+                "ask_followup": {"template": "Follow-up: {{question}}"}
             }
         }
         library = ConfigPromptLibrary(config)
         builder = PromptBuilder(library=library)
 
-        result0 = builder.render_user_prompt("ask", index=0, params={"question": "What?"})
+        result0 = builder.render_user_prompt("ask", params={"question": "What?"})
         assert result0.content == "First: What?"
 
-        result1 = builder.render_user_prompt("ask", index=1, params={"question": "Why?"})
+        result1 = builder.render_user_prompt("ask_followup", params={"question": "Why?"})
         assert result1.content == "Follow-up: Why?"
 
     def test_render_user_prompt_not_found(self):
@@ -480,11 +474,9 @@ class TestPromptBuilderHelpers:
         config = {
             "user": {
                 "ask": {
-                    0: {
-                        "template": "{{question}}",
-                        "validation": {
-                            "required_params": ["question"]
-                        }
+                    "template": "{{question}}",
+                    "validation": {
+                        "required_params": ["question"]
                     }
                 }
             }
@@ -492,7 +484,7 @@ class TestPromptBuilderHelpers:
         library = ConfigPromptLibrary(config)
         builder = PromptBuilder(library=library)
 
-        required = builder.get_required_parameters("ask", prompt_type="user", index=0)
+        required = builder.get_required_parameters("ask", prompt_type="user")
 
         assert "question" in required
 

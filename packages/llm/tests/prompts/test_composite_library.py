@@ -134,33 +134,33 @@ class TestCompositeUserPrompts:
     def test_user_prompt_fallback(self):
         """Test user prompt with fallback behavior."""
         lib1 = ConfigPromptLibrary({
-            "user": {"question": {0: {"template": "From lib1"}}}
+            "user": {"question": {"template": "From lib1"}}
         })
         lib2 = ConfigPromptLibrary({
-            "user": {"question": {0: {"template": "From lib2"}}}
+            "user": {"question": {"template": "From lib2"}}
         })
 
         composite = CompositePromptLibrary(libraries=[lib1, lib2])
-        template = composite.get_user_prompt("question", index=0)
+        template = composite.get_user_prompt("question")
 
         assert template["template"] == "From lib1"
 
-    def test_user_prompt_different_indexes_different_libraries(self):
-        """Test user prompts at different indexes from different libraries."""
+    def test_user_prompt_different_names_different_libraries(self):
+        """Test different user prompts from different libraries."""
         lib1 = ConfigPromptLibrary({
-            "user": {"question": {0: {"template": "Index 0 from lib1"}}}
+            "user": {"question": {"template": "Question from lib1"}}
         })
         lib2 = ConfigPromptLibrary({
-            "user": {"question": {1: {"template": "Index 1 from lib2"}}}
+            "user": {"question_alt": {"template": "Alt question from lib2"}}
         })
 
         composite = CompositePromptLibrary(libraries=[lib1, lib2])
 
-        template0 = composite.get_user_prompt("question", index=0)
-        template1 = composite.get_user_prompt("question", index=1)
+        template0 = composite.get_user_prompt("question")
+        template1 = composite.get_user_prompt("question_alt")
 
-        assert template0["template"] == "Index 0 from lib1"
-        assert template1["template"] == "Index 1 from lib2"
+        assert template0["template"] == "Question from lib1"
+        assert template1["template"] == "Alt question from lib2"
 
 
 class TestCompositeMessageIndexes:

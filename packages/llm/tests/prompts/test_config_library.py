@@ -123,56 +123,52 @@ class TestConfigPromptLibrary:
 class TestConfigUserPrompts:
     """Test suite for user prompts in ConfigPromptLibrary."""
 
-    def test_user_prompt_single_index(self):
-        """Test user prompt with single index."""
+    def test_user_prompt_simple(self):
+        """Test simple user prompt."""
         config = {
             "user": {
                 "question": {
-                    0: {"template": "What is {{topic}}?"}
+                    "template": "What is {{topic}}?"
                 }
             }
         }
         library = ConfigPromptLibrary(config)
-        template = library.get_user_prompt("question", index=0)
+        template = library.get_user_prompt("question")
 
         assert template is not None
         assert template["template"] == "What is {{topic}}?"
 
-    def test_user_prompt_multiple_indexes(self):
-        """Test user prompt with multiple indexes."""
+    def test_user_prompt_multiple_variants(self):
+        """Test multiple user prompt variants."""
         config = {
             "user": {
-                "question": {
-                    0: {"template": "First question about {{topic}}"},
-                    1: {"template": "Second question about {{topic}}"},
-                    2: {"template": "Third question about {{topic}}"}
-                }
+                "question": {"template": "First question about {{topic}}"},
+                "question_second": {"template": "Second question about {{topic}}"},
+                "question_third": {"template": "Third question about {{topic}}"}
             }
         }
         library = ConfigPromptLibrary(config)
 
-        template0 = library.get_user_prompt("question", index=0)
-        template1 = library.get_user_prompt("question", index=1)
-        template2 = library.get_user_prompt("question", index=2)
+        template0 = library.get_user_prompt("question")
+        template1 = library.get_user_prompt("question_second")
+        template2 = library.get_user_prompt("question_third")
 
         assert "First question" in template0["template"]
         assert "Second question" in template1["template"]
         assert "Third question" in template2["template"]
 
-    def test_user_prompt_string_index(self):
-        """Test user prompt with string index (should be converted)."""
+    def test_user_prompt_multiple_names(self):
+        """Test user prompts with different names."""
         config = {
             "user": {
-                "question": {
-                    "0": {"template": "Question {{n}}"},
-                    "1": {"template": "Question {{n}} follow-up"}
-                }
+                "question": {"template": "Question {{n}}"},
+                "question_followup": {"template": "Question {{n}} follow-up"}
             }
         }
         library = ConfigPromptLibrary(config)
 
-        template0 = library.get_user_prompt("question", index=0)
-        template1 = library.get_user_prompt("question", index=1)
+        template0 = library.get_user_prompt("question")
+        template1 = library.get_user_prompt("question_followup")
 
         assert template0 is not None
         assert template1 is not None
@@ -182,15 +178,13 @@ class TestConfigUserPrompts:
         config = {
             "user": {
                 "ask": {
-                    0: {
-                        "template": "Tell me about {{topic}}",
-                        "defaults": {"topic": "Python"}
-                    }
+                    "template": "Tell me about {{topic}}",
+                    "defaults": {"topic": "Python"}
                 }
             }
         }
         library = ConfigPromptLibrary(config)
-        template = library.get_user_prompt("ask", index=0)
+        template = library.get_user_prompt("ask")
 
         assert template["defaults"]["topic"] == "Python"
 
@@ -198,7 +192,6 @@ class TestConfigUserPrompts:
         """Test retrieving non-existent user prompt."""
         library = ConfigPromptLibrary({"user": {}})
         assert library.get_user_prompt("nonexistent") is None
-        assert library.get_user_prompt("nonexistent", index=5) is None
 
 
 class TestConfigMessageIndexes:
@@ -371,8 +364,8 @@ class TestConfigLibraryMutability:
         library = ConfigPromptLibrary()
         template = {"template": "User prompt {{y}}"}
 
-        library.add_user_prompt("new_user", 0, template)
-        retrieved = library.get_user_prompt("new_user", index=0)
+        library.add_user_prompt("new_user", template)
+        retrieved = library.get_user_prompt("new_user")
 
         assert retrieved is not None
         assert retrieved["template"] == "User prompt {{y}}"

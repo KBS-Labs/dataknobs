@@ -72,6 +72,8 @@ class ConversationManager:
         state: Optional[ConversationState] = None,
         metadata: Optional[Dict[str, Any]] = None,
         middleware: Optional[List["ConversationMiddleware"]] = None,
+        cache_rag_results: bool = False,
+        reuse_rag_on_branch: bool = False,
     ):
         """Initialize conversation manager.
 
@@ -85,6 +87,10 @@ class ConversationManager:
             state: Optional existing conversation state
             metadata: Optional metadata for new conversations
             middleware: Optional list of middleware to execute
+            cache_rag_results: If True, store RAG metadata in node metadata
+                             for debugging and transparency
+            reuse_rag_on_branch: If True, reuse cached RAG results when
+                               possible (useful for testing/branching)
         """
         self.llm = llm
         self.prompt_builder = prompt_builder
@@ -92,6 +98,8 @@ class ConversationManager:
         self.state = state
         self._initial_metadata = metadata or {}
         self.middleware = middleware or []
+        self.cache_rag_results = cache_rag_results
+        self.reuse_rag_on_branch = reuse_rag_on_branch
 
     @classmethod
     async def create(
@@ -103,6 +111,8 @@ class ConversationManager:
         system_params: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         middleware: Optional[List["ConversationMiddleware"]] = None,
+        cache_rag_results: bool = False,
+        reuse_rag_on_branch: bool = False,
     ) -> "ConversationManager":
         """Create a new conversation.
 
@@ -114,6 +124,8 @@ class ConversationManager:
             system_params: Optional params for system prompt
             metadata: Optional conversation metadata
             middleware: Optional list of middleware to execute
+            cache_rag_results: If True, store RAG metadata in node metadata
+            reuse_rag_on_branch: If True, reuse cached RAG results when possible
 
         Returns:
             Initialized ConversationManager
@@ -123,7 +135,8 @@ class ConversationManager:
             ...     llm=llm,
             ...     prompt_builder=builder,
             ...     storage=storage,
-            ...     system_prompt_name="helpful_assistant"
+            ...     system_prompt_name="helpful_assistant",
+            ...     cache_rag_results=True
             ... )
         """
         manager = cls(
@@ -132,6 +145,8 @@ class ConversationManager:
             storage=storage,
             metadata=metadata,
             middleware=middleware,
+            cache_rag_results=cache_rag_results,
+            reuse_rag_on_branch=reuse_rag_on_branch,
         )
 
         # Initialize with system prompt if provided
@@ -152,6 +167,8 @@ class ConversationManager:
         prompt_builder: AsyncPromptBuilder,
         storage: ConversationStorage,
         middleware: Optional[List["ConversationMiddleware"]] = None,
+        cache_rag_results: bool = False,
+        reuse_rag_on_branch: bool = False,
     ) -> "ConversationManager":
         """Resume an existing conversation.
 
@@ -161,6 +178,8 @@ class ConversationManager:
             prompt_builder: Prompt builder
             storage: Storage backend
             middleware: Optional list of middleware to execute
+            cache_rag_results: If True, store RAG metadata in node metadata
+            reuse_rag_on_branch: If True, reuse cached RAG results when possible
 
         Returns:
             ConversationManager with restored state
@@ -173,7 +192,8 @@ class ConversationManager:
             ...     conversation_id="conv-123",
             ...     llm=llm,
             ...     prompt_builder=builder,
-            ...     storage=storage
+            ...     storage=storage,
+            ...     cache_rag_results=True
             ... )
         """
         # Load state from storage
@@ -188,6 +208,8 @@ class ConversationManager:
             storage=storage,
             state=state,
             middleware=middleware,
+            cache_rag_results=cache_rag_results,
+            reuse_rag_on_branch=reuse_rag_on_branch,
         )
 
         return manager
@@ -237,34 +259,47 @@ class ConversationManager:
             raise ValueError("Either content or prompt_name must be provided")
 
         # Render prompt if needed
+        rag_metadata_to_store = None
         if prompt_name:
             params = params or {}
+
+            # Check if we should try to reuse cached RAG
+            cached_rag = None
+            if self.reuse_rag_on_branch and include_rag:
+                cached_rag = await self._find_cached_rag(prompt_name, role, params)
+
             if role == "system":
                 result = await self.prompt_builder.render_system_prompt(
                     prompt_name,
                     params=params,
                     include_rag=include_rag,
+                    return_rag_metadata=self.cache_rag_results,
+                    cached_rag=cached_rag,
                 )
             elif role == "user":
-                # For user prompts, calculate the index based on user messages so far
-                user_count = 0
-                if self.state:
-                    current_messages = self.state.get_current_messages()
-                    user_count = sum(1 for m in current_messages if m.role == "user")
-
                 result = await self.prompt_builder.render_user_prompt(
                     prompt_name,
-                    index=user_count,
                     params=params,
                     include_rag=include_rag,
+                    return_rag_metadata=self.cache_rag_results,
+                    cached_rag=cached_rag,
                 )
             else:
                 raise ValueError(f"Cannot render prompt for role '{role}'")
 
             content = result.content
 
+            # Store RAG metadata if caching is enabled and metadata was captured
+            if self.cache_rag_results and result.rag_metadata:
+                rag_metadata_to_store = result.rag_metadata
+
         # Create message
         message = LLMMessage(role=role, content=content)
+
+        # Prepare node metadata
+        node_metadata = metadata or {}
+        if rag_metadata_to_store:
+            node_metadata["rag_metadata"] = rag_metadata_to_store
 
         # Initialize state if this is the first message
         if self.state is None:
@@ -273,7 +308,7 @@ class ConversationManager:
                 message=message,
                 node_id="",
                 prompt_name=prompt_name,
-                metadata=metadata or {},
+                metadata=node_metadata,
             )
             tree = Tree(root_node)
             self.state = ConversationState(
@@ -294,7 +329,7 @@ class ConversationManager:
                     message=message,
                     node_id="",  # Will be calculated after adding to tree
                     prompt_name=prompt_name,
-                    metadata=metadata or {},
+                    metadata=node_metadata,
                 )
             )
 
@@ -721,6 +756,142 @@ class ConversationManager:
         self.state.metadata[key] = value
         self.state.updated_at = datetime.now()
         await self._save_state()
+
+    async def _find_cached_rag(
+        self,
+        prompt_name: str,
+        role: str,
+        params: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Search conversation history for cached RAG metadata.
+
+        This method searches the entire conversation tree for cached RAG metadata
+        that matches both the prompt name/role AND the resolved RAG query parameters.
+        Query matching is done via query hashes.
+
+        Args:
+            prompt_name: Name of the prompt to find cached RAG for
+            role: Role of the prompt ("system" or "user")
+            params: Parameters for the prompt (used to match RAG queries)
+
+        Returns:
+            Cached RAG metadata dictionary if found, None otherwise
+
+        Example:
+            >>> cached = await manager._find_cached_rag("code_question", "user", {"topic": "decorators"})
+            >>> if cached:
+            ...     print(f"Found cached RAG with {len(cached)} placeholders")
+        """
+        if not self.state:
+            return None
+
+        # Get RAG configs for this prompt to determine what queries we're looking for
+        rag_configs = self.prompt_builder.library.get_prompt_rag_configs(
+            prompt_name=prompt_name,
+            prompt_type="system" if role == "system" else "user"
+        )
+
+        if not rag_configs:
+            return None
+
+        # Compute the query hashes we're looking for
+        from jinja2 import Template
+        target_hashes_by_placeholder = {}
+        for rag_config in rag_configs:
+            placeholder = rag_config.get("placeholder", "RAG_CONTENT")
+            adapter_name = rag_config.get("adapter_name", "")
+            query_template = rag_config.get("query", "")
+
+            # Render the query template with params
+            try:
+                template = Template(query_template)
+                resolved_query = template.render(params)
+
+                # Compute hash
+                query_hash = self.prompt_builder._compute_rag_query_hash(adapter_name, resolved_query)
+                target_hashes_by_placeholder[placeholder] = query_hash
+            except Exception:
+                # If query rendering fails, we can't match cache
+                continue
+
+        if not target_hashes_by_placeholder:
+            return None
+
+        # Search entire tree for matching cached RAG (BFS to find any match)
+        from collections import deque
+        queue = deque([self.state.message_tree])
+
+        while queue:
+            tree_node = queue.popleft()
+            node_data = tree_node.data
+
+            # Check if this node has the same prompt name and role
+            if (node_data.prompt_name == prompt_name and
+                node_data.message.role == role):
+
+                # Check if RAG metadata exists
+                rag_metadata = node_data.metadata.get("rag_metadata")
+                if rag_metadata:
+                    # Check if query hashes match for all placeholders
+                    all_match = True
+                    for placeholder, target_hash in target_hashes_by_placeholder.items():
+                        if placeholder not in rag_metadata:
+                            all_match = False
+                            break
+                        cached_hash = rag_metadata[placeholder].get("query_hash")
+                        if cached_hash != target_hash:
+                            all_match = False
+                            break
+
+                    if all_match:
+                        return rag_metadata
+
+            # Add children to queue (if any)
+            if tree_node.children:
+                queue.extend(tree_node.children)
+
+        return None
+
+    def get_rag_metadata(self, node_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Get RAG metadata from a conversation node.
+
+        This method retrieves the cached RAG metadata from a specific node,
+        which includes information about RAG searches executed during prompt
+        rendering (queries, results, query hashes, etc.).
+
+        Args:
+            node_id: Node ID to retrieve metadata from (default: current node)
+
+        Returns:
+            RAG metadata dictionary if present, None otherwise
+
+        Raises:
+            ValueError: If node_id not found in conversation tree
+
+        Example:
+            >>> # Get RAG metadata from current node
+            >>> metadata = manager.get_rag_metadata()
+            >>> if metadata:
+            ...     for placeholder, rag_data in metadata.items():
+            ...         print(f"{placeholder}: query={rag_data['query']}")
+            >>>
+            >>> # Get RAG metadata from specific node
+            >>> metadata = manager.get_rag_metadata(node_id="0.1")
+        """
+        if not self.state:
+            return None
+
+        # Default to current node
+        if node_id is None:
+            node_id = self.state.current_node_id
+
+        # Get node
+        tree_node = get_node_by_id(self.state.message_tree, node_id)
+        if tree_node is None:
+            raise ValueError(f"Node '{node_id}' not found in conversation tree")
+
+        # Return RAG metadata if present
+        return tree_node.data.metadata.get("rag_metadata")
 
     async def _save_state(self) -> None:
         """Persist current state to storage."""

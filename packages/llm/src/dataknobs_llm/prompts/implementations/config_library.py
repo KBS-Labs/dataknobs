@@ -16,13 +16,12 @@ Example:
             }
         },
         "user": {
-            "code_analysis": {
-                0: {
-                    "template": "Please analyze the following code..."
-                },
-                1: {
-                    "template": "Additionally, check for..."
-                }
+            "code_question": {
+                "template": "Please analyze the following code...",
+                "rag_configs": [...]
+            },
+            "followup_question": {
+                "template": "Additionally, check for..."
             }
         }
     }
@@ -58,7 +57,7 @@ class ConfigPromptLibrary(BasePromptLibrary):
     Example:
         >>> config = {
         ...     "system": {"greet": {"template": "Hello {{name}}!"}},
-        ...     "user": {"ask": {0: {"template": "Tell me about {{topic}}"}}}
+        ...     "user": {"ask": {"template": "Tell me about {{topic}}"}}
         ... }
         >>> library = ConfigPromptLibrary(config)
         >>> template = library.get_system_prompt("greet")
@@ -71,7 +70,7 @@ class ConfigPromptLibrary(BasePromptLibrary):
             config: Configuration dictionary with structure:
                 {
                     "system": {name: PromptTemplate, ...},
-                    "user": {name: {index: PromptTemplate, ...}, ...},
+                    "user": {name: PromptTemplate, ...},
                     "messages": {name: MessageIndex, ...},
                     "rag": {name: RAGConfig, ...}
                 }
@@ -105,31 +104,13 @@ class ConfigPromptLibrary(BasePromptLibrary):
         """Load user prompts from config."""
         user_config = self._config.get("user", {})
 
-        for name, indexes in user_config.items():
-            if not isinstance(indexes, dict):
-                logger.warning(
-                    f"User prompt '{name}' should be a dict of {{index: template}}, "
-                    f"got {type(indexes)}"
-                )
-                continue
-
-            for index, data in indexes.items():
-                try:
-                    # Ensure index is int
-                    if isinstance(index, str) and index.isdigit():
-                        index = int(index)
-                    elif not isinstance(index, int):
-                        logger.warning(
-                            f"User prompt index for '{name}' should be int, "
-                            f"got {type(index)}: {index}"
-                        )
-                        continue
-
-                    template = self._parse_prompt_template(data)
-                    self._cache_user_prompt(name, index, template)
-                    logger.debug(f"Loaded user prompt from config: {name}[{index}]")
-                except Exception as e:
-                    logger.error(f"Error loading user prompt {name}[{index}]: {e}")
+        for name, data in user_config.items():
+            try:
+                template = self._parse_prompt_template(data)
+                self._cache_user_prompt(name, template)
+                logger.debug(f"Loaded user prompt from config: {name}")
+            except Exception as e:
+                logger.error(f"Error loading user prompt {name}: {e}")
 
     def _load_message_indexes(self) -> None:
         """Load message indexes from config."""
@@ -195,18 +176,17 @@ class ConfigPromptLibrary(BasePromptLibrary):
         """
         return self._get_cached_system_prompt(name)
 
-    def get_user_prompt(self, name: str, index: int = 0, **kwargs) -> Optional[PromptTemplate]:
-        """Get a user prompt by name and index.
+    def get_user_prompt(self, name: str, **kwargs) -> Optional[PromptTemplate]:
+        """Get a user prompt by name.
 
         Args:
             name: User prompt name
-            index: Prompt index (default: 0)
             **kwargs: Additional arguments (unused)
 
         Returns:
             PromptTemplate if found, None otherwise
         """
-        return self._get_cached_user_prompt(name, index)
+        return self._get_cached_user_prompt(name)
 
     def get_message_index(self, name: str, **kwargs) -> Optional[MessageIndex]:
         """Get a message index by name.
@@ -236,7 +216,6 @@ class ConfigPromptLibrary(BasePromptLibrary):
         self,
         prompt_name: str,
         prompt_type: str = "user",
-        index: int = 0,
         **kwargs
     ) -> List[RAGConfig]:
         """Get RAG configurations for a specific prompt.
@@ -246,7 +225,6 @@ class ConfigPromptLibrary(BasePromptLibrary):
         Args:
             prompt_name: Prompt name
             prompt_type: Type of prompt ("user" or "system")
-            index: Prompt index (for user prompts)
             **kwargs: Additional arguments (unused)
 
         Returns:
@@ -256,7 +234,7 @@ class ConfigPromptLibrary(BasePromptLibrary):
         if prompt_type == "system":
             template = self.get_system_prompt(prompt_name)
         else:
-            template = self.get_user_prompt(prompt_name, index)
+            template = self.get_user_prompt(prompt_name)
 
         if template is None:
             return []
@@ -291,16 +269,15 @@ class ConfigPromptLibrary(BasePromptLibrary):
         self._cache_system_prompt(name, template)
         logger.debug(f"Added/updated system prompt: {name}")
 
-    def add_user_prompt(self, name: str, index: int, template: PromptTemplate) -> None:
+    def add_user_prompt(self, name: str, template: PromptTemplate) -> None:
         """Add or update a user prompt.
 
         Args:
             name: User prompt name
-            index: Prompt index
             template: Prompt template to add
         """
-        self._cache_user_prompt(name, index, template)
-        logger.debug(f"Added/updated user prompt: {name}[{index}]")
+        self._cache_user_prompt(name, template)
+        logger.debug(f"Added/updated user prompt: {name}")
 
     def add_message_index(self, name: str, message_index: MessageIndex) -> None:
         """Add or update a message index.
@@ -330,25 +307,13 @@ class ConfigPromptLibrary(BasePromptLibrary):
         """
         return list(self._system_prompt_cache.keys())
 
-    def list_user_prompts(self, name: Optional[str] = None) -> List[str]:
+    def list_user_prompts(self) -> List[str]:
         """List available user prompts.
 
-        Args:
-            name: If provided, list indices for this specific prompt
-
         Returns:
-            List of user prompt names or indices
+            List of user prompt names
         """
-        if name is None:
-            # Return unique prompt names
-            return list(set(key[0] for key in self._user_prompt_cache.keys()))
-        else:
-            # Return indices for this specific prompt
-            indices = [
-                str(key[1]) for key in self._user_prompt_cache.keys()
-                if key[0] == name
-            ]
-            return sorted(indices, key=int)
+        return list(self._user_prompt_cache.keys())
 
     def list_message_indexes(self) -> List[str]:
         """List all available message index names.

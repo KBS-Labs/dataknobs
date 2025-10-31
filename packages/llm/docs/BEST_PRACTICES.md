@@ -142,11 +142,11 @@ prompts/
 │   ├── base_assistant.yaml
 │   ├── code_reviewer.yaml
 │   └── customer_support.yaml
-├── user/             # User prompts (indexed)
-│   ├── ask_question_0.yaml
-│   ├── ask_question_1.yaml
-│   ├── submit_code_0.yaml
-│   └── follow_up_0.yaml
+├── user/             # User prompts (by name)
+│   ├── initial_question.yaml
+│   ├── detailed_question.yaml
+│   ├── submit_code.yaml
+│   └── follow_up.yaml
 ├── rag/              # RAG configurations
 │   ├── docs_search.yaml
 │   ├── code_search.yaml
@@ -161,10 +161,10 @@ prompts/
 - `customer_support.yaml`
 - `data_analyst.yaml`
 
-**User prompts**: `{action}_{index}.yaml`
-- `ask_question_0.yaml` - Basic question
-- `ask_question_1.yaml` - Detailed question
-- `submit_code_0.yaml`
+**User prompts**: `{descriptive_name}.yaml`
+- `initial_question.yaml` - Basic question
+- `detailed_question.yaml` - Detailed question with context
+- `submit_code.yaml` - Code submission prompt
 
 **RAG configs**: `{source}_search.yaml`
 - `docs_search.yaml`

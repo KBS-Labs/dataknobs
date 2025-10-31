@@ -35,14 +35,14 @@ def create_test_prompts(prompt_dir: Path):
     # User prompts
     user_dir = prompt_dir / "user"
     user_dir.mkdir(parents=True, exist_ok=True)
-    (user_dir / "question_0.yaml").write_text(
+    (user_dir / "question.yaml").write_text(
         yaml.dump({"template": "What is {{topic}}?"})
     )
 
     # Validation prompts - one that will pass, one that will fail
     # Important: Don't use the word "VALID" in the template itself, so EchoProvider
     # will only return "VALID" if it was in the response being validated
-    (user_dir / "validate_response_0.yaml").write_text(
+    (user_dir / "validate_response.yaml").write_text(
         yaml.dump({"template": "Check this response: {{response}}"})
     )
 
