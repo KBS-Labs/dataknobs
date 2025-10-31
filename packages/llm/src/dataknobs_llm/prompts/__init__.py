@@ -75,6 +75,7 @@ from .implementations import (
     FileSystemPromptLibrary,
     ConfigPromptLibrary,
     CompositePromptLibrary,
+    VersionedPromptLibrary,
 )
 
 # Prompt builders
@@ -86,6 +87,20 @@ from .builders import (
 # Template composition
 from .utils import (
     TemplateComposer,
+)
+
+# Versioning and A/B testing
+from .versioning import (
+    VersionManager,
+    ABTestManager,
+    MetricsCollector,
+    PromptVersion,
+    PromptExperiment,
+    PromptVariant,
+    PromptMetrics,
+    VersioningError,
+    VersionStatus,
+    MetricEvent,
 )
 
 # Version info
@@ -131,6 +146,7 @@ __all__ = [
     "FileSystemPromptLibrary",
     "ConfigPromptLibrary",
     "CompositePromptLibrary",
+    "VersionedPromptLibrary",
 
     # Builders
     "PromptBuilder",
@@ -138,4 +154,16 @@ __all__ = [
 
     # Template composition
     "TemplateComposer",
+
+    # Versioning and A/B testing
+    "VersionManager",
+    "ABTestManager",
+    "MetricsCollector",
+    "PromptVersion",
+    "PromptExperiment",
+    "PromptVariant",
+    "PromptMetrics",
+    "VersioningError",
+    "VersionStatus",
+    "MetricEvent",
 ]
