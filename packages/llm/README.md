@@ -70,15 +70,74 @@ The LLM package provides comprehensive integration with the dataknobs-fsm state 
 
 ### Conversation Flows
 
-Build FSM-based conversations using the conversation flow adapter:
+Build structured conversation flows using FSM:
 
 ```python
-from dataknobs_llm.conversations import ConversationManager
-from dataknobs_llm.fsm_integration import ConversationFlow, FlowState
+from dataknobs_llm.conversations.flow import (
+    ConversationFlow,
+    FlowState,
+    keyword_condition,
+    always
+)
 
-# Note: Full ConversationFlow adapter coming soon
-# For now, use workflow patterns directly
+# Define conversation flow
+flow = ConversationFlow(
+    name="customer_support",
+    initial_state="greeting",
+    states={
+        "greeting": FlowState(
+            prompt_name="support_greeting",
+            transitions={
+                "need_help": "collect_issue",
+                "just_browsing": "end"
+            },
+            transition_conditions={
+                "need_help": keyword_condition(["help", "issue", "problem"]),
+                "just_browsing": keyword_condition(["browse", "look"])
+            }
+        ),
+        "collect_issue": FlowState(
+            prompt_name="issue_details",
+            transitions={
+                "technical": "tech_support",
+                "billing": "billing_support"
+            },
+            transition_conditions={
+                "technical": keyword_condition(["bug", "error", "broken"]),
+                "billing": keyword_condition(["payment", "charge", "invoice"])
+            },
+            max_loops=3  # Prevent infinite loops
+        ),
+        "tech_support": FlowState(
+            prompt_name="tech_support_response",
+            transitions={"done": "end"},
+            transition_conditions={"done": always()}
+        ),
+        "billing_support": FlowState(
+            prompt_name="billing_support_response",
+            transitions={"done": "end"},
+            transition_conditions={"done": always()}
+        ),
+        "end": FlowState(
+            prompt_name="goodbye",
+            transitions={},
+            transition_conditions={}
+        )
+    }
+)
+
+# Execute flow with ConversationManager
+async for node in manager.execute_flow(flow):
+    print(f"State: {node.metadata['state']}")
+    print(f"Response: {node.content}")
 ```
+
+**Features:**
+- State-based conversation management
+- Conditional transitions based on user input
+- Loop detection and prevention
+- Multiple conversation paths
+- Integration with prompt library
 
 ### Workflow Patterns
 
@@ -126,11 +185,48 @@ resource = LLMResource(
 )
 ```
 
+### Choosing Between Conversation Flows and FSM Integration
+
+The LLM package provides two approaches for FSM-based workflows:
+
+| Aspect | **Conversation Flows** (`conversations/flow/`) | **FSM Integration** (`fsm_integration/`) |
+|--------|-----------------------------------------------|------------------------------------------|
+| **Level** | High-level conversation orchestration | Low-level FSM+LLM patterns |
+| **Best For** | Dialog management, multi-turn conversations | RAG pipelines, agent systems, LLM workflows |
+| **Integration** | FSM + ConversationManager | Direct FSM with LLM providers |
+| **Input** | `ConversationFlow` definitions | FSM configs with LLM transforms |
+| **Output** | `ConversationNode` messages in conversation tree | FSM execution results |
+| **State Management** | Automatic conversation history tracking | Manual state management |
+| **Use Cases** | - Customer support flows<br>- Sales qualification<br>- Multi-step interviews<br>- Guided conversations | - RAG document retrieval<br>- Chain-of-thought reasoning<br>- Multi-agent orchestration<br>- Complex LLM pipelines |
+| **Ease of Use** | ✅ Simpler, declarative | ⚙️ More control, requires FSM knowledge |
+| **Example** | `conversation_flow_example.py` | `fsm_conversation.py` |
+
+**Quick Decision Guide:**
+
+- **Use Conversation Flows** when you need:
+  - Structured multi-turn conversations with users
+  - Intent-based routing between conversation states
+  - Automatic conversation history management
+  - Integration with the ConversationManager
+
+- **Use FSM Integration** when you need:
+  - Complex LLM processing pipelines (RAG, chain-of-thought)
+  - Fine-grained control over state transitions
+  - Custom LLM workflow patterns
+  - Agent-based systems with multiple LLM calls
+
+Both approaches use the same underlying FSM engine, so you can even combine them in the same application!
+
 ## Examples
 
 The `examples/` directory contains:
 
-- **fsm_conversation.py** - Complete FSM-based conversation system
+- **conversation_flow_example.py** - Conversation flow demonstrations
+  - Customer support flow with intent routing
+  - Sales qualification flow
+  - State transitions and conditions
+  - Loop detection
+- **fsm_conversation.py** - Low-level FSM-based conversation system
   - Multi-stage conversation flow
   - Intent detection and routing
   - Context management
@@ -150,7 +246,11 @@ dataknobs_llm/
 │   └── rendering/         # Template rendering
 ├── conversations/         # Conversation management
 │   ├── manager.py         # ConversationManager
-│   └── storage.py         # Conversation storage
+│   ├── storage.py         # Conversation storage
+│   └── flow/              # Conversation flows (NEW)
+│       ├── flow.py        # ConversationFlow and FlowState
+│       ├── adapter.py     # FSM adapter
+│       └── conditions.py  # Transition conditions
 └── fsm_integration/       # FSM integration (migrated from dataknobs-fsm)
     ├── workflows.py       # RAG, chain-of-thought, agent patterns
     ├── resources.py       # LLM resources for FSM

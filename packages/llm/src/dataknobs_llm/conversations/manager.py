@@ -535,6 +535,114 @@ class ConversationManager:
         # Persist
         await self._save_state()
 
+    async def execute_flow(
+        self,
+        flow: "ConversationFlow",
+        initial_params: Optional[Dict[str, Any]] = None
+    ) -> AsyncIterator[ConversationNode]:
+        """Execute a conversation flow using FSM.
+
+        This method executes a predefined conversation flow, yielding
+        conversation nodes as the flow progresses through states.
+
+        Args:
+            flow: ConversationFlow definition
+            initial_params: Optional initial parameters for the flow
+
+        Yields:
+            ConversationNode for each state in the flow
+
+        Raises:
+            ValueError: If flow execution fails
+
+        Example:
+            >>> from dataknobs_llm.conversations.flow import (
+            ...     ConversationFlow, FlowState,
+            ...     keyword_condition
+            ... )
+            >>>
+            >>> # Define flow
+            >>> flow = ConversationFlow(
+            ...     name="support",
+            ...     initial_state="greeting",
+            ...     states={
+            ...         "greeting": FlowState(
+            ...             prompt_name="support_greeting",
+            ...             transitions={
+            ...                 "help": "collect_issue",
+            ...                 "browse": "end"
+            ...             },
+            ...             transition_conditions={
+            ...                 "help": keyword_condition(["help", "issue"]),
+            ...                 "browse": keyword_condition(["browse", "look"])
+            ...             }
+            ...         )
+            ...     }
+            ... )
+            >>>
+            >>> # Execute flow
+            >>> async for node in manager.execute_flow(flow):
+            ...     print(f"State: {node.metadata.get('state')}")
+            ...     print(f"Response: {node.content}")
+        """
+        from dataknobs_llm.conversations.flow import ConversationFlowAdapter
+
+        if not self.state:
+            raise ValueError("No conversation state")
+
+        # Create adapter
+        adapter = ConversationFlowAdapter(
+            flow=flow,
+            prompt_builder=self.prompt_builder,
+            llm=self.llm
+        )
+
+        # Execute flow and yield nodes
+        data = initial_params or {}
+        data["conversation_id"] = self.state.conversation_id
+
+        try:
+            # Execute flow (this will internally use FSM)
+            result = await adapter.execute(data)
+
+            # Convert flow history to conversation nodes
+            for state_name, response in adapter.execution_state.history:
+                # Create node for this state's response
+                node = ConversationNode(
+                    node_id=str(uuid.uuid4()),  # Temporary ID
+                    role="assistant",
+                    content=response,
+                    timestamp=datetime.now(),
+                    metadata={
+                        "state": state_name,
+                        "flow_name": flow.name,
+                        "flow_execution": True
+                    }
+                )
+
+                # Add to conversation tree
+                current_tree_node = get_node_by_id(
+                    self.state.message_tree,
+                    self.state.current_node_id
+                )
+
+                new_tree_node = Tree(node)
+                current_tree_node.add_child(new_tree_node)
+                node_id = calculate_node_id(new_tree_node)
+                new_tree_node.data.node_id = node_id
+
+                self.state.current_node_id = node_id
+                self.state.updated_at = datetime.now()
+
+                await self._save_state()
+
+                yield node
+
+        except Exception as e:
+            import logging
+            logging.error(f"Flow execution failed: {e}")
+            raise ValueError(f"Flow execution failed: {str(e)}") from e
+
     async def get_history(self) -> List[LLMMessage]:
         """Get conversation history from root to current position.
 
