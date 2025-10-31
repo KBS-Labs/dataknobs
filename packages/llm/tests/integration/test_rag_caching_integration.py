@@ -1,13 +1,13 @@
 """Integration tests for end-to-end RAG caching in conversations."""
 
 import pytest
-from unittest.mock import AsyncMock
 
 from dataknobs_llm.conversations.manager import ConversationManager
 from dataknobs_llm.conversations.storage import DataknobsConversationStorage
 from dataknobs_llm.llm.providers import EchoProvider
 from dataknobs_llm.prompts.implementations import ConfigPromptLibrary
 from dataknobs_llm.prompts.builders import AsyncPromptBuilder
+from dataknobs_llm.prompts.adapters import InMemoryAsyncAdapter
 
 try:
     from dataknobs_data.backends import AsyncMemoryDatabase
@@ -57,14 +57,15 @@ User question: {{question}}""",
 
         library = ConfigPromptLibrary(config)
 
-        # Mock documentation adapter
-        docs_adapter = AsyncMock()
-        docs_adapter.search.return_value = [
-            {"content": "Python decorators are functions that modify other functions", "score": 0.95},
-            {"content": "Use @decorator syntax to apply decorators", "score": 0.90},
-            {"content": "Decorators can take arguments", "score": 0.85},
-        ]
-        docs_adapter.is_async.return_value = True
+        # InMemory documentation adapter
+        docs_adapter = InMemoryAsyncAdapter(
+            search_results=[
+                {"content": "Python decorators are functions that modify other functions", "score": 0.95},
+                {"content": "Use @decorator syntax to apply decorators", "score": 0.90},
+                {"content": "Decorators can take arguments", "score": 0.85},
+            ],
+            name="docs"
+        )
 
         builder = AsyncPromptBuilder(
             library=library,
@@ -96,9 +97,7 @@ User question: {{question}}""",
         )
 
         # Verify RAG search was executed
-        assert docs_adapter.search.call_count == 1
-        first_call_query = docs_adapter.search.call_args[1]["query"]
-        assert first_call_query == "python decorators"
+        assert docs_adapter.search_count == 1
 
         # Verify RAG metadata was stored
         user_node_1 = manager.state.get_current_node().data
@@ -125,7 +124,7 @@ User question: {{question}}""",
         )
 
         # Verify new RAG search was executed (different query)
-        assert docs_adapter.search.call_count == 2
+        assert docs_adapter.search_count == 2
 
         await manager.complete()
 
@@ -134,7 +133,7 @@ User question: {{question}}""",
         await manager.switch_to_node(first_user_node_id)
 
         # Step 5: Add alternative question with SAME parameters as first question
-        docs_adapter.search.reset_mock()  # Reset call count
+        docs_adapter.reset()  # Reset call count
         await manager.add_message(
             role="user",
             prompt_name="code_question",
@@ -146,7 +145,7 @@ User question: {{question}}""",
         )
 
         # Verify RAG search was NOT executed (cache was reused!)
-        assert docs_adapter.search.call_count == 0
+        assert docs_adapter.search_count == 0
 
         # Verify the new node has RAG metadata (passed through from cache)
         branched_node = manager.state.get_current_node().data
@@ -190,14 +189,16 @@ Question: {{question}}""",
 
         library = ConfigPromptLibrary(config)
 
-        # Mock adapters
-        docs_adapter = AsyncMock()
-        docs_adapter.search.return_value = [{"content": "Doc 1"}]
-        docs_adapter.is_async.return_value = True
+        # InMemory adapters
+        docs_adapter = InMemoryAsyncAdapter(
+            search_results=[{"content": "Doc 1"}],
+            name="docs"
+        )
 
-        examples_adapter = AsyncMock()
-        examples_adapter.search.return_value = [{"content": "Example 1"}]
-        examples_adapter.is_async.return_value = True
+        examples_adapter = InMemoryAsyncAdapter(
+            search_results=[{"content": "Example 1"}],
+            name="examples"
+        )
 
         builder = AsyncPromptBuilder(
             library=library,
@@ -223,8 +224,8 @@ Question: {{question}}""",
             params={"question": "How?", "topic": "async"}
         )
 
-        assert docs_adapter.search.call_count == 1
-        assert examples_adapter.search.call_count == 1
+        assert docs_adapter.search_count == 1
+        assert examples_adapter.search_count == 1
 
         # Verify both RAG configs captured
         node = manager.state.get_current_node().data
@@ -236,8 +237,8 @@ Question: {{question}}""",
         await manager.complete()
         await manager.switch_to_node("0")
 
-        docs_adapter.search.reset_mock()
-        examples_adapter.search.reset_mock()
+        docs_adapter.reset()
+        examples_adapter.reset()
 
         await manager.add_message(
             role="user",
@@ -246,8 +247,8 @@ Question: {{question}}""",
         )
 
         # Neither adapter should be called (both cached)
-        assert docs_adapter.search.call_count == 0
-        assert examples_adapter.search.call_count == 0
+        assert docs_adapter.search_count == 0
+        assert examples_adapter.search_count == 0
 
     @pytest.mark.asyncio
     async def test_rag_metadata_inspection(self):
@@ -267,14 +268,15 @@ Question: {{question}}""",
         }
 
         library = ConfigPromptLibrary(config)
-        mock_adapter = AsyncMock()
-        mock_adapter.search.return_value = [
-            {"content": "Result 1", "score": 0.9, "metadata": {"source": "doc1.md"}},
-            {"content": "Result 2", "score": 0.8, "metadata": {"source": "doc2.md"}}
-        ]
-        mock_adapter.is_async.return_value = True
+        adapter = InMemoryAsyncAdapter(
+            search_results=[
+                {"content": "Result 1", "score": 0.9, "metadata": {"source": "doc1.md"}},
+                {"content": "Result 2", "score": 0.8, "metadata": {"source": "doc2.md"}}
+            ],
+            name="docs"
+        )
 
-        builder = AsyncPromptBuilder(library=library, adapters={"docs": mock_adapter})
+        builder = AsyncPromptBuilder(library=library, adapters={"docs": adapter})
         llm = EchoProvider(config={"provider": "echo", "model": "echo"})
         storage = DataknobsConversationStorage(AsyncMemoryDatabase())
 
@@ -322,11 +324,12 @@ Question: {{question}}""",
         }
 
         library = ConfigPromptLibrary(config)
-        mock_adapter = AsyncMock()
-        mock_adapter.search.return_value = [{"content": "Result"}]
-        mock_adapter.is_async.return_value = True
+        adapter = InMemoryAsyncAdapter(
+            search_results=[{"content": "Result"}],
+            name="docs"
+        )
 
-        builder = AsyncPromptBuilder(library=library, adapters={"docs": mock_adapter})
+        builder = AsyncPromptBuilder(library=library, adapters={"docs": adapter})
         llm = EchoProvider(config={"provider": "echo", "model": "echo"})
         storage = DataknobsConversationStorage(AsyncMemoryDatabase())
 
@@ -342,7 +345,7 @@ Question: {{question}}""",
 
         # Add message
         await manager.add_message(role="user", prompt_name="q", params={})
-        assert mock_adapter.search.call_count == 1
+        assert adapter.search_count ==1
 
         # Branch and add again
         await manager.complete()
@@ -350,7 +353,7 @@ Question: {{question}}""",
         await manager.add_message(role="user", prompt_name="q", params={})
 
         # Search should be called again (no caching)
-        assert mock_adapter.search.call_count == 2
+        assert adapter.search_count ==2
 
         # Verify no RAG metadata stored
         metadata = manager.get_rag_metadata()

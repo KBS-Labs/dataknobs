@@ -1,11 +1,13 @@
 """Tests for RAG caching functionality in prompt builders."""
 
 import pytest
-from unittest.mock import AsyncMock, Mock
 
 from dataknobs_llm.prompts.builders import AsyncPromptBuilder, PromptBuilder
 from dataknobs_llm.prompts.implementations import ConfigPromptLibrary
-from dataknobs_llm.prompts.adapters import AsyncDictResourceAdapter, DictResourceAdapter
+from dataknobs_llm.prompts.adapters import (
+    InMemoryAdapter,
+    InMemoryAsyncAdapter,
+)
 
 
 class TestRAGMetadataCapture:
@@ -31,17 +33,18 @@ class TestRAGMetadataCapture:
 
         library = ConfigPromptLibrary(config)
 
-        # Mock adapter that returns test results
-        mock_adapter = AsyncMock()
-        mock_adapter.search.return_value = [
-            {"content": "Result 1", "score": 0.9},
-            {"content": "Result 2", "score": 0.8},
-        ]
-        mock_adapter.is_async.return_value = True
+        # InMemory adapter that returns test results
+        adapter = InMemoryAsyncAdapter(
+            search_results=[
+                {"content": "Result 1", "score": 0.9},
+                {"content": "Result 2", "score": 0.8},
+            ],
+            name="docs"
+        )
 
         builder = AsyncPromptBuilder(
             library=library,
-            adapters={"docs": mock_adapter}
+            adapters={"docs": adapter}
         )
 
         # Render with metadata capture
@@ -85,17 +88,18 @@ class TestRAGMetadataCapture:
 
         library = ConfigPromptLibrary(config)
 
-        # Mock adapter that returns test results
-        mock_adapter = Mock()
-        mock_adapter.search.return_value = [
-            {"content": "Result 1", "score": 0.9},
-            {"content": "Result 2", "score": 0.8},
-        ]
-        mock_adapter.is_async.return_value = False
+        # InMemory adapter that returns test results
+        adapter = InMemoryAdapter(
+            search_results=[
+                {"content": "Result 1", "score": 0.9},
+                {"content": "Result 2", "score": 0.8},
+            ],
+            name="docs"
+        )
 
         builder = PromptBuilder(
             library=library,
-            adapters={"docs": mock_adapter}
+            adapters={"docs": adapter}
         )
 
         # Render with metadata capture
@@ -135,13 +139,14 @@ class TestRAGMetadataCapture:
         }
 
         library = ConfigPromptLibrary(config)
-        mock_adapter = Mock()
-        mock_adapter.search.return_value = [{"content": "Result 1"}]
-        mock_adapter.is_async.return_value = False
+        adapter = InMemoryAdapter(
+            search_results=[{"content": "Result 1"}],
+            name="docs"
+        )
 
         builder = PromptBuilder(
             library=library,
-            adapters={"docs": mock_adapter}
+            adapters={"docs": adapter}
         )
 
         # Render without requesting metadata
@@ -174,17 +179,19 @@ class TestRAGMetadataCapture:
 
         library = ConfigPromptLibrary(config)
 
-        mock_docs = Mock()
-        mock_docs.search.return_value = [{"content": "Doc 1"}]
-        mock_docs.is_async.return_value = False
+        docs_adapter = InMemoryAdapter(
+            search_results=[{"content": "Doc 1"}],
+            name="docs"
+        )
 
-        mock_examples = Mock()
-        mock_examples.search.return_value = [{"content": "Example 1"}]
-        mock_examples.is_async.return_value = False
+        examples_adapter = InMemoryAdapter(
+            search_results=[{"content": "Example 1"}],
+            name="examples"
+        )
 
         builder = PromptBuilder(
             library=library,
-            adapters={"docs": mock_docs, "examples": mock_examples}
+            adapters={"docs": docs_adapter, "examples": examples_adapter}
         )
 
         result = builder.render_system_prompt("test", return_rag_metadata=True)
@@ -218,13 +225,14 @@ class TestRAGCacheReuse:
         }
 
         library = ConfigPromptLibrary(config)
-        mock_adapter = Mock()
-        mock_adapter.search.return_value = [{"content": "Original result"}]
-        mock_adapter.is_async.return_value = False
+        adapter = InMemoryAdapter(
+            search_results=[{"content": "Original result"}],
+            name="docs"
+        )
 
         builder = PromptBuilder(
             library=library,
-            adapters={"docs": mock_adapter}
+            adapters={"docs": adapter}
         )
 
         # First render - captures metadata
@@ -232,7 +240,7 @@ class TestRAGCacheReuse:
         original_content = result1.content
 
         # Verify search was called
-        assert mock_adapter.search.call_count == 1
+        assert adapter.search_count == 1
 
         # Second render - reuses cached RAG
         result2 = builder.render_system_prompt(
@@ -241,7 +249,7 @@ class TestRAGCacheReuse:
         )
 
         # Verify search was NOT called again
-        assert mock_adapter.search.call_count == 1
+        assert adapter.search_count == 1
 
         # Verify content is identical
         assert result2.content == original_content
@@ -267,13 +275,14 @@ class TestRAGCacheReuse:
         }
 
         library = ConfigPromptLibrary(config)
-        mock_adapter = AsyncMock()
-        mock_adapter.search.return_value = [{"content": "Original result"}]
-        mock_adapter.is_async.return_value = True
+        adapter = InMemoryAsyncAdapter(
+            search_results=[{"content": "Original result"}],
+            name="docs"
+        )
 
         builder = AsyncPromptBuilder(
             library=library,
-            adapters={"docs": mock_adapter}
+            adapters={"docs": adapter}
         )
 
         import asyncio
@@ -284,7 +293,7 @@ class TestRAGCacheReuse:
             original_content = result1.content
 
             # Verify search was called
-            assert mock_adapter.search.call_count == 1
+            assert adapter.search_count == 1
 
             # Second render - reuses cached RAG
             result2 = await builder.render_system_prompt(
@@ -293,7 +302,7 @@ class TestRAGCacheReuse:
             )
 
             # Verify search was NOT called again
-            assert mock_adapter.search.call_count == 1
+            assert adapter.search_count == 1
 
             # Verify content is identical
             assert result2.content == original_content
@@ -321,11 +330,12 @@ class TestRAGCacheReuse:
         }
 
         library = ConfigPromptLibrary(config)
-        mock_adapter = Mock()
-        mock_adapter.search.return_value = [{"content": "Result"}]
-        mock_adapter.is_async.return_value = False
+        adapter = InMemoryAdapter(
+            search_results=[{"content": "Result"}],
+            name="docs"
+        )
 
-        builder = PromptBuilder(library=library, adapters={"docs": mock_adapter})
+        builder = PromptBuilder(library=library, adapters={"docs": adapter})
 
         # First render with metadata capture
         result1 = builder.render_system_prompt("test", return_rag_metadata=True)
@@ -363,11 +373,12 @@ class TestRAGCacheMatchingLogic:
         }
 
         library = ConfigPromptLibrary(config)
-        mock_adapter = Mock()
-        mock_adapter.search.return_value = [{"content": "Result"}]
-        mock_adapter.is_async.return_value = False
+        adapter = InMemoryAdapter(
+            search_results=[{"content": "Result"}],
+            name="docs"
+        )
 
-        builder = PromptBuilder(library=library, adapters={"docs": mock_adapter})
+        builder = PromptBuilder(library=library, adapters={"docs": adapter})
 
         # Render and capture metadata
         result = builder.render_system_prompt("test", return_rag_metadata=True)
@@ -396,15 +407,16 @@ class TestRAGCacheMatchingLogic:
         }
 
         library = ConfigPromptLibrary(config)
-        mock_adapter = Mock()
-        mock_adapter.search.return_value = [{"content": "Result"}]
-        mock_adapter.is_async.return_value = False
+        adapter = InMemoryAdapter(
+            search_results=[{"content": "Result"}],
+            name="docs"
+        )
 
-        builder = PromptBuilder(library=library, adapters={"docs": mock_adapter})
+        builder = PromptBuilder(library=library, adapters={"docs": adapter})
 
         # Render twice
         result1 = builder.render_system_prompt("test", return_rag_metadata=True)
-        mock_adapter.search.reset_mock()
+        adapter.reset()
         result2 = builder.render_system_prompt("test", return_rag_metadata=True)
 
         # Verify hashes are identical
@@ -435,11 +447,12 @@ class TestRAGCacheMatchingLogic:
             }
         })
 
-        mock_adapter = Mock()
-        mock_adapter.search.return_value = [{"content": "Result"}]
-        mock_adapter.is_async.return_value = False
+        adapter = InMemoryAdapter(
+            search_results=[{"content": "Result"}],
+            name="docs"
+        )
 
-        builder = PromptBuilder(library=library, adapters={"docs": mock_adapter})
+        builder = PromptBuilder(library=library, adapters={"docs": adapter})
 
         result1 = builder.render_system_prompt("test1", return_rag_metadata=True)
         result2 = builder.render_system_prompt("test2", return_rag_metadata=True)
@@ -470,14 +483,15 @@ class TestRAGCacheMatchingLogic:
         }
 
         library = ConfigPromptLibrary(config)
-        mock_adapter = Mock()
-        mock_adapter.search.return_value = [
-            {"content": "Item 1"},
-            {"content": "Item 2"}
-        ]
-        mock_adapter.is_async.return_value = False
+        adapter = InMemoryAdapter(
+            search_results=[
+                {"content": "Item 1"},
+                {"content": "Item 2"}
+            ],
+            name="docs"
+        )
 
-        builder = PromptBuilder(library=library, adapters={"docs": mock_adapter})
+        builder = PromptBuilder(library=library, adapters={"docs": adapter})
 
         # Capture metadata
         result1 = builder.render_system_prompt("test", return_rag_metadata=True)
@@ -512,11 +526,12 @@ class TestRAGCachingWithParameters:
         }
 
         library = ConfigPromptLibrary(config)
-        mock_adapter = Mock()
-        mock_adapter.search.return_value = [{"content": "Result"}]
-        mock_adapter.is_async.return_value = False
+        adapter = InMemoryAdapter(
+            search_results=[{"content": "Result"}],
+            name="docs"
+        )
 
-        builder = PromptBuilder(library=library, adapters={"docs": mock_adapter})
+        builder = PromptBuilder(library=library, adapters={"docs": adapter})
 
         # Render with python
         result1 = builder.render_system_prompt(

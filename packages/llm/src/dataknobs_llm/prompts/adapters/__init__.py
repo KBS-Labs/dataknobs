@@ -14,6 +14,10 @@ from .dataknobs_backend_adapter import (
     DataknobsBackendAdapter,
     AsyncDataknobsBackendAdapter,
 )
+from .inmemory_adapter import (
+    InMemoryAdapter,
+    InMemoryAsyncAdapter,
+)
 
 __all__ = [
     "ResourceAdapterBase",
@@ -24,4 +28,6 @@ __all__ = [
     "AsyncDictResourceAdapter",
     "DataknobsBackendAdapter",
     "AsyncDataknobsBackendAdapter",
+    "InMemoryAdapter",
+    "InMemoryAsyncAdapter",
 ]

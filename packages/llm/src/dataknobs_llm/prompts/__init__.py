@@ -30,7 +30,6 @@ Quick Start:
     # Render a prompt
     result = builder.render_user_prompt(
         'analyze_code',
-        index=0,
         params={'language': 'python', 'code': code}
     )
 
@@ -59,6 +58,8 @@ from .adapters import (
     AsyncDictResourceAdapter,
     DataknobsBackendAdapter,
     AsyncDataknobsBackendAdapter,
+    InMemoryAdapter,
+    InMemoryAsyncAdapter,
 )
 
 # Template rendering
@@ -117,6 +118,8 @@ __all__ = [
     "AsyncDictResourceAdapter",
     "DataknobsBackendAdapter",
     "AsyncDataknobsBackendAdapter",
+    "InMemoryAdapter",
+    "InMemoryAsyncAdapter",
 
     # Rendering
     "TemplateRenderer",

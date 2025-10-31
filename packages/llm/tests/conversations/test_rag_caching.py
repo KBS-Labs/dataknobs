@@ -1,13 +1,13 @@
 """Tests for RAG caching in ConversationManager."""
 
 import pytest
-from unittest.mock import AsyncMock
 
 from dataknobs_llm.conversations.manager import ConversationManager
 from dataknobs_llm.conversations.storage import DataknobsConversationStorage
 from dataknobs_llm.llm.providers import EchoProvider
 from dataknobs_llm.prompts.implementations import ConfigPromptLibrary
 from dataknobs_llm.prompts.builders import AsyncPromptBuilder
+from dataknobs_llm.prompts.adapters import InMemoryAsyncAdapter
 
 try:
     from dataknobs_data.backends import AsyncMemoryDatabase
@@ -50,16 +50,17 @@ class TestConversationRAGMetadataStorage:
 
         library = ConfigPromptLibrary(config)
 
-        # Mock adapter
-        mock_adapter = AsyncMock()
-        mock_adapter.search.return_value = [
-            {"content": "Python is a programming language", "score": 0.9}
-        ]
-        mock_adapter.is_async.return_value = True
+        # InMemory adapter
+        adapter = InMemoryAsyncAdapter(
+            search_results=[
+                {"content": "Python is a programming language", "score": 0.9}
+            ],
+            name="docs"
+        )
 
         builder = AsyncPromptBuilder(
             library=library,
-            adapters={"docs": mock_adapter}
+            adapters={"docs": adapter}
         )
 
         llm = EchoProvider(config={"provider": "echo", "model": "echo"})
@@ -75,12 +76,12 @@ class TestConversationRAGMetadataStorage:
             reuse_rag_on_branch=False  # Disable reuse for now
         )
 
-        return manager, mock_adapter
+        return manager, adapter
 
     @pytest.mark.asyncio
     async def test_rag_metadata_stored_in_node(self, manager_with_caching):
         """Test that RAG metadata is stored in conversation node metadata."""
-        manager, mock_adapter = manager_with_caching
+        manager, adapter =manager_with_caching
 
         # Add message with RAG
         await manager.add_message(
@@ -127,11 +128,12 @@ class TestConversationRAGMetadataStorage:
         }
 
         library = ConfigPromptLibrary(config)
-        mock_adapter = AsyncMock()
-        mock_adapter.search.return_value = [{"content": "Result"}]
-        mock_adapter.is_async.return_value = True
+        adapter = InMemoryAsyncAdapter(
+            search_results=[{"content": "Result"}],
+            name="docs"
+        )
 
-        builder = AsyncPromptBuilder(library=library, adapters={"docs": mock_adapter})
+        builder = AsyncPromptBuilder(library=library, adapters={"docs": adapter})
         llm = EchoProvider(config={"provider": "echo", "model": "echo"})
         storage = DataknobsConversationStorage(AsyncMemoryDatabase())
 
@@ -178,11 +180,12 @@ class TestConversationRAGCacheReuse:
         }
 
         library = ConfigPromptLibrary(config)
-        mock_adapter = AsyncMock()
-        mock_adapter.search.return_value = [{"content": "Cached result", "score": 0.9}]
-        mock_adapter.is_async.return_value = True
+        adapter = InMemoryAsyncAdapter(
+            search_results=[{"content": "Cached result", "score": 0.9}],
+            name="docs"
+        )
 
-        builder = AsyncPromptBuilder(library=library, adapters={"docs": mock_adapter})
+        builder = AsyncPromptBuilder(library=library, adapters={"docs": adapter})
         llm = EchoProvider(config={"provider": "echo", "model": "echo"})
         storage = DataknobsConversationStorage(AsyncMemoryDatabase())
 
@@ -195,12 +198,12 @@ class TestConversationRAGCacheReuse:
             reuse_rag_on_branch=True  # Enable reuse
         )
 
-        return manager, mock_adapter
+        return manager, adapter
 
     @pytest.mark.asyncio
     async def test_rag_cache_reused_on_branch(self, manager_with_reuse):
         """Test that RAG cache is reused when branching."""
-        manager, mock_adapter = manager_with_reuse
+        manager, adapter =manager_with_reuse
 
         # Add first message with RAG
         await manager.add_message(
@@ -211,7 +214,7 @@ class TestConversationRAGCacheReuse:
         await manager.complete()
 
         # Verify search was called
-        assert mock_adapter.search.call_count == 1
+        assert adapter.search_count ==1
 
         # Switch back to system message
         await manager.switch_to_node("")
@@ -224,7 +227,7 @@ class TestConversationRAGCacheReuse:
         )
 
         # Verify search was NOT called again (cache reused)
-        assert mock_adapter.search.call_count == 1
+        assert adapter.search_count ==1
 
     @pytest.mark.asyncio
     async def test_rag_cache_not_reused_when_disabled(self):
@@ -246,11 +249,12 @@ class TestConversationRAGCacheReuse:
         }
 
         library = ConfigPromptLibrary(config)
-        mock_adapter = AsyncMock()
-        mock_adapter.search.return_value = [{"content": "Result"}]
-        mock_adapter.is_async.return_value = True
+        adapter = InMemoryAsyncAdapter(
+            search_results=[{"content": "Result"}],
+            name="docs"
+        )
 
-        builder = AsyncPromptBuilder(library=library, adapters={"docs": mock_adapter})
+        builder = AsyncPromptBuilder(library=library, adapters={"docs": adapter})
         llm = EchoProvider(config={"provider": "echo", "model": "echo"})
         storage = DataknobsConversationStorage(AsyncMemoryDatabase())
 
@@ -267,14 +271,14 @@ class TestConversationRAGCacheReuse:
         # Add message
         await manager.add_message(role="user", prompt_name="question", params={})
         await manager.complete()
-        assert mock_adapter.search.call_count == 1
+        assert adapter.search_count ==1
 
         # Branch and add same message
         await manager.switch_to_node("")
         await manager.add_message(role="user", prompt_name="question", params={})
 
         # Verify search WAS called again (no reuse)
-        assert mock_adapter.search.call_count == 2
+        assert adapter.search_count ==2
 
 
 class TestFindCachedRAG:

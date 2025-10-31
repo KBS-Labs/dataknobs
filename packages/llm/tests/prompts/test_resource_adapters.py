@@ -6,6 +6,8 @@ from dataknobs_llm.prompts import (
     AsyncResourceAdapter,
     ResourceAdapterBase,
     BaseSearchLogic,
+    InMemoryAdapter,
+    InMemoryAsyncAdapter,
 )
 
 
@@ -299,3 +301,186 @@ class TestBaseSearchLogic:
         assert len(deduped) == 2
         ids = [r["id"] for r in deduped]
         assert ids == ["1", "2"]
+
+
+class TestInMemoryAdapter:
+    """Test suite for InMemoryAdapter."""
+
+    def test_initialization_default(self):
+        """Test adapter initializes with empty defaults."""
+        adapter = InMemoryAdapter()
+        assert adapter.name == "inmemory"
+        assert adapter.is_async() is False
+
+    def test_initialization_with_search_results(self):
+        """Test adapter initializes with search results."""
+        results = [
+            {"content": "Result 1", "score": 0.9},
+            {"content": "Result 2", "score": 0.8}
+        ]
+        adapter = InMemoryAdapter(search_results=results, name="test")
+        assert adapter.name == "test"
+
+    def test_search_returns_configured_results(self):
+        """Test search returns the configured results."""
+        results = [
+            {"content": "Python is a programming language", "score": 0.9},
+            {"content": "Python was created by Guido", "score": 0.8}
+        ]
+        adapter = InMemoryAdapter(search_results=results)
+
+        search_results = adapter.search("python")
+        assert len(search_results) == 2
+        assert search_results[0]["content"] == "Python is a programming language"
+        assert search_results[0]["score"] == 0.9
+
+    def test_search_respects_k_parameter(self):
+        """Test search respects k limit."""
+        results = [
+            {"content": f"Result {i}", "score": 1.0 - i*0.1}
+            for i in range(10)
+        ]
+        adapter = InMemoryAdapter(search_results=results)
+
+        search_results = adapter.search("test", k=3)
+        assert len(search_results) == 3
+
+    def test_search_with_empty_results(self):
+        """Test search with no configured results."""
+        adapter = InMemoryAdapter(search_results=[])
+        results = adapter.search("test")
+        assert len(results) == 0
+
+    def test_get_value(self):
+        """Test get_value retrieves from data dict."""
+        adapter = InMemoryAdapter(data={"language": "Python", "version": "3.11"})
+        assert adapter.get_value("language") == "Python"
+        assert adapter.get_value("version") == "3.11"
+
+    def test_get_value_with_default(self):
+        """Test get_value returns default for missing keys."""
+        adapter = InMemoryAdapter(data={"language": "Python"})
+        assert adapter.get_value("missing", default="N/A") == "N/A"
+
+    def test_search_with_min_score_filter(self):
+        """Test search filters by min_score."""
+        results = [
+            {"content": "High score", "score": 0.9},
+            {"content": "Medium score", "score": 0.6},
+            {"content": "Low score", "score": 0.3}
+        ]
+        adapter = InMemoryAdapter(search_results=results)
+
+        filtered = adapter.search("test", min_score=0.5)
+        assert len(filtered) == 2
+        assert all(r["score"] >= 0.5 for r in filtered)
+
+    def test_search_with_metadata(self):
+        """Test search preserves metadata."""
+        results = [
+            {
+                "content": "Result with metadata",
+                "score": 0.9,
+                "metadata": {"source": "doc1.md", "page": 1}
+            }
+        ]
+        adapter = InMemoryAdapter(search_results=results)
+
+        search_results = adapter.search("test")
+        assert "metadata" in search_results[0]
+        assert search_results[0]["metadata"]["source"] == "doc1.md"
+
+
+class TestInMemoryAsyncAdapter:
+    """Test suite for InMemoryAsyncAdapter."""
+
+    def test_initialization_default(self):
+        """Test async adapter initializes with empty defaults."""
+        adapter = InMemoryAsyncAdapter()
+        assert adapter.name == "inmemory_async"
+        assert adapter.is_async() is True
+
+    def test_initialization_with_search_results(self):
+        """Test async adapter initializes with search results."""
+        results = [
+            {"content": "Result 1", "score": 0.9},
+            {"content": "Result 2", "score": 0.8}
+        ]
+        adapter = InMemoryAsyncAdapter(search_results=results, name="test")
+        assert adapter.name == "test"
+
+    @pytest.mark.asyncio
+    async def test_search_returns_configured_results(self):
+        """Test async search returns the configured results."""
+        results = [
+            {"content": "Python is a programming language", "score": 0.9},
+            {"content": "Python was created by Guido", "score": 0.8}
+        ]
+        adapter = InMemoryAsyncAdapter(search_results=results)
+
+        search_results = await adapter.search("python")
+        assert len(search_results) == 2
+        assert search_results[0]["content"] == "Python is a programming language"
+        assert search_results[0]["score"] == 0.9
+
+    @pytest.mark.asyncio
+    async def test_search_respects_k_parameter(self):
+        """Test async search respects k limit."""
+        results = [
+            {"content": f"Result {i}", "score": 1.0 - i*0.1}
+            for i in range(10)
+        ]
+        adapter = InMemoryAsyncAdapter(search_results=results)
+
+        search_results = await adapter.search("test", k=3)
+        assert len(search_results) == 3
+
+    @pytest.mark.asyncio
+    async def test_search_with_empty_results(self):
+        """Test async search with no configured results."""
+        adapter = InMemoryAsyncAdapter(search_results=[])
+        results = await adapter.search("test")
+        assert len(results) == 0
+
+    @pytest.mark.asyncio
+    async def test_get_value(self):
+        """Test async get_value retrieves from data dict."""
+        adapter = InMemoryAsyncAdapter(data={"language": "Python", "version": "3.11"})
+        assert await adapter.get_value("language") == "Python"
+        assert await adapter.get_value("version") == "3.11"
+
+    @pytest.mark.asyncio
+    async def test_get_value_with_default(self):
+        """Test async get_value returns default for missing keys."""
+        adapter = InMemoryAsyncAdapter(data={"language": "Python"})
+        assert await adapter.get_value("missing", default="N/A") == "N/A"
+
+    @pytest.mark.asyncio
+    async def test_search_with_min_score_filter(self):
+        """Test async search filters by min_score."""
+        results = [
+            {"content": "High score", "score": 0.9},
+            {"content": "Medium score", "score": 0.6},
+            {"content": "Low score", "score": 0.3}
+        ]
+        adapter = InMemoryAsyncAdapter(search_results=results)
+
+        filtered = await adapter.search("test", min_score=0.5)
+        assert len(filtered) == 2
+        assert all(r["score"] >= 0.5 for r in filtered)
+
+    @pytest.mark.asyncio
+    async def test_search_with_metadata(self):
+        """Test async search preserves metadata."""
+        results = [
+            {
+                "content": "Result with metadata",
+                "score": 0.9,
+                "metadata": {"source": "doc1.md", "page": 1}
+            }
+        ]
+        adapter = InMemoryAsyncAdapter(search_results=results)
+
+        search_results = await adapter.search("test")
+        assert "metadata" in search_results[0]
+        assert search_results[0]["metadata"]["source"] == "doc1.md"
