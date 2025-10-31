@@ -1,4 +1,8 @@
-"""LLM resource provider for language model interactions."""
+"""LLM resource provider for language model interactions.
+
+Note: This module was migrated from dataknobs_fsm.resources.llm to
+consolidate all LLM functionality in the dataknobs-llm package.
+"""
 
 import json
 import os
@@ -511,8 +515,8 @@ class LLMResource(BaseResourceProvider):
         **kwargs
     ) -> Dict[str, Any]:
         """OpenAI completion using provider system."""
-        from dataknobs_fsm.llm.base import LLMConfig, LLMMessage
-        from dataknobs_fsm.llm.providers import create_provider
+        from dataknobs_llm.llm.base import LLMConfig, LLMMessage
+        from dataknobs_llm.llm.providers import create_llm_provider as create_provider
         
         # Create config from session
         config = LLMConfig(
@@ -565,8 +569,8 @@ class LLMResource(BaseResourceProvider):
         **kwargs
     ) -> Dict[str, Any]:
         """Anthropic completion using provider system."""
-        from dataknobs_fsm.llm.base import LLMConfig, LLMMessage
-        from dataknobs_fsm.llm.providers import create_provider
+        from dataknobs_llm.llm.base import LLMConfig, LLMMessage
+        from dataknobs_llm.llm.providers import create_llm_provider as create_provider
         
         # Create config from session
         config = LLMConfig(
@@ -758,7 +762,7 @@ class LLMResource(BaseResourceProvider):
     ) -> List[List[float]]:
         """Generate embeddings using OpenAI provider system."""
         from dataknobs_fsm.llm.base import LLMConfig
-        from dataknobs_fsm.llm.providers import create_provider
+        from dataknobs_llm.llm.providers import create_llm_provider as create_provider
         
         # Create config for embeddings
         config = LLMConfig(

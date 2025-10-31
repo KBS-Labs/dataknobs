@@ -6,7 +6,7 @@ Finite State Machine framework with data modes, resource management, and streami
 
 - **Multiple APIs**: SimpleFSM, AsyncSimpleFSM, and AdvancedFSM for different use cases
 - **Data Handling Modes**: COPY, REFERENCE, and DIRECT modes for flexible data management
-- **Resource Management**: Built-in support for databases, files, HTTP services, LLMs, and vector stores
+- **Resource Management**: Built-in support for databases, files, HTTP services, and vector stores
 - **Streaming Support**: Process large datasets with chunking and backpressure handling
 - **Advanced Debugging**: Step-by-step execution, breakpoints, and execution hooks
 - **Flexible Configuration**: YAML/JSON configuration with schema validation
@@ -94,7 +94,6 @@ The `examples/` directory contains comprehensive examples:
 ### Advanced Features
 - **advanced_debugging.py** - Full debugging features demonstration
 - **advanced_debugging_simple.py** - Simplified debugging example
-- **llm_conversation.py** - Conversational AI system using FSM
 
 ### Text Processing
 - **normalize_file_example.py** - Text file normalization with streaming
@@ -145,6 +144,17 @@ fsm = SimpleFSM(config, data_mode=DataHandlingMode.REFERENCE)
 # Use DIRECT mode for performance
 fsm = SimpleFSM(config, data_mode=DataHandlingMode.DIRECT)
 ```
+
+## LLM Integration
+
+For LLM-specific integrations, workflows, and examples, please see the **dataknobs-llm** package:
+
+- **FSM Integration Module**: `dataknobs_llm.fsm_integration`
+- **LLM Workflow Patterns**: RAG pipelines, chain-of-thought, multi-agent systems
+- **Conversation Examples**: FSM-based conversational AI systems
+- **Documentation**: See `packages/llm/README.md` for FSM integration guide
+
+The LLM package provides comprehensive LLM abstractions, providers, and FSM integration capabilities.
 
 ## Documentation
 

@@ -2,6 +2,9 @@
 
 This module provides LLM-related functions that can be referenced
 in FSM configurations for AI-powered workflows.
+
+Note: This module was migrated from dataknobs_fsm.functions.library.llm to
+consolidate all LLM functionality in the dataknobs-llm package.
 """
 
 import asyncio
@@ -11,10 +14,10 @@ from typing import Any, Callable, Dict, List
 from dataknobs_fsm.functions.base import (
     ITransformFunction,
     IValidationFunction,
-    TransformFunctionError,
-    ValidationFunctionError,
+    TransformError,
+    ValidationError,
 )
-from dataknobs_fsm.resources.llm import LLMResource
+from dataknobs_llm.fsm_integration.resources import LLMResource
 
 
 class PromptBuilder(ITransformFunction):
@@ -71,7 +74,7 @@ class PromptBuilder(ITransformFunction):
         try:
             prompt = self.template.format(**variables)
         except KeyError as e:
-            raise TransformFunctionError(f"Missing variable for prompt: {e}") from e
+            raise TransformError(f"Missing variable for prompt: {e}") from e
         
         # Add format specification if provided
         if self.format_spec:
@@ -132,12 +135,12 @@ class LLMCaller(ITransformFunction):
         # Get resource from context
         resource = data.get("_resources", {}).get(self.resource_name)
         if not resource or not isinstance(resource, LLMResource):
-            raise TransformFunctionError(f"LLM resource '{self.resource_name}' not found")
+            raise TransformError(f"LLM resource '{self.resource_name}' not found")
         
         # Get prompt
         prompt = data.get("prompt")
         if not prompt:
-            raise TransformFunctionError("No prompt found in data")
+            raise TransformError("No prompt found in data")
         
         system_prompt = data.get("system_prompt")
         
@@ -168,7 +171,7 @@ class LLMCaller(ITransformFunction):
                 }
         
         except Exception as e:
-            raise TransformFunctionError(f"LLM call failed: {e}") from e
+            raise TransformError(f"LLM call failed: {e}") from e
 
 
 class ResponseValidator(IValidationFunction):
@@ -210,11 +213,11 @@ class ResponseValidator(IValidationFunction):
             True if valid.
             
         Raises:
-            ValidationFunctionError: If validation fails.
+            ValidationError: If validation fails.
         """
         response = data.get(self.response_field)
         if response is None:
-            raise ValidationFunctionError(f"Response field '{self.response_field}' not found")
+            raise ValidationError(f"Response field '{self.response_field}' not found")
         
         # Extract text from response object if needed
         if isinstance(response, dict):
@@ -224,12 +227,12 @@ class ResponseValidator(IValidationFunction):
         
         # Check length constraints
         if self.min_length and len(text) < self.min_length:  # type: ignore
-            raise ValidationFunctionError(
+            raise ValidationError(
                 f"Response too short: {len(text)} < {self.min_length}"  # type: ignore
             )
         
         if self.max_length and len(text) > self.max_length:  # type: ignore
-            raise ValidationFunctionError(
+            raise ValidationError(
                 f"Response too long: {len(text)} > {self.max_length}"  # type: ignore
             )
         
@@ -245,15 +248,15 @@ class ResponseValidator(IValidationFunction):
                     try:
                         model(**parsed)
                     except ValidationError as e:
-                        raise ValidationFunctionError(f"Schema validation failed: {e}") from e
+                        raise ValidationError(f"Schema validation failed: {e}") from e
                 
                 # Check required fields
                 for field in self.required_fields:
                     if field not in parsed:
-                        raise ValidationFunctionError(f"Required field missing: {field}")
+                        raise ValidationError(f"Required field missing: {field}")
                 
             except json.JSONDecodeError as e:
-                raise ValidationFunctionError(f"Invalid JSON response: {e}") from e
+                raise ValidationError(f"Invalid JSON response: {e}") from e
         
         return True
 
@@ -308,7 +311,7 @@ class FunctionCaller(ITransformFunction):
         
         # Look up function
         if function_name not in self.function_registry:
-            raise TransformFunctionError(f"Function not found: {function_name}")
+            raise TransformError(f"Function not found: {function_name}")
         
         func = self.function_registry[function_name]
         
@@ -326,7 +329,7 @@ class FunctionCaller(ITransformFunction):
             }
         
         except Exception as e:
-            raise TransformFunctionError(f"Function call failed: {e}") from e
+            raise TransformError(f"Function call failed: {e}") from e
 
 
 class ConversationManager(ITransformFunction):
@@ -432,7 +435,7 @@ class EmbeddingGenerator(ITransformFunction):
         # Get resource from context
         resource = data.get("_resources", {}).get(self.resource_name)
         if not resource or not isinstance(resource, LLMResource):
-            raise TransformFunctionError(f"LLM resource '{self.resource_name}' not found")
+            raise TransformError(f"LLM resource '{self.resource_name}' not found")
         
         # Get text to embed
         text = data.get(self.text_field)
@@ -458,7 +461,7 @@ class EmbeddingGenerator(ITransformFunction):
             }
         
         except Exception as e:
-            raise TransformFunctionError(f"Embedding generation failed: {e}") from e
+            raise TransformError(f"Embedding generation failed: {e}") from e
 
 
 # Convenience functions for creating LLM functions

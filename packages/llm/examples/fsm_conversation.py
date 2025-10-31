@@ -8,6 +8,9 @@ This example demonstrates an FSM-based LLM conversation system with:
 - Context management and conversation history
 - Error recovery and fallback mechanisms
 - Integration with multiple LLM providers
+
+Note: This example was migrated from dataknobs-fsm package to dataknobs-llm
+to consolidate all LLM+FSM examples in one place.
 """
 
 import asyncio
@@ -19,9 +22,9 @@ from enum import Enum
 
 from dataknobs_fsm.api.simple import SimpleFSM
 from dataknobs_fsm.core.data_modes import DataHandlingMode
-from dataknobs_fsm.llm.utils import render_conditional_template, MessageBuilder
-from dataknobs_fsm.llm.base import LLMConfig
-from dataknobs_fsm.llm.providers import create_llm_provider
+from dataknobs_llm.llm.utils import render_conditional_template, MessageBuilder
+from dataknobs_llm.llm.base import LLMConfig
+from dataknobs_llm.llm.providers import create_llm_provider
 
 
 # Configure logging

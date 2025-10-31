@@ -2,6 +2,9 @@
 
 This module provides pre-configured FSM patterns for LLM-based workflows,
 including RAG pipelines, chain-of-thought reasoning, and multi-agent systems.
+
+Note: This module was migrated from dataknobs_fsm.patterns.llm_workflow to
+consolidate all LLM functionality in the dataknobs-llm package.
 """
 
 from typing import Any, Dict, List, Union, Callable
@@ -9,11 +12,11 @@ from dataclasses import dataclass
 from enum import Enum
 import asyncio
 
-from ..api.simple import SimpleFSM
-from ..core.data_modes import DataHandlingMode
-from ..llm.base import LLMConfig, LLMMessage, LLMResponse
-from ..llm.providers import create_llm_provider
-from ..llm.utils import (
+from dataknobs_fsm.api.simple import SimpleFSM
+from dataknobs_fsm.core.data_modes import DataHandlingMode
+from dataknobs_llm.llm.base import LLMConfig, LLMMessage, LLMResponse
+from dataknobs_llm.llm.providers import create_llm_provider
+from dataknobs_llm.llm.utils import (
     PromptTemplate, MessageBuilder, ResponseParser
 )
 
