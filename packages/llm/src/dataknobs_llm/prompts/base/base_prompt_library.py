@@ -347,6 +347,10 @@ class BasePromptLibrary(AbstractPromptLibrary):
             if "metadata" in data:
                 template["metadata"] = data["metadata"]
 
+            # Add template mode field
+            if "template_mode" in data:
+                template["template_mode"] = data["template_mode"]
+
             # Add composition fields
             if "sections" in data:
                 template["sections"] = data["sections"]
@@ -382,6 +386,10 @@ class BasePromptLibrary(AbstractPromptLibrary):
 
             if "metadata" in data:
                 template["metadata"] = data["metadata"]
+
+            # Add template mode field
+            if "template_mode" in data:
+                template["template_mode"] = data["template_mode"]
 
             if "sections" in data:
                 template["sections"] = data["sections"]

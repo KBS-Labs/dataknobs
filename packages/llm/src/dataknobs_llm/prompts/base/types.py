@@ -26,6 +26,38 @@ class ValidationLevel(Enum):
     IGNORE = "ignore"
 
 
+class TemplateMode(Enum):
+    """Template rendering mode.
+
+    Attributes:
+        MIXED: Pre-process (( )) conditionals then render with Jinja2 (default)
+        JINJA2: Pure Jinja2 rendering, skip (( )) preprocessing
+    """
+    MIXED = "mixed"
+    JINJA2 = "jinja2"
+
+    @classmethod
+    def from_string(cls, value: str) -> "TemplateMode":
+        """Parse mode from string.
+
+        Args:
+            value: Mode string ("mixed" or "jinja2")
+
+        Returns:
+            TemplateMode enum value
+
+        Raises:
+            ValueError: If value is not a valid mode
+        """
+        try:
+            return cls(value.lower())
+        except ValueError:
+            raise ValueError(
+                f"Invalid template mode: {value}. "
+                f"Valid modes: {', '.join(m.value for m in cls)}"
+            )
+
+
 @dataclass
 class ValidationConfig:
     """Configuration for template parameter validation.
@@ -69,6 +101,7 @@ class PromptTemplate(TypedDict, total=False):
         extends: Name of base template to inherit from
         rag_config_refs: References to standalone RAG configurations
         rag_configs: Inline RAG configurations
+        template_mode: Template rendering mode ("mixed" or "jinja2")
     """
     template: str
     defaults: Dict[str, Any]
@@ -78,6 +111,7 @@ class PromptTemplate(TypedDict, total=False):
     extends: str
     rag_config_refs: List[str]
     rag_configs: List['RAGConfig']
+    template_mode: str
 
 
 class RAGConfig(TypedDict, total=False):
