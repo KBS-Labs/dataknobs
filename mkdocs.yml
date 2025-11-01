@@ -149,6 +149,26 @@ nav:
         - packages/fsm/examples/regex-transformations.md
         - packages/fsm/examples/api-workflow.md
         - packages/fsm/examples/llm-chain.md
+    - LLM:
+      - packages/llm/index.md
+      - packages/llm/quickstart.md
+      - Guides:
+        - packages/llm/guides/prompts.md
+        - packages/llm/guides/conversations.md
+        - packages/llm/guides/flows.md
+        - packages/llm/guides/versioning.md
+        - packages/llm/guides/performance.md
+      - API Reference:
+        - packages/llm/api/llm.md
+        - packages/llm/api/prompts.md
+        - packages/llm/api/conversations.md
+        - packages/llm/api/versioning.md
+      - Examples:
+        - packages/llm/examples/basic-usage.md
+        - packages/llm/examples/advanced-prompting.md
+        - packages/llm/examples/conversation-flows.md
+        - packages/llm/examples/fsm-conversation-flow.md
+        - packages/llm/examples/ab-testing.md
     - Xization:
       - packages/xization/index.md
       - packages/xization/tokenization.md
@@ -246,7 +266,8 @@ plugins:
             packages/utils/src,
             packages/xization/src,
             packages/legacy/src,
-            packages/fsm/src
+            packages/fsm/src,
+            packages/llm/src
           ]
           options:
             docstring_style: google

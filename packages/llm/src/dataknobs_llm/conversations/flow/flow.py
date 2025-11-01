@@ -4,7 +4,7 @@ This module provides high-level abstractions for defining conversation flows
 that are executed using the FSM engine.
 """
 
-from typing import Dict, List, Optional, Any, Callable
+from typing import Dict, List, Any, Callable
 from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
 
@@ -66,14 +66,14 @@ class FlowState:
     transition_conditions: Dict[str, TransitionCondition] = field(default_factory=dict)
 
     # Loop detection
-    max_loops: Optional[int] = None
+    max_loops: int | None = None
 
     # Prompt parameters
     prompt_params: Dict[str, Any] = field(default_factory=dict)
 
     # Hooks
-    on_enter: Optional[Callable] = None
-    on_exit: Optional[Callable] = None
+    on_enter: Callable | None = None
+    on_exit: Callable | None = None
 
     # Metadata
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -116,13 +116,13 @@ class ConversationFlow:
 
     # Global settings
     max_total_loops: int = 10
-    timeout_seconds: Optional[float] = None
+    timeout_seconds: float | None = None
 
     # Context
     initial_context: Dict[str, Any] = field(default_factory=dict)
 
     # Metadata
-    description: Optional[str] = None
+    description: str | None = None
     version: str = "1.0.0"
     metadata: Dict[str, Any] = field(default_factory=dict)
 

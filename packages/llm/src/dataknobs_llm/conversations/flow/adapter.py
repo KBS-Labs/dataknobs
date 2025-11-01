@@ -5,7 +5,7 @@ definitions into FSM configurations and manages execution.
 """
 
 import logging
-from typing import Dict, Any, List, Optional, AsyncIterator
+from typing import Dict, Any, List
 from dataclasses import dataclass, field
 
 from dataknobs_fsm.api.simple import SimpleFSM
@@ -30,7 +30,7 @@ class FlowExecutionState:
 
     loop_counts: Dict[str, int] = field(default_factory=dict)
     total_transitions: int = 0
-    current_state: Optional[str] = None
+    current_state: str | None = None
     context: Dict[str, Any] = field(default_factory=dict)
     history: List[tuple] = field(default_factory=list)
 
@@ -56,7 +56,7 @@ class ConversationFlowAdapter:
         self,
         flow: ConversationFlow,
         prompt_builder: Any,  # AsyncPromptBuilder
-        llm: Optional[Any] = None  # AsyncLLMProvider
+        llm: Any | None = None  # AsyncLLMProvider
     ):
         """Initialize the adapter.
 
@@ -194,7 +194,7 @@ class ConversationFlowAdapter:
                 logger.error(f"Failed to build prompt for state '{state_name}': {e}")
                 return {
                     **data,
-                    "_error": f"Prompt building failed: {str(e)}",
+                    "_error": f"Prompt building failed: {e!s}",
                     "response": f"[Error in state {state_name}]"
                 }
 
@@ -271,7 +271,7 @@ class ConversationFlowAdapter:
 
     async def execute(
         self,
-        initial_data: Optional[Dict[str, Any]] = None
+        initial_data: Dict[str, Any] | None = None
     ) -> Dict[str, Any]:
         """Execute the conversation flow.
 

@@ -30,7 +30,7 @@ Example:
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Optional, Any, Dict
+from typing import List, Any, Dict, Callable
 import logging
 
 from dataknobs_llm.llm import LLMMessage, LLMResponse
@@ -127,7 +127,7 @@ class LoggingMiddleware(ConversationMiddleware):
         ... )
     """
 
-    def __init__(self, logger: Optional[logging.Logger] = None):
+    def __init__(self, logger: logging.Logger | None = None):
         """Initialize logging middleware.
 
         Args:
@@ -377,10 +377,10 @@ class MetadataMiddleware(ConversationMiddleware):
 
     def __init__(
         self,
-        request_metadata: Optional[Dict[str, Any]] = None,
-        response_metadata: Optional[Dict[str, Any]] = None,
-        request_metadata_fn: Optional[callable] = None,
-        response_metadata_fn: Optional[callable] = None
+        request_metadata: Dict[str, Any] | None = None,
+        response_metadata: Dict[str, Any] | None = None,
+        request_metadata_fn: Callable[..., Dict[str, Any]] | None = None,
+        response_metadata_fn: Callable[..., Dict[str, Any]] | None = None
     ):
         """Initialize metadata middleware.
 

@@ -5,7 +5,7 @@ common conversation flow patterns.
 """
 
 import re
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Callable
 from dataclasses import dataclass
 
 from .flow import TransitionCondition
@@ -111,7 +111,7 @@ class LLMClassifierCondition(TransitionCondition):
 
     classifier_prompt: str
     expected_value: str
-    llm_config: Optional[Dict[str, Any]] = None
+    llm_config: Dict[str, Any] | None = None
 
     async def evaluate(self, response: str, context: Dict[str, Any]) -> bool:
         """Use LLM to classify and check against expected value."""

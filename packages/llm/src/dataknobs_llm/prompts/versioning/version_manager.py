@@ -9,7 +9,7 @@ This module provides version control capabilities including:
 
 import re
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from datetime import datetime
 
 from .types import (
@@ -51,7 +51,7 @@ class VersionManager:
     # Semantic version pattern: major.minor.patch
     VERSION_PATTERN = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 
-    def __init__(self, storage: Optional[Any] = None):
+    def __init__(self, storage: Any | None = None):
         """Initialize version manager.
 
         Args:
@@ -67,13 +67,13 @@ class VersionManager:
         name: str,
         prompt_type: str,
         template: str,
-        version: Optional[str] = None,
-        defaults: Optional[Dict[str, Any]] = None,
-        validation: Optional[Dict[str, Any]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        created_by: Optional[str] = None,
-        parent_version: Optional[str] = None,
-        tags: Optional[List[str]] = None,
+        version: str | None = None,
+        defaults: Dict[str, Any] | None = None,
+        validation: Dict[str, Any] | None = None,
+        metadata: Dict[str, Any] | None = None,
+        created_by: str | None = None,
+        parent_version: str | None = None,
+        tags: List[str] | None = None,
         status: VersionStatus = VersionStatus.ACTIVE,
     ) -> PromptVersion:
         """Create a new prompt version.
@@ -160,8 +160,8 @@ class VersionManager:
         name: str,
         prompt_type: str,
         version: str = "latest",
-        version_id: Optional[str] = None,
-    ) -> Optional[PromptVersion]:
+        version_id: str | None = None,
+    ) -> PromptVersion | None:
         """Retrieve a prompt version.
 
         Args:
@@ -197,8 +197,8 @@ class VersionManager:
         self,
         name: str,
         prompt_type: str,
-        tags: Optional[List[str]] = None,
-        status: Optional[VersionStatus] = None,
+        tags: List[str] | None = None,
+        status: VersionStatus | None = None,
     ) -> List[PromptVersion]:
         """List all versions of a prompt.
 
@@ -364,7 +364,7 @@ class VersionManager:
             return (0, 0, 0)
         return tuple(int(x) for x in match.groups())
 
-    def _get_latest_version(self, versions: List[PromptVersion]) -> Optional[PromptVersion]:
+    def _get_latest_version(self, versions: List[PromptVersion]) -> PromptVersion | None:
         """Get the latest version from a list."""
         if not versions:
             return None

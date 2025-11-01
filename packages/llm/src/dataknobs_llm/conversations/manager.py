@@ -1,7 +1,7 @@
 """Conversation manager for multi-turn interactions with LLMs."""
 
 import uuid
-from typing import Optional, List, Dict, Any, AsyncIterator
+from typing import List, Dict, Any, AsyncIterator
 from datetime import datetime
 
 from dataknobs_structures.tree import Tree
@@ -13,7 +13,6 @@ from dataknobs_llm.conversations.storage import (
     ConversationStorage,
     calculate_node_id,
     get_node_by_id,
-    get_messages_for_llm,
 )
 
 
@@ -69,9 +68,9 @@ class ConversationManager:
         llm: AsyncLLMProvider,
         prompt_builder: AsyncPromptBuilder,
         storage: ConversationStorage,
-        state: Optional[ConversationState] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        middleware: Optional[List["ConversationMiddleware"]] = None,
+        state: ConversationState | None = None,
+        metadata: Dict[str, Any] | None = None,
+        middleware: List["ConversationMiddleware"] | None = None,
         cache_rag_results: bool = False,
         reuse_rag_on_branch: bool = False,
     ):
@@ -107,10 +106,10 @@ class ConversationManager:
         llm: AsyncLLMProvider,
         prompt_builder: AsyncPromptBuilder,
         storage: ConversationStorage,
-        system_prompt_name: Optional[str] = None,
-        system_params: Optional[Dict[str, Any]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        middleware: Optional[List["ConversationMiddleware"]] = None,
+        system_prompt_name: str | None = None,
+        system_params: Dict[str, Any] | None = None,
+        metadata: Dict[str, Any] | None = None,
+        middleware: List["ConversationMiddleware"] | None = None,
         cache_rag_results: bool = False,
         reuse_rag_on_branch: bool = False,
     ) -> "ConversationManager":
@@ -166,7 +165,7 @@ class ConversationManager:
         llm: AsyncLLMProvider,
         prompt_builder: AsyncPromptBuilder,
         storage: ConversationStorage,
-        middleware: Optional[List["ConversationMiddleware"]] = None,
+        middleware: List["ConversationMiddleware"] | None = None,
         cache_rag_results: bool = False,
         reuse_rag_on_branch: bool = False,
     ) -> "ConversationManager":
@@ -217,11 +216,11 @@ class ConversationManager:
     async def add_message(
         self,
         role: str,
-        content: Optional[str] = None,
-        prompt_name: Optional[str] = None,
-        params: Optional[Dict[str, Any]] = None,
+        content: str | None = None,
+        prompt_name: str | None = None,
+        params: Dict[str, Any] | None = None,
         include_rag: bool = True,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Dict[str, Any] | None = None,
     ) -> ConversationNode:
         """Add a message to the current conversation node.
 
@@ -353,8 +352,8 @@ class ConversationManager:
 
     async def complete(
         self,
-        branch_name: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        branch_name: str | None = None,
+        metadata: Dict[str, Any] | None = None,
         **llm_kwargs,
     ) -> LLMResponse:
         """Get LLM completion and add as child of current node.
@@ -449,8 +448,8 @@ class ConversationManager:
 
     async def stream_complete(
         self,
-        branch_name: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        branch_name: str | None = None,
+        metadata: Dict[str, Any] | None = None,
         **llm_kwargs,
     ) -> AsyncIterator[LLMStreamResponse]:
         """Stream LLM completion and add as child of current node.
@@ -573,7 +572,7 @@ class ConversationManager:
     async def execute_flow(
         self,
         flow: "ConversationFlow",
-        initial_params: Optional[Dict[str, Any]] = None
+        initial_params: Dict[str, Any] | None = None
     ) -> AsyncIterator[ConversationNode]:
         """Execute a conversation flow using FSM.
 
@@ -676,7 +675,7 @@ class ConversationManager:
         except Exception as e:
             import logging
             logging.error(f"Flow execution failed: {e}")
-            raise ValueError(f"Flow execution failed: {str(e)}") from e
+            raise ValueError(f"Flow execution failed: {e!s}") from e
 
     async def get_history(self) -> List[LLMMessage]:
         """Get conversation history from root to current position.
@@ -694,7 +693,7 @@ class ConversationManager:
 
         return self.state.get_current_messages()
 
-    async def get_branches(self, node_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def get_branches(self, node_id: str | None = None) -> List[Dict[str, Any]]:
         """Get information about branches from a given node.
 
         Args:
@@ -762,7 +761,7 @@ class ConversationManager:
         prompt_name: str,
         role: str,
         params: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Dict[str, Any] | None:
         """Search conversation history for cached RAG metadata.
 
         This method searches the entire conversation tree for cached RAG metadata
@@ -852,7 +851,7 @@ class ConversationManager:
 
         return None
 
-    def get_rag_metadata(self, node_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def get_rag_metadata(self, node_id: str | None = None) -> Dict[str, Any] | None:
         """Get RAG metadata from a conversation node.
 
         This method retrieves the cached RAG metadata from a specific node,
@@ -899,11 +898,11 @@ class ConversationManager:
             await self.storage.save_conversation(self.state)
 
     @property
-    def conversation_id(self) -> Optional[str]:
+    def conversation_id(self) -> str | None:
         """Get conversation ID."""
         return self.state.conversation_id if self.state else None
 
     @property
-    def current_node_id(self) -> Optional[str]:
+    def current_node_id(self) -> str | None:
         """Get current node ID."""
         return self.state.current_node_id if self.state else None

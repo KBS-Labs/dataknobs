@@ -9,7 +9,7 @@ This module defines:
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from enum import Enum
 
 
@@ -60,11 +60,11 @@ class PromptVersion:
     version: str
     template: str
     defaults: Dict[str, Any] = field(default_factory=dict)
-    validation: Optional[Dict[str, Any]] = None
+    validation: Dict[str, Any] | None = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.utcnow)
-    created_by: Optional[str] = None
-    parent_version: Optional[str] = None
+    created_by: str | None = None
+    parent_version: str | None = None
     tags: List[str] = field(default_factory=list)
     status: VersionStatus = VersionStatus.ACTIVE
 
@@ -157,7 +157,7 @@ class PromptExperiment:
     variants: List[PromptVariant]
     traffic_split: Dict[str, float]
     start_date: datetime = field(default_factory=datetime.utcnow)
-    end_date: Optional[datetime] = None
+    end_date: datetime | None = None
     status: str = "running"
     metrics: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -226,7 +226,7 @@ class PromptMetrics:
     total_response_time: float = 0.0
     total_tokens: int = 0
     user_ratings: List[float] = field(default_factory=list)
-    last_used: Optional[datetime] = None
+    last_used: datetime | None = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -305,9 +305,9 @@ class MetricEvent:
     version_id: str
     timestamp: datetime = field(default_factory=datetime.utcnow)
     success: bool = True
-    response_time: Optional[float] = None
-    tokens: Optional[int] = None
-    user_rating: Optional[float] = None
+    response_time: float | None = None
+    tokens: int | None = None
+    user_rating: float | None = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:

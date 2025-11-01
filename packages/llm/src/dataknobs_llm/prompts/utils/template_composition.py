@@ -33,7 +33,7 @@ Example:
 """
 
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ class TemplateComposer:
     their configurations, then composes them according to inheritance rules.
     """
 
-    def __init__(self, library: Optional[Any] = None):
+    def __init__(self, library: Any | None = None):
         """Initialize the template composer.
 
         Args:
@@ -65,8 +65,8 @@ class TemplateComposer:
     def compose_template(
         self,
         template: str,
-        sections: Optional[Dict[str, str]] = None,
-        prompt_name: Optional[str] = None
+        sections: Dict[str, str] | None = None,
+        prompt_name: str | None = None
     ) -> str:
         """Compose a template by replacing section placeholders.
 

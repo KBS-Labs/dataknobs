@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
     Any, Dict, List, Union, AsyncIterator, Iterator,
-    Callable, Protocol, Optional
+    Callable, Protocol
 )
 from datetime import datetime
 
@@ -230,7 +230,7 @@ class LLMProvider(ABC):
     def __init__(
         self,
         config: Union[LLMConfig, "Config", Dict[str, Any]],
-        prompt_builder: Optional[Union[PromptBuilder, AsyncPromptBuilder]] = None
+        prompt_builder: Union[PromptBuilder, AsyncPromptBuilder] | None = None
     ):
         """Initialize provider with configuration.
 
@@ -341,7 +341,7 @@ class AsyncLLMProvider(LLMProvider):
     async def render_and_complete(
         self,
         prompt_name: str,
-        params: Optional[Dict[str, Any]] = None,
+        params: Dict[str, Any] | None = None,
         prompt_type: str = "user",
         index: int = 0,
         include_rag: bool = True,
@@ -391,7 +391,7 @@ class AsyncLLMProvider(LLMProvider):
     async def render_and_stream(
         self,
         prompt_name: str,
-        params: Optional[Dict[str, Any]] = None,
+        params: Dict[str, Any] | None = None,
         prompt_type: str = "user",
         index: int = 0,
         include_rag: bool = True,
@@ -437,7 +437,7 @@ class AsyncLLMProvider(LLMProvider):
     async def _render_messages(
         self,
         prompt_name: str,
-        params: Optional[Dict[str, Any]],
+        params: Dict[str, Any] | None,
         prompt_type: str,
         index: int,
         include_rag: bool
@@ -568,7 +568,7 @@ class SyncLLMProvider(LLMProvider):
     def render_and_complete(
         self,
         prompt_name: str,
-        params: Optional[Dict[str, Any]] = None,
+        params: Dict[str, Any] | None = None,
         prompt_type: str = "user",
         index: int = 0,
         include_rag: bool = True,
@@ -618,7 +618,7 @@ class SyncLLMProvider(LLMProvider):
     def render_and_stream(
         self,
         prompt_name: str,
-        params: Optional[Dict[str, Any]] = None,
+        params: Dict[str, Any] | None = None,
         prompt_type: str = "user",
         index: int = 0,
         include_rag: bool = True,
@@ -664,7 +664,7 @@ class SyncLLMProvider(LLMProvider):
     def _render_messages(
         self,
         prompt_name: str,
-        params: Optional[Dict[str, Any]],
+        params: Dict[str, Any] | None,
         prompt_type: str,
         index: int,
         include_rag: bool

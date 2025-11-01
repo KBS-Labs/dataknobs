@@ -7,7 +7,7 @@ Supports both direct instantiation and dataknobs Config-based factory pattern.
 import os
 import json
 import hashlib
-from typing import Any, Dict, List, Union, AsyncIterator, Type, Optional
+from typing import Any, Dict, List, Union, AsyncIterator, Type
 
 from .base import (
     LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
@@ -218,7 +218,7 @@ class OpenAIProvider(AsyncLLMProvider):
     def __init__(
         self,
         config: Union[LLMConfig, "Config", Dict[str, Any]],
-        prompt_builder: Optional[AsyncPromptBuilder] = None
+        prompt_builder: AsyncPromptBuilder | None = None
     ):
         # Normalize config first
         llm_config = normalize_llm_config(config)
@@ -413,7 +413,7 @@ class AnthropicProvider(AsyncLLMProvider):
     def __init__(
         self,
         config: Union[LLMConfig, "Config", Dict[str, Any]],
-        prompt_builder: Optional[AsyncPromptBuilder] = None
+        prompt_builder: AsyncPromptBuilder | None = None
     ):
         # Normalize config first
         llm_config = normalize_llm_config(config)
@@ -699,7 +699,7 @@ class OllamaProvider(AsyncLLMProvider):
     def __init__(
         self,
         config: Union[LLMConfig, "Config", Dict[str, Any]],
-        prompt_builder: Optional[AsyncPromptBuilder] = None
+        prompt_builder: AsyncPromptBuilder | None = None
     ):
         # Normalize config first
         llm_config = normalize_llm_config(config)
@@ -1105,7 +1105,7 @@ class HuggingFaceProvider(AsyncLLMProvider):
     def __init__(
         self,
         config: Union[LLMConfig, "Config", Dict[str, Any]],
-        prompt_builder: Optional[AsyncPromptBuilder] = None
+        prompt_builder: AsyncPromptBuilder | None = None
     ):
         # Normalize config first
         llm_config = normalize_llm_config(config)
@@ -1273,7 +1273,7 @@ class EchoProvider(AsyncLLMProvider):
     def __init__(
         self,
         config: Union[LLMConfig, "Config", Dict[str, Any]],
-        prompt_builder: Optional[AsyncPromptBuilder] = None
+        prompt_builder: AsyncPromptBuilder | None = None
     ):
         # Normalize config first
         llm_config = normalize_llm_config(config)

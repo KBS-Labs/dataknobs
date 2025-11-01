@@ -5,7 +5,7 @@ used as resource providers in the prompt library system. Supports both flat and
 nested dictionaries with dot-notation key access.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from .resource_adapter import ResourceAdapter, AsyncResourceAdapter, BaseSearchLogic
 
 
@@ -27,7 +27,7 @@ class DictResourceAdapter(ResourceAdapter):
         >>> adapter.get_value("user.name")
         "Alice"
         >>> adapter.search("Alice")
-        [{"content": "Alice", "key": "user.name", "score": 1.0}]
+        [{'content': "Alice", 'key': "user.name", 'score': 1.0}]
     """
 
     def __init__(
@@ -51,14 +51,12 @@ class DictResourceAdapter(ResourceAdapter):
         self,
         key: str,
         default: Any = None,
-        context: Optional[Dict[str, Any]] = None
+        context: Dict[str, Any] | None = None
     ) -> Any:
         """Retrieve a value by key from the dictionary.
 
-        Supports nested key access using dot notation:
-        - "simple_key" -> data["simple_key"]
-        - "nested.key" -> data["nested"]["key"]
-        - "deep.nested.key" -> data["deep"]["nested"]["key"]
+        Supports nested key access using dot notation. Dot-separated keys
+        traverse nested dictionaries (e.g., a.b.c accesses nested values).
 
         Args:
             key: Key to look up (supports dot notation for nested access)
@@ -88,7 +86,7 @@ class DictResourceAdapter(ResourceAdapter):
         self,
         query: str,
         k: int = 5,
-        filters: Optional[Dict[str, Any]] = None,
+        filters: Dict[str, Any] | None = None,
         **kwargs
     ) -> List[Dict[str, Any]]:
         """Perform text-based search across dictionary values.
@@ -107,10 +105,10 @@ class DictResourceAdapter(ResourceAdapter):
         Returns:
             List of search results with structure:
             {
-                "content": <value>,
-                "key": <key path>,
-                "score": <relevance score>,
-                "metadata": {<additional metadata>}
+                'content': <value>,
+                'key': <key path>,
+                'score': <relevance score>,
+                'metadata': {<additional metadata>}
             }
         """
         results = []
@@ -215,7 +213,7 @@ class AsyncDictResourceAdapter(AsyncResourceAdapter):
         self,
         key: str,
         default: Any = None,
-        context: Optional[Dict[str, Any]] = None
+        context: Dict[str, Any] | None = None
     ) -> Any:
         """Retrieve a value by key from the dictionary (async).
 
@@ -241,7 +239,7 @@ class AsyncDictResourceAdapter(AsyncResourceAdapter):
         self,
         query: str,
         k: int = 5,
-        filters: Optional[Dict[str, Any]] = None,
+        filters: Dict[str, Any] | None = None,
         **kwargs
     ) -> List[Dict[str, Any]]:
         """Perform text-based search across dictionary values (async).

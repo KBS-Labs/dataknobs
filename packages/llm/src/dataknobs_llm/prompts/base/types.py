@@ -9,7 +9,7 @@ This module defines:
 """
 
 from enum import Enum
-from typing import Any, Dict, List, Optional, TypedDict, Union
+from typing import Any, Dict, List, TypedDict
 from dataclasses import dataclass, field
 
 
@@ -67,15 +67,15 @@ class ValidationConfig:
         required_params: Set of parameter names that must be provided
         optional_params: Set of parameter names that are optional
     """
-    level: Optional[ValidationLevel] = None
+    level: ValidationLevel | None = None
     required_params: set[str] = field(default_factory=set)
     optional_params: set[str] = field(default_factory=set)
 
     def __init__(
         self,
-        level: Optional[ValidationLevel] = None,
-        required_params: Optional[List[str]] = None,
-        optional_params: Optional[List[str]] = None
+        level: ValidationLevel | None = None,
+        required_params: List[str] | None = None,
+        optional_params: List[str] | None = None
     ):
         """Initialize validation configuration.
 
@@ -169,7 +169,7 @@ class RenderResult:
     params_missing: List[str] = field(default_factory=list)
     validation_warnings: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
-    rag_metadata: Optional[Dict[str, Any]] = None
+    rag_metadata: Dict[str, Any] | None = None
 
 
 # Type aliases for convenience

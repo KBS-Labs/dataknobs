@@ -7,7 +7,7 @@ code duplication and ensures consistent behavior across both implementations.
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from ..base import (
     AbstractPromptLibrary,
@@ -15,7 +15,6 @@ from ..base import (
     RAGConfig,
     ValidationLevel,
     ValidationConfig,
-    RenderResult,
 )
 from ..rendering import TemplateRenderer
 
@@ -40,7 +39,7 @@ class BasePromptBuilder(ABC):
     def __init__(
         self,
         library: AbstractPromptLibrary,
-        adapters: Optional[Dict[str, Any]] = None,
+        adapters: Dict[str, Any] | None = None,
         default_validation: ValidationLevel = ValidationLevel.WARN,
         raise_on_rag_error: bool = False
     ):
@@ -207,8 +206,8 @@ class BasePromptBuilder(ABC):
     def _prepare_validation_config(
         self,
         template_dict: PromptTemplate,
-        validation_override: Optional[ValidationLevel]
-    ) -> Optional[ValidationConfig]:
+        validation_override: ValidationLevel | None
+    ) -> ValidationConfig | None:
         """Prepare validation configuration with override support.
 
         Args:
@@ -295,9 +294,9 @@ class BasePromptBuilder(ABC):
         template_dict: PromptTemplate,
         runtime_params: Dict[str, Any],
         include_rag: bool,
-        validation_override: Optional[ValidationLevel],
+        validation_override: ValidationLevel | None,
         return_rag_metadata: bool = False,
-        cached_rag: Optional[Dict[str, Any]] = None,
+        cached_rag: Dict[str, Any] | None = None,
         index: int = 0,
         **kwargs: Any
     ):

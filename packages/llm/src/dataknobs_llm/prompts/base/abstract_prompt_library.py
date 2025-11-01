@@ -4,7 +4,7 @@ This module defines the interface that all prompt library implementations must f
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from .types import PromptTemplate, MessageIndex, RAGConfig
 
@@ -24,7 +24,7 @@ class AbstractPromptLibrary(ABC):
         self,
         name: str,
         **kwargs: Any
-    ) -> Optional[PromptTemplate]:
+    ) -> PromptTemplate | None:
         """Retrieve a system prompt template by name.
 
         Args:
@@ -52,7 +52,7 @@ class AbstractPromptLibrary(ABC):
         self,
         name: str,
         **kwargs: Any
-    ) -> Optional[PromptTemplate]:
+    ) -> PromptTemplate | None:
         """Retrieve a user prompt template by name.
 
         Args:
@@ -80,7 +80,7 @@ class AbstractPromptLibrary(ABC):
         self,
         name: str,
         **kwargs: Any
-    ) -> Optional[MessageIndex]:
+    ) -> MessageIndex | None:
         """Retrieve a message index by name.
 
         Args:
@@ -108,7 +108,7 @@ class AbstractPromptLibrary(ABC):
         self,
         name: str,
         **kwargs: Any
-    ) -> Optional[RAGConfig]:
+    ) -> RAGConfig | None:
         """Retrieve a standalone RAG configuration by name.
 
         Standalone RAG configs can be referenced from prompts or used directly.

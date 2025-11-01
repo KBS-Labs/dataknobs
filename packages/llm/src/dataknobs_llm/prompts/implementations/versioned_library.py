@@ -4,8 +4,7 @@ This module provides a prompt library with full versioning support,
 combining version management, A/B testing, and metrics tracking.
 """
 
-from typing import Any, Dict, List, Optional
-from pathlib import Path
+from typing import Any, Dict, List
 
 from ..base import AbstractPromptLibrary, PromptTemplate, MessageIndex, RAGConfig
 from ..versioning import (
@@ -17,7 +16,6 @@ from ..versioning import (
     PromptVariant,
     PromptMetrics,
     VersionStatus,
-    VersioningError,
 )
 
 
@@ -70,8 +68,8 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
 
     def __init__(
         self,
-        storage: Optional[Any] = None,
-        base_library: Optional[AbstractPromptLibrary] = None,
+        storage: Any | None = None,
+        base_library: AbstractPromptLibrary | None = None,
     ):
         """Initialize versioned prompt library.
 
@@ -97,12 +95,12 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         name: str,
         prompt_type: str,
         template: str,
-        version: Optional[str] = None,
-        defaults: Optional[Dict[str, Any]] = None,
-        validation: Optional[Dict[str, Any]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        created_by: Optional[str] = None,
-        tags: Optional[List[str]] = None,
+        version: str | None = None,
+        defaults: Dict[str, Any] | None = None,
+        validation: Dict[str, Any] | None = None,
+        metadata: Dict[str, Any] | None = None,
+        created_by: str | None = None,
+        tags: List[str] | None = None,
         status: VersionStatus = VersionStatus.ACTIVE,
     ) -> PromptVersion:
         """Create a new prompt version.
@@ -145,7 +143,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         name: str,
         prompt_type: str,
         version: str = "latest",
-    ) -> Optional[PromptVersion]:
+    ) -> PromptVersion | None:
         """Get a specific prompt version.
 
         Args:
@@ -162,8 +160,8 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         self,
         name: str,
         prompt_type: str,
-        tags: Optional[List[str]] = None,
-        status: Optional[VersionStatus] = None,
+        tags: List[str] | None = None,
+        status: VersionStatus | None = None,
     ) -> List[PromptVersion]:
         """List all versions of a prompt.
 
@@ -201,8 +199,8 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         name: str,
         prompt_type: str,
         variants: List[PromptVariant],
-        traffic_split: Optional[Dict[str, float]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        traffic_split: Dict[str, float] | None = None,
+        metadata: Dict[str, Any] | None = None,
     ) -> PromptExperiment:
         """Create an A/B test experiment.
 
@@ -257,7 +255,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
     async def get_experiment(
         self,
         experiment_id: str,
-    ) -> Optional[PromptExperiment]:
+    ) -> PromptExperiment | None:
         """Get an experiment by ID.
 
         Args:
@@ -270,9 +268,9 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
 
     async def list_experiments(
         self,
-        name: Optional[str] = None,
-        prompt_type: Optional[str] = None,
-        status: Optional[str] = None,
+        name: str | None = None,
+        prompt_type: str | None = None,
+        status: str | None = None,
     ) -> List[PromptExperiment]:
         """List experiments.
 
@@ -292,10 +290,10 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         self,
         version_id: str,
         success: bool = True,
-        response_time: Optional[float] = None,
-        tokens: Optional[int] = None,
-        user_rating: Optional[float] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        response_time: float | None = None,
+        tokens: int | None = None,
+        user_rating: float | None = None,
+        metadata: Dict[str, Any] | None = None,
     ):
         """Record a usage event for metrics tracking.
 
@@ -351,7 +349,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         name: str,
         version: str = "latest",
         **kwargs: Any
-    ) -> Optional[PromptTemplate]:
+    ) -> PromptTemplate | None:
         """Get a system prompt template.
 
         This method is synchronous for compatibility with AbstractPromptLibrary.
@@ -391,7 +389,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         name: str,
         version: str = "latest",
         **kwargs: Any
-    ) -> Optional[PromptTemplate]:
+    ) -> PromptTemplate | None:
         """Get a user prompt template.
 
         Args:
@@ -469,7 +467,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         self,
         name: str,
         **kwargs: Any
-    ) -> Optional[MessageIndex]:
+    ) -> MessageIndex | None:
         """Get a message index.
 
         Note: Message indexes are not versioned in this implementation.
@@ -500,7 +498,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         self,
         name: str,
         **kwargs: Any
-    ) -> Optional[RAGConfig]:
+    ) -> RAGConfig | None:
         """Get a RAG configuration.
 
         Note: RAG configs are not versioned in this implementation.

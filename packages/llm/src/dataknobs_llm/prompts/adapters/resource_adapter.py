@@ -12,7 +12,7 @@ Key concepts:
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 import logging
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ class ResourceAdapterBase:
     - Common initialization logic
     """
 
-    def __init__(self, name: str = "adapter", metadata: Optional[Dict[str, Any]] = None):
+    def __init__(self, name: str = "adapter", metadata: Dict[str, Any] | None = None):
         """Initialize the resource adapter base.
 
         Args:
@@ -37,7 +37,7 @@ class ResourceAdapterBase:
         """
         self._name = name
         self._metadata = metadata or {}
-        self._metadata_cache: Optional[Dict[str, Any]] = None
+        self._metadata_cache: Dict[str, Any] | None = None
 
     @property
     def name(self) -> str:
@@ -85,7 +85,7 @@ class ResourceAdapter(ResourceAdapterBase, ABC):
         self,
         key: str,
         default: Any = None,
-        context: Optional[Dict[str, Any]] = None
+        context: Dict[str, Any] | None = None
     ) -> Any:
         """Retrieve a value by key from the resource.
 
@@ -104,7 +104,7 @@ class ResourceAdapter(ResourceAdapterBase, ABC):
         self,
         query: str,
         k: int = 5,
-        filters: Optional[Dict[str, Any]] = None,
+        filters: Dict[str, Any] | None = None,
         **kwargs: Any
     ) -> List[Dict[str, Any]]:
         """Perform a search query against the resource.
@@ -124,7 +124,7 @@ class ResourceAdapter(ResourceAdapterBase, ABC):
         self,
         keys: List[str],
         default: Any = None,
-        context: Optional[Dict[str, Any]] = None
+        context: Dict[str, Any] | None = None
     ) -> Dict[str, Any]:
         """Retrieve multiple values by keys.
 
@@ -156,7 +156,7 @@ class AsyncResourceAdapter(ResourceAdapterBase, ABC):
         self,
         key: str,
         default: Any = None,
-        context: Optional[Dict[str, Any]] = None
+        context: Dict[str, Any] | None = None
     ) -> Any:
         """Retrieve a value by key from the resource (async).
 
@@ -175,7 +175,7 @@ class AsyncResourceAdapter(ResourceAdapterBase, ABC):
         self,
         query: str,
         k: int = 5,
-        filters: Optional[Dict[str, Any]] = None,
+        filters: Dict[str, Any] | None = None,
         **kwargs: Any
     ) -> List[Dict[str, Any]]:
         """Perform a search query against the resource (async).
@@ -195,7 +195,7 @@ class AsyncResourceAdapter(ResourceAdapterBase, ABC):
         self,
         keys: List[str],
         default: Any = None,
-        context: Optional[Dict[str, Any]] = None
+        context: Dict[str, Any] | None = None
     ) -> Dict[str, Any]:
         """Retrieve multiple values by keys (async).
 
@@ -229,8 +229,8 @@ class BaseSearchLogic:
     @staticmethod
     def format_search_result(
         item: Any,
-        score: Optional[float] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        score: float | None = None,
+        metadata: Dict[str, Any] | None = None
     ) -> Dict[str, Any]:
         """Format a search result into a standardized dictionary.
 
@@ -268,8 +268,8 @@ class BaseSearchLogic:
     @staticmethod
     def filter_results(
         results: List[Dict[str, Any]],
-        filters: Optional[Dict[str, Any]] = None,
-        min_score: Optional[float] = None
+        filters: Dict[str, Any] | None = None,
+        min_score: float | None = None
     ) -> List[Dict[str, Any]]:
         """Filter search results based on criteria.
 

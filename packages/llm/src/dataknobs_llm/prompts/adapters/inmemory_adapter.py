@@ -5,7 +5,7 @@ Useful for testing, demos, and examples where you need predictable behavior
 without external dependencies.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from .resource_adapter import ResourceAdapterBase, ResourceAdapter, AsyncResourceAdapter, BaseSearchLogic
 
 
@@ -18,16 +18,16 @@ class InMemoryAdapterBase(ResourceAdapterBase):
 
     def __init__(
         self,
-        search_results: Optional[List[Dict[str, Any]]] = None,
-        data: Optional[Dict[str, Any]] = None,
+        search_results: List[Dict[str, Any]] | None = None,
+        data: Dict[str, Any] | None = None,
         name: str = "inmemory"
     ):
         """Initialize in-memory adapter base.
 
         Args:
             search_results: List of results to return from search().
-                Each result should be a dict with at least a "content" key.
-                Optional keys: "score", "metadata", etc.
+                Each result should be a dict with at least a content key.
+                Optional keys: score, metadata, etc.
             data: Optional dictionary for key-value storage (used by get_value)
             name: Name identifier for this adapter
         """
@@ -44,7 +44,7 @@ class InMemoryAdapterBase(ResourceAdapterBase):
         self,
         key: str,
         default: Any = None,
-        context: Optional[Dict[str, Any]] = None
+        context: Dict[str, Any] | None = None
     ) -> Any:
         """Shared implementation for get_value.
 
@@ -62,7 +62,7 @@ class InMemoryAdapterBase(ResourceAdapterBase):
         self,
         query: str,
         k: int = 5,
-        filters: Optional[Dict[str, Any]] = None,
+        filters: Dict[str, Any] | None = None,
         **kwargs
     ) -> List[Dict[str, Any]]:
         """Shared implementation for search.
@@ -118,8 +118,8 @@ class InMemoryAdapter(InMemoryAdapterBase, ResourceAdapter):
         >>> # Simple usage with search results
         >>> adapter = InMemoryAdapter(
         ...     search_results=[
-        ...         {"content": "Python is a programming language", "score": 0.9},
-        ...         {"content": "Python was created by Guido van Rossum", "score": 0.8}
+        ...         {"content": "Python is a programming language", 'score': 0.9},
+        ...         {"content": "Python was created by Guido van Rossum", 'score': 0.8}
         ...     ],
         ...     name="docs"
         ... )
@@ -133,17 +133,17 @@ class InMemoryAdapter(InMemoryAdapterBase, ResourceAdapter):
 
         >>> # With key-value storage
         >>> adapter = InMemoryAdapter(
-        ...     data={"language": "Python", "version": "3.11"},
+        ...     data={'language': "Python", 'version': "3.11"},
         ...     name="config"
         ... )
-        >>> adapter.get_value("language")
+        >>> adapter.get_value('language')
         'Python'
     """
 
     def __init__(
         self,
-        search_results: Optional[List[Dict[str, Any]]] = None,
-        data: Optional[Dict[str, Any]] = None,
+        search_results: List[Dict[str, Any]] | None = None,
+        data: Dict[str, Any] | None = None,
         name: str = "inmemory"
     ):
         """Initialize synchronous in-memory adapter.
@@ -159,7 +159,7 @@ class InMemoryAdapter(InMemoryAdapterBase, ResourceAdapter):
         self,
         key: str,
         default: Any = None,
-        context: Optional[Dict[str, Any]] = None
+        context: Dict[str, Any] | None = None
     ) -> Any:
         """Retrieve a value by key from the in-memory data.
 
@@ -177,7 +177,7 @@ class InMemoryAdapter(InMemoryAdapterBase, ResourceAdapter):
         self,
         query: str,
         k: int = 5,
-        filters: Optional[Dict[str, Any]] = None,
+        filters: Dict[str, Any] | None = None,
         **kwargs
     ) -> List[Dict[str, Any]]:
         """Return predefined search results.
@@ -204,8 +204,8 @@ class InMemoryAsyncAdapter(InMemoryAdapterBase, AsyncResourceAdapter):
     Example:
         >>> adapter = InMemoryAsyncAdapter(
         ...     search_results=[
-        ...         {"content": "Result 1", "score": 0.9},
-        ...         {"content": "Result 2", "score": 0.8}
+        ...         {'content': "Result 1", 'score': 0.9},
+        ...         {'content': "Result 2", 'score': 0.8}
         ...     ]
         ... )
         >>> results = await adapter.search("test")
@@ -217,8 +217,8 @@ class InMemoryAsyncAdapter(InMemoryAdapterBase, AsyncResourceAdapter):
 
     def __init__(
         self,
-        search_results: Optional[List[Dict[str, Any]]] = None,
-        data: Optional[Dict[str, Any]] = None,
+        search_results: List[Dict[str, Any]] | None = None,
+        data: Dict[str, Any] | None = None,
         name: str = "inmemory_async"
     ):
         """Initialize asynchronous in-memory adapter.
@@ -234,7 +234,7 @@ class InMemoryAsyncAdapter(InMemoryAdapterBase, AsyncResourceAdapter):
         self,
         key: str,
         default: Any = None,
-        context: Optional[Dict[str, Any]] = None
+        context: Dict[str, Any] | None = None
     ) -> Any:
         """Retrieve a value by key from the in-memory data (async).
 
@@ -252,7 +252,7 @@ class InMemoryAsyncAdapter(InMemoryAdapterBase, AsyncResourceAdapter):
         self,
         query: str,
         k: int = 5,
-        filters: Optional[Dict[str, Any]] = None,
+        filters: Dict[str, Any] | None = None,
         **kwargs
     ) -> List[Dict[str, Any]]:
         """Return predefined search results (async).

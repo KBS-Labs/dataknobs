@@ -31,15 +31,13 @@ Example:
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from ..base import (
     BasePromptLibrary,
     PromptTemplate,
     RAGConfig,
     MessageIndex,
-    ValidationConfig,
-    ValidationLevel,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,7 +61,7 @@ class ConfigPromptLibrary(BasePromptLibrary):
         >>> template = library.get_system_prompt("greet")
     """
 
-    def __init__(self, config: Optional[Dict[str, Any]] = None):
+    def __init__(self, config: Dict[str, Any] | None = None):
         """Initialize configuration-based prompt library.
 
         Args:
@@ -164,7 +162,7 @@ class ConfigPromptLibrary(BasePromptLibrary):
 
         return message_index
 
-    def get_system_prompt(self, name: str, **kwargs) -> Optional[PromptTemplate]:
+    def get_system_prompt(self, name: str, **kwargs) -> PromptTemplate | None:
         """Get a system prompt by name.
 
         Args:
@@ -176,7 +174,7 @@ class ConfigPromptLibrary(BasePromptLibrary):
         """
         return self._get_cached_system_prompt(name)
 
-    def get_user_prompt(self, name: str, **kwargs) -> Optional[PromptTemplate]:
+    def get_user_prompt(self, name: str, **kwargs) -> PromptTemplate | None:
         """Get a user prompt by name.
 
         Args:
@@ -188,7 +186,7 @@ class ConfigPromptLibrary(BasePromptLibrary):
         """
         return self._get_cached_user_prompt(name)
 
-    def get_message_index(self, name: str, **kwargs) -> Optional[MessageIndex]:
+    def get_message_index(self, name: str, **kwargs) -> MessageIndex | None:
         """Get a message index by name.
 
         Args:
@@ -200,7 +198,7 @@ class ConfigPromptLibrary(BasePromptLibrary):
         """
         return self._get_cached_message_index(name)
 
-    def get_rag_config(self, name: str, **kwargs) -> Optional[RAGConfig]:
+    def get_rag_config(self, name: str, **kwargs) -> RAGConfig | None:
         """Get a standalone RAG configuration by name.
 
         Args:

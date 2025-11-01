@@ -23,7 +23,7 @@ Example:
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from ..base import (
     AbstractPromptLibrary,
@@ -54,8 +54,8 @@ class CompositePromptLibrary(AbstractPromptLibrary):
 
     def __init__(
         self,
-        libraries: Optional[List[AbstractPromptLibrary]] = None,
-        names: Optional[List[str]] = None
+        libraries: List[AbstractPromptLibrary] | None = None,
+        names: List[str] | None = None
     ):
         """Initialize composite prompt library.
 
@@ -75,7 +75,7 @@ class CompositePromptLibrary(AbstractPromptLibrary):
     def add_library(
         self,
         library: AbstractPromptLibrary,
-        name: Optional[str] = None,
+        name: str | None = None,
         priority: int = -1
     ) -> None:
         """Add a library to the composite.
@@ -121,7 +121,7 @@ class CompositePromptLibrary(AbstractPromptLibrary):
             logger.warning(f"Library '{name}' not found")
             return False
 
-    def get_system_prompt(self, name: str, **kwargs) -> Optional[PromptTemplate]:
+    def get_system_prompt(self, name: str, **kwargs) -> PromptTemplate | None:
         """Get a system prompt by name, searching libraries in order.
 
         Args:
@@ -144,7 +144,7 @@ class CompositePromptLibrary(AbstractPromptLibrary):
         self,
         name: str,
         **kwargs
-    ) -> Optional[PromptTemplate]:
+    ) -> PromptTemplate | None:
         """Get a user prompt by name, searching libraries in order.
 
         Args:
@@ -165,7 +165,7 @@ class CompositePromptLibrary(AbstractPromptLibrary):
         logger.debug(f"User prompt '{name}' not found in any library")
         return None
 
-    def get_message_index(self, name: str, **kwargs) -> Optional[MessageIndex]:
+    def get_message_index(self, name: str, **kwargs) -> MessageIndex | None:
         """Get a message index by name, searching libraries in order.
 
         Args:
@@ -184,7 +184,7 @@ class CompositePromptLibrary(AbstractPromptLibrary):
         logger.debug(f"Message index '{name}' not found in any library")
         return None
 
-    def get_rag_config(self, name: str, **kwargs) -> Optional[RAGConfig]:
+    def get_rag_config(self, name: str, **kwargs) -> RAGConfig | None:
         """Get a standalone RAG configuration by name, searching libraries in order.
 
         Args:
@@ -242,7 +242,7 @@ class CompositePromptLibrary(AbstractPromptLibrary):
             prompts.update(lib.list_system_prompts())
         return sorted(prompts)
 
-    def list_user_prompts(self, name: Optional[str] = None) -> List[str]:
+    def list_user_prompts(self, name: str | None = None) -> List[str]:
         """List available user prompts from all libraries.
 
         Args:
@@ -295,7 +295,7 @@ class CompositePromptLibrary(AbstractPromptLibrary):
         """Get list of library names in priority order."""
         return self._names.copy()
 
-    def get_library_by_name(self, name: str) -> Optional[AbstractPromptLibrary]:
+    def get_library_by_name(self, name: str) -> AbstractPromptLibrary | None:
         """Get a specific library by name.
 
         Args:

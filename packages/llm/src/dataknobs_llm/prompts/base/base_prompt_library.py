@@ -4,7 +4,7 @@ This module provides BasePromptLibrary, a concrete implementation of
 AbstractPromptLibrary that includes caching and common utilities.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 import logging
 
 from .abstract_prompt_library import AbstractPromptLibrary
@@ -29,7 +29,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
     def __init__(
         self,
         enable_cache: bool = True,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Dict[str, Any] | None = None
     ):
         """Initialize the base prompt library.
 
@@ -83,7 +83,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
 
     # ===== Cache Helpers =====
 
-    def _get_cached_system_prompt(self, name: str) -> Optional[PromptTemplate]:
+    def _get_cached_system_prompt(self, name: str) -> PromptTemplate | None:
         """Get system prompt from cache if caching is enabled.
 
         Args:
@@ -106,7 +106,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
         if self._enable_cache:
             self._system_prompt_cache[name] = template
 
-    def _get_cached_user_prompt(self, name: str) -> Optional[PromptTemplate]:
+    def _get_cached_user_prompt(self, name: str) -> PromptTemplate | None:
         """Get user prompt from cache if caching is enabled.
 
         Args:
@@ -129,7 +129,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
         if self._enable_cache:
             self._user_prompt_cache[name] = template
 
-    def _get_cached_message_index(self, name: str) -> Optional[MessageIndex]:
+    def _get_cached_message_index(self, name: str) -> MessageIndex | None:
         """Get message index from cache if caching is enabled.
 
         Args:
@@ -152,7 +152,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
         if self._enable_cache:
             self._message_index_cache[name] = index
 
-    def _get_cached_rag_config(self, name: str) -> Optional[RAGConfig]:
+    def _get_cached_rag_config(self, name: str) -> RAGConfig | None:
         """Get standalone RAG config from cache if caching is enabled.
 
         Args:
@@ -179,7 +179,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
         self,
         prompt_name: str,
         prompt_type: str
-    ) -> Optional[List[RAGConfig]]:
+    ) -> List[RAGConfig] | None:
         """Get prompt RAG configs from cache if caching is enabled.
 
         Args:
@@ -403,7 +403,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
         self,
         name: str,
         **kwargs: Any
-    ) -> Optional[PromptTemplate]:
+    ) -> PromptTemplate | None:
         """Retrieve a system prompt template by name.
 
         Subclasses must implement this method.
@@ -426,7 +426,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
         name: str,
         index: int = 0,
         **kwargs: Any
-    ) -> Optional[PromptTemplate]:
+    ) -> PromptTemplate | None:
         """Retrieve a user prompt template by name and index.
 
         Subclasses must implement this method.
@@ -435,7 +435,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
             f"{self.__class__.__name__} must implement get_user_prompt()"
         )
 
-    def list_user_prompts(self, name: Optional[str] = None) -> List[str]:
+    def list_user_prompts(self, name: str | None = None) -> List[str]:
         """List available user prompts.
 
         Subclasses must implement this method.
@@ -448,7 +448,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
         self,
         name: str,
         **kwargs: Any
-    ) -> Optional[MessageIndex]:
+    ) -> MessageIndex | None:
         """Retrieve a message index by name.
 
         Subclasses must implement this method.
@@ -470,7 +470,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
         self,
         name: str,
         **kwargs: Any
-    ) -> Optional[RAGConfig]:
+    ) -> RAGConfig | None:
         """Retrieve a standalone RAG configuration by name.
 
         Subclasses must implement this method.

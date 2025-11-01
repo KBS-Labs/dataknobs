@@ -9,7 +9,7 @@ This module provides template rendering with:
 
 import re
 import logging
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Set, Tuple
 from dataclasses import dataclass
 
 from jinja2 import Environment, TemplateSyntaxError as Jinja2SyntaxError, Undefined
@@ -112,9 +112,9 @@ class TemplateRenderer:
         self,
         template: str,
         params: Dict[str, Any],
-        validation: Optional[ValidationConfig] = None,
-        template_metadata: Optional[Dict[str, Any]] = None,
-        mode: Optional[TemplateMode] = None
+        validation: ValidationConfig | None = None,
+        template_metadata: Dict[str, Any] | None = None,
+        mode: TemplateMode | None = None
     ) -> RenderResult:
         """Render a template with parameters and validation.
 
@@ -207,8 +207,8 @@ class TemplateRenderer:
         self,
         prompt_template: PromptTemplate,
         params: Dict[str, Any],
-        validation_override: Optional[ValidationLevel] = None,
-        mode_override: Optional[TemplateMode] = None
+        validation_override: ValidationLevel | None = None,
+        mode_override: TemplateMode | None = None
     ) -> RenderResult:
         """Render a PromptTemplate structure with validation.
 
@@ -263,7 +263,7 @@ class TemplateRenderer:
         self,
         templates: List[str],
         params: Dict[str, Any],
-        validation: Optional[ValidationConfig] = None
+        validation: ValidationConfig | None = None
     ) -> List[RenderResult]:
         """Render multiple templates with the same parameters.
 

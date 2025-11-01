@@ -19,7 +19,7 @@ Schema Versioning:
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 import logging
 
 from dataknobs_structures.tree import Tree
@@ -59,8 +59,8 @@ class ConversationNode:
     message: LLMMessage
     node_id: str
     timestamp: datetime = field(default_factory=datetime.now)
-    prompt_name: Optional[str] = None
-    branch_name: Optional[str] = None
+    prompt_name: str | None = None
+    branch_name: str | None = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -136,7 +136,7 @@ def calculate_node_id(node: Tree) -> str:
     return ".".join(indexes) if indexes else "0"
 
 
-def get_node_by_id(tree: Tree, node_id: str) -> Optional[Tree]:
+def get_node_by_id(tree: Tree, node_id: str) -> Tree | None:
     """Retrieve tree node by its dot-delimited ID.
 
     Args:
@@ -248,7 +248,7 @@ class ConversationState:
     updated_at: datetime = field(default_factory=datetime.now)
     schema_version: str = SCHEMA_VERSION
 
-    def get_current_node(self) -> Optional[Tree]:
+    def get_current_node(self) -> Tree | None:
         """Get the current tree node."""
         return get_node_by_id(self.message_tree, self.current_node_id)
 
@@ -313,7 +313,7 @@ class ConversationState:
             nodes_by_id[node.node_id] = node
 
         # Find root (node with empty ID)
-        root_node = nodes_by_id.get("", None)
+        root_node = nodes_by_id.get("")
         if root_node is None:
             # Try to find node with no parent in edges
             child_ids = {edge[1] for edge in data["edges"]}
@@ -434,7 +434,7 @@ class ConversationStorage(ABC):
     async def load_conversation(
         self,
         conversation_id: str
-    ) -> Optional[ConversationState]:
+    ) -> ConversationState | None:
         """Load conversation state.
 
         Args:
@@ -460,7 +460,7 @@ class ConversationStorage(ABC):
     @abstractmethod
     async def list_conversations(
         self,
-        filter_metadata: Optional[Dict[str, Any]] = None,
+        filter_metadata: Dict[str, Any] | None = None,
         limit: int = 100,
         offset: int = 0
     ) -> List[ConversationState]:
@@ -553,7 +553,7 @@ class DataknobsConversationStorage(ConversationStorage):
     async def load_conversation(
         self,
         conversation_id: str
-    ) -> Optional[ConversationState]:
+    ) -> ConversationState | None:
         """Load conversation from backend."""
         try:
             # Read record by ID
@@ -575,7 +575,7 @@ class DataknobsConversationStorage(ConversationStorage):
 
     async def list_conversations(
         self,
-        filter_metadata: Optional[Dict[str, Any]] = None,
+        filter_metadata: Dict[str, Any] | None = None,
         limit: int = 100,
         offset: int = 0
     ) -> List[ConversationState]:

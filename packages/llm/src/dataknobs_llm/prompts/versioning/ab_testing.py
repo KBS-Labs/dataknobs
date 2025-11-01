@@ -10,7 +10,7 @@ This module provides:
 import uuid
 import hashlib
 import random
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from datetime import datetime
 
 from .types import (
@@ -54,7 +54,7 @@ class ABTestManager:
         ```
     """
 
-    def __init__(self, storage: Optional[Any] = None):
+    def __init__(self, storage: Any | None = None):
         """Initialize A/B test manager.
 
         Args:
@@ -70,8 +70,8 @@ class ABTestManager:
         name: str,
         prompt_type: str,
         variants: List[PromptVariant],
-        traffic_split: Optional[Dict[str, float]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        traffic_split: Dict[str, float] | None = None,
+        metadata: Dict[str, Any] | None = None,
     ) -> PromptExperiment:
         """Create a new A/B test experiment.
 
@@ -130,7 +130,7 @@ class ABTestManager:
     async def get_experiment(
         self,
         experiment_id: str,
-    ) -> Optional[PromptExperiment]:
+    ) -> PromptExperiment | None:
         """Retrieve an experiment by ID.
 
         Args:
@@ -143,9 +143,9 @@ class ABTestManager:
 
     async def list_experiments(
         self,
-        name: Optional[str] = None,
-        prompt_type: Optional[str] = None,
-        status: Optional[str] = None,
+        name: str | None = None,
+        prompt_type: str | None = None,
+        status: str | None = None,
     ) -> List[PromptExperiment]:
         """List experiments with optional filters.
 
@@ -260,7 +260,7 @@ class ABTestManager:
         self,
         experiment_id: str,
         status: str,
-        end_date: Optional[datetime] = None,
+        end_date: datetime | None = None,
     ) -> PromptExperiment:
         """Update experiment status.
 
@@ -296,7 +296,7 @@ class ABTestManager:
         self,
         experiment_id: str,
         user_id: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Get existing user assignment without creating a new one.
 
         Args:

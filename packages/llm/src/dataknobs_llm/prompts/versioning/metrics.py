@@ -7,13 +7,12 @@ This module provides:
 - Experiment metrics analysis
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from datetime import datetime
 
 from .types import (
     PromptMetrics,
     MetricEvent,
-    VersioningError,
 )
 
 
@@ -48,7 +47,7 @@ class MetricsCollector:
         ```
     """
 
-    def __init__(self, storage: Optional[Any] = None):
+    def __init__(self, storage: Any | None = None):
         """Initialize metrics collector.
 
         Args:
@@ -63,10 +62,10 @@ class MetricsCollector:
         self,
         version_id: str,
         success: bool = True,
-        response_time: Optional[float] = None,
-        tokens: Optional[int] = None,
-        user_rating: Optional[float] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        response_time: float | None = None,
+        tokens: int | None = None,
+        user_rating: float | None = None,
+        metadata: Dict[str, Any] | None = None,
     ) -> MetricEvent:
         """Record a single usage event.
 
@@ -135,9 +134,9 @@ class MetricsCollector:
     async def get_events(
         self,
         version_id: str,
-        start_time: Optional[datetime] = None,
-        end_time: Optional[datetime] = None,
-        limit: Optional[int] = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        limit: int | None = None,
     ) -> List[MetricEvent]:
         """Get raw events for a version.
 

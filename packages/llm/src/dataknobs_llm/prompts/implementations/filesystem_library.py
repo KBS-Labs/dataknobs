@@ -33,15 +33,13 @@ import json
 import logging
 import yaml
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 
 from ..base import (
     BasePromptLibrary,
     PromptTemplate,
     RAGConfig,
     MessageIndex,
-    ValidationConfig,
-    ValidationLevel,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,7 +65,7 @@ class FileSystemPromptLibrary(BasePromptLibrary):
         self,
         prompt_dir: Union[str, Path],
         auto_load: bool = True,
-        file_extensions: Optional[List[str]] = None
+        file_extensions: List[str] | None = None
     ):
         """Initialize filesystem prompt library.
 
@@ -241,7 +239,7 @@ class FileSystemPromptLibrary(BasePromptLibrary):
             ValueError: If file format is unsupported or parsing fails
         """
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
+            with open(file_path, encoding='utf-8') as f:
                 content = f.read()
 
             if file_path.suffix in [".yaml", ".yml"]:
@@ -259,7 +257,7 @@ class FileSystemPromptLibrary(BasePromptLibrary):
     # Note: _parse_prompt_template(), _parse_validation_config(), and
     # _parse_rag_config() are now inherited from BasePromptLibrary
 
-    def get_system_prompt(self, name: str, **kwargs) -> Optional[PromptTemplate]:
+    def get_system_prompt(self, name: str, **kwargs) -> PromptTemplate | None:
         """Get a system prompt by name.
 
         Args:
@@ -271,7 +269,7 @@ class FileSystemPromptLibrary(BasePromptLibrary):
         """
         return self._get_cached_system_prompt(name)
 
-    def get_user_prompt(self, name: str, **kwargs) -> Optional[PromptTemplate]:
+    def get_user_prompt(self, name: str, **kwargs) -> PromptTemplate | None:
         """Get a user prompt by name.
 
         Args:
@@ -283,7 +281,7 @@ class FileSystemPromptLibrary(BasePromptLibrary):
         """
         return self._get_cached_user_prompt(name)
 
-    def get_message_index(self, name: str, **kwargs) -> Optional[MessageIndex]:
+    def get_message_index(self, name: str, **kwargs) -> MessageIndex | None:
         """Get a message index by name.
 
         Args:
@@ -295,7 +293,7 @@ class FileSystemPromptLibrary(BasePromptLibrary):
         """
         return self._get_cached_message_index(name)
 
-    def get_rag_config(self, name: str, **kwargs) -> Optional[RAGConfig]:
+    def get_rag_config(self, name: str, **kwargs) -> RAGConfig | None:
         """Get a standalone RAG configuration by name.
 
         Args:

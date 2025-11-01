@@ -5,14 +5,12 @@ to be used as resource providers in the prompt library system. Supports both syn
 and async database backends.
 """
 
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, List, TYPE_CHECKING
 
 from .resource_adapter import ResourceAdapter, AsyncResourceAdapter, BaseSearchLogic
 
 if TYPE_CHECKING:
     from dataknobs_data.database import SyncDatabase, AsyncDatabase
-    from dataknobs_data.records import Record
-    from dataknobs_data.query import Query
 
 
 class DataknobsBackendAdapter(ResourceAdapter):
@@ -40,7 +38,7 @@ class DataknobsBackendAdapter(ResourceAdapter):
         database: "SyncDatabase",
         name: str = "dataknobs_backend",
         text_field: str = "content",
-        metadata_field: Optional[str] = None
+        metadata_field: str | None = None
     ):
         """Initialize dataknobs backend adapter.
 
@@ -59,7 +57,7 @@ class DataknobsBackendAdapter(ResourceAdapter):
         self,
         key: str,
         default: Any = None,
-        context: Optional[Dict[str, Any]] = None
+        context: Dict[str, Any] | None = None
     ) -> Any:
         """Retrieve a record or field value by ID.
 
@@ -99,7 +97,7 @@ class DataknobsBackendAdapter(ResourceAdapter):
                 # Return full record as dict
                 return record.to_dict(include_metadata=True)
 
-        except Exception as e:
+        except Exception:
             # Log error if needed, return default
             return default
 
@@ -107,7 +105,7 @@ class DataknobsBackendAdapter(ResourceAdapter):
         self,
         query: str,
         k: int = 5,
-        filters: Optional[Dict[str, Any]] = None,
+        filters: Dict[str, Any] | None = None,
         **kwargs
     ) -> List[Dict[str, Any]]:
         """Perform search using database backend.
@@ -197,7 +195,7 @@ class DataknobsBackendAdapter(ResourceAdapter):
 
             return results[:k]
 
-        except Exception as e:
+        except Exception:
             # Log error if needed
             return []
 
@@ -220,7 +218,7 @@ class AsyncDataknobsBackendAdapter(AsyncResourceAdapter):
         database: "AsyncDatabase",
         name: str = "async_dataknobs_backend",
         text_field: str = "content",
-        metadata_field: Optional[str] = None
+        metadata_field: str | None = None
     ):
         """Initialize async dataknobs backend adapter.
 
@@ -239,7 +237,7 @@ class AsyncDataknobsBackendAdapter(AsyncResourceAdapter):
         self,
         key: str,
         default: Any = None,
-        context: Optional[Dict[str, Any]] = None
+        context: Dict[str, Any] | None = None
     ) -> Any:
         """Retrieve a record or field value by ID (async).
 
@@ -268,7 +266,7 @@ class AsyncDataknobsBackendAdapter(AsyncResourceAdapter):
                 # Return full record as dict
                 return record.to_dict(include_metadata=True)
 
-        except Exception as e:
+        except Exception:
             # Log error if needed, return default
             return default
 
@@ -276,7 +274,7 @@ class AsyncDataknobsBackendAdapter(AsyncResourceAdapter):
         self,
         query: str,
         k: int = 5,
-        filters: Optional[Dict[str, Any]] = None,
+        filters: Dict[str, Any] | None = None,
         **kwargs
     ) -> List[Dict[str, Any]]:
         """Perform search using database backend (async).
@@ -348,6 +346,6 @@ class AsyncDataknobsBackendAdapter(AsyncResourceAdapter):
 
             return results[:k]
 
-        except Exception as e:
+        except Exception:
             # Log error if needed
             return []

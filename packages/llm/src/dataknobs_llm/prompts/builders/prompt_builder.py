@@ -13,7 +13,7 @@ The builder handles:
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 from ..base import (
     PromptTemplate,
@@ -55,7 +55,7 @@ class PromptBuilder(BasePromptBuilder):
     def __init__(
         self,
         library,
-        adapters: Optional[Dict[str, ResourceAdapter]] = None,
+        adapters: Dict[str, ResourceAdapter] | None = None,
         default_validation: ValidationLevel = ValidationLevel.WARN,
         raise_on_rag_error: bool = False
     ):
@@ -92,11 +92,11 @@ class PromptBuilder(BasePromptBuilder):
     def render_system_prompt(
         self,
         name: str,
-        params: Optional[Dict[str, Any]] = None,
+        params: Dict[str, Any] | None = None,
         include_rag: bool = True,
-        validation_override: Optional[ValidationLevel] = None,
+        validation_override: ValidationLevel | None = None,
         return_rag_metadata: bool = False,
-        cached_rag: Optional[Dict[str, Any]] = None,
+        cached_rag: Dict[str, Any] | None = None,
         **kwargs: Any
     ) -> RenderResult:
         """Render a system prompt with parameters and optional RAG content.
@@ -156,11 +156,11 @@ class PromptBuilder(BasePromptBuilder):
     def render_user_prompt(
         self,
         name: str,
-        params: Optional[Dict[str, Any]] = None,
+        params: Dict[str, Any] | None = None,
         include_rag: bool = True,
-        validation_override: Optional[ValidationLevel] = None,
+        validation_override: ValidationLevel | None = None,
         return_rag_metadata: bool = False,
-        cached_rag: Optional[Dict[str, Any]] = None,
+        cached_rag: Dict[str, Any] | None = None,
         **kwargs: Any
     ) -> RenderResult:
         """Render a user prompt with parameters and optional RAG content.
@@ -208,9 +208,9 @@ class PromptBuilder(BasePromptBuilder):
         template_dict: PromptTemplate,
         runtime_params: Dict[str, Any],
         include_rag: bool,
-        validation_override: Optional[ValidationLevel],
+        validation_override: ValidationLevel | None,
         return_rag_metadata: bool = False,
-        cached_rag: Optional[Dict[str, Any]] = None,
+        cached_rag: Dict[str, Any] | None = None,
         **kwargs: Any
     ) -> RenderResult:
         """Internal method to render a prompt template synchronously.
@@ -290,7 +290,7 @@ class PromptBuilder(BasePromptBuilder):
         params: Dict[str, Any],
         capture_metadata: bool = False,
         **kwargs: Any
-    ) -> tuple[Dict[str, str], Optional[Dict[str, Any]]]:
+    ) -> tuple[Dict[str, str], Dict[str, Any] | None]:
         """Execute RAG searches and format results for injection.
 
         Args:
