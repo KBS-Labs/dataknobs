@@ -234,3 +234,68 @@ class TestNestedFieldQueries:
         results = db.search(query)
         assert len(results) == 2
         assert set(r.id for r in results) == {"reading-1", "reading-2"}
+    def test_metadata_as_field_not_attribute(self):
+        """Test that 'metadata' field is accessed before metadata attribute.
+        
+        This is a regression test for a bug where get_nested_value() would
+        always check record.metadata attribute for paths like 'metadata.key',
+        ignoring when 'metadata' was actually a field in the data.
+        """
+        db = SyncMemoryDatabase()
+        
+        # Create a record where 'metadata' is a FIELD (not the attribute)
+        record = Record(
+            id="test-field-metadata",
+            data={
+                "conversation_id": "conv-123",
+                "metadata": {"user_id": "alice", "session": "abc"}
+            },
+            storage_id="test-field-metadata"
+        )
+        
+        db.create(record)
+        
+        # Test direct field access
+        loaded = db.read("test-field-metadata")
+        assert loaded.get_value("metadata") == {"user_id": "alice", "session": "abc"}
+        
+        # Test nested access - this was broken before the fix
+        assert loaded.get_value("metadata.user_id") == "alice"
+        assert loaded.get_value("metadata.session") == "abc"
+        
+        # Test querying by nested field
+        query = Query(filters=[Filter("metadata.user_id", Operator.EQ, "alice")])
+        results = db.search(query)
+        assert len(results) == 1
+        assert results[0].id == "test-field-metadata"
+        
+        # Query with different value should return nothing
+        query = Query(filters=[Filter("metadata.user_id", Operator.EQ, "bob")])
+        results = db.search(query)
+        assert len(results) == 0
+    
+    @pytest.mark.asyncio
+    async def test_metadata_as_field_async(self):
+        """Test metadata field access with async database."""
+        import uuid
+        db = AsyncMemoryDatabase()
+
+        # Create records with metadata as a field
+        for idx, user in enumerate(["alice", "bob", "alice"]):
+            record = Record(
+                data={
+                    "conversation_id": f"conv-{user}-{idx}",
+                    "metadata": {"user_id": user, "active": True}
+                },
+                storage_id=f"conv-{user}-{uuid.uuid4()}"
+            )
+            await db.create(record)
+
+        # Query by nested metadata field
+        query = Query(filters=[Filter("metadata.user_id", Operator.EQ, "alice")])
+        results = await db.search(query)
+
+        # Should find records with metadata field containing user_id=alice
+        assert len(results) == 2
+        for result in results:
+            assert result.get_value("metadata.user_id") == "alice"

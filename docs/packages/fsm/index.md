@@ -23,9 +23,10 @@ Comprehensive lifecycle management with pooling for:
 
 - Database connections with transaction support
 - HTTP clients with retry logic
-- LLM providers with rate limiting
 - File system resources
-- Vector stores for embeddings
+- Custom resource providers
+
+For LLM integration, see the [dataknobs-llm package](../llm/index.md).
 
 ### Transform Functions
 
@@ -44,7 +45,8 @@ Production-ready patterns for:
 - API orchestration with multi-service coordination
 - Error recovery with retry and circuit breaker patterns
 - File processing pipelines
-- LLM/AI workflow orchestration
+
+For LLM/AI workflows, see the [dataknobs-llm package](../llm/index.md).
 
 ### Advanced Features
 
@@ -79,11 +81,13 @@ Or with optional dependencies:
 # With database support
 pip install dataknobs-fsm[database]
 
-# With LLM provider support
-pip install dataknobs-fsm[llm]
-
 # With all extras
 pip install dataknobs-fsm[all]
+```
+
+For LLM functionality, install the separate LLM package:
+```bash
+pip install dataknobs-llm
 ```
 
 ## Basic Usage
@@ -306,10 +310,16 @@ The FSM package is built with a modular, layered architecture:
 
 ### LLM/AI Workflows
 
-- Multi-provider LLM orchestration (OpenAI, Anthropic, HuggingFace)
-- Prompt chaining and response validation
-- Fallback strategies for provider failures
-- Token usage optimization
+> **Note**: LLM functionality has moved to the [dataknobs-llm package](../llm/index.md).
+
+The dedicated LLM package provides:
+- Multi-provider LLM support (OpenAI, Anthropic)
+- FSM-based conversation flows
+- Prompt templating and versioning
+- RAG integration and caching
+- A/B testing and metrics
+
+See the [LLM package documentation](../llm/index.md) for details.
 
 ### File Processing
 

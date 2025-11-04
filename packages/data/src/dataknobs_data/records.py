@@ -211,7 +211,7 @@ class Record:
         """Get a value from a nested path using dot notation.
 
         Supports paths like:
-        - "metadata.type" - access metadata dict
+        - "metadata.type" - access metadata field (if exists) or metadata dict attribute
         - "fields.temperature" - access field values
         - "metadata.config.timeout" - nested dict access
 
@@ -231,10 +231,18 @@ class Record:
 
         # Handle special root paths
         if root == "metadata":
-            # Navigate through metadata dict
-            if not self.metadata:
+            # Check if "metadata" is a field first, before falling back to attribute
+            if root in self.fields:
+                # It's a field, navigate through its value
+                field_value = self.get_value(root, None)
+                if isinstance(field_value, dict):
+                    return self._traverse_dict(field_value, remaining, default)
                 return default
-            return self._traverse_dict(self.metadata, remaining, default)
+            elif self.metadata:
+                # Fall back to record's metadata attribute
+                return self._traverse_dict(self.metadata, remaining, default)
+            else:
+                return default
         elif root == "fields":
             # Get field value by name
             if "." in remaining:

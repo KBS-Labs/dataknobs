@@ -200,30 +200,32 @@ with manager.resource_context("api", "state_123") as api:
 
 ### LLM Resource
 
-Integrate with Large Language Model providers:
+> **Note**: LLM functionality has moved to the [dataknobs-llm package](../../llm/index.md).
 
+For LLM integration, use the dedicated LLM package which provides:
+- Multi-provider LLM support (OpenAI, Anthropic)
+- Conversation management with FSM-based flows
+- Prompt templating and versioning
+- RAG integration and caching
+
+**Quick example:**
 ```python
-from dataknobs_fsm.resources.llm import LLMResourceAdapter
+from dataknobs_llm import create_llm_provider, LLMConfig
 
-# Create LLM resource
-llm_resource = LLMResourceAdapter(
-    name="gpt4",
+# Create LLM provider
+config = LLMConfig(
     provider="openai",
     model="gpt-4",
-    api_key="${OPENAI_API_KEY}",
-    temperature=0.7,
-    max_tokens=1000
+    api_key="your-key",
+    temperature=0.7
 )
+llm = create_llm_provider(config)
 
-manager.register_provider("llm", llm_resource)
-
-# Use in state
-with manager.resource_context("llm", "state_123") as llm:
-    response = llm.complete(
-        prompt="Analyze this text",
-        system="You are a helpful assistant"
-    )
+# Use with conversation manager
+response = await llm.acomplete("Analyze this text")
 ```
+
+See the [LLM package documentation](../../llm/index.md) for complete details.
 
 ## Resource Pooling
 
