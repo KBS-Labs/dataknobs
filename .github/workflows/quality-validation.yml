@@ -38,13 +38,23 @@ jobs:
     name: Validate Quality Checks
     needs: check-changes
     if: needs.check-changes.outputs.code-changed == 'true'
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
         fetch-depth: 1
-    
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v3
+      with:
+        enable-cache: true
+
+    - name: Validate package references
+      run: |
+        echo "🔍 Validating package references..."
+        uv run python bin/validate-package-references.py
+
     - name: Validate quality artifacts
       run: |
         echo "🔍 Validating quality check artifacts..."
@@ -142,11 +152,13 @@ jobs:
           mkdocs-monorepo-plugin mkdocs-awesome-pages-plugin \
           mkdocs-git-revision-date-localized-plugin
         uv pip install --system -e packages/common
+        uv pip install --system -e packages/config
+        uv pip install --system -e packages/data
+        uv pip install --system -e packages/fsm
+        uv pip install --system -e packages/llm
         uv pip install --system -e packages/structures
         uv pip install --system -e packages/utils
         uv pip install --system -e packages/xization
-        uv pip install --system -e packages/legacy
-        uv pip install --system -e packages/data
     
     - name: Build documentation
       run: mkdocs build --strict

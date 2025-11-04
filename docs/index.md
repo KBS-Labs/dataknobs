@@ -51,9 +51,10 @@ Dataknobs is a collection of Python packages designed to facilitate the developm
 
 | Package | Description | Version |
 |---------|-------------|---------|
-| [dataknobs-data](packages/data/index.md) | Data abstraction layer with multiple backend support | 0.3.1 |
 | [dataknobs-config](packages/config/index.md) | Flexible and modular configuration management | 0.2.0 |
+| [dataknobs-data](packages/data/index.md) | Data abstraction layer with multiple backend support | 0.3.1 |
 | [dataknobs-fsm](packages/fsm/index.md) | Finite State Machine framework for building workflows | 0.1.1 |
+| [dataknobs-llm](packages/llm/index.md) | LLM integration with prompt management and tools | 0.1.0 |
 | [dataknobs-structures](packages/structures/index.md) | Core data structures (Tree, Document, RecordStore) | 1.0.1 |
 | [dataknobs-utils](packages/utils/index.md) | Utility functions for JSON, files, and integrations | 1.1.0 |
 | [dataknobs-xization](packages/xization/index.md) | Text processing, tokenization, and normalization | 1.0.1 |

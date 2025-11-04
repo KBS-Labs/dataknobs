@@ -380,6 +380,16 @@ else
     PACKAGE_PATTERN="packages/*/src"
 fi
 
+# Validate package references
+print_status "Validating package references across codebase..."
+if uv run python "$SCRIPT_DIR/validate-package-references.py" > "$ARTIFACTS_DIR/package-validation.log" 2>&1; then
+    print_success "Package references are consistent"
+else
+    print_error "Package validation failed - see $ARTIFACTS_DIR/package-validation.log"
+    cat "$ARTIFACTS_DIR/package-validation.log"
+    exit 1
+fi
+
 # Run linting
 if [ "$SKIP_LINT" != "yes" ]; then
     print_status "Running linting checks..."

@@ -266,6 +266,70 @@ class TestYourFeature:
 - Update README if needed
 - Add entries to CHANGELOG if appropriate
 
+### Adding a New Package
+
+When adding a new package to the monorepo, follow this process to ensure it's properly integrated:
+
+#### 1. Register the Package
+
+Add your package to the central registry:
+
+```bash
+# Edit .dataknobs/packages.json
+{
+  "name": "newpackage",
+  "pypi_name": "dataknobs-newpackage",
+  "description": "Brief description of the package",
+  "version": "0.1.0",
+  "category": "core",  # or "experimental", "legacy"
+  "requires_docs_build": true,
+  "deprecated": false
+}
+```
+
+#### 2. Validate Package References
+
+Run the validation script to check what needs updating:
+
+```bash
+# Using dk command
+dk validate-pkgs
+
+# Or directly
+uv run python bin/validate-package-references.py
+```
+
+The validator will tell you exactly which files need updates.
+
+#### 3. Update Files as Needed
+
+The validation typically catches:
+
+- **GitHub Workflows**: Add package to docs build steps
+- **Release Workflow**: Add to package selection dropdown
+- **README.md**: List the package in installation examples
+- **Documentation**: Add to package tables
+
+#### 4. Verify Before PR
+
+```bash
+# Run full PR checks (includes validation)
+dk pr
+
+# Or just run validation
+dk validate-pkgs
+```
+
+#### Why This Matters
+
+The package registry system ensures:
+- ✅ No missing references when adding packages
+- ✅ Consistent package information across files
+- ✅ Automated validation in CI
+- ✅ Clear documentation of package metadata
+
+For more details, see `.dataknobs/README.md` for the full package registry documentation.
+
 ## Coding Standards
 
 ### Python Style Guide
