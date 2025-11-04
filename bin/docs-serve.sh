@@ -15,6 +15,7 @@ fi
 # Serve documentation
 echo "Starting documentation server at http://localhost:8000"
 echo "Press Ctrl+C to stop"
-mkdocs serve --dev-addr localhost:8000
+# Suppress DeprecationWarning from asttokens (incompatible with astroid 4.x)
+PYTHONWARNINGS="ignore::DeprecationWarning:asttokens" mkdocs serve --dev-addr localhost:8000
 
 echo "✅ Documentation server stopped"

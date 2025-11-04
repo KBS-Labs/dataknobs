@@ -12,6 +12,11 @@ pip install dataknobs-xization
 
 The Xization package specializes in text preprocessing and includes:
 
+- **Markdown Chunking**: Parse and chunk markdown documents for RAG applications
+  - Preserves heading hierarchy and semantic structure
+  - Supports code blocks, tables, lists, and other markdown constructs
+  - Streaming support for large documents
+  - Flexible configuration for chunk size, overlap, and heading inclusion
 - **Tokenization**: Advanced character-based and feature-driven tokenization
 - **Normalization**: Text normalization with camelCase expansion, symbol handling
 - **Masking**: Character-level masking and feature extraction
@@ -25,15 +30,68 @@ dataknobs-xization/
 ├── src/
 │   └── dataknobs_xization/
 │       ├── __init__.py
+│       ├── markdown/
+│       │   ├── md_parser.py       # Markdown parsing to Tree structure
+│       │   ├── md_chunker.py      # Chunking with configurable parameters
+│       │   └── md_streaming.py    # Streaming for large documents
 │       ├── annotations.py
 │       ├── authorities.py
 │       ├── lexicon.py
 │       ├── masking_tokenizer.py
 │       └── normalize.py
+├── scripts/
+│   └── md_cli.py                  # CLI for markdown chunking
+├── examples/
+│   └── markdown/
+│       ├── example_usage.py       # Comprehensive examples
+│       └── example_document.md    # Sample markdown files
 └── tests/
 ```
 
 ## Quick Start
+
+### Markdown Chunking for RAG
+
+```python
+from dataknobs_xization import parse_markdown, chunk_markdown_tree, HeadingInclusion
+```
+
+# Parse markdown into tree structure
+````python
+markdown_text = """
+# User Guide
+
+## Installation
+Install the package using pip or uv.
+
+## Quick Start
+Here's how to get started with the library.
+
+### Example Code
+```python
+import example
+```
+"""
+
+tree = parse_markdown(markdown_text)
+
+# Generate chunks for RAG with headings in metadata
+chunks = chunk_markdown_tree(
+    tree,
+    max_chunk_size=500,
+    chunk_overlap=50,
+    heading_inclusion=HeadingInclusion.IN_METADATA
+)
+
+# Use chunks in vector store
+for chunk in chunks:
+    heading_context = chunk.metadata.get_heading_path()
+    print(f"Context: {heading_context}")
+    print(f"Text: {chunk.text[:100]}...")
+    # store_in_vector_db(chunk.text, chunk.metadata.to_dict())
+````
+
+See the [Markdown Chunking](markdown-chunking.md) guide for complete documentation.
 
 ### Text Normalization
 
@@ -425,12 +483,14 @@ For complete API documentation, see the [Xization API Reference](api.md).
 
 ## Module Documentation
 
+- [Markdown Chunking](markdown-chunking.md) - Parse and chunk markdown for RAG
 - [Tokenization](tokenization.md) - Character-based tokenization
-- [Normalization](normalization.md) - Text normalization functions  
+- [Normalization](normalization.md) - Text normalization functions
 - [Masking](masking.md) - Character masking and features
 
 ## See Also
 
+- [Markdown Chunking Examples](../../examples/markdown-chunking.md)
 - [Text Normalization Examples](../../examples/text-normalization.md)
 - [Integration with Structures](../structures/index.md)
 - [Utils Package](../utils/index.md)

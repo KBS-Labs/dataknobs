@@ -237,7 +237,7 @@ class Annotations:
         if self._df is not None:
             alist = self._df.to_dict(orient="records")
             self._df = None
-        return alist if alist is not None else list()
+        return alist if alist is not None else []
 
     def _build_df(self) -> pd.DataFrame:
         """Get the annotations as a df."""
@@ -303,7 +303,7 @@ class AnnotationsBuilder:
         :param key_fields: The dictionary of key fields
         :param kwargs: Any extra fields to add
         """
-        result = dict()
+        result = {}
         result.update(key_fields)
         if self.data_defaults is not None:
             # Add data_defaults
@@ -392,7 +392,7 @@ class AnnotationsGroup:
         :param autolock: True to automatically lock this group when (1) at
             least one row has been added and (2) a row is rejected.
         """
-        self.rows = list()  # List[RowData]
+        self.rows = []  # List[RowData]
         self.row_accessor = row_accessor
         self.field_col_type = field_col_type
         self.accept_fn = accept_fn
@@ -732,17 +732,17 @@ class AnnotationsGroupList:
     def __init__(
         self,
         groups: List[AnnotationsGroup] = None,
-        accept_fn: Callable[["AnnotationsGroupList", AnnotationsGroup], bool] = lambda l, g: l.size
+        accept_fn: Callable[["AnnotationsGroupList", AnnotationsGroup], bool] = lambda lst, g: lst.size
         == 0
-        or not g.is_subset_of_any(l.groups),
+        or not g.is_subset_of_any(lst.groups),
     ):
         """:param groups: The initial groups for this list
-        :param accept_fn: A fn(l, g) that returns True to accept the group, g,
-            into this list, l, or False to reject the group. If None, then all
+        :param accept_fn: A fn(lst, g) that returns True to accept the group, g,
+            into this list, lst, or False to reject the group. If None, then all
             groups are always accepted. The default function will reject any
             group that is a subset of any existing group in the list.
         """
-        self.groups = groups if groups is not None else list()
+        self.groups = groups if groups is not None else []
         self.accept_fn = accept_fn
         self._coverage = None
 
@@ -838,7 +838,7 @@ class AnnotatedText(dk_doc.Text):
     def bookmarks(self) -> Dict[str, pd.DataFrame]:
         """Get this object's bookmarks"""
         if self._bookmarks is None:
-            self._bookmarks = dict()
+            self._bookmarks = {}
         return self._bookmarks
 
     def get_text(
@@ -1134,13 +1134,14 @@ class EntityAnnotator(BasicAnnotator):
         :param largest_only: True to only mark largest records.
         :return: The annotations added to the text object
         """
-        annot2mask = (
-            None
-            if annot_mask_cols is None
-            else {  # TODO: Use this?!
-                col: self.mask_char for col in annot_mask_cols
-            }
-        )
+        # TODO: Use annot_mask_cols to mask annotations
+        # annot2mask = (
+        #     None
+        #     if annot_mask_cols is None
+        #     else {
+        #         col: self.mask_char for col in annot_mask_cols
+        #     }
+        # )
 
         annots = self.annotate_text(text_obj.text)
         if annots is None:

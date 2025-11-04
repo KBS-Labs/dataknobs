@@ -13,13 +13,26 @@ from dataknobs_xization import (
     normalize
 )
 
+# Import markdown chunking utilities
+from dataknobs_xization import (
+    parse_markdown,
+    chunk_markdown_tree,
+    stream_markdown_file,
+    HeadingInclusion,
+    ChunkFormat
+)
+
 # Import key classes
 from dataknobs_xization.masking_tokenizer import CharacterFeatures, TextFeatures
+from dataknobs_xization.markdown.md_parser import MarkdownParser, MarkdownNode
+from dataknobs_xization.markdown.md_chunker import MarkdownChunker, Chunk, ChunkMetadata
+from dataknobs_xization.markdown.md_streaming import StreamingMarkdownProcessor
 ```
 
 ## Module Index
 
 ### Core Modules
+- [markdown](markdown-chunking.md) - Markdown parsing and chunking for RAG
 - [normalize](normalization.md) - Text normalization and standardization
 - [masking_tokenizer](masking.md) - Character-level features and masking
 - [tokenization](tokenization.md) - Advanced tokenization capabilities
@@ -30,6 +43,41 @@ from dataknobs_xization.masking_tokenizer import CharacterFeatures, TextFeatures
 - **lexicon** - Lexical analysis and vocabulary management
 
 ## Quick Reference
+
+### Markdown Chunking
+```python
+from dataknobs_xization import (
+    parse_markdown,
+    chunk_markdown_tree,
+    stream_markdown_file,
+    stream_markdown_string,
+    HeadingInclusion,
+    ChunkFormat
+)
+
+# Parse markdown into tree
+tree = parse_markdown("# Title\nBody text.")
+
+# Generate chunks
+chunks = chunk_markdown_tree(
+    tree,
+    max_chunk_size=500,
+    chunk_overlap=50,
+    heading_inclusion=HeadingInclusion.BOTH,
+    chunk_format=ChunkFormat.MARKDOWN
+)
+
+# Stream large files
+for chunk in stream_markdown_file("large_doc.md", max_chunk_size=1000):
+    print(chunk.text, chunk.metadata.to_dict())
+
+# Access chunk data
+for chunk in chunks:
+    print(f"Text: {chunk.text}")
+    print(f"Headings: {chunk.metadata.get_heading_path()}")
+    print(f"Size: {chunk.metadata.chunk_size}")
+    print(f"Index: {chunk.metadata.chunk_index}")
+```
 
 ### Text Normalization
 ```python
@@ -93,6 +141,122 @@ trigrams = tokenization.generate_ngrams(["a", "b", "c", "d"], 3)
 ```
 
 ## Detailed Module APIs
+
+### markdown Module
+
+**Parser Functions:**
+- `parse_markdown(source, max_line_length=None, preserve_empty_lines=False) -> Tree`
+  - Parse markdown content into tree structure
+  - Returns Tree with MarkdownNode data
+
+**Chunking Functions:**
+- `chunk_markdown_tree(tree, max_chunk_size=1000, chunk_overlap=100, heading_inclusion=HeadingInclusion.BOTH, chunk_format=ChunkFormat.MARKDOWN, combine_under_heading=True) -> List[Chunk]`
+  - Generate chunks from markdown tree
+  - Returns list of Chunk objects with text and metadata
+
+**Streaming Functions:**
+- `stream_markdown_file(file_path, max_chunk_size=1000, chunk_overlap=100, heading_inclusion=HeadingInclusion.BOTH, chunk_format=ChunkFormat.MARKDOWN) -> Iterator[Chunk]`
+  - Stream chunks from file
+  - Yields Chunk objects incrementally
+
+- `stream_markdown_string(content, ...) -> Iterator[Chunk]`
+  - Stream chunks from string content
+
+**Enums:**
+- `HeadingInclusion` - Control heading inclusion
+  - `BOTH` - Include in text and metadata
+  - `IN_TEXT` - Include only in text
+  - `IN_METADATA` - Include only in metadata
+  - `NONE` - Exclude headings
+
+- `ChunkFormat` - Control output format
+  - `MARKDOWN` - Markdown formatted text
+  - `PLAIN` - Plain text without formatting
+  - `DICT` - Dictionary representation
+
+**Classes:**
+
+`MarkdownParser`
+```python
+class MarkdownParser:
+    def __init__(self, max_line_length=None, preserve_empty_lines=False)
+    def parse(self, source) -> Tree
+```
+
+`MarkdownNode`
+```python
+class MarkdownNode:
+    text: str           # Node text content
+    level: int          # Heading level (1-6) or 0 for body
+    node_type: str      # 'heading', 'body', 'code', 'table', 'list', etc.
+    line_number: int    # Source line number
+    metadata: dict      # Additional metadata
+
+    def is_heading() -> bool
+    def is_body() -> bool
+    def is_code() -> bool
+```
+
+`Chunk`
+```python
+class Chunk:
+    text: str                    # Chunk text
+    metadata: ChunkMetadata      # Chunk metadata
+
+    def to_dict() -> dict
+```
+
+`ChunkMetadata`
+```python
+class ChunkMetadata:
+    headings: List[str]          # Heading texts from root to chunk
+    heading_levels: List[int]    # Corresponding heading levels
+    line_number: int             # Starting line number
+    chunk_index: int             # Sequential chunk index
+    chunk_size: int              # Size in characters
+    custom: dict                 # Custom metadata (node_type, language, etc.)
+
+    def get_heading_path(separator=' / ') -> str
+    def to_dict() -> dict
+```
+
+`MarkdownChunker`
+```python
+class MarkdownChunker:
+    def __init__(
+        self,
+        max_chunk_size=1000,
+        chunk_overlap=100,
+        heading_inclusion=HeadingInclusion.BOTH,
+        chunk_format=ChunkFormat.MARKDOWN,
+        combine_under_heading=True
+    )
+
+    def chunk(self, tree: Tree) -> Iterator[Chunk]
+```
+
+`StreamingMarkdownProcessor`
+```python
+class StreamingMarkdownProcessor:
+    def __init__(self, max_chunk_size=1000, chunk_overlap=100)
+
+    def process_file(self, file_path: str) -> Iterator[Chunk]
+    def process_string(self, content: str) -> Iterator[Chunk]
+```
+
+`AdaptiveStreamingProcessor`
+```python
+class AdaptiveStreamingProcessor(StreamingMarkdownProcessor):
+    def __init__(
+        self,
+        max_chunk_size=1000,
+        chunk_overlap=100,
+        memory_limit_nodes=10000,
+        adaptive_threshold=0.8
+    )
+```
+
+For complete markdown chunking documentation, see [Markdown Chunking Guide](markdown-chunking.md).
 
 ### normalize Module
 

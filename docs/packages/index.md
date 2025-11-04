@@ -12,7 +12,7 @@ Dataknobs is organized as a collection of modular packages, each serving a speci
 | [dataknobs-llm](llm/index.md) | LLM integration & prompt engineering | Unified LLM interface, Prompt templates, Conversations, A/B testing |
 | [dataknobs-structures](structures/index.md) | Core data structures | Tree, Document, RecordStore, ConditionalDict |
 | [dataknobs-utils](utils/index.md) | Utility functions | JSON, File, Elasticsearch, LLM utilities |
-| [dataknobs-xization](xization/index.md) | Text processing | Tokenization, Normalization, Masking |
+| [dataknobs-xization](xization/index.md) | Text processing | Chunking, Tokenization, Normalization, Masking |
 | [dataknobs-common](common/index.md) | Shared components | Base classes, Common utilities |
 | [dataknobs](legacy/index.md) | Legacy compatibility | Backward compatibility (deprecated) |
 

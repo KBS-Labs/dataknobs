@@ -109,6 +109,18 @@ disallow_untyped_defs = false
 disallow_incomplete_defs = false
 check_untyped_defs = false
 
+# Relaxed type checking for dataknobs_xization (complex NLP/annotation code)
+[[tool.mypy.overrides]]
+module = "dataknobs_xization.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+disallow_untyped_decorators = false
+warn_return_any = false
+warn_unused_ignores = false
+warn_no_return = false
+warn_unreachable = false
+
 # Gradual migration for complex vector store implementations
 [[tool.mypy.overrides]]
 module = [
@@ -160,16 +172,30 @@ select = [
 ignore = [
     # Documentation - keep minimal
     "D100", # Missing docstring in public module
+    "D101", # Missing docstring in public class
+    "D102", # Missing docstring in public method
+    "D103", # Missing docstring in public function
     "D104", # Missing docstring in public package
     "D105", # Missing docstring in magic method
     "D107", # Missing docstring in __init__
     "D200", # One-line docstring should fit on one line
     "D203", # 1 blank line required before class docstring (conflicts with D211)
+    "D205", # 1 blank line required between summary line and description
+    "D210", # No whitespace allowed surrounding docstring text
     "D213", # Multi-line docstring summary should start at the second line (conflicts with D212)
     "D401", # First line should be in imperative mood
     "D415", # First line should end with period
     "D417", # Missing argument description in docstring
-    
+
+    # flake8-bugbear
+    "B905", # zip() without an explicit strict parameter
+
+    # flake8-eradicate - allow commented code with TODOs
+    "ERA001", # Found commented-out code
+
+    # Pylint warnings - loop variables
+    "PLW2901", # Loop variable overwritten by assignment target
+
     # Whitespace and formatting - auto-fixable
     "W291", # Trailing whitespace
     "W293", # Blank line contains whitespace
@@ -186,10 +212,16 @@ ignore = [
     
     # Import location - often necessary for circular deps
     "PLC0415", # Import should be at the top-level of a file
+
+    # Type-checking imports - not always practical
+    "TC001", # Move application import into type-checking block
+    "TC002", # Move third-party import into type-checking block
+    "TC003", # Move standard library import into type-checking block
     
     # Code simplification - sometimes less readable
     "SIM102", # Use a single if statement instead of nested if
     "SIM103", # Return negated condition directly - sometimes clearer with if/else
+    "SIM110", # Use return any() instead of for loop - sometimes clearer with explicit loop
     "SIM118", # Use key in dict instead of key in dict.keys() - explicit is clearer
     "PLW3301", # Nested max calls - more readable when nested for complex cases
     "RUF006", # Store asyncio.create_task reference - only needed if canceling task
@@ -200,6 +232,7 @@ ignore = [
     "SIM117", # Use single with statement with multiple contexts
     
     # Complexity metrics - already configured
+    "PLR0206", # Cannot have defined parameters for properties
     "PLR0911", # Too many return statements (configured at 6)
     "PLR0912", # Too many branches (configured at 12)
     "PLR0913", # Too many arguments to function call
