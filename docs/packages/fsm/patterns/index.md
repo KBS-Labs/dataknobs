@@ -69,25 +69,23 @@ Coordinate multiple API calls with advanced features.
 [Learn more →](api-orchestration.md)
 
 ### 4. [LLM Workflow Pattern](llm-workflow.md)
-Build sophisticated LLM-powered workflows.
 
-**Class:** `LLMWorkflow`
-**Import:** `from dataknobs_fsm.patterns.llm_workflow import LLMWorkflow, LLMWorkflowConfig`
+> **Note**: LLM functionality has moved to the [dataknobs-llm package](../../llm/index.md).
 
 **Use Cases:**
-- Simple prompt-response workflows
-- Chain-of-thought reasoning
+- Conversation management with FSM-based flows
+- Multi-turn conversations with branching
 - RAG (Retrieval Augmented Generation)
-- Multi-agent systems
+- Prompt versioning and A/B testing
 
 **Features:**
-- Workflow types: `SIMPLE`, `CHAIN`, `RAG`, `COT`, `TREE`, `AGENT`, `MULTI_AGENT`
-- Multiple LLM provider support (OpenAI, Anthropic, HuggingFace)
-- Document indexing for RAG
-- Token usage tracking and optimization
-- Prompt templating and chaining
+- FSM-based conversation flows
+- Multi-provider LLM support (OpenAI, Anthropic)
+- Prompt templating with Jinja2
+- RAG integration and caching
+- Conversation tree and branching
 
-[Learn more →](llm-workflow.md)
+[Migration guide →](llm-workflow.md) | [LLM Package docs →](../../llm/index.md)
 
 ### 5. [Error Recovery Pattern](error-recovery.md)
 Implement robust error handling and recovery strategies.
@@ -190,15 +188,13 @@ api_orchestrator = create_rest_api_orchestrator(
     mode=OrchestrationMode.PARALLEL
 )
 
-# LLM Workflow
-from dataknobs_fsm.patterns.llm_workflow import create_simple_llm_workflow
+# LLM Workflow - now in dataknobs-llm package
+from dataknobs_llm import create_llm_provider, LLMConfig
+from dataknobs_llm.conversations import ConversationManager
 
-llm_workflow = create_simple_llm_workflow(
-    prompt_template="Summarize this text: {text}",
-    model="gpt-4",
-    provider="openai",
-    temperature=0.7
-)
+config = LLMConfig(provider="openai", model="gpt-4", temperature=0.7)
+llm = create_llm_provider(config)
+# See LLM package docs for complete examples
 
 # Error Recovery
 from dataknobs_fsm.patterns.error_recovery import create_retry_workflow
@@ -306,7 +302,7 @@ Choose the right pattern based on your needs:
 | **Database ETL** | `DatabaseETL` | Database operations | FULL_REFRESH, INCREMENTAL, UPSERT, APPEND |
 | **File Processing** | `FileProcessor` | File operations | STREAM, BATCH, WHOLE |
 | **API Orchestration** | `APIOrchestrator` | API workflows | SEQUENTIAL, PARALLEL, FANOUT, PIPELINE |
-| **LLM Workflow** | `LLMWorkflow` | AI applications | SIMPLE, CHAIN, RAG, AGENT |
+| **LLM Workflow** | See [dataknobs-llm](../../llm/index.md) | AI applications | Conversation flows, RAG, versioning |
 | **Error Recovery** | `ErrorRecoveryWorkflow` | Resilience | RETRY, CIRCUIT_BREAKER, FALLBACK |
 
 ## Common Configurations
@@ -443,11 +439,11 @@ from dataknobs_fsm.patterns.api_orchestration import (
     APIEndpoint, create_rest_api_orchestrator, create_graphql_orchestrator
 )
 
-# LLM Workflow Pattern
-from dataknobs_fsm.patterns.llm_workflow import (
-    LLMWorkflow, LLMWorkflowConfig, WorkflowType,
-    create_simple_llm_workflow, create_rag_workflow, create_chain_workflow
-)
+# LLM Workflow Pattern - moved to dataknobs-llm package
+# See: https://docs.dataknobs.com/packages/llm/
+from dataknobs_llm import create_llm_provider, LLMConfig
+from dataknobs_llm.conversations import ConversationManager
+from dataknobs_llm.conversations.flow import ConversationFlow, FlowState
 
 # Error Recovery Pattern
 from dataknobs_fsm.patterns.error_recovery import (

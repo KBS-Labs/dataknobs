@@ -17,6 +17,7 @@ members = [
     "dataknobs-data",
     "dataknobs-fsm",
     "dataknobs-kv",
+    "dataknobs-llm",
     "dataknobs-structures",
     "dataknobs-utils",
     "dataknobs-workspace",
@@ -1635,6 +1636,47 @@ requires-dist = [
 provides-extras = ["cache", "all", "dev"]
 
 [[package]]
+name = "dataknobs-llm"
+version = "0.1.0"
+source = { editable = "packages/llm" }
+dependencies = [
+    { name = "dataknobs-common" },
+    { name = "dataknobs-config" },
+    { name = "dataknobs-data" },
+    { name = "jinja2" },
+    { name = "pyyaml" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-benchmark" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "dataknobs-common", editable = "packages/common" },
+    { name = "dataknobs-config", editable = "packages/config" },
+    { name = "dataknobs-data", editable = "packages/data" },
+    { name = "jinja2", specifier = ">=3.1.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=1.0.0" },
+    { name = "pytest", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", specifier = ">=0.21.0" },
+    { name = "pytest-benchmark", specifier = ">=4.0.0" },
+    { name = "pytest-cov", specifier = ">=4.0.0" },
+    { name = "ruff", specifier = ">=0.1.0" },
+]
+
+[[package]]
 name = "dataknobs-structures"
 version = "1.0.1"
 source = { editable = "packages/structures" }
@@ -1699,6 +1741,7 @@ dependencies = [
     { name = "dataknobs-data" },
     { name = "dataknobs-fsm" },
     { name = "dataknobs-kv" },
+    { name = "dataknobs-llm" },
     { name = "dataknobs-structures" },
     { name = "dataknobs-utils" },
     { name = "dataknobs-xization" },
@@ -1739,6 +1782,7 @@ requires-dist = [
     { name = "dataknobs-data", editable = "packages/data" },
     { name = "dataknobs-fsm", editable = "packages/fsm" },
     { name = "dataknobs-kv", editable = "packages/kv" },
+    { name = "dataknobs-llm", editable = "packages/llm" },
     { name = "dataknobs-structures", editable = "packages/structures" },
     { name = "dataknobs-utils", editable = "packages/utils" },
     { name = "dataknobs-xization", editable = "packages/xization" },

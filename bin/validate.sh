@@ -357,6 +357,10 @@ PRINT_EXCEPTIONS=(
     "*/api/advanced.py"   # Debugger class needs user output
 )
 
+# Note: The following are automatically excluded:
+# - Doctest examples (lines containing ">>>" or "...")
+# - Lines with "# validate: ignore-print" marker (for legitimate example code)
+
 # Function to check if a file should be excluded
 should_exclude_file() {
     local file="$1"
@@ -373,20 +377,31 @@ for target in "${VALIDATE_TARGETS[@]}"; do
         # Single file
         if [[ "$(basename "$target")" != "__init__.py" ]] && \
            [[ "$target" != *test* ]] && \
-           ! should_exclude_file "$target" && \
-           grep -q "print(" "$target"; then
-            PRINT_FILES+=("$target")
-            HAS_PRINTS=true
+           ! should_exclude_file "$target"; then
+            # Check for print statements, excluding docstrings and ignored lines
+            if grep -n "print(" "$target" | \
+               grep -v ">>>" | \
+               grep -v '^\s*[0-9]\+:[[:space:]]*\.\.\.' | \
+               grep -v "# validate: ignore-print" | \
+               grep -q .; then
+                PRINT_FILES+=("$target")
+                HAS_PRINTS=true
+            fi
         fi
     elif [[ -d "$target" ]]; then
         # Directory - find all files with print statements
         while IFS= read -r file; do
             # Check if this file should be excluded
-            if ! should_exclude_file "$file"; then
+            if ! should_exclude_file "$file" && \
+               grep -n "print(" "$file" | \
+               grep -v ">>>" | \
+               grep -v '^\s*[0-9]\+:[[:space:]]*\.\.\.' | \
+               grep -v "# validate: ignore-print" | \
+               grep -q .; then
                 PRINT_FILES+=("$file")
                 HAS_PRINTS=true
             fi
-        done < <(find "$target" -name "*.py" ! -name "__init__.py" ! -path "*/test*" -exec grep -l "print(" {} \; 2>/dev/null)
+        done < <(find "$target" -name "*.py" ! -name "__init__.py" ! -path "*/test*" -print0 | xargs -0 grep -l "print(" 2>/dev/null)
     fi
 done
 
@@ -400,7 +415,8 @@ else
         if [[ $shown -lt 10 ]]; then
             # Show the file and line numbers where print statements appear
             echo -e "${RED}      - $file:${NC}"
-            grep -n "print(" "$file" | head -3 | while IFS=: read -r line_num line_content; do
+            # Exclude docstring examples (>>> and ...) and ignored lines
+            grep -n "print(" "$file" | grep -v ">>>" | grep -v '^\s*[0-9]\+:[[:space:]]*\.\.\.' | grep -v "# validate: ignore-print" | head -3 | while IFS=: read -r line_num line_content; do
                 # Trim whitespace and show a preview
                 trimmed=$(echo "$line_content" | sed 's/^[[:space:]]*//' | cut -c1-60)
                 echo -e "${RED}        Line $line_num: $trimmed${NC}"

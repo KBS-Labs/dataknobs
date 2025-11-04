@@ -1,11 +1,11 @@
 {
-  "timestamp": "2025-10-22T23:01:15Z",
+  "timestamp": "2025-11-04T22:14:37Z",
   "python_version": "Python 3.10.18",
-  "uv_version": "uv 0.9.4 (Homebrew 2025-10-18)",
+  "uv_version": "uv 0.9.7 (Homebrew 2025-10-30)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/markdown-chunking",
-  "git_commit": "91a13d949ad5ee8c974723ba0c9c2cef566767b3",
+  "git_branch": "update-dependencies",
+  "git_commit": "88ade46e9ae3adafdf6b12e86622e8d617c611da",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

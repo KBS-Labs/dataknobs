@@ -6,15 +6,19 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: 'Package to release (e.g., structures, utils, xization, common, legacy)'
+        description: 'Package to release (e.g., structures, utils, xization, common, legacy, llm, fsm)'
         required: true
         type: choice
         options:
+          - common
+          - config
+          - data
           - structures
           - utils
           - xization
-          - common
           - legacy
+          - llm
+          - fsm
           - all
       test_pypi:
         description: 'Release to TestPyPI first'

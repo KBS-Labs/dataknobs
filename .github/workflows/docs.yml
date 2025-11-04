@@ -49,9 +49,14 @@ jobs:
           uv pip install --system -e packages/utils
           uv pip install --system -e packages/xization
           uv pip install --system -e packages/legacy
+          uv pip install --system -e packages/llm
+          uv pip install --system -e packages/fsm
 
       - name: Build documentation
         run: mkdocs build --strict
+
+      - name: Add .nojekyll file
+        run: touch ./site/.nojekyll
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
