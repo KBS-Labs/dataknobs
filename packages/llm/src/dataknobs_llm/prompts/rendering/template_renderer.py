@@ -18,7 +18,7 @@ from dataknobs_llm.template_utils import render_conditional_template
 from ..base.types import (
     ValidationLevel,
     ValidationConfig,
-    PromptTemplate,
+    PromptTemplateDict,
     RenderResult,
     TemplateMode
 )
@@ -205,15 +205,15 @@ class TemplateRenderer:
 
     def render_prompt_template(
         self,
-        prompt_template: PromptTemplate,
+        prompt_template: PromptTemplateDict,
         params: Dict[str, Any],
         validation_override: ValidationLevel | None = None,
         mode_override: TemplateMode | None = None
     ) -> RenderResult:
-        """Render a PromptTemplate structure with validation.
+        """Render a PromptTemplateDict structure with validation.
 
         Args:
-            prompt_template: PromptTemplate dictionary with template, defaults, validation
+            prompt_template: PromptTemplateDict dictionary with template, defaults, validation
             params: Parameters to substitute (merged with template defaults)
             validation_override: Optional runtime validation level override
             mode_override: Optional template mode override

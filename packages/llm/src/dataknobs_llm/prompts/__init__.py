@@ -40,7 +40,7 @@ For more information, see the documentation in the design document.
 from .base import (
     ValidationLevel,
     ValidationConfig,
-    PromptTemplate,
+    PromptTemplateDict,
     RAGConfig,
     MessageIndex,
     RenderResult,
@@ -115,7 +115,7 @@ __all__ = [
     "ValidationConfig",
 
     # Types
-    "PromptTemplate",
+    "PromptTemplateDict",
     "RAGConfig",
     "MessageIndex",
     "RenderResult",

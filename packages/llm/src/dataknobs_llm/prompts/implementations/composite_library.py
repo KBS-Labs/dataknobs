@@ -27,7 +27,7 @@ from typing import Any, Dict, List
 
 from ..base import (
     AbstractPromptLibrary,
-    PromptTemplate,
+    PromptTemplateDict,
     RAGConfig,
     MessageIndex,
 )
@@ -121,7 +121,7 @@ class CompositePromptLibrary(AbstractPromptLibrary):
             logger.warning(f"Library '{name}' not found")
             return False
 
-    def get_system_prompt(self, name: str, **kwargs) -> PromptTemplate | None:
+    def get_system_prompt(self, name: str, **kwargs) -> PromptTemplateDict | None:
         """Get a system prompt by name, searching libraries in order.
 
         Args:
@@ -129,7 +129,7 @@ class CompositePromptLibrary(AbstractPromptLibrary):
             **kwargs: Additional arguments passed to libraries
 
         Returns:
-            PromptTemplate from first library that has it, or None
+            PromptTemplateDict from first library that has it, or None
         """
         for lib, lib_name in zip(self._libraries, self._names, strict=True):
             template = lib.get_system_prompt(name, **kwargs)
@@ -144,7 +144,7 @@ class CompositePromptLibrary(AbstractPromptLibrary):
         self,
         name: str,
         **kwargs
-    ) -> PromptTemplate | None:
+    ) -> PromptTemplateDict | None:
         """Get a user prompt by name, searching libraries in order.
 
         Args:
@@ -152,7 +152,7 @@ class CompositePromptLibrary(AbstractPromptLibrary):
             **kwargs: Additional arguments passed to libraries
 
         Returns:
-            PromptTemplate from first library that has it, or None
+            PromptTemplateDict from first library that has it, or None
         """
         for lib, lib_name in zip(self._libraries, self._names, strict=True):
             template = lib.get_user_prompt(name, **kwargs)

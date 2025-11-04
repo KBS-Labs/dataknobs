@@ -3,7 +3,7 @@
 from .types import (
     ValidationLevel,
     ValidationConfig,
-    PromptTemplate,
+    PromptTemplateDict,
     RAGConfig,
     MessageIndex,
     RenderResult,
@@ -20,7 +20,7 @@ __all__ = [
     "ValidationLevel",
     "ValidationConfig",
     # Template types
-    "PromptTemplate",
+    "PromptTemplateDict",
     "RAGConfig",
     "MessageIndex",
     "RenderResult",

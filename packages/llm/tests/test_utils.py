@@ -3,7 +3,7 @@
 import pytest
 from dataknobs_llm.llm.utils import (
     TemplateStrategy,
-    PromptTemplate,
+    MessageTemplate,
     render_conditional_template,
     MessageBuilder,
     ResponseParser,
@@ -21,11 +21,11 @@ def test_template_strategy_enum():
     assert TemplateStrategy.CONDITIONAL.value == "conditional"
 
 
-# PromptTemplate with SIMPLE strategy tests
+# MessageTemplate with SIMPLE strategy tests
 
 def test_prompt_template_simple_basic():
-    """Test basic PromptTemplate with SIMPLE strategy."""
-    template = PromptTemplate("Hello {name}!", ["name"])
+    """Test basic MessageTemplate with SIMPLE strategy."""
+    template = MessageTemplate("Hello {name}!", ["name"])
     assert template.strategy == TemplateStrategy.SIMPLE
     result = template.format(name="Alice")
     assert result == "Hello Alice!"
@@ -33,7 +33,7 @@ def test_prompt_template_simple_basic():
 
 def test_prompt_template_simple_auto_extract_variables():
     """Test SIMPLE template auto-extracts variables."""
-    template = PromptTemplate("Hello {name}, you are {age} years old.")
+    template = MessageTemplate("Hello {name}, you are {age} years old.")
     assert set(template.variables) == {"name", "age"}
     result = template.format(name="Bob", age=30)
     assert result == "Hello Bob, you are 30 years old."
@@ -41,7 +41,7 @@ def test_prompt_template_simple_auto_extract_variables():
 
 def test_prompt_template_simple_missing_variable():
     """Test SIMPLE template raises error for missing variables."""
-    template = PromptTemplate("Hello {name}!")
+    template = MessageTemplate("Hello {name}!")
     with pytest.raises(ValueError) as exc_info:
         template.format()
     assert "Missing variables" in str(exc_info.value)
@@ -49,7 +49,7 @@ def test_prompt_template_simple_missing_variable():
 
 def test_prompt_template_simple_partial():
     """Test SIMPLE template partial substitution."""
-    template = PromptTemplate("Hello {name}, you are {age} years old.")
+    template = MessageTemplate("Hello {name}, you are {age} years old.")
     partial = template.partial(name="Alice")
     assert "Alice" in partial.template
     assert "age" in partial.variables
@@ -61,7 +61,7 @@ def test_prompt_template_simple_partial():
 
 def test_prompt_template_simple_multiple_variables():
     """Test SIMPLE template with multiple variables."""
-    template = PromptTemplate(
+    template = MessageTemplate(
         "Name: {name}\nAge: {age}\nCity: {city}",
         ["name", "age", "city"]
     )
@@ -71,11 +71,11 @@ def test_prompt_template_simple_multiple_variables():
     assert "City: NYC" in result
 
 
-# PromptTemplate with CONDITIONAL strategy tests
+# MessageTemplate with CONDITIONAL strategy tests
 
 def test_prompt_template_conditional_basic():
     """Test basic CONDITIONAL template."""
-    template = PromptTemplate.from_conditional("Hello {{name}}!")
+    template = MessageTemplate.from_conditional("Hello {{name}}!")
     assert template.strategy == TemplateStrategy.CONDITIONAL
     result = template.format(name="Alice")
     assert result == "Hello Alice!"
@@ -83,7 +83,7 @@ def test_prompt_template_conditional_basic():
 
 def test_prompt_template_conditional_auto_extract_variables():
     """Test CONDITIONAL template auto-extracts variables."""
-    template = PromptTemplate.from_conditional(
+    template = MessageTemplate.from_conditional(
         "Hello {{name}}((, you have {{count}} messages))"
     )
     assert set(template.variables) == {"name", "count"}
@@ -91,7 +91,7 @@ def test_prompt_template_conditional_auto_extract_variables():
 
 def test_prompt_template_conditional_with_value():
     """Test CONDITIONAL template includes section when variable has value."""
-    template = PromptTemplate.from_conditional(
+    template = MessageTemplate.from_conditional(
         "Hello {{name}}((, you have {{count}} messages))"
     )
     result = template.format(name="Alice", count=5)
@@ -100,7 +100,7 @@ def test_prompt_template_conditional_with_value():
 
 def test_prompt_template_conditional_without_value():
     """Test CONDITIONAL template removes section when variable is missing."""
-    template = PromptTemplate.from_conditional(
+    template = MessageTemplate.from_conditional(
         "Hello {{name}}((, you have {{count}} messages))"
     )
     result = template.format(name="Bob")
@@ -110,7 +110,7 @@ def test_prompt_template_conditional_without_value():
 
 def test_prompt_template_conditional_missing_variable():
     """Test CONDITIONAL template handles missing variables gracefully."""
-    template = PromptTemplate.from_conditional("Hello {{name}}!")
+    template = MessageTemplate.from_conditional("Hello {{name}}!")
     # Missing variables outside conditionals are left as-is
     result = template.format()
     assert "{{name}}" in result
@@ -118,7 +118,7 @@ def test_prompt_template_conditional_missing_variable():
 
 def test_prompt_template_conditional_partial():
     """Test CONDITIONAL template partial substitution."""
-    template = PromptTemplate.from_conditional(
+    template = MessageTemplate.from_conditional(
         "Hello {{name}}((, you have {{count}} messages))"
     )
     partial = template.partial(name="Alice")
@@ -130,7 +130,7 @@ def test_prompt_template_conditional_partial():
 
 def test_prompt_template_conditional_nested():
     """Test CONDITIONAL template with nested conditionals."""
-    template = PromptTemplate.from_conditional(
+    template = MessageTemplate.from_conditional(
         "Hello {{name}}((, age {{age}}((, from {{city}}))))"
     )
     # All provided
@@ -666,7 +666,7 @@ def test_message_builder_function():
 
 def test_message_builder_from_template():
     """Test MessageBuilder from_template."""
-    template = PromptTemplate("Hello {name}, you are {age} years old.")
+    template = MessageTemplate("Hello {name}, you are {age} years old.")
     messages = (
         MessageBuilder()
         .from_template("user", template, name="Alice", age=30)
@@ -926,8 +926,8 @@ def test_cost_calculator_estimate_cost():
 
 def test_chain_prompts_basic():
     """Test chain_prompts basic usage."""
-    t1 = PromptTemplate("First {a}")
-    t2 = PromptTemplate("Second {b}")
+    t1 = MessageTemplate("First {a}")
+    t2 = MessageTemplate("Second {b}")
     combined = chain_prompts(t1, t2)
 
     assert "First" in combined.template
@@ -941,8 +941,8 @@ def test_chain_prompts_basic():
 
 def test_chain_prompts_shared_variables():
     """Test chain_prompts with shared variables."""
-    t1 = PromptTemplate("Hello {name}")
-    t2 = PromptTemplate("Goodbye {name}")
+    t1 = MessageTemplate("Hello {name}")
+    t2 = MessageTemplate("Goodbye {name}")
     combined = chain_prompts(t1, t2)
 
     # Should only have 'name' once in variables
@@ -962,8 +962,8 @@ def test_chain_prompts_empty():
 
 def test_chain_prompts_mixed_strategies_error():
     """Test chain_prompts raises error for mixed strategies."""
-    t1 = PromptTemplate("Simple {a}")  # SIMPLE strategy
-    t2 = PromptTemplate.from_conditional("Conditional {{b}}")  # CONDITIONAL
+    t1 = MessageTemplate("Simple {a}")  # SIMPLE strategy
+    t2 = MessageTemplate.from_conditional("Conditional {{b}}")  # CONDITIONAL
 
     with pytest.raises(ValueError) as exc_info:
         chain_prompts(t1, t2)
@@ -972,8 +972,8 @@ def test_chain_prompts_mixed_strategies_error():
 
 def test_chain_prompts_conditional():
     """Test chain_prompts with CONDITIONAL templates."""
-    t1 = PromptTemplate.from_conditional("First {{a}}")
-    t2 = PromptTemplate.from_conditional("Second {{b}}((, optional {{c}}))")
+    t1 = MessageTemplate.from_conditional("First {{a}}")
+    t2 = MessageTemplate.from_conditional("Second {{b}}((, optional {{c}}))")
     combined = chain_prompts(t1, t2)
 
     assert combined.strategy == TemplateStrategy.CONDITIONAL

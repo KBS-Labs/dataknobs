@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Union
 import logging
 
 from .abstract_prompt_library import AbstractPromptLibrary
-from .types import PromptTemplate, MessageIndex, RAGConfig, ValidationConfig, ValidationLevel
+from .types import PromptTemplateDict, MessageIndex, RAGConfig, ValidationConfig, ValidationLevel
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +41,8 @@ class BasePromptLibrary(AbstractPromptLibrary):
         self._metadata = metadata or {}
 
         # Caches for loaded prompts and indexes
-        self._system_prompt_cache: Dict[str, PromptTemplate] = {}
-        self._user_prompt_cache: Dict[str, PromptTemplate] = {}
+        self._system_prompt_cache: Dict[str, PromptTemplateDict] = {}
+        self._user_prompt_cache: Dict[str, PromptTemplateDict] = {}
         self._message_index_cache: Dict[str, MessageIndex] = {}
         self._rag_config_cache: Dict[str, RAGConfig] = {}  # Standalone RAG configs
         self._prompt_rag_cache: Dict[tuple, List[RAGConfig]] = {}  # (name, type)
@@ -83,48 +83,48 @@ class BasePromptLibrary(AbstractPromptLibrary):
 
     # ===== Cache Helpers =====
 
-    def _get_cached_system_prompt(self, name: str) -> PromptTemplate | None:
+    def _get_cached_system_prompt(self, name: str) -> PromptTemplateDict | None:
         """Get system prompt from cache if caching is enabled.
 
         Args:
             name: System prompt identifier
 
         Returns:
-            Cached PromptTemplate if found, None otherwise
+            Cached PromptTemplateDict if found, None otherwise
         """
         if not self._enable_cache:
             return None
         return self._system_prompt_cache.get(name)
 
-    def _cache_system_prompt(self, name: str, template: PromptTemplate) -> None:
+    def _cache_system_prompt(self, name: str, template: PromptTemplateDict) -> None:
         """Cache a system prompt if caching is enabled.
 
         Args:
             name: System prompt identifier
-            template: PromptTemplate to cache
+            template: PromptTemplateDict to cache
         """
         if self._enable_cache:
             self._system_prompt_cache[name] = template
 
-    def _get_cached_user_prompt(self, name: str) -> PromptTemplate | None:
+    def _get_cached_user_prompt(self, name: str) -> PromptTemplateDict | None:
         """Get user prompt from cache if caching is enabled.
 
         Args:
             name: User prompt identifier
 
         Returns:
-            Cached PromptTemplate if found, None otherwise
+            Cached PromptTemplateDict if found, None otherwise
         """
         if not self._enable_cache:
             return None
         return self._user_prompt_cache.get(name)
 
-    def _cache_user_prompt(self, name: str, template: PromptTemplate) -> None:
+    def _cache_user_prompt(self, name: str, template: PromptTemplateDict) -> None:
         """Cache a user prompt if caching is enabled.
 
         Args:
             name: User prompt identifier
-            template: PromptTemplate to cache
+            template: PromptTemplateDict to cache
         """
         if self._enable_cache:
             self._user_prompt_cache[name] = template
@@ -289,7 +289,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
 
         return rag_config
 
-    def _parse_prompt_template(self, data: Any) -> PromptTemplate:
+    def _parse_prompt_template(self, data: Any) -> PromptTemplateDict:
         """Parse prompt template from various formats.
 
         This method is shared by all library implementations for consistent
@@ -303,7 +303,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
             data: Prompt template data (string or dict)
 
         Returns:
-            PromptTemplate dictionary
+            PromptTemplateDict dictionary
 
         Raises:
             ValueError: If data format is invalid
@@ -317,7 +317,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
             return {"template": ""}
 
         # Initialize template
-        template: PromptTemplate = None
+        template: PromptTemplateDict = None
 
         # If dict with template field
         if isinstance(data, dict) and "template" in data:
@@ -406,7 +406,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
         self,
         name: str,
         **kwargs: Any
-    ) -> PromptTemplate | None:
+    ) -> PromptTemplateDict | None:
         """Retrieve a system prompt template by name.
 
         Subclasses must implement this method.
@@ -429,7 +429,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
         name: str,
         index: int = 0,
         **kwargs: Any
-    ) -> PromptTemplate | None:
+    ) -> PromptTemplateDict | None:
         """Retrieve a user prompt template by name and index.
 
         Subclasses must implement this method.

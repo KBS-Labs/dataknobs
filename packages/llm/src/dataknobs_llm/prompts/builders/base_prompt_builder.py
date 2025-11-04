@@ -11,7 +11,7 @@ from typing import Any, Dict, List
 
 from ..base import (
     AbstractPromptLibrary,
-    PromptTemplate,
+    PromptTemplateDict,
     RAGConfig,
     ValidationLevel,
     ValidationConfig,
@@ -188,7 +188,7 @@ class BasePromptBuilder(ABC):
 
     def _merge_params_with_defaults(
         self,
-        template_dict: PromptTemplate,
+        template_dict: PromptTemplateDict,
         runtime_params: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Merge template defaults with runtime parameters.
@@ -205,7 +205,7 @@ class BasePromptBuilder(ABC):
 
     def _prepare_validation_config(
         self,
-        template_dict: PromptTemplate,
+        template_dict: PromptTemplateDict,
         validation_override: ValidationLevel | None
     ) -> ValidationConfig | None:
         """Prepare validation configuration with override support.
@@ -291,7 +291,7 @@ class BasePromptBuilder(ABC):
         self,
         prompt_name: str,
         prompt_type: str,
-        template_dict: PromptTemplate,
+        template_dict: PromptTemplateDict,
         runtime_params: Dict[str, Any],
         include_rag: bool,
         validation_override: ValidationLevel | None,

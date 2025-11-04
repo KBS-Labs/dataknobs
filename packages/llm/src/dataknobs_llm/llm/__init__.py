@@ -27,12 +27,14 @@ from .providers import (
 )
 from .utils import (
     TemplateStrategy,
-    PromptTemplate,
+    MessageTemplate,
     MessageBuilder,
     ResponseParser,
     TokenCounter,
     CostCalculator,
     render_conditional_template,
+    chain_prompts,
+    create_few_shot_prompt,
 )
 
 __all__ = [
@@ -57,10 +59,12 @@ __all__ = [
     'create_llm_provider',
     # Utils
     'TemplateStrategy',
-    'PromptTemplate',
+    'MessageTemplate',
     'MessageBuilder',
     'ResponseParser',
     'TokenCounter',
     'CostCalculator',
     'render_conditional_template',
+    'chain_prompts',
+    'create_few_shot_prompt',
 ]

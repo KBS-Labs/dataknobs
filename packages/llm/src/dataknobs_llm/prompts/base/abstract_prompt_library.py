@@ -6,7 +6,7 @@ This module defines the interface that all prompt library implementations must f
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 
-from .types import PromptTemplate, MessageIndex, RAGConfig
+from .types import PromptTemplateDict, MessageIndex, RAGConfig
 
 
 class AbstractPromptLibrary(ABC):
@@ -24,7 +24,7 @@ class AbstractPromptLibrary(ABC):
         self,
         name: str,
         **kwargs: Any
-    ) -> PromptTemplate | None:
+    ) -> PromptTemplateDict | None:
         """Retrieve a system prompt template by name.
 
         Args:
@@ -32,7 +32,7 @@ class AbstractPromptLibrary(ABC):
             **kwargs: Additional library-specific parameters
 
         Returns:
-            PromptTemplate if found, None otherwise
+            PromptTemplateDict if found, None otherwise
         """
         pass
 
@@ -52,7 +52,7 @@ class AbstractPromptLibrary(ABC):
         self,
         name: str,
         **kwargs: Any
-    ) -> PromptTemplate | None:
+    ) -> PromptTemplateDict | None:
         """Retrieve a user prompt template by name.
 
         Args:
@@ -60,7 +60,7 @@ class AbstractPromptLibrary(ABC):
             **kwargs: Additional library-specific parameters
 
         Returns:
-            PromptTemplate if found, None otherwise
+            PromptTemplateDict if found, None otherwise
         """
         pass
 

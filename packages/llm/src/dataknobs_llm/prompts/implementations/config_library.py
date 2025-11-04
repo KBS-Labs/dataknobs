@@ -35,7 +35,7 @@ from typing import Any, Dict, List
 
 from ..base import (
     BasePromptLibrary,
-    PromptTemplate,
+    PromptTemplateDict,
     RAGConfig,
     MessageIndex,
 )
@@ -67,8 +67,8 @@ class ConfigPromptLibrary(BasePromptLibrary):
         Args:
             config: Configuration dictionary with structure:
                 {
-                    "system": {name: PromptTemplate, ...},
-                    "user": {name: PromptTemplate, ...},
+                    "system": {name: PromptTemplateDict, ...},
+                    "user": {name: PromptTemplateDict, ...},
                     "messages": {name: MessageIndex, ...},
                     "rag": {name: RAGConfig, ...}
                 }
@@ -162,7 +162,7 @@ class ConfigPromptLibrary(BasePromptLibrary):
 
         return message_index
 
-    def get_system_prompt(self, name: str, **kwargs) -> PromptTemplate | None:
+    def get_system_prompt(self, name: str, **kwargs) -> PromptTemplateDict | None:
         """Get a system prompt by name.
 
         Args:
@@ -170,11 +170,11 @@ class ConfigPromptLibrary(BasePromptLibrary):
             **kwargs: Additional arguments (unused)
 
         Returns:
-            PromptTemplate if found, None otherwise
+            PromptTemplateDict if found, None otherwise
         """
         return self._get_cached_system_prompt(name)
 
-    def get_user_prompt(self, name: str, **kwargs) -> PromptTemplate | None:
+    def get_user_prompt(self, name: str, **kwargs) -> PromptTemplateDict | None:
         """Get a user prompt by name.
 
         Args:
@@ -182,7 +182,7 @@ class ConfigPromptLibrary(BasePromptLibrary):
             **kwargs: Additional arguments (unused)
 
         Returns:
-            PromptTemplate if found, None otherwise
+            PromptTemplateDict if found, None otherwise
         """
         return self._get_cached_user_prompt(name)
 
@@ -257,7 +257,7 @@ class ConfigPromptLibrary(BasePromptLibrary):
 
         return configs
 
-    def add_system_prompt(self, name: str, template: PromptTemplate) -> None:
+    def add_system_prompt(self, name: str, template: PromptTemplateDict) -> None:
         """Add or update a system prompt.
 
         Args:
@@ -267,7 +267,7 @@ class ConfigPromptLibrary(BasePromptLibrary):
         self._cache_system_prompt(name, template)
         logger.debug(f"Added/updated system prompt: {name}")
 
-    def add_user_prompt(self, name: str, template: PromptTemplate) -> None:
+    def add_user_prompt(self, name: str, template: PromptTemplateDict) -> None:
         """Add or update a user prompt.
 
         Args:

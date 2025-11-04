@@ -145,7 +145,7 @@ class TestTemplateRenderer:
         assert "unmatched" in errors[0].lower() and "conditional" in errors[0].lower()
 
     def test_render_prompt_template_with_defaults(self):
-        """Test rendering a PromptTemplate dict with default values."""
+        """Test rendering a PromptTemplateDict with default values."""
         renderer = TemplateRenderer()
         prompt_template = {
             "template": "Hello {{name}}, age: {{age}}",

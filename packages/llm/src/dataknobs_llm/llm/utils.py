@@ -15,8 +15,8 @@ from ..template_utils import TemplateStrategy, render_conditional_template
 
 
 @dataclass
-class PromptTemplate:
-    """Template for generating prompts with multiple rendering strategies.
+class MessageTemplate:
+    """Template for generating message content with multiple rendering strategies.
 
     Supports two template strategies:
     1. SIMPLE (default): Uses Python str.format() with {variable} syntax.
@@ -79,7 +79,7 @@ class PromptTemplate:
         else:
             raise ValueError(f"Unknown template strategy: {self.strategy}")
 
-    def partial(self, **kwargs) -> 'PromptTemplate':
+    def partial(self, **kwargs) -> 'MessageTemplate':
         """Create partial template with some variables filled.
 
         Args:
@@ -98,7 +98,7 @@ class PromptTemplate:
                     new_template = new_template.replace(f'{{{key}}}', str(value))
                     new_variables.remove(key)
 
-            return PromptTemplate(new_template, new_variables, self.strategy)
+            return MessageTemplate(new_template, new_variables, self.strategy)
 
         elif self.strategy == TemplateStrategy.CONDITIONAL:
             # For conditional templates, render with provided variables
@@ -120,14 +120,14 @@ class PromptTemplate:
                     )
                     new_variables.remove(key)
 
-            return PromptTemplate(new_template, new_variables, self.strategy)
+            return MessageTemplate(new_template, new_variables, self.strategy)
 
         else:
             raise ValueError(f"Unknown template strategy: {self.strategy}")
 
     @classmethod
-    def from_conditional(cls, template: str, variables: List[str] | None = None) -> 'PromptTemplate':
-        """Create a PromptTemplate using the CONDITIONAL strategy.
+    def from_conditional(cls, template: str, variables: List[str] | None = None) -> 'MessageTemplate':
+        """Create a MessageTemplate using the CONDITIONAL strategy.
 
         Convenience method for creating templates with advanced conditional rendering.
 
@@ -136,10 +136,10 @@ class PromptTemplate:
             variables: Optional explicit list of variables
 
         Returns:
-            PromptTemplate configured with CONDITIONAL strategy
+            MessageTemplate configured with CONDITIONAL strategy
 
         Example:
-            >>> template = PromptTemplate.from_conditional(
+            >>> template = MessageTemplate.from_conditional(
             ...     "Hello {{name}}((, you have {{count}} messages))"
             ... )
             >>> template.format(name="Alice", count=5)
@@ -219,16 +219,16 @@ class MessageBuilder:
     def from_template(
         self,
         role: str,
-        template: PromptTemplate,
+        template: MessageTemplate,
         **kwargs
     ) -> 'MessageBuilder':
         """Add message from template.
-        
+
         Args:
             role: Message role
-            template: Prompt template
+            template: Message template
             **kwargs: Template variables
-            
+
         Returns:
             Self for chaining
         """
@@ -553,9 +553,9 @@ class CostCalculator:
 
 
 def chain_prompts(
-    *templates: PromptTemplate
-) -> PromptTemplate:
-    """Chain multiple prompt templates.
+    *templates: MessageTemplate
+) -> MessageTemplate:
+    """Chain multiple message templates.
 
     All templates must use the same strategy. The combined template
     will use the strategy of the first template.
@@ -570,7 +570,7 @@ def chain_prompts(
         ValueError: If templates use different strategies
     """
     if not templates:
-        return PromptTemplate("", [])
+        return MessageTemplate("", [])
 
     # Check that all templates use the same strategy
     first_strategy = templates[0].strategy
@@ -590,7 +590,7 @@ def chain_prompts(
                 combined_variables.append(var)
                 seen.add(var)
 
-    return PromptTemplate(combined_template, combined_variables, first_strategy)
+    return MessageTemplate(combined_template, combined_variables, first_strategy)
 
 
 def create_few_shot_prompt(
@@ -598,30 +598,30 @@ def create_few_shot_prompt(
     examples: List[Dict[str, str]],
     query_key: str = 'input',
     response_key: str = 'output'
-) -> PromptTemplate:
+) -> MessageTemplate:
     """Create few-shot learning prompt.
-    
+
     Args:
         instruction: Task instruction
         examples: List of example input/output pairs
         query_key: Key for input in examples
         response_key: Key for output in examples
-        
+
     Returns:
         Few-shot prompt template
     """
     template_parts = [instruction, '']
-    
+
     # Add examples
     for i, example in enumerate(examples, 1):
         template_parts.append(f"Example {i}:")
         template_parts.append(f"Input: {example[query_key]}")
         template_parts.append(f"Output: {example[response_key]}")
         template_parts.append('')
-        
+
     # Add query placeholder
     template_parts.append("Now, process this input:")
     template_parts.append("Input: {query}")
     template_parts.append("Output:")
-    
-    return PromptTemplate('\n'.join(template_parts), ['query'])
+
+    return MessageTemplate('\n'.join(template_parts), ['query'])

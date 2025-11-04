@@ -16,7 +16,7 @@ import logging
 from typing import Any, Dict
 
 from ..base import (
-    PromptTemplate,
+    PromptTemplateDict,
     RAGConfig,
     ValidationLevel,
     RenderResult,
@@ -205,7 +205,7 @@ class PromptBuilder(BasePromptBuilder):
         self,
         prompt_name: str,
         prompt_type: str,
-        template_dict: PromptTemplate,
+        template_dict: PromptTemplateDict,
         runtime_params: Dict[str, Any],
         include_rag: bool,
         validation_override: ValidationLevel | None,

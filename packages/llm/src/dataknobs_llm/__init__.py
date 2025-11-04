@@ -17,7 +17,7 @@ from dataknobs_llm.llm import (
     LLMProviderFactory,
     create_llm_provider,
     TemplateStrategy,
-    PromptTemplate,
+    MessageTemplate,
     MessageBuilder,
     ResponseParser,
     TokenCounter,
@@ -47,7 +47,7 @@ __all__ = [
     "create_llm_provider",
     # Utils
     "TemplateStrategy",
-    "PromptTemplate",
+    "MessageTemplate",
     "MessageBuilder",
     "ResponseParser",
     "TokenCounter",

@@ -37,7 +37,7 @@ from typing import Any, Dict, List, Union
 
 from ..base import (
     BasePromptLibrary,
-    PromptTemplate,
+    PromptTemplateDict,
     RAGConfig,
     MessageIndex,
 )
@@ -171,14 +171,14 @@ class FileSystemPromptLibrary(BasePromptLibrary):
                 except Exception as e:
                     logger.error(f"Error loading RAG config {name}: {e}")
 
-    def _load_prompt_template(self, file_path: Path) -> PromptTemplate:
+    def _load_prompt_template(self, file_path: Path) -> PromptTemplateDict:
         """Load a prompt template from a file.
 
         Args:
             file_path: Path to the prompt template file
 
         Returns:
-            PromptTemplate dictionary
+            PromptTemplateDict dictionary
         """
         data = self._load_file(file_path)
 
@@ -257,7 +257,7 @@ class FileSystemPromptLibrary(BasePromptLibrary):
     # Note: _parse_prompt_template(), _parse_validation_config(), and
     # _parse_rag_config() are now inherited from BasePromptLibrary
 
-    def get_system_prompt(self, name: str, **kwargs) -> PromptTemplate | None:
+    def get_system_prompt(self, name: str, **kwargs) -> PromptTemplateDict | None:
         """Get a system prompt by name.
 
         Args:
@@ -265,11 +265,11 @@ class FileSystemPromptLibrary(BasePromptLibrary):
             **kwargs: Additional arguments (unused in filesystem library)
 
         Returns:
-            PromptTemplate if found, None otherwise
+            PromptTemplateDict if found, None otherwise
         """
         return self._get_cached_system_prompt(name)
 
-    def get_user_prompt(self, name: str, **kwargs) -> PromptTemplate | None:
+    def get_user_prompt(self, name: str, **kwargs) -> PromptTemplateDict | None:
         """Get a user prompt by name.
 
         Args:
@@ -277,7 +277,7 @@ class FileSystemPromptLibrary(BasePromptLibrary):
             **kwargs: Additional arguments (unused in filesystem library)
 
         Returns:
-            PromptTemplate if found, None otherwise
+            PromptTemplateDict if found, None otherwise
         """
         return self._get_cached_user_prompt(name)
 

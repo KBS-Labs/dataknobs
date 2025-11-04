@@ -89,8 +89,12 @@ class ValidationConfig:
         self.optional_params = set(optional_params or [])
 
 
-class PromptTemplate(TypedDict, total=False):
-    """Structure for a prompt template definition.
+class PromptTemplateDict(TypedDict, total=False):
+    """TypedDict structure for prompt template configuration.
+
+    This defines the schema for prompt template definitions used throughout
+    the prompt library system. It supports template inheritance, validation,
+    RAG configuration, and flexible template composition.
 
     Attributes:
         template: The template string with {{variables}} and ((conditionals))
@@ -173,7 +177,7 @@ class RenderResult:
 
 
 # Type aliases for convenience
-TemplateDict = Dict[str, PromptTemplate]
+TemplateDict = Dict[str, PromptTemplateDict]
 MessageIndexDict = Dict[str, MessageIndex]
 ParameterDict = Dict[str, Any]
 AdapterDict = Dict[str, Any]  # Will be refined in adapter modules

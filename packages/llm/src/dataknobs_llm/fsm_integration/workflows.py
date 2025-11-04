@@ -17,7 +17,7 @@ from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_llm.llm.base import LLMConfig, LLMMessage, LLMResponse
 from dataknobs_llm.llm.providers import create_llm_provider
 from dataknobs_llm.llm.utils import (
-    PromptTemplate, MessageBuilder, ResponseParser
+    MessageTemplate, MessageBuilder, ResponseParser
 )
 
 
@@ -36,7 +36,7 @@ class WorkflowType(Enum):
 class LLMStep:
     """Single step in LLM workflow."""
     name: str
-    prompt_template: PromptTemplate
+    prompt_template: MessageTemplate
     model_config: LLMConfig | None = None  # Override default
     
     # Processing
@@ -73,7 +73,7 @@ class RAGConfig:
     
     # Context settings
     max_context_length: int = 2000
-    context_template: PromptTemplate | None = None
+    context_template: MessageTemplate | None = None
     
     # Chunking settings
     chunk_size: int = 500
@@ -101,7 +101,7 @@ class AgentConfig:
     
     # Reflection
     reflection_enabled: bool = False
-    reflection_prompt: PromptTemplate | None = None
+    reflection_prompt: MessageTemplate | None = None
 
 
 @dataclass
@@ -684,7 +684,7 @@ def create_simple_llm_workflow(
     Returns:
         Configured LLM workflow
     """
-    template = PromptTemplate(prompt_template)
+    template = MessageTemplate(prompt_template)
     
     config = LLMWorkflowConfig(
         workflow_type=WorkflowType.SIMPLE,
@@ -761,7 +761,7 @@ def create_chain_workflow(
     for step_config in steps:
         llm_steps.append(LLMStep(
             name=step_config['name'],
-            prompt_template=PromptTemplate(step_config['prompt']),
+            prompt_template=MessageTemplate(step_config['prompt']),
             output_key=step_config.get('output_key'),
             parse_json=step_config.get('parse_json', False),
             depends_on=step_config.get('depends_on')

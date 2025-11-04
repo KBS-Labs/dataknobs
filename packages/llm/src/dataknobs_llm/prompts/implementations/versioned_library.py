@@ -6,7 +6,7 @@ combining version management, A/B testing, and metrics tracking.
 
 from typing import Any, Dict, List
 
-from ..base import AbstractPromptLibrary, PromptTemplate, MessageIndex, RAGConfig
+from ..base import AbstractPromptLibrary, PromptTemplateDict, MessageIndex, RAGConfig
 from ..versioning import (
     VersionManager,
     ABTestManager,
@@ -43,7 +43,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
             version="1.0.0"
         )
 
-        # Get latest version (returns PromptTemplate for compatibility)
+        # Get latest version (returns PromptTemplateDict for compatibility)
         template = library.get_system_prompt("greeting")
 
         # Create A/B test
@@ -86,7 +86,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         self.metrics_collector = MetricsCollector(storage)
 
         # Cache for converting versions to templates
-        self._template_cache: Dict[str, PromptTemplate] = {}
+        self._template_cache: Dict[str, PromptTemplateDict] = {}
 
     # ===== Version Management API =====
 
@@ -349,7 +349,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         name: str,
         version: str = "latest",
         **kwargs: Any
-    ) -> PromptTemplate | None:
+    ) -> PromptTemplateDict | None:
         """Get a system prompt template.
 
         This method is synchronous for compatibility with AbstractPromptLibrary.
@@ -361,7 +361,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
             **kwargs: Additional parameters
 
         Returns:
-            PromptTemplate if found, None otherwise
+            PromptTemplateDict if found, None otherwise
         """
         import asyncio
 
@@ -389,7 +389,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         name: str,
         version: str = "latest",
         **kwargs: Any
-    ) -> PromptTemplate | None:
+    ) -> PromptTemplateDict | None:
         """Get a user prompt template.
 
         Args:
@@ -398,7 +398,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
             **kwargs: Additional parameters
 
         Returns:
-            PromptTemplate if found, None otherwise
+            PromptTemplateDict if found, None otherwise
         """
         import asyncio
 
@@ -551,14 +551,14 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
 
     # ===== Helper Methods =====
 
-    def _version_to_template(self, version: PromptVersion) -> PromptTemplate:
-        """Convert PromptVersion to PromptTemplate for compatibility."""
+    def _version_to_template(self, version: PromptVersion) -> PromptTemplateDict:
+        """Convert PromptVersion to PromptTemplateDict for compatibility."""
         # Check cache
         cache_key = version.version_id
         if cache_key in self._template_cache:
             return self._template_cache[cache_key]
 
-        template: PromptTemplate = {
+        template: PromptTemplateDict = {
             "template": version.template,
             "defaults": version.defaults,
             "metadata": {
