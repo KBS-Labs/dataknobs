@@ -7,7 +7,7 @@ Supports both direct instantiation and dataknobs Config-based factory pattern.
 import os
 import json
 import hashlib
-from typing import Any, Dict, List, Union, AsyncIterator, Type
+from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator, Type
 
 from .base import (
     LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
@@ -17,6 +17,8 @@ from .base import (
 
 # Import prompt builder types - clean one-way dependency (llm depends on prompts)
 from dataknobs_llm.prompts import AsyncPromptBuilder
+if TYPE_CHECKING:
+    from dataknobs_config.config import Config
 
 
 class SyncProviderAdapter:
@@ -1560,12 +1562,12 @@ class LLMProviderFactory:
     """
 
     # Registry of provider classes
-    _providers: Dict[str, Type[AsyncLLMProvider]] = {
-        'openai': None,  # type: ignore # Populated lazily
-        'anthropic': None,  # type: ignore
-        'ollama': None,  # type: ignore
-        'huggingface': None,  # type: ignore
-        'echo': None,  # type: ignore
+    _providers: Dict[str, Type[AsyncLLMProvider] | None] = {
+        'openai': None,  # Populated lazily
+        'anthropic': None,
+        'ollama': None,
+        'huggingface': None,
+        'echo': None,
     }
 
     def __init__(self, is_async: bool = True):

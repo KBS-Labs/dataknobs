@@ -12,7 +12,6 @@ from datetime import datetime
 from typing import Any, Dict, List
 from enum import Enum
 
-
 class VersioningError(Exception):
     """Base exception for versioning-related errors."""
     pass

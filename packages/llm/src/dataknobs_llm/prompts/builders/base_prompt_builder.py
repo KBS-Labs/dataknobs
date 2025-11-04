@@ -62,7 +62,7 @@ class BasePromptBuilder(ABC):
         self,
         cached_rag: Dict[str, Any]
     ) -> Dict[str, str]:
-        """Extract formatted content from cached RAG metadata.
+        r"""Extract formatted content from cached RAG metadata.
 
         This method extracts the pre-formatted RAG content from cache
         so it can be injected directly into templates without re-executing

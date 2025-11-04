@@ -14,6 +14,7 @@ from datetime import datetime
 
 # Import prompt builder types - clean one-way dependency (llm depends on prompts)
 from dataknobs_llm.prompts import AsyncPromptBuilder, PromptBuilder
+from dataknobs_config.config import Config
 
 
 class CompletionMode(Enum):
@@ -178,7 +179,7 @@ class LLMConfig:
         return result
 
 
-def normalize_llm_config(config: Union["LLMConfig", "Config", Dict[str, Any]]) -> "LLMConfig":
+def normalize_llm_config(config: Union["LLMConfig", Config, Dict[str, Any]]) -> "LLMConfig":
     """Normalize various config formats to LLMConfig.
 
     This helper function accepts LLMConfig instances, dataknobs Config objects,
@@ -208,13 +209,13 @@ def normalize_llm_config(config: Union["LLMConfig", "Config", Dict[str, Any]]) -
         # Try to get first llm config, or fall back to first available type
         try:
             config_dict = config.get('llm', 0)
-        except Exception:
+        except Exception as e:
             # If no 'llm' type, try to get first available config of any type
             types = config.get_types()
             if types:
                 config_dict = config.get(types[0], 0)
             else:
-                raise ValueError("Config object has no configurations")
+                raise ValueError("Config object has no configurations") from e
 
         return LLMConfig.from_dict(config_dict)
 
@@ -229,7 +230,7 @@ class LLMProvider(ABC):
 
     def __init__(
         self,
-        config: Union[LLMConfig, "Config", Dict[str, Any]],
+        config: Union[LLMConfig, Config, Dict[str, Any]],
         prompt_builder: Union[PromptBuilder, AsyncPromptBuilder] | None = None
     ):
         """Initialize provider with configuration.
@@ -800,7 +801,7 @@ class LLMMiddleware(Protocol):
     async def process_request(
         self,
         messages: List[LLMMessage],
-        config: Union[LLMConfig, "Config", Dict[str, Any]]
+        config: Union[LLMConfig, Config, Dict[str, Any]]
     ) -> List[LLMMessage]:
         """Process request before sending to LLM.
 
@@ -816,7 +817,7 @@ class LLMMiddleware(Protocol):
     async def process_response(
         self,
         response: LLMResponse,
-        config: Union[LLMConfig, "Config", Dict[str, Any]]
+        config: Union[LLMConfig, Config, Dict[str, Any]]
     ) -> LLMResponse:
         """Process response from LLM.
 

@@ -1,4 +1,4 @@
-"""Template composition utilities for building complex prompts from reusable parts.
+r"""Template composition utilities for building complex prompts from reusable parts.
 
 This module provides the TemplateComposer class which handles:
 - Section substitution in templates
@@ -68,7 +68,7 @@ class TemplateComposer:
         sections: Dict[str, str] | None = None,
         prompt_name: str | None = None
     ) -> str:
-        """Compose a template by replacing section placeholders.
+        r"""Compose a template by replacing section placeholders.
 
         Replaces all {{SECTION_NAME}} placeholders in the template with
         their corresponding section content from the sections dictionary.

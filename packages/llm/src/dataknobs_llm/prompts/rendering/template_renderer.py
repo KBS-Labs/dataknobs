@@ -357,7 +357,7 @@ class TemplateRenderer:
     def add_custom_filter(
         self,
         name: str,
-        filter_func: Callable[[Any, ...], Any]
+        filter_func: Callable[..., Any]
     ):
         """Register a custom filter with Jinja2.
 

@@ -243,11 +243,11 @@ class ResponseValidator(IValidationFunction):
                 
                 # Validate against schema if provided
                 if self.schema:
-                    from pydantic import create_model, ValidationError
+                    from pydantic import create_model, ValidationError as PydanticValidationError
                     model = create_model("ResponseSchema", **self.schema)
                     try:
                         model(**parsed)
-                    except ValidationError as e:
+                    except PydanticValidationError as e:
                         raise ValidationError(f"Schema validation failed: {e}") from e
                 
                 # Check required fields

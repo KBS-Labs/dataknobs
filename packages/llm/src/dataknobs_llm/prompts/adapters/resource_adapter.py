@@ -213,7 +213,7 @@ class AsyncResourceAdapter(ResourceAdapterBase, ABC):
         import asyncio
         tasks = [self.get_value(key, default, context) for key in keys]
         values = await asyncio.gather(*tasks)
-        return dict(zip(keys, values))
+        return dict(zip(keys, values, strict=True))
 
 
 class BaseSearchLogic:

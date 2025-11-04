@@ -7,6 +7,8 @@ from datetime import datetime
 from dataknobs_structures.tree import Tree
 from dataknobs_llm.llm import AsyncLLMProvider, LLMMessage, LLMResponse, LLMStreamResponse
 from dataknobs_llm.prompts import AsyncPromptBuilder
+from dataknobs_llm.conversations.flow.flow import ConversationFlow
+from dataknobs_llm.conversations.middleware import ConversationMiddleware
 from dataknobs_llm.conversations.storage import (
     ConversationNode,
     ConversationState,
@@ -70,7 +72,7 @@ class ConversationManager:
         storage: ConversationStorage,
         state: ConversationState | None = None,
         metadata: Dict[str, Any] | None = None,
-        middleware: List["ConversationMiddleware"] | None = None,
+        middleware: List[ConversationMiddleware] | None = None,
         cache_rag_results: bool = False,
         reuse_rag_on_branch: bool = False,
     ):
@@ -109,7 +111,7 @@ class ConversationManager:
         system_prompt_name: str | None = None,
         system_params: Dict[str, Any] | None = None,
         metadata: Dict[str, Any] | None = None,
-        middleware: List["ConversationMiddleware"] | None = None,
+        middleware: List[ConversationMiddleware] | None = None,
         cache_rag_results: bool = False,
         reuse_rag_on_branch: bool = False,
     ) -> "ConversationManager":
@@ -165,7 +167,7 @@ class ConversationManager:
         llm: AsyncLLMProvider,
         prompt_builder: AsyncPromptBuilder,
         storage: ConversationStorage,
-        middleware: List["ConversationMiddleware"] | None = None,
+        middleware: List[ConversationMiddleware] | None = None,
         cache_rag_results: bool = False,
         reuse_rag_on_branch: bool = False,
     ) -> "ConversationManager":
@@ -571,7 +573,7 @@ class ConversationManager:
 
     async def execute_flow(
         self,
-        flow: "ConversationFlow",
+        flow: ConversationFlow,
         initial_params: Dict[str, Any] | None = None
     ) -> AsyncIterator[ConversationNode]:
         """Execute a conversation flow using FSM.
@@ -637,7 +639,7 @@ class ConversationManager:
 
         try:
             # Execute flow (this will internally use FSM)
-            result = await adapter.execute(data)
+            await adapter.execute(data)
 
             # Convert flow history to conversation nodes
             for state_name, response in adapter.execution_state.history:

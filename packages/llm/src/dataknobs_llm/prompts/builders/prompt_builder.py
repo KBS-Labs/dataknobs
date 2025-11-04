@@ -328,7 +328,7 @@ class PromptBuilder(BasePromptBuilder):
                         rag_config, params
                     )
                     rag_content[placeholder] = formatted_content
-                    if metadata:
+                    if metadata and rag_metadata is not None:
                         rag_metadata[placeholder] = metadata
                 else:
                     # Execute without metadata (faster)
@@ -343,7 +343,7 @@ class PromptBuilder(BasePromptBuilder):
                     logger.warning(error_msg)
                     # Use empty content on failure
                     rag_content[placeholder] = ""
-                    if capture_metadata:
+                    if capture_metadata and rag_metadata is not None:
                         from datetime import datetime
                         rag_metadata[placeholder] = {
                             "error": str(e),

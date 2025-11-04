@@ -319,45 +319,54 @@ class AsyncPromptBuilder(BasePromptBuilder):
             return {}, None
 
         # Execute all RAG searches in parallel
-        if capture_metadata:
-            tasks = [
-                self._execute_single_rag_with_metadata(rag_config, params)
-                for rag_config in rag_configs
-            ]
-        else:
-            tasks = [
-                self._execute_single_rag_search_safe(rag_config, params)
-                for rag_config in rag_configs
-            ]
-
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Collect results
         rag_content = {}
         rag_metadata = {} if capture_metadata else None
 
-        for rag_config, result in zip(rag_configs, results):
-            placeholder = rag_config.get("placeholder", "RAG_CONTENT")
+        if capture_metadata:
+            tasks_with_metadata = [
+                self._execute_single_rag_with_metadata(rag_config, params)
+                for rag_config in rag_configs
+            ]
+            results_with_metadata = await asyncio.gather(*tasks_with_metadata, return_exceptions=True)
 
-            if isinstance(result, Exception):
-                error_msg = f"RAG search failed for {prompt_name}: {result}"
-                if self._raise_on_rag_error:
-                    raise RuntimeError(error_msg) from result
+            for rag_config, result in zip(rag_configs, results_with_metadata, strict=True):
+                placeholder = rag_config.get("placeholder", "RAG_CONTENT")
+
+                if isinstance(result, BaseException):
+                    error_msg = f"RAG search failed for {prompt_name}: {result}"
+                    if self._raise_on_rag_error:
+                        raise RuntimeError(error_msg) from result
+                    else:
+                        logger.warning(error_msg)
+                        rag_content[placeholder] = ""
+                        if rag_metadata is not None:
+                            from datetime import datetime
+                            rag_metadata[placeholder] = {
+                                "error": str(result),
+                                "timestamp": datetime.now().isoformat()
+                            }
                 else:
-                    logger.warning(error_msg)
-                    rag_content[placeholder] = ""
-                    if capture_metadata:
-                        from datetime import datetime
-                        rag_metadata[placeholder] = {
-                            "error": str(result),
-                            "timestamp": datetime.now().isoformat()
-                        }
-            else:
-                if capture_metadata:
                     formatted_content, metadata = result
                     rag_content[placeholder] = formatted_content
-                    if metadata:
+                    if metadata and rag_metadata is not None:
                         rag_metadata[placeholder] = metadata
+        else:
+            tasks_no_metadata = [
+                self._execute_single_rag_search_safe(rag_config, params)
+                for rag_config in rag_configs
+            ]
+            results_no_metadata = await asyncio.gather(*tasks_no_metadata, return_exceptions=True)
+
+            for rag_config, result in zip(rag_configs, results_no_metadata, strict=True):
+                placeholder = rag_config.get("placeholder", "RAG_CONTENT")
+
+                if isinstance(result, BaseException):
+                    error_msg = f"RAG search failed for {prompt_name}: {result}"
+                    if self._raise_on_rag_error:
+                        raise RuntimeError(error_msg) from result
+                    else:
+                        logger.warning(error_msg)
+                        rag_content[placeholder] = ""
                 else:
                     rag_content[placeholder] = result
 

@@ -572,7 +572,7 @@ class VersionedPromptLibrary(AbstractPromptLibrary):
         }
 
         if version.validation:
-            template["validation"] = version.validation
+            template["validation"] = version.validation  # type: ignore[typeddict-item]
 
         # Cache it
         self._template_cache[cache_key] = template

@@ -316,9 +316,12 @@ class BasePromptLibrary(AbstractPromptLibrary):
         if isinstance(data, dict) and len(data) == 0:
             return {"template": ""}
 
+        # Initialize template
+        template: PromptTemplate = None
+
         # If dict with template field
         if isinstance(data, dict) and "template" in data:
-            template: PromptTemplate = {
+            template = {
                 "template": data["template"],
             }
 
@@ -357,7 +360,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
 
         # If dict with extends field but no template (template will be inherited)
         elif isinstance(data, dict) and "extends" in data:
-            template: PromptTemplate = {}
+            template = {}
 
             # Template will be inherited from base
             template["extends"] = data["extends"]
@@ -435,7 +438,7 @@ class BasePromptLibrary(AbstractPromptLibrary):
             f"{self.__class__.__name__} must implement get_user_prompt()"
         )
 
-    def list_user_prompts(self, name: str | None = None) -> List[str]:
+    def list_user_prompts(self) -> List[str]:
         """List available user prompts.
 
         Subclasses must implement this method.

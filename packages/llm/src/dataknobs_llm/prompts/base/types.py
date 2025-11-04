@@ -51,11 +51,11 @@ class TemplateMode(Enum):
         """
         try:
             return cls(value.lower())
-        except ValueError:
+        except ValueError as e:
             raise ValueError(
                 f"Invalid template mode: {value}. "
                 f"Valid modes: {', '.join(m.value for m in cls)}"
-            )
+            ) from e
 
 
 @dataclass

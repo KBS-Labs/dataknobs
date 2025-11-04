@@ -154,6 +154,7 @@ class AbstractPromptLibrary(ABC):
         """
         pass
 
+    @abstractmethod
     def reload(self) -> None:
         """Reload the prompt library from its source.
 

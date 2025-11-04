@@ -252,7 +252,7 @@ class FileSystemPromptLibrary(BasePromptLibrary):
                 raise ValueError(f"Unsupported file extension: {file_path.suffix}")
 
         except Exception as e:
-            raise ValueError(f"Error loading file {file_path}: {e}")
+            raise ValueError(f"Error loading file {file_path}: {e}") from e
 
     # Note: _parse_prompt_template(), _parse_validation_config(), and
     # _parse_rag_config() are now inherited from BasePromptLibrary

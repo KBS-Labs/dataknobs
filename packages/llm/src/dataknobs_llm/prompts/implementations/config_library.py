@@ -1,4 +1,4 @@
-"""Configuration-based prompt library implementation.
+r"""Configuration-based prompt library implementation.
 
 This module provides a prompt library that loads prompts from Python dictionaries.
 Useful for programmatic prompt definition and testing.

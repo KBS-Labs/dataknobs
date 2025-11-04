@@ -266,7 +266,7 @@ class ConversationState:
         nodes = []
         edges = []
 
-        all_nodes = self.message_tree.find_nodes(lambda n: True, traversal="bfs")
+        all_nodes = self.message_tree.find_nodes(lambda n: True, traversal="bfs")  # noqa: ARG005
         for tree_node in all_nodes:
             if isinstance(tree_node.data, ConversationNode):
                 nodes.append(tree_node.data.to_dict())
@@ -323,7 +323,7 @@ class ConversationState:
                 root_node = nodes_by_id[root_ids.pop()]
             else:
                 # Fallback: first node
-                root_node = list(nodes_by_id.values())[0]
+                root_node = next(iter(nodes_by_id.values()))
 
         tree = Tree(root_node)
         tree_nodes_by_id = {"": tree}  # Map node_id -> Tree node
@@ -369,8 +369,8 @@ class ConversationState:
             SchemaVersionError: If migration path is not supported
         """
         # Parse version strings
-        from_major, from_minor, from_patch = map(int, from_version.split("."))
-        to_major, to_minor, to_patch = map(int, to_version.split("."))
+        from_major, _from_minor, _from_patch = map(int, from_version.split("."))
+        to_major, _to_minor, _to_patch = map(int, to_version.split("."))
 
         # No migration needed if versions match
         if from_version == to_version:
@@ -381,9 +381,9 @@ class ConversationState:
 
         # Example migration patterns:
         # if from_version == "0.0.0" and to_version >= "1.0.0":
-        #     data = cls._migrate_0_to_1(data)
+        #     data = cls._migrate_0_to_1(data)                   # noqa: ERA001
         # if from_version < "1.1.0" and to_version >= "1.1.0":
-        #     data = cls._migrate_1_0_to_1_1(data)
+        #     data = cls._migrate_1_0_to_1_1(data)               # noqa: ERA001
 
         # For now, version 0.0.0 (no version field) to 1.0.0 is a no-op
         # because the schema didn't change, we just added versioning
@@ -410,8 +410,8 @@ class ConversationState:
     # def _migrate_1_0_to_1_1(data: Dict[str, Any]) -> Dict[str, Any]:
     #     """Migrate from schema 1.0 to 1.1."""
     #     # Add new field with default value
-    #     data["new_field"] = "default_value"
-    #     return data
+    #     data["new_field"] = "default_value"  # noqa: ERA001
+    #     return data                          # noqa: ERA001
 
 
 class ConversationStorage(ABC):
@@ -513,7 +513,7 @@ class DataknobsConversationStorage(ConversationStorage):
             raise StorageError(
                 "dataknobs_data package not available. "
                 "Install it to use DataknobsConversationStorage."
-            )
+            ) from None
 
         # Convert state to dict
         data = state.to_dict()
@@ -535,8 +535,8 @@ class DataknobsConversationStorage(ConversationStorage):
         """
         # Extract data from record
         data = {}
-        for field_name, field in record.fields.items():
-            data[field_name] = field.value
+        for field_name, field_obj in record.fields.items():
+            data[field_name] = field_obj.value
 
         # Reconstruct conversation state
         return ConversationState.from_dict(data)
@@ -588,7 +588,7 @@ class DataknobsConversationStorage(ConversationStorage):
                 raise StorageError(
                     "dataknobs_data package not available. "
                     "Install it to use DataknobsConversationStorage."
-                )
+                ) from None
 
             # Build query with metadata filters using fluent interface
             query = Query()

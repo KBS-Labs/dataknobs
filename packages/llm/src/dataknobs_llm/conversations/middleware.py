@@ -34,7 +34,9 @@ from typing import List, Any, Dict, Callable
 import logging
 
 from dataknobs_llm.llm import LLMMessage, LLMResponse
+from dataknobs_llm.llm.providers import AsyncLLMProvider
 from dataknobs_llm.conversations.storage import ConversationState
+from dataknobs_llm.prompts import AsyncPromptBuilder
 
 
 class ConversationMiddleware(ABC):
@@ -265,8 +267,8 @@ class ValidationMiddleware(ConversationMiddleware):
 
     def __init__(
         self,
-        llm: "AsyncLLMProvider",
-        prompt_builder: "AsyncPromptBuilder",
+        llm: AsyncLLMProvider,
+        prompt_builder: AsyncPromptBuilder,
         validation_prompt: str,
         auto_retry: bool = False,
         retry_limit: int = 3
@@ -280,9 +282,6 @@ class ValidationMiddleware(ConversationMiddleware):
             auto_retry: Whether to automatically retry on validation failure
             retry_limit: Maximum number of retries if auto_retry is True
         """
-        from dataknobs_llm.prompts import AsyncPromptBuilder
-        from dataknobs_llm.llm import AsyncLLMProvider
-
         self.llm: AsyncLLMProvider = llm
         self.builder: AsyncPromptBuilder = prompt_builder
         self.validation_prompt = validation_prompt

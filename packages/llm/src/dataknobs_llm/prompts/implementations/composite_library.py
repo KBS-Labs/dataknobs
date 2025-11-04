@@ -131,7 +131,7 @@ class CompositePromptLibrary(AbstractPromptLibrary):
         Returns:
             PromptTemplate from first library that has it, or None
         """
-        for lib, lib_name in zip(self._libraries, self._names):
+        for lib, lib_name in zip(self._libraries, self._names, strict=True):
             template = lib.get_system_prompt(name, **kwargs)
             if template is not None:
                 logger.debug(f"Found system prompt '{name}' in library '{lib_name}'")
@@ -154,7 +154,7 @@ class CompositePromptLibrary(AbstractPromptLibrary):
         Returns:
             PromptTemplate from first library that has it, or None
         """
-        for lib, lib_name in zip(self._libraries, self._names):
+        for lib, lib_name in zip(self._libraries, self._names, strict=True):
             template = lib.get_user_prompt(name, **kwargs)
             if template is not None:
                 logger.debug(
@@ -175,7 +175,7 @@ class CompositePromptLibrary(AbstractPromptLibrary):
         Returns:
             MessageIndex from first library that has it, or None
         """
-        for lib, lib_name in zip(self._libraries, self._names):
+        for lib, lib_name in zip(self._libraries, self._names, strict=True):
             message_index = lib.get_message_index(name, **kwargs)
             if message_index is not None:
                 logger.debug(f"Found message index '{name}' in library '{lib_name}'")
@@ -194,7 +194,7 @@ class CompositePromptLibrary(AbstractPromptLibrary):
         Returns:
             RAGConfig from first library that has it, or None
         """
-        for lib, lib_name in zip(self._libraries, self._names):
+        for lib, lib_name in zip(self._libraries, self._names, strict=True):
             rag_config = lib.get_rag_config(name, **kwargs)
             if rag_config is not None:
                 logger.debug(f"Found RAG config '{name}' in library '{lib_name}'")
@@ -219,7 +219,7 @@ class CompositePromptLibrary(AbstractPromptLibrary):
         Returns:
             List of RAGConfig from first library that has the prompt
         """
-        for lib, lib_name in zip(self._libraries, self._names):
+        for lib, lib_name in zip(self._libraries, self._names, strict=True):
             configs = lib.get_prompt_rag_configs(prompt_name, prompt_type, **kwargs)
             if configs:
                 logger.debug(
@@ -242,25 +242,16 @@ class CompositePromptLibrary(AbstractPromptLibrary):
             prompts.update(lib.list_system_prompts())
         return sorted(prompts)
 
-    def list_user_prompts(self, name: str | None = None) -> List[str]:
+    def list_user_prompts(self) -> List[str]:
         """List available user prompts from all libraries.
-
-        Args:
-            name: If provided, list indices for this specific prompt
 
         Returns:
             Combined list of user prompt names or indices
         """
-        if name is None:
-            prompts = set()
-            for lib in self._libraries:
-                prompts.update(lib.list_user_prompts())
-            return sorted(prompts)
-        else:
-            indices = set()
-            for lib in self._libraries:
-                indices.update(lib.list_user_prompts(name))
-            return sorted(indices, key=int)
+        prompts = set()
+        for lib in self._libraries:
+            prompts.update(lib.list_user_prompts())
+        return sorted(prompts)
 
     def list_message_indexes(self) -> List[str]:
         """List all available message index names from all libraries.
@@ -284,6 +275,14 @@ class CompositePromptLibrary(AbstractPromptLibrary):
             "num_libraries": len(self._libraries),
             "library_names": self._names,
         }
+
+    def reload(self) -> None:
+        """Reload the library by clearing the cache.
+
+        Subclasses can override to perform additional reload logic.
+        """
+        for lib in self._libraries:
+            lib.reload()
 
     @property
     def libraries(self) -> List[AbstractPromptLibrary]:

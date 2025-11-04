@@ -187,7 +187,7 @@ class ConversationFlow:
         warnings = []
 
         # Check for unreachable states
-        reachable = set([self.initial_state])
+        reachable = {self.initial_state}
         to_visit = [self.initial_state]
 
         while to_visit:

@@ -66,21 +66,18 @@ class DictResourceAdapter(ResourceAdapter):
         Returns:
             Value at the key, or default if not found
         """
-        try:
-            # Handle dot notation for nested keys
-            if '.' in key:
-                parts = key.split('.')
-                value = self._data
-                for part in parts:
-                    if isinstance(value, dict):
-                        value = value[part]
-                    else:
-                        return default
-                return value
-            else:
-                return self._data.get(key, default)
-        except (KeyError, TypeError):
-            return default
+        # Handle dot notation for nested keys
+        if '.' in key:
+            parts = key.split('.')
+            value = self._data
+            for part in parts:
+                if isinstance(value, dict) and part in value:
+                    value = value[part]
+                else:
+                    return default
+            return value
+        else:
+            return self._data.get(key, default)
 
     def search(
         self,
@@ -219,21 +216,18 @@ class AsyncDictResourceAdapter(AsyncResourceAdapter):
 
         See DictResourceAdapter.get_value for details.
         """
-        try:
-            # Handle dot notation for nested keys
-            if '.' in key:
-                parts = key.split('.')
-                value = self._data
-                for part in parts:
-                    if isinstance(value, dict):
-                        value = value[part]
-                    else:
-                        return default
-                return value
-            else:
-                return self._data.get(key, default)
-        except (KeyError, TypeError):
-            return default
+        # Handle dot notation for nested keys
+        if '.' in key:
+            parts = key.split('.')
+            value = self._data
+            for part in parts:
+                if isinstance(value, dict) and part in value:
+                    value = value[part]
+                else:
+                    return default
+            return value
+        else:
+            return self._data.get(key, default)
 
     async def search(
         self,
