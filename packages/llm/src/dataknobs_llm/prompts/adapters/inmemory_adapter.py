@@ -118,15 +118,16 @@ class InMemoryAdapter(InMemoryAdapterBase, ResourceAdapter):
         >>> # Simple usage with search results
         >>> adapter = InMemoryAdapter(
         ...     search_results=[
-        ...         {"content": "Python is a programming language", 'score': 0.9},
-        ...         {"content": "Python was created by Guido van Rossum", 'score': 0.8}
+        ...         {'content': "Python is a programming language", 'score': 0.9},
+        ...         {'content': "Python was created by Guido van Rossum", 'score': 0.8}
         ...     ],
         ...     name="docs"
         ... )
         >>> results = adapter.search("python")
         >>> len(results)
         2
-        >>> results[0]["content"]
+        >>> first_result = results[0]
+        >>> first_result.get('content')
         'Python is a programming language'
         >>> adapter.search_count  # Track how many times search was called
         1

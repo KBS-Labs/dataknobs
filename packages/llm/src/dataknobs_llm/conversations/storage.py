@@ -381,9 +381,9 @@ class ConversationState:
 
         # Example migration patterns:
         # if from_version == "0.0.0" and to_version >= "1.0.0":
-        #     data = cls._migrate_0_to_1(data)                   # noqa: ERA001
+        #     data = cls._migrate_0_to_1(data)
         # if from_version < "1.1.0" and to_version >= "1.1.0":
-        #     data = cls._migrate_1_0_to_1_1(data)               # noqa: ERA001
+        #     data = cls._migrate_1_0_to_1_1(data)
 
         # For now, version 0.0.0 (no version field) to 1.0.0 is a no-op
         # because the schema didn't change, we just added versioning
@@ -410,8 +410,8 @@ class ConversationState:
     # def _migrate_1_0_to_1_1(data: Dict[str, Any]) -> Dict[str, Any]:
     #     """Migrate from schema 1.0 to 1.1."""
     #     # Add new field with default value
-    #     data["new_field"] = "default_value"  # noqa: ERA001
-    #     return data                          # noqa: ERA001
+    #     data["new_field"] = "default_value"
+    #     return data
 
 
 class ConversationStorage(ABC):

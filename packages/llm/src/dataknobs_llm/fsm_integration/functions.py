@@ -87,11 +87,19 @@ class PromptBuilder(ITransformFunction):
             **data,
             "prompt": prompt,
         }
-        
+
         if self.system_prompt:
             result["system_prompt"] = self.system_prompt
-        
+
         return result
+
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation.
+
+        Returns:
+            String describing what this transform does.
+        """
+        return f"Build prompt from template: {self.template}"
 
 
 class LLMCaller(ITransformFunction):
@@ -172,6 +180,14 @@ class LLMCaller(ITransformFunction):
         
         except Exception as e:
             raise TransformError(f"LLM call failed: {e}") from e
+
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation.
+
+        Returns:
+            String describing what this transform does.
+        """
+        return f"Call LLM resource '{self.resource_name}' with prompt"
 
 
 class ResponseValidator(IValidationFunction):
@@ -257,8 +273,23 @@ class ResponseValidator(IValidationFunction):
                 
             except json.JSONDecodeError as e:
                 raise ValidationError(f"Invalid JSON response: {e}") from e
-        
+
         return True
+
+    def get_validation_rules(self) -> Dict[str, Any]:
+        """Get the validation rules this function implements.
+
+        Returns:
+            Dictionary describing the validation rules.
+        """
+        return {
+            "response_field": self.response_field,
+            "format": self.format,
+            "schema": self.schema,
+            "min_length": self.min_length,
+            "max_length": self.max_length,
+            "required_fields": self.required_fields,
+        }
 
 
 class FunctionCaller(ITransformFunction):
@@ -331,6 +362,15 @@ class FunctionCaller(ITransformFunction):
         except Exception as e:
             raise TransformError(f"Function call failed: {e}") from e
 
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation.
+
+        Returns:
+            String describing what this transform does.
+        """
+        available_funcs = ", ".join(self.function_registry.keys()) if self.function_registry else "none"
+        return f"Call function from LLM response (available: {available_funcs})"
+
 
 class ConversationManager(ITransformFunction):
     """Manage conversation history for multi-turn interactions."""
@@ -395,6 +435,14 @@ class ConversationManager(ITransformFunction):
             **data,
             self.history_field: history,
         }
+
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation.
+
+        Returns:
+            String describing what this transform does.
+        """
+        return f"Manage conversation history (max {self.max_history} messages)"
 
 
 class EmbeddingGenerator(ITransformFunction):
@@ -462,6 +510,14 @@ class EmbeddingGenerator(ITransformFunction):
         
         except Exception as e:
             raise TransformError(f"Embedding generation failed: {e}") from e
+
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation.
+
+        Returns:
+            String describing what this transform does.
+        """
+        return f"Generate embeddings using resource '{self.resource_name}'"
 
 
 # Convenience functions for creating LLM functions
