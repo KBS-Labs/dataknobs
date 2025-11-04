@@ -1,0 +1,68 @@
+# Example: Dynamic workflow using the package registry
+# This shows how to use the centralized package list
+
+name: Example Dynamic Workflow
+
+on: [push, pull_request]
+
+jobs:
+  # Generate the package list dynamically
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      packages: ${{ steps.get-packages.outputs.packages }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get package list
+        id: get-packages
+        run: |
+          # Get packages that require docs build
+          PACKAGES=$(python bin/list-packages.py --format yaml --requires-docs)
+          echo "packages=$PACKAGES" >> $GITHUB_OUTPUT
+
+  # Use the package list in a matrix
+  build-docs:
+    needs: setup
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package: ${{ fromJson(needs.setup.outputs.packages) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build docs for ${{ matrix.package }}
+        run: |
+          echo "Building docs for ${{ matrix.package }}"
+          # Your build commands here
+
+  # Or install all packages dynamically
+  install-all:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install all doc packages
+        run: |
+          # Generate install commands from registry
+          python bin/list-packages.py --format uv-install --requires-docs | bash
+
+  # Release workflow with dynamic choices
+  # Note: GitHub Actions doesn't support dynamic workflow_dispatch inputs yet,
+  # but we can validate against the registry
+  validate-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate package exists
+        run: |
+          PACKAGE="${{ github.event.inputs.package }}"
+          # Check if package exists in registry
+          python bin/list-packages.py --format yaml | grep -q "$PACKAGE" || {
+            echo "Error: Package $PACKAGE not found in registry"
+            exit 1
+          }

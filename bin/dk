@@ -73,6 +73,7 @@ ${BOLD}${BLUE}Detailed Commands:${NC}
     checkall         Check all packages
     lint [pkg]       Run linting only
     style [pkg]      Run style checks only
+    validate-pkgs    Validate package references across codebase
     
   ${BOLD}Testing:${NC}
     test [pkg]       Run tests (smart mode)
@@ -216,7 +217,11 @@ main() {
             run_command "Running style checks" \
                 uv run ruff check packages/*/src "$@"
             ;;
-            
+        validate-pkgs|validate-packages|vp)
+            run_command "Validating package references" \
+                uv run python "$SCRIPT_DIR/validate-package-references.py" "$@"
+            ;;
+
         # Testing
         test|t)
             # Set environment variables for integration tests
