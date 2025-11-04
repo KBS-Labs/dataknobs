@@ -84,7 +84,7 @@ class DictResourceAdapter(ResourceAdapter):
         query: str,
         k: int = 5,
         filters: Dict[str, Any] | None = None,
-        **kwargs
+        **kwargs: Any
     ) -> List[Dict[str, Any]]:
         """Perform text-based search across dictionary values.
 
@@ -234,7 +234,7 @@ class AsyncDictResourceAdapter(AsyncResourceAdapter):
         query: str,
         k: int = 5,
         filters: Dict[str, Any] | None = None,
-        **kwargs
+        **kwargs: Any
     ) -> List[Dict[str, Any]]:
         """Perform text-based search across dictionary values (async).
 

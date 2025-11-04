@@ -205,17 +205,18 @@ from dataknobs_fsm.patterns.llm_workflow import (
     WorkflowType
 )
 from dataknobs_fsm.llm.base import LLMConfig
+from dataknobs_llm.llm.utils import MessageTemplate
 
 # Define workflow
 step1 = LLMStep(
     name="summarize",
-    prompt_template=PromptTemplate("Summarize: {text}"),
+    prompt_template=MessageTemplate("Summarize: {text}"),
     output_key="summary"
 )
 
 step2 = LLMStep(
     name="analyze",
-    prompt_template=PromptTemplate("Analyze: {summary}"),
+    prompt_template=MessageTemplate("Analyze: {summary}"),
     depends_on=["summarize"],
     output_key="analysis"
 )

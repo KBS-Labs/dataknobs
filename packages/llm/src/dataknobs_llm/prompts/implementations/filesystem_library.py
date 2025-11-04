@@ -257,7 +257,7 @@ class FileSystemPromptLibrary(BasePromptLibrary):
     # Note: _parse_prompt_template(), _parse_validation_config(), and
     # _parse_rag_config() are now inherited from BasePromptLibrary
 
-    def get_system_prompt(self, name: str, **kwargs) -> PromptTemplateDict | None:
+    def get_system_prompt(self, name: str, **kwargs: Any) -> PromptTemplateDict | None:
         """Get a system prompt by name.
 
         Args:
@@ -269,7 +269,7 @@ class FileSystemPromptLibrary(BasePromptLibrary):
         """
         return self._get_cached_system_prompt(name)
 
-    def get_user_prompt(self, name: str, **kwargs) -> PromptTemplateDict | None:
+    def get_user_prompt(self, name: str, **kwargs: Any) -> PromptTemplateDict | None:
         """Get a user prompt by name.
 
         Args:
@@ -281,7 +281,7 @@ class FileSystemPromptLibrary(BasePromptLibrary):
         """
         return self._get_cached_user_prompt(name)
 
-    def get_message_index(self, name: str, **kwargs) -> MessageIndex | None:
+    def get_message_index(self, name: str, **kwargs: Any) -> MessageIndex | None:
         """Get a message index by name.
 
         Args:
@@ -293,7 +293,7 @@ class FileSystemPromptLibrary(BasePromptLibrary):
         """
         return self._get_cached_message_index(name)
 
-    def get_rag_config(self, name: str, **kwargs) -> RAGConfig | None:
+    def get_rag_config(self, name: str, **kwargs: Any) -> RAGConfig | None:
         """Get a standalone RAG configuration by name.
 
         Args:
@@ -309,7 +309,7 @@ class FileSystemPromptLibrary(BasePromptLibrary):
         self,
         prompt_name: str,
         prompt_type: str = "user",
-        **kwargs
+        **kwargs: Any
     ) -> List[RAGConfig]:
         """Get RAG configurations for a specific prompt.
 

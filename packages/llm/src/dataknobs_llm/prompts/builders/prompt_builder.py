@@ -16,6 +16,7 @@ import logging
 from typing import Any, Dict
 
 from ..base import (
+    AbstractPromptLibrary,
     PromptTemplateDict,
     RAGConfig,
     ValidationLevel,
@@ -54,7 +55,7 @@ class PromptBuilder(BasePromptBuilder):
 
     def __init__(
         self,
-        library,
+        library: AbstractPromptLibrary,
         adapters: Dict[str, ResourceAdapter] | None = None,
         default_validation: ValidationLevel = ValidationLevel.WARN,
         raise_on_rag_error: bool = False

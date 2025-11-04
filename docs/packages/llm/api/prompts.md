@@ -102,9 +102,9 @@ Resource adapters provide data for RAG and template variables.
 
 ## Prompt Types
 
-### PromptTemplate
+### PromptTemplateDict
 
-::: dataknobs_llm.prompts.PromptTemplate
+::: dataknobs_llm.prompts.PromptTemplateDict
     options:
       show_source: true
       heading_level: 3
@@ -141,11 +141,11 @@ print(result)
 ### In-Memory Library
 
 ```python
-from dataknobs_llm.prompts import InMemoryPromptLibrary, PromptTemplate
+from dataknobs_llm.prompts import InMemoryPromptLibrary, PromptTemplateDict
 
 # Create templates
 templates = {
-    "greeting": PromptTemplate(
+    "greeting": PromptTemplateDict(
         template="Hello {{name}}!",
         defaults={"name": "User"},
         validation={"required": ["name"]}
@@ -188,19 +188,19 @@ For comprehensive RAG documentation, including caching and configuration, see:
 
 ```python
 # String formatting mode
-template = PromptTemplate(
+template = PromptTemplateDict(
     template_mode="string",
     template="Hello {name}!"
 )
 
 # Jinja2 mode (default)
-template = PromptTemplate(
+template = PromptTemplateDict(
     template_mode="jinja2",
     template="Hello {{name | upper}}!"
 )
 
 # Conditional mode
-template = PromptTemplate(
+template = PromptTemplateDict(
     template_mode="conditional",
     template="Hello {{name}}!",
     conditional_blocks=[
@@ -216,7 +216,7 @@ template = PromptTemplate(
 
 ```python
 # Define validation rules
-template = PromptTemplate(
+template = PromptTemplateDict(
     template="Code review for {{language}}: {{code}}",
     validation={
         "required": ["language", "code"],

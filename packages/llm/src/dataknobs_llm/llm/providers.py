@@ -1073,20 +1073,20 @@ To call a function, respond with JSON:
                 LLMMessage(role='system', content=system_prompt)
             ] + list(messages)
 
-            response = await self.complete(messages_with_system, **kwargs)
+            llm_response = await self.complete(messages_with_system, **kwargs)
 
             # Try to parse function call
             try:
-                func_data = json.loads(response.content)
+                func_data = json.loads(llm_response.content)
                 if 'function' in func_data:
-                    response.function_call = {
+                    llm_response.function_call = {
                         'name': func_data['function'],
                         'arguments': func_data.get('arguments', {})
                     }
             except json.JSONDecodeError:
                 pass
 
-            return response
+            return llm_response
         
     def _build_prompt(self, messages: List[LLMMessage]) -> str:
         """Build prompt from messages."""

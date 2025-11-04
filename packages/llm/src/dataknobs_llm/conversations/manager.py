@@ -356,7 +356,7 @@ class ConversationManager:
         self,
         branch_name: str | None = None,
         metadata: Dict[str, Any] | None = None,
-        **llm_kwargs,
+        **llm_kwargs: Any,
     ) -> LLMResponse:
         """Get LLM completion and add as child of current node.
 

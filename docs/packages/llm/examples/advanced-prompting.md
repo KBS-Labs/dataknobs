@@ -7,10 +7,10 @@ Complex templates, RAG integration, and advanced patterns.
 ### Template with Filters
 
 ```python
-from dataknobs_llm.prompts import InMemoryPromptLibrary, AsyncPromptBuilder, PromptTemplate
+from dataknobs_llm.prompts import InMemoryPromptLibrary, AsyncPromptBuilder, PromptTemplateDict
 
 # Template using Jinja2 filters
-template = PromptTemplate(
+template = PromptTemplateDict(
     template_mode="jinja2",
     template="""
     Analyze this {{language | upper}} code:
@@ -48,7 +48,7 @@ print(result)
 ### Conditional Blocks
 
 ```python
-template = PromptTemplate(
+template = PromptTemplateDict(
     template_mode="jinja2",
     template="""
     {% if user_level == 'beginner' %}
@@ -84,7 +84,7 @@ result = await builder.render_user_prompt(
 ### Loops and Lists
 
 ```python
-template = PromptTemplate(
+template = PromptTemplateDict(
     template_mode="jinja2",
     template="""
     Review the following {{language}} files:
@@ -242,7 +242,7 @@ result = await builder.render_user_prompt(
 ### Type Validation
 
 ```python
-template = PromptTemplate(
+template = PromptTemplateDict(
     template="Analyze {{metric}} for {{dates | length}} dates",
     validation={
         "required": ["metric", "dates"],
@@ -303,7 +303,7 @@ builder = AsyncPromptBuilder(library=library)
 
 ```python
 # Base template
-base_template = PromptTemplate(
+base_template = PromptTemplateDict(
     template="""
     You are {{role}}.
     {{content}}
@@ -312,7 +312,7 @@ base_template = PromptTemplate(
 )
 
 # Specialized template
-code_review_template = PromptTemplate(
+code_review_template = PromptTemplateDict(
     template="""
     {% include 'base' %}
 
@@ -346,7 +346,7 @@ class InheritingLibrary(InMemoryPromptLibrary):
 ### Macros
 
 ```python
-template = PromptTemplate(
+template = PromptTemplateDict(
     template_mode="jinja2",
     template="""
     {% macro format_code(language, code) %}

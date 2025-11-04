@@ -100,7 +100,7 @@ class Tool(ABC):
         pass
 
     @abstractmethod
-    async def execute(self, **kwargs) -> Any:
+    async def execute(self, **kwargs: Any) -> Any:
         """Execute the tool with given parameters.
 
         This method performs the actual tool logic. Parameters are passed
@@ -159,7 +159,7 @@ class Tool(ABC):
             "input_schema": self.schema,
         }
 
-    def validate_parameters(self, **kwargs) -> bool:
+    def validate_parameters(self, **kwargs: Any) -> bool:
         """Validate parameters against schema.
 
         Optional method for parameter validation before execution.

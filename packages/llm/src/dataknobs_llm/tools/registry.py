@@ -232,7 +232,7 @@ class ToolRegistry:
 
         return [tool.to_anthropic_tool_definition() for tool in tools_to_include]
 
-    async def execute_tool(self, name: str, **kwargs) -> Any:
+    async def execute_tool(self, name: str, **kwargs: Any) -> Any:
         """Execute a tool by name with given parameters.
 
         This is a convenience method for getting and executing a tool
@@ -252,7 +252,7 @@ class ToolRegistry:
         tool = self.get_tool(name)
         return await tool.execute(**kwargs)
 
-    def filter_by_metadata(self, **filters) -> List[Tool]:
+    def filter_by_metadata(self, **filters: Any) -> List[Tool]:
         """Filter tools by metadata attributes.
 
         Args:

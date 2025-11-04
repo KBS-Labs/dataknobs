@@ -178,7 +178,7 @@ class InMemoryAdapter(InMemoryAdapterBase, ResourceAdapter):
         query: str,
         k: int = 5,
         filters: Dict[str, Any] | None = None,
-        **kwargs
+        **kwargs: Any
     ) -> List[Dict[str, Any]]:
         """Return predefined search results.
 

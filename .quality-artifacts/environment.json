@@ -1,11 +1,11 @@
 {
-  "timestamp": "2025-10-20T16:16:21Z",
+  "timestamp": "2025-11-04T19:40:53Z",
   "python_version": "Python 3.10.18",
-  "uv_version": "uv 0.9.0 (Homebrew 2025-10-07)",
+  "uv_version": "uv 0.9.7 (Homebrew 2025-10-30)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "update-dependencies",
-  "git_commit": "16d8820382ab39e6ece89701722e1515a248bcf8",
+  "git_branch": "sbk/llm-package",
+  "git_commit": "66bba9f10da2c8a16a00c717c102a4c17d0f5002",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

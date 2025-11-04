@@ -158,11 +158,13 @@ nav:
         - packages/llm/guides/flows.md
         - packages/llm/guides/versioning.md
         - packages/llm/guides/performance.md
+        - packages/llm/guides/tools-and-enhancements.md
       - API Reference:
         - packages/llm/api/llm.md
         - packages/llm/api/prompts.md
         - packages/llm/api/conversations.md
         - packages/llm/api/versioning.md
+        - packages/llm/api/tools.md
       - Examples:
         - packages/llm/examples/basic-usage.md
         - packages/llm/examples/advanced-prompting.md

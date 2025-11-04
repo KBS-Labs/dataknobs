@@ -90,11 +90,11 @@ print(f"\n\nFull response: {full_response}")
 ### Simple Template
 
 ```python
-from dataknobs_llm.prompts import InMemoryPromptLibrary, AsyncPromptBuilder, PromptTemplate
+from dataknobs_llm.prompts import InMemoryPromptLibrary, AsyncPromptBuilder, PromptTemplateDict
 
 # Create template
 templates = {
-    "greeting": PromptTemplate(
+    "greeting": PromptTemplateDict(
         template="Greet a user named {{name}} in {{language}}.",
         defaults={"language": "English"}
     )

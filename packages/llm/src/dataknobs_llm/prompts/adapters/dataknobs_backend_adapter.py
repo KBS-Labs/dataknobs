@@ -106,7 +106,7 @@ class DataknobsBackendAdapter(ResourceAdapter):
         query: str,
         k: int = 5,
         filters: Dict[str, Any] | None = None,
-        **kwargs
+        **kwargs: Any
     ) -> List[Dict[str, Any]]:
         """Perform search using database backend.
 
@@ -275,7 +275,7 @@ class AsyncDataknobsBackendAdapter(AsyncResourceAdapter):
         query: str,
         k: int = 5,
         filters: Dict[str, Any] | None = None,
-        **kwargs
+        **kwargs: Any
     ) -> List[Dict[str, Any]]:
         """Perform search using database backend (async).
 
