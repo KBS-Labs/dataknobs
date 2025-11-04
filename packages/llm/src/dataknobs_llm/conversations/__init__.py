@@ -58,6 +58,8 @@ from dataknobs_llm.conversations.middleware import (
     ContentFilterMiddleware,
     ValidationMiddleware,
     MetadataMiddleware,
+    RateLimitMiddleware,
+    RateLimitError,
 )
 
 __all__ = [
@@ -81,6 +83,8 @@ __all__ = [
     "ContentFilterMiddleware",
     "ValidationMiddleware",
     "MetadataMiddleware",
+    "RateLimitMiddleware",
+    "RateLimitError",
 
     # Helper functions
     "calculate_node_id",

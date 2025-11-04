@@ -59,6 +59,10 @@ class LLMResponse:
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
 
+    # Cost tracking (optional enhancement for DynaBot)
+    cost_usd: float | None = None  # Estimated cost in USD
+    cumulative_cost_usd: float | None = None  # Running total for conversation
+
 
 @dataclass
 class LLMStreamResponse:
@@ -177,6 +181,26 @@ class LLMConfig:
             result['type'] = 'llm'
 
         return result
+
+    def clone(self, **overrides) -> "LLMConfig":
+        """Create a copy of this config with optional overrides.
+
+        This method is useful for creating runtime configuration variations
+        without mutating the original config. All dataclass fields can be
+        overridden via keyword arguments.
+
+        Args:
+            **overrides: Field values to override in the cloned config
+
+        Returns:
+            New LLMConfig instance with overrides applied
+
+        Example:
+            >>> base_config = LLMConfig(provider="openai", model="gpt-4", temperature=0.7)
+            >>> creative_config = base_config.clone(temperature=1.2, max_tokens=500)
+        """
+        from dataclasses import replace
+        return replace(self, **overrides)
 
 
 def normalize_llm_config(config: Union["LLMConfig", Config, Dict[str, Any]]) -> "LLMConfig":

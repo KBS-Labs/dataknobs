@@ -423,6 +423,9 @@ class ConversationManager:
             "finish_reason": response.finish_reason,
         })
 
+        # Calculate and track cost
+        self._calculate_and_track_cost(response, assistant_metadata)
+
         new_tree_node = Tree(
             ConversationNode(
                 message=assistant_message,
@@ -516,6 +519,9 @@ class ConversationManager:
             "model": response.model,
             "finish_reason": response.finish_reason,
         })
+
+        # Calculate and track cost
+        self._calculate_and_track_cost(response, assistant_metadata)
 
         new_tree_node = Tree(
             ConversationNode(
@@ -908,3 +914,198 @@ class ConversationManager:
     def current_node_id(self) -> str | None:
         """Get current node ID."""
         return self.state.current_node_id if self.state else None
+
+    def get_metadata(self, key: str | None = None, default: Any = None) -> Any:
+        """Get conversation metadata.
+
+        This provides access to the conversation-level metadata stored in
+        the ConversationState. Metadata is useful for storing client_id,
+        user_id, session information, and other contextual data.
+
+        Args:
+            key: Specific metadata key to retrieve. If None, returns all metadata.
+            default: Default value if key not found (only used when key is specified)
+
+        Returns:
+            Metadata value, all metadata dict, or default value
+
+        Example:
+            >>> # Get all metadata
+            >>> metadata = manager.get_metadata()
+            >>> print(metadata)  # {'client_id': 'abc', 'user_id': '123'}
+            >>>
+            >>> # Get specific key
+            >>> client_id = manager.get_metadata('client_id')
+            >>> print(client_id)  # 'abc'
+            >>>
+            >>> # Get with default
+            >>> tier = manager.get_metadata('user_tier', default='free')
+        """
+        if not self.state:
+            return default if key else {}
+
+        if key is None:
+            return self.state.metadata
+        else:
+            return self.state.metadata.get(key, default)
+
+    def set_metadata(self, key: str, value: Any) -> None:
+        """Set conversation metadata.
+
+        Updates a specific key in the conversation metadata. The metadata
+        is automatically persisted when save() is called.
+
+        Args:
+            key: Metadata key to set
+            value: Metadata value
+
+        Example:
+            >>> manager.set_metadata('client_id', 'client-abc')
+            >>> manager.set_metadata('user_tier', 'premium')
+            >>> await manager.save()
+        """
+        if self.state:
+            self.state.metadata[key] = value
+
+    def update_metadata(self, updates: Dict[str, Any]) -> None:
+        """Update multiple metadata fields at once.
+
+        Args:
+            updates: Dictionary of metadata key-value pairs to update
+
+        Example:
+            >>> manager.update_metadata({
+            ...     'client_id': 'client-abc',
+            ...     'user_id': 'user-456',
+            ...     'session_id': 'sess-789'
+            ... })
+            >>> await manager.save()
+        """
+        if self.state:
+            self.state.metadata.update(updates)
+
+    def remove_metadata(self, key: str) -> None:
+        """Remove a metadata key.
+
+        Args:
+            key: Metadata key to remove
+
+        Example:
+            >>> manager.remove_metadata('temporary_flag')
+            >>> await manager.save()
+        """
+        if self.state and key in self.state.metadata:
+            del self.state.metadata[key]
+
+    def get_total_cost(self) -> float:
+        """Get total accumulated cost for this conversation in USD.
+
+        Calculates the sum of all LLM API costs from the conversation history.
+        Requires that cost_usd was set on LLMResponses.
+
+        Returns:
+            Total cost in USD, or 0.0 if no cost data available
+
+        Example:
+            >>> total = manager.get_total_cost()
+            >>> print(f"Total cost: ${total:.4f}")
+        """
+        if not self.state:
+            return 0.0
+
+        total = 0.0
+
+        # Walk the tree and sum costs from all assistant message nodes
+        def walk_tree(node: Tree) -> None:
+            nonlocal total
+            if node.data and node.data.metadata:
+                cost = node.data.metadata.get('cost_usd')
+                if cost is not None:
+                    total += cost
+
+            for child in node.children:
+                walk_tree(child)
+
+        walk_tree(self.state.message_tree)
+        return total
+
+    def get_cost_by_branch(self, node_id: str | None = None) -> float:
+        """Get accumulated cost for a specific conversation branch.
+
+        Calculates the cost from root to a specific node (defaults to current).
+
+        Args:
+            node_id: Node ID to calculate cost to. If None, uses current node.
+
+        Returns:
+            Cost in USD for this branch, or 0.0 if no cost data
+
+        Example:
+            >>> # Get cost of current branch
+            >>> current_cost = manager.get_cost_by_branch()
+            >>>
+            >>> # Get cost of specific branch
+            >>> alt_cost = manager.get_cost_by_branch("0.1")
+        """
+        if not self.state:
+            return 0.0
+
+        target_node_id = node_id or self.state.current_node_id
+
+        # Get messages in this branch
+
+        # Walk from root to target node
+        if not target_node_id or target_node_id == "":
+            # Just root node
+            return 0.0
+
+        indexes = [int(i) for i in target_node_id.split(".")]
+
+        total = 0.0
+        current = self.state.message_tree
+
+        for idx in indexes:
+            if idx < len(current.children):
+                current = current.children[idx]
+                if current.data and current.data.metadata:
+                    cost = current.data.metadata.get('cost_usd')
+                    if cost is not None:
+                        total += cost
+
+        return total
+
+    def _calculate_and_track_cost(
+        self,
+        response: LLMResponse,
+        metadata: Dict[str, Any]
+    ) -> None:
+        """Calculate cost for a response and add to metadata.
+
+        This is an internal helper that uses the CostCalculator utility
+        to estimate costs and track them in the conversation.
+
+        Args:
+            response: LLM response to calculate cost for
+            metadata: Metadata dict to add cost information to
+        """
+        try:
+            from dataknobs_llm.llm.utils import CostCalculator
+
+            if response.usage:
+                cost = CostCalculator.calculate_cost(response, response.model)
+                if cost is not None:
+                    # Add to response
+                    response.cost_usd = cost
+
+                    # Calculate cumulative cost
+                    cumulative = self.get_total_cost() + cost
+                    response.cumulative_cost_usd = cumulative
+
+                    # Store in metadata
+                    metadata['cost_usd'] = cost
+                    metadata['cumulative_cost_usd'] = cumulative
+        except Exception as e:
+            # Don't fail the conversation if cost calculation fails
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to calculate cost: {e}")

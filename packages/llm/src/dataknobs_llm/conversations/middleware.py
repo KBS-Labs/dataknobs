@@ -438,3 +438,252 @@ class MetadataMiddleware(ConversationMiddleware):
             response.metadata.update(metadata_to_add)
 
         return response
+
+
+class RateLimitMiddleware(ConversationMiddleware):
+    """Middleware that enforces rate limiting on LLM requests.
+
+    This middleware tracks request rates per conversation or per client
+    and raises an exception when the rate limit is exceeded. Rate limits
+    are tracked in-memory using a sliding window algorithm.
+
+    Example:
+        >>> # Limit to 10 requests per minute
+        >>> middleware = RateLimitMiddleware(
+        ...     max_requests=10,
+        ...     window_seconds=60
+        ... )
+        >>>
+        >>> # Per-client rate limiting
+        >>> middleware = RateLimitMiddleware(
+        ...     max_requests=100,
+        ...     window_seconds=3600,
+        ...     scope="client_id"  # Rate limit per client
+        ... )
+        >>>
+        >>> # With custom key function
+        >>> def get_user_id(state):
+        ...     return state.metadata.get("user_id")
+        >>>
+        >>> middleware = RateLimitMiddleware(
+        ...     max_requests=50,
+        ...     window_seconds=60,
+        ...     key_fn=get_user_id
+        ... )
+    """
+
+    def __init__(
+        self,
+        max_requests: int,
+        window_seconds: int = 60,
+        scope: str = "conversation",  # "conversation" or "client_id"
+        key_fn: Callable[[ConversationState], str] | None = None
+    ):
+        """Initialize rate limiting middleware.
+
+        Args:
+            max_requests: Maximum number of requests allowed in window
+            window_seconds: Time window in seconds for rate limiting
+            scope: Scope for rate limiting ("conversation" or "client_id")
+            key_fn: Optional custom function to extract rate limit key from state
+        """
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.scope = scope
+        self.key_fn = key_fn
+
+        # In-memory storage: key -> list of request timestamps
+        self._request_history: Dict[str, List[float]] = {}
+
+    def _get_rate_limit_key(self, state: ConversationState) -> str:
+        """Get the key to use for rate limiting.
+
+        Args:
+            state: Conversation state
+
+        Returns:
+            Rate limit key
+        """
+        if self.key_fn:
+            return self.key_fn(state)
+        elif self.scope == "client_id":
+            return state.metadata.get("client_id", state.conversation_id)
+        else:
+            return state.conversation_id
+
+    def _clean_old_requests(self, key: str, current_time: float) -> None:
+        """Remove requests outside the time window.
+
+        Args:
+            key: Rate limit key
+            current_time: Current timestamp
+        """
+        if key in self._request_history:
+            cutoff_time = current_time - self.window_seconds
+            self._request_history[key] = [
+                ts for ts in self._request_history[key]
+                if ts > cutoff_time
+            ]
+
+    def _check_rate_limit(self, key: str, current_time: float) -> tuple[bool, int]:
+        """Check if request is within rate limit.
+
+        Args:
+            key: Rate limit key
+            current_time: Current timestamp
+
+        Returns:
+            Tuple of (is_allowed, current_count)
+        """
+        # Clean old requests
+        self._clean_old_requests(key, current_time)
+
+        # Check current count
+        if key not in self._request_history:
+            self._request_history[key] = []
+
+        current_count = len(self._request_history[key])
+        is_allowed = current_count < self.max_requests
+
+        return is_allowed, current_count
+
+    def _record_request(self, key: str, current_time: float) -> None:
+        """Record a new request.
+
+        Args:
+            key: Rate limit key
+            current_time: Current timestamp
+        """
+        if key not in self._request_history:
+            self._request_history[key] = []
+
+        self._request_history[key].append(current_time)
+
+    async def process_request(
+        self,
+        messages: List[LLMMessage],
+        state: ConversationState
+    ) -> List[LLMMessage]:
+        """Check rate limit before allowing request through."""
+        import time
+
+        current_time = time.time()
+        key = self._get_rate_limit_key(state)
+
+        # Check rate limit
+        is_allowed, current_count = self._check_rate_limit(key, current_time)
+
+        if not is_allowed:
+            # Add rate limit info to state metadata for debugging
+            if not state.metadata:
+                state.metadata = {}
+            state.metadata["rate_limit_exceeded"] = True
+            state.metadata["rate_limit_count"] = current_count
+            state.metadata["rate_limit_max"] = self.max_requests
+            state.metadata["rate_limit_window"] = self.window_seconds
+
+            raise RateLimitError(
+                f"Rate limit exceeded: {current_count}/{self.max_requests} "
+                f"requests in {self.window_seconds}s window"
+            )
+
+        # Record this request
+        self._record_request(key, current_time)
+
+        # Add rate limit info to messages metadata
+        for msg in messages:
+            if not msg.metadata:
+                msg.metadata = {}
+            msg.metadata["rate_limit_count"] = current_count + 1
+            msg.metadata["rate_limit_max"] = self.max_requests
+
+        return messages
+
+    async def process_response(
+        self,
+        response: LLMResponse,
+        state: ConversationState
+    ) -> LLMResponse:
+        """Add rate limit info to response metadata."""
+        key = self._get_rate_limit_key(state)
+
+        if key in self._request_history:
+            current_count = len(self._request_history[key])
+
+            if not response.metadata:
+                response.metadata = {}
+
+            response.metadata["rate_limit_count"] = current_count
+            response.metadata["rate_limit_max"] = self.max_requests
+            response.metadata["rate_limit_remaining"] = self.max_requests - current_count
+
+        return response
+
+    def get_rate_limit_status(self, key: str) -> Dict[str, Any]:
+        """Get current rate limit status for a key.
+
+        Args:
+            key: Rate limit key
+
+        Returns:
+            Dictionary with rate limit status
+
+        Example:
+            >>> status = middleware.get_rate_limit_status("client-abc")
+            >>> print(status)
+            {
+                'current_count': 5,
+                'max_requests': 10,
+                'remaining': 5,
+                'window_seconds': 60,
+                'next_reset': 45.2  # seconds until oldest request expires
+            }
+        """
+        import time
+
+        current_time = time.time()
+        self._clean_old_requests(key, current_time)
+
+        if key not in self._request_history or not self._request_history[key]:
+            return {
+                'current_count': 0,
+                'max_requests': self.max_requests,
+                'remaining': self.max_requests,
+                'window_seconds': self.window_seconds,
+                'next_reset': 0
+            }
+
+        current_count = len(self._request_history[key])
+        oldest_request = min(self._request_history[key])
+        next_reset = max(0, (oldest_request + self.window_seconds) - current_time)
+
+        return {
+            'current_count': current_count,
+            'max_requests': self.max_requests,
+            'remaining': max(0, self.max_requests - current_count),
+            'window_seconds': self.window_seconds,
+            'next_reset': next_reset
+        }
+
+    def reset(self, key: str | None = None) -> None:
+        """Reset rate limit for a specific key or all keys.
+
+        Args:
+            key: Key to reset. If None, resets all keys.
+
+        Example:
+            >>> # Reset specific client
+            >>> middleware.reset("client-abc")
+            >>>
+            >>> # Reset all
+            >>> middleware.reset()
+        """
+        if key is None:
+            self._request_history.clear()
+        elif key in self._request_history:
+            del self._request_history[key]
+
+
+class RateLimitError(Exception):
+    """Exception raised when rate limit is exceeded."""
+    pass

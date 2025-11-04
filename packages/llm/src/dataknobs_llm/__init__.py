@@ -25,6 +25,11 @@ from dataknobs_llm.llm import (
     render_conditional_template,
 )
 
+from dataknobs_llm.tools import (
+    Tool,
+    ToolRegistry,
+)
+
 __version__ = "0.1.0"
 
 __all__ = [
@@ -53,4 +58,7 @@ __all__ = [
     "TokenCounter",
     "CostCalculator",
     "render_conditional_template",
+    # Tools
+    "Tool",
+    "ToolRegistry",
 ]
