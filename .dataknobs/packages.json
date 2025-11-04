@@ -23,7 +23,7 @@
       "name": "data",
       "pypi_name": "dataknobs-data",
       "description": "Data abstraction layer with multiple backend support",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -32,7 +32,7 @@
       "name": "fsm",
       "pypi_name": "dataknobs-fsm",
       "description": "Finite State Machine framework for building workflows",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -68,7 +68,7 @@
       "name": "xization",
       "pypi_name": "dataknobs-xization",
       "description": "Text processing, tokenization, and normalization",
-      "version": "1.0.1",
+      "version": "1.1.1",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false

@@ -277,7 +277,44 @@ bump_version() {
         # Update version in pyproject.toml
         sed -i.bak "s/^version = \"${current_version}\"/version = \"${new_version}\"/" "$pyproject"
         rm "${pyproject}.bak"
-        echo -e "${GREEN}✓ Updated ${package} to v${new_version}${NC}"
+
+        # Update version in packages.json
+        local packages_json="$ROOT_DIR/.dataknobs/packages.json"
+        if [ -f "$packages_json" ]; then
+            python3 << EOF
+import json
+import sys
+
+packages_json = "$packages_json"
+package_name = "$package"
+new_version = "$new_version"
+
+try:
+    with open(packages_json, 'r') as f:
+        data = json.load(f)
+
+    # Find and update the package version
+    for pkg in data.get('packages', []):
+        if pkg['name'] == package_name:
+            pkg['version'] = new_version
+            break
+
+    with open(packages_json, 'w') as f:
+        json.dump(data, f, indent=2)
+        f.write('\n')  # Add trailing newline
+
+except Exception as e:
+    print(f"Warning: Could not update packages.json: {e}", file=sys.stderr)
+    sys.exit(1)
+EOF
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}✓ Updated ${package} to v${new_version} (pyproject.toml and packages.json)${NC}"
+            else
+                echo -e "${YELLOW}⚠ Updated ${package} to v${new_version} in pyproject.toml but packages.json update failed${NC}"
+            fi
+        else
+            echo -e "${GREEN}✓ Updated ${package} to v${new_version}${NC}"
+        fi
     fi
 }
 

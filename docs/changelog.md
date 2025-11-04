@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## Release - 2025-11-04
+
+### dataknobs-llm [0.1.0]
+
+#### Added
+- created new llm package
+
+### dataknobs-xization [1.1.0]
+
+#### Added
+- added markdown chunking utilities
+
+#### Changed
+- updated documentation
+
+#### Fixed
+- fixed ruff and mypy validation errors; moved md_cli.py to xization/scripts
+
+### dataknobs-data [0.3.2]
+
+#### Fixed
+- fixed get_nested_value bug for metadata fields
+- fixed intermittent test failures
+
+### dataknobs-fsm [0.1.2]
+
+#### Changed
+- moved llm modules and llm-based examples to the llm package
+
 ## Release - 2025-10-08
 
 ### dataknobs-data [0.3.1]
