@@ -1780,6 +1780,7 @@ version = "1.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "dataknobs" },
+    { name = "dataknobs-bots" },
     { name = "dataknobs-common" },
     { name = "dataknobs-config" },
     { name = "dataknobs-data" },
@@ -1821,6 +1822,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "dataknobs", editable = "packages/legacy" },
+    { name = "dataknobs-bots", editable = "packages/bots" },
     { name = "dataknobs-common", editable = "packages/common" },
     { name = "dataknobs-config", editable = "packages/config" },
     { name = "dataknobs-data", editable = "packages/data" },

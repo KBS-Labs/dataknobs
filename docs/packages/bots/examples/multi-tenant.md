@@ -414,6 +414,6 @@ To learn about configuration-driven tools, see the [Custom Tools Example](custom
 
 ## Related Documentation
 
-- [User Guide - Multi-Tenancy](../guides/user-guide.md#multi-tenancy)
+- [User Guide - Multi-Tenancy](../guides/user-guide.md#multi-tenant-deployment)
 - [Architecture](../guides/architecture.md)
-- [API Reference - Registry](../api/reference.md#botregistry-class)
+- [API Reference - Registry](../api/reference.md#botregistry)

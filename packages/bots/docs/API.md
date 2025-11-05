@@ -1029,8 +1029,8 @@ ContextDict = dict[str, Any]
 
 ## See Also
 
-- [User Guide](USER_GUIDE.md) - Tutorials and how-to guides
-- [Configuration Reference](CONFIGURATION.md) - Complete configuration options
-- [Tools Development](TOOLS.md) - Creating custom tools
-- [Architecture](ARCHITECTURE.md) - System design
-- [Examples](../examples/) - Working code examples
+- [User Guide](../guides/user-guide.md) - Tutorials and how-to guides
+- [Configuration Reference](../guides/configuration.md) - Complete configuration options
+- [Tools Development](../guides/tools.md) - Creating custom tools
+- [Architecture](../guides/architecture.md) - System design
+- [Examples](../examples/index.md) - Working code examples

@@ -13,7 +13,6 @@ Complete guide to using DataKnobs Bots with tutorials and how-to guides.
 - [Advanced Topics](#advanced-topics)
   - [Multi-Tenant Deployment](#multi-tenant-deployment)
   - [Custom Tools Development](#custom-tools-development)
-  - [Custom Memory Strategies](#custom-memory-strategies)
   - [Production Deployment](#production-deployment)
 - [Common Patterns](#common-patterns)
 - [Troubleshooting](#troubleshooting)
@@ -611,7 +610,7 @@ if __name__ == "__main__":
 
 ### Custom Tools Development
 
-See [TOOLS.md](TOOLS.md) for comprehensive guide.
+See [TOOLS.md](tools.md) for comprehensive guide.
 
 **Quick Example**:
 
@@ -977,11 +976,11 @@ config["reasoning"]["store_trace"] = True
 
 ## Next Steps
 
-- **Explore Examples**: Check out [examples/](../examples/) for more patterns
-- **Read API Docs**: See [API.md](API.md) for complete API reference
-- **Configuration Deep Dive**: Read [CONFIGURATION.md](CONFIGURATION.md)
-- **Build Custom Tools**: Follow [TOOLS.md](TOOLS.md) guide
-- **Understand Architecture**: Study [ARCHITECTURE.md](ARCHITECTURE.md)
+- **Explore Examples**: Check out [examples/](../examples/index.md) for more patterns
+- **Read API Docs**: See [API.md](../api/reference.md) for complete API reference
+- **Configuration Deep Dive**: Read [CONFIGURATION.md](configuration.md)
+- **Build Custom Tools**: Follow [TOOLS.md](tools.md) guide
+- **Understand Architecture**: Study [ARCHITECTURE.md](architecture.md)
 
 ---
 
@@ -990,4 +989,4 @@ config["reasoning"]["store_trace"] = True
 - **GitHub Issues**: [Report bugs or request features](https://github.com/kbs-labs/dataknobs/issues)
 - **Discussions**: [Ask questions and share ideas](https://github.com/kbs-labs/dataknobs/discussions)
 - **Documentation**: You're reading it!
-- **Examples**: [Working code examples](../examples/)
+- **Examples**: [Working code examples](../examples/index.md)

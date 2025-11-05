@@ -874,7 +874,7 @@ class MyAsyncTool(Tool):
 
 ### Complete Calculator Tool
 
-See [examples/06_config_based_tools.py](../examples/06_config_based_tools.py:21)
+See [Custom Tools Example](../examples/custom-tools.md) for complete code
 
 ### Complete API Integration Tool
 
@@ -998,7 +998,7 @@ class GitHubTool(Tool):
 
 ## See Also
 
-- [API Reference](API.md) - Complete API documentation
-- [User Guide](USER_GUIDE.md) - Usage tutorials
-- [Configuration Reference](CONFIGURATION.md) - Configuration options
-- [Examples](../examples/06_config_based_tools.py) - Working tool examples
+- [API Reference](../api/reference.md) - Complete API documentation
+- [User Guide](user-guide.md) - Usage tutorials
+- [Configuration Reference](configuration.md) - Configuration options
+- [Examples](../examples/custom-tools.md) - Working tool examples

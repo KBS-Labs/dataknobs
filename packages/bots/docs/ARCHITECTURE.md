@@ -720,8 +720,8 @@ Total: ~500-2000ms
 
 ## See Also
 
-- [API Reference](API.md) - Complete API documentation
-- [Configuration Reference](CONFIGURATION.md) - Configuration options
-- [User Guide](USER_GUIDE.md) - Usage tutorials
-- [Tools Development](TOOLS.md) - Creating custom tools
-- [Examples](../examples/) - Working examples
+- [API Reference](../api/reference.md) - Complete API documentation
+- [Configuration Reference](configuration.md) - Configuration options
+- [User Guide](user-guide.md) - Usage tutorials
+- [Tools Development](tools.md) - Creating custom tools
+- [Examples](../examples/index.md) - Working examples

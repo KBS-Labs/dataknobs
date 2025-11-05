@@ -51,6 +51,7 @@ jobs:
           uv pip install --system -e packages/legacy
           uv pip install --system -e packages/llm
           uv pip install --system -e packages/fsm
+          uv pip install --system -e packages/bots
 
       - name: Build documentation
         run: mkdocs build --strict

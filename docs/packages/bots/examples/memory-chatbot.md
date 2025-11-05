@@ -177,6 +177,6 @@ To add knowledge retrieval, see the [RAG Chatbot Example](rag-chatbot.md).
 
 ## Related Documentation
 
-- [User Guide - Memory Systems](../guides/user-guide.md#memory-systems)
+- [User Guide - Memory Systems](../guides/user-guide.md#tutorial-2-adding-memory)
 - [Configuration Reference](../guides/configuration.md)
-- [API Reference - Memory](../api/reference.md#memory-systems)
+- [API Reference - Memory](../api/reference.md#memory)

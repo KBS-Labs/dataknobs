@@ -6,47 +6,46 @@ Complete API reference for dataknobs-bots.
 
 The dataknobs-bots API is organized into several modules:
 
-- **[Bot Classes](reference.md#dynabot-class)** - Core DynaBot and BotContext classes
-- **[Bot Registry](reference.md#botregistry-class)** - Multi-tenant bot management
-- **[Memory Systems](reference.md#memory-systems)** - Memory implementations for context management
-- **[Knowledge Base](reference.md#ragknowledgebase-class)** - RAG implementation for document retrieval
-- **[Reasoning Strategies](reference.md#reasoning-strategies)** - ReAct and simple reasoning
+- **[Bot Classes](reference.md#dynabot)** - Core DynaBot and BotContext classes
+- **[Bot Registry](reference.md#botregistry)** - Multi-tenant bot management
+- **[Memory Systems](reference.md#memory)** - Memory implementations for context management
+- **[Knowledge Base](reference.md#ragknowledgebase)** - RAG implementation for document retrieval
+- **[Reasoning Strategies](reference.md#reasoningstrategy-base)** - ReAct and simple reasoning
 - **[Tools](reference.md#tools)** - Tool interface and built-in tools
 
 ## Quick Links
 
 ### Core Classes
 
-- [`DynaBot`](reference.md#dynabot-class) - Main bot orchestrator
-- [`BotContext`](reference.md#botcontext-dataclass) - Execution context
-- [`BotRegistry`](reference.md#botregistry-class) - Multi-tenant registry
+- [`DynaBot`](reference.md#dynabot) - Main bot orchestrator
+- [`BotContext`](reference.md#botcontext) - Execution context
+- [`BotRegistry`](reference.md#botregistry) - Multi-tenant registry
 
 ### Memory
 
-- [`Memory`](reference.md#memory-base-class) - Memory interface
-- [`BufferMemory`](reference.md#buffermemory-class) - Sliding window memory
-- [`VectorMemory`](reference.md#vectormemory-class) - Semantic search memory
+- [`Memory`](reference.md#memory-base) - Memory interface
+- [`BufferMemory`](reference.md#buffermemory) - Sliding window memory
+- [`VectorMemory`](reference.md#vectormemory) - Semantic search memory
 
 ### Knowledge Base
 
-- [`RAGKnowledgeBase`](reference.md#ragknowledgebase-class) - RAG implementation
+- [`RAGKnowledgeBase`](reference.md#ragknowledgebase) - RAG implementation
 
 ### Reasoning
 
-- [`ReasoningStrategy`](reference.md#reasoningstrategy-base-class) - Reasoning interface
-- [`SimpleReasoning`](reference.md#simplereasoning-class) - Direct LLM response
-- [`ReActReasoning`](reference.md#reactreasoning-class) - Reasoning + Acting pattern
+- [`ReasoningStrategy`](reference.md#reasoningstrategy-base) - Reasoning interface
+- [`SimpleReasoning`](reference.md#simplereasoning) - Direct LLM response
+- [`ReActReasoning`](reference.md#reactreasoning) - Reasoning + Acting pattern
 
 ### Tools
 
-- [`Tool`](reference.md#tool-base-class) - Tool interface
 - [`KnowledgeSearchTool`](reference.md#knowledgesearchtool) - Built-in knowledge search
 
 ### Factory Functions
 
-- [`create_memory()`](reference.md#create_memory) - Create memory from configuration
-- [`create_knowledge_base()`](reference.md#create_knowledge_base) - Create knowledge base from configuration
-- [`create_reasoning_strategy()`](reference.md#create_reasoning_strategy) - Create reasoning strategy from configuration
+- [`create_memory_from_config()`](reference.md#create_memory_from_config) - Create memory from configuration
+- [`create_knowledge_base_from_config()`](reference.md#create_knowledge_base_from_config) - Create knowledge base from configuration
+- [`create_reasoning_from_config()`](reference.md#create_reasoning_from_config) - Create reasoning strategy from configuration
 
 ## Complete Reference
 

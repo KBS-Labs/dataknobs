@@ -709,7 +709,7 @@ tools:
       precision: 3
 ```
 
-See [TOOLS.md](TOOLS.md) for detailed tool development guide.
+See [TOOLS.md](tools.md) for detailed tool development guide.
 
 ---
 
@@ -1049,8 +1049,8 @@ def validate_config(config: dict) -> None:
 
 ## See Also
 
-- [API Reference](API.md) - Complete API documentation
-- [User Guide](USER_GUIDE.md) - Tutorials and how-to guides
-- [Tools Development](TOOLS.md) - Creating custom tools
-- [Architecture](ARCHITECTURE.md) - System design
-- [Examples](../examples/) - Working configurations
+- [API Reference](../api/reference.md) - Complete API documentation
+- [User Guide](user-guide.md) - Tutorials and how-to guides
+- [Tools Development](tools.md) - Creating custom tools
+- [Architecture](architecture.md) - System design
+- [Examples](../examples/index.md) - Working configurations

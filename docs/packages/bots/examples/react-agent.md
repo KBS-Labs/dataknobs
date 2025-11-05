@@ -296,7 +296,7 @@ To set up multi-tenant bots, see the [Multi-Tenant Bot Example](multi-tenant.md)
 
 ## Related Documentation
 
-- [User Guide - Tools](../guides/user-guide.md#tool-using-agents)
+- [User Guide - Tools](../guides/user-guide.md#tutorial-4-creating-tool-using-agents)
 - [Tools Development Guide](../guides/tools.md)
 - [Configuration Reference](../guides/configuration.md)
 - [API Reference - Tools](../api/reference.md#tools)

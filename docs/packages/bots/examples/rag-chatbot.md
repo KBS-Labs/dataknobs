@@ -328,6 +328,6 @@ To add tool use and reasoning, see the [ReAct Agent Example](react-agent.md).
 
 ## Related Documentation
 
-- [User Guide - RAG](../guides/user-guide.md#rag-knowledge-base)
+- [User Guide - RAG](../guides/user-guide.md#tutorial-3-building-a-rag-chatbot)
 - [Configuration Reference](../guides/configuration.md)
-- [API Reference - Knowledge Base](../api/reference.md#ragknowledgebase-class)
+- [API Reference - Knowledge Base](../api/reference.md#ragknowledgebase)

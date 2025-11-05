@@ -79,7 +79,7 @@ if __name__ == "__main__":
 - **Stateless Design** - Perfect for horizontal scaling in containerized environments
 - **Connection Pooling** - PostgreSQL connection pooling for high concurrency
 
-[Learn more →](guides/user-guide.md#multi-tenancy)
+[Learn more →](guides/user-guide.md#multi-tenant-deployment)
 
 ### 🧠 Memory Systems
 
@@ -88,7 +88,7 @@ if __name__ == "__main__":
 - **Async Support** - Fully asynchronous for high throughput
 - **Conversation Storage** - Memory, PostgreSQL, or custom backends
 
-[Learn more →](guides/user-guide.md#memory-systems)
+[Learn more →](guides/user-guide.md#tutorial-2-adding-memory)
 
 ### 📚 RAG (Retrieval Augmented Generation)
 
@@ -97,7 +97,7 @@ if __name__ == "__main__":
 - **Vector Search** - FAISS, Chroma, Pinecone support
 - **Context Injection** - Automatic context injection into prompts
 
-[Learn more →](guides/user-guide.md#rag-knowledge-base)
+[Learn more →](guides/user-guide.md#tutorial-3-building-a-rag-chatbot)
 
 ### 🛠️ Tool Integration
 
@@ -115,7 +115,7 @@ if __name__ == "__main__":
 - **Configurable** - Switch reasoning strategies via configuration
 - **Extensible** - Implement custom reasoning strategies
 
-[Learn more →](guides/user-guide.md#reasoning-strategies)
+[Learn more →](guides/user-guide.md#tutorial-4-creating-tool-using-agents)
 
 ## Architecture
 
@@ -173,12 +173,7 @@ dataknobs_bots/
 
 ### API Reference
 
-- [**DynaBot & BotContext**](api/bot.md) - Core bot classes
-- [**Memory Systems**](api/memory.md) - Memory implementations
-- [**Knowledge Base**](api/knowledge.md) - RAG implementation
-- [**Reasoning Strategies**](api/reasoning.md) - Reasoning implementations
-- [**Tools**](api/tools.md) - Tool interface and built-in tools
-- [**Registry**](api/registry.md) - Multi-tenant bot registry
+- [**Complete API Reference**](api/reference.md) - Full API documentation for all classes and methods
 
 ### Examples
 
