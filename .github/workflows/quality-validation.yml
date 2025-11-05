@@ -159,6 +159,7 @@ jobs:
         uv pip install --system -e packages/structures
         uv pip install --system -e packages/utils
         uv pip install --system -e packages/xization
+        uv pip install --system -e packages/bots
     
     - name: Build documentation
       run: mkdocs build --strict

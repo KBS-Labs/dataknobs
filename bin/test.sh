@@ -98,11 +98,13 @@ set_integration_env_vars() {
         export TEST_S3="false"
         export TEST_ELASTICSEARCH="false"
         export TEST_POSTGRES="false"
+        export TEST_OLLAMA="false"
     else
         # Use environment values or default to true (run tests if services available)
         export TEST_S3="${TEST_S3:-true}"
         export TEST_ELASTICSEARCH="${TEST_ELASTICSEARCH:-true}"
         export TEST_POSTGRES="${TEST_POSTGRES:-true}"
+        export TEST_OLLAMA="${TEST_OLLAMA:-true}"
     fi
 }
 

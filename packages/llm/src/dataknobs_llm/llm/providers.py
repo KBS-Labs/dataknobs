@@ -722,19 +722,25 @@ class OllamaProvider(AsyncLLMProvider):
         Returns:
             Dictionary of options for the API request.
         """
-        options: Dict[str, Any] = {
-            'temperature': self.config.temperature,
-            'top_p': self.config.top_p
-        }
+        options: Dict[str, Any] = {}
+
+        # Only add temperature if it's not the default to avoid issues
+        if self.config.temperature != 1.0:
+            options['temperature'] = float(self.config.temperature)
+
+        # Only add top_p if explicitly set and different from default
+        if self.config.top_p != 1.0:
+            options['top_p'] = float(self.config.top_p)
 
         if self.config.seed is not None:
-            options['seed'] = self.config.seed
+            options['seed'] = int(self.config.seed)
 
         if self.config.max_tokens:
-            options['num_predict'] = self.config.max_tokens  # type: ignore
+            # Ensure it's an integer
+            options['num_predict'] = int(self.config.max_tokens)
 
         if self.config.stop_sequences:
-            options['stop'] = self.config.stop_sequences  # type: ignore
+            options['stop'] = list(self.config.stop_sequences)
 
         return options
 
@@ -904,7 +910,12 @@ class OllamaProvider(AsyncLLMProvider):
             payload['format'] = 'json'
 
         async with self._session.post(f"{self.base_url}/api/chat", json=payload) as response:
-            response.raise_for_status()
+            if response.status != 200:
+                error_text = await response.text()
+                import logging
+                logging.error(f"Ollama API error (status {response.status}): {error_text}")
+                logging.error(f"Request payload: {json.dumps(payload, indent=2)}")
+                response.raise_for_status()
             data = await response.json()
 
         # Extract response

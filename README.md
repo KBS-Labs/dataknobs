@@ -15,6 +15,7 @@ The project is organized as a monorepo with the following packages:
 - **[dataknobs-data](packages/data/)**: Unified data abstraction layer supporting Memory, File, PostgreSQL, Elasticsearch, and S3 backends
 - **[dataknobs-fsm](packages/fsm/)**: Finite State Machine framework with data modes, resource management, and streaming support
 - **[dataknobs-llm](packages/llm/)**: LLM integration with prompt management, conversations, versioning, tools, and cost tracking
+- **[dataknobs-bots](packages/bots/)**: Configuration-driven AI agents and chatbots with multi-tenancy, RAG, memory, and reasoning strategies
 - **[dataknobs-structures](packages/structures/)**: Data structures for AI knowledge bases (trees, documents, record stores)
 - **[dataknobs-utils](packages/utils/)**: Utility functions (file I/O, JSON processing, pandas helpers, web requests)
 - **[dataknobs-xization](packages/xization/)**: Text normalization and tokenization tools
@@ -33,12 +34,13 @@ pip install dataknobs-config
 pip install dataknobs-data
 pip install dataknobs-fsm
 pip install dataknobs-llm
+pip install dataknobs-bots
 pip install dataknobs-structures
 pip install dataknobs-utils
 pip install dataknobs-xization
 
 # Or install multiple packages
-pip install dataknobs-config dataknobs-data dataknobs-fsm dataknobs-llm dataknobs-structures
+pip install dataknobs-config dataknobs-data dataknobs-fsm dataknobs-llm dataknobs-bots dataknobs-structures
 ```
 
 ### For Existing Projects

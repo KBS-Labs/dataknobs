@@ -47,6 +47,15 @@
       "deprecated": false
     },
     {
+      "name": "bots",
+      "pypi_name": "dataknobs-bots",
+      "description": "Configuration-driven AI agents for DataKnobs",
+      "version": "0.1.0",
+      "category": "core",
+      "requires_docs_build": true,
+      "deprecated": false
+    },
+    {
       "name": "structures",
       "pypi_name": "dataknobs-structures",
       "description": "Core data structures (Tree, Document, RecordStore)",

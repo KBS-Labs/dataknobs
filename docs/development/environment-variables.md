@@ -49,6 +49,28 @@ This guide covers the environment variables used throughout the DataKnobs projec
 - **`PYTEST_WORKERS`** - Number of pytest workers for parallel testing
 - **`MKDOCS_PORT`** - Port for MkDocs server (default: 8000)
 
+### Test Environment Variables
+
+These variables control which integration tests are run:
+
+- **`TEST_POSTGRES`** - Run PostgreSQL integration tests (default: true)
+- **`TEST_ELASTICSEARCH`** - Run Elasticsearch integration tests (default: true)
+- **`TEST_S3`** - Run S3/LocalStack integration tests (default: true)
+- **`TEST_OLLAMA`** - Run Ollama integration tests (default: true)
+
+Set to `false` to skip specific integration tests:
+
+```bash
+# Skip Ollama tests
+export TEST_OLLAMA=false
+dk test
+
+# Skip all integration tests
+dk testquick
+```
+
+**Note**: Ollama requires local installation (cannot be containerized easily). See [Development Services](index.md#development-services) for setup instructions.
+
 ## Usage Examples
 
 ### Setting Variables in Shell
