@@ -495,7 +495,22 @@ show_status() {
                 ;;
         esac
     done
-    
+
+    # Check Ollama (non-Docker service)
+    echo ""
+    echo "Local Services:"
+    OLLAMA_HOST="${OLLAMA_HOST:-http://localhost:11434}"
+    if curl -s "${OLLAMA_HOST}/api/tags" > /dev/null 2>&1; then
+        MODEL_COUNT=$(curl -s "${OLLAMA_HOST}/api/tags" 2>/dev/null | grep -o '"name"' | wc -l | tr -d ' ')
+        if [ "$MODEL_COUNT" -gt 0 ]; then
+            echo -e "  Ollama:        ${GREEN}✓ Running ($MODEL_COUNT models)${NC}"
+        else
+            echo -e "  Ollama:        ${YELLOW}⚠ Running (no models installed)${NC}"
+        fi
+    else
+        echo -e "  Ollama:        ${YELLOW}⚠ Not running${NC} (install locally or skip with TEST_OLLAMA=false)"
+    fi
+
     return 0
 }
 

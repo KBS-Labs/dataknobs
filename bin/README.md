@@ -110,6 +110,83 @@ This script checks:
 - Import problems
 - Common code quality issues
 
+## Development Services
+
+### Docker-based Services
+
+Most development services (Postgres, Elasticsearch, S3/LocalStack) run via Docker and are managed automatically:
+
+```bash
+# Start all services
+./bin/manage-services.sh start
+
+# Stop all services
+./bin/manage-services.sh stop
+
+# Check service status
+./bin/check-services.py
+```
+
+### Ollama (Local Installation Required)
+
+Unlike other services, **Ollama runs locally on your development machine** due to hardware requirements (GPU access). It cannot be easily containerized for local development.
+
+#### Installation
+
+**macOS:**
+```bash
+brew install ollama
+```
+
+**Linux:**
+```bash
+curl -fsSL https://ollama.ai/install.sh | sh
+```
+
+**Windows:**
+Download from https://ollama.ai/download
+
+#### Starting Ollama
+
+```bash
+# Start the Ollama service
+ollama serve
+```
+
+Ollama will run on `http://localhost:11434` by default.
+
+#### Required Models
+
+Pull the models needed for tests:
+```bash
+ollama pull <model-name>  # e.g., llama2, mistral, etc.
+```
+
+Check which models your tests require in the bots package tests.
+
+#### Verifying Ollama
+
+```bash
+# Check if Ollama is running
+./bin/check-ollama.sh
+
+# Or manually:
+curl http://localhost:11434/api/tags
+```
+
+#### Running Tests Without Ollama
+
+If you don't have Ollama installed or don't need to run those tests:
+
+```bash
+# Skip Ollama tests explicitly
+export TEST_OLLAMA=false
+dk test
+
+# Or use quick test mode (skips all integration tests)
+dk testquick
+```
+
 ## Quick Start
 
 For a fresh development setup:

@@ -112,9 +112,11 @@ source .venv/bin/activate  # On Linux/macOS
 ./bin/run-integration-tests.sh -s      # Start services for manual testing
 ```
 
-### Docker Services
+### Development Services
 
-The project uses Docker containers for development services:
+#### Docker-based Services
+
+Most development services run via Docker:
 
 ```bash
 # Start all services
@@ -125,6 +127,35 @@ docker-compose ps
 
 # Stop services
 docker-compose down
+```
+
+#### Ollama (Local Installation Required)
+
+Unlike other services, **Ollama runs locally** due to hardware requirements (GPU access).
+
+**Installation:**
+- **macOS**: `brew install ollama`
+- **Linux**: `curl -fsSL https://ollama.ai/install.sh | sh`
+- **Windows**: Download from https://ollama.ai/download
+
+**Starting Ollama:**
+```bash
+ollama serve
+```
+
+**Verifying Ollama:**
+```bash
+./bin/check-ollama.sh
+# Or manually:
+curl http://localhost:11434/api/tags
+```
+
+**Running Tests Without Ollama:**
+```bash
+export TEST_OLLAMA=false
+dk test
+# Or use quick test mode (skips all integration tests)
+dk testquick
 ```
 
 For more details, see the [UV Virtual Environment Guide](uv-environment.md) and [Quality Checks Process](quality-checks.md).

@@ -214,6 +214,7 @@ set_environment_vars() {
     export TEST_S3="true"
     export TEST_ELASTICSEARCH="true"
     export TEST_POSTGRES="true"
+    export TEST_OLLAMA="true"
 }
 
 # Function to cleanup resources

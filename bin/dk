@@ -166,7 +166,7 @@ main() {
     local cmd="${1:-help}"
     shift || true
     
-    # Note: TEST_S3=true, TEST_ELASTICSEARCH=true, and TEST_POSTGRES=true are set for test commands
+    # Note: TEST_S3=true, TEST_ELASTICSEARCH=true, TEST_POSTGRES=true, and TEST_OLLAMA=true are set for test commands
     # to ensure integration tests are not skipped when services are available
     
     case "$cmd" in
@@ -183,6 +183,7 @@ main() {
             export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
+            export TEST_OLLAMA=true
             run_command "Preparing for PR (full quality checks)" \
                 "$SCRIPT_DIR/run-quality-checks.sh" --pr "$@"
             ;;
@@ -190,6 +191,7 @@ main() {
             export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
+            export TEST_OLLAMA=true
             run_command "Quick PR check (skipping lint)" \
                 "$SCRIPT_DIR/run-quality-checks.sh" --pr --skip-lint "$@"
             ;;
@@ -199,6 +201,7 @@ main() {
             export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
+            export TEST_OLLAMA=true
             run_command "Quick quality check (dev mode)" \
                 "$SCRIPT_DIR/run-quality-checks.sh" --dev "$@"
             ;;
@@ -206,6 +209,7 @@ main() {
             export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
+            export TEST_OLLAMA=true
             run_command "Checking all packages (dev mode)" \
                 "$SCRIPT_DIR/run-quality-checks.sh" --dev
             ;;
@@ -228,6 +232,7 @@ main() {
             export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
+            export TEST_OLLAMA=true
             # Smart test mode - determines best approach
             if [[ "$1" == "--last" ]] || [[ "$1" == "-l" ]]; then
                 shift
@@ -246,6 +251,7 @@ main() {
             export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
+            export TEST_OLLAMA=true
             run_command "Re-running failed tests" \
                 "$SCRIPT_DIR/test.sh" -- --lf "$@"
             ;;
@@ -253,6 +259,7 @@ main() {
             export TEST_S3=false
             export TEST_ELASTICSEARCH=false
             export TEST_POSTGRES=false
+            export TEST_OLLAMA=false
             run_command "Running tests without coverage" \
                 "$SCRIPT_DIR/test.sh" -n --skip-integration --no-cov "$@"
             ;;
@@ -265,6 +272,7 @@ main() {
             export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
+            export TEST_OLLAMA=true
             run_command "Running integration tests" \
                 "$SCRIPT_DIR/test.sh" -t integration "$@"
             ;;
@@ -403,36 +411,41 @@ main() {
             ;;
             
         # Shortcuts
-        p) 
+        p)
             export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
-            dk pr "${@}" 
+            export TEST_OLLAMA=true
+            dk pr "${@}"
             ;;
-        q) 
+        q)
             export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
-            dk check "${@}" 
+            export TEST_OLLAMA=true
+            dk check "${@}"
             ;;
-        t) 
+        t)
             export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
-            dk test "${@}" 
+            export TEST_OLLAMA=true
+            dk test "${@}"
             ;;
-        tf) 
+        tf)
             export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
-            dk testlast "${@}" 
+            export TEST_OLLAMA=true
+            dk testlast "${@}"
             ;;
         u) dk unit "${@}" ;;
-        i) 
+        i)
             export TEST_S3=true
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
-            dk int "${@}" 
+            export TEST_OLLAMA=true
+            dk int "${@}"
             ;;
         f) dk fix "${@}" ;;
         d) dk diagnose "${@}" ;;

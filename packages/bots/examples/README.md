@@ -117,6 +117,62 @@ ollama pull gemma3:3b
 python examples/05_multi_tenant.py
 ```
 
+### 6. Config-Based Tool Loading (`06_config_based_tools.py`)
+
+Demonstrates loading tools directly from configuration without manual instantiation.
+
+**Required Ollama Model:**
+```bash
+ollama pull phi3:mini
+```
+
+**Features Demonstrated:**
+- Loading tools via configuration
+- Direct class instantiation with parameters
+- XRef-based tool definitions
+- Tool parameter customization
+- Reusable tool configurations
+- No manual tool registration needed
+
+**Run:**
+```bash
+python examples/06_config_based_tools.py
+```
+
+**Key Concepts:**
+
+This example shows two ways to configure tools:
+
+1. **Direct Class Instantiation:**
+```python
+"tools": [
+    {
+        "class": "my_module.CalculatorTool",
+        "params": {"precision": 3}
+    }
+]
+```
+
+2. **XRef to Predefined Tools:**
+```python
+"tool_definitions": {
+    "my_calculator": {
+        "class": "my_module.CalculatorTool",
+        "params": {"precision": 5}
+    }
+},
+"tools": [
+    "xref:tools[my_calculator]"
+]
+```
+
+Benefits:
+- Tools are configuration-driven, not hardcoded
+- Easy to swap tools without code changes
+- Parameters can be customized per instance
+- XRef allows tool definition reuse
+- Supports nested XRef references
+
 ## Storage Backends
 
 Most examples default to in-memory storage for simplicity. To use PostgreSQL:

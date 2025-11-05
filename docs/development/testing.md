@@ -117,6 +117,23 @@ This script automatically:
 - Runs integration tests
 - Generates test reports in `.quality-artifacts/`
 
+**Note**: Ollama must be installed and running locally (cannot be containerized). See [Development Services](index.md#development-services) for Ollama setup instructions.
+
+#### Skipping Specific Integration Tests
+
+You can skip specific integration tests using environment variables:
+
+```bash
+# Skip Ollama tests if not installed
+export TEST_OLLAMA=false
+./bin/test.sh
+
+# Skip all integration tests
+./bin/test.sh --skip-integration
+# Or use the dk command
+dk testquick
+```
+
 #### Marking Integration Tests
 
 Always mark integration tests with the `@pytest.mark.integration` decorator:

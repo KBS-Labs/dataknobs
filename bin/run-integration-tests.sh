@@ -206,6 +206,7 @@ export AWS_DEFAULT_REGION=us-east-1
 export TEST_S3=true
 export TEST_ELASTICSEARCH=true
 export TEST_POSTGRES=true
+export TEST_OLLAMA=true
 
 # Determine which packages to test
 if [ -n "$PACKAGE" ]; then
