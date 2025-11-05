@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## Release - 2025-11-05
+
+### dataknobs-bots [0.1.0]
+
+#### Added
+- created new bots package
+
+### dataknobs-llm [0.1.1]
+
+#### Fixed
+- fixed option types and logging for the OllamaProvider
+
 ## Release - 2025-11-04
 
 ### dataknobs-llm [0.1.0]
