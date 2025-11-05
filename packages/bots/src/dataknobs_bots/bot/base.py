@@ -121,7 +121,6 @@ class DynaBot:
         from dataknobs_llm.llm import LLMProviderFactory
         from dataknobs_llm.prompts import AsyncPromptBuilder
         from dataknobs_llm.prompts.implementations import CompositePromptLibrary
-        from dataknobs_llm.prompts.adapters import InMemoryAsyncAdapter
         from ..memory import create_memory_from_config
 
         # Create LLM provider
@@ -143,24 +142,29 @@ class DynaBot:
         # Support optional prompts configuration
         prompt_libraries = []
         if "prompts" in config:
-            from dataknobs_llm.prompts.implementations import BasePromptLibrary
+            from dataknobs_llm.prompts.implementations import ConfigPromptLibrary
 
             prompts_config = config["prompts"]
 
-            # If prompts are provided as a dict, create an in-memory library
+            # If prompts are provided as a dict, create a config-based library
             if isinstance(prompts_config, dict):
-                adapter = InMemoryAsyncAdapter()
-                # Add prompts to adapter
+                # Convert simple string prompts to proper template structure
+                structured_config = {"system": {}, "user": {}}
+
                 for prompt_name, prompt_content in prompts_config.items():
                     if isinstance(prompt_content, dict):
-                        # Support different prompt types
-                        for prompt_type, content in prompt_content.items():
-                            await adapter.store(f"{prompt_name}_{prompt_type}", content)
+                        # Already structured - use as-is
+                        # Assume it's a system prompt unless specified
+                        prompt_type = prompt_content.get("type", "system")
+                        if prompt_type in structured_config:
+                            structured_config[prompt_type][prompt_name] = prompt_content
                     else:
-                        # Simple string prompt
-                        await adapter.store(prompt_name, prompt_content)
+                        # Simple string - treat as system prompt template
+                        structured_config["system"][prompt_name] = {
+                            "template": prompt_content
+                        }
 
-                library = BasePromptLibrary(adapter)
+                library = ConfigPromptLibrary(structured_config)
                 prompt_libraries.append(library)
 
         # Create composite library (empty if no prompts configured)
