@@ -175,9 +175,9 @@ class DynaBot:
         tool_registry = ToolRegistry()
         if "tools" in config:
             for tool_config in config["tools"]:
-                tool = cls._resolve_tool(tool_config)
+                tool = cls._resolve_tool(tool_config, config)
                 if tool:
-                    tool_registry.register_tool(tool)
+                    tool_registry.register(tool)
 
         # Create memory
         memory = None
@@ -384,18 +384,118 @@ class DynaBot:
         return message
 
     @staticmethod
-    def _resolve_tool(tool_config: dict[str, Any]) -> Any | None:
+    def _resolve_tool(tool_config: dict[str, Any] | str, config: dict[str, Any]) -> Any | None:
         """Resolve tool from configuration.
 
+        Supports two patterns:
+        1. Direct class instantiation: {"class": "module.ToolClass", "params": {...}}
+        2. XRef resolution: "xref:tools[tool_name]" or {"xref": "tools[tool_name]"}
+
         Args:
-            tool_config: Tool configuration
+            tool_config: Tool configuration (dict or string xref)
+            config: Full bot configuration for xref resolution
 
         Returns:
-            Tool instance or None
+            Tool instance or None if resolution fails
+
+        Example:
+            # Direct instantiation
+            tool_config = {
+                "class": "my_tools.CalculatorTool",
+                "params": {"precision": 2}
+            }
+
+            # XRef to pre-defined tool
+            tool_config = "xref:tools[calculator]"
+            # Requires config to have:
+            # {
+            #     "tool_definitions": {
+            #         "calculator": {
+            #             "class": "my_tools.CalculatorTool",
+            #             "params": {}
+            #         }
+            #     }
+            # }
         """
-        # TODO: Implement tool resolution from config
-        # This would handle xref resolution and tool instantiation
-        return None
+        import importlib
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        try:
+            # Handle xref string format
+            if isinstance(tool_config, str):
+                if tool_config.startswith("xref:"):
+                    # Parse xref (e.g., "xref:tools[calculator]")
+                    # Extract the reference name
+                    import re
+
+                    match = re.match(r"xref:tools\[([^\]]+)\]", tool_config)
+                    if not match:
+                        logger.error(f"Invalid xref format: {tool_config}")
+                        return None
+
+                    tool_name = match.group(1)
+
+                    # Look up in tool_definitions
+                    tool_definitions = config.get("tool_definitions", {})
+                    if tool_name not in tool_definitions:
+                        logger.error(
+                            f"Tool definition not found: {tool_name}. "
+                            f"Available: {list(tool_definitions.keys())}"
+                        )
+                        return None
+
+                    # Recursively resolve the referenced config
+                    return DynaBot._resolve_tool(tool_definitions[tool_name], config)
+                else:
+                    logger.error(f"String tool config must be xref format: {tool_config}")
+                    return None
+
+            # Handle dict with xref key
+            if isinstance(tool_config, dict) and "xref" in tool_config:
+                return DynaBot._resolve_tool(tool_config["xref"], config)
+
+            # Handle dict with class key (direct instantiation)
+            if isinstance(tool_config, dict) and "class" in tool_config:
+                class_path = tool_config["class"]
+                params = tool_config.get("params", {})
+
+                # Import the tool class
+                module_path, class_name = class_path.rsplit(".", 1)
+                module = importlib.import_module(module_path)
+                tool_class = getattr(module, class_name)
+
+                # Instantiate the tool
+                tool = tool_class(**params)
+
+                # Validate it's a Tool instance
+                from dataknobs_llm.tools import Tool
+
+                if not isinstance(tool, Tool):
+                    logger.error(
+                        f"Resolved class {class_path} is not a Tool instance: {type(tool)}"
+                    )
+                    return None
+
+                logger.info(f"Successfully loaded tool: {tool.name} ({class_path})")
+                return tool
+            else:
+                logger.error(
+                    f"Invalid tool config format. Expected dict with 'class' or 'xref' key, "
+                    f"or xref string. Got: {type(tool_config)}"
+                )
+                return None
+
+        except ImportError as e:
+            logger.error(f"Failed to import tool class: {e}")
+            return None
+        except AttributeError as e:
+            logger.error(f"Failed to find tool class: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to instantiate tool: {e}")
+            return None
 
     @staticmethod
     def _create_middleware(config: dict[str, Any]) -> Any | None:
