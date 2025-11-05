@@ -853,14 +853,10 @@ async def create_memory_from_config(config: dict[str, Any]) -> Memory
 {
     "type": "vector",
     "max_messages": int,  # default: 100
-    "embedding": {
-        "provider": str,
-        "model": str
-    },
-    "vector_store": {
-        "backend": str,
-        "dimension": int
-    }
+    "embedding_provider": str,
+    "embedding_model": str,
+    "backend": str,
+    "dimension": int
 }
 ```
 
@@ -904,10 +900,8 @@ async def create_knowledge_base_from_config(
         "dimension": int,
         "collection": str
     },
-    "embedding": {
-        "provider": str,
-        "model": str
-    },
+    "embedding_provider": str,
+    "embedding_model": str,
     "chunking": {
         "max_chunk_size": int,  # default: 500
         "chunk_overlap": int    # default: 50
@@ -926,10 +920,8 @@ kb_config = {
         "backend": "faiss",
         "dimension": 384
     },
-    "embedding": {
-        "provider": "ollama",
-        "model": "nomic-embed-text"
-    }
+    "embedding_provider": "ollama",
+    "embedding_model": "nomic-embed-text"
 }
 
 kb = await create_knowledge_base_from_config(kb_config)

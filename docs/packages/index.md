@@ -6,6 +6,7 @@ Dataknobs is organized as a collection of modular packages, each serving a speci
 
 | Package | Purpose | Key Features |
 |---------|---------|--------------|
+| [dataknobs-bots](bots/index.md) | AI agents & chatbots | Configuration-driven bots, Multi-tenancy, RAG, Tool integration |
 | [dataknobs-data](data/index.md) | Data abstraction layer | Records, Fields, Multiple backends, Async support |
 | [dataknobs-config](config/index.md) | Configuration management | Modular configs, Environment overrides, Cross-references |
 | [dataknobs-fsm](fsm/index.md) | Finite State Machine framework | Workflow orchestration, State management, Resource handling |
@@ -22,9 +23,10 @@ Install the packages you need:
 
 ```bash
 # Install all main packages
-pip install dataknobs-data dataknobs-config dataknobs-fsm dataknobs-llm dataknobs-structures dataknobs-utils dataknobs-xization
+pip install dataknobs-bots dataknobs-data dataknobs-config dataknobs-fsm dataknobs-llm dataknobs-structures dataknobs-utils dataknobs-xization
 
 # Or install individually
+pip install dataknobs-bots
 pip install dataknobs-data
 pip install dataknobs-config
 pip install dataknobs-fsm
@@ -51,6 +53,7 @@ graph TD
 
 ## Choosing Packages
 
+- **dataknobs-bots**: For building AI agents and chatbots with configuration-driven behavior, multi-tenancy, RAG, and tool integration
 - **dataknobs-data**: For data abstraction with multiple backend support (memory, file, PostgreSQL, Elasticsearch, S3)
 - **dataknobs-config**: For configuration management with environment overrides
 - **dataknobs-fsm**: For building workflow orchestration and state machine-based processes

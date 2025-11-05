@@ -217,14 +217,10 @@ Bot: I'm an AI assistant designed to have helpful, harmless conversations...
 "memory": {
     "type": "vector",
     "max_messages": 100,
-    "embedding": {
-        "provider": "ollama",
-        "model": "nomic-embed-text"
-    },
-    "vector_store": {
-        "backend": "faiss",
-        "dimension": 384
-    }
+    "embedding_provider": "ollama",
+    "embedding_model": "nomic-embed-text",
+    "backend": "faiss",
+    "dimension": 384
 }
 ```
 
@@ -271,10 +267,8 @@ async def main():
                 "dimension": 384,
                 "collection": "my_knowledge"
             },
-            "embedding": {
-                "provider": "ollama",
-                "model": "nomic-embed-text"
-            },
+            "embedding_provider": "ollama",
+            "embedding_model": "nomic-embed-text",
             "chunking": {
                 "max_chunk_size": 500,
                 "chunk_overlap": 50
@@ -936,7 +930,7 @@ config["knowledge_base"]["chunking"] = {
 }
 
 # Try different embedding model
-config["knowledge_base"]["embedding"]["model"] = "text-embedding-3-large"
+config["knowledge_base"]["embedding_model"] = "text-embedding-3-large"
 
 # Return more results
 # In query: kb.query(query, k=10)  # Instead of k=3

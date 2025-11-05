@@ -360,13 +360,11 @@ Semantic search over conversation history:
 memory:
   type: vector
   max_messages: 100
-  embedding:
-    provider: ollama
-    model: nomic-embed-text
-  vector_store:
-    backend: faiss
-    dimension: 384      # Must match embedding model dimension
-    metric: cosine      # Optional: cosine, l2, ip
+  embedding_provider: ollama
+  embedding_model: nomic-embed-text
+  backend: faiss
+  dimension: 384      # Must match embedding model dimension
+  metric: cosine      # Optional: cosine, l2, ip
 ```
 
 **Embedding Models:**
@@ -405,9 +403,8 @@ knowledge_base:
     backend: faiss
     dimension: 384
     collection: knowledge
-  embedding:
-    provider: ollama
-    model: nomic-embed-text
+  embedding_provider: ollama
+  embedding_model: nomic-embed-text
 ```
 
 ### Advanced Configuration
@@ -425,10 +422,8 @@ knowledge_base:
     metric: cosine         # Similarity metric
 
   # Embedding configuration
-  embedding:
-    provider: ollama
-    model: nomic-embed-text
-    batch_size: 32         # Batch size for embedding
+  embedding_provider: ollama
+  embedding_model: nomic-embed-text
 
   # Document chunking
   chunking:
@@ -927,9 +922,8 @@ knowledge_base:
     environment: us-west1-gcp
     index_name: production-kb
     dimension: 1536
-  embedding:
-    provider: openai
-    model: text-embedding-3-small
+  embedding_provider: openai
+  embedding_model: text-embedding-3-small
   chunking:
     max_chunk_size: 500
     chunk_overlap: 50
@@ -1047,7 +1041,8 @@ def validate_config(config: dict) -> None:
     if config.get("knowledge_base", {}).get("enabled"):
         kb = config["knowledge_base"]
         assert "vector_store" in kb, "Vector store required for knowledge base"
-        assert "embedding" in kb, "Embedding config required for knowledge base"
+        assert "embedding_provider" in kb, "Embedding provider required for knowledge base"
+        assert "embedding_model" in kb, "Embedding model required for knowledge base"
 ```
 
 ---

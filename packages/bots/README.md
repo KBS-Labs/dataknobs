@@ -128,10 +128,8 @@ config = {
             "backend": "faiss",
             "dimension": 384
         },
-        "embedding": {
-            "provider": "ollama",
-            "model": "nomic-embed-text"
-        }
+        "embedding_provider": "ollama",
+        "embedding_model": "nomic-embed-text"
     }
 }
 
@@ -255,9 +253,8 @@ knowledge_base:
   vector_store:
     backend: faiss
     dimension: 384
-  embedding:
-    provider: ollama
-    model: nomic-embed-text
+  embedding_provider: ollama
+  embedding_model: nomic-embed-text
 
 # Optional: Reasoning
 reasoning:

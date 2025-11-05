@@ -171,6 +171,25 @@ nav:
         - packages/llm/examples/conversation-flows.md
         - packages/llm/examples/fsm-conversation-flow.md
         - packages/llm/examples/ab-testing.md
+    - Bots:
+      - packages/bots/index.md
+      - packages/bots/quickstart.md
+      - Guides:
+        - packages/bots/guides/user-guide.md
+        - packages/bots/guides/configuration.md
+        - packages/bots/guides/architecture.md
+        - packages/bots/guides/tools.md
+      - API Reference:
+        - packages/bots/api/index.md
+        - packages/bots/api/reference.md
+      - Examples:
+        - packages/bots/examples/index.md
+        - packages/bots/examples/simple-chatbot.md
+        - packages/bots/examples/memory-chatbot.md
+        - packages/bots/examples/rag-chatbot.md
+        - packages/bots/examples/react-agent.md
+        - packages/bots/examples/multi-tenant.md
+        - packages/bots/examples/custom-tools.md
     - Xization:
       - packages/xization/index.md
       - packages/xization/tokenization.md
@@ -185,7 +204,9 @@ nav:
   
   - API Reference:
     - api/index.md
+    - dataknobs-bots: packages/bots/api/index.md
     - dataknobs-fsm: packages/fsm/api/index.md
+    - dataknobs-llm: packages/llm/api/llm.md
     - dataknobs-data: api/dataknobs-data.md
     - dataknobs-config: api/dataknobs-config.md
     - dataknobs-structures: api/dataknobs-structures.md
@@ -272,7 +293,8 @@ plugins:
             packages/xization/src,
             packages/legacy/src,
             packages/fsm/src,
-            packages/llm/src
+            packages/llm/src,
+            packages/bots/src
           ]
           options:
             docstring_style: google
