@@ -294,7 +294,8 @@ plugins:
   - git-revision-date-localized:
       enable_creation_date: true
       type: iso_datetime
-      enable_git_follow: false
+      fallback_to_build_date: true
+      strict: false
   - mkdocstrings:
       handlers:
         python:
