@@ -1681,7 +1681,7 @@ provides-extras = ["cache", "all", "dev"]
 
 [[package]]
 name = "dataknobs-llm"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/llm" }
 dependencies = [
     { name = "dataknobs-common" },
