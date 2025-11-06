@@ -238,6 +238,20 @@ nav:
   
   - Examples:
     - examples/index.md
+    - Bots Examples:
+      - packages/bots/examples/index.md
+      - packages/bots/examples/simple-chatbot.md
+      - packages/bots/examples/memory-chatbot.md
+      - packages/bots/examples/rag-chatbot.md
+      - packages/bots/examples/react-agent.md
+      - packages/bots/examples/multi-tenant.md
+      - packages/bots/examples/custom-tools.md
+    - LLM Examples:
+      - packages/llm/examples/basic-usage.md
+      - packages/llm/examples/advanced-prompting.md
+      - packages/llm/examples/conversation-flows.md
+      - packages/llm/examples/fsm-conversation-flow.md
+      - packages/llm/examples/ab-testing.md
     - FSM Examples:
       - packages/fsm/examples/file-processor.md
       - packages/fsm/examples/data-pipeline.md
