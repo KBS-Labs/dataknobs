@@ -13,11 +13,23 @@ Dataknobs is a modular Python ecosystem for AI knowledge base structures and tex
     
     **[→ Learn the dk Command](dk-command.md)**
 
+## Creating New Packages
+
+!!! tip "Package Creation Automation"
+    Creating a new DataKnobs package is fully automated! Use `./bin/create-package.py` to generate package structure and automatically integrate it into the ecosystem. The script handles all the tedious integration work - you just focus on implementing the functionality.
+
+    **Quick commands:**
+    - `./bin/create-package.py <name> -d "description"` - Create new package
+    - `./bin/create-package.py --help` - See all options
+    - `./bin/validate-package-references.py` - Validate integration
+
+    **[→ New Package Checklist](new-package-checklist.md)** - Complete guide with automated and manual steps
+
 ## Release Management
 
 !!! success "Simplified Release Process"
     The release process has been streamlined with automated tools that handle version bumping, changelog generation, and publishing. Use `dk release` for an interactive guided process or check the **[Release Process Guide](release-process.md)** for detailed documentation and FAQ.
-    
+
     **Quick commands:**
     - `dk release` - Interactive complete release
     - `dk release-check` - See what changed
@@ -30,18 +42,20 @@ If you're new to Dataknobs development:
 
 1. **[Developer Workflow (dk)](dk-command.md)** - 🚀 **Start here** - The easy way to develop
 2. **[Contributing Guide](contributing.md)** - Learn how to contribute
-3. **[Configuration System](configuration-system.md)** - Understand the DataKnobs configuration patterns
-4. **[UV Virtual Environment Guide](uv-environment.md)** - How to work with UV package manager
-5. **[Quality Checks Process](quality-checks.md)** - Developer-driven quality assurance
-6. **[Architecture Overview](architecture.md)** - Understand the system design
-7. **[Testing Guide](testing.md)** - Learn about our testing approach
-8. **[Integration Testing & CI](integration-testing-ci.md)** - Integration testing in CI/CD pipeline
-9. **[CI/CD Pipeline](ci-cd.md)** - Understand our deployment process
+3. **[New Package Checklist](new-package-checklist.md)** - 📦 Create and integrate new packages
+4. **[Configuration System](configuration-system.md)** - Understand the DataKnobs configuration patterns
+5. **[UV Virtual Environment Guide](uv-environment.md)** - How to work with UV package manager
+6. **[Quality Checks Process](quality-checks.md)** - Developer-driven quality assurance
+7. **[Architecture Overview](architecture.md)** - Understand the system design
+8. **[Testing Guide](testing.md)** - Learn about our testing approach
+9. **[Integration Testing & CI](integration-testing-ci.md)** - Integration testing in CI/CD pipeline
+10. **[CI/CD Pipeline](ci-cd.md)** - Understand our deployment process
 
 ## Development Topics
 
 ### Core Development
 - **[Contributing Guide](contributing.md)** - How to contribute code, documentation, and report issues
+- **[New Package Checklist](new-package-checklist.md)** - 📦 Automated package creation and integration guide
 - **[Configuration System](configuration-system.md)** - DataKnobs configuration patterns and best practices
 - **[Adding Config Support](adding-config-support.md)** - Step-by-step guide to add configuration support to packages
 - **[UV Virtual Environment Guide](uv-environment.md)** - Working with UV package manager and virtual environments
@@ -64,11 +78,14 @@ If you're new to Dataknobs development:
 dataknobs/
 ├── packages/          # Individual packages
 │   ├── common/          # Shared utilities
+│   ├── config/          # Configuration system
+│   ├── data/            # Database abstractions
+│   ├── fsm/             # FSM processing
+│   ├── llm/             # LLM integration
+│   ├── bots/            # AI agents and chatbots
 │   ├── structures/      # Core data structures
 │   ├── utils/           # Utility functions
 │   ├── xization/        # Text processing
-│   ├── data/            # Database abstractions
-│   ├── fsm/             # FSM processing
 │   └── legacy/          # Legacy compatibility
 ├── docs/              # Documentation
 ├── tests/             # Integration tests
@@ -202,6 +219,28 @@ For more details, see the [UV Virtual Environment Guide](uv-environment.md) and 
 - Streaming support with backpressure handling
 - YAML/JSON configuration with inline transforms
 - Step-by-step debugging with breakpoints and execution hooks
+
+### dataknobs-llm
+**Purpose**: LLM integration with prompt management, conversations, versioning, and tools.
+
+**Key Components**:
+- Multi-provider LLM support (OpenAI, Anthropic, Ollama, etc.)
+- Prompt template management with versioning
+- Conversation history and context management
+- Tool/function calling support
+- Cost tracking and token usage monitoring
+- Async/await support for concurrent requests
+
+### dataknobs-bots
+**Purpose**: Configuration-driven AI agents and chatbots for building intelligent applications.
+
+**Key Components**:
+- Multi-tenant bot architecture with BotRegistry
+- Memory systems (buffer, vector) for conversation context
+- RAG (Retrieval Augmented Generation) with knowledge base integration
+- Reasoning strategies (Simple, ReAct) for tool-using agents
+- Configuration-driven tool loading without code changes
+- Production-ready with PostgreSQL storage and horizontal scaling
 
 ### dataknobs-structures
 **Purpose**: Core data structures for hierarchical and document-based data.
