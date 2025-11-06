@@ -1,6 +1,384 @@
 # Advanced Usage
 
-This guide covers advanced features and patterns for power users.
+This guide covers advanced features and patterns for power users, including the heavier packages for AI, workflows, and data processing.
+
+## Configuration Management
+
+### Environment-Aware Configuration
+
+```python
+from dataknobs_config import Config
+from dataknobs_data import database_factory
+
+# config.yaml with environment variables
+# databases:
+#   primary:
+#     backend: ${DB_BACKEND:memory}
+#     host: ${DB_HOST:localhost}
+#     port: ${DB_PORT:5432}
+
+config = Config("config.yaml")
+config.register_factory("database", database_factory)
+
+# Backend chosen based on environment
+db = config.get_instance("databases", "primary")
+```
+
+### Factory Pattern for Dynamic Objects
+
+```python
+from dataknobs_config import Config
+
+def custom_processor_factory(config_dict):
+    processor_type = config_dict.get("type")
+    if processor_type == "fast":
+        return FastProcessor(**config_dict)
+    elif processor_type == "accurate":
+        return AccurateProcessor(**config_dict)
+
+config = Config({"processors": {"main": {"type": "fast"}}})
+config.register_factory("processor", custom_processor_factory)
+processor = config.get_instance("processors", "main")
+```
+
+[Learn more →](../packages/config/index.md)
+
+## Data Abstraction
+
+### Multi-Backend Applications
+
+```python
+from dataknobs_data import database_factory, Record, Query
+from dataknobs_config import Config
+
+config = Config({
+    "databases": {
+        "cache": {"backend": "memory"},
+        "storage": {"backend": "postgres", "connection": "..."},
+        "search": {"backend": "elasticsearch", "host": "..."}
+    }
+})
+config.register_factory("database", database_factory)
+
+# Use different backends for different purposes
+cache = config.get_instance("databases", "cache")
+storage = config.get_instance("databases", "storage")
+search = config.get_instance("databases", "search")
+
+# Same API across all backends
+record = Record({"id": "123", "content": "data"})
+cache.create(record)
+storage.create(record)
+search.create(record)
+
+# Query with same interface
+results = search.search(Query().filter("content", "contains", "data"))
+```
+
+### Async High-Performance Operations
+
+```python
+from dataknobs_data import async_database_factory, Record, Query
+
+async def process_large_dataset():
+    # Create async database using factory
+    db = async_database_factory.create({
+        "backend": "postgres",
+        "connection": "postgresql://...",
+        "pool_size": 20
+    })
+
+    # Batch create with pooling
+    records = [Record({"id": i, "data": f"item{i}"}) for i in range(10000)]
+    await db.bulk_create(records, batch_size=100)
+
+    # Async iteration over large result sets
+    async for record in db.stream(Query()):
+        await process_record(record)
+
+    await db.close()
+```
+
+[Learn more →](../packages/data/index.md)
+
+## Workflow Orchestration with FSM
+
+### Complex Multi-Stage Pipelines
+
+```python
+from dataknobs_fsm import SimpleFSM, DataHandlingMode
+
+config = {
+    "name": "etl_pipeline",
+    "states": [
+        {"name": "extract", "is_start": True},
+        {"name": "validate"},
+        {"name": "transform"},
+        {"name": "enrich"},
+        {"name": "load", "is_end": True},
+        {"name": "error"}
+    ],
+    "arcs": [
+        {
+            "from": "extract",
+            "to": "validate",
+            "transform": {
+                "type": "builtin",
+                "name": "extract_from_api",
+                "params": {"url": "https://api.example.com/data"}
+            }
+        },
+        {
+            "from": "validate",
+            "to": "transform",
+            "pre_test": {
+                "type": "inline",
+                "code": "lambda data, ctx: data.get('valid', False)"
+            }
+        },
+        {
+            "from": "validate",
+            "to": "error",
+            "pre_test": {
+                "type": "inline",
+                "code": "lambda data, ctx: not data.get('valid', False)"
+            }
+        },
+        {"from": "transform", "to": "enrich"},
+        {"from": "enrich", "to": "load"}
+    ]
+}
+
+fsm = SimpleFSM(config, data_mode=DataHandlingMode.COPY)
+result = fsm.process({"source": "api"})
+```
+
+### FSM with Resource Management
+
+```python
+from dataknobs_fsm import SimpleFSM
+from dataknobs_data import database_factory
+
+# Create database using factory for FSM context
+db = database_factory.create({
+    "backend": "postgres",
+    "connection": "postgresql://..."
+})
+
+config = {
+    "name": "db_processor",
+    "states": [
+        {"name": "load", "is_start": True},
+        {"name": "process", "is_end": True}
+    ],
+    "arcs": [
+        {
+            "from": "load",
+            "to": "process",
+            "transform": {
+                "type": "inline",
+                "code": "lambda data, ctx: ctx['database'].search(Query())"
+            }
+        }
+    ]
+}
+
+fsm = SimpleFSM(config)
+fsm.context["database"] = db
+result = fsm.process(data)
+```
+
+[Learn more →](../packages/fsm/index.md)
+
+## LLM Integration
+
+### Prompt Template Management
+
+```python
+from dataknobs_llm import create_llm_provider, MessageTemplate, MessageBuilder, LLMMessage
+
+# Create message templates for reusable prompts
+summarize_template_v1 = MessageTemplate(
+    "Summarize the following in {max_words} words:\n\n{text}"
+)
+summarize_template_v2 = MessageTemplate(
+    "Provide a {max_words}-word summary of:\n{text}\n\nFocus on key points."
+)
+
+# Use LLM with templates
+llm = create_llm_provider({"provider": "openai", "model": "gpt-4"})
+
+# Build messages from template
+builder = MessageBuilder()
+builder.add_user_message(summarize_template_v2.format(
+    text="Long article content...",
+    max_words=50
+))
+
+response = await llm.generate(builder.messages)
+```
+
+### Tool Calling with LLMs
+
+```python
+from dataknobs_llm import create_llm_provider, Tool, ToolRegistry, LLMMessage
+from typing import Dict, Any
+
+# Define custom tools by subclassing Tool
+class DatabaseSearchTool(Tool):
+    def __init__(self):
+        super().__init__(
+            name="search_database",
+            description="Search the database for relevant information"
+        )
+
+    @property
+    def schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"}
+            },
+            "required": ["query"]
+        }
+
+    async def execute(self, query: str) -> list:
+        # Implementation
+        return results
+
+class CalculatorTool(Tool):
+    def __init__(self):
+        super().__init__(
+            name="calculate",
+            description="Evaluate a mathematical expression"
+        )
+
+    @property
+    def schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "expression": {"type": "string", "description": "Math expression"}
+            },
+            "required": ["expression"]
+        }
+
+    async def execute(self, expression: str) -> float:
+        # Implementation
+        return result
+
+# Register tools
+registry = ToolRegistry()
+registry.register(DatabaseSearchTool())
+registry.register(CalculatorTool())
+
+# Use LLM with tools
+llm = create_llm_provider({
+    "provider": "openai",
+    "model": "gpt-4"
+})
+
+messages = [LLMMessage(
+    role="user",
+    content="What's 15% of the revenue from last quarter?"
+)]
+response = await llm.generate(messages, tools=registry.get_all())
+```
+
+[Learn more →](../packages/llm/index.md)
+
+## AI Agents and Chatbots
+
+### Multi-Tenant Bot System
+
+```python
+import asyncio
+from dataknobs_bots import DynaBot, BotContext
+from dataknobs_data import database_factory
+
+async def main():
+    # Persistent storage using factory
+    db = database_factory.create({
+        "backend": "postgres",
+        "connection": "postgresql://..."
+    })
+
+    # Create bots for different tenants
+    support_bot = await DynaBot.from_config({
+        "llm": {"provider": "openai", "model": "gpt-4"},
+        "conversation_storage": {"backend": "postgres", "connection": "postgresql://..."},
+        "memory": {"type": "buffer", "max_messages": 20},
+        "system_prompt": "You are a helpful support agent."
+    })
+
+    sales_bot = await DynaBot.from_config({
+        "llm": {"provider": "anthropic", "model": "claude-3-5-sonnet-20241022"},
+        "conversation_storage": {"backend": "postgres", "connection": "postgresql://..."},
+        "memory": {"type": "buffer", "max_messages": 20},
+        "system_prompt": "You are a sales assistant."
+    })
+
+    # Use bots with context isolation
+    support_context = BotContext(
+        conversation_id="support-001",
+        client_id="tenant1",
+        user_id="user1"
+    )
+    support_response = await support_bot.chat("Help me reset password", support_context)
+
+    sales_context = BotContext(
+        conversation_id="sales-001",
+        client_id="tenant2",
+        user_id="user2"
+    )
+    sales_response = await sales_bot.chat("Tell me about pricing", sales_context)
+
+asyncio.run(main())
+```
+
+### RAG-Enabled Chatbot
+
+```python
+import asyncio
+from dataknobs_bots import DynaBot, BotContext
+from dataknobs_data import database_factory
+
+async def main():
+    # Knowledge base using factory
+    knowledge_base = database_factory.create({
+        "backend": "elasticsearch",
+        "host": "localhost:9200",
+        "index": "documentation"
+    })
+
+    bot_config = {
+        "llm": {"provider": "openai", "model": "gpt-4"},
+        "conversation_storage": {"backend": "memory"},
+        "memory": {"type": "buffer", "max_messages": 10},
+        "rag": {
+            "enabled": True,
+            "knowledge_base": knowledge_base,
+            "top_k": 5,
+            "score_threshold": 0.7
+        },
+        "system_prompt": "Answer questions using the provided documentation."
+    }
+
+    bot = await DynaBot.from_config(bot_config)
+
+    # Bot retrieves relevant docs before answering
+    context = BotContext(
+        conversation_id="docs-001",
+        client_id="my-app",
+        user_id="user1"
+    )
+    response = await bot.chat("How do I configure the database?", context)
+    print(response)
+
+asyncio.run(main())
+```
+
+[Learn more →](../packages/bots/index.md)
 
 ## Advanced Tree Operations
 

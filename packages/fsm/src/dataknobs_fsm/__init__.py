@@ -10,6 +10,7 @@ __version__ = "0.1.0"
 from .core.fsm import FSM
 from .core.state import StateDefinition, StateInstance
 from .core.arc import ArcDefinition
+from .core.data_modes import DataHandlingMode
 
 # Simple API
 from .api.simple import SimpleFSM
@@ -39,6 +40,7 @@ __all__ = [
     "StateDefinition",
     "StateInstance",
     "ArcDefinition",
+    "DataHandlingMode",
     # Simple API
     "SimpleFSM",
     "AsyncSimpleFSM",
