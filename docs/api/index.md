@@ -4,9 +4,18 @@ Complete API documentation for all Dataknobs packages.
 
 ## Package APIs
 
-- [dataknobs-fsm](../packages/fsm/api/index.md) - Finite State Machine framework API
+### AI & LLM Packages
+- [dataknobs-bots](../packages/bots/api/index.md) - AI chatbots and agents API
+- [dataknobs-llm](../packages/llm/api/llm.md) - LLM integration API
+
+### Data & Configuration Packages
 - [dataknobs-data](dataknobs-data.md) - Data abstraction API
 - [dataknobs-config](dataknobs-config.md) - Configuration management API
+
+### Workflow & Processing Packages
+- [dataknobs-fsm](../packages/fsm/api/index.md) - Finite State Machine framework API
+
+### Core Utilities Packages
 - [dataknobs-structures](dataknobs-structures.md) - Core data structures API
 - [dataknobs-utils](dataknobs-utils.md) - Utility functions API
 - [dataknobs-xization](dataknobs-xization.md) - Text processing API
@@ -14,14 +23,41 @@ Complete API documentation for all Dataknobs packages.
 
 ## Quick Reference
 
+### Bots
+```python
+from dataknobs_bots import DynaBot, BotContext
+```
+
+### LLM
+```python
+from dataknobs_llm import (
+    create_llm_provider,
+    LLMMessage,
+    LLMResponse,
+    MessageTemplate,
+    MessageBuilder,
+    Tool,
+    ToolRegistry
+)
+```
+
 ### FSM
 ```python
-from dataknobs_fsm import SimpleFSM, AdvancedFSM, AsyncSimpleFSM
-from dataknobs_fsm.core.data_modes import DataHandlingMode
+from dataknobs_fsm import SimpleFSM, AdvancedFSM, AsyncSimpleFSM, DataHandlingMode
 ```
 
 ### Data
-- See [dataknobs-data API reference](../packages/data/api-reference.md) documentation
+```python
+from dataknobs_data import (
+    database_factory,
+    async_database_factory,
+    Record,
+    Query,
+    Filter,
+    Operator
+)
+```
+- See [dataknobs-data API reference](../packages/data/api-reference.md) for complete documentation
 
 ### Config
 ```python

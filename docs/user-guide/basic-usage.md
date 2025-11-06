@@ -169,8 +169,22 @@ except Exception as e:
     print(f"Unexpected error: {e}")
 ```
 
+## Beyond the Basics
+
+Dataknobs includes powerful packages for more advanced use cases:
+
+**For AI Applications:**
+- [Bots Package](../packages/bots/index.md) - Build intelligent chatbots with memory and RAG
+- [LLM Package](../packages/llm/index.md) - Integrate language models with prompt management
+
+**For Data Engineering:**
+- [FSM Package](../packages/fsm/index.md) - Orchestrate complex workflows with finite state machines
+- [Data Package](../packages/data/index.md) - Unified interface across PostgreSQL, Elasticsearch, S3, and more
+- [Config Package](../packages/config/index.md) - Environment-aware configuration management
+
 ## Next Steps
 
-- Explore [Advanced Usage](advanced-usage.md) for complex scenarios
+- Explore [Advanced Usage](advanced-usage.md) for complex scenarios and heavier packages
 - Read [Best Practices](best-practices.md) for production deployments
 - Check the [API Reference](../api/index.md) for detailed documentation
+- Browse [Examples](../examples/index.md) for real-world use cases
