@@ -83,15 +83,6 @@
       "deprecated": false
     },
     {
-      "name": "kv",
-      "pypi_name": "dataknobs-kv",
-      "description": "Key-value store implementations",
-      "version": "0.1.0",
-      "category": "experimental",
-      "requires_docs_build": false,
-      "deprecated": false
-    },
-    {
       "name": "legacy",
       "pypi_name": "dataknobs",
       "description": "Legacy compatibility package",
