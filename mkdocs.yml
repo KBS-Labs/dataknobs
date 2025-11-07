@@ -204,15 +204,17 @@ nav:
   
   - API Reference:
     - api/index.md
-    - dataknobs-bots: packages/bots/api/index.md
-    - dataknobs-fsm: packages/fsm/api/index.md
-    - dataknobs-llm: packages/llm/api/llm.md
-    - dataknobs-data: api/dataknobs-data.md
-    - dataknobs-config: api/dataknobs-config.md
-    - dataknobs-structures: api/dataknobs-structures.md
-    - dataknobs-utils: api/dataknobs-utils.md
-    - dataknobs-xization: api/dataknobs-xization.md
-    - dataknobs-common: api/dataknobs-common.md
+    - Complete Reference: api/complete-reference.md
+    - Curated Guides:
+      - dataknobs-bots: packages/bots/api/index.md
+      - dataknobs-fsm: packages/fsm/api/index.md
+      - dataknobs-llm: packages/llm/api/llm.md
+      - dataknobs-data: api/dataknobs-data.md
+      - dataknobs-config: api/dataknobs-config.md
+      - dataknobs-structures: api/dataknobs-structures.md
+      - dataknobs-utils: api/dataknobs-utils.md
+      - dataknobs-xization: api/dataknobs-xization.md
+      - dataknobs-common: api/dataknobs-common.md
   
   - Development:
     - Overview: development/index.md

@@ -2,6 +2,24 @@
 
 Complete API documentation for all Dataknobs packages.
 
+## Documentation Types
+
+### 📖 [Complete Reference](complete-reference.md)
+**Auto-generated comprehensive documentation** showing all classes, methods, and functions with full signatures and source code. Best for:
+- Looking up specific method signatures
+- Exploring all available functionality
+- Understanding type annotations
+- Browsing source code
+
+### 📚 Curated Guides (below)
+**Hand-crafted guides with examples** focusing on common use cases and best practices. Best for:
+- Learning how to use the API
+- Understanding design patterns
+- Seeing practical examples
+- Quick reference with context
+
+---
+
 ## Package APIs
 
 ### AI & LLM Packages

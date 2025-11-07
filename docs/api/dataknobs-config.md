@@ -4,9 +4,16 @@
 
 The `dataknobs-config` package provides a modular configuration system with composable settings, environment variable overrides, and cross-references between configurations.
 
+> **💡 Quick Links:**
+> - [Complete API Documentation](complete-reference.md#dataknobs-config) - Full auto-generated reference
+> - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/config/src/dataknobs_config) - Browse on GitHub
+> - [Package Guide](../packages/config/index.md) - Detailed documentation
+
 ## Main Classes
 
 ### Config
+
+**Source:** [`config.py`](https://github.com/kbs-labs/dataknobs/blob/main/packages/config/src/dataknobs_config/config.py)
 
 The main configuration management class.
 
@@ -25,13 +32,13 @@ config = Config("base.yaml", "overrides.yaml")
 
 #### Key Methods
 
-- `get(type_name, name_or_index)` - Get a specific configuration
-- `get_all(type_name)` - Get all configurations of a type
-- `set(type_name, name_or_index, value)` - Set a configuration value
-- `resolve_reference(ref)` - Resolve a string reference
-- `build_object(ref)` - Build an object from configuration
-- `to_dict()` - Export configuration as dictionary
-- `to_file(path)` - Save configuration to file
+- [`get(type_name, name_or_index)`](https://github.com/kbs-labs/dataknobs/blob/main/packages/config/src/dataknobs_config/config.py) - Get a specific configuration
+- [`get_all(type_name)`](https://github.com/kbs-labs/dataknobs/blob/main/packages/config/src/dataknobs_config/config.py) - Get all configurations of a type
+- [`set(type_name, name_or_index, value)`](https://github.com/kbs-labs/dataknobs/blob/main/packages/config/src/dataknobs_config/config.py) - Set a configuration value
+- [`resolve_reference(ref)`](https://github.com/kbs-labs/dataknobs/blob/main/packages/config/src/dataknobs_config/config.py) - Resolve a string reference
+- [`build_object(ref)`](https://github.com/kbs-labs/dataknobs/blob/main/packages/config/src/dataknobs_config/config.py) - Build an object from configuration
+- [`to_dict()`](https://github.com/kbs-labs/dataknobs/blob/main/packages/config/src/dataknobs_config/config.py) - Export configuration as dictionary
+- [`to_file(path)`](https://github.com/kbs-labs/dataknobs/blob/main/packages/config/src/dataknobs_config/config.py) - Save configuration to file
 
 ### Reference System
 
