@@ -10,13 +10,29 @@ import pandas as pd
 
 
 class XmlStream(ABC):
-    """Abstract base class for streaming XML content.
+    """Abstract base class for streaming XML content with memory management.
 
-    NOTE: Extending classes need to implement __iter__
+    Provides a framework for iterating through XML documents using element-based
+    streaming. Subclasses must implement loop_through_elements() to define specific
+    element collection behavior. Automatically manages element cleanup to prevent
+    memory buildup when processing large XML files.
+
+    Note:
+        Extending classes must implement the loop_through_elements() abstract method.
+
+    Attributes:
+        source: XML filename or file object.
+        auto_clear_elts: If True, automatically clears closed elements to save memory.
     """
 
     def __init__(self, source: Union[str, TextIO], auto_clear_elts: bool = True):
-        """:param source: An XML filename or file object"""
+        """Initialize the XML stream.
+
+        Args:
+            source: Path to XML file or file object.
+            auto_clear_elts: If True, automatically clears closed elements to prevent
+                memory buildup. Defaults to True.
+        """
         self._xml_iter: Any | None = None
         self.source = source
         self.auto_clear_elts = auto_clear_elts
@@ -25,17 +41,31 @@ class XmlStream(ABC):
 
     @property
     def context(self) -> List[ET.Element]:
-        """Get the current "stack" of elements from the root."""
+        """Get the current element context stack from root to current position.
+
+        Returns:
+            List[ET.Element]: Copy of the element stack from root to current element.
+        """
         return self._context.copy()
 
     @property
     def context_length(self) -> int:
-        """Get the length of the current context."""
+        """Get the depth of the current element in the XML tree.
+
+        Returns:
+            int: Number of elements in the context stack.
+        """
         return len(self._context)
 
     def next_xml_iter(self) -> Tuple[str, ET.Element]:
-        """Get the next (event, elem) from the underlying xml iterator or raise
-        a StopIteration exception if exhausted.
+        """Get the next event and element from the XML iterator.
+
+        Returns:
+            Tuple[str, ET.Element]: Tuple of (event, element) where event is
+                'start' or 'end'.
+
+        Raises:
+            StopIteration: When the XML iterator is exhausted.
         """
         if self._xml_iter is None:
             self.__iter__()
@@ -49,8 +79,16 @@ class XmlStream(ABC):
 
     @abstractmethod
     def loop_through_elements(self) -> List[ET.Element]:
-        """Loop through elements of self.xml_iter, adding elements to the context,
-        until the next desired element has been collected.
+        """Process XML elements until collecting the next desired element(s).
+
+        Subclasses must implement this method to define specific element
+        collection behavior, updating the context as elements are encountered.
+
+        Returns:
+            List[ET.Element]: The collected element(s) in context from root.
+
+        Raises:
+            NotImplementedError: Must be implemented by subclasses.
         """
         raise NotImplementedError
 
@@ -77,11 +115,24 @@ class XmlStream(ABC):
             self._closed_elt = None
 
     def add_to_context(self, elem: ET.Element) -> None:
-        """Add the element to the context"""
+        """Add an element to the context stack.
+
+        Args:
+            elem: Element to add to the context.
+        """
         self._context.append(elem)
 
     def find_context_idx(self, elem: ET.Element) -> int:
-        """Find the latest index of the element in the context (or -1)."""
+        """Find the most recent index of an element in the context stack.
+
+        Searches backwards through the context to find the element's index.
+
+        Args:
+            elem: Element to find in the context.
+
+        Returns:
+            int: Index of the element in context, or -1 if not found.
+        """
         idx = len(self._context) - 1
         while idx >= 0:
             if self._context[idx] == elem:
@@ -90,9 +141,14 @@ class XmlStream(ABC):
         return idx
 
     def pop_closed_from_context(self, closed_elem: ET.Element, idx: int | None = None) -> None:
-        """Pop the closed element from the context
-        :param closed_elem: The closed element
-        :param idx: The element's index within the context (if known)
+        """Remove a closed element and its descendants from the context.
+
+        Truncates the context at the element's position and optionally clears
+        the element's memory if auto_clear_elts is enabled.
+
+        Args:
+            closed_elem: The element that has closed.
+            idx: Index of the element in context (computed if None). Defaults to None.
         """
         if idx is None:
             idx = self.find_context_idx(closed_elem)
@@ -104,7 +160,15 @@ class XmlStream(ABC):
             self._closed_elt = closed_elem
 
     def take(self, n: int) -> Generator[List[ET.Element], None, None]:
-        """Take the next N items from this iterator."""
+        """Generate the next N items from this iterator.
+
+        Args:
+            n: Number of items to take.
+
+        Yields:
+            List[ET.Element]: Each collected element list, stopping early if
+                iterator is exhausted.
+        """
         idx = 0
         while idx < n:
             try:
@@ -118,13 +182,21 @@ class XmlStream(ABC):
     def to_string(
         elt_path: List[ET.Element], with_text_or_atts: Union[bool, str, List[str]] = True
     ) -> str:
-        """Show the element path  as a dot-delimited string of tags, optionally
-        adding the leaf node's text or value from an attribute.
+        """Convert element path to dot-delimited string with optional leaf value.
 
-        :param elt_path: The list of elements from root to leaf
-        :param with_text_or_atts: If True or a non-empty string or list of
-            strings, then append the first non-empty value from the element's
-            text or attribute.
+        Creates an XPath-like string representation of the element hierarchy,
+        optionally appending text or attribute values from the leaf element.
+
+        Args:
+            elt_path: List of elements from root to leaf.
+            with_text_or_atts: Controls value appending behavior:
+                - True: Append leaf element's text if present
+                - str: Append value of specified attribute if present
+                - List[str]: Append first non-empty attribute value from list
+                - False: Don't append any values
+
+        Returns:
+            str: Dot-delimited path (e.g., "root.child.leaf|text=\"value\"").
         """
         rv = ".".join(e.tag for e in elt_path)
         if with_text_or_atts:
@@ -149,30 +221,45 @@ class XmlStream(ABC):
 
 
 class XmlLeafStream(XmlStream):
-    """Class to get each XML leaf node with its parents to the root from an xml
-    stream.
+    """Stream XML leaf nodes with their full path from root.
 
-    Usage example to show the first 10 xpaths to leaf nodes, including node text
-    taken from actual text or attributes:
+    Iterates through an XML document yielding each leaf (terminal) element
+    along with its ancestor path from the root. Useful for extracting data
+    from deeply nested XML structures.
 
-    >>> import dataknobs_utils.xml_utils as xml_utils
-    >>> s = xml_utils.XmlLeafStream(xml_fpath)
-    >>> for idx, elts in enumerate(s):
-            print(f'{idx} ', s.to_string(elts, ["value", "extension", "code", "ID"]))
-    >>>     if idx >= 9:
-                break
+    Examples:
+        Show paths to first 10 leaf nodes with text or attribute values:
+
+        >>> import dataknobs_utils.xml_utils as xml_utils
+        >>> s = xml_utils.XmlLeafStream(xml_fpath)
+        >>> for idx, elts in enumerate(s):
+        ...     print(f'{idx} ', s.to_string(elts, ["value", "extension", "code", "ID"]))
+        ...     if idx >= 9:
+        ...         break
+
+    Attributes:
+        count: Number of leaf nodes processed.
+        elts: Most recently yielded element path.
     """
 
     def __init__(self, source: Union[str, TextIO], auto_clear_elts: bool = True):
-        """:param source: An XML filename or file object"""
+        """Initialize the XML leaf stream.
+
+        Args:
+            source: Path to XML file or file object.
+            auto_clear_elts: If True, automatically clears closed elements.
+                Defaults to True.
+        """
         super().__init__(source, auto_clear_elts=auto_clear_elts)
         self._last_elt: ET.Element | None = None  # The last new element
         self.count = 0  # The number of terminal nodes seen
         self.elts: List[ET.Element] | None = None  # The latest yielded sequence
 
     def loop_through_elements(self) -> List[ET.Element]:
-        """Loop through elements of self.xml_iter, adding elements to the context,
-        until the next terminal element has been collected.
+        """Collect the next leaf element with its full path from root.
+
+        Returns:
+            List[ET.Element]: Element path from root to the next leaf element.
         """
         gotit: List[ET.Element] | None = None
         while True:
@@ -198,12 +285,21 @@ class XmlLeafStream(XmlStream):
 
 
 class XmlElementGrabber(XmlStream):
-    """Class to grab each highest matching DOM element from streamed XML.
+    """Stream matching XML elements with their full path from root.
 
-    Usage example to get the first 10 xpaths to element nodes with the tag "foo"
-    >>> import dataknobs_utils.xml_utils as xml_utils
-    >>> g = xml_utils.XmlElementGrabber(xml_fpath, "foo")
-    >>> first_10_foos = g.take(10)
+    Finds and yields elements matching a tag name or custom condition,
+    returning the highest matching element (not searching within matched elements).
+
+    Examples:
+        Get first 10 elements with tag "foo":
+
+        >>> import dataknobs_utils.xml_utils as xml_utils
+        >>> g = xml_utils.XmlElementGrabber(xml_fpath, "foo")
+        >>> first_10_foos = g.take(10)
+
+    Attributes:
+        match: Tag name or callable for matching elements.
+        count: Number of matching elements found.
     """
 
     def __init__(
@@ -212,9 +308,14 @@ class XmlElementGrabber(XmlStream):
         match: Union[str, Callable[[ET.Element], bool]],
         auto_clear_elts: bool = True,
     ):
-        """:param source: An XML filename or file object
-        :param match: A tag name to match or a function returning True when a
-           an element is encountered.
+        """Initialize the XML element grabber.
+
+        Args:
+            source: Path to XML file or file object.
+            match: Tag name to match or callable that returns True when an
+                element should be matched.
+            auto_clear_elts: If True, automatically clears closed elements.
+                Defaults to True.
         """
         super().__init__(source, auto_clear_elts=auto_clear_elts)
         self.match = match
@@ -235,8 +336,10 @@ class XmlElementGrabber(XmlStream):
         return matches
 
     def loop_through_elements(self) -> List[ET.Element]:
-        """Find the next match ET.Element, returning in context from the root
-        node to the element.
+        """Find the next matching element with its full path from root.
+
+        Returns:
+            List[ET.Element]: Element path from root to the next matching element.
         """
         gotit: List[ET.Element] | None = None
         grabbing: ET.Element | None = None
@@ -260,8 +363,15 @@ class XmlElementGrabber(XmlStream):
 
 
 class XMLTagStream:
-    """Class for chunking a large XML file into separate bs4 "soup" objects based
-    on a tag.
+    """Memory-efficient XML tag chunking using memory-mapped file access.
+
+    Processes large XML files by extracting individual tag instances as
+    BeautifulSoup objects using memory-mapped I/O for efficient processing
+    without loading the entire file.
+
+    Attributes:
+        tag_name: XML tag name to extract.
+        encoding: Character encoding of the XML file.
     """
 
     def __init__(
@@ -295,12 +405,19 @@ class XMLTagStream:
 def soup_generator(
     xmlfilepath: str, tag_name: str, with_attrs: bool = False, encoding: str = "utf-8"
 ) -> Generator[bs4.BeautifulSoup, None, None]:
-    """A generator for bs4 soup objects for each tag_name in the xml file.
-    :param xmlfilepath: The path to the xml file
-    :param tag_name: The tag name to extract
-    :param with_attrs: True to find the tag with attributes
-    :param encoding: File's encoding
-    :yield: A soup object for each xml tag in the file
+    """Generate BeautifulSoup objects for each occurrence of a tag in XML.
+
+    Efficiently processes large XML files by yielding BeautifulSoup objects
+    for each instance of the specified tag using memory-mapped I/O.
+
+    Args:
+        xmlfilepath: Path to the XML file.
+        tag_name: XML tag name to extract.
+        with_attrs: If True, matches tags with attributes. Defaults to False.
+        encoding: File character encoding. Defaults to "utf-8".
+
+    Yields:
+        bs4.BeautifulSoup: Soup object for each tag instance in the file.
     """
     with XMLTagStream(
         xmlfilepath,
@@ -316,11 +433,20 @@ def html_table_scraper(
     soup_table: bs4.element.Tag,
     add_header_as_row: bool = False,
 ) -> pd.DataFrame:
-    """Scrape html table information into a dataframe.
-    :param soup_table: The soup table element
-    :param add_header_as_row: If True, the header row will also be added as
-        a table row.
-    :return: A dataframe with the scraped table data
+    """Extract HTML table data into a pandas DataFrame.
+
+    Scrapes table data from a BeautifulSoup table element, handling headers,
+    nested elements, and non-breaking spaces. Concatenates text from nested
+    elements within cells.
+
+    Args:
+        soup_table: BeautifulSoup table element to scrape.
+        add_header_as_row: If True, includes header row in the data rows
+            in addition to using it as column names. Defaults to False.
+
+    Returns:
+        pd.DataFrame: DataFrame with scraped table data. Column names are taken
+            from <th> elements if present, otherwise columns are unnamed.
     """
     columns: List[str] | None = None
     rows: List[List[str]] = []

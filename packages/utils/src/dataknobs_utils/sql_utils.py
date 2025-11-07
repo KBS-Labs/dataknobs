@@ -20,7 +20,17 @@ from dataknobs_utils.sys_utils import load_project_vars
 
 
 class RecordFetcher(ABC):
-    """Abstract base class for fetching records from a data source."""
+    """Abstract base class for fetching records from a data source.
+
+    Provides a common interface for retrieving records by ID from various
+    data sources (databases, DataFrames, dictionaries, etc.) with support
+    for zero-based and one-based ID systems.
+
+    Attributes:
+        id_field_name: Name of the ID field in the data source.
+        fields_to_retrieve: Subset of fields to retrieve (None for all).
+        one_based: True if data source uses 1-based IDs.
+    """
 
     def __init__(
         self,
@@ -28,9 +38,14 @@ class RecordFetcher(ABC):
         fields_to_retrieve: List[str] | None = None,
         one_based_ids: bool = False,
     ) -> None:
-        """:param id_field_name: The name of the integer "id" field for the data source.
-        :param fields_to_retrieve: The subset of fields to retrieve (retrieve all if None).
-        :param one_based_ids: True if the data source IDs are 1-based.
+        """Initialize the record fetcher.
+
+        Args:
+            id_field_name: Name of the integer ID field. Defaults to "id".
+            fields_to_retrieve: Subset of fields to retrieve. If None, retrieves
+                all fields. Defaults to None.
+            one_based_ids: True if data source uses 1-based IDs, False for 0-based.
+                Defaults to False.
         """
         self.id_field_name = id_field_name
         self.fields_to_retrieve = fields_to_retrieve
@@ -40,15 +55,38 @@ class RecordFetcher(ABC):
     def get_records(
         self, ids: List[int], one_based: bool = False, fields_to_retrieve: List[str] | None = None
     ) -> pd.DataFrame:
-        """:param ids: The collection of IDs of the records to retrieve
-        :param one_based: True if the ids are one-based.
-        :param fields_to_retrieve: Overriding subset of self.fields_to_retrieve for this call.
-        :return: A pandas dataframe with the retrieved records.
+        """Fetch records by ID from the data source.
+
+        Args:
+            ids: Collection of record IDs to retrieve.
+            one_based: True if the provided IDs are 1-based. Defaults to False.
+            fields_to_retrieve: Subset of fields for this call, overriding
+                instance default. Defaults to None.
+
+        Returns:
+            pd.DataFrame: DataFrame containing the retrieved records.
+
+        Raises:
+            NotImplementedError: Must be implemented by subclasses.
         """
         raise NotImplementedError
 
 
 class DotenvPostgresConnector:
+    """PostgreSQL connection manager using environment variables and project vars.
+
+    Loads database connection parameters from environment variables (.env),
+    project variables file, or constructor arguments, with environment variables
+    taking precedence.
+
+    Attributes:
+        host: Database host address.
+        database: Database name.
+        user: Database username.
+        password: Database password.
+        port: Database port number.
+    """
+
     def __init__(
         self,
         host: str | None = None,
@@ -58,6 +96,21 @@ class DotenvPostgresConnector:
         port: int | None = None,
         pvname: str = ".project_vars",
     ) -> None:
+        """Initialize PostgreSQL connector with environment-based configuration.
+
+        Args:
+            host: Database host. If None, uses POSTGRES_HOST environment variable
+                or "localhost". Defaults to None.
+            db: Database name. If None, uses POSTGRES_DB environment variable
+                or "postgres". Defaults to None.
+            user: Username. If None, uses POSTGRES_USER environment variable
+                or "postgres". Defaults to None.
+            pwd: Password. If None, uses POSTGRES_PASSWORD environment variable.
+                Defaults to None.
+            port: Port number. If None, uses POSTGRES_PORT environment variable
+                or 5432. Defaults to None.
+            pvname: Project variables filename to load. Defaults to ".project_vars".
+        """
         config = load_project_vars(pvname=pvname)
         if host is None or db is None or user is None or pwd is None or port is None:
             load_dotenv()
@@ -99,9 +152,10 @@ class DotenvPostgresConnector:
         )
 
     def get_conn(self) -> Any:
-        """Get a connection to the database.
+        """Create and return a PostgreSQL database connection.
 
-        :return: The database connection
+        Returns:
+            psycopg2.connection: Active database connection using configured parameters.
         """
         return psycopg2.connect(
             host=self.host,
@@ -113,6 +167,15 @@ class DotenvPostgresConnector:
 
 
 class PostgresDB:
+    """PostgreSQL database wrapper with utilities for querying and managing tables.
+
+    Provides high-level interface for executing queries, managing tables, and
+    uploading DataFrames to PostgreSQL databases.
+
+    Attributes:
+        _connector: Connection manager for database operations.
+    """
+
     def __init__(
         self,
         host: str | DotenvPostgresConnector | None = None,
@@ -121,6 +184,17 @@ class PostgresDB:
         pwd: str | None = None,
         port: int | None = None,
     ) -> None:
+        """Initialize PostgreSQL database wrapper.
+
+        Args:
+            host: Database host or DotenvPostgresConnector instance. If None,
+                uses environment configuration. Defaults to None.
+            db: Database name. If None, uses environment configuration.
+                Defaults to None.
+            user: Username. If None, uses environment configuration. Defaults to None.
+            pwd: Password. If None, uses environment configuration. Defaults to None.
+            port: Port number. If None, uses environment configuration. Defaults to None.
+        """
         # Allow passing a connector directly (for backward compatibility)
         if isinstance(host, DotenvPostgresConnector):
             self._connector = host
@@ -131,17 +205,25 @@ class PostgresDB:
 
     @property
     def table_names(self) -> List[str]:
-        """Get the database table names as a list of strings."""
+        """Get list of all table names in the database.
+
+        Returns:
+            List[str]: List of table names from the public schema.
+        """
         if self._table_names is None:
             self._table_names = self._do_get_table_names()
         return self._table_names
 
     @property
     def tables_df(self) -> pd.DataFrame:
-        """Get the database tables dataframe. Note that this is non-standard
-        across db types.
+        """Get DataFrame of database table metadata.
 
-        :return: The database tables dataframe
+        Note:
+            The exact schema is database-specific. For PostgreSQL, queries
+            information_schema.tables.
+
+        Returns:
+            pd.DataFrame: Table metadata from information_schema.tables.
         """
         if self._tables_df is None:
             self._tables_df = self._do_get_tables_df()
@@ -155,16 +237,22 @@ class PostgresDB:
         """)
 
     def table_head(self, table_name: str, n: int = 10) -> pd.DataFrame:
-        """Get a sample of N rows from the table.
-        :param table_name: The table whose rows to sample
-        :param n: The number of rows to return
+        """Get the first N rows from a table.
+
+        Args:
+            table_name: Name of the table to sample.
+            n: Number of rows to return. Defaults to 10.
+
+        Returns:
+            pd.DataFrame: First N rows from the table.
         """
         return self.query(f"""SELECT * FROM {table_name} LIMIT {n}""")
 
     def get_conn(self) -> Any:
-        """Get a connection to the database.
+        """Get a connection to the PostgreSQL database.
 
-        :return: The database connection
+        Returns:
+            psycopg2.connection: Active database connection.
         """
         return self._connector.get_conn()
 
@@ -181,12 +269,18 @@ class PostgresDB:
         query: str,
         params: Dict[str, Any] | None = None,
     ) -> pd.DataFrame:
-        """Submit a query, returning the results as a dataframe.
+        """Execute a SQL query and return results as a DataFrame.
 
-        :param query: The sql query to execute
-        :param params: Parameters to safely inject into the query string, where
-            each parameter "param" has the form "%(param)s" in the query string
-        :return: A dataframe with the results
+        Uses parameterized queries for safe injection of values.
+
+        Args:
+            query: SQL query string to execute.
+            params: Dictionary of parameters to safely inject. Each parameter
+                "param" should appear as "%(param)s" in the query string.
+                Defaults to None.
+
+        Returns:
+            pd.DataFrame: Query results with column names from the cursor.
         """
         with self.get_conn() as conn:
             with conn.cursor() as curs:
@@ -198,11 +292,15 @@ class PostgresDB:
         return df
 
     def execute(self, stmt: str, params: Dict[str, Any] | None = None) -> int:
-        """Execute a statement.
+        """Execute a SQL statement and commit changes.
 
-        :param stmt: The sql statement to execute
-        :param params: Optional dictionary of parameters for the query
-        :return: Number of rows affected
+        Args:
+            stmt: SQL statement to execute.
+            params: Optional dictionary of parameters for safe injection.
+                Defaults to None.
+
+        Returns:
+            int: Number of rows affected by the statement.
         """
         with self.get_conn() as conn:
             with conn.cursor() as curs:
@@ -212,11 +310,13 @@ class PostgresDB:
         return rowcount
 
     def upload(self, table_name: str, df: pd.DataFrame) -> None:
-        """Upload the dataframe data to the table.
+        """Upload DataFrame data to a database table.
 
-        :param table_name: The name of the table to upload the data to
-        :param df: A dataframe whose columns match the table fields that holds
-                   the data to upload
+        Creates the table if it doesn't exist, inferring schema from DataFrame types.
+
+        Args:
+            table_name: Name of the table to insert data into.
+            df: DataFrame with columns matching table fields and data to upload.
         """
         fields = ", ".join(df.columns)
         template = ", ".join(["%s"] * len(df.columns))
@@ -234,10 +334,14 @@ class PostgresDB:
                 curs.execute(sql)
 
     def _create_table(self, table_name: str, df: pd.DataFrame) -> None:
-        """Create a table for the dataframe if it doesn't already exist.
-        Do not populate the table with the contents of the dataframe here.
-        :param table_name: The name of the table to create
-        :param df: A dataframe whose columns represent the table schema
+        """Create a table with schema inferred from DataFrame.
+
+        Creates the table structure based on DataFrame column types but doesn't
+        populate it with data.
+
+        Args:
+            table_name: Name of the table to create.
+            df: DataFrame whose columns and types define the table schema.
         """
 
         def psql_schema_line(df: pd.DataFrame, col: str) -> str:
@@ -268,7 +372,12 @@ class PostgresDB:
 
 
 class PostgresRecordFetcher(RecordFetcher):
-    """Class for fetching records from a Postgres DB."""
+    """Fetch records from a PostgreSQL table by ID.
+
+    Attributes:
+        db: PostgreSQL database connection wrapper.
+        table_name: Name of the table to query.
+    """
 
     def __init__(
         self,
@@ -278,11 +387,15 @@ class PostgresRecordFetcher(RecordFetcher):
         fields_to_retrieve: List[str] | None = None,
         one_based_ids: bool = False,
     ) -> None:
-        """:param db: The postgres database
-        :param table_name: The name of the table of the data source.
-        :param id_field_name: The name of the integer "id" field in the table.
-        :param fields_to_retrieve: The subset of fields to retrieve (retrieve all if None).
-        :param one_based_ids: True if the data source IDs are 1-based.
+        """Initialize PostgreSQL record fetcher.
+
+        Args:
+            db: PostgresDB instance for database operations.
+            table_name: Name of the table to fetch records from.
+            id_field_name: Name of the integer ID field. Defaults to "id".
+            fields_to_retrieve: Subset of fields to retrieve. If None, retrieves
+                all fields. Defaults to None.
+            one_based_ids: True if data source uses 1-based IDs. Defaults to False.
         """
         super().__init__(
             id_field_name=id_field_name,
@@ -298,12 +411,16 @@ class PostgresRecordFetcher(RecordFetcher):
         one_based: bool = False,
         fields_to_retrieve: List[str] | None = None,
     ) -> pd.DataFrame:
-        """Get the records as a dataframe for the given IDs.
+        """Fetch records from PostgreSQL table by IDs.
 
-        :param ids: The collection of IDs of the records to retrieve
-        :param one_based: True if these ids are one-based.
-        :param fields_to_retrieve: Overriding subset of self.fields_to_retrieve for this call.
-        :return: A pandas dataframe with the retrieved records.
+        Args:
+            ids: Collection of record IDs to retrieve.
+            one_based: True if provided IDs are 1-based. Defaults to False.
+            fields_to_retrieve: Subset of fields for this call, overriding
+                instance default. Defaults to None.
+
+        Returns:
+            pd.DataFrame: DataFrame containing the retrieved records.
         """
         if fields_to_retrieve is None:
             fields_to_retrieve = self.fields_to_retrieve
@@ -323,7 +440,12 @@ class PostgresRecordFetcher(RecordFetcher):
 
 
 class DictionaryRecordFetcher(RecordFetcher):
-    """Class for fetching records from a dictionary of IDs mapped to record values."""
+    """Fetch records from a dictionary mapping IDs to record values.
+
+    Attributes:
+        the_dict: Dictionary mapping IDs to record value lists.
+        field_names: Field names corresponding to record value positions.
+    """
 
     def __init__(
         self,
@@ -333,12 +455,15 @@ class DictionaryRecordFetcher(RecordFetcher):
         fields_to_retrieve: List[str] | None = None,
         one_based_ids: bool = False,
     ):
-        """:param db: The postgres database
-        :param the_dict: The dictionary mapping IDs to records
-        :param all_field_names: All field names in the same order as the records
-        :param id_field_name: The name of the integer "id" field in the table.
-        :param fields_to_retrieve: The subset of fields to retrieve (retrieve all if None).
-        :param one_based_ids: True if the data source IDs are 1-based.
+        """Initialize dictionary record fetcher.
+
+        Args:
+            the_dict: Dictionary mapping IDs to lists of record values.
+            all_field_names: Field names in same order as record value lists.
+            id_field_name: Name of the integer ID field. Defaults to "id".
+            fields_to_retrieve: Subset of fields to retrieve. If None, retrieves
+                all fields. Defaults to None.
+            one_based_ids: True if dictionary uses 1-based IDs. Defaults to False.
         """
         super().__init__(
             id_field_name=id_field_name,
@@ -354,12 +479,17 @@ class DictionaryRecordFetcher(RecordFetcher):
         one_based: bool = False,
         fields_to_retrieve: List[str] | None = None,
     ) -> pd.DataFrame:
-        """Get the records as a dataframe for the given IDs.
+        """Fetch records from dictionary by IDs.
 
-        :param ids: The collection of IDs of the records to retrieve
-        :param one_based: True if these ids are one-based.
-        :param fields_to_retrieve: Overriding subset of self.fields_to_retrieve for this call.
-        :return: A pandas dataframe with the retrieved records.
+        Args:
+            ids: Collection of record IDs to retrieve.
+            one_based: True if provided IDs are 1-based. Defaults to False.
+            fields_to_retrieve: Subset of fields for this call, overriding
+                instance default. Defaults to None.
+
+        Returns:
+            pd.DataFrame: DataFrame containing the retrieved records, with None
+                values for missing IDs.
         """
         offset = 0
         if one_based != self.one_based:
@@ -378,7 +508,11 @@ class DictionaryRecordFetcher(RecordFetcher):
 
 
 class DataFrameRecordFetcher(RecordFetcher):
-    """Class for fetching records from a pandas dataframe."""
+    """Fetch records from a pandas DataFrame by ID.
+
+    Attributes:
+        df: DataFrame containing records to fetch from.
+    """
 
     def __init__(
         self,
@@ -387,10 +521,14 @@ class DataFrameRecordFetcher(RecordFetcher):
         fields_to_retrieve: List[str] | None = None,
         one_based_ids: bool = False,
     ) -> None:
-        """:param df: The dataframe of records
-        :param id_field_name: The name of the integer "id" field in the table.
-        :param fields_to_retrieve: The subset of fields to retrieve (retrieve all if None).
-        :param one_based_ids: True if the data source IDs are 1-based.
+        """Initialize DataFrame record fetcher.
+
+        Args:
+            df: DataFrame containing records.
+            id_field_name: Name of the integer ID field. Defaults to "id".
+            fields_to_retrieve: Subset of fields to retrieve. If None, retrieves
+                all fields. Defaults to None.
+            one_based_ids: True if DataFrame uses 1-based IDs. Defaults to False.
         """
         super().__init__(
             id_field_name=id_field_name,
@@ -405,12 +543,16 @@ class DataFrameRecordFetcher(RecordFetcher):
         one_based: bool = False,
         fields_to_retrieve: List[str] | None = None,
     ) -> pd.DataFrame:
-        """Get the records as a dataframe for the given IDs.
+        """Fetch records from DataFrame by IDs.
 
-        :param ids: The collection of IDs of the records to retrieve
-        :param one_based: True if these ids are one-based.
-        :param fields_to_retrieve: Overriding subset of self.fields_to_retrieve for this call.
-        :return: A pandas dataframe with the retrieved records.
+        Args:
+            ids: Collection of record IDs to retrieve.
+            one_based: True if provided IDs are 1-based. Defaults to False.
+            fields_to_retrieve: Subset of fields for this call, overriding
+                instance default. Defaults to None.
+
+        Returns:
+            pd.DataFrame: DataFrame containing the retrieved records.
         """
         offset = 0
         if one_based != self.one_based:

@@ -22,14 +22,18 @@ _NLTK_WN = None
 
 
 def active_datadir() -> str | None:
-    """Get the active data directory as the first that exists from:
-        * the DATADIR environment variable
-        * the HOME/data directory
-        * the /data directory
+    """Get the active data directory from available locations.
 
-    NOTE: If an active DATADIR must exist to get a non-None result.
+    Searches for an existing data directory in the following order:
+    1. DATADIR environment variable
+    2. $HOME/data directory
+    3. /data directory
 
-    :return: The active data directory or None
+    Note:
+        An active data directory must exist to get a non-None result.
+
+    Returns:
+        str | None: Path to the active data directory, or None if not found.
     """
     global _DATADIR  # pylint: disable-msg=W0603
     if _DATADIR is None:
@@ -45,12 +49,15 @@ def download_nltk_resources(
     verbose: bool = False,
     downloader: Callable = nltk.download,
 ) -> None:
-    """Download the nltk resources that don't yet exist.
-    :resources_dir: The resources (root) directory to download to, or
-        the default if None.
-    :resources: A dictionary of resource names to download mapped to
-        the relative (to the resoures dir) path of the resource
-    :verbose: True to print status
+    """Download NLTK resources that don't yet exist locally.
+
+    Args:
+        resources: Dictionary mapping resource names to their relative paths
+            (relative to resources_dir).
+        resources_dir: Root directory for resources. If None, uses the default
+            from get_nltk_resources_dir(). Defaults to None.
+        verbose: If True, prints download status messages. Defaults to False.
+        downloader: Callable for downloading resources. Defaults to nltk.download.
     """
     if resources is not None:
         if resources_dir is None:
@@ -70,16 +77,25 @@ def get_nltk_resources_dir(
     verbose: bool = False,
     downloader: Callable = nltk.download,
 ) -> str | None:
-    """Get the NLTK resources directory, optionally downloading resources, from:
-        * the NLTK_DATA environment variable
-        * the active_datadir()/NLTK_RESOURCES_PATH
+    """Get the NLTK resources directory and optionally download resources.
 
-    NOTE: If an active DATADIR must exist to get a non-None result.
+    Determines the NLTK resources directory from:
+    1. NLTK_DATA environment variable
+    2. active_datadir()/NLTK_RESOURCES_PATH
 
-    :param resources: A dictionary identifying the resources and relative (to
-        the NLTK resources directory) paths to ensure are downloaded
-    :verbose: True to print status
-    :return: The NLTK resources directory path or None
+    If resources are specified, downloads any missing resources to the directory.
+
+    Note:
+        An active DATADIR must exist to get a non-None result.
+
+    Args:
+        resources: Optional dictionary mapping resource names to their relative
+            paths (relative to NLTK resources dir) to ensure are downloaded.
+        verbose: If True, prints status messages. Defaults to False.
+        downloader: Callable for downloading resources. Defaults to nltk.download.
+
+    Returns:
+        str | None: Path to NLTK resources directory, or None if not found.
     """
     global _NLTK_RESOURCES_DIR  # pylint: disable-msg=W0603
     if _NLTK_RESOURCES_DIR is None:
@@ -102,9 +118,16 @@ def get_nltk_resources_dir(
 
 
 def get_nltk_wordnet(downloader: Callable = nltk.download) -> Any:
-    """Get a handle on NLTK's wordnet object, ensuring resources have
-    been downloaded.
-    :return: nltk.corpus.wordnet
+    """Get NLTK's WordNet corpus, ensuring resources are downloaded.
+
+    Automatically downloads required WordNet resources if not already present.
+
+    Args:
+        downloader: Callable for downloading resources. Defaults to nltk.download.
+
+    Returns:
+        nltk.corpus.wordnet: The NLTK WordNet corpus object, or None if
+            resources directory cannot be determined.
     """
     # Make sure resources have been downloaded
     global _NLTK_WN  # pylint: disable-msg=W0603

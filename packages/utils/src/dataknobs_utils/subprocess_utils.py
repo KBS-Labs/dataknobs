@@ -6,21 +6,28 @@ from typing import List, Union
 def run_command(
     handle_line_fn: Callable[[str], bool], command: str, args: List[str] | None = None
 ) -> int:
-    """Run a system command and do something with each line. Stop early by
-    returning False from the handle_line_fn.
+    """Run a system command and process output line by line.
+
+    Executes a command and calls a handler function for each line of output.
+    The handler can signal early termination by returning False.
+
+    Args:
+        handle_line_fn: Callback function that takes each output line and returns
+            True to continue processing or False to kill the process immediately.
+        command: Command string with args (if args=None) or just command name
+            (if args provided).
+        args: Optional list of command arguments. If provided, command runs
+            without shell=True. Defaults to None.
+
+    Returns:
+        int: The command's return code, or 0 if poll returns None.
 
     Examples:
-    # Print all files in the directory.
-    >>> subprocess_utils.run_command(lambda x: (print(x), True)[1], 'ls -1')
+        Print all files in the directory:
+        >>> run_command(lambda x: (print(x), True)[1], 'ls -1')
 
-    # Print files in the directory, stopping once "foo" is found.
-    >>> subprocess_utils.run_command(lambda x: (print(x), x!='foo')[1], 'ls -1')
-
-    :param handle_line_fn: A fn(output_line) that returns True to continue receiving
-        lines or False to kill the process.
-    :param command: A string with the command and its args or just the command
-    :param args: The args for the command (if not None)
-    :return: The command's return code
+        Print files until "foo" is found:
+        >>> run_command(lambda x: (print(x), x!='foo')[1], 'ls -1')
     """
     the_args: Union[str, List[str]] = command
     shell = True

@@ -14,12 +14,13 @@ DBG_HEADERS = {"Content-Type": "application/json", "error_trace": "true"}
 def get_current_ip() -> str:
     """Get the running machine's IPv4 address.
 
-    This function attempts to get the machine's IP address by connecting to
-    an external service (Google DNS) to determine the local IP used for
-    outbound connections. If that fails, it falls back to trying hostname
-    resolution, and finally returns localhost as a last resort.
+    Attempts to determine the local IP address by:
+    1. Connecting to an external service (Google DNS) to find the outbound IP
+    2. Falling back to hostname resolution
+    3. Finally returning localhost as last resort
 
-    :return: The IP address
+    Returns:
+        str: The machine's IPv4 address (or "127.0.0.1" if detection fails).
     """
     try:
         # Create a socket and connect to an external service to get the local IP
@@ -65,14 +66,19 @@ def get_request(
     ] = default_api_response_handler,
     requests: Any = requests,  # pylint: disable-msg=W0621
 ) -> Tuple[requests.models.Response, Any]:
-    """Submit the api get request and collect the response as a Dict.
-    :param api_request: The api request
-    :param params: The request parameters
-    :param headers: The request headers (defaults to HEADERS)
-    :param timeout: The request timeout (in seconds)
-    :param api_response_handler: A handler function for api responses
-    :param requests: Arg for alternate or "mock" requests package override
-    :return: The response code and the json result as a dict (or None)
+    """Execute an HTTP GET request and return the response.
+
+    Args:
+        api_request: Full URL for the API request.
+        params: Query parameters for the request. Defaults to None.
+        headers: HTTP headers. If None, uses HEADERS constant. Defaults to None.
+        timeout: Request timeout in seconds. Defaults to DEFAULT_TIMEOUT.
+        api_response_handler: Function to process the response. Defaults to
+            json_api_response_handler.
+        requests: Requests library or mock for testing. Defaults to requests.
+
+    Returns:
+        Tuple[requests.models.Response, Any]: Tuple of (response object, parsed result).
     """
     if headers is None:
         headers = HEADERS
@@ -92,14 +98,20 @@ def post_request(
     ] = default_api_response_handler,
     requests: Any = requests,  # pylint: disable-msg=W0621
 ) -> Tuple[requests.models.Response, Any]:
-    """Submit the api post request and collect the response as a Dict.
-    :param api_request: The api request
-    :param params: The request parameters
-    :param headers: The request headers (defaults to HEADERS)
-    :param timeout: The request timeout (in seconds)
-    :param api_response_handler: A handler function for api responses
-    :param requests: Arg for alternate or "mock" requests package override
-    :return: The response code and the json result as a dict (or None)
+    """Execute an HTTP POST request and return the response.
+
+    Args:
+        api_request: Full URL for the API request.
+        payload: Request body data to send.
+        params: Query parameters for the request. Defaults to None.
+        headers: HTTP headers. If None, uses HEADERS constant. Defaults to None.
+        timeout: Request timeout in seconds. Defaults to DEFAULT_TIMEOUT.
+        api_response_handler: Function to process the response. Defaults to
+            json_api_response_handler.
+        requests: Requests library or mock for testing. Defaults to requests.
+
+    Returns:
+        Tuple[requests.models.Response, Any]: Tuple of (response object, parsed result).
     """
     if headers is None:
         headers = HEADERS
@@ -124,24 +136,33 @@ def post_files_request(
     ] = default_api_response_handler,
     requests: Any = requests,  # pylint: disable-msg=W0621
 ) -> Tuple[requests.models.Response, Any]:
-    """Post data from one or more files.
-    :param api_request: The api request
-    :param files: A dict of {<file_id>: <file_data>}} entries for each file,
-        where files can be of the form of the following examples:
-            1. Just file data:
-               - {'myfile': open('report.xls', 'rb')}  # NOTE: open in binary mode!
-            2. Including filename, content_type, and headers
-               - {'myfile': (
-                                'report.xls',
-                                open('report.xls', 'rb'),
-                                'application/vnd.ms-excel',
-                                {'Expires': '0'}
-                            )}
-    :param headers: The request headers
-    :param timeout: The request timeout (in seconds)
-    :param api_response_handler: A handler function for api responses
-    :param requests: Arg for alternate or "mock" requests package override
-    :return: The response code and the json result as a dict (or None)
+    """Execute an HTTP POST request with file uploads.
+
+    Args:
+        api_request: Full URL for the API request.
+        files: Dictionary of {file_id: file_data} entries, where file_data can be:
+            - Simple: open('report.xls', 'rb') (must open in binary mode)
+            - Detailed: ('filename', file_object, 'content_type', {'headers': 'values'})
+        headers: HTTP headers. Defaults to None.
+        timeout: Request timeout in seconds. Defaults to DEFAULT_TIMEOUT.
+        api_response_handler: Function to process the response. Defaults to
+            json_api_response_handler.
+        requests: Requests library or mock for testing. Defaults to requests.
+
+    Returns:
+        Tuple[requests.models.Response, Any]: Tuple of (response object, parsed result).
+
+    Examples:
+        Simple file upload:
+
+        >>> post_files_request(url, {'myfile': open('report.xls', 'rb')})
+
+        With metadata:
+
+        >>> post_files_request(url, {
+        ...     'myfile': ('report.xls', open('report.xls', 'rb'),
+        ...                'application/vnd.ms-excel', {'Expires': '0'})
+        ... })
     """
     return api_response_handler(
         requests.post(api_request, files=files, headers=headers, timeout=timeout)
@@ -159,14 +180,20 @@ def put_request(
     ] = default_api_response_handler,
     requests: Any = requests,  # pylint: disable-msg=W0621
 ) -> Tuple[requests.models.Response, Any]:
-    """Submit the api put request and collect the response as a Dict.
-    :param api_request: The api request
-    :param params: The request parameters
-    :param headers: The request headers (defaults to HEADERS)
-    :param timeout: The request timeout (in seconds)
-    :param api_response_handler: A handler function for api responses
-    :param requests: Arg for alternate or "mock" requests package override
-    :return: The response code and the json result as a dict (or None)
+    """Execute an HTTP PUT request and return the response.
+
+    Args:
+        api_request: Full URL for the API request.
+        payload: Request body data to send.
+        params: Query parameters for the request. Defaults to None.
+        headers: HTTP headers. If None, uses HEADERS constant. Defaults to None.
+        timeout: Request timeout in seconds. Defaults to DEFAULT_TIMEOUT.
+        api_response_handler: Function to process the response. Defaults to
+            json_api_response_handler.
+        requests: Requests library or mock for testing. Defaults to requests.
+
+    Returns:
+        Tuple[requests.models.Response, Any]: Tuple of (response object, parsed result).
     """
     if headers is None:
         headers = HEADERS
@@ -191,14 +218,19 @@ def delete_request(
     ] = default_api_response_handler,
     requests: Any = requests,  # pylint: disable-msg=W0621
 ) -> Tuple[requests.models.Response, Any]:
-    """Submit the api delete request and collect the response as a Dict.
-    :param api_request: The api request
-    :param params: The request parameters
-    :param headers: The request headers (defaults to HEADERS)
-    :param timeout: The request timeout (in seconds)
-    :param api_response_handler: A handler function for api responses
-    :param requests: Arg for alternate or "mock" requests package override
-    :return: The response code and the json result as a dict (or None)
+    """Execute an HTTP DELETE request and return the response.
+
+    Args:
+        api_request: Full URL for the API request.
+        params: Query parameters for the request. Defaults to None.
+        headers: HTTP headers. If None, uses HEADERS constant. Defaults to None.
+        timeout: Request timeout in seconds. Defaults to DEFAULT_TIMEOUT.
+        api_response_handler: Function to process the response. Defaults to
+            json_api_response_handler.
+        requests: Arg for alternate or "mock" requests package override
+
+    Returns:
+        Tuple[requests.models.Response, Any]: Tuple of (response object, parsed result).
     """
     if headers is None:
         headers = HEADERS
@@ -208,7 +240,15 @@ def delete_request(
 
 
 class ServerResponse:
-    """Class to encapsulate request response data from the elasticsearch server."""
+    """Wrapper for HTTP response data with convenience properties.
+
+    Encapsulates response data from HTTP requests, providing easy access to
+    status codes, JSON data, and response text with consistent interface.
+
+    Attributes:
+        resp: The underlying requests Response object.
+        result: Parsed response data (typically JSON).
+    """
 
     def __init__(self, resp: requests.models.Response | None, result: Any) -> None:
         self.resp = resp
@@ -225,25 +265,51 @@ class ServerResponse:
 
     @property
     def succeeded(self) -> bool:
+        """Check if the request succeeded (status 200 or 201).
+
+        Returns:
+            bool: True if status code is 200 or 201, False otherwise.
+        """
         return self.resp.status_code in {200, 201} if self.resp is not None else False
 
     @property
     def status(self) -> int | None:
+        """Get the HTTP status code.
+
+        Returns:
+            int | None: Status code, or None if no response.
+        """
         return self.resp.status_code if self.resp is not None else None
 
     @property
     def status_code(self) -> int | None:
-        """Alias for status property for consistency with requests.Response."""
+        """Get the HTTP status code (alias for status).
+
+        Provided for consistency with requests.Response interface.
+
+        Returns:
+            int | None: Status code, or None if no response.
+        """
         return self.status
 
     @property
     def json(self) -> Any:
-        """Get the JSON response data (alias for result)."""
+        """Get the parsed JSON response data.
+
+        Alias for the result attribute.
+
+        Returns:
+            Any: Parsed response data.
+        """
         return self.result
 
     @property
     def text(self) -> str:
-        """Get the response as text."""
+        """Get the response as text.
+
+        Returns:
+            str: Response text (JSON-serialized if result is not a string).
+        """
         if self.result:
             if isinstance(self.result, str):
                 return self.result
@@ -253,19 +319,49 @@ class ServerResponse:
 
     @property
     def extra(self) -> Dict[str, Any]:
+        """Get the extra data dictionary.
+
+        Lazily initializes an empty dictionary for storing additional metadata.
+
+        Returns:
+            Dict[str, Any]: Extra data dictionary.
+        """
         if self._extra is None:
             self._extra = dict()
         return self._extra
 
     def has_extra(self) -> bool:
+        """Check if extra data has been added.
+
+        Returns:
+            bool: True if extra data exists and is non-empty.
+        """
         return self._extra is not None and len(self._extra) > 0
 
     def add_extra(self, key: str, value: Any) -> None:
+        """Add additional metadata to the response.
+
+        Args:
+            key: Metadata key.
+            value: Metadata value.
+        """
         self.extra[key] = value
 
 
 class RequestHelper:
-    """Class to simplify sending api request commands to a server."""
+    """Helper class for making HTTP requests to a server.
+
+    Simplifies sending API requests by managing server connection details,
+    headers, timeouts, and response handling in a reusable instance.
+
+    Attributes:
+        ip: Server IP address.
+        port: Server port number.
+        response_handler: Function for processing responses.
+        headers: Default HTTP headers.
+        timeout: Default request timeout in seconds.
+        requests: Requests library or mock for testing.
+    """
 
     def __init__(
         self,
@@ -276,6 +372,17 @@ class RequestHelper:
         timeout: int = DEFAULT_TIMEOUT,
         mock_requests: Any | None = None,
     ) -> None:
+        """Initialize request helper with server details.
+
+        Args:
+            server_ip: Server IP address or hostname.
+            server_port: Server port number.
+            api_response_handler: Default response handler function.
+                Defaults to json_api_response_handler.
+            headers: Default HTTP headers. Defaults to None.
+            timeout: Default timeout in seconds. Defaults to DEFAULT_TIMEOUT.
+            mock_requests: Mock requests object for testing. Defaults to None.
+        """
         self.ip = server_ip
         self.port = server_port
         self.response_handler = api_response_handler
@@ -284,6 +391,14 @@ class RequestHelper:
         self.requests = mock_requests if mock_requests else requests
 
     def build_url(self, path: str) -> str:
+        """Construct full URL from path.
+
+        Args:
+            path: API path (without leading slash recommended).
+
+        Returns:
+            str: Complete URL (http://ip:port/path).
+        """
         return f"http://{self.ip}:{self.port}/{path}"
 
     def request(
@@ -298,17 +413,25 @@ class RequestHelper:
         timeout: int = 0,
         verbose: Union[bool, Any] = True,
     ) -> ServerResponse:
-        """:param rtype: The request type, or command. One of:
-            ['get', 'post', 'post-files', 'put', 'delete']
-        :param path: The api path portion of the request
-        :param payload: The request payload
-        :param params: The request params
-        :param files: The request files
-        :param response_handler: Response handler to override instance value
-        :param headers: Headers to override instance value
-        :param timeout: The request timeout override (in seconds) if not 0
-        :param verbose: True (or an output stream) to print server response info
-        :return: A ServerResponse instance with the results
+        """Execute an HTTP request of any type.
+
+        Args:
+            rtype: Request type - one of: 'get', 'post', 'post-files', 'put',
+                'delete', 'head'.
+            path: API path portion (will be appended to server URL).
+            payload: Request body data. Defaults to None.
+            params: Query parameters. Defaults to None.
+            files: Files for upload (for post-files requests). Defaults to None.
+            response_handler: Response handler to override instance default.
+                Defaults to None.
+            headers: Headers to override instance default. Defaults to None.
+            timeout: Timeout override in seconds (0 uses instance default).
+                Defaults to 0.
+            verbose: If True, prints response to stderr. If a file object,
+                prints to that stream. Defaults to True.
+
+        Returns:
+            ServerResponse: Response object with status and parsed data.
         """
         rtype = rtype.lower()
         if timeout == 0:
@@ -553,7 +676,15 @@ class RequestHelper:
 
 
 class MockResponse:
-    """A mock response object"""
+    """Mock HTTP response for testing.
+
+    Simulates a requests.Response object with status code and result data.
+
+    Attributes:
+        status_code: HTTP status code.
+        result: Response data.
+        text: Response as text (JSON-serialized if result is not a string).
+    """
 
     def __init__(self, status_code: int, result: Any) -> None:
         self.status_code = status_code
@@ -563,11 +694,25 @@ class MockResponse:
             self.text = json.dumps(result)
 
     def to_server_response(self) -> ServerResponse:
-        """Convenience method for creating a ServerResponse"""
+        """Convert to a ServerResponse object.
+
+        Returns:
+            ServerResponse: Wrapped response object.
+        """
         return ServerResponse(self, self.result)  # type: ignore[arg-type]
 
 
 class MockRequests:
+    """Mock requests library for testing.
+
+    Simulates the requests library by storing expected responses keyed by
+    request parameters, allowing deterministic testing without network calls.
+
+    Attributes:
+        responses: Dictionary of registered mock responses.
+        r404: Default 404 response for unregistered requests.
+    """
+
     def __init__(self) -> None:
         self.responses: Dict[str, MockResponse] = dict()
         self.r404 = MockResponse(404, '"Not found"')
@@ -583,6 +728,18 @@ class MockRequests:
         params: Dict[str, Any] | None = None,
         timeout: int = DEFAULT_TIMEOUT,
     ) -> None:
+        """Register a mock response for specific request parameters.
+
+        Args:
+            response: Mock response to return.
+            api: Request method ('get', 'post', 'put', 'delete').
+            api_request: Request URL.
+            data: Request body data. Defaults to None.
+            files: Request files. Defaults to None.
+            headers: Request headers. Defaults to None.
+            params: Query parameters. Defaults to None.
+            timeout: Request timeout. Defaults to DEFAULT_TIMEOUT.
+        """
         key = self._make_key(
             api,
             api_request,

@@ -101,12 +101,18 @@ def stream_json_data(
     visitor_fn: Callable[[Any, Tuple[Any, ...]], None],
     timeout: int = TIMEOUT,
 ) -> None:
-    """Stream the json data, calling the visitor_fn at each value.
-    :param json_data: The json data (url, file_path, or str)
-    :param visitor_fn: The visitor_fn(item, path) to call, where
-        item is each json item's value and path is the tuple of
-        elements identifying the path to the item.
-    :param timeout: The requests timeout (in seconds)
+    """Stream JSON data and call a visitor function for each value.
+
+    Supports multiple input formats: file paths (including .gz), URLs, or JSON strings.
+    Automatically detects and handles gzip-compressed files.
+
+    Args:
+        json_data: The JSON data source - can be a file path, URL (starting with
+            'http'), or JSON string.
+        visitor_fn: Function called for each JSON value with signature
+            visitor_fn(item, path) where item is the value and path is a tuple
+            of elements identifying the path to the item.
+        timeout: Request timeout in seconds for URL sources. Defaults to 10.
     """
     if os.path.exists(json_data):
         if dk_futils.is_gzip_file(json_data):
@@ -124,10 +130,19 @@ def stream_json_data(
 
 
 def build_jq_path(path: Tuple[Any, ...], keep_list_idxs: bool = True) -> str:
-    """Build a jq path string from the json_stream path tuple.
-    :param path: A tuple with json_stream path components.
-    :param keep_list_idxs: True to keep the exact path index values;
-        False to emit a generic "[]" for the list.
+    """Build a jq path string from a json_stream path tuple.
+
+    Converts a path tuple like ('data', 0, 'name') to a jq-style path
+    like '.data[0].name'.
+
+    Args:
+        path: Tuple of json_stream path components, with integers representing
+            array indices and strings representing object keys.
+        keep_list_idxs: If True, keeps exact array index values (e.g., [0], [1]).
+            If False, emits generic '[]' for all array indices. Defaults to True.
+
+    Returns:
+        str: A jq-style path string.
     """
     jq_path = ""
     for elt in path:
@@ -139,10 +154,19 @@ def build_jq_path(path: Tuple[Any, ...], keep_list_idxs: bool = True) -> str:
 
 
 def build_path_tuple(jq_path: str, any_list_idx: int = -1) -> Tuple[Any, ...]:
-    """Build a json_stream tuple path from a jq_path (reverse of build_jq_path).
-    :param jq_path: The jq_path whose values to extract.
-    :param any_list_idx: The index value to give for a generic list
-    :return: The json_stream tuple form of the path
+    """Build a json_stream tuple path from a jq path string.
+
+    Reverses the operation of build_jq_path, converting a jq-style path like
+    '.data[0].name' back to a tuple like ('data', 0, 'name').
+
+    Args:
+        jq_path: The jq-style path string to convert (e.g., '.data[0].name').
+        any_list_idx: Index value to use for generic '[]' array notation.
+            Defaults to -1.
+
+    Returns:
+        Tuple[Any, ...]: Path tuple in json_stream format alternating between
+            keys (str) and array indices (int).
     """
     path = list()
     for part in jq_path.split("."):
@@ -166,14 +190,16 @@ def stream_jq_paths(
     keep_list_idxs: bool = True,
     timeout: int = TIMEOUT,
 ) -> None:
-    """Write built lines from (jq_path, item) tuples from the json_data.
-    :param json_data: The json_data to copy
-    :param output_stream: The output stream to write lines to
-    :param line_builder_fn: The function for turning record tuples into a line
-        string.
-    :param keep_list_idxs: True to keep the exact path index values;
-        False to emit a generic "[]" for the list.
-    :param timeout: The requests timeout (in seconds)
+    """Stream JSON data and write formatted lines for each (jq_path, item) pair.
+
+    Args:
+        json_data: JSON data source (file path, URL, or JSON string).
+        output_stream: Text stream to write formatted lines to.
+        line_builder_fn: Function that takes (jq_path, item) and returns a
+            formatted string. Defaults to tab-separated format.
+        keep_list_idxs: If True, keeps exact array index values.
+            If False, uses generic '[]'. Defaults to True.
+        timeout: Request timeout in seconds for URL sources. Defaults to 10.
     """
 
     def visitor(item: Any, path: Tuple[Any, ...]) -> None:
@@ -190,23 +216,23 @@ def squash_data(
     prune_at: List[Union[str, Tuple[str, int]]] | None = None,
     timeout: int = TIMEOUT,
 ) -> None:
-    """Squash the json_data, optionally pruning branches by id'd path elements.
-    Where "squashed" means the paths are compressed to a single level
-    with complex jq keys.
+    """Squash JSON data into single-level structure with jq-style keys.
 
-    Each path to prune is identified by:
-        * (path_element_name:str, path_index:int)
-            -- or paths where path[path_index] == path_element_name
-        * path_element_name:str or (path_element_name, None)
-            -- or any path element whose name is path_element_name
-        * path_index:int or (None, path_index)
-            -- or any path at path_index depth
+    Compresses nested JSON paths into a flat structure where each path becomes
+    a jq-style key. Optionally prunes specific branches from the output.
 
-    :param builder_fn: fn(jq_path, item) for building a result
-    :param json_data: The json_data to copy
-    :param prune_at: The names and optional path indexes of path elements
-        to ignore
-    :param timeout: The requests timeout (in seconds)
+    Pruning specification formats:
+        - (path_element_name, path_index): Paths where path[path_index] == path_element_name
+        - path_element_name or (path_element_name, None): Any path containing this element name
+        - path_index or (None, path_index): Any path at this depth
+
+    Args:
+        builder_fn: Callback function with signature fn(jq_path, item) called for
+            each path/value pair to build results.
+        json_data: JSON data source (file path, URL, or JSON string).
+        prune_at: List of path specifications identifying branches to skip.
+            Defaults to None (no pruning).
+        timeout: Request timeout in seconds for URL sources. Defaults to 10.
     """
     raw_depths = set()
     raw_elts = set()
@@ -270,12 +296,20 @@ def collect_squashed(
     timeout: int = TIMEOUT,
     result: Dict[Any, Any] | None = None,
 ) -> Dict[Any, Any]:
-    """Collected squashed data in a dictionary
-    :param json_data: The json_data to copy
-    :param prune_at: The names and optional path indexes of path elements
-        to ignore
-    :param timeout: The requests timeout (in seconds)
-    :param result: (optional) The dictionary in which to collect items
+    """Collect squashed JSON data into a dictionary.
+
+    Convenience function that squashes JSON into a flat dictionary where keys
+    are jq-style paths and values are the leaf values from the JSON.
+
+    Args:
+        jdata: JSON data source (file path, URL, or JSON string).
+        prune_at: List of path specifications identifying branches to skip.
+            Defaults to None. See squash_data() for format details.
+        timeout: Request timeout in seconds for URL sources. Defaults to 10.
+        result: Optional dictionary to populate. If None, creates a new dict.
+
+    Returns:
+        Dict[Any, Any]: Dictionary mapping jq-style paths to their values.
     """
     if result is None:
         result = dict()
@@ -293,15 +327,21 @@ def collect_squashed(
 
 
 def indexing_format_fn(jq_path: str, item: Any) -> str:
-    """A formatting function for writing a csv with the columns:
-        item (value) \t field \t flat_jq \t idxs
+    """Format a (jq_path, item) pair for indexing purposes.
 
-    Where
-        * value -- is the item value
-        * field -- is the last flat_jq path element
-        * flat_jq -- is the jq_path with all indexes flattened "[.*]" -> "[]"
-                     up to the last path element
-        * idxs -- is a comma-delimitted string with the indices
+    Creates a tab-separated format optimized for indexing with columns:
+    value, field, flat_jq, idxs.
+
+    Args:
+        jq_path: The jq-style path to the item.
+        item: The value at the path.
+
+    Returns:
+        str: Tab-separated string with format:
+            - value: The item value
+            - field: The last path element (field name)
+            - flat_jq: The path with array indices flattened to '[]'
+            - idxs: Comma-separated list of array indices from the path
     """
     idxs = ", ".join(FLATTEN_IDX_RE.findall(jq_path))
     flat_jq = FLATTEN_IDX_RE.sub("[]", jq_path)
@@ -314,14 +354,20 @@ def indexing_format_fn(jq_path: str, item: Any) -> str:
 def indexing_format_splitter(
     fileline: str,
 ) -> Tuple[str | None, str | None, str | None, str | None]:
-    """Reversal of the indexing_format_fn to extract:
-        (value, field, flat_jq, idxs)
-    Where
-        * value -- is the item value
-        * field -- is the last flat_jq path element
-        * flat_jq -- is the jq_path with all indexes flattened "[.*]" -> "[]"
-                     up to the last path element
-        * idxs -- is a comma-delimitted string with the indices
+    """Parse a line formatted by indexing_format_fn.
+
+    Reverses indexing_format_fn to extract the original components.
+
+    Args:
+        fileline: Tab-separated line from indexing_format_fn.
+
+    Returns:
+        Tuple[str | None, str | None, str | None, str | None]: A tuple containing:
+            - value: The item value
+            - field: The last path element (field name)
+            - flat_jq: The path with array indices flattened to '[]'
+            - idxs: Comma-separated list of array indices
+            All values are None if line is empty.
     """
     line = fileline.strip()
     value = None
@@ -347,13 +393,16 @@ def write_squashed(
     timeout: int = TIMEOUT,
     format_fn: Callable[[str, Any], str] = lambda jq_path, item: f"{jq_path}\t{item}",
 ) -> None:
-    """Write squashed data to the file.
-    :param json_data: The json_data to copy
-    :param prune_at: The names and optional path indexes of path elements
-        to ignore
-    :param timeout: The requests timeout (in seconds)
-    :param format_fn: A function for formatting each output line. Default is
-        tab-delimitted: jq_path <tab> item.
+    """Write squashed JSON data to a file.
+
+    Args:
+        dest_file: Output file path (str) or open text stream (TextIO).
+        jdata: JSON data source (file path, URL, or JSON string).
+        prune_at: List of path specifications identifying branches to skip.
+            Defaults to None. See squash_data() for format details.
+        timeout: Request timeout in seconds for URL sources. Defaults to 10.
+        format_fn: Function to format each (jq_path, item) pair as a line.
+            Defaults to tab-separated format.
     """
     needs_close = False
     f: TextIO
@@ -375,11 +424,19 @@ def write_squashed(
 def path_to_dict(
     path: Union[Tuple[Any, ...], str], value: Any, result: Dict[Any, Any] | None = None
 ) -> Dict[Any, Any]:
-    """Convert the jq_path (if a string) or path (if a tuple) to a dict.
-    :param path: The path to convert
-    :param value: The path's value
-    :param result: The dictionary to add the result to
-    :return: the result
+    """Convert a jq path and value into a nested dictionary structure.
+
+    Takes a path (jq string or tuple) and reconstructs the nested dictionary
+    structure it represents, setting the value at the leaf.
+
+    Args:
+        path: Path to the value - either a jq-style string (e.g., '.data[0].name')
+            or a path tuple (e.g., ('data', 0, 'name')).
+        value: The value to set at the path.
+        result: Optional dictionary to populate. If None, creates a new dict.
+
+    Returns:
+        Dict[Any, Any]: Dictionary with nested structure representing the path.
     """
     if result is None:
         result = dict()
@@ -443,7 +500,17 @@ def path_to_dict(
 
 
 def explode(squashed: Dict[Any, Any]) -> Dict[Any, Any]:
-    """Explode a "squashed" json with jq paths as keys."""
+    """Explode a squashed JSON dictionary back into nested structure.
+
+    Reverses the squashing operation by converting a flat dictionary with
+    jq-style paths as keys back into a nested JSON-like structure.
+
+    Args:
+        squashed: Dictionary with jq-style paths as keys and leaf values.
+
+    Returns:
+        Dict[Any, Any]: Nested dictionary reconstructed from the paths.
+    """
     result: Dict[Any, Any] = dict()
     for jq_path, value in squashed.items():
         path_to_dict(jq_path, value, result)
@@ -451,15 +518,22 @@ def explode(squashed: Dict[Any, Any]) -> Dict[Any, Any]:
 
 
 class ValuePath:
-    """Structure to hold (compressed) information about the jq_path indices
-    leading to a unique value.
+    """Structure to hold compressed information about paths to a unique value.
 
-    Essentially, this the tree of path indices leading to the value.
+    Stores the tree of array indices leading to each occurrence of a value in
+    JSON data, enabling efficient tracking of where values appear.
+
+    Attributes:
+        jq_path: The jq-style path template with generic array indices.
+        value: The value found at this path.
     """
 
     def __init__(self, jq_path: str, value: Any):
-        """:param jq_path: The jq_path (key)
-        :param value: The path's value
+        """Initialize a ValuePath for tracking occurrences of a value.
+
+        Args:
+            jq_path: The jq-style path template (key).
+            value: The value found at this path.
         """
         self.jq_path = jq_path
         self.value = value
@@ -470,7 +544,12 @@ class ValuePath:
         return build_tree_from_string(self._indices)
 
     def add(self, path: Tuple[Any, ...] | None) -> None:
-        """Add the path (with the samem structure as jq_path) to the tree."""
+        """Add a path occurrence to the index tree.
+
+        Args:
+            path: Path tuple with the same structure as jq_path, or None if
+                no path information is available.
+        """
         root = self.indices
         node = root
         node.data = int(node.data) + 1  # keep track of total
@@ -496,11 +575,16 @@ class ValuePath:
         return int(self.indices.data)
 
     def path_generator(self, result_type: str = "jq_path") -> Any:
-        """Generate value paths.
-        :param result_type: 'jq_path', 'path', or 'idx'
-            'jq_path' to generate jq_path strings;
-            'path' to generate path tuples
-            'idx' to generate index tuples.
+        """Generate all concrete paths to this value.
+
+        Args:
+            result_type: Format for generated paths:
+                - 'jq_path': Generate jq-style path strings (default)
+                - 'path': Generate full path tuples with keys and indices
+                - 'idx': Generate index-only tuples
+
+        Yields:
+            Paths in the requested format for each occurrence of the value.
         """
         path = build_path_tuple(self.jq_path, any_list_idx=-1)
         for node in self.indices.collect_terminal_nodes():
@@ -520,11 +604,13 @@ class ValuePath:
 
 
 class ValuesIndex:
-    """An index of unique values by jpath and (optionally) an index of values to
-    their paths for each jpath.
+    """Index of unique values organized by their jq paths.
 
-    The values to paths index is compressed such that each unique value mapped
-    to the tree of path indices leading to it, if path information is available.
+    Maintains a compressed index mapping each jq path to its unique values,
+    with optional tracking of all occurrences via path trees.
+
+    Attributes:
+        path_values: Nested dict mapping jq_path -> value -> ValuePath.
     """
 
     def __init__(self) -> None:
@@ -533,6 +619,13 @@ class ValuesIndex:
         )  # Dict[jq_path, Dict[value, ValuePath]]
 
     def add(self, value: Any, jq_path: str, path: Tuple[Any, ...] | None = None) -> None:
+        """Add a value occurrence to the index.
+
+        Args:
+            value: The value to index.
+            jq_path: The jq-style path where the value was found.
+            path: Optional full path tuple for tracking specific occurrences.
+        """
         if jq_path in self.path_values:
             value_paths = self.path_values[jq_path]
         else:
@@ -553,32 +646,60 @@ class ValuesIndex:
         value_path.add(path)
 
     def has_jqpath(self, jq_path: str) -> bool:
-        """Determine whether there are any values for jq_path"""
+        """Check if any values exist for the given jq path.
+
+        Args:
+            jq_path: The jq-style path to check.
+
+        Returns:
+            bool: True if values exist for this path, False otherwise.
+        """
         return jq_path in self.path_values
 
     def get_values(self, jq_path: str) -> Set[Any]:
-        """Get the set of values for jq_path"""
+        """Get all unique values for a jq path.
+
+        Args:
+            jq_path: The jq-style path to query.
+
+        Returns:
+            Set[Any]: Set of unique values found at this path.
+        """
         return set(self.path_values.get(jq_path, {}).keys())
 
     def num_values(self, jq_path: str) -> int:
-        """Get the number of values for jq_path"""
+        """Get count of unique values for a jq path.
+
+        Args:
+            jq_path: The jq-style path to query.
+
+        Returns:
+            int: Number of unique values at this path.
+        """
         return len(self.path_values.get(jq_path, {}))
 
 
 class JsonSchema:
-    """Container for a schema view of a json object of the form:
+    """Schema representation of JSON structure with type statistics.
 
-    {
-        <jq_path>: {
-            <value_type>: <value_count>,
+    Maintains a mapping of jq paths to value types and their occurrence counts,
+    with optional tracking of unique values at each path.
+
+    Schema format:
+        {
+            <jq_path>: {
+                <value_type>: <value_count>,
+                ...
+            },
+            ...
         }
-        ...,
-    }
 
-    Where,
-        * value_type is the type of value at the path (e.g., int, float,
-            str, etc.)
-        * value_count is the number of types the value_type occurs in an object.
+    Where value_type is the type of value (e.g., 'int', 'float', 'str') and
+    value_count is the number of times that type occurs at the path.
+
+    Attributes:
+        schema: Mapping of jq_path to type counts.
+        values: Optional ValuesIndex for tracking unique values.
     """
 
     def __init__(
@@ -587,10 +708,13 @@ class JsonSchema:
         values: ValuesIndex | None = None,
         values_limit: int = 0,  # max number of unique values to keep
     ):
-        """:param schema: Reconstruct instance with a known schema
-        :param values: Prime with existing values
-        :param values_limit: Stop counting unique values after reaching this
-            limit, or don't stop counting if 0.
+        """Initialize a JsonSchema.
+
+        Args:
+            schema: Pre-existing schema to reconstruct from. Defaults to None.
+            values: Pre-existing ValuesIndex to include. Defaults to None.
+            values_limit: Maximum unique values to track per path. If 0, tracks
+                all unique values. Defaults to 0.
         """
         self.schema = schema if schema is not None else dict()
         self.values = ValuesIndex() if values is None else values
@@ -604,13 +728,13 @@ class JsonSchema:
         value: Any = None,
         path: Tuple[Any, ...] | None = None,
     ) -> None:
-        """Add an instance of the jq_path/value_type
-        :param jq_path: The "key" path for grouping/squashing values
-        :param value_type: The type of value with this path
-        :param value: (optional) The value for tracking unique values (if not
-            None)
-        :param path: (optional) The path tuple for inverting paths to uniques
-            (if not None and if value is also not None)
+        """Add an occurrence of a value type at a jq path.
+
+        Args:
+            jq_path: The jq-style path identifying the location.
+            value_type: The type of value at this path (e.g., 'int', 'str').
+            value: Optional actual value for unique value tracking.
+            path: Optional full path tuple for tracking value occurrences.
         """
         if jq_path not in self.schema:
             self.schema[jq_path] = {value_type: 1}
@@ -634,9 +758,14 @@ class JsonSchema:
         return self._df
 
     def _build_df(self) -> pd.DataFrame:
-        """Get schema information as a DataFrame with columns:
+        """Build a DataFrame representation of the schema.
 
-        jq_path    value_type    value_count    [unique_count]
+        Returns:
+            pd.DataFrame: Schema with columns:
+                - jq_path: The jq-style path
+                - value_type: Type of value at this path
+                - value_count: Number of occurrences of this type
+                - unique_count: (optional) Number of unique values if tracked
         """
         data = list()
         has_value = False
@@ -660,12 +789,18 @@ class JsonSchema:
         unique: bool = True,
         timeout: int = TIMEOUT,
     ) -> Union[List[Any], Set[Any]]:
-        """Extract values from the json_data's jq_path.
-        :param jq_path: The jq_path whose values to extract.
-        :param json_data: The json data (url, file_path, or str)
-        :param unique: True to collect only unique values
-        :param timeout: The requests timeout (in seconds)
-        :return: The list (or set if unique) of values.
+        """Extract all values at a jq path from JSON data.
+
+        Args:
+            jq_path: The jq-style path to extract values from.
+            json_data: JSON data source (file path, URL, or JSON string).
+            unique: If True, returns only unique values as a set.
+                If False, returns all values as a list. Defaults to True.
+            timeout: Request timeout in seconds for URL sources. Defaults to 10.
+
+        Returns:
+            Union[List[Any], Set[Any]]: Set of unique values if unique=True,
+                otherwise list of all values.
         """
         keep_list_idxs = False if "[]" in jq_path else False
         sresult = set()
@@ -684,7 +819,11 @@ class JsonSchema:
 
 
 class JsonSchemaBuilder:
-    """Create a schema view of a json object."""
+    """Build a schema view of JSON data by streaming and analyzing structure.
+
+    Processes JSON data to extract type information, value statistics, and
+    optionally track unique values at each path.
+    """
 
     def __init__(
         self,
@@ -703,25 +842,27 @@ class JsonSchemaBuilder:
         url_value_type: str = "URL",
         on_add: Callable[[str], bool] | None = None,
     ):
-        """:param json_data: The json data (url, file_path, or str)
-        :param value_typer: A fn(atomic_value) that returns the type of the
-            value to override the default typing of "int", "float", and "str"
-        :param keep_unique_values: True to keep unique values for each path or
-            an integer for a maximum number of unique values to keep
-        :param invert_uniques: True to keep value paths for unique values
-        :param keep_list_idxs: True to keep the list indexes in the dictionary
-            paths. When False, all list indexes will be generalized to "[]".
-        :param timeout: The requests timeout (in seconds)
-        :param empty_dict_type: The type of an empty dictionary
-        :param empty_list_type: The type of an empty list
-        :param unk_value_type: The type of an unknown/unclassified value
-        :param int_value_type: The type of an int
-        :param float_value_type: The type of a float
-        :param str_value_type: The type of a string
-        :param url_value_type: The value type of a URL if not None
-        :param on_add: A fn(jq_path) called just before adding each jq_path
-            that returns True to add the path and False to skip adding it.
-            When None, all paths are added.
+        """Initialize a JsonSchemaBuilder to analyze JSON structure.
+
+        Args:
+            json_data: JSON data source (file path, URL, or JSON string).
+            value_typer: Optional custom function that takes a value and returns
+                its type string, overriding default type detection.
+            keep_unique_values: If True or an integer, tracks unique values.
+                If int, limits tracking to that many unique values per path.
+            invert_uniques: If True, maintains reverse index from values to paths.
+            keep_list_idxs: If True, preserves exact array indices in paths.
+                If False, generalizes all indices to '[]'.
+            timeout: Request timeout in seconds for URL sources. Defaults to 10.
+            empty_dict_type: Type name for empty dictionaries.
+            empty_list_type: Type name for empty lists.
+            unk_value_type: Type name for unclassified values.
+            int_value_type: Type name for integers.
+            float_value_type: Type name for floats.
+            str_value_type: Type name for strings.
+            url_value_type: Type name for URL strings, or None to treat as regular strings.
+            on_add: Optional filter function called before adding each path.
+                Takes jq_path and returns True to include or False to skip.
         """
         self.json_data = json_data
         self.value_typer = value_typer
@@ -803,11 +944,24 @@ class JsonSchemaBuilder:
 
 
 class Path:
-    """Container for a path."""
+    """Container for a jq path with its value and optional line number.
+
+    Represents a single path/value pair from JSON data, with optional tracking
+    of the original line number for streaming scenarios.
+
+    Attributes:
+        jq_path: Fully-qualified jq-style path (e.g., '.data[0].name').
+        item: The value at this path.
+        line_num: Optional line number from streaming (-1 if not tracked).
+    """
 
     def __init__(self, jq_path: str, item: Any, line_num: int = -1):
-        """:param jq_path: A fully-qualified indexed path.
-        :param item: The path's item (value)
+        """Initialize a Path.
+
+        Args:
+            jq_path: Fully-qualified jq-style path with indices.
+            item: The value at this path.
+            line_num: Optional line number for ordering. Defaults to -1.
         """
         self.jq_path = jq_path
         self.item = item
@@ -850,17 +1004,27 @@ class Path:
 
 
 class GroupAcceptStrategy(ABC):
-    """Add a Path to a Group if it belongs."""
+    """Abstract strategy for determining if a Path belongs in a PathGroup.
+
+    Defines the logic for accepting paths as either main paths (defining the
+    record structure) or distributed paths (shared across records).
+    """
 
     @abstractmethod
     def accept_path(self, path: Path, group: "PathGroup", distribute: bool = False) -> str | None:
-        """Determine whether the Path belongs in the group.
-        :param path: The path to potentially add
-        :param group: The group to which to add the path
-        :param distribute: True if the path is proposed as a distributed path
-            instead of as a main path.
-        :return: 'main', 'distributed', or None if the path belongs as a main
-            path, a distributed path, or not at all in the group
+        """Determine if and how a path should be added to the group.
+
+        Args:
+            path: The path to evaluate for acceptance.
+            group: The group that would receive the path.
+            distribute: If True, path is proposed as a distributed (shared) path
+                rather than a main (record-defining) path.
+
+        Returns:
+            str | None: One of:
+                - 'main': Accept as main path (record structure)
+                - 'distributed': Accept as distributed path (shared data)
+                - None: Reject the path
         """
         raise NotImplementedError
 
@@ -943,11 +1107,26 @@ class PathGroup:
 
 
 class ArrayElementAcceptStrategy(GroupAcceptStrategy):
-    """Container for a consistent group of paths built around each array."""
+    """Strategy that groups paths by array element at a specific nesting level.
+
+    Creates record boundaries at array elements, treating each element as a
+    distinct record with paths that share the same array indices up to the
+    specified level.
+
+    Attributes:
+        max_array_level: Array nesting level at which to create records.
+        ref_path: Reference path for matching subsequent paths.
+    """
 
     def __init__(self, max_array_level: int = -1):
-        """:param max_array_level: -1 to ignore, 0 to force new record at the
-        first (top) array level, 1 at the 2nd, etc.
+        """Initialize the array element grouping strategy.
+
+        Args:
+            max_array_level: Array nesting depth for record boundaries:
+                - -1: Ignore array levels (accept all)
+                - 0: New record at first (top-level) array
+                - 1: New record at second array level
+                - etc.
         """
         self.max_array_level = max_array_level
         self.ref_path: Path | None = None
@@ -980,7 +1159,18 @@ class ArrayElementAcceptStrategy(GroupAcceptStrategy):
 
 
 class PathSorter:
-    """Container for sorting paths belonging together into groups."""
+    """Sort and group paths into records based on an acceptance strategy.
+
+    Manages the incremental grouping of paths as they're streamed, creating
+    record boundaries according to the acceptance strategy and enforcing
+    size constraints.
+
+    Attributes:
+        accept_strategy: Strategy for determining path membership.
+        group_size: Minimum group size (groups below this are dropped).
+        max_groups: Maximum groups kept in memory.
+        groups: List of active PathGroup instances.
+    """
 
     def __init__(
         self,
@@ -988,11 +1178,14 @@ class PathSorter:
         group_size: int = 0,
         max_groups: int = 0,
     ):
-        """:param accept_strategy: The group accept strategy to use
-        :param group_size: A size constraint/expectation for groups such that
-           any group not reaching this size (if > 0) is silently "dropped".
-        :param max_groups: The maximum number of groups to keep in memory where
-            all groups are kept if <= 0
+        """Initialize a PathSorter.
+
+        Args:
+            accept_strategy: Strategy for determining how paths are grouped.
+            group_size: Minimum required group size. Groups smaller than this
+                are silently dropped when closed. 0 means no minimum. Defaults to 0.
+            max_groups: Maximum groups kept in memory. Older groups are dropped
+                when limit is reached. 0 means unlimited. Defaults to 0.
         """
         self.accept_strategy = accept_strategy
         self.group_size = group_size
@@ -1007,9 +1200,17 @@ class PathSorter:
         return len(self.groups) if self.groups is not None else 0
 
     def add_path(self, path: Path) -> PathGroup | None:
-        """Add the path to an existing group, or create a new group.
-        :param path: The path to add
-        :return: each closed PathGroup, otherwise None.
+        """Add a path to the appropriate group, creating new groups as needed.
+
+        Paths are added to the most recent group if accepted. When a path is
+        rejected, the current group is closed and a new group is created.
+
+        Args:
+            path: The path to add to a group.
+
+        Returns:
+            PathGroup | None: The most recently closed group if one was closed,
+                otherwise None.
         """
         result = None
         if self.groups is None or len(self.groups) == 0:
@@ -1043,10 +1244,18 @@ class PathSorter:
         return result
 
     def close_group(self, idx: int = -1, check_size: bool = True) -> PathGroup | None:
-        """Close the (last) group by
-          * Adding distributable lines from the prior group
-          * Checking size constraints and dropping if warranted
-        :return: The closed PathGroup
+        """Close a group, finalizing its contents.
+
+        Closing a group involves:
+        1. Incorporating distributed paths from the previous group
+        2. Optionally checking size constraints and dropping undersized groups
+
+        Args:
+            idx: Index of group to close (-1 for last). Defaults to -1.
+            check_size: If True, enforces group_size constraint. Defaults to True.
+
+        Returns:
+            PathGroup | None: The closed group, or None if dropped for size.
         """
         if self.groups is None or len(self.groups) == 0:
             return None
@@ -1069,9 +1278,13 @@ class PathSorter:
         return latest_group
 
     def accept_path(self, path: Path) -> bool:
-        """Add the path only if accepted by an existing group.
-        :param path: The path to add
-        :return: True if accepted
+        """Try to add a path to any existing group.
+
+        Args:
+            path: The path to add.
+
+        Returns:
+            bool: True if the path was accepted by a group, False otherwise.
         """
         if self.groups is not None:
             for group in self.groups:
@@ -1080,8 +1293,13 @@ class PathSorter:
         return False
 
     def all_groups_have_size(self, group_size: int) -> bool:
-        """:param group_size: The group size to test for.
-        :return: True if all groups have the group_size
+        """Check if all groups have a specific size.
+
+        Args:
+            group_size: The size to test for.
+
+        Returns:
+            bool: True if all groups have exactly this size, False otherwise.
         """
         if self.groups is not None:
             for group in self.groups:
@@ -1092,7 +1310,20 @@ class PathSorter:
 
 
 class RecordPathBuilder:
-    """Class for building record paths from json_data."""
+    """Build and output records from JSON by grouping paths.
+
+    Streams JSON data, groups paths into records using a PathSorter, and
+    writes formatted output for each record.
+
+    Attributes:
+        jdata: JSON data source.
+        output_stream: Where to write formatted output.
+        builder_fn: Function to format record lines.
+        timeout: Request timeout for URLs.
+        rec_id: Current record ID counter.
+        inum: Current item number counter.
+        sorter: PathSorter for grouping paths.
+    """
 
     def __init__(
         self,
@@ -1101,11 +1332,14 @@ class RecordPathBuilder:
         line_builder_fn: Callable[[int, int, str, Any], str],
         timeout: int = TIMEOUT,
     ):
-        """:param json_data: The json data (url, file_path, or str)
-        :param output_stream: The output stream to write lines to
-        :param line_builder_fn: The function for turning record tuples into a line
-            string.
-        :param timeout: The requests timeout (if json_data is a url)
+        """Initialize a RecordPathBuilder.
+
+        Args:
+            json_data: JSON data source (file path, URL, or JSON string).
+            output_stream: Text stream to write formatted lines to.
+            line_builder_fn: Function with signature fn(rec_id, line_num, jq_path, item)
+                that returns a formatted string.
+            timeout: Request timeout in seconds for URL sources. Defaults to 10.
         """
         self.jdata = json_data
         self.output_stream = output_stream
@@ -1152,31 +1386,43 @@ def stream_record_paths(
     line_builder_fn: Callable[[int, int, str, Any], str],
     timeout: int = TIMEOUT,
 ) -> None:
-    """Write built lines from (rec_id, item_num, jq_path, item) tuples of the
-    top-level json "records" to the output stream where:
-        * rec_id is a 0-based integer identifying unique records
-        * line_num is a 0-based integer identifying the original item number
-        * jq_path is the fully-qualified (indexed) path (a record attribute)
-        * item is the item value at the path.
-    :param json_data: The json data (url, file_path, or str)
-    :param output_stream: The output stream to write lines to
-    :param line_builder_fn: The function for turning record tuples into a line
-        string.
-    :param timeout: The requests timeout (if json_data is a url)
+    """Stream JSON and write formatted records grouped by top-level structure.
+
+    Identifies top-level JSON records (typically array elements) and writes
+    formatted lines for each path within each record.
+
+    Each output line represents a (rec_id, line_num, jq_path, item) tuple where:
+        - rec_id: 0-based record identifier
+        - line_num: 0-based original item number from stream
+        - jq_path: Fully-qualified path within the record
+        - item: Value at the path
+
+    Args:
+        json_data: JSON data source (file path, URL, or JSON string).
+        output_stream: Text stream to write formatted lines to.
+        line_builder_fn: Function with signature fn(rec_id, line_num, jq_path, item)
+            that returns a formatted string.
+        timeout: Request timeout in seconds for URL sources. Defaults to 10.
     """
     rpb = RecordPathBuilder(json_data, output_stream, line_builder_fn, timeout=timeout)
     rpb.stream_record_paths()
 
 
 def get_records_df(json_data: str, timeout: int = TIMEOUT) -> pd.DataFrame:
-    """Convenience function to collect the (top-level) record lines from a json
-    stream as a DataFrame with columns:
-        record_id, line_num, jq_path, item
+    """Collect top-level JSON records into a pandas DataFrame.
 
-    WARNING: Don't use this method with very large streams.
-    :param json_data: The source json data
-    :param timeout: The requests timeout (if json_data is a url)
-    :return: The record lines as a dataframe
+    Convenience function that streams JSON and collects all records into memory
+    as a DataFrame with columns: rec_id, line_num, jq_path, item.
+
+    Warning:
+        Not suitable for large JSON files as all data is loaded into memory.
+
+    Args:
+        json_data: JSON data source (file path, URL, or JSON string).
+        timeout: Request timeout in seconds for URL sources. Defaults to 10.
+
+    Returns:
+        pd.DataFrame: Records with columns rec_id, line_num, jq_path, item.
     """
     s = io.StringIO()
     stream_record_paths(

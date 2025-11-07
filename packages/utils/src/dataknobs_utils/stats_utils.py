@@ -8,14 +8,37 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 
 def wait_for_random_millis(uptomillis: float) -> float:
+    """Wait for a random number of milliseconds.
+
+    Args:
+        uptomillis: Maximum number of milliseconds to wait.
+
+    Returns:
+        float: The actual wait time in milliseconds.
+    """
     waittime = random.uniform(1, uptomillis)
     time.sleep(waittime / 1000)
     return waittime
 
 
 class StatsAccumulator:
-    """A low-memory helper class to collect statistical samples and provide
-    summary statistics.
+    """A low-memory helper class to collect statistical samples and provide summary statistics.
+
+    Accumulates statistical values in a thread-safe manner, computing mean, variance,
+    standard deviation, min, max, and other summary statistics incrementally without
+    storing individual values. Supports combining multiple accumulators and
+    initialization from dictionaries.
+
+    Attributes:
+        label: A label or name for this instance.
+        n: The number of values added.
+        min: The minimum value added.
+        max: The maximum value added.
+        sum: The sum of all values added.
+        sum_of_squares: The sum of all squared values.
+        mean: The mean of the values.
+        std: The standard deviation of the values.
+        var: The variance of the values.
     """
 
     def __init__(
@@ -25,10 +48,16 @@ class StatsAccumulator:
         as_dict: Dict[str, Any] | None = None,
         values: Union[float, List[float]] | None = None,
     ) -> None:
-        """:param label: A label or name for this instance.
-        :param other: An other instance for copying into this
-        :param as_dict: An "as_dict" form of stats to start with
-        :param values: A list of initial values or a single value to add
+        """Initialize a StatsAccumulator.
+
+        Args:
+            label: A label or name for this instance. Defaults to "".
+            other: Another StatsAccumulator instance to copy data from.
+                Defaults to None.
+            as_dict: Dictionary representation of stats to initialize with.
+                Defaults to None.
+            values: A list of initial values or a single value to add.
+                Defaults to None.
         """
         self._label: str = label
         self._n = 0
@@ -111,7 +140,11 @@ class StatsAccumulator:
         return var
 
     def clear(self, label: str = "") -> None:
-        """Clear all values (reset)"""
+        """Clear all values and reset statistics.
+
+        Args:
+            label: Optional new label to assign. Defaults to "".
+        """
         self._modlock.acquire()
         try:
             self._label = label
@@ -133,7 +166,22 @@ class StatsAccumulator:
         std: float = 0,
         as_dict: Dict[str, Any] | None = None,
     ) -> None:
-        """Initialize with the given values, preferring existing values from the dictionary."""
+        """Initialize with the given values.
+
+        When as_dict is provided, its values override the individual parameters.
+        Computes internal sum and sum_of_squares from mean and std if not provided
+        in the dictionary.
+
+        Args:
+            label: A label or name for this instance. Defaults to "".
+            n: Number of values. Defaults to 0.
+            min: Minimum value. Defaults to 0.
+            max: Maximum value. Defaults to 0.
+            mean: Mean value. Defaults to 0.
+            std: Standard deviation. Defaults to 0.
+            as_dict: Dictionary with keys: label, n, min, max, mean, std, sum, sos.
+                Values from this dict override individual parameters. Defaults to None.
+        """
         if as_dict is not None:
             if "label" in as_dict:
                 label = as_dict["label"]
@@ -166,7 +214,16 @@ class StatsAccumulator:
             self._modlock.release()
 
     def as_dict(self, with_sums: bool = False) -> Dict[str, Any]:
-        """Get a dictionary containing a summary of this instance's information."""
+        """Get a dictionary containing a summary of this instance's information.
+
+        Args:
+            with_sums: If True, include sum and sos (sum of squares) in the output.
+                Defaults to False.
+
+        Returns:
+            Dict[str, Any]: Dictionary with keys: label, n, min, max, mean, std,
+                and optionally sum and sos.
+        """
         d = {
             "label": self.label,
             "n": self.n,
@@ -180,11 +237,22 @@ class StatsAccumulator:
         return d
 
     def __str__(self) -> str:
-        """Get the info as a json string"""
+        """Get the statistics as a JSON string.
+
+        Returns:
+            str: JSON representation of the statistics dictionary.
+        """
         return json.dumps(self.as_dict(), sort_keys=True)
 
     def add(self, *values: float) -> "StatsAccumulator":
-        """Add the value(s) (thread-safe)"""
+        """Add one or more values to the accumulator (thread-safe).
+
+        Args:
+            *values: One or more numeric values to add.
+
+        Returns:
+            StatsAccumulator: This instance for method chaining.
+        """
         self._modlock.acquire()
         try:
             for value in values:
@@ -194,7 +262,11 @@ class StatsAccumulator:
         return self
 
     def _do_add(self, value: float) -> None:
-        """Do the work of adding a value"""
+        """Internal method to add a single value.
+
+        Args:
+            value: The numeric value to add.
+        """
         if self._n == 0:
             self._min = value
             self._max = value
@@ -208,8 +280,15 @@ class StatsAccumulator:
 
     @staticmethod
     def combine(label: str, *stats_accumulators: "StatsAccumulator") -> "StatsAccumulator":
-        """Create a new statsAccumulator as if it had accumulated all data from
-        the given list of stats accumulators.
+        """Create a new StatsAccumulator combining data from multiple accumulators.
+
+        Args:
+            label: Label for the new combined accumulator.
+            *stats_accumulators: One or more StatsAccumulator instances to combine.
+
+        Returns:
+            StatsAccumulator: New accumulator as if it had accumulated all data
+                from the provided accumulators.
         """
         result = StatsAccumulator(label)
         for stats in stats_accumulators:
@@ -217,8 +296,13 @@ class StatsAccumulator:
         return result
 
     def incorporate(self, other: Optional["StatsAccumulator"]) -> None:
-        """Incorporate the other stats_accumulator's data into this as if this had
-        accumulated the other's along with its own.
+        """Incorporate another accumulator's data into this one.
+
+        Merges the statistics as if this accumulator had accumulated all values
+        from both accumulators.
+
+        Args:
+            other: Another StatsAccumulator to incorporate. If None, no action taken.
         """
         if other is None:
             return
@@ -240,11 +324,25 @@ class StatsAccumulator:
 
 
 class LinearRegression:
-    """A low-memory helper class to collect (x,y) samples and compute the
-    linear regression.
+    """A low-memory helper class to collect (x,y) samples and compute linear regression.
+
+    Incrementally computes the line of best fit (y = mx + b) from (x,y) samples
+    without storing individual points. Uses the least squares method to calculate
+    the slope (m) and intercept (b).
+
+    Attributes:
+        n: Number of (x,y) samples added.
+        x_sum: Sum of all x values.
+        y_sum: Sum of all y values.
+        xy_sum: Sum of all x*y products.
+        xx_sum: Sum of all x*x products.
+        yy_sum: Sum of all y*y products.
+        m: Slope of the regression line (computed lazily).
+        b: Y-intercept of the regression line (computed lazily).
     """
 
     def __init__(self) -> None:
+        """Initialize a LinearRegression accumulator."""
         self._n = 0
         self._x_sum = 0.0
         self._y_sum = 0.0
@@ -257,44 +355,66 @@ class LinearRegression:
 
     @property
     def n(self) -> int:
+        """Get the number of (x,y) samples added."""
         return self._n
 
     @property
     def x_sum(self) -> float:
+        """Get the sum of all x values."""
         return self._x_sum
 
     @property
     def y_sum(self) -> float:
+        """Get the sum of all y values."""
         return self._y_sum
 
     @property
     def xy_sum(self) -> float:
+        """Get the sum of all x*y products."""
         return self._xy_sum
 
     @property
     def xx_sum(self) -> float:
+        """Get the sum of all x*x products."""
         return self._xx_sum
 
     @property
     def yy_sum(self) -> float:
+        """Get the sum of all y*y products."""
         return self._yy_sum
 
     @property
     def m(self) -> float:
+        """Get the slope of the regression line."""
         if self._m is None:
             self._compute_regression()
         return self._m if self._m is not None else 0.0
 
     @property
     def b(self) -> float:
+        """Get the y-intercept of the regression line."""
         if self._b is None:
             self._compute_regression()
         return self._b if self._b is not None else 0.0
 
     def get_y(self, x: float) -> float:
+        """Compute the predicted y value for a given x.
+
+        Args:
+            x: The x value.
+
+        Returns:
+            float: The predicted y value (y = mx + b).
+        """
         return self.m * x + self.b
 
     def add(self, x: float, y: float) -> None:
+        """Add an (x,y) sample point.
+
+        Args:
+            x: The x value.
+            y: The y value.
+        """
         self._m = None
         self._b = None
         self._n += 1
@@ -305,9 +425,15 @@ class LinearRegression:
         self._yy_sum += y * y
 
     def __str__(self) -> str:
+        """Get the regression equation as a string.
+
+        Returns:
+            str: The equation in the form "y = m x + b".
+        """
         return "y = %.4f x + %.4f" % (self.m, self.b)
 
     def _compute_regression(self) -> None:
+        """Internal method to compute the slope and intercept."""
         self._m = 0.0
         self._b = 0.0
 
@@ -321,9 +447,34 @@ class LinearRegression:
 
 
 class RollingStats:
-    """Implementation for a collection of stats through a rolling window of time."""
+    """A collection of statistics through a rolling window of time.
+
+    Maintains both cumulative statistics (since initialization) and rolling window
+    statistics (over a recent time period). The rolling window is divided into
+    segments that are automatically cleared as time advances, providing an efficient
+    way to track recent activity without storing all historical data.
+
+    Attributes:
+        window_width: Width of the rolling window in milliseconds.
+        num_segments: Number of segments dividing the window.
+        cur_segment: Current segment index.
+        last_segment: Last segment index (same as cur_segment).
+        start_time: Time when this RollingStats was created or reset.
+        ref_time: Most recent reference time (updates on each access).
+        cumulative_stats: Statistics accumulated since start_time.
+        window_stats: Statistics for the current rolling window.
+        current_label: Label for the current window.
+    """
 
     def __init__(self, window_width: int = 300000, segment_width: int = 5000) -> None:
+        """Initialize a RollingStats instance.
+
+        Args:
+            window_width: Width of the rolling window in milliseconds.
+                Defaults to 300000 (5 minutes).
+            segment_width: Width of each segment in milliseconds.
+                Defaults to 5000 (5 seconds).
+        """
         self._modlock = Lock()
         self._window_width = window_width
         self._segment_width = segment_width
@@ -340,14 +491,17 @@ class RollingStats:
 
     @property
     def window_width(self) -> int:
+        """Get the width of the rolling window in milliseconds."""
         return self._window_width
 
     @property
     def num_segments(self) -> int:
+        """Get the number of segments in the rolling window."""
         return self._num_segments
 
     @property
     def cur_segment(self) -> int:
+        """Get the current segment index (updates to current time)."""
         result = -1
         self._modlock.acquire()
         try:
@@ -359,23 +513,27 @@ class RollingStats:
 
     @property
     def last_segment(self) -> int:
+        """Get the last segment index (same as cur_segment without update)."""
         return self._cur_segment
 
     @property
     def start_time(self) -> datetime:
+        """Get the time when this RollingStats was created or last reset."""
         return self._starttime
 
     @property
     def ref_time(self) -> datetime:
+        """Get the most recent reference time."""
         return self._reftime
 
     @property
     def cumulative_stats(self) -> StatsAccumulator:
+        """Get cumulative statistics since start_time."""
         return self._cumulative_stats
 
     @property
     def window_stats(self) -> StatsAccumulator:
-        """Get the stats for the current window."""
+        """Get statistics for the current rolling window."""
         self._modlock.acquire()
         try:
             self._inc_to_cur_segment()
@@ -386,10 +544,15 @@ class RollingStats:
 
     @property
     def current_label(self) -> str:
+        """Get the label for the current window."""
         return "Window-%s-%s" % (str(self._reftime), str(self._window_delta))
 
     def as_dict(self) -> Dict[str, Any]:
-        """Get a dictionary containing a summary of this instance's information."""
+        """Get a dictionary containing a summary of this instance's information.
+
+        Returns:
+            Dict[str, Any]: Dictionary with keys: now, cumulative, window.
+        """
         result: Dict[str, Any] = {"now": str(datetime.now())}
 
         cumulative_info: Dict[str, Any] = {"since": str(self.start_time)}
@@ -404,9 +567,15 @@ class RollingStats:
         return result
 
     def __str__(self) -> str:
+        """Get the statistics as a JSON string.
+
+        Returns:
+            str: JSON representation of the statistics dictionary.
+        """
         return json.dumps(self.as_dict(), sort_keys=True)
 
     def reset(self) -> None:
+        """Reset all statistics and restart from current time."""
         self._modlock.acquire()
         try:
             self._starttime = datetime.now()
@@ -419,8 +588,13 @@ class RollingStats:
             self._modlock.release()
 
     def add(self, *values: float) -> int:
-        """Add the current value(s), returning the segment number to which the
-        value as added (useful for testing).
+        """Add one or more values to the current segment.
+
+        Args:
+            *values: One or more numeric values to add.
+
+        Returns:
+            int: The segment number to which the values were added (useful for testing).
         """
         self._modlock.acquire()
         try:
@@ -434,13 +608,17 @@ class RollingStats:
         return result
 
     def has_window_activity(self) -> Tuple[bool, StatsAccumulator]:
-        """Determines whether the current window has activity, returning
-        (has_activity, current_window_stats)
+        """Determine whether the current window has activity.
+
+        Returns:
+            Tuple[bool, StatsAccumulator]: A tuple of (has_activity, current_window_stats)
+                where has_activity is True if the window has any values.
         """
         window_stats = self.window_stats
         return (window_stats.n > 0, window_stats)
 
     def _inc_to_cur_segment(self) -> None:
+        """Internal method to advance to the current segment, clearing old segments."""
         result = datetime.now()
         seg_num = int(
             (self._get_millis(result, self._starttime) % self._window_width) / self._segment_width
@@ -470,10 +648,24 @@ class RollingStats:
         self._reftime = result
 
     def _get_millis(self, laterdatetime: datetime, earlierdatetime: datetime) -> int:
+        """Internal method to compute milliseconds between two datetimes.
+
+        Args:
+            laterdatetime: The later datetime.
+            earlierdatetime: The earlier datetime.
+
+        Returns:
+            int: Milliseconds between the two datetimes.
+        """
         return int((laterdatetime - earlierdatetime).total_seconds() * 1000)
 
     def _add_stats_info(self, stats: StatsAccumulator, info: Dict[str, Any]) -> None:
-        """Add stats summary information to the 'info' dict."""
+        """Add stats summary information to the info dictionary.
+
+        Args:
+            stats: The StatsAccumulator to summarize.
+            info: Dictionary to update with summary information.
+        """
         if stats.n > 0:
             info["status"] = "active"
             info["stats"] = stats.as_dict()
@@ -484,7 +676,15 @@ class RollingStats:
 
     @staticmethod
     def get_millis_per_item(stats: StatsAccumulator | None) -> float | None:
-        """Extract the (average) number of milliseconds per item from the stats."""
+        """Extract the average number of milliseconds per item from the stats.
+
+        Args:
+            stats: StatsAccumulator instance or None.
+
+        Returns:
+            float | None: Average milliseconds per item, or None if stats is None
+                or has no values.
+        """
         result = None
 
         if stats is not None:
@@ -495,7 +695,15 @@ class RollingStats:
 
     @staticmethod
     def get_items_per_milli(stats: StatsAccumulator | None) -> float | None:
-        """Extract the (average) number of items per millisecond from the stats."""
+        """Extract the average number of items per millisecond from the stats.
+
+        Args:
+            stats: StatsAccumulator instance or None.
+
+        Returns:
+            float | None: Average items per millisecond, or None if stats is None
+                or mean is zero.
+        """
         result = None
 
         if stats is not None:
@@ -506,7 +714,27 @@ class RollingStats:
 
 
 class Monitor:
-    """A monitor tracks processing and/or access times and rates for some function."""
+    """A monitor tracks processing and/or access times and rates for some function.
+
+    Monitors measure both access frequency (how often something is called) and
+    processing time (how long it takes). Uses RollingStats to provide both
+    cumulative and rolling window statistics.
+
+    Attributes:
+        alive_since: Time when this monitor was created.
+        description: Optional description of what is being monitored.
+        last_access_time: Time when access was last recorded.
+        access_times: RollingStats for tracking time between accesses.
+        processing_times: RollingStats for tracking processing duration.
+        access_cumulative_stats: Cumulative access time statistics.
+        access_window_stats: Rolling window access time statistics.
+        access_window_width: Width of the access time rolling window.
+        processing_cumulative_stats: Cumulative processing time statistics.
+        processing_window_stats: Rolling window processing time statistics.
+        processing_window_width: Width of the processing time rolling window.
+        default_window_width: Default window width for auto-created RollingStats.
+        default_segment_width: Default segment width for auto-created RollingStats.
+    """
 
     def __init__(
         self,
@@ -516,7 +744,20 @@ class Monitor:
         default_window_width: int = 300000,
         default_segment_width: int = 5000,
     ) -> None:
-        """NOTE: access_times, processing_times should be RollingStats instances."""
+        """Initialize a Monitor.
+
+        Args:
+            description: Optional description of what is being monitored.
+                Defaults to None.
+            access_times: RollingStats instance for tracking access times.
+                Defaults to None (created on first mark).
+            processing_times: RollingStats instance for tracking processing times.
+                Defaults to None (created on first mark with endtime).
+            default_window_width: Default window width in milliseconds for
+                auto-created RollingStats. Defaults to 300000 (5 minutes).
+            default_segment_width: Default segment width in milliseconds for
+                auto-created RollingStats. Defaults to 5000 (5 seconds).
+        """
         self._modlock = Lock()
         self._alive_since = datetime.now()
         self._description = description
@@ -530,14 +771,17 @@ class Monitor:
 
     @property
     def alive_since(self) -> datetime:
+        """Get the time when this monitor was created."""
         return self._alive_since
 
     @property
     def description(self) -> str | None:
+        """Get the description of what is being monitored."""
         return self._description
 
     @description.setter
     def description(self, val: str | None) -> None:
+        """Set the description of what is being monitored."""
         self._description = val
 
     @property
@@ -557,46 +801,61 @@ class Monitor:
 
     @property
     def access_cumulative_stats(self) -> StatsAccumulator | None:
+        """Get cumulative access time statistics."""
         return None if self._access_times is None else self._access_times.cumulative_stats
 
     @property
     def access_window_stats(self) -> StatsAccumulator | None:
+        """Get rolling window access time statistics."""
         return None if self._access_times is None else self._access_times.window_stats
 
     @property
     def access_window_width(self) -> int | None:
+        """Get the access time rolling window width in milliseconds."""
         return None if self._access_times is None else self._access_times.window_width
 
     @property
     def processing_cumulative_stats(self) -> StatsAccumulator | None:
+        """Get cumulative processing time statistics."""
         return None if self._processing_times is None else self._processing_times.cumulative_stats
 
     @property
     def processing_window_stats(self) -> StatsAccumulator | None:
+        """Get rolling window processing time statistics."""
         return None if self._processing_times is None else self._processing_times.window_stats
 
     @property
     def processing_window_width(self) -> int | None:
+        """Get the processing time rolling window width in milliseconds."""
         return None if self._processing_times is None else self._processing_times.window_width
 
     @property
     def default_window_width(self) -> int:
+        """Get the default window width for auto-created RollingStats."""
         return self._default_window_width
 
     @default_window_width.setter
     def default_window_width(self, val: int) -> None:
+        """Set the default window width for auto-created RollingStats."""
         self._default_window_width = val
 
     @property
     def default_segment_width(self) -> int:
+        """Get the default segment width for auto-created RollingStats."""
         return self._default_segment_width
 
     @default_segment_width.setter
     def default_segment_width(self, val: int) -> None:
+        """Set the default segment width for auto-created RollingStats."""
         self._default_segment_width = val
 
     def as_dict(self) -> Dict[str, Any]:
-        """Get a dictionary containing a summary of this instance's information."""
+        """Get a dictionary containing a summary of this instance's information.
+
+        Returns:
+            Dict[str, Any]: Dictionary with keys: alive_since, description (optional),
+                last_mark (optional), access_stats (optional), processing_stats (optional).
+        """
         result: Dict[str, Any] = {}
 
         result["alive_since"] = str(self.alive_since)
@@ -612,10 +871,25 @@ class Monitor:
         return result
 
     def __str__(self) -> str:
+        """Get the monitor statistics as a JSON string.
+
+        Returns:
+            str: JSON representation of the statistics dictionary.
+        """
         return json.dumps(self.as_dict(), sort_keys=True)
 
     def get_stats(self, access: bool = False, window: bool = False) -> StatsAccumulator | None:
-        """Get window/cumulative access/processing stats."""
+        """Get window or cumulative access or processing stats.
+
+        Args:
+            access: If True, get access stats; if False, get processing stats.
+                Defaults to False.
+            window: If True, get window stats; if False, get cumulative stats.
+                Defaults to False.
+
+        Returns:
+            StatsAccumulator | None: The requested statistics, or None if not available.
+        """
         result = None
 
         rolling_stats = self._access_times if access else self._processing_times
@@ -625,7 +899,17 @@ class Monitor:
         return result
 
     def mark(self, starttime: datetime, endtime: datetime | None = None) -> None:
-        """Mark another access time, and processing time if endtime is not None."""
+        """Mark another access and optionally record processing time.
+
+        Records the time between this call and the previous call as an access time.
+        If endtime is provided, also records the time between starttime and endtime
+        as processing time.
+
+        Args:
+            starttime: The start time of this access.
+            endtime: Optional end time for recording processing duration.
+                Defaults to None.
+        """
         self._modlock.acquire()
         try:
             if self._last_start_time is not None:
@@ -652,15 +936,41 @@ class Monitor:
             self._modlock.release()
 
     def _get_millis(self, laterdatetime: datetime, earlierdatetime: datetime) -> int:
+        """Internal method to compute milliseconds between two datetimes.
+
+        Args:
+            laterdatetime: The later datetime.
+            earlierdatetime: The earlier datetime.
+
+        Returns:
+            int: Milliseconds between the two datetimes.
+        """
         return int((laterdatetime - earlierdatetime).total_seconds() * 1000)
 
 
 class MonitorManager:
-    """Class to manage a set of monitors by label, providing rollup views across."""
+    """Manage a set of monitors by label, providing rollup views across all monitors.
+
+    Maintains a collection of Monitor instances identified by labels, allowing
+    aggregation of statistics across multiple monitors. Uses a KeyManager to
+    generate unique keys from type and description pairs.
+
+    Attributes:
+        default_window_width: Default window width for auto-created Monitors.
+        default_segment_width: Default segment width for auto-created Monitors.
+    """
 
     def __init__(
         self, default_window_width: int = 300000, default_segment_width: int = 5000
     ) -> None:
+        """Initialize a MonitorManager.
+
+        Args:
+            default_window_width: Default window width in milliseconds for
+                auto-created Monitors. Defaults to 300000 (5 minutes).
+            default_segment_width: Default segment width in milliseconds for
+                auto-created Monitors. Defaults to 5000 (5 seconds).
+        """
         self._monitors: Dict[str, Monitor] = {}
         self._key_manager = KeyManager()
 
@@ -670,26 +980,48 @@ class MonitorManager:
 
     @property
     def default_window_width(self) -> int:
+        """Get the default window width for auto-created Monitors."""
         return self._default_window_width
 
     @default_window_width.setter
     def default_window_width(self, val: int) -> None:
+        """Set the default window width for auto-created Monitors."""
         self._default_window_width = val
 
     @property
     def default_segment_width(self) -> int:
+        """Get the default segment width for auto-created Monitors."""
         return self._default_segment_width
 
     @default_segment_width.setter
     def default_segment_width(self, val: int) -> None:
+        """Set the default segment width for auto-created Monitors."""
         self._default_segment_width = val
 
     def get_monitors(self) -> Dict[str, Monitor]:
+        """Get all monitors.
+
+        Returns:
+            Dict[str, Monitor]: Dictionary mapping labels to Monitor instances.
+        """
         return self._monitors
 
     def get_monitor(
         self, label: str, create_if_missing: bool = False, description: str | None = None
     ) -> Monitor | None:
+        """Get a monitor by label, optionally creating it if missing.
+
+        Args:
+            label: The monitor label.
+            create_if_missing: If True, create a new Monitor if the label doesn't exist.
+                Defaults to False.
+            description: Optional description for a newly created Monitor.
+                Defaults to None.
+
+        Returns:
+            Monitor | None: The Monitor instance, or None if not found and
+                create_if_missing is False.
+        """
         result = None
 
         if label in self._monitors:
@@ -706,18 +1038,48 @@ class MonitorManager:
         return result
 
     def get_or_create_monitor_by_key_type(self, keytype: str, description: str) -> Monitor:
+        """Get or create a monitor using a key type and description.
+
+        Generates a unique key from the keytype and description using the internal
+        KeyManager, then gets or creates a monitor with that key.
+
+        Args:
+            keytype: The key type (e.g., "endpoint", "function").
+            description: The description to convert to a key.
+
+        Returns:
+            Monitor: The Monitor instance (always created if missing).
+        """
         key = self._key_manager.get_key(keytype, description)
         result = self.get_monitor(key, create_if_missing=True, description=description)
         assert result is not None  # Always created when create_if_missing=True
         return result
 
     def set_monitor(self, label: str, monitor: Monitor) -> None:
+        """Set or replace a monitor for a given label.
+
+        Args:
+            label: The monitor label.
+            monitor: The Monitor instance to set.
+        """
         self._monitors[label] = monitor
 
     def get_stats(
         self, label: str | None = None, access: bool = False, window: bool = False
     ) -> StatsAccumulator | None:
-        """Get window/cumulative access/processing stats for label or all."""
+        """Get window or cumulative access or processing stats for a label or all monitors.
+
+        Args:
+            label: The monitor label, or None to aggregate across all monitors.
+                Defaults to None.
+            access: If True, get access stats; if False, get processing stats.
+                Defaults to False.
+            window: If True, get window stats; if False, get cumulative stats.
+                Defaults to False.
+
+        Returns:
+            StatsAccumulator | None: The requested statistics, or None if not available.
+        """
         result = None
 
         if label is None:
@@ -733,7 +1095,12 @@ class MonitorManager:
         return result
 
     def as_dict(self) -> Dict[str, Any]:
-        """Get a dictionary containing a summary of this instance's information."""
+        """Get a dictionary containing a summary of this instance's information.
+
+        Returns:
+            Dict[str, Any]: Dictionary with overall_stats and individual monitor
+                statistics keyed by label.
+        """
         result = {}
 
         # add overall processing/access, cumulative/window stats
@@ -746,9 +1113,20 @@ class MonitorManager:
         return result
 
     def __str__(self) -> str:
+        """Get the monitor manager statistics as a JSON string.
+
+        Returns:
+            str: JSON representation of the statistics dictionary.
+        """
         return json.dumps(self.as_dict(), sort_keys=True)
 
     def get_overall_stats(self) -> Dict[str, Any]:
+        """Get overall statistics aggregated across all monitors.
+
+        Returns:
+            Dict[str, Any]: Dictionary with keys: cumulative_processing,
+                cumulative_access, window_processing, window_access (each optional).
+        """
         result = {}
 
         cumulative_processing = self.get_stats(access=False, window=False)
@@ -771,12 +1149,36 @@ class MonitorManager:
 
 
 class KeyManager:
-    """Class to turn descriptions of key types into keys of the form type-N."""
+    """Turn descriptions of key types into keys of the form type-N.
+
+    Maps (keytype, description) pairs to unique keys by tracking descriptions
+    for each keytype and assigning sequential numbers. The same description
+    always maps to the same key for a given keytype.
+
+    Example:
+        >>> km = KeyManager()
+        >>> km.get_key("endpoint", "/api/users")
+        "endpoint-0"
+        >>> km.get_key("endpoint", "/api/posts")
+        "endpoint-1"
+        >>> km.get_key("endpoint", "/api/users")
+        "endpoint-0"
+    """
 
     def __init__(self) -> None:
+        """Initialize a KeyManager."""
         self._keytype2descriptions: Dict[str, List[str]] = {}
 
     def get_key(self, keytype: str, description: str) -> str:
+        """Get a unique key for a (keytype, description) pair.
+
+        Args:
+            keytype: The key type (e.g., "endpoint", "function").
+            description: The description to convert to a key.
+
+        Returns:
+            str: A unique key in the form "keytype-N" where N is the index.
+        """
         if keytype in self._keytype2descriptions:
             descriptions = self._keytype2descriptions[keytype]
         else:
