@@ -3,9 +3,9 @@
 Complete API documentation for the `dataknobs-data` package.
 
 > **💡 Quick Links:**
-> - [Complete API](complete-reference.md#dataknobs-data)
-> - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/data/src/dataknobs_data)
-> - [Package Guide](../packages/data/index.md)
+> - [Package Guide](../packages/data/index.md) - Tutorials and examples
+> - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/data/src/dataknobs_data) - View on GitHub
+> - [API Index](complete-reference.md) - All packages
 
 ## Core Classes
 

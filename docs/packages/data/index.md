@@ -2,6 +2,11 @@
 
 The `dataknobs-data` package provides a unified data abstraction layer that works seamlessly across multiple storage backends. Whether you're working with in-memory caches, local files, SQL databases, search engines, or cloud storage, the data package offers a consistent API for all your data management needs.
 
+> **💡 Quick Links:**
+> - [Complete API Reference](../../api/dataknobs-data.md) - Full API documentation
+> - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/data/src/dataknobs_data) - View on GitHub
+> - [API Index](../../api/complete-reference.md) - All packages
+
 ## Key Features
 
 - **Unified Interface**: Same API works with all backends
