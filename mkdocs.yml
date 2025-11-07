@@ -205,16 +205,26 @@ nav:
   - API Reference:
     - api/index.md
     - Complete Reference: api/complete-reference.md
-    - Curated Guides:
-      - dataknobs-bots: packages/bots/api/index.md
-      - dataknobs-fsm: packages/fsm/api/index.md
-      - dataknobs-llm: packages/llm/api/llm.md
-      - dataknobs-data: api/dataknobs-data.md
-      - dataknobs-config: api/dataknobs-config.md
-      - dataknobs-structures: api/dataknobs-structures.md
-      - dataknobs-utils: api/dataknobs-utils.md
-      - dataknobs-xization: api/dataknobs-xization.md
-      - dataknobs-common: api/dataknobs-common.md
+    - Complete References (Docstrings):
+      - bots (complete): api/reference/bots.md
+      - llm (complete): api/reference/llm.md
+      - fsm (complete): api/reference/fsm.md
+      - data (complete): api/reference/data.md
+      - config (complete): api/reference/config.md
+      - structures (complete): api/reference/structures.md
+      - utils (complete): api/reference/utils.md
+      - xization (complete): api/reference/xization.md
+      - common (complete): api/reference/common.md
+    - Curated Guides (Examples & Tutorials):
+      - bots (curated): packages/bots/api/index.md
+      - fsm (curated): packages/fsm/api/index.md
+      - llm (curated): packages/llm/api/llm.md
+      - data (curated): api/dataknobs-data.md
+      - config (curated): api/dataknobs-config.md
+      - structures (curated): api/dataknobs-structures.md
+      - utils (curated): api/dataknobs-utils.md
+      - xization (curated): api/dataknobs-xization.md
+      - common (curated): api/dataknobs-common.md
   
   - Development:
     - Overview: development/index.md

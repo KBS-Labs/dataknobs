@@ -8,61 +8,62 @@ This page provides links to comprehensive API documentation for all Dataknobs pa
 
 ## AI & LLM Packages
 
-### [dataknobs-bots](../packages/bots/api/index.md)
-AI chatbots and agents with comprehensive tool integration examples.
+### [dataknobs-bots](reference/bots.md)
+Complete auto-generated API documentation for AI chatbots and agents.
 
-### [dataknobs-llm](../packages/llm/api/llm.md)
-LLM provider interfaces, prompts, conversations, and structured tool calling.
+### [dataknobs-llm](reference/llm.md)
+Complete auto-generated API documentation for LLM provider interfaces, prompts, and conversations.
 
 ---
 
 ## Data & Configuration Packages
 
-### [dataknobs-data](dataknobs-data.md)
-Data abstraction layer with support for multiple backends (Elasticsearch, PostgreSQL, MongoDB, SQLite).
+### [dataknobs-data](reference/data.md)
+Complete auto-generated API documentation for data abstraction layer with multiple backends.
 
-### [dataknobs-config](dataknobs-config.md)
-Configuration management with references, environment overrides, and secret handling.
+### [dataknobs-config](reference/config.md)
+Complete auto-generated API documentation for configuration management.
 
 ---
 
 ## Workflow & Processing Packages
 
-### [dataknobs-fsm](../packages/fsm/api/index.md)
-Finite State Machine framework for workflow orchestration and state management.
+### [dataknobs-fsm](reference/fsm.md)
+Complete auto-generated API documentation for Finite State Machine framework.
 
 ---
 
 ## Core Utilities Packages
 
-### [dataknobs-structures](dataknobs-structures.md)
-Core data structures including Tree, Document, RecordStore, and conditional dictionaries.
+### [dataknobs-structures](reference/structures.md)
+Complete auto-generated API documentation for core data structures.
 
-### [dataknobs-utils](dataknobs-utils.md)
-Utility functions for JSON, files, Elasticsearch, and LLM operations.
+### [dataknobs-utils](reference/utils.md)
+Complete auto-generated API documentation for utility functions.
 
-### [dataknobs-xization](dataknobs-xization.md)
-Text processing utilities for tokenization, normalization, and masking.
+### [dataknobs-xization](reference/xization.md)
+Complete auto-generated API documentation for text processing utilities.
 
-### [dataknobs-common](dataknobs-common.md)
-Common components and base classes used across packages.
+### [dataknobs-common](reference/common.md)
+Complete auto-generated API documentation for common components and base classes.
 
 ---
 
 ## Documentation Organization
 
-Each package's API reference includes:
+Each package's complete API reference is **auto-generated from source code docstrings** and includes:
 
 - **Complete signatures** - All classes, methods, and functions with type annotations
-- **Docstrings** - Detailed descriptions from source code
+- **Docstrings** - Detailed descriptions extracted from source code
 - **Source links** - Direct links to GitHub source files
-- **Examples** - Usage examples where available
 - **Inheritance** - Base classes and inheritance chains
+- **Comprehensive coverage** - Every public API documented
 
-For curated guides with tutorials, design patterns, and integration examples, see:
-- [Getting Started](../getting-started.md)
-- [User Guide](../user-guide/index.md)
-- [Package Guides](../packages/index.md)
+For hand-crafted tutorials, design patterns, and integration examples, see:
+- [Curated API Guides](index.md#curated-guides-below) - Hand-written guides with examples
+- [Getting Started](../getting-started.md) - Quick start tutorials
+- [User Guide](../user-guide/index.md) - Step-by-step guides
+- [Package Guides](../packages/index.md) - Package-specific documentation
 
 ---
 

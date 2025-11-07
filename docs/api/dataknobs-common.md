@@ -797,18 +797,13 @@ typing-extensions>=4.0.0  # For Python <3.10 compatibility
 
 > **Philosophy**: Keep dependencies minimal to avoid version conflicts when using multiple dataknobs packages together.
 
-## API Reference
+## Complete API Reference
 
-For detailed API documentation, see the auto-generated reference below.
+For comprehensive auto-generated API documentation with all classes, methods, and functions including full signatures and type annotations, see:
 
-### Core Components
+**[📖 dataknobs-common Complete API Reference](reference/common.md)**
 
-::: dataknobs_common
-    options:
-      show_source: true
-      show_root_heading: true
-      show_root_toc_entry: false
-      members_order: source
+This curated guide focuses on practical examples and usage patterns. The complete reference provides exhaustive technical documentation auto-generated from source code docstrings.
 
 ---
 

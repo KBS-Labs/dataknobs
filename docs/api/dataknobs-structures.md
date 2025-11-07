@@ -1042,54 +1042,10 @@ validated = cdict(combined_validation)
        return isinstance(v, int)
    ```
 
-## API Reference
+## Complete API Reference
 
-Complete auto-generated API documentation for all classes and functions.
+For comprehensive auto-generated API documentation with all classes, methods, and functions including full signatures and type annotations, see:
 
-### Package-level
+**[📖 dataknobs-structures Complete API Reference](reference/structures.md)**
 
-::: dataknobs_structures
-    options:
-      show_root_heading: true
-      show_source: true
-      members_order: source
-
-### Tree Module
-
-::: dataknobs_structures.tree
-    options:
-      show_root_heading: false
-      show_source: true
-      members:
-        - Tree
-        - build_tree_from_string
-        - build_tree_from_list
-
-### Document Module
-
-::: dataknobs_structures.document
-    options:
-      show_root_heading: false
-      show_source: true
-      members:
-        - Text
-        - TextMetaData
-        - MetaData
-
-### Record Store Module
-
-::: dataknobs_structures.record_store
-    options:
-      show_root_heading: false
-      show_source: true
-      members:
-        - RecordStore
-
-### Conditional Dict Module
-
-::: dataknobs_structures.conditional_dict
-    options:
-      show_root_heading: false
-      show_source: true
-      members:
-        - cdict
+This curated guide focuses on practical examples and usage patterns. The complete reference provides exhaustive technical documentation auto-generated from source code docstrings.
