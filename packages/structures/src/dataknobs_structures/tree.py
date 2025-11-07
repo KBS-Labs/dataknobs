@@ -565,7 +565,7 @@ class Tree:
             ```
         """
         if _found is None:
-            _found = list()
+            _found = []
         if not self._children:
             if accept_node_fn is None or accept_node_fn(self):
                 _found.append(self)
@@ -879,9 +879,10 @@ class Tree:
             Requires the graphviz package and Graphviz system installation.
         """
         if node_name_fn is None:
-            node_name_fn = lambda n: str(n.data)
+            def node_name_fn(n):
+                return str(n.data)
         dot = graphviz.Digraph(**kwargs)
-        ids = dict()  # ids[node] -> id
+        ids = {}  # ids[node] -> id
         for idx, node in enumerate(self.root.find_nodes(lambda _n: True, traversal="bfs")):
             ids[node] = idx
             dot.node(f"N_{idx:03}", node_name_fn(node))

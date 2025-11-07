@@ -30,7 +30,7 @@ from collections.abc import Callable
 from typing import Any, Dict
 
 
-class cdict(dict):
+class cdict(dict):  # noqa: N801
     """Dictionary that validates key-value pairs before acceptance.
 
     A dictionary subclass that applies a validation function to each item before
@@ -96,7 +96,7 @@ class cdict(dict):
             ```
         """
         super().__init__()
-        self._rejected: Dict[Any, Any] = dict()
+        self._rejected: Dict[Any, Any] = {}
         self.accept_fn = accept_fn
         # super().__init__(*args, **kwargs)
         self.update(*args, **kwargs)
@@ -211,5 +211,5 @@ class cdict(dict):
                 for key, value in other:
                     self.__setitem__(key, value)
         # Handle keyword arguments
-        for key in kwargs:
-            self.__setitem__(key, kwargs[key])
+        for key, value in kwargs.items():
+            self.__setitem__(key, value)

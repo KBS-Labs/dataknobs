@@ -81,7 +81,7 @@ class RecordStore:
         df: pd.DataFrame | None = None,
         sep: str = "\t",
     ):
-        """Initialize record store with optional file backing.
+        r"""Initialize record store with optional file backing.
 
         Args:
             tsv_fpath: Path to TSV/CSV file on disk. If None, operates without
