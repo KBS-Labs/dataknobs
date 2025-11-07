@@ -1,4 +1,48 @@
-"""OpenAI LLM provider implementation."""
+"""OpenAI LLM provider implementation.
+
+This module provides OpenAI API integration for dataknobs-llm, supporting:
+- GPT-4, GPT-3.5-turbo, and other OpenAI chat models
+- Text embeddings (ada-002, etc.)
+- Function calling / tool use
+- Streaming responses
+- JSON mode for structured outputs
+- Vision models (GPT-4V)
+
+The OpenAIProvider uses the official OpenAI Python SDK and supports all
+standard OpenAI API parameters.
+
+Example:
+    ```python
+    from dataknobs_llm.llm.providers import OpenAIProvider
+    from dataknobs_llm.llm.base import LLMConfig
+
+    # Create provider
+    config = LLMConfig(
+        provider="openai",
+        model="gpt-4",
+        api_key="sk-...",  # or set OPENAI_API_KEY env var
+        temperature=0.7,
+        max_tokens=500
+    )
+
+    async with OpenAIProvider(config) as llm:
+        # Simple completion
+        response = await llm.complete("What is Python?")
+        print(response.content)
+
+        # Streaming
+        async for chunk in llm.stream_complete("Tell a story"):
+            print(chunk.delta, end="", flush=True)
+
+        # Embeddings
+        embedding = await llm.embed("sample text")
+        print(f"Dimensions: {len(embedding)}")
+    ```
+
+See Also:
+    - OpenAI API Documentation: https://platform.openai.com/docs
+    - openai Python package: https://github.com/openai/openai-python
+"""
 
 import os
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
@@ -80,7 +124,101 @@ class OpenAIAdapter(LLMAdapter):
 
 
 class OpenAIProvider(AsyncLLMProvider):
-    """OpenAI LLM provider."""
+    """OpenAI LLM provider with full API support.
+
+    Provides async access to OpenAI's chat, completion, embedding, and
+    function calling APIs. Supports all GPT models including GPT-4, GPT-3.5,
+    and specialized models (vision, embeddings).
+
+    Features:
+        - Full GPT-4 and GPT-3.5-turbo support
+        - Streaming responses for real-time output
+        - Function calling for tool use
+        - JSON mode for structured outputs
+        - Embeddings for semantic search
+        - Custom API endpoints (e.g., Azure OpenAI)
+        - Automatic retry with rate limiting
+        - Cost tracking
+
+    Example:
+        ```python
+        from dataknobs_llm.llm.providers import OpenAIProvider
+        from dataknobs_llm.llm.base import LLMConfig, LLMMessage
+
+        # Basic usage
+        config = LLMConfig(
+            provider="openai",
+            model="gpt-4",
+            api_key="sk-...",
+            temperature=0.7
+        )
+
+        async with OpenAIProvider(config) as llm:
+            # Simple question
+            response = await llm.complete("Explain async/await")
+            print(response.content)
+
+            # Multi-turn conversation
+            messages = [
+                LLMMessage(role="system", content="You are a coding tutor"),
+                LLMMessage(role="user", content="How do I use asyncio?")
+            ]
+            response = await llm.complete(messages)
+
+        # JSON mode for structured output
+        json_config = LLMConfig(
+            provider="openai",
+            model="gpt-4",
+            response_format="json",
+            system_prompt="Return JSON only"
+        )
+
+        llm = OpenAIProvider(json_config)
+        await llm.initialize()
+        response = await llm.complete(
+            "List 3 Python libraries as JSON: {name, description}"
+        )
+        import json
+        data = json.loads(response.content)
+
+        # With Azure OpenAI
+        azure_config = LLMConfig(
+            provider="openai",
+            model="gpt-4",
+            api_base="https://your-resource.openai.azure.com/",
+            api_key="azure-key"
+        )
+
+        # Function calling
+        functions = [{
+            "name": "search",
+            "description": "Search for information",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"}
+                }
+            }
+        }]
+
+        response = await llm.function_call(messages, functions)
+        if response.function_call:
+            print(f"Call: {response.function_call['name']}")
+        ```
+
+    Args:
+        config: LLMConfig, dataknobs Config, or dict with provider settings
+        prompt_builder: Optional AsyncPromptBuilder for prompt rendering
+
+    Attributes:
+        adapter (OpenAIAdapter): Format adapter for OpenAI API
+        _client: OpenAI AsyncOpenAI client instance
+
+    See Also:
+        LLMConfig: Configuration options
+        AsyncLLMProvider: Base provider interface
+        OpenAIAdapter: Format conversion
+    """
 
     def __init__(
         self,

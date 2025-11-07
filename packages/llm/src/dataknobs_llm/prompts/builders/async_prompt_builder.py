@@ -2,16 +2,98 @@
 
 This module provides the AsyncPromptBuilder class which coordinates between:
 - Prompt libraries (template sources)
-- Async resource adapters (data sources)
+- Async resource adapters (data sources for RAG)
 - Template renderer (rendering engine)
 
 The async builder handles:
 - Concurrent parameter resolution from multiple sources
 - Parallel RAG content retrieval and injection
+- RAG result caching for performance optimization
 - Validation enforcement
 - Template defaults merging
 
-All async operations use asyncio.gather() for maximum parallelism.
+All async operations use asyncio.gather() for maximum parallelism, making it
+ideal for high-throughput applications with RAG-enhanced prompts.
+
+Key Features:
+    - Parallel RAG searches across multiple data sources
+    - RAG result caching to avoid redundant searches
+    - Async-first design for optimal performance
+    - Flexible parameter resolution from multiple adapters
+    - Template validation with configurable levels
+    - Metadata tracking for debugging and optimization
+
+Example:
+    ```python
+    from dataknobs_llm.prompts import AsyncPromptBuilder
+    from dataknobs_llm.prompts import FileSystemPromptLibrary
+    from dataknobs_llm.prompts.adapters import (
+        AsyncDictResourceAdapter,
+        AsyncDataknobsBackendAdapter
+    )
+    from dataknobs_data import database_factory
+
+    # Set up data sources for RAG
+    docs_db = database_factory.create("vector", embedding_model="...")
+
+    # Create adapters
+    adapters = {
+        'config': AsyncDictResourceAdapter({
+            'company': 'Acme Corp',
+            'domain': 'e-commerce'
+        }),
+        'docs': AsyncDataknobsBackendAdapter(docs_db)
+    }
+
+    # Create builder with prompt library
+    library = FileSystemPromptLibrary("prompts/")
+    builder = AsyncPromptBuilder(
+        library=library,
+        adapters=adapters,
+        default_validation=ValidationLevel.WARN
+    )
+
+    # Render prompt with RAG
+    result = await builder.render_user_prompt(
+        "analyze_code",
+        index=0,
+        params={
+            'code': code_snippet,
+            'language': 'python'
+        },
+        include_rag=True  # Executes RAG searches in parallel
+    )
+
+    # Access rendered content
+    print(result.content)
+
+    # Cache RAG results for reuse
+    result_with_metadata = await builder.render_user_prompt(
+        "analyze_code",
+        params={'code': another_snippet, 'language': 'python'},
+        return_rag_metadata=True
+    )
+
+    # Reuse cached RAG (avoids re-searching)
+    result2 = await builder.render_user_prompt(
+        "analyze_code",
+        params={'code': yet_another_snippet, 'language': 'python'},
+        cached_rag=result_with_metadata.rag_metadata
+    )
+
+    # Parallel rendering of multiple prompts
+    results = await asyncio.gather(
+        builder.render_system_prompt("helpful_assistant"),
+        builder.render_user_prompt("user_query", params={'question': q}),
+        builder.render_user_prompt("context_setter", params={'topic': t})
+    )
+    ```
+
+See Also:
+    - BasePromptBuilder: Base implementation with shared logic
+    - PromptBuilder: Synchronous version for non-async applications
+    - AsyncResourceAdapter: Adapter interface for async data sources
+    - AbstractPromptLibrary: Prompt library interface
 """
 
 import asyncio

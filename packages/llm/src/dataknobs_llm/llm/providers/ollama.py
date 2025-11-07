@@ -1,4 +1,90 @@
-"""Ollama local LLM provider implementation."""
+"""Ollama local LLM provider implementation.
+
+This module provides Ollama integration for dataknobs-llm, enabling local LLM
+deployment and usage without cloud APIs. Perfect for privacy-sensitive applications,
+offline usage, and cost reduction.
+
+Supports:
+- All Ollama models (Llama, Mistral, CodeLlama, Phi, etc.)
+- Chat with message history
+- Streaming responses
+- Embeddings for semantic search
+- Tool/function calling (Ollama 0.1.17+)
+- Vision models with image inputs
+- Custom model parameters (temperature, top_p, seed, etc.)
+- Docker environment auto-detection
+- Multi-modal capabilities
+
+The OllamaProvider automatically detects Docker environments and adjusts
+connection URLs accordingly.
+
+Example:
+    ```python
+    from dataknobs_llm.llm.providers import OllamaProvider
+    from dataknobs_llm.llm.base import LLMConfig
+
+    # Basic usage (assumes Ollama running on localhost:11434)
+    config = LLMConfig(
+        provider="ollama",
+        model="llama2",
+        temperature=0.7
+    )
+
+    async with OllamaProvider(config) as llm:
+        # Simple completion
+        response = await llm.complete("Explain Python generators")
+        print(response.content)
+
+        # Streaming
+        async for chunk in llm.stream_complete("Write a poem"):
+            print(chunk.delta, end="", flush=True)
+
+    # Custom Ollama URL (remote or Docker)
+    remote_config = LLMConfig(
+        provider="ollama",
+        model="codellama",
+        api_base="http://my-ollama-server:11434"
+    )
+
+    # Generate embeddings
+    embed_config = LLMConfig(
+        provider="ollama",
+        model="nomic-embed-text"
+    )
+
+    llm = OllamaProvider(embed_config)
+    await llm.initialize()
+    embeddings = await llm.embed([
+        "Python is great",
+        "JavaScript is versatile"
+    ])
+
+    # Vision model with images
+    vision_messages = [
+        LLMMessage(
+            role="user",
+            content="What's in this image?",
+            metadata={"images": ["base64encodedimage..."]}
+        )
+    ]
+
+    vision_config = LLMConfig(provider="ollama", model="llava")
+    llm = OllamaProvider(vision_config)
+    await llm.initialize()
+    response = await llm.complete(vision_messages)
+    ```
+
+Installation:
+    1. Install Ollama from https://ollama.ai
+    2. Pull a model: `ollama pull llama2`
+    3. Start server: `ollama serve` (usually auto-starts)
+    4. Use with dataknobs-llm (no API key needed!)
+
+See Also:
+    - Ollama: https://ollama.ai
+    - Ollama Models: https://ollama.ai/library
+    - Ollama GitHub: https://github.com/ollama/ollama
+"""
 
 import os
 import json
@@ -16,13 +102,160 @@ if TYPE_CHECKING:
 
 
 class OllamaProvider(AsyncLLMProvider):
-    """Ollama local LLM provider.
+    """Ollama local LLM provider for privacy-first, offline LLM usage.
 
-    Supports latest Ollama features including:
-    - Native tools/function calling (Ollama 0.1.17+)
-    - Chat endpoint with message history
-    - Streaming responses
-    - Embeddings
+    Provides async access to locally-hosted Ollama models, enabling
+    on-premise LLM deployment without cloud APIs. Perfect for sensitive
+    data, air-gapped environments, and cost optimization.
+
+    Features:
+        - All Ollama models (Llama 2/3, Mistral, Phi, CodeLlama, etc.)
+        - No API key required - fully local
+        - Chat with message history
+        - Streaming responses for real-time output
+        - Embeddings for RAG and semantic search
+        - Tool/function calling (Ollama 0.1.17+)
+        - Vision models (LLaVA, bakllava)
+        - Docker environment auto-detection
+        - Custom model parameters (temperature, top_p, seed)
+        - Zero-cost inference
+
+    Example:
+        ```python
+        from dataknobs_llm.llm.providers import OllamaProvider
+        from dataknobs_llm.llm.base import LLMConfig, LLMMessage
+
+        # Basic local usage
+        config = LLMConfig(
+            provider="ollama",
+            model="llama2",  # or llama3, mistral, phi, etc.
+            temperature=0.7
+        )
+
+        async with OllamaProvider(config) as llm:
+            # Simple completion
+            response = await llm.complete("Explain decorators in Python")
+            print(response.content)
+
+            # Multi-turn conversation
+            messages = [
+                LLMMessage(role="system", content="You are a helpful assistant"),
+                LLMMessage(role="user", content="What is recursion?"),
+                LLMMessage(role="assistant", content="Recursion is..."),
+                LLMMessage(role="user", content="Show me an example")
+            ]
+            response = await llm.complete(messages)
+
+        # Code generation with CodeLlama
+        code_config = LLMConfig(
+            provider="ollama",
+            model="codellama",
+            temperature=0.2,  # Lower for more deterministic code
+            max_tokens=500
+        )
+
+        llm = OllamaProvider(code_config)
+        await llm.initialize()
+        response = await llm.complete(
+            "Write a Python function to merge two sorted lists"
+        )
+        print(response.content)
+
+        # Remote Ollama server
+        remote_config = LLMConfig(
+            provider="ollama",
+            model="llama2",
+            api_base="http://192.168.1.100:11434"  # Remote server
+        )
+
+        # Docker usage (auto-detects)
+        # In Docker, automatically uses host.docker.internal
+        docker_config = LLMConfig(
+            provider="ollama",
+            model="mistral"
+        )
+
+        # Vision model with image input
+        from dataknobs_llm.llm.base import LLMMessage
+        import base64
+
+        with open("image.jpg", "rb") as f:
+            image_data = base64.b64encode(f.read()).decode()
+
+        vision_config = LLMConfig(
+            provider="ollama",
+            model="llava"  # or bakllava
+        )
+
+        llm = OllamaProvider(vision_config)
+        await llm.initialize()
+
+        messages = [
+            LLMMessage(
+                role="user",
+                content="What objects are in this image?",
+                metadata={"images": [image_data]}
+            )
+        ]
+
+        response = await llm.complete(messages)
+        print(response.content)
+
+        # Embeddings for RAG
+        embed_config = LLMConfig(
+            provider="ollama",
+            model="nomic-embed-text"  # or mxbai-embed-large
+        )
+
+        llm = OllamaProvider(embed_config)
+        await llm.initialize()
+
+        # Single embedding
+        embedding = await llm.embed("Sample text")
+        print(f"Dimensions: {len(embedding)}")
+
+        # Batch embeddings
+        texts = [
+            "Python programming",
+            "Machine learning basics",
+            "Web development with Flask"
+        ]
+        embeddings = await llm.embed(texts)
+        print(f"Generated {len(embeddings)} embeddings")
+
+        # Tool use (Ollama 0.1.17+)
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get current weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {"type": "string"}
+                        },
+                        "required": ["location"]
+                    }
+                }
+            }
+        ]
+
+        response = await llm.function_call(messages, tools)
+        ```
+
+    Args:
+        config: LLMConfig, dataknobs Config, or dict with provider settings
+        prompt_builder: Optional AsyncPromptBuilder for prompt rendering
+
+    Attributes:
+        base_url (str): Ollama API base URL (auto-detects Docker environment)
+        _client: HTTP client for Ollama API
+
+    See Also:
+        LLMConfig: Configuration options
+        AsyncLLMProvider: Base provider interface
+        Ollama Documentation: https://ollama.ai
     """
 
     def __init__(

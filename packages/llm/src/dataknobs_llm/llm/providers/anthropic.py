@@ -1,4 +1,61 @@
-"""Anthropic Claude LLM provider implementation."""
+"""Anthropic Claude LLM provider implementation.
+
+This module provides Anthropic Claude API integration for dataknobs-llm, supporting:
+- Claude 3 (Opus, Sonnet, Haiku) and Claude 2 models
+- Native tools API for function calling
+- Vision capabilities (Claude 3+)
+- Streaming responses
+- Long context windows (up to 200k tokens)
+- Advanced reasoning and coding capabilities
+
+The AnthropicProvider uses the official Anthropic Python SDK and supports
+all standard Anthropic API parameters including system prompts, temperature,
+and token limits.
+
+Example:
+    ```python
+    from dataknobs_llm.llm.providers import AnthropicProvider
+    from dataknobs_llm.llm.base import LLMConfig
+
+    # Create provider
+    config = LLMConfig(
+        provider="anthropic",
+        model="claude-3-sonnet-20240229",
+        api_key="sk-ant-...",  # or set ANTHROPIC_API_KEY env var
+        temperature=0.7,
+        max_tokens=1024
+    )
+
+    async with AnthropicProvider(config) as llm:
+        # Simple completion
+        response = await llm.complete("Explain quantum computing")
+        print(response.content)
+
+        # Streaming for real-time output
+        async for chunk in llm.stream_complete("Write a story"):
+            print(chunk.delta, end="", flush=True)
+
+        # Tool use (Claude 3+)
+        tools = [{
+            "name": "calculator",
+            "description": "Perform arithmetic",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "operation": {"type": "string"},
+                    "x": {"type": "number"},
+                    "y": {"type": "number"}
+                }
+            }
+        }]
+
+        response = await llm.function_call(messages, tools)
+    ```
+
+See Also:
+    - Anthropic API Documentation: https://docs.anthropic.com/
+    - anthropic Python package: https://github.com/anthropics/anthropic-sdk-python
+"""
 
 import os
 import json
@@ -16,12 +73,120 @@ if TYPE_CHECKING:
 
 
 class AnthropicProvider(AsyncLLMProvider):
-    """Anthropic Claude LLM provider.
+    """Anthropic Claude LLM provider with full API support.
 
-    Supports latest Anthropic features including:
-    - Native tools API (Claude 3+)
-    - Vision capabilities (Claude 3+)
-    - Streaming responses
+    Provides async access to Anthropic's Claude models including Claude 3
+    (Opus, Sonnet, Haiku) and Claude 2. Supports advanced features like
+    native tool use, vision, and extended context windows.
+
+    Features:
+        - Claude 3 Opus/Sonnet/Haiku and Claude 2 models
+        - Native tools API for function calling (Claude 3+)
+        - Vision capabilities for image understanding (Claude 3+)
+        - Streaming responses for real-time output
+        - Long context windows (up to 200k tokens)
+        - Advanced reasoning and coding capabilities
+        - System prompts for behavior control
+        - JSON output mode
+
+    Example:
+        ```python
+        from dataknobs_llm.llm.providers import AnthropicProvider
+        from dataknobs_llm.llm.base import LLMConfig, LLMMessage
+
+        # Basic usage
+        config = LLMConfig(
+            provider="anthropic",
+            model="claude-3-sonnet-20240229",
+            api_key="sk-ant-...",
+            temperature=0.7,
+            max_tokens=1024
+        )
+
+        async with AnthropicProvider(config) as llm:
+            # Simple completion
+            response = await llm.complete("Explain machine learning")
+            print(response.content)
+
+            # With system prompt
+            messages = [
+                LLMMessage(
+                    role="system",
+                    content="You are an expert Python tutor"
+                ),
+                LLMMessage(
+                    role="user",
+                    content="How do I use decorators?"
+                )
+            ]
+            response = await llm.complete(messages)
+
+        # Long context processing (Claude 3+)
+        long_config = LLMConfig(
+            provider="anthropic",
+            model="claude-3-opus-20240229",
+            max_tokens=4096
+        )
+
+        llm = AnthropicProvider(long_config)
+        await llm.initialize()
+
+        # Process large document
+        with open("large_doc.txt") as f:
+            long_text = f.read()  # Up to 200k tokens!
+
+        response = await llm.complete(
+            f"Summarize this document:\n\n{long_text}"
+        )
+
+        # Tool use / function calling (Claude 3+)
+        tools = [
+            {
+                "name": "web_search",
+                "description": "Search the web for information",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query"
+                        },
+                        "num_results": {
+                            "type": "integer",
+                            "description": "Number of results"
+                        }
+                    },
+                    "required": ["query"]
+                }
+            }
+        ]
+
+        messages = [
+            LLMMessage(
+                role="user",
+                content="Search for latest AI news"
+            )
+        ]
+
+        response = await llm.function_call(messages, tools)
+        if response.function_call:
+            import json
+            tool_input = json.loads(response.function_call["arguments"])
+            print(f"Tool: {response.function_call['name']}")
+            print(f"Input: {tool_input}")
+        ```
+
+    Args:
+        config: LLMConfig, dataknobs Config, or dict with provider settings
+        prompt_builder: Optional AsyncPromptBuilder for prompt rendering
+
+    Attributes:
+        _client: Anthropic AsyncAnthropic client instance
+
+    See Also:
+        LLMConfig: Configuration options
+        AsyncLLMProvider: Base provider interface
+        Anthropic API Docs: https://docs.anthropic.com/
     """
 
     def __init__(
