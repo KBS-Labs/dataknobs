@@ -348,7 +348,7 @@ echo -e "\n${BLUE}5. Checking for common issues...${NC}"
 # Check for print statements (with exceptions for legitimate uses)
 echo -e "${YELLOW}  Checking for print statements...${NC}"
 HAS_PRINTS=false
-PRINT_FILES=()
+PRINT_RESULTS=()
 
 # Files that are allowed to have print statements
 # CLI tools and debuggers need to output to users
@@ -356,10 +356,6 @@ PRINT_EXCEPTIONS=(
     "*/cli/main.py"       # CLI interface uses Rich console.print
     "*/api/advanced.py"   # Debugger class needs user output
 )
-
-# Note: The following are automatically excluded:
-# - Doctest examples (lines containing ">>>" or "...")
-# - Lines with "# validate: ignore-print" marker (for legitimate example code)
 
 # Function to check if a file should be excluded
 should_exclude_file() {
@@ -372,36 +368,36 @@ should_exclude_file() {
     return 1  # Should not exclude (false)
 }
 
+# Use Python AST parser to find print statements in actual code
+# (ignoring comments, docstrings, and string literals)
 for target in "${VALIDATE_TARGETS[@]}"; do
+    # Collect files to check
     if [[ -f "$target" ]]; then
-        # Single file
         if [[ "$(basename "$target")" != "__init__.py" ]] && \
            [[ "$target" != *test* ]] && \
            ! should_exclude_file "$target"; then
-            # Check for print statements, excluding docstrings and ignored lines
-            if grep -n "print(" "$target" | \
-               grep -v ">>>" | \
-               grep -v '^\s*[0-9]\+:[[:space:]]*\.\.\.' | \
-               grep -v "# validate: ignore-print" | \
-               grep -q .; then
-                PRINT_FILES+=("$target")
-                HAS_PRINTS=true
-            fi
+            check_files=("$target")
+        else
+            check_files=()
         fi
     elif [[ -d "$target" ]]; then
-        # Directory - find all files with print statements
-        while IFS= read -r file; do
-            # Check if this file should be excluded
-            if ! should_exclude_file "$file" && \
-               grep -n "print(" "$file" | \
-               grep -v ">>>" | \
-               grep -v '^\s*[0-9]\+:[[:space:]]*\.\.\.' | \
-               grep -v "# validate: ignore-print" | \
-               grep -q .; then
-                PRINT_FILES+=("$file")
+        # Find Python files excluding __init__.py and test files
+        check_files=()
+        while IFS= read -r -d '' file; do
+            if ! should_exclude_file "$file"; then
+                check_files+=("$file")
+            fi
+        done < <(find "$target" -name "*.py" ! -name "__init__.py" ! -path "*/test*" -print0)
+    fi
+
+    # Run the print finder on collected files
+    if [[ ${#check_files[@]} -gt 0 ]]; then
+        while IFS= read -r line; do
+            if [[ -n "$line" ]]; then
+                PRINT_RESULTS+=("$line")
                 HAS_PRINTS=true
             fi
-        done < <(find "$target" -name "*.py" ! -name "__init__.py" ! -path "*/test*" -print0 | xargs -0 grep -l "print(" 2>/dev/null)
+        done < <(uv run python "$ROOT_DIR/bin/find_print_statements.py" "${check_files[@]}" 2>/dev/null || true)
     fi
 done
 
@@ -409,23 +405,46 @@ if [[ "$HAS_PRINTS" == false ]]; then
     echo -e "${GREEN}    ✓ No print statements found${NC}"
 else
     echo -e "${RED}    ✗ Found print statements (use logging instead):${NC}"
-    # Show up to 10 files with print statements
+
+    # Group results by file (simple approach without associative arrays)
+    current_file=""
     shown=0
-    for file in "${PRINT_FILES[@]}"; do
-        if [[ $shown -lt 10 ]]; then
-            # Show the file and line numbers where print statements appear
-            echo -e "${RED}      - $file:${NC}"
-            # Exclude docstring examples (>>> and ...) and ignored lines
-            grep -n "print(" "$file" | grep -v ">>>" | grep -v '^\s*[0-9]\+:[[:space:]]*\.\.\.' | grep -v "# validate: ignore-print" | head -3 | while IFS=: read -r line_num line_content; do
-                # Trim whitespace and show a preview
-                trimmed=$(echo "$line_content" | sed 's/^[[:space:]]*//' | cut -c1-60)
-                echo -e "${RED}        Line $line_num: $trimmed${NC}"
-            done
-            ((shown++))
+    count_in_file=0
+
+    for result in "${PRINT_RESULTS[@]}"; do
+        # Parse the result: filepath:line:col:content
+        file="${result%%:*}"
+        rest="${result#*:}"
+        line="${rest%%:*}"
+        rest="${rest#*:}"
+        col="${rest%%:*}"
+        content="${rest#*:}"
+
+        # Check if this is a new file
+        if [[ "$file" != "$current_file" ]]; then
+            current_file="$file"
+            count_in_file=0
+
+            # Only show up to 10 files
+            if [[ $shown -lt 10 ]]; then
+                echo -e "${RED}      - $file:${NC}"
+                ((shown++))
+            fi
+        fi
+
+        # Show up to 3 occurrences per file
+        if [[ $count_in_file -lt 3 ]] && [[ $shown -le 10 ]]; then
+            # Trim and truncate line content
+            trimmed=$(echo "$content" | cut -c1-60)
+            echo -e "${RED}        Line $line: $trimmed${NC}"
+            ((count_in_file++))
         fi
     done
-    if [[ ${#PRINT_FILES[@]} -gt 10 ]]; then
-        echo -e "${RED}      ... and $((${#PRINT_FILES[@]} - 10)) more files${NC}"
+
+    # Count unique files
+    total_files=$(echo "${PRINT_RESULTS[@]}" | tr ' ' '\n' | cut -d: -f1 | sort -u | wc -l | tr -d ' ')
+    if [[ $total_files -gt 10 ]]; then
+        echo -e "${RED}      ... and $(($total_files - 10)) more files${NC}"
     fi
     FAILED=true
 fi
@@ -437,20 +456,31 @@ TODO_FILES=()
 
 for target in "${VALIDATE_TARGETS[@]}"; do
     if [[ -f "$target" ]]; then
-        # grep -c returns exit 1 when count is 0, so we use || echo 0
-        count=$(grep -c "TODO\|FIXME" "$target" 2>/dev/null || echo 0)
+        # grep returns exit 1 when no match, handle gracefully
+        # Disable pipefail temporarily for this command
+        set +o pipefail
+        count=$(grep -E "TODO|FIXME" "$target" 2>/dev/null | wc -l | tr -d ' ')
+        set -o pipefail
+        # Ensure count is a number (default to 0 if empty)
+        count=${count:-0}
         if [[ $count -gt 0 ]]; then
             TODO_FILES+=("$target:$count")
             TODO_COUNT=$((TODO_COUNT + count))
         fi
     elif [[ -d "$target" ]]; then
         # Find files with TODO/FIXME and their counts
-        while IFS=: read -r file count; do
-            if [[ -n "$file" ]] && [[ "$count" -gt 0 ]]; then
+        while IFS= read -r -d '' file; do
+            # Disable pipefail temporarily for this command
+            set +o pipefail
+            count=$(grep -E "TODO|FIXME" "$file" 2>/dev/null | wc -l | tr -d ' ')
+            set -o pipefail
+            # Ensure count is a number (default to 0 if empty)
+            count=${count:-0}
+            if [[ $count -gt 0 ]]; then
                 TODO_FILES+=("$file:$count")
                 TODO_COUNT=$((TODO_COUNT + count))
             fi
-        done < <(find "$target" -name "*.py" -exec grep -c "TODO\|FIXME" {} + 2>/dev/null | grep -v ":0$")
+        done < <(find "$target" -name "*.py" -print0)
     fi
 done
 
@@ -466,11 +496,11 @@ elif [[ "$TODO_COUNT" -gt 0 ]]; then
             count="${file_info##*:}"
             echo -e "${YELLOW}      - $file ($count occurrences):${NC}"
             # Show first 3 TODO/FIXME comments with line numbers
-            grep -n "TODO\|FIXME" "$file" | head -3 | while IFS=: read -r line_num line_content; do
+            grep -E -n "TODO|FIXME" "$file" 2>/dev/null | head -3 | while IFS=: read -r line_num line_content; do
                 # Trim whitespace and show a preview
                 trimmed=$(echo "$line_content" | sed 's/^[[:space:]]*//' | cut -c1-60)
                 echo -e "${YELLOW}        Line $line_num: $trimmed${NC}"
-            done
+            done || true
             ((shown++))
         fi
     done
