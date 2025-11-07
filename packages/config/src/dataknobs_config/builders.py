@@ -113,7 +113,7 @@ class ObjectBuilder:
         try:
             return cls(**config)
         except TypeError as e:
-            raise ConfigError(f"Failed to instantiate {class_path}: {e}")
+            raise ConfigError(f"Failed to instantiate {class_path}: {e}") from e
 
     def _build_with_factory(self, config: dict) -> Any:
         """Build an object using a factory class.
@@ -186,9 +186,9 @@ class ObjectBuilder:
             return cls
 
         except ImportError as e:
-            raise ConfigError(f"Failed to import {class_path}: {e}")
+            raise ConfigError(f"Failed to import {class_path}: {e}") from e
         except Exception as e:
-            raise ConfigError(f"Failed to load class {class_path}: {e}")
+            raise ConfigError(f"Failed to load class {class_path}: {e}") from e
 
     def clear_cache(self, ref: str | None = None) -> None:
         """Clear cached objects.

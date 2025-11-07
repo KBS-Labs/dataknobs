@@ -1,7 +1,6 @@
 """Global settings and defaults management."""
 
 import copy
-import os
 import re
 from pathlib import Path
 from typing import Any, Dict, Union
@@ -185,7 +184,7 @@ class SettingsManager:
             return path
 
         # Check if already absolute
-        if os.path.isabs(path):
+        if Path(path).is_absolute():
             return path
 
         # Relative path needs base path for resolution
