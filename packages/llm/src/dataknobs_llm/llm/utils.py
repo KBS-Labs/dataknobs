@@ -53,7 +53,7 @@ class MessageTemplate:
                         unique_vars.append(var)
                 self.variables = unique_vars
 
-    def format(self, **kwargs) -> str:
+    def format(self, **kwargs: Any) -> str:
         """Format template with variables using the selected strategy.
 
         Args:
@@ -79,7 +79,7 @@ class MessageTemplate:
         else:
             raise ValueError(f"Unknown template strategy: {self.strategy}")
 
-    def partial(self, **kwargs) -> 'MessageTemplate':
+    def partial(self, **kwargs: Any) -> 'MessageTemplate':
         """Create partial template with some variables filled.
 
         Args:
@@ -220,7 +220,7 @@ class MessageBuilder:
         self,
         role: str,
         template: MessageTemplate,
-        **kwargs
+        **kwargs: Any
     ) -> 'MessageBuilder':
         """Add message from template.
 

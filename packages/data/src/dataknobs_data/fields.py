@@ -391,7 +391,7 @@ class VectorField(Field):
         dimensions: int | None = None,
         model_name: str | None = None,
         model_version: str | None = None,
-        **kwargs
+        **kwargs: Any
     ) -> VectorField:
         """Create a VectorField from text using an embedding function.
         

@@ -513,7 +513,7 @@ class LLMConfig:
 
         return result
 
-    def clone(self, **overrides) -> "LLMConfig":
+    def clone(self, **overrides: Any) -> "LLMConfig":
         """Create a copy of this config with optional overrides.
 
         This method is useful for creating runtime configuration variations

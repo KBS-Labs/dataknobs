@@ -299,7 +299,7 @@ See Also:
 """
 
 import time
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
@@ -410,7 +410,7 @@ class AdvancedFSM:
     def configure_transactions(
         self,
         strategy: TransactionStrategy,
-        **config
+        **config: Any
     ) -> None:
         """Configure transaction management.
         
@@ -578,7 +578,7 @@ class AdvancedFSM:
         data: dict[str, Any] | Record,
         data_mode: DataHandlingMode = DataHandlingMode.COPY,
         initial_state: str | None = None
-    ):
+    ) -> AsyncGenerator[ExecutionContext, None]:
         """Create an execution context for manual control.
 
         Args:
@@ -1690,7 +1690,7 @@ class FSMDebugger:
 def create_advanced_fsm(
     config: str | Path | dict[str, Any] | FSM,
     custom_functions: dict[str, Callable] | None = None,
-    **kwargs
+    **kwargs: Any
 ) -> AdvancedFSM:
     """Factory function to create an AdvancedFSM instance.
     

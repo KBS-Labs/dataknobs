@@ -43,7 +43,7 @@ class DatabaseFactory(FactoryBase):
             prefix: archives/
     """
 
-    def create(self, **config) -> SyncDatabase:
+    def create(self, **config: Any) -> SyncDatabase:
         """Create a database instance based on configuration.
         
         Args:
@@ -213,7 +213,7 @@ class AsyncDatabaseFactory(FactoryBase):
     Note: Currently only some backends support async operations.
     """
 
-    def create(self, **config) -> Any:
+    def create(self, **config: Any) -> Any:
         """Create an async database instance.
         
         Args:

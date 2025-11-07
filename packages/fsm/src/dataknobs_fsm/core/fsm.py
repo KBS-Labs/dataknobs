@@ -175,9 +175,13 @@ See Also:
     - :class:`~dataknobs_fsm.execution.async_engine.AsyncExecutionEngine`: Async execution engine
 """
 
-from typing import Any, Dict, List, Set, Tuple, Optional
+from typing import Any, Dict, List, Set, Tuple, Optional, TYPE_CHECKING
 
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
+
+if TYPE_CHECKING:
+    from dataknobs_fsm.execution.engine import ExecutionEngine
+    from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.state import StateDefinition, StateInstance, StateType
 from dataknobs_fsm.functions.base import FunctionRegistry
@@ -778,12 +782,12 @@ class FSM:
             return network.get_arcs_from_state(state_name)
         return []
     
-    def get_engine(self, strategy: str | None = None):
+    def get_engine(self, strategy: str | None = None) -> "ExecutionEngine":
         """Get or create the execution engine.
-        
+
         Args:
             strategy: Optional execution strategy override
-            
+
         Returns:
             ExecutionEngine instance.
         """
@@ -809,12 +813,12 @@ class FSM:
         
         return self._engine
     
-    def get_async_engine(self, strategy: str | None = None):
+    def get_async_engine(self, strategy: str | None = None) -> "AsyncExecutionEngine":
         """Get or create the async execution engine.
-        
+
         Args:
             strategy: Optional execution strategy override
-            
+
         Returns:
             AsyncExecutionEngine instance.
         """
