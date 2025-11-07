@@ -15,7 +15,38 @@ if TYPE_CHECKING:
 
 
 class AsyncDatabase(ABC):
-    """Abstract base class for async database implementations."""
+    """Abstract base class for async database implementations.
+
+    Provides a unified async interface for CRUD operations, querying, and streaming
+    across different backend databases. Supports schema validation, batch operations,
+    and complex queries with boolean logic.
+
+    Example:
+        ```python
+        from dataknobs_data import async_database_factory, Record, Query, Filter, Operator
+
+        # Create async database
+        db = async_database_factory("memory")
+
+        # Use as async context manager
+        async with db:
+            # Create records
+            id1 = await db.create(Record({"name": "Alice", "age": 30}))
+            id2 = await db.create(Record({"name": "Bob", "age": 25}))
+
+            # Query records
+            query = Query(filters=[Filter("age", Operator.GT, 25)])
+            results = await db.search(query)
+            print(results)  # [Alice's record]
+
+            # Update record
+            await db.update(id1, Record({"name": "Alice", "age": 31}))
+
+            # Stream large datasets
+            async for record in db.stream_read():
+                process_record(record)
+        ```
+    """
 
     def __init__(self, config: dict[str, Any] | None = None, schema: DatabaseSchema | None = None):
         """Initialize the database with optional configuration.
@@ -23,6 +54,20 @@ class AsyncDatabase(ABC):
         Args:
             config: Backend-specific configuration parameters (may include 'schema' key)
             schema: Optional database schema (overrides config schema)
+
+        Example:
+            ```python
+            from dataknobs_data import AsyncDatabase
+            from dataknobs_data.schema import DatabaseSchema
+            from dataknobs_data.fields import FieldType
+
+            # With schema
+            schema = DatabaseSchema.create(
+                name=FieldType.STRING,
+                age=FieldType.INTEGER
+            )
+            db = AsyncDatabase(config={"path": "data.db"}, schema=schema)
+            ```
         """
         config = config or {}
 
@@ -516,7 +561,38 @@ class AsyncDatabase(ABC):
 
 
 class SyncDatabase(ABC):
-    """Synchronous variant of the Database abstract base class."""
+    """Synchronous variant of the Database abstract base class.
+
+    Provides a unified synchronous interface for CRUD operations, querying, and streaming
+    across different backend databases. Supports schema validation, batch operations,
+    and complex queries with boolean logic.
+
+    Example:
+        ```python
+        from dataknobs_data import database_factory, Record, Query, Filter, Operator
+
+        # Create database
+        db = database_factory("memory")
+
+        # Use as context manager
+        with db:
+            # Create records
+            id1 = db.create(Record({"name": "Alice", "age": 30}))
+            id2 = db.create(Record({"name": "Bob", "age": 25}))
+
+            # Query records
+            query = Query(filters=[Filter("age", Operator.GT, 25)])
+            results = db.search(query)
+            print(results)  # [Alice's record]
+
+            # Update record
+            db.update(id1, Record({"name": "Alice", "age": 31}))
+
+            # Stream large datasets
+            for record in db.stream_read():
+                process_record(record)
+        ```
+    """
 
     def __init__(self, config: dict[str, Any] | None = None, schema: DatabaseSchema | None = None):
         """Initialize the database with optional configuration.
@@ -524,6 +600,20 @@ class SyncDatabase(ABC):
         Args:
             config: Backend-specific configuration parameters (may include 'schema' key)
             schema: Optional database schema (overrides config schema)
+
+        Example:
+            ```python
+            from dataknobs_data import SyncDatabase
+            from dataknobs_data.schema import DatabaseSchema
+            from dataknobs_data.fields import FieldType
+
+            # With schema
+            schema = DatabaseSchema.create(
+                name=FieldType.STRING,
+                age=FieldType.INTEGER
+            )
+            db = SyncDatabase(config={"path": "data.db"}, schema=schema)
+            ```
         """
         config = config or {}
 
@@ -626,27 +716,108 @@ class SyncDatabase(ABC):
 
     @abstractmethod
     def create(self, record: Record) -> str:
-        """Create a new record in the database."""
+        """Create a new record in the database.
+
+        Args:
+            record: The record to create
+
+        Returns:
+            The ID of the created record
+
+        Example:
+            ```python
+            record = Record({"name": "Alice", "age": 30})
+            record_id = db.create(record)
+            print(record_id)  # "550e8400-e29b-41d4-a716-446655440000"
+            ```
+        """
         raise NotImplementedError
 
     @abstractmethod
     def read(self, id: str) -> Record | None:
-        """Read a record by ID."""
+        """Read a record by ID.
+
+        Args:
+            id: The record ID
+
+        Returns:
+            The record if found, None otherwise
+
+        Example:
+            ```python
+            record = db.read("550e8400-e29b-41d4-a716-446655440000")
+            if record:
+                print(record.get_value("name"))  # "Alice"
+            ```
+        """
         raise NotImplementedError
 
     @abstractmethod
     def update(self, id: str, record: Record) -> bool:
-        """Update an existing record."""
+        """Update an existing record.
+
+        Args:
+            id: The record ID
+            record: The updated record
+
+        Returns:
+            True if the record was updated, False if not found
+
+        Example:
+            ```python
+            updated_record = Record({"name": "Alice", "age": 31})
+            success = db.update(record_id, updated_record)
+            print(success)  # True
+            ```
+        """
         raise NotImplementedError
 
     @abstractmethod
     def delete(self, id: str) -> bool:
-        """Delete a record by ID."""
+        """Delete a record by ID.
+
+        Args:
+            id: The record ID
+
+        Returns:
+            True if the record was deleted, False if not found
+
+        Example:
+            ```python
+            success = db.delete(record_id)
+            print(success)  # True
+            ```
+        """
         raise NotImplementedError
 
     @abstractmethod
     def search(self, query: Query | ComplexQuery) -> list[Record]:
-        """Search for records matching a query (simple or complex)."""
+        """Search for records matching a query (simple or complex).
+
+        Args:
+            query: The search query
+
+        Returns:
+            List of matching records
+
+        Example:
+            ```python
+            # Simple query
+            query = Query(filters=[Filter("age", Operator.GT, 25)])
+            results = db.search(query)
+
+            # Complex query with boolean logic
+            from dataknobs_data.query_logic import QueryBuilder, LogicOperator
+
+            complex_query = (
+                QueryBuilder()
+                .where("age", Operator.GT, 25)
+                .and_where("name", Operator.LIKE, "A%")
+                .build()
+            )
+            results = db.search(complex_query)
+            ```
+        """
         raise NotImplementedError
 
     def all(self) -> list[Record]:

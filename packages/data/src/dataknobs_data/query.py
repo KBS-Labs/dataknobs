@@ -14,7 +14,34 @@ if TYPE_CHECKING:
 
 
 class Operator(Enum):
-    """Query operators for filtering."""
+    """Query operators for filtering.
+
+    Operators used to build filter conditions in queries. Supports comparison,
+    pattern matching, existence checks, and range queries.
+
+    Example:
+        ```python
+        from dataknobs_data import Filter, Operator, Query
+
+        # Equality
+        filter_eq = Filter("age", Operator.EQ, 30)
+
+        # Comparison
+        filter_gt = Filter("score", Operator.GT, 90)
+
+        # Pattern matching (SQL LIKE)
+        filter_like = Filter("name", Operator.LIKE, "A%")  # Names starting with 'A'
+
+        # IN operator
+        filter_in = Filter("status", Operator.IN, ["active", "pending"])
+
+        # Range query
+        filter_between = Filter("age", Operator.BETWEEN, [20, 40])
+
+        # Build query
+        query = Query(filters=[filter_gt, filter_like])
+        ```
+    """
 
     EQ = "="  # Equal
     NEQ = "!="  # Not equal
@@ -42,7 +69,33 @@ class SortOrder(Enum):
 
 @dataclass
 class Filter:
-    """Represents a filter condition."""
+    """Represents a filter condition.
+
+    A Filter combines a field name, an operator, and a value to create a query condition.
+    Multiple filters can be combined in a Query for complex filtering.
+
+    Attributes:
+        field: The field name to filter on
+        operator: The comparison operator
+        value: The value to compare against (optional for EXISTS/NOT_EXISTS operators)
+
+    Example:
+        ```python
+        from dataknobs_data import Filter, Operator, Query, database_factory
+
+        # Create filters
+        age_filter = Filter("age", Operator.GT, 25)
+        name_filter = Filter("name", Operator.LIKE, "A%")
+        status_filter = Filter("status", Operator.IN, ["active", "pending"])
+
+        # Use in query
+        query = Query(filters=[age_filter, name_filter])
+
+        # Search database
+        db = database_factory("memory")
+        results = db.search(query)
+        ```
+    """
 
     field: str
     operator: Operator
@@ -270,7 +323,53 @@ class VectorQuery:
 
 @dataclass
 class Query:
-    """Represents a database query with filters, sorting, pagination, and vector search."""
+    """Represents a database query with filters, sorting, pagination, and vector search.
+
+    A Query combines multiple filter conditions, sort specifications, and pagination
+    options to retrieve records from a database. Supports fluent interface for building queries.
+
+    Attributes:
+        filters: List of filter conditions
+        sort_specs: List of sort specifications
+        limit_value: Maximum number of results
+        offset_value: Number of results to skip
+        fields: List of field names to include (projection)
+        vector_query: Optional vector similarity search parameters
+
+    Example:
+        ```python
+        from dataknobs_data import Query, Filter, Operator, SortOrder, SortSpec, database_factory
+
+        # Simple query with filters
+        query = Query(
+            filters=[
+                Filter("age", Operator.GT, 25),
+                Filter("status", Operator.EQ, "active")
+            ]
+        )
+
+        # Using fluent interface
+        query = (
+            Query()
+            .filter("age", Operator.GT, 25)
+            .filter("status", Operator.EQ, "active")
+            .sort_by("age", SortOrder.DESC)
+            .limit(10)
+            .offset(20)
+        )
+
+        # With field projection
+        query = (
+            Query()
+            .filter("age", Operator.GT, 25)
+            .select("name", "age", "email")
+        )
+
+        # Execute query
+        db = database_factory("memory")
+        results = db.search(query)
+        ```
+    """
 
     filters: list[Filter] = field(default_factory=list)
     sort_specs: list[SortSpec] = field(default_factory=list)

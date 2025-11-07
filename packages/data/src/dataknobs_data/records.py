@@ -19,10 +19,33 @@ class Record:
     - Returns the storage_id if set (database-assigned ID)
     - Falls back to user-defined 'id' field if present
     - Returns None if no ID is available
-    
+
     This separation allows records to have both:
     - A user-defined 'id' field as part of their data
     - A system-assigned storage_id for database operations
+
+    Example:
+        ```python
+        from dataknobs_data import Record, Field, FieldType
+
+        # Create record from dict
+        record = Record({"name": "Alice", "age": 30, "email": "alice@example.com"})
+
+        # Access field values
+        print(record.get_value("name"))  # "Alice"
+        print(record["age"])  # 30
+        print(record.name)  # "Alice" (attribute access)
+
+        # Set field values
+        record.set_value("age", 31)
+        record["city"] = "New York"
+
+        # Work with metadata
+        record.metadata["source"] = "user_input"
+
+        # Convert to dict
+        data = record.to_dict()  # {"name": "Alice", "age": 31, "email": "...", "city": "..."}
+        ```
     """
 
     fields: OrderedDict[str, Field] = field(default_factory=OrderedDict)
@@ -44,6 +67,24 @@ class Record:
             metadata: Optional metadata for the record
             id: Optional unique identifier for the record (deprecated, use storage_id)
             storage_id: Optional storage system identifier for the record
+
+        Example:
+            ```python
+            # From simple dict
+            record = Record({"name": "Alice", "age": 30})
+
+            # With metadata
+            record = Record(
+                data={"name": "Bob"},
+                metadata={"source": "api", "timestamp": "2024-01-01"}
+            )
+
+            # With storage_id
+            record = Record(
+                data={"name": "Charlie"},
+                storage_id="550e8400-e29b-41d4-a716-446655440000"
+            )
+            ```
         """
         self.metadata = metadata or {}
         self.fields = OrderedDict()
@@ -198,6 +239,23 @@ class Record:
 
         Returns:
             The field value or default
+
+        Example:
+            ```python
+            record = Record({
+                "name": "Alice",
+                "config": {"timeout": 30, "retries": 3}
+            })
+
+            # Simple field access
+            name = record.get_value("name")  # "Alice"
+
+            # Nested path access
+            timeout = record.get_value("config.timeout")  # 30
+
+            # With default
+            missing = record.get_value("missing_field", "default")  # "default"
+            ```
         """
         # Check if this is a nested path
         if "." in name:
@@ -506,7 +564,31 @@ class Record:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Record:
-        """Create a record from a dictionary representation."""
+        """Create a record from a dictionary representation.
+
+        Args:
+            data: Dictionary containing record data
+
+        Returns:
+            A new Record instance
+
+        Example:
+            ```python
+            # From simple dict
+            data = {"name": "Alice", "age": 30}
+            record = Record.from_dict(data)
+
+            # From structured format
+            data = {
+                "fields": {
+                    "name": {"value": "Alice", "type": "string"},
+                    "age": {"value": 30, "type": "integer"}
+                },
+                "metadata": {"source": "api"}
+            }
+            record = Record.from_dict(data)
+            ```
+        """
         if "fields" in data:
             fields = OrderedDict()
             for name, field_data in data["fields"].items():
@@ -574,7 +656,23 @@ class Record:
         return Record(data=new_fields, metadata=new_metadata, id=self.id)
 
     def project(self, field_names: list[str]) -> Record:
-        """Create a new record with only specified fields."""
+        """Create a new record with only specified fields.
+
+        Args:
+            field_names: List of field names to include in the projection
+
+        Returns:
+            A new Record containing only the specified fields
+
+        Example:
+            ```python
+            record = Record({"name": "Alice", "age": 30, "email": "alice@example.com"})
+
+            # Project to specific fields
+            subset = record.project(["name", "age"])
+            print(subset.field_names())  # ["name", "age"]
+            ```
+        """
         projected_fields = OrderedDict()
         for name in field_names:
             if name in self.fields:

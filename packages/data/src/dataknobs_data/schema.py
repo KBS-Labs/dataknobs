@@ -10,7 +10,39 @@ from .fields import FieldType
 
 @dataclass
 class FieldSchema:
-    """Schema definition for a field without actual data."""
+    """Schema definition for a field without actual data.
+
+    Defines the structure and constraints for a field in a database schema.
+    Used for validation, type checking, and backend schema generation.
+
+    Attributes:
+        name: Field name
+        type: Field data type
+        metadata: Additional field metadata
+        required: Whether the field is required
+        default: Default value if field is missing
+
+    Example:
+        ```python
+        from dataknobs_data.schema import FieldSchema
+        from dataknobs_data.fields import FieldType
+
+        # Simple field schema
+        name_schema = FieldSchema(name="name", type=FieldType.STRING, required=True)
+
+        # Vector field schema with metadata
+        embedding_schema = FieldSchema(
+            name="embedding",
+            type=FieldType.VECTOR,
+            metadata={"dimensions": 384, "source_field": "content"},
+            required=False
+        )
+
+        # Check if vector field
+        is_vector = embedding_schema.is_vector_field()  # True
+        dims = embedding_schema.get_dimensions()  # 384
+        ```
+    """
 
     name: str
     type: FieldType
@@ -19,7 +51,20 @@ class FieldSchema:
     default: Any = None
 
     def is_vector_field(self) -> bool:
-        """Check if this is a vector field."""
+        """Check if this is a vector field.
+
+        Returns:
+            True if the field type is VECTOR or SPARSE_VECTOR
+
+        Example:
+            ```python
+            vector_schema = FieldSchema(name="embedding", type=FieldType.VECTOR)
+            print(vector_schema.is_vector_field())  # True
+
+            text_schema = FieldSchema(name="content", type=FieldType.TEXT)
+            print(text_schema.is_vector_field())  # False
+            ```
+        """
         return self.type in (FieldType.VECTOR, FieldType.SPARSE_VECTOR)
 
     def get_dimensions(self) -> int | None:
@@ -58,7 +103,48 @@ class FieldSchema:
 
 @dataclass
 class DatabaseSchema:
-    """Schema definition for a database."""
+    """Schema definition for a database.
+
+    Defines the structure of a database by specifying field schemas. Used for
+    validation, type checking, and ensuring consistent data structure across records.
+
+    Attributes:
+        fields: Dictionary mapping field names to FieldSchema objects
+        metadata: Optional schema-level metadata
+
+    Example:
+        ```python
+        from dataknobs_data.schema import DatabaseSchema, FieldSchema
+        from dataknobs_data.fields import FieldType
+
+        # Create schema using .create() method
+        schema = DatabaseSchema.create(
+            name=FieldType.STRING,
+            age=FieldType.INTEGER,
+            email=FieldType.STRING
+        )
+
+        # With vector field and metadata
+        schema = DatabaseSchema.create(
+            content=FieldType.TEXT,
+            embedding=(FieldType.VECTOR, {
+                "dimensions": 384,
+                "source_field": "content"
+            })
+        )
+
+        # Add fields after creation
+        schema.add_field(FieldSchema(
+            name="created_at",
+            type=FieldType.DATETIME,
+            required=True
+        ))
+
+        # Get field schemas
+        content_schema = schema.get_field("content")
+        all_field_names = schema.get_field_names()
+        ```
+    """
 
     fields: dict[str, FieldSchema] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -66,14 +152,29 @@ class DatabaseSchema:
     @classmethod
     def create(cls, **field_definitions) -> DatabaseSchema:
         """Create a schema from keyword arguments.
-        
-        Examples:
+
+        Args:
+            **field_definitions: Field definitions where each key is a field name and
+                each value is either a FieldType or a tuple of (FieldType, options_dict)
+
+        Returns:
+            A new DatabaseSchema instance
+
+        Example:
+            ```python
+            # Simple field types
+            schema = DatabaseSchema.create(
+                name=FieldType.STRING,
+                age=FieldType.INTEGER
+            )
+
+            # With field options
             schema = DatabaseSchema.create(
                 content=FieldType.TEXT,
                 embedding=(FieldType.VECTOR, {"dimensions": 384, "source_field": "content"}),
-                title=FieldType.TEXT,
-                score=(FieldType.FLOAT, {"required": True})
+                score=(FieldType.FLOAT, {"required": True, "default": 0.0})
             )
+            ```
         """
         schema = cls()
         for name, definition in field_definitions.items():

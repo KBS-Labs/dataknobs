@@ -14,7 +14,36 @@ else:
 
 
 class FieldType(Enum):
-    """Enumeration of supported field types."""
+    """Enumeration of supported field types.
+
+    Defines the data types that can be stored in Record fields. Field types enable
+    type validation, schema enforcement, and backend-specific optimizations.
+
+    Attributes:
+        STRING: Short text (< 1000 chars)
+        TEXT: Long text content
+        INTEGER: Whole numbers
+        FLOAT: Decimal numbers
+        BOOLEAN: True/False values
+        DATETIME: Date and time values
+        JSON: Structured JSON data (dicts, lists)
+        BINARY: Binary data (bytes)
+        VECTOR: Dense vector embeddings for similarity search
+        SPARSE_VECTOR: Sparse vector representations
+
+    Example:
+        ```python
+        from dataknobs_data import Field, FieldType
+
+        # Create typed fields
+        name_field = Field(name="name", value="Alice", type=FieldType.STRING)
+        age_field = Field(name="age", value=30, type=FieldType.INTEGER)
+        tags_field = Field(name="tags", value=["python", "data"], type=FieldType.JSON)
+
+        # Auto-detection (type is inferred from value)
+        auto_field = Field(name="score", value=95.5)  # Auto-detected as FLOAT
+        ```
+    """
 
     STRING = "string"
     INTEGER = "integer"
@@ -30,7 +59,44 @@ class FieldType(Enum):
 
 @dataclass
 class Field:
-    """Represents a single field in a record."""
+    """Represents a single field in a record.
+
+    A Field encapsulates a named value along with its type and optional metadata.
+    Field types are automatically detected if not explicitly provided.
+
+    Attributes:
+        name: The field name
+        value: The field value (can be any Python type)
+        type: The field type (auto-detected if None)
+        metadata: Optional metadata dictionary
+
+    Example:
+        ```python
+        from dataknobs_data import Field, FieldType
+
+        # Auto-detected type
+        name = Field(name="name", value="Alice")
+        print(name.type)  # FieldType.STRING
+
+        # Explicit type
+        score = Field(name="score", value=95.5, type=FieldType.FLOAT)
+
+        # With metadata
+        vector = Field(
+            name="embedding",
+            value=[0.1, 0.2, 0.3],
+            type=FieldType.VECTOR,
+            metadata={"dimensions": 3, "model": "text-embedding-3-small"}
+        )
+
+        # Validation
+        is_valid = name.validate()  # True
+
+        # Type conversion
+        str_score = score.convert_to(FieldType.STRING)
+        print(str_score.value)  # "95.5"
+        ```
+    """
 
     name: str
     value: Any
@@ -43,7 +109,21 @@ class Field:
             self.type = self._detect_type(self.value)
 
     def _detect_type(self, value: Any) -> FieldType:
-        """Detect the field type from the value."""
+        """Detect the field type from the value.
+
+        Args:
+            value: The value to analyze
+
+        Returns:
+            The detected FieldType
+
+        Example:
+            ```python
+            field = Field(name="data", value=[1, 2, 3])
+            detected_type = field._detect_type([1, 2, 3])
+            print(detected_type)  # FieldType.JSON
+            ```
+        """
         if value is None:
             return FieldType.STRING
         elif isinstance(value, bool):
@@ -75,7 +155,22 @@ class Field:
         )
 
     def validate(self) -> bool:
-        """Validate that the value matches the field type."""
+        """Validate that the value matches the field type.
+
+        Returns:
+            True if the value is valid for the field type, False otherwise
+
+        Example:
+            ```python
+            # Valid field
+            age = Field(name="age", value=30, type=FieldType.INTEGER)
+            print(age.validate())  # True
+
+            # Invalid field (wrong type for value)
+            bad_field = Field(name="count", value="not a number", type=FieldType.INTEGER)
+            print(bad_field.validate())  # False
+            ```
+        """
         if self.value is None:
             return True
 
@@ -98,7 +193,30 @@ class Field:
         return True
 
     def convert_to(self, target_type: FieldType) -> Field:
-        """Convert the field to a different type."""
+        """Convert the field to a different type.
+
+        Args:
+            target_type: The target FieldType to convert to
+
+        Returns:
+            A new Field with the converted value and type
+
+        Raises:
+            ValueError: If conversion is not possible or fails
+
+        Example:
+            ```python
+            # Integer to string
+            age = Field(name="age", value=30, type=FieldType.INTEGER)
+            age_str = age.convert_to(FieldType.STRING)
+            print(age_str.value)  # "30"
+
+            # String to integer
+            count = Field(name="count", value="42", type=FieldType.STRING)
+            count_int = count.convert_to(FieldType.INTEGER)
+            print(count_int.value)  # 42
+            ```
+        """
         if self.type == target_type:
             return self
 

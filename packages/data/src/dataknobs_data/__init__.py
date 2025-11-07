@@ -1,4 +1,89 @@
-"""DataKnobs Data Package - Unified data abstraction layer."""
+"""DataKnobs Data Package - Unified data abstraction layer.
+
+The `dataknobs-data` package provides a unified interface for working with various
+database backends, including SQLite, PostgreSQL, Elasticsearch, and S3. It offers
+structured data storage, querying, validation, migration, and vector search capabilities.
+
+Modules:
+    database: Core Database classes (SyncDatabase, AsyncDatabase) providing the main API
+    records: Record class for structured data with fields and metadata
+    fields: Field types and definitions for data validation
+    schema: Database schema definitions and field schemas
+    query: Query building with filters, operators, and sorting
+    query_logic: Complex boolean logic queries with AND/OR/NOT operators
+    factory: Database factory functions for creating database instances
+    streaming: Streaming operations for large-scale data processing
+    validation: Data validation with schemas and constraints
+    migration: Data migration tools for moving between backends
+    exceptions: Custom exceptions for error handling
+
+Quick Examples:
+
+    Create and query a database:
+
+    ```python
+    from dataknobs_data import database_factory, Record, Query, Operator, Filter
+
+    # Create an in-memory database
+    db = database_factory("memory")
+
+    # Add records
+    db.add(Record({"name": "Alice", "age": 30}))
+    db.add(Record({"name": "Bob", "age": 25}))
+
+    # Query with filters
+    query = Query(filters=[Filter("age", Operator.GT, 25)])
+    results = db.search(query)
+    print(results)  # [Record with Alice's data]
+    ```
+
+    Use schemas for validation:
+
+    ```python
+    from dataknobs_data import database_factory, Record, FieldType
+    from dataknobs_data.schema import DatabaseSchema
+
+    # Define schema
+    schema = DatabaseSchema.create(
+        name=FieldType.STRING,
+        age=FieldType.INTEGER,
+        email=FieldType.STRING
+    )
+
+    # Create database with schema
+    db = database_factory("memory", config={"schema": schema})
+    db.add(Record({"name": "Alice", "age": 30, "email": "alice@example.com"}))
+    ```
+
+    Stream large datasets:
+
+    ```python
+    from dataknobs_data import database_factory, StreamConfig
+
+    db = database_factory("sqlite", config={"path": "large_data.db"})
+
+    # Stream records in batches
+    config = StreamConfig(batch_size=100)
+    for batch in db.stream(config=config):
+        process_batch(batch.records)
+    ```
+
+Design Philosophy:
+
+    1. **Backend Agnostic** - Write once, deploy anywhere with multiple backend support
+    2. **Type Safe** - Strong typing with schema validation and field type checking
+    3. **Async Ready** - Full async/await support for high-performance applications
+    4. **Composable** - Mix and match features like validation, migration, and vector search
+
+Installation:
+
+    ```bash
+    pip install dataknobs-data
+    ```
+
+For detailed documentation, see the individual module docstrings and the online
+documentation at https://docs.kbs-labs.com/dataknobs
+"""
 
 # Import validation and migration modules
 from . import migration, validation
