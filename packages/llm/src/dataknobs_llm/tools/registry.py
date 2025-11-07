@@ -34,7 +34,7 @@ class ToolRegistry:
         # List available tools
         tools = registry.list_tools()
         for tool_info in tools:
-            print(f"{tool_info['name']}: {tool_info['description']}")  # validate: ignore-print
+            print(f"{tool_info['name']}: {tool_info['description']}")
     """
 
     def __init__(self):

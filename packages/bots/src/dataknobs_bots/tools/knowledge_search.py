@@ -88,7 +88,7 @@ class KnowledgeSearchTool(Tool):
                 max_results=3
             )
             for chunk in result['results']:
-                print(f"{chunk['heading_path']}: {chunk['text']}")  # validate: ignore-print
+                print(f"{chunk['heading_path']}: {chunk['text']}")
             ```
         """
         # Clamp max_results to valid range

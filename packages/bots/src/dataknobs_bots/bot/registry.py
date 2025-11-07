@@ -274,7 +274,7 @@ class BotRegistry:
         Example:
             ```python
             clients = registry.get_cached_clients()
-            print(f"Cached bots: {clients}")  # validate: ignore-print
+            print(f"Cached bots: {clients}")
             ```
         """
         return list(self._cache.keys())
