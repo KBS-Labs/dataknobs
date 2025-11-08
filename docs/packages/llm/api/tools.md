@@ -169,5 +169,5 @@ The `to_anthropic_tool_definition()` method returns Claude-compatible tool defin
 ## See Also
 
 - [Tools Guide](../guides/tools-and-enhancements.md) - Comprehensive usage guide
-- [LLM API](llm.md) - LLM provider interface
+- [LLM API](../../../api/dataknobs-llm.md) - LLM provider interface
 - [Conversations API](conversations.md) - Conversation management

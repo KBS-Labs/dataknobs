@@ -6,7 +6,6 @@ The `dataknobs-bots` package provides a flexible framework for building AI chatb
 
 > **💡 Quick Links:**
 > - [Complete API Documentation](reference/bots.md) - Full auto-generated reference
-> - [Detailed API Reference](../packages/bots/api/index.md) - Curated API docs with examples
 > - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/bots/src/dataknobs_bots) - Browse on GitHub
 > - [Package Guide](../packages/bots/index.md) - Detailed documentation
 

@@ -308,7 +308,7 @@ summary = await manager.execute_flow()
 - [FSM Conversation Flow](../../llm/examples/fsm-conversation-flow.md)
 
 ### API Reference
-- [LLM API](../../llm/api/llm.md)
+- [LLM API](../../../api/dataknobs-llm.md)
 - [Conversations API](../../llm/api/conversations.md)
 - [Prompts API](../../llm/api/prompts.md)
 

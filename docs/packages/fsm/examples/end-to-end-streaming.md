@@ -398,9 +398,9 @@ uv run pytest tests/test_end_to_end_streaming_example.py -v
 ## Related Documentation
 
 - [FSM Configuration Guide](../guides/configuration.md) - Complete guide to FSM configuration
-- [SimpleFSM API](../api/simple.md) - Simple FSM API documentation
-- [AdvancedFSM API](../api/advanced.md) - Advanced FSM with debugging capabilities
-- [API Index](../api/index.md) - Complete API documentation
+- [SimpleFSM API](../../../api/dataknobs-fsm.md) - Simple FSM API documentation
+- [AdvancedFSM API](../../../api/dataknobs-fsm.md) - Advanced FSM with debugging capabilities
+- [API Index](../../../api/dataknobs-fsm.md) - Complete API documentation
 
 ## Summary
 

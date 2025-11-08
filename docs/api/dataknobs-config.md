@@ -5,7 +5,7 @@
 The `dataknobs-config` package provides a modular configuration system with composable settings, environment variable overrides, and cross-references between configurations.
 
 > **💡 Quick Links:**
-> - [Complete API Documentation](complete-reference.md#dataknobs-config) - Full auto-generated reference
+> - [Complete API Documentation](reference/config.md) - Full auto-generated reference
 > - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/config/src/dataknobs_config) - Browse on GitHub
 > - [Package Guide](../packages/config/index.md) - Detailed documentation
 

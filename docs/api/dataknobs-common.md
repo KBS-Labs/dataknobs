@@ -2,8 +2,10 @@
 
 Common utilities and base classes shared across dataknobs packages.
 
-> **Repository**: [github.com/KBS-Labs/dataknobs](https://github.com/KBS-Labs/dataknobs)
-> **Source Code**: [packages/common/src/dataknobs_common](https://github.com/KBS-Labs/dataknobs/tree/main/packages/common/src/dataknobs_common)
+> **💡 Quick Links:**
+> - [Complete API Documentation](reference/common.md) - Full auto-generated reference
+> - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/common/src/dataknobs_common) - Browse on GitHub
+> - [Package Guide](../packages/common/index.md) - Detailed documentation
 
 ## Overview
 

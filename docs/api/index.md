@@ -23,15 +23,15 @@ Complete API documentation for all Dataknobs packages.
 ## Package APIs
 
 ### AI & LLM Packages
-- [dataknobs-bots](../packages/bots/api/index.md) - AI chatbots and agents API
-- [dataknobs-llm](../packages/llm/api/llm.md) - LLM integration API
+- [dataknobs-bots](dataknobs-bots.md) - AI chatbots and agents API
+- [dataknobs-llm](dataknobs-llm.md) - LLM integration API
 
 ### Data & Configuration Packages
 - [dataknobs-data](dataknobs-data.md) - Data abstraction API
 - [dataknobs-config](dataknobs-config.md) - Configuration management API
 
 ### Workflow & Processing Packages
-- [dataknobs-fsm](../packages/fsm/api/index.md) - Finite State Machine framework API
+- [dataknobs-fsm](dataknobs-fsm.md) - Finite State Machine framework API
 
 ### Core Utilities Packages
 - [dataknobs-structures](dataknobs-structures.md) - Core data structures API

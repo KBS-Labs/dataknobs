@@ -6,7 +6,6 @@ The `dataknobs-fsm` package provides finite state machine implementations for bu
 
 > **💡 Quick Links:**
 > - [Complete API Documentation](reference/fsm.md) - Full auto-generated reference
-> - [Detailed API Reference](../packages/fsm/api/index.md) - Curated API docs with examples
 > - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/fsm/src/dataknobs_fsm) - Browse on GitHub
 > - [Package Guide](../packages/fsm/index.md) - Detailed documentation
 

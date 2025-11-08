@@ -121,7 +121,6 @@ nav:
       - packages/fsm/quickstart.md
       - packages/fsm/faq.md
       - API Reference:
-        - packages/fsm/api/index.md
         - packages/fsm/api/simple.md
         - packages/fsm/api/async_simple.md
         - packages/fsm/api/advanced.md
@@ -160,7 +159,6 @@ nav:
         - packages/llm/guides/performance.md
         - packages/llm/guides/tools-and-enhancements.md
       - API Reference:
-        - packages/llm/api/llm.md
         - packages/llm/api/prompts.md
         - packages/llm/api/conversations.md
         - packages/llm/api/versioning.md
@@ -180,7 +178,6 @@ nav:
         - packages/bots/guides/architecture.md
         - packages/bots/guides/tools.md
       - API Reference:
-        - packages/bots/api/index.md
         - packages/bots/api/reference.md
       - Examples:
         - packages/bots/examples/index.md

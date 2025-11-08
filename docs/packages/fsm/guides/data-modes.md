@@ -523,4 +523,4 @@ Start with COPY mode and only switch to other modes when you have specific requi
 - [Resource Management Guide](resources.md) - Learn about managing external resources
 - [Streaming Guide](streaming.md) - Process large datasets efficiently
 - [Pattern Catalog](../patterns/index.md) - FSM usage patterns
-- [API Reference](../api/index.md) - Detailed API documentation
+- [API Reference](../../../api/dataknobs-fsm.md) - Detailed API documentation

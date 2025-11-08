@@ -2,6 +2,11 @@
 
 Core data structures for AI knowledge bases and data processing pipelines.
 
+> **💡 Quick Links:**
+> - [Complete API Documentation](reference/structures.md) - Full auto-generated reference
+> - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/structures/src/dataknobs_structures) - Browse on GitHub
+> - [Package Guide](../packages/structures/index.md) - Detailed documentation
+
 ## Overview
 
 The `dataknobs-structures` package provides fundamental data structures designed for building AI applications, knowledge bases, and data processing workflows. Each structure is designed to be simple, flexible, and practical for real-world use cases.

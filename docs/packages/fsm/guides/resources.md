@@ -682,5 +682,5 @@ Use the ResourceManager for all external dependencies to ensure proper lifecycle
 
 - [Streaming Guide](streaming.md) - Process large datasets with resources
 - [Data Modes Guide](data-modes.md) - Understand data handling modes
-- [API Reference](../api/index.md) - Resource API documentation
+- [API Reference](../../../api/dataknobs-fsm.md) - Resource API documentation
 - [Pattern Catalog](../patterns/index.md) - Resource usage patterns

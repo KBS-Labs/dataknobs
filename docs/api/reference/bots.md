@@ -3,7 +3,7 @@
 Complete auto-generated API documentation from source code docstrings.
 
 > **💡 Also see:**
-> - [Curated Guide](../../packages/bots/api/index.md) - Hand-crafted tutorials and examples
+> - [Curated API Guide](../dataknobs-bots.md) - Hand-crafted tutorials and examples
 > - [Package Overview](../../packages/bots/index.md) - Introduction and getting started
 > - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/bots/src/dataknobs_bots) - View on GitHub
 

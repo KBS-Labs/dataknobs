@@ -3,7 +3,7 @@
 Complete auto-generated API documentation from source code docstrings.
 
 > **💡 Also see:**
-> - [Curated Guide](../../packages/llm/api/llm.md) - Hand-crafted tutorials and examples
+> - [Curated API Guide](../dataknobs-llm.md) - Hand-crafted tutorials and examples
 > - [Package Overview](../../packages/llm/index.md) - Introduction and getting started
 > - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/llm/src/dataknobs_llm) - View on GitHub
 

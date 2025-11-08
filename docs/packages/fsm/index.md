@@ -65,7 +65,7 @@ For LLM/AI workflows, see the [dataknobs-llm package](../llm/index.md).
 ## Quick Links
 
 - [Quick Start Guide](quickstart.md) - Get started with FSM in 5 minutes
-- [API Documentation](api/index.md) - Complete API reference
+- [API Documentation](../../api/dataknobs-fsm.md) - Complete API reference
 - [Patterns Guide](patterns/index.md) - Pre-built integration patterns
 - [Examples](examples/index.md) - Real-world usage examples
 
@@ -404,7 +404,7 @@ Functions can be registered and used throughout the FSM:
 
 - **Getting Started**: Follow the [Quick Start Guide](quickstart.md) for a hands-on introduction
 - **Examples**: Explore [real-world examples](examples/index.md) with complete code
-- **API Reference**: Read the [API Documentation](api/index.md) for detailed reference
+- **API Reference**: Read the [API Documentation](../../api/dataknobs-fsm.md) for detailed reference
 - **Patterns**: Learn about [Integration Patterns](patterns/index.md) for common scenarios
 
 ### [Guides](guides/index.md): Deep dive into specific features:

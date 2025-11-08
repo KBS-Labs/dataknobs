@@ -3,9 +3,9 @@
 Complete API documentation for the `dataknobs_xization` package.
 
 > **💡 Quick Links:**
-> - [Package Guide](../packages/xization/index.md) - Tutorials and examples
-> - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/xization/src/dataknobs_xization) - View on GitHub
-> - [API Index](complete-reference.md) - All packages
+> - [Complete API Documentation](reference/xization.md) - Full auto-generated reference
+> - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/xization/src/dataknobs_xization) - Browse on GitHub
+> - [Package Guide](../packages/xization/index.md) - Detailed documentation
 
 ## Package Information
 

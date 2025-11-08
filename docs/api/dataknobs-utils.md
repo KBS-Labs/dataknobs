@@ -3,9 +3,9 @@
 Complete API documentation for the `dataknobs_utils` package.
 
 > **💡 Quick Links:**
-> - [Package Guide](../packages/utils/index.md) - Tutorials and examples
-> - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/utils/src/dataknobs_utils) - View on GitHub
-> - [API Index](complete-reference.md) - All packages
+> - [Complete API Documentation](reference/utils.md) - Full auto-generated reference
+> - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/utils/src/dataknobs_utils) - Browse on GitHub
+> - [Package Guide](../packages/utils/index.md) - Detailed documentation
 
 ## Package Information
 

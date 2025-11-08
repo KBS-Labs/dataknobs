@@ -274,6 +274,6 @@ To extend this example for your use case:
 
 ## API References
 
-- [SimpleFSM](../api/simple.md) - Simple FSM API for basic workflows
-- [AdvancedFSM](../api/advanced.md) - Advanced FSM with debugging capabilities
-- [API Index](../api/index.md) - Complete API documentation
+- [SimpleFSM](../../../api/dataknobs-fsm.md) - Simple FSM API for basic workflows
+- [AdvancedFSM](../../../api/dataknobs-fsm.md) - Advanced FSM with debugging capabilities
+- [API Index](../../../api/dataknobs-fsm.md) - Complete API documentation

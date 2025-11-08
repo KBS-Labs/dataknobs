@@ -3,7 +3,7 @@
 Complete auto-generated API documentation from source code docstrings.
 
 > **💡 Also see:**
-> - [Curated Guide](../../packages/fsm/api/index.md) - Hand-crafted tutorials and examples
+> - [Curated API Guide](../dataknobs-fsm.md) - Hand-crafted tutorials and examples
 > - [Package Overview](../../packages/fsm/index.md) - Introduction and getting started
 > - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/fsm/src/dataknobs_fsm) - View on GitHub
 

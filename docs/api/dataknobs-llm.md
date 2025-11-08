@@ -6,7 +6,6 @@ The `dataknobs-llm` package provides a unified interface for working with differ
 
 > **💡 Quick Links:**
 > - [Complete API Documentation](reference/llm.md) - Full auto-generated reference
-> - [Detailed API Reference](../packages/llm/api/llm.md) - Curated API docs with examples
 > - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/llm/src/dataknobs_llm) - Browse on GitHub
 > - [Package Guide](../packages/llm/index.md) - Detailed documentation
 
