@@ -1,3 +1,9 @@
+"""System and environment utility functions.
+
+Provides utilities for loading environment variables, network discovery,
+and system configuration management.
+"""
+
 import os
 import re
 import socket

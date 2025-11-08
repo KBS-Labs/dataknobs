@@ -1,3 +1,9 @@
+"""HTTP request utilities for making API calls and handling responses.
+
+Provides convenience functions for making HTTP requests with error handling,
+timeout management, and response parsing.
+"""
+
 import json
 import socket
 import sys

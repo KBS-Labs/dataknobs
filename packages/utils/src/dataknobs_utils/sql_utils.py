@@ -1,3 +1,9 @@
+"""SQL database utility functions and connection management.
+
+Provides utilities for working with SQL databases including PostgreSQL,
+with support for connection management, query execution, and data loading.
+"""
+
 from __future__ import annotations
 
 import os

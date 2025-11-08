@@ -1,3 +1,10 @@
+"""Database abstraction layer providing unified interfaces for data operations.
+
+This module defines abstract base classes for synchronous and asynchronous database
+operations, supporting CRUD, querying, streaming, and schema management across
+different backend database implementations.
+"""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

@@ -1,3 +1,9 @@
+"""Character-level text feature extraction and tokenization.
+
+Provides abstract classes for extracting character-level features from text,
+building DataFrames with character features for masking and tokenization.
+"""
+
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any, List, Tuple, Union
@@ -102,6 +108,14 @@ class CharacterFeatures(ABC):
 
 
 class TextFeatures(CharacterFeatures):
+    """Extracts text-specific character features for tokenization.
+
+    Extends CharacterFeatures to provide text tokenization with support for
+    camelCase splitting, character type features (alpha, digit, upper, lower),
+    and emoji handling. Builds a character DataFrame with features for
+    token boundary detection.
+    """
+
     def __init__(
         self,
         doctext: Union[dk_doc.Text, str],

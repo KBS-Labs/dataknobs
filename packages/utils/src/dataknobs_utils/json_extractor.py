@@ -1,3 +1,9 @@
+"""Extract and repair JSON objects from text strings.
+
+Provides the JSONExtractor class for finding, extracting, and repairing
+JSON objects embedded in text, with categorization of complete vs fixed objects.
+"""
+
 import json
 import re
 from typing import Any, Dict, List, Tuple

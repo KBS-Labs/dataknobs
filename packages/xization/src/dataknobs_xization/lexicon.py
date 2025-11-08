@@ -1,3 +1,9 @@
+"""Lexical matching and token alignment for text processing.
+
+Provides classes for lexical expansion, normalization, token alignment,
+and pattern matching in text with support for variations and fuzzy matching.
+"""
+
 from abc import abstractmethod
 from collections import defaultdict
 from collections.abc import Callable
@@ -97,6 +103,13 @@ class LexicalExpander:
 
 
 class TokenMatch:
+    """Represents a match between tokens and a lexical authority variation.
+
+    Matches a sequence of tokens against a lexical authority variation,
+    tracking whether the match is complete and providing access to
+    matched text and annotation generation.
+    """
+
     def __init__(self, auth: dk_auth.LexicalAuthority, val_idx: int, var: str, token: dk_tok.Token):
         self.auth = auth
         self.val_idx = val_idx
@@ -143,6 +156,13 @@ class TokenMatch:
 
 
 class TokenAligner:
+    """Aligns tokens with a lexical authority to generate annotations.
+
+    Processes a token stream, matching tokens against lexical authority
+    variations and generating annotations for matches. Handles overlapping
+    matches and tracks processed tokens.
+    """
+
     def __init__(self, first_token: dk_tok.Token, authority: dk_auth.LexicalAuthority):
         self.first_token = first_token
         self.auth = authority

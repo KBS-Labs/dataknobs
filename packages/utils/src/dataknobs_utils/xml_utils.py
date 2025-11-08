@@ -1,3 +1,9 @@
+"""XML processing utilities with streaming and memory-efficient parsing.
+
+Provides classes and functions for parsing and streaming XML documents,
+including the XmlStream abstract base class for memory-efficient processing.
+"""
+
 import mmap
 import re
 import xml.etree.ElementTree as ET

@@ -1,3 +1,9 @@
+"""Authority-based annotation processing and field grouping.
+
+Provides classes for managing authority-based annotations, field groups,
+and derived annotation columns for structured text extraction.
+"""
+
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable

@@ -1,3 +1,9 @@
+"""Structured data records with typed fields and metadata.
+
+This module defines the Record class for representing structured data with
+typed fields, validation, and conversion utilities for database operations.
+"""
+
 from __future__ import annotations
 
 import uuid

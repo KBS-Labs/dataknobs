@@ -1,3 +1,9 @@
+"""Utility functions for Elasticsearch operations and query building.
+
+Provides helper functions for constructing Elasticsearch queries, managing indices,
+and processing search results with Pandas integration.
+"""
+
 import json
 from collections.abc import Generator
 from typing import Any, Dict, List, TextIO, Union

@@ -1,3 +1,9 @@
+"""Query construction and filtering for database operations.
+
+This module provides classes for building queries with filters, operators,
+sorting, pagination, and vector similarity search for database operations.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

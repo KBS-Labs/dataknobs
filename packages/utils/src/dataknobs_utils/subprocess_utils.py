@@ -1,3 +1,9 @@
+"""Subprocess execution utilities for running system commands.
+
+Provides functions for executing system commands and processing their
+output line-by-line with callback handlers.
+"""
+
 import subprocess
 from collections.abc import Callable
 from typing import List, Union

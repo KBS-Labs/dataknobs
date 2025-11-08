@@ -1,3 +1,9 @@
+"""File system utility functions for traversing, reading, and writing files.
+
+Provides generators and helpers for working with files, directories,
+and compressed file formats.
+"""
+
 import gzip
 import os
 from collections.abc import Generator

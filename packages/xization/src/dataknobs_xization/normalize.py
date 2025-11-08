@@ -1,3 +1,9 @@
+"""Text normalization utilities and regular expressions.
+
+Provides functions and regex patterns for normalizing text including
+whitespace handling, camelCase splitting, and symbol processing.
+"""
+
 import math
 import re
 from itertools import product

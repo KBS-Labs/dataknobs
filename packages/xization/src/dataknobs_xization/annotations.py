@@ -1,3 +1,9 @@
+"""Text annotation data structures and interfaces.
+
+Provides classes for managing text annotations with metadata, including
+position tracking, annotation types, and derived annotation columns.
+"""
+
 import json
 from abc import ABC, abstractmethod
 from collections.abc import Callable

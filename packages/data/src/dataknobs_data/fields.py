@@ -1,3 +1,9 @@
+"""Field type definitions and metadata for structured data records.
+
+This module defines field types, validation, and metadata structures used by
+Record objects to represent typed data fields with constraints and transformations.
+"""
+
 from __future__ import annotations
 
 import copy

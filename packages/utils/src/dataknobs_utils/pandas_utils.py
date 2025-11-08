@@ -1,3 +1,9 @@
+"""Pandas DataFrame utility functions and data transformations.
+
+Provides utilities for creating, transforming, and manipulating Pandas DataFrames,
+including conversions between dicts, lists, and DataFrame formats.
+"""
+
 import itertools
 import json
 from typing import Any, Dict, List, Set, Tuple, Union

@@ -1,3 +1,9 @@
+"""Utility functions for JSON processing, streaming, and manipulation.
+
+Provides functions for working with JSON data including nested value access,
+streaming from files and URLs, and tree-based JSON structure operations.
+"""
+
 import gzip
 import io
 import os

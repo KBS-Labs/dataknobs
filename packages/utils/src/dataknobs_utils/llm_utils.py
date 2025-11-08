@@ -1,3 +1,9 @@
+"""Utility functions for working with Large Language Model outputs.
+
+Provides functions for LLM-related operations including response parsing,
+prompt formatting, and structured output extraction.
+"""
+
 import json
 from collections.abc import Callable
 from datetime import datetime

@@ -1,3 +1,9 @@
+"""Statistical utility functions and timing helpers.
+
+Provides utilities for timing operations, random waits, rate limiting,
+and basic statistical calculations.
+"""
+
 import json
 import math
 import random
