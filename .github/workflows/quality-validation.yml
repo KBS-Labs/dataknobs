@@ -80,21 +80,21 @@ jobs:
               owner: owner,
               repo: repo,
             body: `## ❌ Quality Check Validation Failed
-            
+
             The quality check artifacts are either missing, outdated, or show failing tests.
-            
+
             **Please run the following command locally before pushing:**
             \`\`\`bash
             ./bin/run-quality-checks.sh
             \`\`\`
-            
+
             This will:
             1. Start the required Docker services (PostgreSQL, Elasticsearch, LocalStack)
             2. Run all unit and integration tests
-            3. Perform linting and style checks
+            3. Perform style checks with ruff
             4. Generate coverage reports
             5. Create artifacts in \`.quality-artifacts/\` that must be committed
-            
+
             For more information, see [Quality Checks Guide](../blob/main/docs/development/quality-checks.md)`
             })
           }

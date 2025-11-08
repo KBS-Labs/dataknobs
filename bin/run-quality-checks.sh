@@ -12,7 +12,6 @@ TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 # Default values
 PACKAGES=""
-SKIP_LINT="no"
 SKIP_STYLE="no"
 SKIP_TESTS="no"
 PYTEST_ARGS=""
@@ -58,8 +57,7 @@ ${YELLOW}Options:${NC}
                             (unit and integration tests separately)
     --dev                   Dev mode: Run quick checks without artifacts
                             (combined tests, no artifact pollution)
-    --skip-lint             Skip linting checks
-    --skip-style            Skip style checks  
+    --skip-style            Skip style checks (ruff)
     --skip-tests            Skip test execution
     --keep-services         Keep services running after completion
     -h, --help              Show this help message
@@ -74,7 +72,7 @@ ${YELLOW}Examples:${NC}
     $0 --dev data           # Dev mode: Quick checks for data package
     $0 data config          # Dev mode: Check specific packages (no artifacts)
     $0 --pr data            # PR mode for data package only
-    $0 --skip-lint          # Run all checks except linting
+    $0 --skip-style         # Run all checks except style checks
     $0 data -- -x           # Run data package with pytest -x flag
 
 ${YELLOW}Environment:${NC}
@@ -123,10 +121,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --dev)
             PR_MODE="no"
-            shift
-            ;;
-        --skip-lint)
-            SKIP_LINT="yes"
             shift
             ;;
         --skip-style)
@@ -351,7 +345,6 @@ EOF
 fi
 
 # Initialize status tracking
-LINT_STATUS=0
 STYLE_STATUS=0
 TEST_STATUS=0
 UNIT_TEST_STATUS=0
@@ -391,52 +384,20 @@ else
     exit 1
 fi
 
-# Run linting
-if [ "$SKIP_LINT" != "yes" ]; then
-    print_status "Running linting checks..."
-    if [ "$PR_MODE" = "yes" ]; then
-        # PR mode: save output to artifacts
-        if uv run pylint $PACKAGE_PATTERN --rcfile=.pylintrc --output-format=json > "$ARTIFACTS_DIR/lint-report.json" 2>&1; then
-            print_success "Linting passed"
-        else
-            LINT_STATUS=$?
-            if [ $LINT_STATUS -eq 2 ] || [ $LINT_STATUS -eq 4 ] || [ $LINT_STATUS -eq 8 ] || [ $LINT_STATUS -eq 16 ]; then
-                print_warning "Linting found issues (exit code: $LINT_STATUS)"
-            else
-                print_error "Linting failed with error"
-            fi
-        fi
-    else
-        # Dev mode: show output directly
-        if uv run pylint $PACKAGE_PATTERN --rcfile=.pylintrc; then
-            print_success "Linting passed"
-        else
-            LINT_STATUS=$?
-            if [ $LINT_STATUS -eq 2 ] || [ $LINT_STATUS -eq 4 ] || [ $LINT_STATUS -eq 8 ] || [ $LINT_STATUS -eq 16 ]; then
-                print_warning "Linting found issues (exit code: $LINT_STATUS)"
-            else
-                print_error "Linting failed with error"
-            fi
-        fi
-    fi
-else
-    print_status "Skipping linting checks"
-fi
-
-# Run style checks
+# Run style checks (using ruff for linting and style)
 if [ "$SKIP_STYLE" != "yes" ]; then
     print_status "Running style checks with ruff..."
     if [ "$PR_MODE" = "yes" ]; then
-        # PR mode: save output to artifacts
-        if uv run ruff check $PACKAGE_PATTERN --output-format=json > "$ARTIFACTS_DIR/style-check.json" 2>&1; then
+        # PR mode: save output to artifacts (use config to respect suppressions)
+        if uv run ruff check $PACKAGE_PATTERN --output-format=json --config "$PROJECT_ROOT/pyproject.toml" > "$ARTIFACTS_DIR/style-check.json" 2>&1; then
             print_success "Style checks passed"
         else
             STYLE_STATUS=$?
             print_warning "Style check found issues"
         fi
     else
-        # Dev mode: show output directly
-        if uv run ruff check $PACKAGE_PATTERN; then
+        # Dev mode: show output directly (use config to respect suppressions)
+        if uv run ruff check $PACKAGE_PATTERN --config "$PROJECT_ROOT/pyproject.toml"; then
             print_success "Style checks passed"
         else
             STYLE_STATUS=$?
@@ -817,15 +778,11 @@ if [ "$PR_MODE" = "yes" ]; then
   "environment": "$([ "$IN_DOCKER" = true ] && echo "docker" || echo "host")",
   "packages": "$([ -n "$PACKAGES" ] && echo "$PACKAGES" || echo "all")",
   "checks": {
-    "lint": {
-      "status": $([ $LINT_STATUS -eq 0 ] && echo '"pass"' || echo '"warning"'),
-      "exit_code": $LINT_STATUS,
-      "skipped": $([ "$SKIP_LINT" = "yes" ] && echo "true" || echo "false")
-    },
     "style": {
       "status": $([ $STYLE_STATUS -eq 0 ] && echo '"pass"' || echo '"warning"'),
       "exit_code": $STYLE_STATUS,
-      "skipped": $([ "$SKIP_STYLE" = "yes" ] && echo "true" || echo "false")
+      "skipped": $([ "$SKIP_STYLE" = "yes" ] && echo "true" || echo "false"),
+      "tool": "ruff"
     },
     "unit_tests": {
       "status": $([ $UNIT_TEST_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
@@ -856,20 +813,12 @@ echo -e "${BLUE}                        Quality Check Summary                   
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
 echo ""
 
-if [ "$SKIP_LINT" = "yes" ]; then
-    echo -e "  Linting:           ${CYAN}⊘ SKIPPED${NC}"
-elif [ $LINT_STATUS -eq 0 ]; then
-    echo -e "  Linting:           ${GREEN}✓ PASSED${NC}"
-else
-    echo -e "  Linting:           ${YELLOW}⚠ WARNINGS${NC}"
-fi
-
 if [ "$SKIP_STYLE" = "yes" ]; then
-    echo -e "  Style Check:       ${CYAN}⊘ SKIPPED${NC}"
+    echo -e "  Style Check (ruff): ${CYAN}⊘ SKIPPED${NC}"
 elif [ $STYLE_STATUS -eq 0 ]; then
-    echo -e "  Style Check:       ${GREEN}✓ PASSED${NC}"
+    echo -e "  Style Check (ruff): ${GREEN}✓ PASSED${NC}"
 else
-    echo -e "  Style Check:       ${YELLOW}⚠ WARNINGS${NC}"
+    echo -e "  Style Check (ruff): ${YELLOW}⚠ WARNINGS${NC}"
 fi
 
 if [ "$PR_MODE" = "yes" ]; then

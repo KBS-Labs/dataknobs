@@ -66,7 +66,7 @@ ${BOLD}${BLUE}Detailed Commands:${NC}
   
   ${BOLD}PR Preparation:${NC}
     pr, prepare      Full quality checks for PR
-    prq, pr-quick    PR checks without slow linting
+    prq, pr-quick    Alias for 'pr' (same as full PR checks)
     
   ${BOLD}Quality Checks:${NC}
     check [pkg]      Quick check (dev mode)
@@ -192,8 +192,8 @@ main() {
             export TEST_ELASTICSEARCH=true
             export TEST_POSTGRES=true
             export TEST_OLLAMA=true
-            run_command "Quick PR check (skipping lint)" \
-                "$SCRIPT_DIR/run-quality-checks.sh" --pr --skip-lint "$@"
+            run_command "Quick PR check" \
+                "$SCRIPT_DIR/run-quality-checks.sh" --pr "$@"
             ;;
             
         # Quality Checks
