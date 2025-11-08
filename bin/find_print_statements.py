@@ -4,6 +4,9 @@ Find print statements in Python code using AST parsing.
 
 This tool parses Python source files and identifies print() function calls
 in executable code, ignoring comments, docstrings, and string literals.
+
+Print statements that explicitly specify a 'file' argument are ignored,
+as these are considered proper usage (e.g., print(..., file=sys.stderr)).
 """
 
 import ast
@@ -40,10 +43,18 @@ class PrintStatementFinder(ast.NodeVisitor):
             is_print = True
 
         if is_print:
-            # Get the line content for context
-            line_num = node.lineno
-            col_offset = node.col_offset
-            self.print_statements.append((line_num, col_offset, self.filename))
+            # Check if the print call uses the 'file' argument
+            # If it does, it's considered proper usage and should be ignored
+            has_file_arg = any(
+                keyword.arg == 'file'
+                for keyword in node.keywords
+            )
+
+            if not has_file_arg:
+                # Only flag prints that don't specify a file argument
+                line_num = node.lineno
+                col_offset = node.col_offset
+                self.print_statements.append((line_num, col_offset, self.filename))
 
         # Continue visiting child nodes
         self.generic_visit(node)
