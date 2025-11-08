@@ -5,8 +5,11 @@ Find print statements in Python code using AST parsing.
 This tool parses Python source files and identifies print() function calls
 in executable code, ignoring comments, docstrings, and string literals.
 
-Print statements that explicitly specify a 'file' argument are ignored,
-as these are considered proper usage (e.g., print(..., file=sys.stderr)).
+Print statements are ignored in the following cases (considered proper usage):
+- Print statements that explicitly specify a 'file' argument
+  (e.g., print(..., file=sys.stderr))
+- Print statements inside 'if __name__ == "__main__":' blocks
+  (CLI/script usage where stdout printing is expected)
 """
 
 import ast
@@ -22,6 +25,7 @@ class PrintStatementFinder(ast.NodeVisitor):
         self.filename = filename
         self.print_statements: List[Tuple[int, int, str]] = []
         self._in_docstring = False
+        self._in_main_block = False
 
     def visit_Expr(self, node: ast.Expr) -> None:
         """Visit expression nodes to detect docstrings."""
@@ -30,6 +34,49 @@ class PrintStatementFinder(ast.NodeVisitor):
             # This is a docstring, skip it
             return
         self.generic_visit(node)
+
+    def visit_If(self, node: ast.If) -> None:
+        """Visit If nodes to detect if __name__ == "__main__" blocks."""
+        is_main_block = self._is_main_guard(node.test)
+
+        if is_main_block:
+            # Set flag before visiting the block
+            old_in_main = self._in_main_block
+            self._in_main_block = True
+
+            # Visit the body of the if block
+            for child in node.body:
+                self.visit(child)
+
+            # Visit the else block (orelse) if it exists, without the main flag
+            self._in_main_block = old_in_main
+            for child in node.orelse:
+                self.visit(child)
+        else:
+            # Regular if statement, visit normally
+            self.generic_visit(node)
+
+    def _is_main_guard(self, test_node: ast.expr) -> bool:
+        """Check if a test expression is 'if __name__ == "__main__"'."""
+        if isinstance(test_node, ast.Compare):
+            # Check for __name__ == "__main__" or "__main__" == __name__
+            if len(test_node.ops) == 1 and isinstance(test_node.ops[0], ast.Eq):
+                left = test_node.left
+                comparators = test_node.comparators
+
+                if len(comparators) == 1:
+                    right = comparators[0]
+
+                    # Check both orders: __name__ == "__main__" and "__main__" == __name__
+                    name_is_left = isinstance(left, ast.Name) and left.id == "__name__"
+                    main_is_right = isinstance(right, ast.Constant) and right.value == "__main__"
+
+                    name_is_right = isinstance(right, ast.Name) and right.id == "__name__"
+                    main_is_left = isinstance(left, ast.Constant) and left.value == "__main__"
+
+                    return (name_is_left and main_is_right) or (name_is_right and main_is_left)
+
+        return False
 
     def visit_Call(self, node: ast.Call) -> None:
         """Visit function call nodes to find print() calls."""
@@ -43,6 +90,11 @@ class PrintStatementFinder(ast.NodeVisitor):
             is_print = True
 
         if is_print:
+            # Ignore prints in if __name__ == "__main__" blocks
+            if self._in_main_block:
+                self.generic_visit(node)
+                return
+
             # Check if the print call uses the 'file' argument
             # If it does, it's considered proper usage and should be ignored
             has_file_arg = any(
