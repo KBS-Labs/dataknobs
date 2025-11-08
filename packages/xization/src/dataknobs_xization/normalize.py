@@ -1,3 +1,9 @@
+"""Text normalization utilities and regular expressions.
+
+Provides functions and regex patterns for normalizing text including
+whitespace handling, camelCase splitting, and symbol processing.
+"""
+
 import math
 import re
 from itertools import product
@@ -80,7 +86,7 @@ def get_hyphen_slash_expansions_fn(
     add_self: bool = True,
     do_split: bool = True,
     min_split_token_len: int = 2,
-    hyphen_slash_re=HYPHEN_SLASH_RE,
+    hyphen_slash_re: re.Pattern[str] = HYPHEN_SLASH_RE,
 ) -> Set[str]:
     """Given text with words that may or may not appear as hyphenated or with a
     slash, return the set potential variations:
@@ -91,19 +97,24 @@ def get_hyphen_slash_expansions_fn(
         - with each word separately (do_split as long as min_split_token_len is
               met for all tokens)
 
-    :param text: The hyphen-worthy snippet of text, either already
-        hyphenated or with a slash or space delimited.
-    :param subs: A string of characters or list of strings to insert between
-        tokens
-    :param add_self: True to include the text itself in the result
-    :param min_split_token_len: If any of the split tokens fail
-        to meet the min token length, don't add any of the splits.
-    :param hyphen_slash_re: The regex to identify hyphen/slash to expand.
+    Note:
+        * To add a variation with a slash, add '/' to subs.
+        * To not add any variations with symbols, leave them out of subs
+          and don't add self.
 
-    Notes:
-      * To add a variation with a slash, add '/' to subs.
-      * To not add any variations with symbols, leave them out of subs
-        * and don't add self.
+    Args:
+        text: The hyphen-worthy snippet of text, either already
+            hyphenated or with a slash or space delimited.
+        subs: A string of characters or list of strings to insert between
+            tokens.
+        add_self: True to include the text itself in the result.
+        do_split: True to add split tokens separately.
+        min_split_token_len: If any of the split tokens fail
+            to meet the min token length, don't add any of the splits.
+        hyphen_slash_re: The regex to identify hyphen/slash to expand.
+
+    Returns:
+        The set of text variations.
     """
     variations = {text} if add_self else set()
     if subs is not None and len(subs) > 0:
@@ -138,7 +149,7 @@ def get_lexical_variations(
     do_hyphen_expansion: bool = True,
     hyphen_subs: List[str] = (" ", ""),
     do_hyphen_split: bool = True,
-    min_hyphen_split_token_len=2,
+    min_hyphen_split_token_len: int = 2,
     do_slash_expansion: bool = True,
     slash_subs: List[str] = (" ", " or "),
     do_slash_split: bool = True,
@@ -147,7 +158,30 @@ def get_lexical_variations(
     expand_ampersands: bool = True,
     add_eng_plurals: bool = True,
 ) -> Set[str]:
-    """Get all variations for the text (including the text itself)."""
+    """Get all variations for the text (including the text itself).
+
+    Args:
+        text: The text to generate variations for.
+        include_self: True to include the original text in the result.
+        expand_camelcase: True to expand camelCase text.
+        drop_non_embedded_symbols: True to drop symbols not embedded in words.
+        drop_embedded_symbols: True to drop symbols embedded in words.
+        spacify_embedded_symbols: True to replace embedded symbols with spaces.
+        do_hyphen_expansion: True to expand hyphenated text.
+        hyphen_subs: List of strings to substitute for hyphens.
+        do_hyphen_split: True to split on hyphens.
+        min_hyphen_split_token_len: Minimum token length for hyphen splits.
+        do_slash_expansion: True to expand slashes.
+        slash_subs: List of strings to substitute for slashes.
+        do_slash_split: True to split on slashes.
+        min_slash_split_token_len: Minimum token length for slash splits.
+        drop_parentheticals: True to drop parenthetical expressions.
+        expand_ampersands: True to expand ampersands to ' and '.
+        add_eng_plurals: True to add English plural forms.
+
+    Returns:
+        The set of all text variations.
+    """
     variations = {text} if include_self else set()
     if expand_camelcase:
         variations.add(expand_camelcase_fn(text))
@@ -283,14 +317,23 @@ def zero_pad_variations(
     to max (exclusive) zero-pad lengths.
 
     Examples:
-      * zero_pad_variations(9, 2, 4) == {'09', '009'}
-      * zero_pad_variations(90, 2, 4) == {'090'}
-      * zero_pad_variations(90, 2, 3) == {}
-      * zero_pad_variations(3, 0, 5) == {'03', '003', '0003'}
+        >>> from dataknobs_xization.normalize import zero_pad_variations
+        >>> zero_pad_variations(9, 2, 4)
+        {'09', '009'}
+        >>> zero_pad_variations(90, 2, 4)
+        {'090'}
+        >>> zero_pad_variations(90, 2, 3)
+        set()
+        >>> zero_pad_variations(3, 0, 5)
+        {'03', '003', '0003'}
 
-    :param min_zpad_len: The minimum zero-padded string length (inclusive)
-    :param max_zpad_len: The maximum zero-padded string length (exclusive)
-    :return: The set of all requested zero-padded number strings
+    Args:
+        val: The integer value to zero-pad.
+        min_zpad_len: The minimum zero-padded string length (inclusive).
+        max_zpad_len: The maximum zero-padded string length (exclusive).
+
+    Returns:
+        The set of all requested zero-padded number strings.
     """
     return {
         f"{val:0{zpad}d}"
@@ -308,9 +351,12 @@ def month_day_variations_fn(
     itself as a string, a 2-digit zero-padded form of the number, and
     (optionally) english word for the number.
 
-    :param month_or_day: The month or day for which to get variations
-    :param do_int_to_en: Optionally include the english word for the number
-    :return: The set of variations for the value
+    Args:
+        month_or_day: The month or day for which to get variations.
+        do_int_to_en: Optionally include the english word for the number.
+
+    Returns:
+        The set of variations for the value.
     """
     result = zero_pad_variations(month_or_day, 2, 3)
     result.add(str(month_or_day))
@@ -326,10 +372,22 @@ def year_variations_fn(
     do_int_to_en_below_100: bool = False,
     numeric_only: bool = False,
 ) -> Set[str]:
-    """* "1999"
-    * Convert a year to english text:
-      * Long text: one thousand, nine hundred and ninety nine
-      * Short text: nineteen [hundred and] ninety nine
+    """Convert a year to various text representations.
+
+    Generates variations including:
+        * "1999" (numeric)
+        * Long text: "one thousand, nine hundred and ninety nine"
+        * Short text: "nineteen [hundred and] ninety nine"
+
+    Args:
+        year: The year value to convert.
+        min_year: Minimum year to process (inclusive).
+        max_year: Maximum year to process (inclusive).
+        do_int_to_en_below_100: True to convert years below 100 to English text.
+        numeric_only: True to return only numeric variations.
+
+    Returns:
+        The set of year variations.
     """
     variations = {str(year)}
 
@@ -414,13 +472,27 @@ def basic_normalization_fn(
     do_all: bool = False,
 ) -> str:
     """Basic normalization functions include:
-    * lowercasing [default]
-    * expanding camelcase [default]
-    * replacing "smart" quotes and apostrophes with ascii verisons [default]
-    * dropping non_embedded symbols [optional]
-    * replacing embedded symbols with a space [takes precedence over dropping unless do_all]
-    * or dropping embedded symbols [optional]
-    * collapsing multiple spaces and stripping spaces from ends [optional]
+        * lowercasing [default]
+        * expanding camelcase [default]
+        * replacing "smart" quotes and apostrophes with ascii versions [default]
+        * dropping non_embedded symbols [optional]
+        * replacing embedded symbols with a space [takes precedence over dropping unless do_all]
+        * or dropping embedded symbols [optional]
+        * collapsing multiple spaces and stripping spaces from ends [optional]
+
+    Args:
+        text: The text to normalize.
+        lowercase: True to convert to lowercase.
+        expand_camelcase: True to expand camelCase text.
+        simplify_quote_chars: True to replace smart quotes with ASCII quotes.
+        drop_non_embedded_symbols: True to drop symbols not embedded in words.
+        spacify_embedded_symbols: True to replace embedded symbols with spaces.
+        drop_embedded_symbols: True to drop embedded symbols.
+        squash_whitespace: True to collapse whitespace and strip ends.
+        do_all: True to apply all normalization steps.
+
+    Returns:
+        The normalized text.
     """
     # NOTE: do this before changing case
     if expand_camelcase or do_all:

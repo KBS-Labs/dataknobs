@@ -223,7 +223,7 @@ variant = await ab.get_variant_for_user(exp.experiment_id, "user123")
 
 ### API Reference
 
-- **[LLM API](api/llm.md)** - LLM provider interface
+- **[LLM API](../../api/dataknobs-llm.md)** - LLM provider interface
 - **[Prompts API](api/prompts.md)** - Prompt library and builders
 - **[Conversations API](api/conversations.md)** - Conversation management
 - **[Versioning API](api/versioning.md)** - Version and experiment management

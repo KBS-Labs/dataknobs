@@ -2,6 +2,11 @@
 
 The `dataknobs-xization` package provides text processing, normalization, and tokenization tools for AI knowledge bases.
 
+> **💡 Quick Links:**
+> - [Complete API Reference](../../api/dataknobs-xization.md) - Full API documentation
+> - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/xization/src/dataknobs_xization) - View on GitHub
+> - [API Index](../../api/complete-reference.md) - All packages
+
 ## Installation
 
 ```bash

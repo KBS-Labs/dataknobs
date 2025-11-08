@@ -526,5 +526,5 @@ The file processor handles errors at multiple levels:
 
 - [ETL Pattern](etl.md) - Database ETL workflows
 - [Streaming Guide](../guides/streaming.md) - Advanced streaming
-- [API Reference](../api/index.md) - FSM configuration
+- [API Reference](../../../api/dataknobs-fsm.md) - FSM configuration
 - [Examples](../examples/file-processor.md) - More file processing examples

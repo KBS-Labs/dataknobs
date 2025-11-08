@@ -2,31 +2,89 @@
 
 This module provides middleware capabilities for processing messages before they
 are sent to the LLM and processing responses after they come back from the LLM.
-Middleware can be used for logging, validation, content filtering, and more.
+Middleware can be used for logging, validation, content filtering, rate limiting,
+metadata injection, and more.
+
+Execution Model (Onion Pattern):
+    Middleware wraps around LLM calls in an "onion" pattern:
+
+    Request Flow:  MW0 → MW1 → MW2 → LLM
+    Response Flow: LLM → MW2 → MW1 → MW0
+
+    Example with 3 middleware [Logging, RateLimit, Validation]:
+
+    ```
+    1. Logging.process_request()      # Log incoming messages
+    2.   RateLimit.process_request()  # Check rate limits
+    3.     Validation.process_request()  # Validate request
+    4.       → LLM Call →              # Actual LLM API call
+    5.     Validation.process_response() # Validate LLM response
+    6.   RateLimit.process_response() # Add rate limit info to response
+    7. Logging.process_response()     # Log response details
+    ```
+
+    This ensures middleware can:
+    - Time the full LLM call (start timer in process_request, stop in process_response)
+    - Wrap operations symmetrically (open resources → LLM → close resources)
+    - See the final state after inner middleware modifications
+
+Performance Considerations:
+    - **Middleware adds latency**: Each middleware's `process_request()` and
+      `process_response()` adds to total response time. Keep middleware logic fast.
+
+    - **Async is key**: All middleware methods are async. Use `await` for I/O
+      operations (DB calls, network requests) to avoid blocking.
+
+    - **Order matters**: Place expensive middleware (like ValidationMiddleware
+      that makes additional LLM calls) at the end of the list to minimize
+      wasted work if earlier middleware rejects the request.
+
+    - **Memory usage**: RateLimitMiddleware keeps request history in memory.
+      For high-traffic applications, consider external rate limiting (Redis, etc.).
+
+Available Middleware:
+    - **LoggingMiddleware**: Log requests and responses for debugging
+    - **ContentFilterMiddleware**: Filter inappropriate content from responses
+    - **ValidationMiddleware**: Validate responses with additional LLM call
+    - **MetadataMiddleware**: Inject custom metadata into messages/responses
+    - **RateLimitMiddleware**: Enforce rate limits with sliding window
 
 Example:
-    >>> from dataknobs_llm.conversations import (
-    ...     ConversationManager,
-    ...     LoggingMiddleware,
-    ...     ValidationMiddleware
-    ... )
-    >>> import logging
-    >>>
-    >>> # Create middleware instances
-    >>> logger = logging.getLogger(__name__)
-    >>> logging_mw = LoggingMiddleware(logger)
-    >>> validation_mw = ValidationMiddleware(
-    ...     prompt_builder=builder,
-    ...     validation_prompt="validate_response"
-    ... )
-    >>>
-    >>> # Create conversation with middleware
-    >>> manager = await ConversationManager.create(
-    ...     llm=llm,
-    ...     prompt_builder=builder,
-    ...     storage=storage,
-    ...     middleware=[logging_mw, validation_mw]
-    ... )
+    ```python
+    from dataknobs_llm.conversations import (
+        ConversationManager,
+        LoggingMiddleware,
+        RateLimitMiddleware,
+        ContentFilterMiddleware
+    )
+    import logging
+
+    # Create middleware instances (order matters!)
+    logger = logging.getLogger(__name__)
+    logging_mw = LoggingMiddleware(logger)
+    rate_limit_mw = RateLimitMiddleware(max_requests=10, window_seconds=60)
+    filter_mw = ContentFilterMiddleware(
+        filter_words=["inappropriate"],
+        replacement="[FILTERED]"
+    )
+
+    # Create conversation with middleware stack
+    # Execution: Logging → RateLimit → Filter → LLM → Filter → RateLimit → Logging
+    manager = await ConversationManager.create(
+        llm=llm,
+        prompt_builder=builder,
+        storage=storage,
+        middleware=[logging_mw, rate_limit_mw, filter_mw]
+    )
+
+    # All requests will go through middleware pipeline
+    await manager.add_message(role="user", content="Hello")
+    response = await manager.complete()  # Middleware applied automatically
+    ```
+
+See Also:
+    ConversationManager: Uses middleware for all LLM interactions
+    ConversationMiddleware: Base class for custom middleware
 """
 
 from abc import ABC, abstractmethod
@@ -44,17 +102,71 @@ class ConversationMiddleware(ABC):
 
     Middleware can process requests before LLM and responses after LLM.
     Middleware is executed in order for requests, and in reverse order
-    for responses (like an onion).
+    for responses (onion pattern).
+
+    Execution Order:
+        Given middleware list [MW0, MW1, MW2]:
+
+        - **Request**: MW0 → MW1 → MW2 → LLM
+        - **Response**: LLM → MW2 → MW1 → MW0
+
+        This allows MW0 to:
+        1. Start a timer in `process_request()`
+        2. See the LLM call complete
+        3. Stop the timer in `process_response()` and log total time
+
+    Use Cases:
+        - **Logging**: Track request/response details
+        - **Validation**: Verify request/response content
+        - **Transformation**: Modify messages or responses
+        - **Rate Limiting**: Enforce API usage limits
+        - **Caching**: Store/retrieve responses
+        - **Monitoring**: Collect metrics and analytics
+        - **Security**: Filter sensitive information
 
     Example:
-        >>> class CustomMiddleware(ConversationMiddleware):
-        ...     async def process_request(self, messages, state):
-        ...         # Add custom processing before LLM
-        ...         return messages
-        ...
-        ...     async def process_response(self, response, state):
-        ...         # Add custom processing after LLM
-        ...         return response
+        ```python
+        from dataknobs_llm.conversations import ConversationMiddleware
+        import time
+
+        class TimingMiddleware(ConversationMiddleware):
+            '''Measure LLM call duration.'''
+
+            async def process_request(self, messages, state):
+                # Store start time in state metadata
+                state.metadata["request_start"] = time.time()
+                return messages
+
+            async def process_response(self, response, state):
+                # Calculate elapsed time
+                start = state.metadata.get("request_start")
+                if start:
+                    elapsed = time.time() - start
+                    if not response.metadata:
+                        response.metadata = {}
+                    response.metadata["llm_duration_seconds"] = elapsed
+                    print(f"LLM call took {elapsed:.2f}s")
+                return response
+
+        # Use in conversation
+        manager = await ConversationManager.create(
+            llm=llm,
+            middleware=[TimingMiddleware()]
+        )
+        ```
+
+    Note:
+        **Performance Tips**:
+
+        - Keep `process_request()` and `process_response()` fast
+        - Use async I/O (await) for external calls (DB, network)
+        - Don't block the async loop with synchronous operations
+        - For expensive operations, consider running them in background tasks
+        - Store state in `state.metadata` not instance variables (thread safety)
+
+    See Also:
+        LoggingMiddleware: Example implementation
+        ConversationManager.complete: Where middleware is executed
     """
 
     @abstractmethod
@@ -73,6 +185,7 @@ class ConversationMiddleware(ABC):
             Processed messages (can modify, add, or remove messages)
 
         Example:
+            >>> from datetime import datetime
             >>> async def process_request(self, messages, state):
             ...     # Add timestamp to metadata
             ...     for msg in messages:
@@ -99,6 +212,7 @@ class ConversationMiddleware(ABC):
             Processed response (can modify content, metadata, etc.)
 
         Example:
+            >>> from datetime import datetime
             >>> async def process_response(self, response, state):
             ...     # Add processing metadata
             ...     if not response.metadata:
@@ -252,7 +366,11 @@ class ValidationMiddleware(ConversationMiddleware):
     if responses meet certain criteria. Can optionally retry on validation failure.
 
     Example:
+        >>> from dataknobs_llm.llm.providers import OpenAIProvider
+        >>> from dataknobs_llm.llm.base import LLMConfig
+        >>>
         >>> # Create validation middleware
+        >>> config = LLMConfig(provider="openai", model="gpt-4")
         >>> validation_llm = OpenAIProvider(config)
         >>> middleware = ValidationMiddleware(
         ...     llm=validation_llm,
@@ -359,6 +477,8 @@ class MetadataMiddleware(ConversationMiddleware):
     which is useful for tracking, analytics, and debugging.
 
     Example:
+        >>> from datetime import datetime
+        >>>
         >>> # Add environment info to all messages
         >>> middleware = MetadataMiddleware(
         ...     request_metadata={"environment": "production"},

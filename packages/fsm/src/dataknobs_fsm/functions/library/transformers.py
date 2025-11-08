@@ -87,6 +87,14 @@ class FieldMapper(ITransformFunction):
             current = current[part]
         current[parts[-1]] = value
 
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation."""
+        mappings = list(self.field_map.items())
+        mapping_str = ", ".join(f"{s}->{t}" for s, t in mappings[:3])
+        if len(mappings) > 3:
+            mapping_str += "..."
+        return f"Map fields: {mapping_str}"
+
 
 class ValueNormalizer(ITransformFunction):
     """Normalize values in data fields."""
@@ -177,6 +185,17 @@ class ValueNormalizer(ITransformFunction):
         else:
             return value
 
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation."""
+        fields = self.fields if self.fields else ["all fields"]
+        norm_types = set()
+        for val in self.normalizations.values():
+            if isinstance(val, list):
+                norm_types.update(val)
+            else:
+                norm_types.add(val)
+        return f"Normalize {', '.join(str(f) for f in fields[:3])} using {', '.join(list(norm_types)[:3])}"
+
 
 class TypeConverter(ITransformFunction):
     """Convert field types in data."""
@@ -254,9 +273,17 @@ class TypeConverter(ITransformFunction):
         # Special handling for datetime
         if target_type == datetime.fromisoformat and isinstance(value, str):
             return datetime.fromisoformat(value)
-        
+
         # Standard type conversion
         return target_type(value)  # type: ignore
+
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation."""
+        conversions = list(self.conversions.items())
+        conv_str = ", ".join(f"{k}:{v}" for k, v in conversions[:3])
+        if len(conversions) > 3:
+            conv_str += "..."
+        return f"Convert types: {conv_str}"
 
 
 class DataEnricher(ITransformFunction):
@@ -334,10 +361,10 @@ class FieldFilter(ITransformFunction):
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Transform data by filtering fields.
-        
+
         Args:
             data: Input data.
-            
+
         Returns:
             Transformed data with filtered fields.
         """
@@ -350,6 +377,21 @@ class FieldFilter(ITransformFunction):
         else:
             # No filtering
             return data.copy()
+
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation."""
+        if self.include:
+            fields = ', '.join(self.include[:3])
+            if len(self.include) > 3:
+                fields += "..."
+            return f"Include only fields: {fields}"
+        elif self.exclude:
+            fields = ', '.join(self.exclude[:3])
+            if len(self.exclude) > 3:
+                fields += "..."
+            return f"Exclude fields: {fields}"
+        else:
+            return "No field filtering"
 
 
 class ValueReplacer(ITransformFunction):
@@ -371,23 +413,31 @@ class ValueReplacer(ITransformFunction):
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Transform data by replacing values.
-        
+
         Args:
             data: Input data.
-            
+
         Returns:
             Transformed data with replaced values.
         """
         result = copy.deepcopy(data)
-        
+
         for field, value in result.items():
             # Get replacements for this field
             field_replacements = self.replacements.get(field, self.default_replacements)
-            
+
             if value in field_replacements:
                 result[field] = field_replacements[value]
-        
+
         return result
+
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation."""
+        fields = list(self.replacements.keys())[:3]
+        field_str = ', '.join(fields)
+        if len(self.replacements) > 3:
+            field_str += "..."
+        return f"Replace values in fields: {field_str if fields else 'all fields'}"
 
 
 class ArrayFlattener(ITransformFunction):
@@ -451,6 +501,14 @@ class ArrayFlattener(ITransformFunction):
                     result.append(item)
             return result
 
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation."""
+        fields = ', '.join(self.fields[:3])
+        if len(self.fields) > 3:
+            fields += "..."
+        depth_str = "fully" if self.depth == 0 else f"to depth {self.depth}"
+        return f"Flatten arrays in {fields} {depth_str}"
+
 
 class DataSplitter(ITransformFunction):
     """Split data into multiple records based on a field."""
@@ -488,13 +546,17 @@ class DataSplitter(ITransformFunction):
         # Create a record for each value
         records = []
         base_data = {k: v for k, v in data.items() if k != self.split_field}
-        
+
         for value in split_values:
             record = copy.deepcopy(base_data)
             record[self.split_field] = value
             records.append(record)
-        
+
         return {self.output_field: records}
+
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation."""
+        return f"Split data on field '{self.split_field}' into '{self.output_field}'"
 
 
 class ChainTransformer(ITransformFunction):
@@ -510,10 +572,10 @@ class ChainTransformer(ITransformFunction):
 
     def transform(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Apply all transformers in sequence.
-        
+
         Args:
             data: Input data.
-            
+
         Returns:
             Transformed data after all transformers.
         """
@@ -521,6 +583,11 @@ class ChainTransformer(ITransformFunction):
         for transformer in self.transformers:
             result = transformer.transform(result)
         return result
+
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation."""
+        count = len(self.transformers)
+        return f"Chain {count} transformer{'s' if count != 1 else ''} in sequence"
 
 
 # Convenience functions for creating transformers

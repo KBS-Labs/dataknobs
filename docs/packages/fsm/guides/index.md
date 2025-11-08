@@ -76,7 +76,7 @@ If you're new to DataKnobs FSM, we recommend reading the guides in this order:
 
 ## Related Documentation
 
-- **[API Reference](../api/index.md)** - Complete API documentation for SimpleFSM and AdvancedFSM
+- **[API Reference](../../../api/dataknobs-fsm.md)** - Complete API documentation for SimpleFSM and AdvancedFSM
 - **[Pattern Catalog](../patterns/index.md)** - Pre-built patterns (ETL, File Processing, API Orchestration, LLM, Error Recovery)
 - **[Examples](../examples/index.md)** - Working examples including `database_etl.py`, `large_file_processor.py`, and more
 - **[Quick Start](../quickstart.md)** - Get started with FSM in minutes
@@ -119,5 +119,5 @@ For additional help:
 
 - Check the [FAQ](../faq.md) if it exists
 - Review troubleshooting sections in each guide
-- Consult the [API documentation](../api/index.md) for detailed method signatures
+- Consult the [API documentation](../../../api/dataknobs-fsm.md) for detailed method signatures
 - See [Examples](../examples/index.md) for complete working code

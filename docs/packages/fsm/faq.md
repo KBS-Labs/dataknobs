@@ -346,7 +346,7 @@ from dataknobs_fsm.core.modes import ProcessingMode
 
 - [Quick Start Guide](quickstart.md) - Get started quickly
 - [Guides](guides/index.md) - In-depth topic guides
-- [API Reference](api/index.md) - SimpleFSM and AdvancedFSM documentation
+- [API Reference](../../api/dataknobs-fsm.md) - SimpleFSM and AdvancedFSM documentation
 - [Examples](examples/index.md) - Working examples in `packages/fsm/examples/`
 - [Pattern Catalog](patterns/index.md) - Pre-built patterns (ETL, API, LLM, etc.)
 

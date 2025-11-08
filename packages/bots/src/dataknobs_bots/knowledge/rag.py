@@ -214,7 +214,7 @@ class RAGKnowledgeBase:
                 "docs/",
                 pattern="**/*.md"
             )
-            print(f"Loaded {results['total_chunks']} chunks from {results['total_files']} files")  # validate: ignore-print
+            print(f"Loaded {results['total_chunks']} chunks from {results['total_files']} files")
             ```
         """
         directory = Path(directory)
@@ -265,8 +265,8 @@ class RAGKnowledgeBase:
                 k=3
             )
             for result in results:
-                print(f"[{result['similarity']:.2f}] {result['heading_path']}")  # validate: ignore-print
-                print(result['text'])  # validate: ignore-print
+                print(f"[{result['similarity']:.2f}] {result['heading_path']}")
+                print(result['text'])
             ```
         """
         import numpy as np

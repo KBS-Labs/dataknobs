@@ -501,6 +501,13 @@ class ResourceManager:
         """
         # Create a simple in-memory resource provider
         class SimpleResourceProvider(IResourceProvider):
+            """Simple in-memory resource provider for testing and basic use cases.
+
+            Provides a lightweight resource provider that stores data in memory
+            from configuration. Useful for testing FSMs without external dependencies
+            or for simple static data resources.
+            """
+
             def __init__(self, name: str, config: Dict[str, Any]):
                 self.name = name
                 self.config = config

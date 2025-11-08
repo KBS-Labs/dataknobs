@@ -37,8 +37,8 @@ class MetricsCollector:
 
         # Get aggregated metrics
         metrics = await collector.get_metrics("v1")
-        print(f"Success rate: {metrics.success_rate:.2%}")  # validate: ignore-print
-        print(f"Avg response time: {metrics.avg_response_time:.2f}s")  # validate: ignore-print
+        print(f"Success rate: {metrics.success_rate:.2%}")
+        print(f"Avg response time: {metrics.avg_response_time:.2f}s")
 
         # Compare variants in experiment
         comparison = await collector.compare_variants(

@@ -3,6 +3,8 @@
 import argparse
 import json
 import os
+import sys
+from pathlib import Path
 
 from flask import request
 
@@ -18,22 +20,26 @@ def echo_args():
     verbose = request.args.get("verbose", type=bool, default=True)
     rv = request.args.to_dict(flat=False)
     if verbose:
-        print(json.dumps(rv, indent=indent))
+        print(json.dumps(rv, indent=indent), file=sys.stdout)
     return rv
 
 
 @app.route("/printenv")
 def printenv():
-    rv = {x: y for x, y in os.environ.items()}
-    print(json.dumps(rv, indent=2))
+    rv = os.environ
+    verbose = request.args.get("verbose", type=bool, default=True)
+    if verbose:
+        print(json.dumps(rv, indent=2), file=sys.stdout)
     return rv
 
 
 @app.route("/listdir")
 def listdir():
-    name = request.args.get("name", default=None)
-    rv = os.listdir(name)
-    print(json.dumps(rv, indent=2))
+    name = request.args.get("name", default=".")
+    verbose = request.args.get("verbose", type=bool, default=True)
+    rv = [p.name for p in Path(name).iterdir()]
+    if verbose:
+        print(json.dumps(rv, indent=2), file=sys.stdout)
     return rv
 
 

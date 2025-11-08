@@ -653,19 +653,29 @@ class VectorMigration:
 
 class IncrementalVectorizer:
     """Manages incremental vectorization of large datasets.
-    
+
     Examples:
+        import numpy as np
+        from dataknobs_data import database_factory
+
+        # Create database and embedding function
+        db = database_factory.create(backend="memory")
+
+        def embedding_fn(text):
+            # In practice, use a real model like sentence-transformers
+            return np.random.rand(384).astype(np.float32)
+
         # Simple usage with single field
         vectorizer = IncrementalVectorizer(
             db,
-            embedding_fn=model.encode,
+            embedding_fn=embedding_fn,
             text_fields="content"  # Can be string or list
         )
         result = await vectorizer.run()
-        
+
         # Resume from checkpoint
         result = await vectorizer.run(resume_from=last_checkpoint)
-        
+
         # Process limited batch
         result = await vectorizer.run_batch(limit=1000)
     """

@@ -9,46 +9,13 @@ The tools API provides abstractions for defining functions that LLMs can call du
 - **Tool**: Abstract base class for defining callable tools
 - **ToolRegistry**: Central registry for managing available tools
 
-## Tool
+## Complete API Reference
 
-### Base Class
+For comprehensive auto-generated API documentation with all classes, methods, and full signatures, see:
 
-::: dataknobs_llm.Tool
-    options:
-      show_source: true
-      heading_level: 3
-      members:
-        - __init__
-        - schema
-        - execute
-        - to_function_definition
-        - to_anthropic_tool_definition
-        - validate_parameters
+**[📖 Tool & ToolRegistry Complete Reference](../../../api/reference/llm.md#dataknobs_llm.Tool)**
 
-## ToolRegistry
-
-### Registry Class
-
-::: dataknobs_llm.ToolRegistry
-    options:
-      show_source: true
-      heading_level: 3
-      members:
-        - __init__
-        - register
-        - register_many
-        - unregister
-        - get_tool
-        - has_tool
-        - list_tools
-        - get_tool_names
-        - count
-        - clear
-        - to_function_definitions
-        - to_anthropic_tool_definitions
-        - execute_tool
-        - filter_by_metadata
-        - clone
+This page focuses on practical usage examples. The complete reference provides exhaustive technical documentation with all methods, parameters, and type annotations.
 
 ## Usage Examples
 
@@ -202,5 +169,5 @@ The `to_anthropic_tool_definition()` method returns Claude-compatible tool defin
 ## See Also
 
 - [Tools Guide](../guides/tools-and-enhancements.md) - Comprehensive usage guide
-- [LLM API](llm.md) - LLM provider interface
+- [LLM API](../../../api/dataknobs-llm.md) - LLM provider interface
 - [Conversations API](conversations.md) - Conversation management

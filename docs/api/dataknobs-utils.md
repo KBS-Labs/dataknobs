@@ -2,6 +2,11 @@
 
 Complete API documentation for the `dataknobs_utils` package.
 
+> **💡 Quick Links:**
+> - [Complete API Documentation](reference/utils.md) - Full auto-generated reference
+> - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/utils/src/dataknobs_utils) - Browse on GitHub
+> - [Package Guide](../packages/utils/index.md) - Detailed documentation
+
 ## Package Information
 
 - **Package Name**: `dataknobs_utils`

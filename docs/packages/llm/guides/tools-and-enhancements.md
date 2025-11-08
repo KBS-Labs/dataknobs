@@ -518,6 +518,6 @@ print(f"Conversation {user_id}: ${total_cost:.4f} total")
 ## See Also
 
 - [Conversation Management](conversations.md) - Managing multi-turn conversations
-- [LLM API](../api/llm.md) - Core LLM interface
+- [LLM API](../../../api/dataknobs-llm.md) - Core LLM interface
 - [Middleware API](../api/conversations.md#middleware) - Creating custom middleware
 - [Tools API](../api/tools.md) - Tool system reference

@@ -1,3 +1,9 @@
+"""Pandas DataFrame utility functions and data transformations.
+
+Provides utilities for creating, transforming, and manipulating Pandas DataFrames,
+including conversions between dicts, lists, and DataFrame formats.
+"""
+
 import itertools
 import json
 from typing import Any, Dict, List, Set, Tuple, Union
@@ -11,18 +17,27 @@ def dicts2df(
     rename: Dict[str, str] | None = None,
     item_id: str | None = "item_id",
 ) -> pd.DataFrame:
-    """Create a dataframe from a list of or list of lists of dictionaries.
-    :param dicts: A list of dictionaries
-    :param rename: Dictionary of {from: to} column name mappings
-    :param item_id: Name of column to add with list indices
-    :return: A dataframe
+    """Create a DataFrame from dictionaries or lists of dictionaries.
+
+    Converts a list of dictionaries or a list of lists of dictionaries into
+    a single concatenated DataFrame with optional column renaming and indexing.
+
+    Args:
+        dicts: List of dictionaries or list of lists of dictionaries.
+        rename: Optional mapping of column names to rename {from: to}.
+            Defaults to None.
+        item_id: Name of column to add containing the list index. Set to None
+            to skip adding this column. Defaults to "item_id".
+
+    Returns:
+        pd.DataFrame: Concatenated DataFrame from all dictionaries.
     """
     dfs = [pd.DataFrame.from_records(rec) for rec in dicts]
     for idx, df in enumerate(dfs):
         if rename:
-            df.rename(columns=rename, inplace=True)
+            dfs[idx] = df.rename(columns=rename)
         if item_id:
-            df[item_id] = idx
+            dfs[idx][item_id] = idx
     df = pd.concat(dfs).reset_index(drop=True) if len(dfs) > 0 else pd.DataFrame()
     return df
 
@@ -32,18 +47,29 @@ def sort_by_strlen(
     text_col: str,
     ascending: bool = False,
 ) -> pd.DataFrame:
-    """Sort the dataframe according to the length of the strings in a text column
-    :param df: The dataframe to sort
-    :param text_col: The text column to sort by
-    :return: The sorted dataframe
+    """Sort DataFrame by string length in a text column.
+
+    Args:
+        df: DataFrame to sort.
+        text_col: Name of the text column to sort by.
+        ascending: If True, sort shortest to longest; if False, longest to
+            shortest. Defaults to False.
+
+    Returns:
+        pd.DataFrame: Sorted DataFrame (original is not modified).
     """
     return df.loc[df[text_col].str.len().sort_values(ascending=ascending).index]
 
 
 def get_loc_range(bool_ser: pd.Series) -> Tuple[int, int]:
-    """Get the first (start index) and last True locations in the boolean series.
-    :param bool_ser: A boolean series
-    :return: (first_loc, last_loc) for the first and last "True" locations
+    """Find the range of True values in a boolean Series.
+
+    Args:
+        bool_ser: Boolean Series to analyze.
+
+    Returns:
+        Tuple[int, int]: Tuple of (first_loc, last_loc) containing indices of
+            first and last True values. Returns (0, 0) if no True values exist.
     """
     # Find all True positions
     true_positions = bool_ser[bool_ser].index
@@ -51,10 +77,6 @@ def get_loc_range(bool_ser: pd.Series) -> Tuple[int, int]:
     if len(true_positions) == 0:
         # No True values, return (0, 0) or raise an error
         return (0, 0)
-
-    # Get first and last True positions
-    first_loc = true_positions[0]
-    last_loc = true_positions[-1]
 
     # Convert to int (handling both integer indices and other types)
     # Use tolist() to convert index values to Python types
@@ -65,19 +87,32 @@ def get_loc_range(bool_ser: pd.Series) -> Tuple[int, int]:
 
 
 def explode_json_series(json_ser: pd.Series) -> pd.Series:
-    """Given a series with each value a json list of items, explode the series
-    items.
-    :param json_ser: The series with json values
-    :return: The exploded series
+    """Explode a Series containing JSON-encoded lists into individual items.
+
+    Parses JSON list strings and expands them so each list item becomes a
+    separate row with a repeated index.
+
+    Args:
+        json_ser: Series with values as JSON-encoded lists (e.g., "[1, 2, 3]").
+
+    Returns:
+        pd.Series: Exploded Series with individual list items as values.
     """
     result = json_ser[np.logical_and(json_ser.notna(), json_ser != "")].apply(json.loads).explode()
     return pd.Series(result) if not isinstance(result, pd.Series) else result
 
 
 class GroupManager:
-    """Class to manage groups of rows in a dataframe identified by a json list of
-    numbers in a group number column such that all rows sharing the same group
-    number constitute a group.
+    """Manage overlapping row groups in a DataFrame using JSON-encoded group lists.
+
+    Handles DataFrames where rows can belong to multiple groups, with group
+    membership stored as JSON lists of group numbers (e.g., "[1, 3]" means
+    row belongs to groups 1 and 3). Provides utilities for marking, unmarking,
+    querying, and analyzing group memberships.
+
+    Attributes:
+        idf: Original input DataFrame.
+        gcol: Name of the group number column.
     """
 
     def __init__(
@@ -85,9 +120,12 @@ class GroupManager:
         df: pd.DataFrame,
         group_num_col: str,
     ):
-        """Initialize with the dataframe and group number column name.
-        :param df: The dataframe with rows in sorted order
-        :param group_num_col: The name of the group number column
+        """Initialize group manager with DataFrame and group column.
+
+        Args:
+            df: DataFrame with rows to manage (will be re-indexed if needed).
+            group_num_col: Name of the column containing JSON-encoded group
+                number lists.
         """
         self.idf = df  # input dataframe
         self.gcol = group_num_col
@@ -101,29 +139,40 @@ class GroupManager:
         if df.index.value_counts().max() > 1 or not (df.index.sort_values() == df.index).all():
             # Index isn't unique or in order, so need to reset the index
             df = df.reset_index(
-                drop=("__orig_idx__" == None), allow_duplicates=False, names="__orig_idx__"
+                drop=False, allow_duplicates=False, names="__orig_idx__"
             )
         return df
 
     @property
     def df(self) -> pd.DataFrame:
-        """Get the collapsed dataframe such that the group number column holds the
-        list of group numbers as a json string in unique rows.
+        """Get the DataFrame with JSON-encoded group lists.
+
+        Returns:
+            pd.DataFrame: DataFrame with group column containing JSON lists.
         """
         return self._cdf
 
     @property
     def collapsed_df(self) -> pd.DataFrame:
-        """Get the collapsed dataframe such that the group number column holds the
-        list of group numbers as a json string in unique rows.
+        """Get the DataFrame with JSON-encoded group lists.
+
+        Alias for the df property.
+
+        Returns:
+            pd.DataFrame: DataFrame with group column containing JSON lists.
         """
         return self._cdf
 
     @property
     def expanded_ser(self) -> pd.Series:
-        """Get the expanded series such that the group number column holds an
-        integer and the index values are repeated for members of multiple
-        groups.
+        """Get Series with individual group numbers and repeated indices.
+
+        Expands JSON group lists so each group number becomes a separate
+        row with repeated indices for rows belonging to multiple groups.
+
+        Returns:
+            pd.Series: Series with individual group numbers, indices repeated
+                for multi-group membership.
         """
         if self._es is None:
             if self._cdf is not None:
@@ -142,7 +191,11 @@ class GroupManager:
 
     @property
     def all_group_locs(self) -> Dict[int, List[int]]:
-        """Get all group row locs, indexed by group_num."""
+        """Get row indices for all groups.
+
+        Returns:
+            Dict[int, List[int]]: Mapping from group number to list of row indices.
+        """
         if self._glocs is None:
             edf = pd.DataFrame(self.expanded_ser)
             edf["__tmp_idx__"] = edf.index
@@ -158,11 +211,28 @@ class GroupManager:
         return self._glocs if self._glocs is not None else {}
 
     def get_group_locs(self, group_num: int) -> List[int]:
-        """Get the row locs for the given group, or empty list."""
+        """Get row indices for a specific group.
+
+        Args:
+            group_num: Group number to query.
+
+        Returns:
+            List[int]: List of row indices in the group (empty if group doesn't exist).
+        """
         return self.all_group_locs.get(group_num, [])
 
     def get_intra_ungrouped_locs(self, group_num: int) -> List[int]:
-        """Get the locs for rows within the given group rows, but not in the group"""
+        """Get row indices between group boundaries that aren't in the group.
+
+        Finds rows that fall within the range from the first to last row of
+        a group but aren't actually members of the group.
+
+        Args:
+            group_num: Group number to analyze.
+
+        Returns:
+            List[int]: Row indices within group range but not in the group.
+        """
         result = None
         colname = f"{self.gcol}_{group_num}"
         if colname in self.mask_df:
@@ -172,33 +242,54 @@ class GroupManager:
                 locs = ~mcol[startloc : endloc + 1]
                 if locs.any():
                     result = locs[locs].index.tolist()
-        return result if result is not None else list()
+        return result if result is not None else []
 
     @property
     def grouped_locs(self) -> List[int]:
-        """Get all row locs that are in at least one group"""
+        """Get indices of all rows belonging to at least one group.
+
+        Returns:
+            List[int]: Row indices with group membership.
+        """
         return self.mask_df.index[self.mask_df.sum(axis=1) > 0].tolist()
 
     @property
     def ungrouped_locs(self) -> List[int]:
-        """Get all row locs that aren't in any group"""
+        """Get indices of all rows not belonging to any group.
+
+        Returns:
+            List[int]: Row indices without group membership.
+        """
         return self.mask_df.index[self.mask_df.sum(axis=1) == 0].tolist()
 
     @property
     def all_group_nums(self) -> List[int]:
-        """Get the existing group numbers, or an empty list."""
+        """Get all existing group numbers.
+
+        Returns:
+            List[int]: List of group numbers currently in use (empty if none).
+        """
         result = self.expanded_ser.unique()
         return [int(x) for x in result if not np.isnan(x)]
 
     @property
     def max_group_num(self) -> int:
-        """Get the maximum group number present, or -1 if there are none."""
+        """Get the highest group number in use.
+
+        Returns:
+            int: Maximum group number, or -1 if no groups exist.
+        """
         result = self.expanded_ser.max()
         return -1 if np.isnan(result) else result
 
     @property
     def mask_df(self) -> pd.DataFrame:
-        """Get a dataframe of group masks identifying rows in each group."""
+        """Get DataFrame of boolean masks for each group.
+
+        Returns:
+            pd.DataFrame: DataFrame where each column is a boolean mask for a group,
+                with column names like "{group_col}_{group_num}".
+        """
         if self._mdf is None:
             cdf = self.collapsed_df
             if self.gcol in cdf:
@@ -219,14 +310,16 @@ class GroupManager:
     def mark_group(
         self, idx_values: Union[pd.Series, List[int]], group_num: int | None = None
     ) -> None:
-        """Mark the rows identified by their index values as a group, either with
-        the next higher available group number or with the given group number.
+        """Add rows to a group, creating or updating group membership.
 
-        If the group_num already exists, then rows without the group_num will
-        be added to the group.
+        Assigns rows to a group number, either specified or auto-generated.
+        If the group already exists, adds new rows to it without removing
+        existing members.
 
-        :param idx_values: The row locs to include in the group
-        :param group_num: The group number to assign, or None to auto-assign.
+        Args:
+            idx_values: Row indices to include in the group.
+            group_num: Group number to assign. If None, uses next available
+                number (max + 1). Defaults to None.
         """
         df = self.collapsed_df
         if group_num is None:
@@ -252,11 +345,12 @@ class GroupManager:
         idx_value_lists: List[Union[pd.Series, List[int]]],
         group_nums: List[int] | None = None,
     ) -> None:
-        """Convenience method to mark multiple groups at once.
-        :param idx_value_lists: A list of idx_values identifying groups
-        :param group_nums: A list of group numbers corresponding to each
-            idx_values list. If None, then auto-increment group_nums for
-            each list.
+        """Mark multiple groups in a single operation.
+
+        Args:
+            idx_value_lists: List where each element contains row indices for a group.
+            group_nums: Group numbers corresponding to each idx_values list.
+                If None, auto-generates consecutive numbers. Defaults to None.
         """
         for pos, idx_values in enumerate(idx_value_lists):
             self.mark_group(
@@ -264,11 +358,12 @@ class GroupManager:
             )
 
     def unmark_group(self, group_num: int, idx_values: pd.Series | None = None) -> None:
-        """Remove group_num from the specified rows, or entirely.
-        :param group_num: The group_num to remove
-        :param idx_values: The row locs from which to remove the group_num.
-            If None, then group_num will be removed from all rows in which
-            it exists.
+        """Remove a group number from specified rows or entirely.
+
+        Args:
+            group_num: Group number to remove.
+            idx_values: Row indices from which to remove the group. If None,
+                removes the group from all rows. Defaults to None.
         """
         df = self.collapsed_df
         if self.gcol in df:
@@ -285,20 +380,27 @@ class GroupManager:
                     rv = json.dumps(list(groups)) if len(groups) > 0 else np.nan
                 return rv
 
-            gser.where(mask, gser.apply(del_group), inplace=True)
+            df[self.gcol] = gser.where(mask, gser.apply(del_group))
             self._reset_edf()
 
     def remove_groups(self, group_nums: Union[List[int], Set[int]]) -> None:
-        """Convenience method to unmark (remove) the listed groups.
-        :param group_num: The group numbers to remove
+        """Remove multiple groups entirely.
+
+        Args:
+            group_nums: Collection of group numbers to remove completely.
         """
         for gnum in group_nums:
             self.unmark_group(gnum)
 
     def find_subsets(self, proper: bool = True) -> Set[int]:
-        """Find the groups that are subsets of other groups.
-        :param proper: If True, include proper (complete) subsets.
-        :return: The set of group numbers that are subsets of other groups
+        """Find groups that are subsets of other groups.
+
+        Args:
+            proper: If True, includes proper subsets (strict subsets) and
+                identical groups. If False, only strict subsets. Defaults to True.
+
+        Returns:
+            Set[int]: Group numbers that are subsets of other groups.
         """
         rv = set()
         mdf = self.mask_df
@@ -320,21 +422,31 @@ class GroupManager:
         return rv
 
     def remove_subsets(self, proper: bool = True) -> None:
-        """Convenience method to remove all groups that are subsets of others.
-        :param proper: If True, include proper (complete) subsets.
+        """Remove all groups that are subsets of other groups.
+
+        Args:
+            proper: If True, removes proper subsets and identical groups.
+                If False, only removes strict subsets. Defaults to True.
         """
         self.remove_groups(list(self.find_subsets(proper=proper)))
 
     def clear_all_groups(self) -> None:
-        """Remove (unmark) all groups."""
+        """Remove all group assignments from the DataFrame.
+
+        Resets the group column to NaN for all rows.
+        """
         df = self.collapsed_df
         if self.gcol in df.columns:
             df[self.gcol] = np.nan
             self._reset_edf()
 
     def reset_group_numbers(self, start_num: int = 0) -> None:
-        """Reset group numbers to increase consecutively from a start.
-        :param start_num: The group number to start from.
+        """Renumber all groups consecutively starting from a given number.
+
+        Preserves group memberships but assigns new consecutive numbers.
+
+        Args:
+            start_num: Starting group number. Defaults to 0.
         """
         glocs = self.all_group_locs
         self.clear_all_groups()
@@ -352,19 +464,20 @@ class GroupManager:
         group_num: int,
         subgroup_num_col: str,
     ) -> "GroupManager":
-        """Given that this group manager's groups are comprised of groups from
-        another group manager, reconstruct that group manager's groups
-        identified by the given group_num from this manager.
+        """Create a GroupManager for subgroups within a specific group.
 
-        Or, get a GroupManager for the subgroup_num_col updated to reflect only
-        groups identified by this manager's group_num. Note that this returns
-        a copy of this manager's dataframe with the subgroup_num_col updated
-        to exclude other subgroup's groupings.
+        Extracts subgroup information for rows belonging to a specific group,
+        filtering out subgroups that are shared with other groups. Returns a
+        new GroupManager with a copy of the DataFrame showing only the relevant
+        subgroup structure.
 
-        :param group_num: This manager's group num whose subgroups to get
-        :param subgroup_num_col: The name of the collapsed dataframe column
-            holding subgroup values.
-        :return: A new GroupManager with only the relevant subgroups marked.
+        Args:
+            group_num: Group number whose subgroups to extract.
+            subgroup_num_col: Name of the DataFrame column containing
+                subgroup number lists.
+
+        Returns:
+            GroupManager: New manager with only subgroups unique to this group.
         """
         group_locs = self.get_group_locs(group_num)
         # Get the subgroup column data as a Series

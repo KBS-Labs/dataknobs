@@ -1,13 +1,24 @@
-# dataknobs-common API Reference
+# Dataknobs Common
 
-Complete API documentation for the `dataknobs_common` package.
+Common utilities and base classes shared across dataknobs packages.
 
-## Package Information
+> **💡 Quick Links:**
+> - [Complete API Documentation](reference/common.md) - Full auto-generated reference
+> - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/common/src/dataknobs_common) - Browse on GitHub
+> - [Package Guide](../packages/common/index.md) - Detailed documentation
+
+## Overview
+
+The `dataknobs-common` package provides shared functionality and common abstractions used across the dataknobs ecosystem. It establishes consistent patterns for configuration, logging, error handling, and validation across all dataknobs packages.
+
+> **Note**: This documentation describes the conceptual architecture and intended usage patterns for common utilities. Some features described here represent planned functionality and design patterns that packages should follow.
+
+**Package Information:**
 
 - **Package Name**: `dataknobs_common`
 - **Version**: 1.0.0
-- **Description**: Common components and utilities shared across dataknobs packages
 - **Python Requirements**: >=3.8
+- **License**: See [project license](https://github.com/KBS-Labs/dataknobs/blob/main/LICENSE)
 
 ## Installation
 
@@ -15,88 +26,144 @@ Complete API documentation for the `dataknobs_common` package.
 pip install dataknobs-common
 ```
 
-## Import Statement
+## Quick Start
+
+The `dataknobs-common` package establishes patterns and conventions used across the dataknobs ecosystem. While the package itself is minimal, it defines the interfaces and standards that other packages follow.
 
 ```python
-from dataknobs_common import (
-    # Common utilities and base classes will be imported here
-)
+from dataknobs_common import __version__
+
+print(f"dataknobs-common version: {__version__}")
 ```
 
-## Module Documentation
+> **Note**: The examples in this documentation demonstrate the conceptual patterns and conventions that dataknobs packages should follow. Some features represent planned functionality and architectural guidelines.
 
-### Core Components
+## Core Concepts
 
-::: dataknobs_common
-    options:
-      show_source: true
-      show_root_heading: true
-      show_root_toc_entry: false
+The `dataknobs_common` package establishes consistent patterns across the dataknobs ecosystem:
 
-## Usage Examples
+### Design Principles
 
-### Basic Usage
+1. **Consistency** - Standardized interfaces and behaviors across all packages
+2. **Simplicity** - Minimal abstractions that don't obscure underlying functionality
+3. **Flexibility** - Common patterns that adapt to different use cases
+4. **Interoperability** - Seamless integration between dataknobs packages
 
-```python
-from dataknobs_common import common_utilities
+### Package Architecture
 
-# Example usage of common components
-# (Specific examples will depend on actual implementation)
-```
+**Base Classes:**
 
-## Package Structure
-
-The `dataknobs_common` package provides shared functionality used across the dataknobs ecosystem:
-
-### Base Classes
-- Common abstract base classes
+- Common abstract base classes for data structures
 - Shared interface definitions
-- Standard exception classes
+- Standard exception hierarchy
 
-### Utilities
-- Configuration management
-- Logging utilities
-- Validation functions
-- Type definitions
+**Utilities:**
 
-### Constants
-- Package-wide constants
-- Default configuration values
-- Standard error messages
+- Configuration management with environment variable support
+- Structured logging with consistent formatting
+- Input validation and sanitization
+- Type definitions and protocols
 
-## API Overview
+**Constants & Defaults:**
 
-### Configuration Management
+- Package-wide constants for configuration
+- Default values for common parameters
+- Standard error messages and codes
+
+## Common Patterns
+
+These patterns demonstrate the conventions and standards used across dataknobs packages.
+
+### Configuration Management Pattern
+
+Standardized configuration loading and management:
 
 ```python
 from dataknobs_common import config
 
-# Configuration utilities for managing package settings
-config_manager = config.ConfigManager()
-settings = config_manager.load_settings("config.json")
+def setup_component(config_path: str = None):
+    """Set up component with configuration.
+
+    Args:
+        config_path: Optional path to configuration file.
+            If not provided, uses default location.
+
+    Returns:
+        Configured component instance
+    """
+    # Load configuration with standard pattern
+    config_manager = config.ConfigManager()
+    settings = config_manager.load_settings(
+        config_path or config.get_default_config_path()
+    )
+
+    return Component(settings)
 ```
 
-### Logging
+### Logging Pattern
+
+Consistent logging across all dataknobs packages:
 
 ```python
 from dataknobs_common import logging
 
-# Standardized logging across dataknobs packages
+# Get logger for current module
 logger = logging.get_logger(__name__)
-logger.info("Processing started")
+
+def process_data(data):
+    """Process data with structured logging.
+
+    Args:
+        data: Input data to process
+
+    Returns:
+        Processed result
+    """
+    logger.info("Processing started", extra={"data_size": len(data)})
+
+    try:
+        result = perform_processing(data)
+        logger.info("Processing completed successfully")
+        return result
+    except Exception as e:
+        logger.error("Processing failed", exc_info=True)
+        raise
 ```
 
-### Validation
+### Validation Pattern
+
+Common validation functions for input checking:
 
 ```python
 from dataknobs_common import validation
 
-# Common validation functions
-validation.validate_text_input(text)
-validation.validate_file_path(path)
+def safe_text_operation(text: str) -> str:
+    """Perform text operation with validation.
+
+    Args:
+        text: Input text to process
+
+    Returns:
+        Processed text
+
+    Raises:
+        ValidationError: If input validation fails
+    """
+    # Validate input
+    validation.validate_text_input(text)
+
+    # Process
+    result = process(text)
+
+    # Validate output
+    validation.validate_text_output(result)
+
+    return result
 ```
 
-### Type Definitions
+### Type Definitions Pattern
+
+Common type definitions for cross-package consistency:
 
 ```python
 from dataknobs_common.types import (
@@ -105,14 +172,37 @@ from dataknobs_common.types import (
     ProcessingConfig
 )
 
-# Use common type definitions across packages
-def process_document(doc: TextData) -> ProcessingConfig:
-    pass
+def process_document(
+    doc: TextData,
+    metadata: DocumentMetadata,
+    config: ProcessingConfig
+) -> TextData:
+    """Process document with type safety.
+
+    Args:
+        doc: Input document text
+        metadata: Document metadata
+        config: Processing configuration
+
+    Returns:
+        Processed document
+    """
+    # Type-safe processing with common types
+    return perform_processing(doc, metadata, config)
 ```
 
 ## Integration Examples
 
-### With dataknobs-structures
+These examples show how `dataknobs-common` provides shared functionality across different dataknobs packages.
+
+> **Related Packages:**
+> - [dataknobs-structures](https://github.com/KBS-Labs/dataknobs/tree/main/packages/structures) - Core data structures
+> - [dataknobs-utils](https://github.com/KBS-Labs/dataknobs/tree/main/packages/utils) - Utility functions
+> - [dataknobs-xization](https://github.com/KBS-Labs/dataknobs/tree/main/packages/xization) - Text normalization
+
+### Integration with dataknobs-structures
+
+Extend data structures with common validation and error handling:
 
 ```python
 from dataknobs_common import base_classes
@@ -120,13 +210,13 @@ from dataknobs_structures import Tree
 
 class CustomTree(base_classes.BaseDataStructure, Tree):
     """Custom tree with common functionality."""
-    
+
     def validate(self) -> bool:
         """Use common validation methods."""
         return super().validate() and self._validate_tree_structure()
 ```
 
-### With dataknobs-utils
+### Integration with dataknobs-utils
 
 ```python
 from dataknobs_common import config, logging
@@ -150,73 +240,122 @@ def process_files(input_dir: str):
             logger.error(f"Failed to process {filepath}: {e}")
 ```
 
-### With dataknobs-xization
+### Integration with dataknobs-xization
+
+Use common validation and error handling with text normalization:
 
 ```python
 from dataknobs_common import validation, exceptions
 from dataknobs_xization import normalize
 
 def safe_normalize_text(text: str) -> str:
-    """Normalize text with common validation and error handling."""
+    """Normalize text with common validation and error handling.
+
+    Args:
+        text: Input text to normalize
+
+    Returns:
+        Normalized text string
+
+    Raises:
+        DataProcessingError: If validation or normalization fails
+    """
     try:
         # Use common validation
         validation.validate_text_input(text)
-        
+
         # Perform normalization
         normalized = normalize.basic_normalization_fn(text)
-        
+
         # Validate result
         validation.validate_text_output(normalized)
-        
+
         return normalized
-        
+
     except validation.ValidationError as e:
         raise exceptions.DataProcessingError(f"Text validation failed: {e}")
     except Exception as e:
         raise exceptions.DataProcessingError(f"Normalization failed: {e}")
 ```
 
-## Common Patterns
+## Design Patterns
 
-### Error Handling
+Common design patterns for building dataknobs components.
+
+### Error Handling Pattern
+
+Standardized error handling across packages:
 
 ```python
 from dataknobs_common import exceptions, logging
 
 logger = logging.get_logger(__name__)
 
-try:
-    # Process data
-    result = process_data(data)
-except exceptions.DataValidationError as e:
-    logger.error(f"Validation error: {e}")
-    raise
-except exceptions.DataProcessingError as e:
-    logger.error(f"Processing error: {e}")
-    raise
-except Exception as e:
-    logger.error(f"Unexpected error: {e}")
-    raise exceptions.DataProcessingError(f"Unexpected error: {e}")
+def robust_operation(data):
+    """Perform operation with standard error handling.
+
+    Args:
+        data: Input data to process
+
+    Returns:
+        Processed result
+
+    Raises:
+        DataValidationError: If input validation fails
+        DataProcessingError: If processing fails
+    """
+    try:
+        # Validate and process data
+        validate_data(data)
+        result = process_data(data)
+        return result
+    except exceptions.DataValidationError as e:
+        logger.error(f"Validation error: {e}")
+        raise
+    except exceptions.DataProcessingError as e:
+        logger.error(f"Processing error: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        raise exceptions.DataProcessingError(f"Unexpected error: {e}")
 ```
 
-### Configuration Management
+### Multi-Package Configuration Pattern
+
+Managing configuration across multiple packages:
 
 ```python
 from dataknobs_common import config
 
-# Global configuration manager
-config_manager = config.ConfigManager()
+class ApplicationConfig:
+    """Application configuration manager."""
 
-# Load package-specific settings
-utils_config = config_manager.get_package_config("dataknobs_utils")
-structures_config = config_manager.get_package_config("dataknobs_structures")
+    def __init__(self):
+        self.config_manager = config.ConfigManager()
 
-# Override with local settings
-local_config = config_manager.load_local_config("local_settings.json")
-final_config = config_manager.merge_configs(utils_config, local_config)
+    def load_all_configs(self):
+        """Load configurations for all packages.
+
+        Returns:
+            Dictionary of package configurations
+        """
+        # Load package-specific settings
+        utils_config = self.config_manager.get_package_config("dataknobs_utils")
+        structures_config = self.config_manager.get_package_config("dataknobs_structures")
+
+        # Override with local settings
+        local_config = self.config_manager.load_local_config("local_settings.json")
+
+        # Merge configurations
+        return {
+            "utils": self.config_manager.merge_configs(utils_config, local_config),
+            "structures": self.config_manager.merge_configs(structures_config, local_config)
+        }
 ```
 
-### Logging Standards
+### Hierarchical Logging Pattern
+
+Package-level logging with consistent formatting:
 
 ```python
 from dataknobs_common import logging
@@ -224,131 +363,206 @@ from dataknobs_common import logging
 # Package-level logger
 logger = logging.get_logger("dataknobs.mypackage")
 
-def process_data(data):
-    """Process data with standardized logging."""
-    logger.info("Starting data processing")
-    
+def process_batch(items: list):
+    """Process batch of items with detailed logging.
+
+    Args:
+        items: List of items to process
+
+    Returns:
+        List of processed results
+    """
+    logger.info("Starting batch processing", extra={"batch_size": len(items)})
+
+    results = []
     try:
-        logger.debug(f"Processing {len(data)} items")
-        
-        for i, item in enumerate(data):
-            logger.debug(f"Processing item {i}: {item}")
+        for i, item in enumerate(items):
+            logger.debug(f"Processing item {i+1}/{len(items)}")
             result = process_item(item)
-            
-        logger.info(f"Successfully processed {len(data)} items")
+            results.append(result)
+
+        logger.info(f"Successfully processed {len(items)} items")
         return results
-        
+
     except Exception as e:
-        logger.error(f"Data processing failed: {e}", exc_info=True)
+        logger.error(
+            f"Batch processing failed at item {i}",
+            exc_info=True,
+            extra={"failed_item_index": i}
+        )
         raise
 ```
 
-## Testing Utilities
+## Additional Utilities
+
+These utilities demonstrate common patterns for specialized functionality.
+
+### Testing Pattern
+
+Standardized testing with common utilities:
 
 ```python
+import pytest
 from dataknobs_common import testing
 
-class TestMyDataProcessing(testing.BaseTestCase):
+class TestDataProcessing(testing.BaseTestCase):
     """Test case using common testing utilities."""
-    
+
     def setUp(self):
-        """Set up test environment."""
+        """Set up test environment with common fixtures."""
         super().setUp()
         self.test_data = testing.create_test_data()
         self.config = testing.get_test_config()
-    
+
     def test_data_validation(self):
         """Test data validation using common patterns."""
-        with testing.assert_raises_validation_error():
+        with pytest.raises(testing.ValidationError):
             validate_invalid_data(self.test_data)
-    
+
     def test_processing_pipeline(self):
-        """Test processing pipeline."""
+        """Test processing pipeline with validation."""
         result = process_data(self.test_data, self.config)
         testing.assert_valid_result(result)
-        
+
     def tearDown(self):
         """Clean up test environment."""
         testing.cleanup_test_data()
         super().tearDown()
 ```
 
-## Performance Utilities
+### Performance Monitoring Pattern
+
+Monitor performance with decorators and context managers:
 
 ```python
 from dataknobs_common import performance
 
 @performance.monitor_performance
 def expensive_operation(data):
-    """Operation with performance monitoring."""
-    # Expensive processing here
-    return processed_data
+    """Operation with automatic performance monitoring.
 
-# Context manager for performance monitoring
+    Args:
+        data: Input data to process
+
+    Returns:
+        Processed result
+    """
+    return process_large_dataset(data)
+
+# Context manager for detailed monitoring
 with performance.PerformanceMonitor("data_processing") as monitor:
     result = process_large_dataset(data)
     monitor.log_memory_usage()
     monitor.log_timing_stats()
 ```
 
-## Security Utilities
+### Security Pattern
+
+Input sanitization and data masking:
 
 ```python
 from dataknobs_common import security
 
-# Input sanitization
-sanitized_input = security.sanitize_text_input(user_input)
+def safe_user_input_processing(user_input: str):
+    """Process user input safely.
 
-# Data masking for logging
-masked_data = security.mask_sensitive_data(data, patterns=[
-    security.EMAIL_PATTERN,
-    security.PHONE_PATTERN,
-    security.SSN_PATTERN
-])
+    Args:
+        user_input: Raw user input string
 
-logger.info(f"Processing data: {masked_data}")
+    Returns:
+        Sanitized and processed result
+    """
+    # Input sanitization
+    sanitized_input = security.sanitize_text_input(user_input)
+
+    # Data masking for logging
+    masked_data = security.mask_sensitive_data(
+        sanitized_input,
+        patterns=[
+            security.EMAIL_PATTERN,
+            security.PHONE_PATTERN,
+            security.SSN_PATTERN
+        ]
+    )
+
+    logger.info(f"Processing data: {masked_data}")
+
+    return process(sanitized_input)
 ```
 
-## Version Compatibility
+### Version Compatibility Pattern
+
+Check version compatibility for feature detection:
 
 ```python
 from dataknobs_common import version
 
-# Check version compatibility
-if version.is_compatible("dataknobs_utils", "1.2.0"):
-    # Use new features
-    pass
-else:
-    # Fallback to older API
-    pass
+def use_features_conditionally():
+    """Use features based on package versions.
 
-# Get version information
-version_info = version.get_package_versions()
-print(f"Installed versions: {version_info}")
+    Returns:
+        Processing result using appropriate API version
+    """
+    # Check version compatibility
+    if version.is_compatible("dataknobs_utils", "1.2.0"):
+        # Use new features from 1.2.0+
+        return use_new_api()
+    else:
+        # Fallback to older API
+        return use_legacy_api()
+
+    # Get version information for diagnostics
+    version_info = version.get_package_versions()
+    logger.debug(f"Installed versions: {version_info}")
 ```
 
-## Migration Utilities
+### Migration Pattern
+
+Data and configuration migration utilities:
 
 ```python
 from dataknobs_common import migration
 
-# Data format migration
-old_data = load_old_format_data("legacy_data.json")
-new_data = migration.migrate_data_format(
-    old_data, 
-    from_version="0.9", 
-    to_version="1.0"
-)
+def migrate_legacy_data(legacy_data_path: str, output_path: str):
+    """Migrate legacy data to current format.
 
-# Configuration migration
-old_config = load_old_config("old_config.yaml")
-new_config = migration.migrate_configuration(
-    old_config,
-    migration_rules=migration.get_migration_rules("0.9", "1.0")
-)
+    Args:
+        legacy_data_path: Path to legacy data file
+        output_path: Path for migrated data
+
+    Returns:
+        Migration success status
+    """
+    # Load and migrate data format
+    old_data = load_old_format_data(legacy_data_path)
+    new_data = migration.migrate_data_format(
+        old_data,
+        from_version="0.9",
+        to_version="1.0"
+    )
+
+    # Save migrated data
+    save_data(new_data, output_path)
+    return True
+
+def migrate_configuration(old_config_path: str):
+    """Migrate configuration to new format.
+
+    Args:
+        old_config_path: Path to old configuration file
+
+    Returns:
+        Migrated configuration dictionary
+    """
+    old_config = load_old_config(old_config_path)
+    migration_rules = migration.get_migration_rules("0.9", "1.0")
+
+    return migration.migrate_configuration(old_config, migration_rules)
 ```
 
-## Error Handling Standards
+### Exception Hierarchy Pattern
+
+Standardized exception handling with custom exceptions:
 
 ```python
 from dataknobs_common.exceptions import (
@@ -360,25 +574,39 @@ from dataknobs_common.exceptions import (
 )
 
 def robust_data_processing(data, config):
-    """Example of standardized error handling."""
+    """Process data with comprehensive error handling.
+
+    Args:
+        data: Input data to process
+        config: Processing configuration
+
+    Returns:
+        Processed result
+
+    Raises:
+        DataValidationError: If input validation fails
+        ConfigurationError: If configuration is invalid
+        DataProcessingError: If processing fails
+        DataknobsError: For unexpected errors
+    """
     try:
         # Validate input
         if not validation.is_valid_data(data):
             raise DataValidationError("Invalid input data format")
-        
+
         # Validate configuration
         if not validation.is_valid_config(config):
             raise ConfigurationError("Invalid configuration")
-        
+
         # Process data
         result = process_data(data, config)
-        
+
         # Validate output
         if not validation.is_valid_result(result):
             raise DataProcessingError("Processing produced invalid result")
-        
+
         return result
-        
+
     except DataValidationError:
         logger.error("Data validation failed")
         raise
@@ -396,12 +624,15 @@ def robust_data_processing(data, config):
 ## Best Practices
 
 ### 1. Use Common Base Classes
+
+Inherit from common base classes to ensure consistent behavior:
+
 ```python
 from dataknobs_common.base import BaseProcessor
 
 class MyProcessor(BaseProcessor):
     """Custom processor inheriting common functionality."""
-    
+
     def process(self, data):
         """Process data using inherited validation and logging."""
         self.validate_input(data)
@@ -411,10 +642,15 @@ class MyProcessor(BaseProcessor):
 ```
 
 ### 2. Standard Configuration Patterns
+
+Use consistent configuration loading across components:
+
 ```python
-from dataknobs_common import config
+from dataknobs_common import config, logging
 
 class MyComponent:
+    """Component with standard configuration."""
+
     def __init__(self, config_path=None):
         self.config = config.load_config(
             config_path or config.get_default_config_path()
@@ -423,102 +659,171 @@ class MyComponent:
 ```
 
 ### 3. Consistent Error Handling
+
+Use common decorators and error handling patterns:
+
 ```python
 from dataknobs_common.decorators import handle_common_errors
 
 @handle_common_errors
 def process_document(doc):
-    """Process document with standard error handling."""
-    # Implementation here - common errors will be caught and handled
+    """Process document with standard error handling.
+
+    Common errors (ValidationError, ConfigurationError) will be
+    caught and handled according to standard patterns.
+    """
+    # Implementation here
     return processed_doc
 ```
 
-## Testing
+### 4. Structured Logging
+
+Follow consistent logging patterns across all packages:
+
+```python
+from dataknobs_common import logging
+
+logger = logging.get_logger(__name__)
+
+def process_data(data):
+    """Process data with structured logging."""
+    logger.info("Processing started", extra={"data_size": len(data)})
+
+    try:
+        result = do_processing(data)
+        logger.info("Processing completed", extra={"result_size": len(result)})
+        return result
+    except Exception as e:
+        logger.error("Processing failed", exc_info=True, extra={"error": str(e)})
+        raise
+```
+
+### 5. Type Hints and Validation
+
+Use common type definitions and validation:
+
+```python
+from dataknobs_common.types import TextData, ProcessingConfig
+from dataknobs_common import validation
+
+def process_text(text: TextData, config: ProcessingConfig) -> TextData:
+    """Process text with type safety and validation."""
+    # Validate inputs
+    validation.validate_text_input(text)
+    validation.validate_config(config)
+
+    # Process with type safety
+    result = perform_processing(text, config)
+
+    # Validate output
+    validation.validate_text_output(result)
+    return result
+```
+
+## Testing Common Functionality
+
+Example tests demonstrating common functionality patterns:
 
 ```python
 import pytest
-from dataknobs_common import testing, validation, exceptions
+from dataknobs_common import testing, validation, exceptions, config
 
 class TestCommonFunctionality:
-    """Test common functionality."""
-    
+    """Test common functionality patterns."""
+
     def test_validation(self):
-        """Test validation functions."""
+        """Test validation functions work correctly.
+
+        Verifies that validation correctly accepts valid data
+        and rejects invalid data with appropriate exceptions.
+        """
         # Test valid data
         valid_data = testing.create_valid_test_data()
         assert validation.is_valid_data(valid_data)
-        
+
         # Test invalid data
         invalid_data = testing.create_invalid_test_data()
         with pytest.raises(exceptions.DataValidationError):
             validation.validate_data(invalid_data)
-    
+
     def test_configuration(self):
-        """Test configuration management."""
-        from dataknobs_common import config
-        
-        # Test loading configuration
+        """Test configuration management.
+
+        Verifies that configuration can be loaded and
+        managed correctly.
+        """
+        # Create and load test configuration
         test_config = testing.create_test_config()
         config_manager = config.ConfigManager()
         loaded_config = config_manager.load_config_from_dict(test_config)
-        
+
         assert loaded_config == test_config
-    
+
     def test_error_handling(self):
-        """Test error handling patterns."""
-        from dataknobs_common.exceptions import DataProcessingError
-        
+        """Test error handling patterns.
+
+        Verifies that errors are properly wrapped and
+        raised with appropriate exception types.
+        """
         def failing_function():
             raise ValueError("Test error")
-        
-        with pytest.raises(DataProcessingError):
+
+        # Test exception wrapping
+        with pytest.raises(exceptions.DataProcessingError):
             try:
                 failing_function()
             except ValueError as e:
-                raise DataProcessingError(f"Processing failed: {e}")
+                raise exceptions.DataProcessingError(f"Processing failed: {e}")
 ```
 
-## Performance Considerations
+## Package Architecture
 
-- Common utilities are optimized for performance across all packages
-- Configuration loading is cached to avoid repeated file I/O
-- Logging is configured for minimal performance impact
-- Validation functions use efficient algorithms
+### Performance Considerations
 
-## Dependencies
+The common package is designed for minimal overhead:
 
-Core dependencies for dataknobs_common:
+- **Optimized utilities** - Core functions use efficient algorithms
+- **Configuration caching** - Config loading is cached to avoid repeated I/O
+- **Lazy initialization** - Resources loaded only when needed
+- **Minimal logging overhead** - Logging configured for production performance
+
+### Dependencies
+
+Minimal dependencies to avoid conflicts across packages:
 
 ```txt
-# Minimal dependencies to avoid conflicts
+# Core dependencies
 python>=3.8
-typing-extensions>=4.0.0  # For older Python versions
+typing-extensions>=4.0.0  # For Python <3.10 compatibility
 ```
+
+> **Philosophy**: Keep dependencies minimal to avoid version conflicts when using multiple dataknobs packages together.
+
+## Complete API Reference
+
+For comprehensive auto-generated API documentation with all classes, methods, and functions including full signatures and type annotations, see:
+
+**[📖 dataknobs-common Complete API Reference](reference/common.md)**
+
+This curated guide focuses on practical examples and usage patterns. The complete reference provides exhaustive technical documentation auto-generated from source code docstrings.
+
+---
 
 ## Contributing
 
-For contributing to dataknobs_common:
+Contributions to `dataknobs-common` are welcome! Since this package provides shared functionality, changes here can affect all other dataknobs packages.
 
-1. Fork the repository
-2. Create feature branch for common functionality
-3. Ensure changes don't break other packages
-4. Add comprehensive tests
-5. Update documentation for all affected packages
-6. Submit pull request
-
-See [Contributing Guide](../development/contributing.md) for detailed information.
+See the [Contributing Guide](https://github.com/KBS-Labs/dataknobs/blob/main/CONTRIBUTING.md) for information on how to contribute.
 
 ## Changelog
 
+See the [project changelog](https://github.com/KBS-Labs/dataknobs/blob/main/CHANGELOG.md) for detailed version history.
+
 ### Version 1.0.0
-- Initial release
-- Base classes and interfaces
-- Common configuration management
-- Standardized logging
-- Error handling framework
-- Validation utilities
-- Testing support
+
+- Initial release with core package structure
+- Common patterns and conventions established
 
 ## License
 
-See [License](../license.md) for license information.
+This project is licensed under the MIT License - see the [LICENSE](https://github.com/KBS-Labs/dataknobs/blob/main/LICENSE) file for details.

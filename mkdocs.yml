@@ -121,7 +121,6 @@ nav:
       - packages/fsm/quickstart.md
       - packages/fsm/faq.md
       - API Reference:
-        - packages/fsm/api/index.md
         - packages/fsm/api/simple.md
         - packages/fsm/api/async_simple.md
         - packages/fsm/api/advanced.md
@@ -160,7 +159,6 @@ nav:
         - packages/llm/guides/performance.md
         - packages/llm/guides/tools-and-enhancements.md
       - API Reference:
-        - packages/llm/api/llm.md
         - packages/llm/api/prompts.md
         - packages/llm/api/conversations.md
         - packages/llm/api/versioning.md
@@ -180,7 +178,6 @@ nav:
         - packages/bots/guides/architecture.md
         - packages/bots/guides/tools.md
       - API Reference:
-        - packages/bots/api/index.md
         - packages/bots/api/reference.md
       - Examples:
         - packages/bots/examples/index.md
@@ -204,15 +201,27 @@ nav:
   
   - API Reference:
     - api/index.md
-    - dataknobs-bots: packages/bots/api/index.md
-    - dataknobs-fsm: packages/fsm/api/index.md
-    - dataknobs-llm: packages/llm/api/llm.md
-    - dataknobs-data: api/dataknobs-data.md
-    - dataknobs-config: api/dataknobs-config.md
-    - dataknobs-structures: api/dataknobs-structures.md
-    - dataknobs-utils: api/dataknobs-utils.md
-    - dataknobs-xization: api/dataknobs-xization.md
-    - dataknobs-common: api/dataknobs-common.md
+    - Complete Reference: api/complete-reference.md
+    - Complete References (Docstrings):
+      - bots (complete): api/reference/bots.md
+      - llm (complete): api/reference/llm.md
+      - fsm (complete): api/reference/fsm.md
+      - data (complete): api/reference/data.md
+      - config (complete): api/reference/config.md
+      - structures (complete): api/reference/structures.md
+      - utils (complete): api/reference/utils.md
+      - xization (complete): api/reference/xization.md
+      - common (complete): api/reference/common.md
+    - Curated Guides (Examples & Tutorials):
+      - bots (curated): api/dataknobs-bots.md
+      - fsm (curated): api/dataknobs-fsm.md
+      - llm (curated): api/dataknobs-llm.md
+      - data (curated): api/dataknobs-data.md
+      - config (curated): api/dataknobs-config.md
+      - structures (curated): api/dataknobs-structures.md
+      - utils (curated): api/dataknobs-utils.md
+      - xization (curated): api/dataknobs-xization.md
+      - common (curated): api/dataknobs-common.md
   
   - Development:
     - Overview: development/index.md

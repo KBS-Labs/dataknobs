@@ -117,7 +117,7 @@ class EchoProvider(AsyncLLMProvider):
     async def complete(
         self,
         messages: Union[str, List[LLMMessage]],
-        **kwargs
+        **kwargs: Any
     ) -> LLMResponse:
         """Echo back the input messages.
 
@@ -164,7 +164,7 @@ class EchoProvider(AsyncLLMProvider):
     async def stream_complete(
         self,
         messages: Union[str, List[LLMMessage]],
-        **kwargs
+        **kwargs: Any
     ) -> AsyncIterator[LLMStreamResponse]:
         """Stream echo response character by character.
 
@@ -200,7 +200,7 @@ class EchoProvider(AsyncLLMProvider):
     async def embed(
         self,
         texts: Union[str, List[str]],
-        **kwargs
+        **kwargs: Any
     ) -> Union[List[float], List[List[float]]]:
         """Generate deterministic mock embeddings.
 
@@ -223,7 +223,7 @@ class EchoProvider(AsyncLLMProvider):
         self,
         messages: List[LLMMessage],
         functions: List[Dict[str, Any]],
-        **kwargs
+        **kwargs: Any
     ) -> LLMResponse:
         """Mock function calling with deterministic response.
 

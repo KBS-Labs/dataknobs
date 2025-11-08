@@ -57,16 +57,39 @@ SPECIAL_CHARS = {
 
 @dataclass
 class Emoji:
-    emoji: str  # The emoji characters
-    status: str  # component  (fully-  minimally-  un) + qualified
-    since_version: str  # "Ex.x"
-    short_name: str  # (english) short name
-    group: str | None = None  # test file "group" name
-    subgroup: str | None = None  # test file "subgroup" name
+    """Metadata for a Unicode emoji from the emoji-test.txt file.
+
+    Attributes:
+        emoji: The emoji character(s) as a string.
+        status: Qualification status (e.g., 'fully-qualified', 'minimally-qualified',
+            'unqualified', 'component').
+        since_version: Unicode version when emoji was introduced (e.g., 'E13.0').
+        short_name: Short English name describing the emoji.
+        group: Optional emoji group category from test file. Defaults to None.
+        subgroup: Optional emoji subgroup category from test file. Defaults to None.
+    """
+
+    emoji: str
+    status: str
+    since_version: str
+    short_name: str
+    group: str | None = None
+    subgroup: str | None = None
 
 
 def build_emoji_dataclass(emoji_test_line: str) -> Emoji | None:
-    """Build an Emoji dataclass from the emoji-test file line."""
+    """Parse an emoji-test.txt file line into an Emoji dataclass.
+
+    Parses lines matching the emoji-test.txt format to extract emoji metadata.
+    Lines not matching the expected format are ignored.
+
+    Args:
+        emoji_test_line: Single line from emoji-test.txt file.
+
+    Returns:
+        Emoji | None: Parsed emoji metadata, or None if line doesn't match
+            expected format.
+    """
     result = None
     m = ETESTLINE_RE.match(emoji_test_line)
     if m:
@@ -80,14 +103,32 @@ def build_emoji_dataclass(emoji_test_line: str) -> Emoji | None:
 
 
 def get_emoji_seq(emoji_str: str, as_hex: bool = False) -> List[Union[int, str]]:
+    """Convert emoji string to sequence of code points.
+
+    Args:
+        emoji_str: Emoji string to convert.
+        as_hex: If True, returns hex strings; if False, returns integers.
+            Defaults to False.
+
+    Returns:
+        List[Union[int, str]]: List of code points as integers or hex strings.
+    """
     return [hex(ord(x)) for x in emoji_str] if as_hex else [ord(x) for x in emoji_str]
 
 
 class EmojiData:
-    """Class for interpreting the unicode emoji_test.txt file."""
+    """Parser and analyzer for Unicode emoji-test.txt files.
+
+    Loads emoji metadata from Unicode's emoji-test.txt file and provides
+    utilities for identifying emojis in text, extracting emoji sequences,
+    and querying emoji properties.
+
+    Attributes:
+        emojis: Dictionary mapping emoji characters to their Emoji metadata.
+    """
 
     def __init__(self, emoji_test_path: str):
-        self.emojis: Dict[str, Emoji] = dict()  # emojichars -> EmojiData
+        self.emojis: Dict[str, Emoji] = {}  # emojichars -> EmojiData
         self._echars: List[int] | None = None
         self._ldepechars: Dict[int, Set[int]] | None = None
         self._rdepechars: Dict[int, Set[int]] | None = None
@@ -95,15 +136,25 @@ class EmojiData:
 
     @property
     def echars(self) -> List[int]:
-        """Code points that alone are an emoji code point."""
+        """Get code points that standalone represent complete emojis.
+
+        Returns:
+            List[int]: List of code points that by themselves form valid emojis.
+        """
         if self._echars is None:
             self._compute_echars()
         return self._echars if self._echars is not None else []
 
     @property
     def ldepechars(self) -> Dict[int, Set[int]]:
-        """Code points are not an emoji alone, but precede emoji code points,
-        where ldepechars[cp] is the set of all emoji code points that follow cp.
+        """Get code points that precede other code points in emoji sequences.
+
+        Maps code points that are not standalone emojis but can precede emoji
+        code points in compound sequences.
+
+        Returns:
+            Dict[int, Set[int]]: Dictionary where keys are left-dependent code
+                points and values are sets of emoji code points that can follow.
         """
         if self._ldepechars is None:
             self._compute_echars()
@@ -111,8 +162,14 @@ class EmojiData:
 
     @property
     def rdepechars(self) -> Dict[int, Set[int]]:
-        """Code points are not an emoji alone, but follow emoji code points,
-        where rdepechars[cp] is the set of all emoji code points that precede cp.
+        """Get code points that follow other code points in emoji sequences.
+
+        Maps code points that are not standalone emojis but can follow emoji
+        code points in compound sequences.
+
+        Returns:
+            Dict[int, Set[int]]: Dictionary where keys are right-dependent code
+                points and values are sets of emoji code points that can precede.
         """
         if self._rdepechars is None:
             self._compute_echars()
@@ -135,19 +192,30 @@ class EmojiData:
         self._rdepechars = rdepechars
 
     def emojis_with_cp(self, cp: int) -> List[Emoji]:
-        """Find emojis containing the given code point.
-        :param cp: The code point
-        :return: The list of emoji dataclasses
+        """Find all emojis containing a specific code point.
+
+        Args:
+            cp: Unicode code point to search for.
+
+        Returns:
+            List[Emoji]: List of emoji metadata objects containing the code point.
         """
         return [e for emoji, e in self.emojis.items() if cp in get_emoji_seq(emoji)]
 
     def emoji_bio(self, emoji_text: str) -> str:
-        """Given a string of text, create a "BIO" string to identify Begin,
-        Internal, and Outer emoji characters in the text.
-        :param text: The input text
-        :return: a BIO string
+        """Create BIO tags identifying emoji character positions in text.
+
+        Generates a string of the same length as the input where each character
+        is tagged as 'B' (Begin - first char of emoji), 'I' (Internal - subsequent
+        chars in emoji), or 'O' (Outer - not part of emoji).
+
+        Args:
+            emoji_text: Input text to analyze.
+
+        Returns:
+            str: BIO-tagged string of same length as input.
         """
-        result = list()
+        result = []
         start_pos = -1
         textlen = len(emoji_text)
         prevc: str | None = None
@@ -188,11 +256,16 @@ class EmojiData:
         return "".join(result)
 
     def get_emojis(self, text: str) -> List[Emoji]:
-        """Get emoji data for all emojis in the given text.
-        :param text: Arbitrary text
-        :return: The (possibly empty) list of emojis found
+        """Extract all emojis from text with their metadata.
+
+        Args:
+            text: Arbitrary text to search for emojis.
+
+        Returns:
+            List[Emoji]: List of emoji metadata objects found in the text
+                (empty if no emojis found).
         """
-        result = list()
+        result = []
         bio = self.emoji_bio(text)
         biolen = len(bio)
         start_pos = 0
@@ -220,9 +293,9 @@ class EmojiData:
                     for e in self.emojis.values():
                         c[e.status] += 1
                     # with expectations
-                    for l in f:
-                        if l.startswith("# "):
-                            m = STATUS_COUNT_RE.match(l)
+                    for line in f:
+                        if line.startswith("# "):
+                            m = STATUS_COUNT_RE.match(line)
                             if m:
                                 assert c[m.group(1)] == int(m.group(2))
                         else:
@@ -238,7 +311,14 @@ class EmojiData:
 
 
 def load_emoji_data() -> EmojiData | None:
-    """Load latest emoji-test.txt or reference EMOJI_TEST_DATA env var."""
+    """Load emoji data from emoji-test.txt file.
+
+    Attempts to load from the EMOJI_TEST_DATA environment variable if set,
+    otherwise uses the default latest emoji data file.
+
+    Returns:
+        EmojiData | None: Loaded emoji data, or None if the data file doesn't exist.
+    """
     result = None
     datapath = os.environ.get("EMOJI_TEST_DATA", LATEST_EMOJI_DATA)
     if os.path.exists(datapath):

@@ -152,7 +152,7 @@ dataknobs_llm/
 
 ### API Reference
 
-- [**LLM Providers**](api/llm.md) - LLM interface and providers
+- [**LLM Providers**](../../api/dataknobs-llm.md) - LLM interface and providers
 - [**Prompt Library**](api/prompts.md) - Prompt management API
 - [**Conversations**](api/conversations.md) - Conversation management API
 - [**Versioning**](api/versioning.md) - Version management and A/B testing API

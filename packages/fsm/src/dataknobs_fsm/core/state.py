@@ -1,8 +1,233 @@
 """Core state definitions and instances for FSM.
 
-This module provides:
-- StateDefinition: Blueprint for states with schema, functions, etc.
-- StateInstance: Runtime instance of a state with data
+This module provides the fundamental building blocks for state management in
+dataknobs-fsm. States are the nodes in the state network graph, representing
+discrete steps in a workflow.
+
+Architecture:
+    The state system uses a two-level design:
+
+    **StateDefinition (Blueprint):**
+    - Defines the static structure of a state
+    - Schema, functions, resources, retry logic
+    - Immutable once created
+    - Shared across multiple executions
+
+    **StateInstance (Runtime):**
+    - Runtime instance of a StateDefinition
+    - Holds execution data for a specific workflow run
+    - Tracks status, timing, errors, resources
+    - Manages data mode handlers
+
+    **Separation Benefits:**
+    - Definition can be reused across executions
+    - Instance holds execution-specific state
+    - Clean separation of static vs dynamic concerns
+
+State Lifecycle:
+    A state instance progresses through a defined lifecycle:
+
+    **1. Creation:**
+    - StateInstance created from StateDefinition
+    - Status: PENDING
+    - No data yet
+
+    **2. Entry:**
+    - enter() called with input data
+    - Status: ACTIVE
+    - Data mode handler applies transformations
+    - Pre-validation functions run
+    - Resources acquired
+
+    **3. Processing:**
+    - Validation functions run
+    - Transform functions modify data
+    - Can modify_data() for additional changes
+    - Can pause() / resume() execution
+
+    **4. Exit:**
+    - exit() called to finalize state
+    - Data mode handler commits or rolls back
+    - Status: COMPLETED or FAILED
+    - Resources can be released
+    - Duration calculated
+
+    **5. Error Handling:**
+    - fail() marks state as FAILED
+    - Error tracking (error_count, last_error)
+    - Retry logic can re-enter state
+    - Transaction rollback if configured
+
+Data Handling Modes:
+    States use configurable data handling modes to control how data flows:
+
+    **COPY Mode (DataHandlingMode.COPY):**
+    - Deep copy on entry
+    - Modifications to local copy
+    - Commit on exit
+    - Thread-safe, memory-intensive
+    - Best for: Production, concurrent processing
+
+    **REFERENCE Mode (DataHandlingMode.REFERENCE):**
+    - Lazy loading with optimistic locking
+    - Version tracking for conflicts
+    - Moderate memory usage
+    - Best for: Large datasets, memory-constrained
+
+    **DIRECT Mode (DataHandlingMode.DIRECT):**
+    - In-place modification
+    - No copying, fastest performance
+    - Not thread-safe
+    - Best for: Single-threaded, performance-critical
+
+    Each state can specify a preferred data_mode, or inherit from FSM-level
+    configuration.
+
+State Types:
+    States can be classified by their role in the workflow:
+
+    **NORMAL:**
+    - Standard processing state
+    - Most states are NORMAL
+    - Can have incoming and outgoing transitions
+
+    **START:**
+    - Entry point for workflow
+    - No incoming transitions
+    - Exactly one per network (typically)
+
+    **END:**
+    - Terminal state
+    - No outgoing transitions
+    - Workflow completes here
+
+    **START_END:**
+    - Both entry and exit
+    - For simple single-state FSMs
+
+    **ERROR:**
+    - Error handling state
+    - Typically has special error recovery logic
+
+    **CHOICE:**
+    - Branching decision point
+    - Multiple outgoing transitions
+    - Conditional logic determines path
+
+    **WAIT:**
+    - Pause/synchronization point
+    - Waits for external event
+    - Can have timeout
+
+    **PARALLEL:**
+    - Parallel execution split/join
+    - Spawns concurrent paths
+
+Resource Management:
+    States can declare resource requirements:
+
+    **Resource Types:**
+    - Database connections
+    - API clients
+    - File handles
+    - External services
+    - Memory allocations
+
+    **Lifecycle:**
+    - Requirements declared in StateDefinition
+    - Resources acquired on state entry
+    - Tracked in StateInstance.acquired_resources
+    - Released on state exit or error
+
+    **Resource Pooling:**
+    - Resource managers can pool connections
+    - States request from pool on entry
+    - Return to pool on exit
+    - Reduces acquisition overhead
+
+Validation and Schemas:
+    States can validate data using schemas:
+
+    **StateSchema:**
+    - Defines expected field types
+    - Required vs optional fields
+    - Type constraints
+    - Extra field handling
+
+    **Validation Functions:**
+    - Pre-validation: Before state entry
+    - Validation: After entry, before transform
+    - Custom validation logic
+    - Return (is_valid, errors)
+
+    **Validation Flow:**
+    1. Schema validation (if schema defined)
+    2. Pre-validation functions
+    3. State entry
+    4. Validation functions
+    5. Transform functions
+
+Transformation:
+    States can transform data via transform functions:
+
+    **Transform Functions:**
+    - Modify data during state processing
+    - Multiple transforms can chain
+    - Applied in order of registration
+    - Return modified data
+
+    **Use Cases:**
+    - Data enrichment
+    - Format conversion
+    - Filtering
+    - Aggregation
+    - Computation
+
+Error Handling and Retries:
+    States support automatic retry on failure:
+
+    **Retry Configuration:**
+    - retry_count: Number of retry attempts
+    - retry_delay: Delay between retries (seconds)
+    - Configured in StateDefinition
+
+    **Retry Behavior:**
+    - State fails, error recorded
+    - If retries remaining, re-enter state
+    - Exponential backoff possible
+    - If all retries exhausted, fail workflow
+
+    **Error Tracking:**
+    - error_count: Total errors encountered
+    - last_error: Most recent error message
+    - Status: FAILED after all retries exhausted
+
+Transaction Support:
+    States participate in transactions when configured:
+
+    **Transaction Modes:**
+    - NONE: No transactional guarantees
+    - OPTIMISTIC: Commit at workflow end
+    - PESSIMISTIC: Commit at each state
+
+    **State Integration:**
+    - StateInstance.transaction: Active transaction
+    - Data changes recorded in transaction log
+    - Rollback on error
+    - Commit on success
+
+Note:
+    This is an internal API used by the core FSM and execution engines.
+    Users typically interact with states indirectly through the SimpleFSM,
+    AsyncSimpleFSM, or AdvancedFSM APIs.
+
+See Also:
+    - :class:`~dataknobs_fsm.core.fsm.FSM`: Core FSM class
+    - :class:`~dataknobs_fsm.core.network.StateNetwork`: State graph container
+    - :class:`~dataknobs_fsm.core.data_modes.DataHandlingMode`: Data mode enum
+    - :class:`~dataknobs_fsm.core.data_modes.DataModeManager`: Data mode handler manager
+    - :class:`~dataknobs_fsm.functions.base.IValidationFunction`: Validation function interface
+    - :class:`~dataknobs_fsm.functions.base.ITransformFunction`: Transform function interface
 """
 
 from dataclasses import dataclass, field as dataclass_field
@@ -26,7 +251,39 @@ if TYPE_CHECKING:
 
 
 class StateType(Enum):
-    """Type of state in the FSM."""
+    """Type of state in the FSM.
+
+    State types classify states by their role in the workflow. The type
+    influences how the execution engine treats the state and what transitions
+    are valid.
+
+    Attributes:
+        NORMAL: Regular processing state with standard behavior. Can have
+            both incoming and outgoing transitions. Most states are NORMAL.
+        START: Entry point state where workflow execution begins. Typically
+            has no incoming transitions. Each network should have exactly one
+            START state (or START_END).
+        END: Terminal state where workflow execution completes. Has no
+            outgoing transitions. Networks can have multiple END states for
+            different completion paths.
+        START_END: Combined entry and exit state for simple single-state
+            FSMs. Acts as both START and END simultaneously.
+        ERROR: Error handling state for workflow failures. Typically has
+            special error recovery logic and may have transitions back to
+            recovery states.
+        CHOICE: Decision/branching state with conditional logic. Has multiple
+            outgoing transitions with conditions that determine the path taken.
+        WAIT: Pause/synchronization state that waits for external events.
+            Can have timeout configuration. Used for async workflows.
+        PARALLEL: Parallel execution split/join point. Spawns concurrent
+            execution paths that may later merge. Used for parallel workflows.
+
+    Note:
+        State type affects validation rules:
+        - START states typically cannot have incoming arcs
+        - END states typically cannot have outgoing arcs
+        - CHOICE states must have multiple outgoing arcs with conditions
+    """
 
     NORMAL = "normal"  # Regular processing state
     START = "start"  # Entry point state
@@ -39,8 +296,50 @@ class StateType(Enum):
 
 
 class StateStatus(Enum):
-    """Status of a state instance."""
-    
+    """Status of a state instance during execution.
+
+    State status tracks the current execution state of a StateInstance.
+    The status changes as the instance progresses through its lifecycle.
+
+    Lifecycle:
+        Normal flow: PENDING → ACTIVE → COMPLETED
+        Failure flow: PENDING → ACTIVE → FAILED
+        Skip flow: PENDING → SKIPPED
+        Pause flow: PENDING → ACTIVE → PAUSED → ACTIVE → COMPLETED
+
+    Attributes:
+        PENDING: State instance created but not yet entered. Initial status
+            for all state instances. No data processing has occurred.
+        ACTIVE: State is currently being processed. Entry functions have run,
+            and transform/validation functions are executing or have executed.
+            Resources may be acquired.
+        COMPLETED: State processing completed successfully. Exit functions
+            have run, data committed, resources released. This is a terminal
+            status for this state instance.
+        FAILED: State processing failed with an error. Error has been recorded
+            in last_error field. If retry_count > 0, state may be re-entered.
+            Otherwise, this is a terminal status.
+        SKIPPED: State was skipped during execution, typically due to
+            conditional logic or optimization. No processing occurred. This
+            is a terminal status for this state instance.
+        PAUSED: State execution has been temporarily paused, typically in
+            debugging scenarios or waiting for external events. Can transition
+            back to ACTIVE via resume().
+
+    Status Transitions:
+        Valid transitions:
+        - PENDING → ACTIVE (via enter())
+        - PENDING → SKIPPED (via skip())
+        - ACTIVE → COMPLETED (via exit() with success)
+        - ACTIVE → FAILED (via fail() or exception)
+        - ACTIVE → PAUSED (via pause())
+        - PAUSED → ACTIVE (via resume())
+
+    Note:
+        Status is managed internally by the StateInstance class. Users
+        typically observe status via execution results or debugging tools.
+    """
+
     PENDING = "pending"  # Not yet entered
     ACTIVE = "active"  # Currently processing
     COMPLETED = "completed"  # Successfully completed
@@ -93,8 +392,96 @@ class StateSchema:
 
 @dataclass
 class StateDefinition:
-    """Definition of a state in the FSM."""
-    
+    """Definition of a state in the FSM.
+
+    StateDefinition is the static blueprint for a state, defining its structure,
+    schema, functions, resources, and execution configuration. It is immutable
+    once created and can be reused across multiple executions.
+
+    Architecture:
+        StateDefinition follows a declarative design pattern:
+        - Define structure, not behavior
+        - Functions referenced by interface, not implementation
+        - Configuration-driven execution
+        - Immutable and reusable
+
+    Key Components:
+        **Identity:**
+        - name: Unique identifier within network
+        - type: Role in workflow (START/END/NORMAL/etc)
+        - description: Human-readable description
+        - metadata: Additional custom attributes
+
+        **Data Validation:**
+        - schema: Optional StateSchema for data validation
+        - pre_validation_functions: Run before state entry
+        - validation_functions: Run after entry, before transform
+        - Ensures data quality throughout workflow
+
+        **Data Transformation:**
+        - transform_functions: Modify data during processing
+        - Multiple transforms chain in order
+        - Each returns modified data
+
+        **Resource Requirements:**
+        - resource_requirements: List of ResourceConfig
+        - Database connections, API clients, etc.
+        - Acquired on entry, released on exit
+
+        **Execution Configuration:**
+        - timeout: Max execution time in seconds
+        - retry_count: Number of retry attempts on failure
+        - retry_delay: Delay between retries in seconds
+        - data_mode: Preferred data handling mode
+
+        **Network Integration:**
+        - outgoing_arcs: List of transitions to other states
+        - end_test_function: Determines if this is an end state
+
+    Data Modes:
+        States can specify a preferred data_mode:
+        - COPY: Deep copy for thread safety (default)
+        - REFERENCE: Lazy loading for memory efficiency
+        - DIRECT: In-place modification for performance
+        - None: Inherit from FSM-level configuration
+
+    Validation:
+        Multiple levels of validation:
+        1. Schema validation (structural)
+        2. Pre-validation functions (business logic before entry)
+        3. Validation functions (business logic after entry)
+
+    Resource Management:
+        States declare resource requirements:
+        - Specified as ResourceConfig objects
+        - Include resource type, name, and configuration
+        - Execution engine acquires before state entry
+        - Released after state exit or on error
+
+    Error Handling:
+        Built-in retry support:
+        - retry_count: Number of attempts (0 = no retry)
+        - retry_delay: Delay between attempts in seconds
+        - Exponential backoff can be implemented in retry logic
+        - After all retries exhausted, state fails
+
+    Note:
+        StateDefinition is immutable after creation. To modify a state,
+        create a new StateDefinition. This ensures consistency when the
+        same definition is used across multiple executions.
+
+        Functions are stored as references (interfaces), not implementations.
+        The actual function implementations are registered in the FSM's
+        FunctionRegistry.
+
+    See Also:
+        - :class:`~dataknobs_fsm.core.state.StateInstance`: Runtime instance
+        - :class:`~dataknobs_fsm.core.state.StateSchema`: Data schema
+        - :class:`~dataknobs_fsm.core.state.StateType`: State type enum
+        - :class:`~dataknobs_fsm.functions.base.IValidationFunction`: Validation interface
+        - :class:`~dataknobs_fsm.functions.base.ITransformFunction`: Transform interface
+    """
+
     name: str
     type: StateType = StateType.NORMAL
     description: str = ""
@@ -200,8 +587,188 @@ class StateDefinition:
 
 @dataclass
 class StateInstance:
-    """Runtime instance of a state."""
-    
+    """Runtime instance of a state.
+
+    StateInstance represents a single execution of a StateDefinition within
+    a workflow. It holds the runtime data, tracks execution status, manages
+    resources, and implements the state lifecycle.
+
+    Architecture:
+        StateInstance follows the Instance pattern:
+        - One StateDefinition → Many StateInstances
+        - Each instance is independent
+        - Instance holds mutable execution state
+        - Definition holds immutable structure
+
+    Lifecycle:
+        StateInstance progresses through a defined lifecycle:
+
+        **1. Creation:**
+        ```python
+        from dataknobs_fsm.core.state import StateDefinition, StateInstance, StateType
+
+        # Define state first
+        state_def = StateDefinition(name="process", type=StateType.NORMAL)
+
+        # Create instance
+        instance = StateInstance(definition=state_def)
+        # Status: PENDING
+        # No data yet
+        ```
+
+        **2. Entry:**
+        ```python
+        instance.enter(input_data)
+        # Status: ACTIVE
+        # Data mode handler applies transformations
+        # Resources acquired
+        # Execution tracking begins
+        ```
+
+        **3. Processing:**
+        ```python
+        # Validation, transformation happen
+        instance.modify_data(updates)
+        # Can pause/resume if needed
+        ```
+
+        **4. Exit:**
+        ```python
+        result_data = instance.exit(commit=True)
+        # Status: COMPLETED (or FAILED)
+        # Data mode handler commits changes
+        # Resources released
+        # Duration calculated
+        ```
+
+        **5. Error Handling:**
+        ```python
+        instance.fail(error_message)
+        # Status: FAILED
+        # Error tracking updated
+        # Can retry if retry_count > 0
+        ```
+
+    Attributes:
+        id (str): Unique identifier for this instance (UUID)
+        definition (StateDefinition): The state blueprint being executed
+        status (StateStatus): Current execution status (PENDING/ACTIVE/COMPLETED/FAILED/etc)
+        data (Dict[str, Any]): Current state data
+        data_mode_manager (DataModeManager | None): Manages data handling modes
+        data_handler (Any | None): Active data mode handler (COPY/REFERENCE/DIRECT)
+        transaction (Transaction | None): Active transaction if using transactional mode
+        acquired_resources (Dict[str, Any]): Resources acquired for this instance
+        entry_time (datetime | None): When state was entered
+        exit_time (datetime | None): When state was exited
+        execution_count (int): Number of times state has been entered
+        error_count (int): Number of errors encountered
+        last_error (str | None): Most recent error message
+        executed_arcs (List[str]): IDs of arcs executed from this state
+        next_state (str | None): Name of next state to transition to
+
+    Data Handling:
+        StateInstance uses data mode handlers to manage how data flows:
+
+        **COPY Mode:**
+        - Deep copy on entry via data_handler.on_entry()
+        - Modifications to local copy
+        - Commit on exit via data_handler.on_exit(commit=True)
+        - Thread-safe, memory-intensive
+
+        **REFERENCE Mode:**
+        - Lazy loading with version tracking
+        - Optimistic locking for conflicts
+        - on_modification() tracks changes
+        - Memory-efficient
+
+        **DIRECT Mode:**
+        - In-place modification
+        - No copying overhead
+        - Fastest performance
+        - Not thread-safe
+
+    Resource Management:
+        StateInstance tracks acquired resources:
+
+        **Lifecycle:**
+        1. acquire: add_resource(name, handle)
+        2. use: get_resource(name) → handle
+        3. release: release_resources()
+
+        **Automatic Cleanup:**
+        - Resources released on exit()
+        - Resources released on fail()
+        - Ensures no resource leaks
+
+    Execution Tracking:
+        StateInstance tracks detailed execution metrics:
+
+        **Timing:**
+        - entry_time: When processing started
+        - exit_time: When processing completed
+        - get_duration(): Calculates elapsed time
+
+        **Counts:**
+        - execution_count: Total entries (for retries)
+        - error_count: Total errors encountered
+        - executed_arcs: History of transitions
+
+        **State:**
+        - status: Current execution status
+        - next_state: Determined next state
+        - last_error: Most recent error message
+
+    Transaction Support:
+        StateInstance participates in transactions:
+
+        **Integration:**
+        - transaction field holds active transaction
+        - Data changes logged to transaction
+        - Rollback on fail()
+        - Commit on exit(commit=True)
+
+        **Modes:**
+        - NONE: No transaction tracking
+        - OPTIMISTIC: Commit at workflow end
+        - PESSIMISTIC: Commit at each state exit
+
+    Methods:
+        **Lifecycle:**
+        - enter(input_data): Enter state with data
+        - exit(commit=True): Exit and finalize
+        - fail(error): Mark as failed
+        - skip(): Skip this state
+
+        **Control:**
+        - pause(): Temporarily pause
+        - resume(): Resume from pause
+        - modify_data(updates): Update state data
+
+        **Resources:**
+        - add_resource(name, resource): Acquire resource
+        - get_resource(name): Get acquired resource
+        - release_resources(): Release all resources
+
+        **Tracking:**
+        - record_arc_execution(arc_id): Track transition
+        - get_duration(): Get execution time
+        - to_dict(): Serialize to dictionary
+
+    Note:
+        StateInstance is managed by execution engines. Users typically don't
+        create or manipulate instances directly, but may observe them via
+        debugging tools or execution results.
+
+        Each workflow execution creates fresh StateInstances, even when reusing
+        StateDefinitions. This ensures execution isolation.
+
+    See Also:
+        - :class:`~dataknobs_fsm.core.state.StateDefinition`: State blueprint
+        - :class:`~dataknobs_fsm.core.state.StateStatus`: Status enum
+        - :class:`~dataknobs_fsm.core.data_modes.DataModeManager`: Data mode manager
+        - :class:`~dataknobs_fsm.core.transactions.Transaction`: Transaction support
+    """
+
     id: str = dataclass_field(default_factory=lambda: str(uuid4()))
     definition: StateDefinition = None
     status: StateStatus = StateStatus.PENDING

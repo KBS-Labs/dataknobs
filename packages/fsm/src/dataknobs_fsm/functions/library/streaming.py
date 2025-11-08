@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
-from dataknobs_fsm.functions.base import ITransformFunction, TransformFunctionError
+from dataknobs_fsm.functions.base import ITransformFunction, TransformError
 from dataknobs_fsm.streaming.core import IStreamSource
 
 
@@ -49,7 +49,7 @@ class ChunkReader(ITransformFunction):
             # File source
             file_path = Path(self.source)
             if not file_path.exists():
-                raise TransformFunctionError(f"File not found: {self.source}")
+                raise TransformError(f"File not found: {self.source}")
             
             # Determine format
             format = self.format
@@ -64,7 +64,7 @@ class ChunkReader(ITransformFunction):
             elif format == "lines":
                 chunk = await self._read_lines_chunk(file_path, chunk_state)
             else:
-                raise TransformFunctionError(f"Unsupported format: {format}")
+                raise TransformError(f"Unsupported format: {format}")
         
         else:
             # Stream source
@@ -86,6 +86,11 @@ class ChunkReader(ITransformFunction):
             return "csv"
         else:
             return "lines"
+
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation."""
+        source_str = str(self.source) if isinstance(self.source, str) else "stream"
+        return f"Read {self.chunk_size} records from {source_str} in {self.format} format"
 
     async def _read_json_chunk(
         self, file_path: Path, state: Dict[str, Any]
@@ -244,7 +249,7 @@ class RecordParser(ITransformFunction):
             elif self.format == "xml":
                 parsed = self._parse_xml(raw_data)
             else:
-                raise TransformFunctionError(f"Unsupported format: {self.format}")
+                raise TransformError(f"Unsupported format: {self.format}")
             
             return {
                 **data,
@@ -252,7 +257,7 @@ class RecordParser(ITransformFunction):
             }
         
         except Exception as e:
-            raise TransformFunctionError(f"Failed to parse {self.format}: {e}") from e
+            raise TransformError(f"Failed to parse {self.format}: {e}") from e
 
     def _parse_json(self, raw: Union[str, bytes]) -> Any:
         """Parse JSON data."""
@@ -288,15 +293,15 @@ class RecordParser(ITransformFunction):
     def _xml_to_dict(self, element) -> Dict[str, Any]:
         """Convert XML element to dictionary."""
         result = {}
-        
+
         # Add attributes
         if element.attrib:
             result["@attributes"] = element.attrib
-        
+
         # Add text content
         if element.text and element.text.strip():
             result["text"] = element.text.strip()
-        
+
         # Add children
         for child in element:
             child_data = self._xml_to_dict(child)
@@ -307,8 +312,12 @@ class RecordParser(ITransformFunction):
                 result[child.tag].append(child_data)
             else:
                 result[child.tag] = child_data
-        
+
         return result
+
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation."""
+        return f"Parse {self.format} data from '{self.field}' to '{self.output_field}'"
 
 
 class FileAppender(ITransformFunction):
@@ -418,7 +427,7 @@ class FileAppender(ITransformFunction):
                         f.write(str(record) + "\n")
         
         else:
-            raise TransformFunctionError(f"Unsupported format: {self.format}")
+            raise TransformError(f"Unsupported format: {self.format}")
         
         self._buffer.clear()
         return count
@@ -426,6 +435,10 @@ class FileAppender(ITransformFunction):
     async def flush(self) -> int:
         """Flush any remaining buffered data."""
         return await self._write_buffer()
+
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation."""
+        return f"Append {self.format} data from '{self.field}' to {self.file_path}"
 
 
 class StreamAggregator(ITransformFunction):
@@ -512,7 +525,7 @@ class StreamAggregator(ITransformFunction):
             return len(records)
         
         if not field:
-            raise TransformFunctionError(f"Field required for {func} aggregation")
+            raise TransformError(f"Field required for {func} aggregation")
         
         values: List[Any] = [r.get(field) for r in records if r.get(field) is not None]
         
@@ -528,7 +541,16 @@ class StreamAggregator(ITransformFunction):
         elif func == "max":
             return max(values)  # type: ignore
         else:
-            raise TransformFunctionError(f"Unknown aggregation function: {func}")
+            raise TransformError(f"Unknown aggregation function: {func}")
+
+    def get_transform_description(self) -> str:
+        """Get a description of the transformation."""
+        agg_list = list(self.aggregations.keys())[:3]
+        agg_str = ", ".join(agg_list)
+        if len(self.aggregations) > 3:
+            agg_str += "..."
+        group_str = f" grouped by {', '.join(self.group_by)}" if self.group_by else ""
+        return f"Aggregate {agg_str}{group_str}"
 
 
 # Convenience functions for creating streaming functions

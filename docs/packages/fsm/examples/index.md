@@ -338,7 +338,7 @@ arcs:
 
 ## Learn More
 
-- [API Reference](../api/index.md) - Complete API documentation
+- [API Reference](../../../api/dataknobs-fsm.md) - Complete API documentation
 - [Patterns Guide](../patterns/index.md) - Pre-built integration patterns
 - [Data Modes Guide](../guides/data-modes.md) - Understanding data handling
 - [Contributing Guide](../../../development/contributing.md) - Submit your examples

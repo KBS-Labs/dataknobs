@@ -1,4 +1,86 @@
-"""Conversation manager for multi-turn interactions with LLMs."""
+"""Conversation manager for multi-turn interactions with LLMs.
+
+This module provides ConversationManager, a comprehensive system for managing
+multi-turn LLM conversations with advanced features like:
+
+- **Tree-based History**: Conversations stored as trees, enabling branching
+- **Persistence**: Automatic state saving to any storage backend
+- **RAG Caching**: Reuse search results across conversation branches
+- **Middleware**: Pre/post-processing pipeline for all LLM calls
+- **Cost Tracking**: Automatic API cost calculation and accumulation
+- **Flow Execution**: FSM-based conversation flows with state management
+- **Resumability**: Save and resume conversations across sessions
+
+Architecture:
+    ConversationManager orchestrates three core components:
+
+    1. **AsyncLLMProvider**: Handles LLM API calls (OpenAI, Anthropic, Ollama)
+    2. **AsyncPromptBuilder**: Renders prompts with RAG integration
+    3. **ConversationStorage**: Persists conversation state (Memory, File, S3, Postgres)
+
+    Conversations are stored as trees where each node represents a message.
+    Branching occurs when multiple responses are generated from the same point,
+    enabling A/B testing, alternative explorations, and retry scenarios.
+
+Example:
+    ```python
+    from dataknobs_llm import create_llm_provider
+    from dataknobs_llm.prompts import AsyncPromptBuilder
+    from dataknobs_llm.conversations import (
+        ConversationManager,
+        DataknobsConversationStorage
+    )
+    from dataknobs_data import database_factory
+
+    # Setup components
+    llm = create_llm_provider("openai", api_key="sk-...")
+    builder = AsyncPromptBuilder.create(library_path="./prompts")
+    db = database_factory.create(backend="memory")
+    storage = DataknobsConversationStorage(db)
+
+    # Create conversation
+    manager = await ConversationManager.create(
+        llm=llm,
+        prompt_builder=builder,
+        storage=storage,
+        system_prompt_name="helpful_assistant"
+    )
+
+    # Add user message and get response
+    await manager.add_message(
+        role="user",
+        content="What is Python?"
+    )
+    response = await manager.complete()
+    print(response.content)
+
+    # Continue conversation
+    await manager.add_message(
+        role="user",
+        content="Show me a decorator example"
+    )
+    response = await manager.complete()
+
+    # Create alternative response branch
+    await manager.switch_to_node("0.0")  # Back to first assistant response
+    alt_response = await manager.complete(branch_name="alternative")
+
+    # Resume later
+    conv_id = manager.conversation_id
+    manager2 = await ConversationManager.resume(
+        conversation_id=conv_id,
+        llm=llm,
+        prompt_builder=builder,
+        storage=storage
+    )
+    ```
+
+See Also:
+    - ConversationStorage: Storage interface and implementations
+    - ConversationMiddleware: Middleware system for request/response processing
+    - ConversationFlow: FSM-based conversation flows
+    - AsyncPromptBuilder: Prompt rendering with RAG integration
+"""
 
 import uuid
 from typing import List, Dict, Any, AsyncIterator
@@ -27,42 +109,89 @@ class ConversationManager:
     - Persisting to storage backend
     - Supporting multiple conversation branches
 
+    The conversation history is stored as a tree structure where:
+    - Root node contains the initial system prompt (if any)
+    - Each message is a tree node with a dot-delimited ID (e.g., "0.1.2")
+    - Branches occur when multiple children are added to the same node
+    - Current position tracks where you are in the conversation tree
+
+    Attributes:
+        llm: LLM provider for completions
+        prompt_builder: Prompt builder with library
+        storage: Storage backend for persistence
+        state: Current conversation state (tree, metadata, position)
+        middleware: List of middleware to execute on requests/responses
+        cache_rag_results: Whether to store RAG metadata in nodes
+        reuse_rag_on_branch: Whether to reuse cached RAG across branches
+        conversation_id: Unique conversation identifier
+        current_node_id: Current position in conversation tree
+
     Example:
-        >>> manager = await ConversationManager.create(
-        ...     llm=llm,
-        ...     prompt_builder=builder,
-        ...     storage=storage_backend,
-        ...     system_prompt_name="helpful_assistant"
-        ... )
-        >>>
-        >>> # Add user message
-        >>> await manager.add_message(
-        ...     prompt_name="user_query",
-        ...     params={"question": "What is Python?"},
-        ...     role="user"
-        ... )
-        >>>
-        >>> # Get LLM response
-        >>> result = await manager.complete()
-        >>>
-        >>> # Continue conversation
-        >>> await manager.add_message(
-        ...     content="Tell me more about decorators",
-        ...     role="user"
-        ... )
-        >>> result = await manager.complete()
-        >>>
-        >>> # Create alternative response branch
-        >>> await manager.switch_to_node("0")  # Back to first user message
-        >>> result2 = await manager.complete(branch_name="alt-response")
-        >>>
-        >>> # Resume after interruption
-        >>> manager2 = await ConversationManager.resume(
-        ...     conversation_id=manager.conversation_id,
-        ...     llm=llm,
-        ...     prompt_builder=builder,
-        ...     storage=storage_backend
-        ... )
+        ```python
+        # Create conversation
+        manager = await ConversationManager.create(
+            llm=llm,
+            prompt_builder=builder,
+            storage=storage_backend,
+            system_prompt_name="helpful_assistant"
+        )
+
+        # Add user message
+        await manager.add_message(
+            prompt_name="user_query",
+            params={"question": "What is Python?"},
+            role="user"
+        )
+
+        # Get LLM response
+        result = await manager.complete()
+
+        # Continue conversation
+        await manager.add_message(
+            content="Tell me more about decorators",
+            role="user"
+        )
+        result = await manager.complete()
+
+        # Create alternative response branch
+        await manager.switch_to_node("0")  # Back to first user message
+        result2 = await manager.complete(branch_name="alt-response")
+
+        # Resume after interruption
+        manager2 = await ConversationManager.resume(
+            conversation_id=manager.conversation_id,
+            llm=llm,
+            prompt_builder=builder,
+            storage=storage_backend
+        )
+        ```
+
+    Note:
+        Tree-based branching enables:
+
+        - **A/B Testing**: Generate multiple responses from the same context
+        - **Retry Logic**: Try again from a previous point after failures
+        - **Alternative Explorations**: Explore different conversation paths
+        - **Debugging**: Compare different middleware or RAG configurations
+
+        Node IDs use dot notation (e.g., "0.1.2" means 3rd child of 2nd child
+        of 1st child of root). The root node has ID "".
+
+        State is automatically persisted after every operation. Use
+        `resume()` to continue conversations across sessions or servers.
+
+    See Also:
+        create: Create a new conversation
+        resume: Resume an existing conversation
+        add_message: Add user/system message
+        complete: Get LLM completion (blocking)
+        stream_complete: Get LLM completion (streaming)
+        switch_to_node: Navigate to different branch
+        get_branches: List available branches
+        get_total_cost: Calculate cumulative cost
+        ConversationStorage: Storage backend implementations
+        ConversationMiddleware: Request/response processing
+        ConversationFlow: FSM-based conversation flows
     """
 
     def __init__(
@@ -226,7 +355,9 @@ class ConversationManager:
     ) -> ConversationNode:
         """Add a message to the current conversation node.
 
-        Either content or prompt_name must be provided.
+        Either content or prompt_name must be provided. If using a prompt
+        with RAG configuration, the RAG searches will be executed and results
+        will be automatically inserted into the prompt.
 
         Args:
             role: Message role ("system", "user", or "assistant")
@@ -243,18 +374,45 @@ class ConversationManager:
             ValueError: If neither content nor prompt_name provided
 
         Example:
-            >>> # Add message from prompt
-            >>> await manager.add_message(
-            ...     role="user",
-            ...     prompt_name="code_question",
-            ...     params={"code": code_snippet}
-            ... )
-            >>>
-            >>> # Add direct message
-            >>> await manager.add_message(
-            ...     role="user",
-            ...     content="What is Python?"
-            ... )
+            ```python
+            # Add message from prompt
+            await manager.add_message(
+                role="user",
+                prompt_name="code_question",
+                params={"code": code_snippet}
+            )
+
+            # Add direct message
+            await manager.add_message(
+                role="user",
+                content="What is Python?"
+            )
+
+            # Add system prompt with custom metadata
+            await manager.add_message(
+                role="system",
+                prompt_name="expert_coder",
+                metadata={"version": "v2"}
+            )
+            ```
+
+        Note:
+            **RAG Caching Behavior**:
+
+            If `cache_rag_results=True` and `reuse_rag_on_branch=True` were
+            set during ConversationManager creation, this method will:
+
+            1. Check if the same prompt+role was used elsewhere in the tree
+            2. Check if the RAG query parameters match (via query hash)
+            3. Reuse cached RAG results if found (no re-search!)
+            4. Store new RAG results if not found
+
+            This is particularly useful when exploring conversation branches,
+            as you can avoid redundant searches for the same information.
+
+        See Also:
+            complete: Get LLM response after adding message
+            get_rag_metadata: Retrieve RAG metadata from a node
         """
         if not content and not prompt_name:
             raise ValueError("Either content or prompt_name must be provided")
@@ -375,18 +533,46 @@ class ConversationManager:
             **llm_kwargs: Additional arguments for LLM.complete()
 
         Returns:
-            LLM response
+            LLM response with content, usage, and cost information
 
         Raises:
             ValueError: If conversation has no messages yet
 
         Example:
-            >>> # Get response
-            >>> result = await manager.complete()
-            >>> print(result.content)
-            >>>
-            >>> # Create labeled branch
-            >>> result = await manager.complete(branch_name="alternative-answer")
+            ```python
+            # Get response
+            result = await manager.complete()
+            print(result.content)
+            print(f"Cost: ${result.cost_usd:.4f}")
+
+            # Create labeled branch
+            result = await manager.complete(branch_name="alternative-answer")
+
+            # With LLM parameters
+            result = await manager.complete(temperature=0.9, max_tokens=500)
+            ```
+
+        Note:
+            **Middleware Execution Order** (Onion Model):
+
+            - Pre-LLM: middleware[0] → middleware[1] → ... → middleware[N]
+            - LLM call happens
+            - Post-LLM: middleware[N] → ... → middleware[1] → middleware[0]
+
+            This "onion" pattern ensures that middleware wraps around the LLM
+            call symmetrically. For example, if middleware[0] starts a timer
+            in `process_request()`, it will be the last to run in
+            `process_response()` and can log the total elapsed time.
+
+            **Automatic Cost Tracking**:
+
+            The response includes `cost_usd` (this call) and `cumulative_cost_usd`
+            (total conversation cost) if the LLM provider returns usage statistics.
+
+        See Also:
+            stream_complete: Streaming version for real-time output
+            add_message: Add user/system message before calling complete
+            switch_to_node: Navigate to different branch before completing
         """
         if not self.state:
             raise ValueError("Cannot complete: no messages in conversation")
@@ -457,9 +643,11 @@ class ConversationManager:
         metadata: Dict[str, Any] | None = None,
         **llm_kwargs,
     ) -> AsyncIterator[LLMStreamResponse]:
-        """Stream LLM completion and add as child of current node.
+        r"""Stream LLM completion and add as child of current node.
 
-        Similar to complete() but streams the response.
+        Similar to complete() but streams the response incrementally for
+        real-time display. The complete response is automatically added
+        to the conversation tree after streaming finishes.
 
         Args:
             branch_name: Optional human-readable label for this branch
@@ -467,14 +655,45 @@ class ConversationManager:
             **llm_kwargs: Additional arguments for LLM.stream_complete()
 
         Yields:
-            Streaming response chunks
+            Streaming response chunks with delta, usage, and final metadata
 
         Raises:
             ValueError: If conversation has no messages yet
 
         Example:
-            >>> async for chunk in manager.stream_complete():
-            ...     print(chunk.delta, end="", flush=True)
+            ```python
+            # Real-time display
+            async for chunk in manager.stream_complete():
+                print(chunk.delta, end="", flush=True)
+            print()  # New line after streaming
+
+            # Accumulate full response
+            full_text = ""
+            async for chunk in manager.stream_complete():
+                full_text += chunk.delta
+                if chunk.is_final:
+                    print(f"\nFinished. Total: {len(full_text)} chars")
+                    print(f"Cost: ${chunk.usage.get('cost_usd', 0):.4f}")
+
+            # With branch label
+            async for chunk in manager.stream_complete(
+                branch_name="creative-response",
+                temperature=0.9
+            ):
+                print(chunk.delta, end="", flush=True)
+            ```
+
+        Note:
+            The middleware execution order is the same as `complete()`:
+            pre-LLM middleware runs before streaming starts, post-LLM
+            middleware runs after the stream completes.
+
+            Cost and usage information is only available in the final chunk
+            (when `chunk.is_final == True`).
+
+        See Also:
+            complete: Non-streaming version for simple use cases
+            add_message: Add message before streaming
         """
         if not self.state:
             raise ValueError("Cannot complete: no messages in conversation")
@@ -870,20 +1089,54 @@ class ConversationManager:
             node_id: Node ID to retrieve metadata from (default: current node)
 
         Returns:
-            RAG metadata dictionary if present, None otherwise
+            RAG metadata dictionary if present, None otherwise. Structure:
+
+            ```python
+            {
+                "PLACEHOLDER_NAME": {
+                    "query": "resolved RAG query",
+                    "query_hash": "hash of adapter+query",
+                    "results": [...],  # Search results
+                    "adapter_name": "name of RAG adapter used"
+                },
+                ...  # One entry per RAG placeholder
+            }
+            ```
 
         Raises:
             ValueError: If node_id not found in conversation tree
 
         Example:
-            >>> # Get RAG metadata from current node
-            >>> metadata = manager.get_rag_metadata()
-            >>> if metadata:
-            ...     for placeholder, rag_data in metadata.items():
-            ...         print(f"{placeholder}: query={rag_data['query']}")
-            >>>
-            >>> # Get RAG metadata from specific node
-            >>> metadata = manager.get_rag_metadata(node_id="0.1")
+            ```python
+            # Get RAG metadata from current node
+            metadata = manager.get_rag_metadata()
+            if metadata:
+                for placeholder, rag_data in metadata.items():
+                    print(f"Placeholder: {placeholder}")
+                    print(f"  Query: {rag_data['query']}")
+                    print(f"  Adapter: {rag_data['adapter_name']}")
+                    print(f"  Results: {len(rag_data['results'])} items")
+                    print(f"  Hash: {rag_data['query_hash']}")
+
+            # Get RAG metadata from specific node
+            metadata = manager.get_rag_metadata(node_id="0.1")
+
+            # Check if RAG was used for a message
+            if manager.get_rag_metadata():
+                print("This message used RAG-enhanced prompt")
+            else:
+                print("This message used direct content")
+            ```
+
+        Note:
+            RAG metadata is only available if `cache_rag_results=True` was
+            set during ConversationManager creation. This metadata is useful
+            for debugging RAG behavior, understanding what information was
+            retrieved, and implementing RAG result caching across branches.
+
+        See Also:
+            add_message: Method that executes RAG and stores metadata
+            reuse_rag_on_branch: Parameter enabling RAG cache reuse
         """
         if not self.state:
             return None

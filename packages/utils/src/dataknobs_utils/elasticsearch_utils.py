@@ -1,3 +1,9 @@
+"""Utility functions for Elasticsearch operations and query building.
+
+Provides helper functions for constructing Elasticsearch queries, managing indices,
+and processing search results with Pandas integration.
+"""
+
 import json
 from collections.abc import Generator
 from typing import Any, Dict, List, TextIO, Union
@@ -12,10 +18,18 @@ from dataknobs_utils import requests_utils
 def build_field_query_dict(
     fields: Union[str, List[str]], text: str, operator: str | None = None
 ) -> Dict[str, Any]:
-    """Build an elasticsearch field query to find the text in the field(s).
-    :param fields: The field (str) or fields (list[str]) to query.
-    :param text: The text to find.
-    :param operator: The operator to use (default if None), e.g., "AND", "OR"
+    """Build an Elasticsearch field query to search for text.
+
+    Creates either a match query (single field) or multi_match query (multiple fields).
+
+    Args:
+        fields: Field name (str) or list of field names to query.
+        text: Text to search for.
+        operator: Search operator (e.g., "AND", "OR"). Uses Elasticsearch
+            default if None. Defaults to None.
+
+    Returns:
+        Dict[str, Any]: Elasticsearch query dictionary.
     """
     rv: Dict[str, Any]
     if isinstance(fields, str) or len(fields) == 1:  # single match
@@ -44,10 +58,15 @@ def build_field_query_dict(
 
 
 def build_phrase_query_dict(field: str, phrase: str, slop: int = 0) -> Dict[str, Any]:
-    """Build an elasticsearch phrase query to find the phrase in the field.
-    :param field: The field to query
-    :param phrase: The phrase to find
-    :param slop: The slop factor to use
+    """Build an Elasticsearch phrase query with slop tolerance.
+
+    Args:
+        field: Field name to query.
+        phrase: Exact phrase to search for.
+        slop: Maximum number of positions between terms. Defaults to 0 (exact match).
+
+    Returns:
+        Dict[str, Any]: Elasticsearch match_phrase query dictionary.
     """
     return {
         "query": {
@@ -62,7 +81,15 @@ def build_phrase_query_dict(field: str, phrase: str, slop: int = 0) -> Dict[str,
 
 
 def build_hits_dataframe(query_result: Dict[str, Any]) -> pd.DataFrame | None:
-    """Build a dataframe from an elasticsearch query result's hits."""
+    """Extract search hits from Elasticsearch query results as DataFrame.
+
+    Args:
+        query_result: Elasticsearch query response dictionary.
+
+    Returns:
+        pd.DataFrame | None: DataFrame with _source fields from hits, or None
+            if no hits found.
+    """
     df = None
     if "hits" in query_result:
         qr_hits = query_result["hits"]
@@ -74,16 +101,32 @@ def build_hits_dataframe(query_result: Dict[str, Any]) -> pd.DataFrame | None:
 
 
 def build_aggs_dataframe(query_result: Dict[str, Any]) -> pd.DataFrame | None:
-    """Build a dataframe from an elasticsearch query result's aggregations."""
+    """Extract aggregations from Elasticsearch query results as DataFrame.
+
+    Args:
+        query_result: Elasticsearch query response dictionary.
+
+    Returns:
+        pd.DataFrame | None: DataFrame with aggregation results (not yet implemented).
+
+    Note:
+        This function is a placeholder and currently returns None.
+    """
     # TODO: implement this
     return None
 
 
 def decode_results(query_result: Dict[str, Any]) -> Dict[str, pd.DataFrame]:
-    """Decode elasticsearch query results as "hits_df" and/or "aggs_df"
-    dataframes.
+    """Decode Elasticsearch query results into DataFrames.
+
+    Args:
+        query_result: Elasticsearch query response dictionary.
+
+    Returns:
+        Dict[str, pd.DataFrame]: Dictionary with "hits_df" and/or "aggs_df" keys
+            containing result DataFrames (only present if data exists).
     """
-    result = dict()
+    result = {}
     hits_df = build_hits_dataframe(query_result)
     if hits_df is not None:
         result["hits_df"] = hits_df
@@ -100,19 +143,21 @@ def add_batch_data(
     source_id_fieldname: str = "id",
     cur_id: int = 1,
 ) -> int:
-    """Add source records from the generator to the batchfile for elasticsearch
-    bulk load into the named index with record IDs starting at the given value,
-    optionally adding the record ID to the source record if indicated.
+    """Write records to Elasticsearch bulk load batch file.
 
-    :param batchfile: The file handle to which to write the batch data
-    :param record_generator: Generator for the "source" record
-        dictionaries to index
-    :param idx_name: Name of the elasticsearch index to hold the records
-    :param source_id_fieldname: If non-empty, ensure that the source record
-        also has the correct index ID in the field with this name
-    :param cur_id: The id of the next source record
-    :return: The id of the next source record to be added after exhausting
-        the generator
+    Generates newline-delimited JSON (NDJSON) format for Elasticsearch bulk API,
+    with alternating action/source lines for each record.
+
+    Args:
+        batchfile: File handle for writing batch data.
+        record_generator: Generator yielding source record dictionaries to index.
+        idx_name: Elasticsearch index name for these records.
+        source_id_fieldname: If non-empty, adds/updates this field in source
+            records with the document ID. Defaults to "id".
+        cur_id: Starting document ID. Defaults to 1.
+
+    Returns:
+        int: Next available document ID after processing all records.
     """
     for record in record_generator:
         if source_id_fieldname:
@@ -130,10 +175,15 @@ def add_batch_data(
 
 
 def batchfile_record_generator(batchfile_path: str) -> Generator[Any, None, None]:
-    """Given the path to an elasticsearch batchfile yield each elasticsearch
-    record (dict).
-    :param batchfile_path: The path to the elasticdsearch batch file
-    :yield: Each elasticsearch record dictionary
+    """Generate records from an Elasticsearch bulk load batch file.
+
+    Parses NDJSON batch files, yielding only source documents (skipping action lines).
+
+    Args:
+        batchfile_path: Path to the Elasticsearch batch file.
+
+    Yields:
+        Dict[str, Any]: Each source record dictionary from the batch file.
     """
     with open(batchfile_path, encoding="utf-8") as f:
         for line in f:
@@ -144,13 +194,16 @@ def batchfile_record_generator(batchfile_path: str) -> Generator[Any, None, None
 def collect_batchfile_values(
     batchfile_path: str, fieldname: str, default_value: Any = ""
 ) -> List[Any]:
-    """Given the path to an elasticsearch batchfile and a source record fieldname,
-    collect all of the values for the named field.
+    """Collect all values for a specific field from batch file records.
 
-    :param batchfile_path: The path to the elasticsearch batchfile
-    :param fieldname: The name of the source record field whose values to collect
-    :param default_value: The value to use if the field doesn't exist for a record.
-    :return: The list of collected values
+    Args:
+        batchfile_path: Path to the Elasticsearch batch file.
+        fieldname: Name of the field whose values to collect.
+        default_value: Value to use when field doesn't exist in a record.
+            Defaults to "".
+
+    Returns:
+        List[Any]: List of field values from all records.
     """
     values = []
     for ldata in batchfile_record_generator(batchfile_path):
@@ -159,7 +212,14 @@ def collect_batchfile_values(
 
 
 def collect_batchfile_records(batchfile_path: str) -> pd.DataFrame:
-    """Collect the batchfile records as a pandas DataFrame."""
+    """Load all batch file records into a pandas DataFrame.
+
+    Args:
+        batchfile_path: Path to the Elasticsearch batch file.
+
+    Returns:
+        pd.DataFrame: DataFrame containing all records from the batch file.
+    """
     records = []
     for record in batchfile_record_generator(batchfile_path):
         records.append(record)
@@ -167,7 +227,13 @@ def collect_batchfile_records(batchfile_path: str) -> pd.DataFrame:
 
 
 class TableSettings:
-    """Container for elasticsearch table settings."""
+    """Configuration container for an Elasticsearch index.
+
+    Attributes:
+        name: Index name.
+        settings: Index settings (shards, replicas, analyzers, etc.).
+        mapping: Field mappings and types.
+    """
 
     def __init__(
         self,
@@ -175,13 +241,28 @@ class TableSettings:
         data_settings: Dict[str, Any],
         data_mapping: Dict[str, Any],
     ) -> None:
+        """Initialize table settings.
+
+        Args:
+            table_name: Name of the Elasticsearch index.
+            data_settings: Index settings dictionary.
+            data_mapping: Field mappings dictionary.
+        """
         self.name = table_name
         self.settings = data_settings
         self.mapping = data_mapping
 
 
 class ElasticsearchIndex:
-    """Wrapper for interacting with an elasticsearch index."""
+    """Wrapper for managing Elasticsearch indices with settings and mappings.
+
+    Handles index creation, initialization, and querying across multiple indices
+    with predefined settings and mappings.
+
+    Attributes:
+        request_helper: RequestHelper for making HTTP requests.
+        tables: List of TableSettings for managed indices.
+    """
 
     def __init__(
         self,
@@ -191,6 +272,17 @@ class ElasticsearchIndex:
         elasticsearch_port: int = 9200,
         mock_requests: Any | None = None,
     ) -> None:
+        """Initialize Elasticsearch index manager.
+
+        Args:
+            request_helper: Pre-configured RequestHelper. If None, creates one
+                using elasticsearch_ip and elasticsearch_port. Defaults to None.
+            table_settings: List of TableSettings for indices to manage.
+            elasticsearch_ip: Elasticsearch host IP. Used if request_helper is None.
+                Defaults to None (uses "localhost").
+            elasticsearch_port: Elasticsearch port. Defaults to 9200.
+            mock_requests: Mock requests object for testing. Defaults to None.
+        """
         self.request_helper: Any  # Always set, never None
         if request_helper is None:
             # Use localhost as default if no IP is provided
@@ -201,11 +293,15 @@ class ElasticsearchIndex:
             )
         else:
             self.request_helper = request_helper
-        self.tables = table_settings or list()
+        self.tables = table_settings or []
         self._init_tables()
 
     def _init_tables(self) -> None:
-        """Ensure the tables have been created and initialized."""
+        """Create and initialize all managed indices.
+
+        For each index that doesn't exist, creates it and applies settings
+        and mappings. Settings require the index to be closed temporarily.
+        """
         for table in self.tables:
             resp = self._request("get", f"{table.name}/_mapping")
             if not resp.succeeded:
@@ -242,16 +338,34 @@ class ElasticsearchIndex:
         )
 
     def is_up(self) -> bool:
-        """:return: True if the elasticsearch server is up."""
+        """Check if the Elasticsearch server is reachable.
+
+        Returns:
+            bool: True if server responds to cluster health check.
+        """
         resp = self._request("get", "_cluster/health")
         return bool(resp.succeeded if resp else False)
 
     def get_cluster_health(self, verbose: bool = False) -> Any:
-        """:return: a requests_utils.ServerResponse instance"""
+        """Get Elasticsearch cluster health information.
+
+        Args:
+            verbose: If True, prints response. Defaults to False.
+
+        Returns:
+            ServerResponse: Response with cluster health data.
+        """
         return self._request("get", "_cluster/health", verbose=verbose)
 
     def inspect_indices(self, verbose: bool = False) -> Any:
-        """:return: a requests_utils.ServerResponse instance"""
+        """List all indices with their statistics.
+
+        Args:
+            verbose: If True, prints response. Defaults to False.
+
+        Returns:
+            ServerResponse: Response with indices information.
+        """
         return self._request(
             "get",
             "_cat/indices?v&pretty",
@@ -260,7 +374,17 @@ class ElasticsearchIndex:
         )
 
     def purge(self, verbose: bool = False) -> Any:
-        """Purge all data in tables managed by this wrapper."""
+        """Delete and recreate all managed indices.
+
+        Removes all data by deleting indices, then recreates them with
+        original settings and mappings.
+
+        Args:
+            verbose: If True, prints responses. Defaults to False.
+
+        Returns:
+            ServerResponse: Response from the last delete operation.
+        """
         resp = None
         for table in self.tables:
             resp = self.delete_table(table.name, verbose=verbose)
@@ -268,7 +392,15 @@ class ElasticsearchIndex:
         return resp
 
     def delete_table(self, table_name: str, verbose: bool = False) -> Any:
-        """:return: a requests_utils.ServerResponse instance"""
+        """Delete an index.
+
+        Args:
+            table_name: Name of the index to delete.
+            verbose: If True, prints response. Defaults to False.
+
+        Returns:
+            ServerResponse: Delete operation response.
+        """
         return self._request("delete", table_name, verbose=verbose)
 
     ## NOT WORKING
@@ -295,7 +427,16 @@ class ElasticsearchIndex:
         analyzer: str,
         verbose: bool = False,
     ) -> Any:
-        """:return: a requests_utils.ServerResponse instance"""
+        """Analyze text using a specified analyzer.
+
+        Args:
+            text: Text to analyze.
+            analyzer: Name of the analyzer to use.
+            verbose: If True, prints response. Defaults to False.
+
+        Returns:
+            ServerResponse: Response with analysis results (tokens, etc.).
+        """
         return self._request(
             "post",
             "_analyze",
@@ -314,15 +455,19 @@ class ElasticsearchIndex:
         table: str | None = None,
         verbose: bool = False,
     ) -> Any | None:
-        """Submit the elasticsearch search DSL query.
+        """Execute an Elasticsearch search DSL query.
 
-        :param query: The elasticsearch search query of the form, e.g.,:
-            {"query": {"match": {<field>: {"query": <text>, "operator": "AND"}}}}
-        :param table: The name of the table (defaults to first table's name)
-        :param verbose: True to print the request response.
-        :return: a requests_utils.ServerResponse instance, resp, with
-            resp.extra['hits_df'] and/or resp.extra['aggs_df']
-            holding dataframe(s) representing the results if successful.
+        Args:
+            query: Elasticsearch query dictionary, e.g.:
+                {"query": {"match": {field: {"query": text, "operator": "AND"}}}}
+            table: Index name to search. If None, uses first managed index.
+                Defaults to None.
+            verbose: If True, prints response. Defaults to False.
+
+        Returns:
+            ServerResponse | None: Response with results. If successful,
+                resp.extra contains 'hits_df' and/or 'aggs_df' DataFrames.
+                Returns None if no table is available.
         """
         if table is None:
             if len(self.tables) > 0:
@@ -343,16 +488,20 @@ class ElasticsearchIndex:
         columnar: bool = True,
         verbose: bool = False,
     ) -> Any:
-        """Submit the elasticsearch sql query.
+        """Execute an Elasticsearch SQL query.
 
-        :param query: The elasticsearch search sql query
-        :param fetch_size: The max number of records to fetch at a time
-        :param columnar: True for a more compact response (best when the number
-            of columns returned by the query is small)
-        :param verbose: True to print the request response.
-        :return: a requests_utils.ServerResponse instance, resp, with
-            resp.extra['df'] holding dataframe(s) representing the results
-            if successful.
+        Automatically handles pagination using cursors to retrieve all results.
+
+        Args:
+            query: SQL query string.
+            fetch_size: Maximum records per fetch. Defaults to 10000.
+            columnar: If True, uses compact columnar format (better for few columns).
+                Defaults to True.
+            verbose: If True, prints responses. Defaults to False.
+
+        Returns:
+            ServerResponse: Response with results. If successful, resp.extra['df']
+                contains a DataFrame with all query results.
         """
         df = None
         payload = json.dumps(

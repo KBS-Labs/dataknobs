@@ -1,3 +1,9 @@
+"""Character-level text feature extraction and tokenization.
+
+Provides abstract classes for extracting character-level features from text,
+building DataFrames with character features for masking and tokenization.
+"""
+
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any, List, Tuple, Union
@@ -15,9 +21,12 @@ class CharacterFeatures(ABC):
     """
 
     def __init__(self, doctext: Union[dk_doc.Text, str], roll_padding: int = 0):
-        """:param doctext: The text to tokenize (or dk_doc.Text with its metadata)
-        :param roll_padding: The number of pad characters added to each end of
-            the text.
+        """Initialize with the text to tokenize.
+
+        Args:
+            doctext: The text to tokenize (or dk_doc.Text with its metadata).
+            roll_padding: The number of pad characters added to each end of
+                the text.
         """
         self._doctext = doctext
         self._roll_padding = roll_padding
@@ -56,9 +65,12 @@ class CharacterFeatures(ABC):
     ) -> "Token":
         """Build the first token as the start of tokenization.
 
-        :param normalize_fn: A function to normalize a raw text term or any
-          of its variations. If None, then the identity function is used.
-        :return: The first text token
+        Args:
+            normalize_fn: A function to normalize a raw text term or any
+                of its variations. If None, then the identity function is used.
+
+        Returns:
+            The first text token.
         """
         raise NotImplementedError
 
@@ -80,8 +92,12 @@ class CharacterFeatures(ABC):
         normalize_fn: Callable[[str], str] = lambda x: x,
     ) -> List["Token"]:
         """Get all token instances using the given normalize function.
-        :param normalize_fn: The normalization function (default=identity fn)
-        :return: A list of token instances
+
+        Args:
+            normalize_fn: The normalization function (default=identity fn).
+
+        Returns:
+            A list of token instances.
         """
         token = self.build_first_token(normalize_fn)
         tokens = []
@@ -92,6 +108,14 @@ class CharacterFeatures(ABC):
 
 
 class TextFeatures(CharacterFeatures):
+    """Extracts text-specific character features for tokenization.
+
+    Extends CharacterFeatures to provide text tokenization with support for
+    camelCase splitting, character type features (alpha, digit, upper, lower),
+    and emoji handling. Builds a character DataFrame with features for
+    token boundary detection.
+    """
+
     def __init__(
         self,
         doctext: Union[dk_doc.Text, str],
@@ -102,23 +126,26 @@ class TextFeatures(CharacterFeatures):
         mark_lower: bool = False,
         emoji_data: emoji_utils.EmojiData = None,
     ):
-        """:param doctext: The text to tokenize with its metadata
-        :param split_camelcase: True to mark camel-case features
-        :param mark_alpha: True to mark alpha features (separate from alnum)
-        :param mark_digit: True to mark digit features (separate from alnum)
-        :param mark_upper: True to mark upper features (auto-included for
-            camel-case)
-        :param mark_lower: True to mark lower features (auto-included for
-            camel-case)
-        :param emoji_data: An EmojiData instance to mark emoji BIO features
+        """Initialize with text tokenization parameters.
 
-        Notes:
-          * If emoji_data is non-null:
-             * Then emojis will be treated as text (instead of as non-text)
-             * If split_camelcase is True,
-                * then each emoji will be in its own token
-                * otherwise, each sequence of (adjacent) emojis will be treated
-                  as a single token.
+        Note:
+            If emoji_data is non-null:
+                * Then emojis will be treated as text (instead of as non-text)
+                * If split_camelcase is True,
+                    * then each emoji will be in its own token
+                    * otherwise, each sequence of (adjacent) emojis will be treated
+                      as a single token.
+
+        Args:
+            doctext: The text to tokenize with its metadata.
+            split_camelcase: True to mark camel-case features.
+            mark_alpha: True to mark alpha features (separate from alnum).
+            mark_digit: True to mark digit features (separate from alnum).
+            mark_upper: True to mark upper features (auto-included for
+                camel-case).
+            mark_lower: True to mark lower features (auto-included for
+                camel-case).
+            emoji_data: An EmojiData instance to mark emoji BIO features.
         """
         # NOTE: roll_padding is determined by "roll" feature needs. Currently 1.
         super().__init__(doctext, roll_padding=1)
@@ -143,9 +170,12 @@ class TextFeatures(CharacterFeatures):
     ) -> "Token":
         """Build the first token as the start of tokenization.
 
-        :param normalize_fn: A function to normalize a raw text term or any
-          of its variations. If None, then the identity function is used.
-        :return: The first text token
+        Args:
+            normalize_fn: A function to normalize a raw text term or any
+                of its variations. If None, then the identity function is used.
+
+        Returns:
+            The first text token.
         """
         token_mask = (
             DualTokenMask(
@@ -240,9 +270,12 @@ class CharacterInputFeatures(CharacterFeatures):
     ) -> "Token":
         """Build the first token as the start of tokenization.
 
-        :param normalize_fn: A function to normalize a raw text term or any
-          of its variations. If None, then the identity function is used.
-        :return: The first text token
+        Args:
+            normalize_fn: A function to normalize a raw text term or any
+                of its variations. If None, then the identity function is used.
+
+        Returns:
+            The first text token.
         """
         token = Token(self._token_mask, normalize_fn=normalize_fn)
         return token
@@ -261,13 +294,14 @@ class TokenLoc:
     ):
         """Initialize with the available information.
 
-        :param start_loc: The starting location of the token
-        :param end_loc: The ending location of the token
-        :param token_num: The position of the token within its text string
-        :param start_incl: True if start_loc is part of the token; otherwise
-            start_loc+1 is part of the token.
-        :param end_incl: True if end_loc is part of the token; otherwise
-            end_loc-1 is part of the token.
+        Args:
+            start_loc: The starting location of the token.
+            end_loc: The ending location of the token.
+            token_num: The position of the token within its text string.
+            start_incl: True if start_loc is part of the token; otherwise
+                start_loc+1 is part of the token.
+            end_incl: True if end_loc is part of the token; otherwise
+                end_loc-1 is part of the token.
         """
         self._start_loc = start_loc
         self._end_loc = end_loc
@@ -333,9 +367,13 @@ class TokenMask(ABC):
         """Given the end of a prior token or possible start of the next, get
         the "next" start token's starting ploc. If there is no subsequent
         token, then return None.
-        :param ref_ploc: The end ploc of the prior token or start of string
-        :param token_mask: The token mask to use
-        :return: The ploc of the start of the next token or None.
+
+        Args:
+            ref_ploc: The end ploc of the prior token or start of string.
+            token_mask: The token mask to use.
+
+        Returns:
+            The ploc of the start of the next token or None.
         """
         # if not at end of string or already at the start of a token, increment
         if ref_ploc > self.max_ploc:
@@ -350,8 +388,12 @@ class TokenMask(ABC):
 
     def get_text(self, token_loc: TokenLoc) -> str:
         """Get the text at the (padded) token location.
-        :param token_loc: The token location
-        :return: The token text
+
+        Args:
+            token_loc: The token location.
+
+        Returns:
+            The token text.
         """
         return self.get_padded_text(token_loc.start_loc_incl, token_loc.end_loc_excl)
 
@@ -360,9 +402,13 @@ class TokenMask(ABC):
         """Given the end of a prior token or possible start of the next, get
         the "next" token's location.
         If there is no subsequent token, then return None.
-        :param ref_ploc: The end ploc of the prior token or start of string
-        :param token_num: The token position within its text string
-        :return: The TokenLoc of the next token or None.
+
+        Args:
+            ref_ploc: The end ploc of the prior token or start of string.
+            token_num: The token position within its text string.
+
+        Returns:
+            The TokenLoc of the next token or None.
         """
         raise NotImplementedError
 
@@ -370,8 +416,12 @@ class TokenMask(ABC):
     def get_prev_token_loc(self, from_token_loc: TokenLoc) -> TokenLoc:
         """Get the previous token bounds before the given token start ploc.
         If there is no prior token, then return None.
-        :param from_start: The start ploc of the token after the result
-        :return: (tok_start, tok_end) plocs of the prior token or None.
+
+        Args:
+            from_token_loc: The token location after the result.
+
+        Returns:
+            The TokenLoc of the prior token or None.
         """
         raise NotImplementedError
 
@@ -385,9 +435,12 @@ def increment(start_loc: int, mask: pd.Series) -> Tuple[int, bool]:
     start_idx (inclusive) to end_idx (exclusive) are all False.
     And vice-versa for if the mask value at start_idx is True.
 
-    :param start_loc: The start index location
-    :param mask: The boolean feature mask
-    :return: end_loc Where the mask value is opposite that at start_loc
+    Args:
+        start_loc: The start index location.
+        mask: The boolean feature mask.
+
+    Returns:
+        end_loc Where the mask value is opposite that at start_loc.
         If unable to increment (e.g., at the end of the mask or no flips),
         then end_idx will equal start_idx.
     """
@@ -406,9 +459,10 @@ class SimpleTokenMask(TokenMask):
     def __init__(self, text_features: CharacterFeatures, token_mask: pd.Series):
         """Initialize with the text_features and token mask.
 
-        :param text_features: The text features to tokenize.
-        :param token_mask: The token mask identifying token characters as True
-            and characters between tokens as False.
+        Args:
+            text_features: The text features to tokenize.
+            token_mask: The token mask identifying token characters as True
+                and characters between tokens as False.
         """
         super().__init__(text_features)
         self.token_mask = token_mask
@@ -418,9 +472,13 @@ class SimpleTokenMask(TokenMask):
         """Given the end of a prior token or possible start of the next, get
         the "next" token's location.
         If there is no subsequent token, then return None.
-        :param ref_ploc: The end ploc of the prior token or start of string
-        :param token_num: The token position within its text string
-        :return: The TokenLoc of the next token or None.
+
+        Args:
+            ref_ploc: The end ploc of the prior token or start of string.
+            token_num: The token position within its text string.
+
+        Returns:
+            The TokenLoc of the next token or None.
         """
         result = None
         start_ploc = self._get_next_start(ref_ploc, self.token_mask)
@@ -432,8 +490,12 @@ class SimpleTokenMask(TokenMask):
     def get_prev_token_loc(self, from_token_loc: TokenLoc) -> TokenLoc:
         """Get the previous token bounds before the given token start ploc.
         If there is no prior token, then return None.
-        :param from_start: The start ploc of the token after the result
-        :return: (tok_start, tok_end) plocs of the prior token or None.
+
+        Args:
+            from_token_loc: The token location after the result.
+
+        Returns:
+            The TokenLoc of the prior token or None.
         """
         result = None
 
@@ -472,9 +534,13 @@ class DualTokenMask(TokenMask):
         """Given the end of a prior token or possible start of the next, get
         the "next" token's location.
         If there is no subsequent token, then return None.
-        :param ref_ploc: The end ploc of the prior token or start of string
-        :param token_num: The token position within its text string
-        :return: The TokenLoc of the next token or None.
+
+        Args:
+            ref_ploc: The end ploc of the prior token or start of string.
+            token_num: The token position within its text string.
+
+        Returns:
+            The TokenLoc of the next token or None.
         """
         result = None
         start_ploc = self._get_next_start(ref_ploc, self.tok_starts)
@@ -486,8 +552,12 @@ class DualTokenMask(TokenMask):
     def get_prev_token_loc(self, from_token_loc: TokenLoc) -> TokenLoc:
         """Get the previous token bounds before the given token start ploc.
         If there is no prior token, then return None.
-        :param from_start: The start ploc of the token after the result
-        :return: (tok_start, tok_end) plocs of the prior token or None.
+
+        Args:
+            from_token_loc: The token location after the result.
+
+        Returns:
+            The TokenLoc of the prior token or None.
         """
         result = None
         from_loc = from_token_loc.start_loc_excl
@@ -519,17 +589,18 @@ class Token:
     ):
         """Initialize the token pointer with text features and the token_mask.
 
-        :param token_mask: The token mask to use.
-        :param token_loc: The (padded) token location, if known or None.
-            If token_loc is None and start_ploc is 0, then this will be the
-            first token of the text.
-        :param start_ploc: The padded character index for the start of this
-            token as an alternate to specifying token_loc. If start_ploc is not
-            at a token character according to the token mask, then it will be
-            auto-incremented to the next token.
-        :param prev_token: The token prior to this token.
-        :param next_token: The token following this token.
-        :param normalize_fn: A function to normalize token text.
+        Args:
+            token_mask: The token mask to use.
+            token_loc: The (padded) token location, if known or None.
+                If token_loc is None and start_ploc is 0, then this will be the
+                first token of the text.
+            start_ploc: The padded character index for the start of this
+                token as an alternate to specifying token_loc. If start_ploc is not
+                at a token character according to the token mask, then it will be
+                auto-incremented to the next token.
+            prev_token: The token prior to this token.
+            next_token: The token following this token.
+            normalize_fn: A function to normalize token text.
         """
         self.token_mask = token_mask
         self._next = next_token

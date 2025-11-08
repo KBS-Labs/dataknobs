@@ -2,6 +2,11 @@
 
 The `dataknobs-utils` package provides utility functions and helper classes for common data processing tasks.
 
+> **💡 Quick Links:**
+> - [Complete API Reference](../../api/dataknobs-utils.md) - Full API documentation
+> - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/utils/src/dataknobs_utils) - View on GitHub
+> - [API Index](../../api/complete-reference.md) - All packages
+
 ## Installation
 
 ```bash

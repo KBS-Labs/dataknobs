@@ -2,6 +2,11 @@
 
 Complete API documentation for the `dataknobs-data` package.
 
+> **💡 Quick Links:**
+> - [Complete API Documentation](reference/data.md) - Full auto-generated reference
+> - [Source Code](https://github.com/kbs-labs/dataknobs/tree/main/packages/data/src/dataknobs_data) - Browse on GitHub
+> - [Package Guide](../packages/data/index.md) - Detailed documentation
+
 ## Core Classes
 
 ### `dataknobs_data.Record`

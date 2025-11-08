@@ -1,3 +1,9 @@
+"""Authority-based annotation processing and field grouping.
+
+Provides classes for managing authority-based annotations, field groups,
+and derived annotation columns for structured text extraction.
+"""
+
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -34,9 +40,10 @@ class DerivedFieldGroups(dk_annots.DerivedAnnotationColumns):
           * A field_group column identifies groups of annotation fields
           * A field_record column identifies groups of annotation field groups
 
-        :param field_type_suffix: The field_type col name suffix (if not _field)
-        :param field_group_suffix: The field_group col name suffix (if not _num)
-        :param field_record_suffix: field_record colname sfx (if not _recsnum)
+        Args:
+            field_type_suffix: The field_type col name suffix (if not _field).
+            field_group_suffix: The field_group col name suffix (if not _num).
+            field_record_suffix: field_record colname sfx (if not _recsnum).
         """
         self.field_type_suffix = field_type_suffix
         self.field_group_suffix = field_group_suffix
@@ -57,11 +64,14 @@ class DerivedFieldGroups(dk_annots.DerivedAnnotationColumns):
 
         And "field" is the row_accessor's metadata's "ann_type" col's value.
 
-        :param metadata: The AnnotationsMetaData
-        :param col_type: The type of column value to derive
-        :param row: A row from which to get the value.
-        :param missing: The value to return for unknown or missing column
-        :return: The row value or the missing value
+        Args:
+            metadata: The AnnotationsMetaData.
+            col_type: The type of column value to derive.
+            row: A row from which to get the value.
+            missing: The value to return for unknown or missing column.
+
+        Returns:
+            The row value or the missing value.
         """
         value = missing
         if metadata.ann_type_col in row.index:
@@ -136,7 +146,7 @@ class AuthorityAnnotationsMetaData(dk_annots.AnnotationsMetaData):
         auth_id_col: str = KEY_AUTH_ID_COL,
         sort_fields: List[str] = (dk_annots.KEY_START_POS_COL, dk_annots.KEY_END_POS_COL),
         sort_fields_ascending: List[bool] = (True, False),
-        **kwargs,
+        **kwargs: Any,
     ):
         """Initialize with key (and more) column names and info.
 
@@ -147,19 +157,20 @@ class AuthorityAnnotationsMetaData(dk_annots.AnnotationsMetaData):
           * ann_type
           * auth_id
 
-        Notes:
-          * Actual table columns can be named arbitrarily
-             * BUT: interactions through annotations classes and interfaces
-               relating to the "key" columns must use the key column constants
+        Note:
+            Actual table columns can be named arbitrarily, BUT interactions
+            through annotations classes and interfaces relating to the "key"
+            columns must use the key column constants.
 
-        :param start_pos_col: Col name for the token starting position
-        :param end_pos_col: Col name for the token ending position
-        :param text_col: Col name for the token text
-        :param ann_type_col: Col name for the annotation types
-        :param auth_id_col: Col name for the authority value ID
-        :param sort_fields: The col types relevant for sorting annotation rows
-        :param sort_fields_ascending: To specify sort order of sort_fields
-        :param **kwargs: More column types mapped to column names
+        Args:
+            start_pos_col: Col name for the token starting position.
+            end_pos_col: Col name for the token ending position.
+            text_col: Col name for the token text.
+            ann_type_col: Col name for the annotation types.
+            auth_id_col: Col name for the authority value ID.
+            sort_fields: The col types relevant for sorting annotation rows.
+            sort_fields_ascending: To specify sort order of sort_fields.
+            **kwargs: More column types mapped to column names.
         """
         super().__init__(
             start_pos_col=start_pos_col,
@@ -186,16 +197,19 @@ class AuthorityAnnotationsBuilder(dk_annots.AnnotationsBuilder):
         metadata: AuthorityAnnotationsMetaData = None,
         data_defaults: Dict[str, Any] = None,
     ):
-        """:param metadata: The authority annotations metadata
-        :param data_defaults: Dict[ann_colname, default_value] with default
-            values for annotation columns
+        """Initialize AuthorityAnnotationsBuilder.
+
+        Args:
+            metadata: The authority annotations metadata.
+            data_defaults: Dict[ann_colname, default_value] with default
+                values for annotation columns.
         """
         super().__init__(
             metadata if metadata is not None else AuthorityAnnotationsMetaData(), data_defaults
         )
 
     def build_annotation_row(
-        self, start_pos: int, end_pos: int, text: str, ann_type: str, auth_id: str, **kwargs
+        self, start_pos: int, end_pos: int, text: str, ann_type: str, auth_id: str, **kwargs: Any
     ) -> Dict[str, Any]:
         """Build an annotation row with the mandatory key values and those from
         the remaining keyword arguments.
@@ -203,13 +217,16 @@ class AuthorityAnnotationsBuilder(dk_annots.AnnotationsBuilder):
         For those kwargs whose names match metadata column names, override the
         data_defaults and add remaining data_default attributes.
 
-        :param result_row_dict: The result row dictionary being built
-        :param start_pos: The token start position
-        :param end_pos: The token end position
-        :param text: The token text
-        :param ann_type: The annotation type
-        :param auth_id: The authority ID for the row
-        :return: The result_row_dict
+        Args:
+            start_pos: The token start position.
+            end_pos: The token end position.
+            text: The token text.
+            ann_type: The annotation type.
+            auth_id: The authority ID for the row.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The result row dictionary.
         """
         return self.do_build_row(
             {
@@ -235,11 +252,15 @@ class AuthorityData:
         """Get the authority data in a dataframe"""
         return self._df
 
-    def lookup_values(self, value: Any, is_id=False) -> pd.DataFrame:
+    def lookup_values(self, value: Any, is_id: bool = False) -> pd.DataFrame:
         """Lookup authority value(s) for the given value or value id.
-        :param value: A value or value_id for this authority
-        :param is_id: True if value is an ID
-        :return: The applicable authority dataframe rows.
+
+        Args:
+            value: A value or value_id for this authority.
+            is_id: True if value is an ID.
+
+        Returns:
+            The applicable authority dataframe rows.
         """
         col = self.df.index if is_id else self.df[self.name]
         return self.df[col == value]
@@ -260,15 +281,17 @@ class Authority(dk_annots.Annotator):
         parent_auth: "Authority" = None,
     ):
         """Initialize with this authority's metadata.
-        :param name: This authority's entity name
-        :param auth_anns_builder: The authority annotations row builder to use
-            for building annotation rows.
-        :param authdata: The authority data
-        :param field_groups: The derived field groups to use
-        :param anns_validator: fn(auth, anns_dict_list) that returns True if
-           the list of annotation row dicts are valid to be added as
-           annotations for a single match or "entity".
-        :param parent_auth: This authority's parent authority (if any)
+
+        Args:
+            name: This authority's entity name.
+            auth_anns_builder: The authority annotations row builder to use
+                for building annotation rows.
+            authdata: The authority data.
+            field_groups: The derived field groups to use.
+            anns_validator: fn(auth, anns_dict_list) that returns True if
+                the list of annotation row dicts are valid to be added as
+                annotations for a single match or "entity".
+            parent_auth: This authority's parent authority (if any).
         """
         super().__init__(name)
         self.anns_builder = (
@@ -292,15 +315,19 @@ class Authority(dk_annots.Annotator):
     @abstractmethod
     def has_value(self, value: Any) -> bool:
         """Determine whether the given value is in this authority.
-        :param value: A possible authority value.
-        :return: True if the value is a valid entity value.
+
+        Args:
+            value: A possible authority value.
+
+        Returns:
+            True if the value is a valid entity value.
         """
         raise NotImplementedError
 
     def annotate_input(
         self,
         text_obj: Union[dk_annots.AnnotatedText, str],
-        **kwargs,
+        **kwargs: Any,
     ) -> dk_annots.Annotations:
         """Find and annotate this authority's entities in the document text
         as dictionaries like:
@@ -315,8 +342,13 @@ class Authority(dk_annots.Annotator):
                 'confidence': <confidence_if_available>,
             },
         ]
-        :param text_obj: The text object or string to process.
-        :return: An Annotations instance
+
+        Args:
+            text_obj: The text object or string to process.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            An Annotations instance.
         """
         if text_obj is not None:
             if isinstance(text_obj, str) and len(text_obj.strip()) > 0:
@@ -334,8 +366,12 @@ class Authority(dk_annots.Annotator):
         text_obj: dk_annots.AnnotatedText,
     ) -> dk_annots.Annotations:
         """Method to do the work of finding, validating, and adding annotations.
-        :param text_obj: The annotated text object to process and add annotations.
-        :return: The added Annotations
+
+        Args:
+            text_obj: The annotated text object to process and add annotations.
+
+        Returns:
+            The added Annotations.
         """
         raise NotImplementedError
 
@@ -345,8 +381,12 @@ class Authority(dk_annots.Annotator):
           * and
              * either there is no annotations validator
              * or they are valid according to the validator
-        :param ann_dicts: Annotation dictionaries
-        :return: True if valid
+
+        Args:
+            ann_dicts: Annotation dictionaries.
+
+        Returns:
+            True if valid.
         """
         return len(ann_dicts) > 0 and (
             self.anns_validator is None or self.anns_validator(self, ann_dicts)
@@ -357,8 +397,12 @@ class Authority(dk_annots.Annotator):
         annotations: dk_annots.Annotations,
     ) -> dk_annots.Annotations:
         """Compose annotations into groups.
-        :param annotations: The annotations
-        :return: composed annotations
+
+        Args:
+            annotations: The annotations.
+
+        Returns:
+            Composed annotations.
         """
         return annotations
 
@@ -389,9 +433,13 @@ class AnnotationsValidator(ABC):
     ) -> bool:
         """Call function to enable instances of this type of class to be passed in
         as a anns_validator function to an Authority.
-        :param auth: The authority proposing annotations
-        :param ann_row_dicts: The proposed annotations
-        :return: True if the annotations are valid; otherwise, False
+
+        Args:
+            auth: The authority proposing annotations.
+            ann_row_dicts: The proposed annotations.
+
+        Returns:
+            True if the annotations are valid; otherwise, False.
         """
         return self.validate_annotation_rows(
             AnnotationsValidator.AuthAnnotations(auth, ann_row_dicts)
@@ -403,9 +451,13 @@ class AnnotationsValidator(ABC):
         auth_annotations: "AnnotationsValidator.AuthAnnotations",
     ) -> bool:
         """Determine whether the proposed authority annotation rows are valid.
-        :param auth_annotations: The AuthAnnotations instance with the
-            proposed data.
-        :return: True if valid; False if not.
+
+        Args:
+            auth_annotations: The AuthAnnotations instance with the
+                proposed data.
+
+        Returns:
+            True if valid; False if not.
         """
         raise NotImplementedError
 
@@ -476,12 +528,16 @@ class AuthorityFactory(ABC):
         parent_auth: Authority = None,
     ) -> Authority:
         """Build an authority with the given name and data.
-        :param name: The authority name
-        :param auth_anns_builder: The authority annotations row builder to use
-            for building annotation rows.
-        :param authdata: The authority data
-        :param parent_auth: The parent authority.
-        :return: The authority
+
+        Args:
+            name: The authority name.
+            auth_anns_builder: The authority annotations row builder to use
+                for building annotation rows.
+            authdata: The authority data.
+            parent_auth: The parent authority.
+
+        Returns:
+            The authority.
         """
         raise NotImplementedError
 
@@ -501,15 +557,17 @@ class LexicalAuthority(Authority):
         parent_auth: "Authority" = None,
     ):
         """Initialize with this authority's metadata.
-        :param name: This authority's entity name
-        :param auth_anns_builder: The authority annotations row builder to use
-            for building annotation rows.
-        :param authdata: The authority data
-        :param field_groups: The derived field groups to use
-        :param anns_validator: fn(auth, anns_dict_list) that returns True if
-           the list of annotation row dicts are valid to be added as
-           annotations for a single match or "entity".
-        :param parent_auth: This authority's parent authority (if any)
+
+        Args:
+            name: This authority's entity name.
+            auth_anns_builder: The authority annotations row builder to use
+                for building annotation rows.
+            authdata: The authority data.
+            field_groups: The derived field groups to use.
+            anns_validator: fn(auth, anns_dict_list) that returns True if
+                the list of annotation row dicts are valid to be added as
+                annotations for a single match or "entity".
+            parent_auth: This authority's parent authority (if any).
         """
         super().__init__(
             name,
@@ -525,8 +583,12 @@ class LexicalAuthority(Authority):
         """Get all IDs associated with the given value. Note that typically
         there is a single ID for any value, but this allows for inherent
         ambiguities in the authority.
-        :param value: An authority value
-        :return: The associated IDs or an empty set if the value is not valid.
+
+        Args:
+            value: An authority value.
+
+        Returns:
+            The associated IDs or an empty set if the value is not valid.
         """
         raise NotImplementedError
 
@@ -536,16 +598,23 @@ class LexicalAuthority(Authority):
         there is a single value for an ID, but this allows for inherent
         ambiguities in the authority.
 
-        :param value: An authority value
-        :return: The associated IDs or an empty set if the value is not valid.
+        Args:
+            value_id: An authority value ID.
+
+        Returns:
+            The associated values or an empty set if the value is not valid.
         """
         raise NotImplementedError
 
     @abstractmethod
     def get_id_by_variation(self, variation: str) -> Set[str]:
         """Get the IDs of the value(s) associated with the given variation.
-        :param variation: Variation text
-        :return: The possibly empty set of associated value IDS.
+
+        Args:
+            variation: Variation text.
+
+        Returns:
+            The possibly empty set of associated value IDS.
         """
         raise NotImplementedError
 
@@ -558,21 +627,24 @@ class LexicalAuthority(Authority):
         scope: str = "fullmatch",
     ) -> pd.Series:
         """Find all matches to the given variation.
-        :param variation: The text to find; treated as a regular expression
-            unless either starts_with or ends_with is True.
-        :param starts_with: When True, find all terms that start with the
-            variation text.
-        :param ends_with: When True, find all terms that end with the variation
-            text.
-        :param scope: 'fullmatch' (default), 'match', or 'contains' for
-            strict, less strict, and least strict matching
-        :param category_constraints: When present, limit results to terms with
-            the given constraints.
-        :return: The matching variations as a pd.Series
 
-        Note only the first true of starts_with, ends_with, and scope will
-        be applied. If none of these are true, an full match on the pattern
-        is performed.
+        Note:
+            Only the first true of starts_with, ends_with, and scope will
+            be applied. If none of these are true, a full match on the pattern
+            is performed.
+
+        Args:
+            variation: The text to find; treated as a regular expression
+                unless either starts_with or ends_with is True.
+            starts_with: When True, find all terms that start with the
+                variation text.
+            ends_with: When True, find all terms that end with the variation
+                text.
+            scope: 'fullmatch' (default), 'match', or 'contains' for
+                strict, less strict, and least strict matching.
+
+        Returns:
+            The matching variations as a pd.Series.
         """
         raise NotImplementedError
 
@@ -594,36 +666,37 @@ class RegexAuthority(Authority):
         parent_auth: "Authority" = None,
     ):
         """Initialize with this authority's entity name.
-        :param name: The authority name
-        :param regex: The regular expression to apply
-        :param canonical_fn: A function, fn(match_text, group_name), to
-            transform input matches to a canonical form as a value_id.
-            Where group_name will be None and the full match text will be
-            passed in if there are no group names. Note that the canonical form
-            is computed before the match_validator is applied and its value
-            will be found as the value to the <auth_id> key.
-        :param auth_anns_builder: The authority annotations row builder to use
-            for building annotation rows.
-        :param authdata: The authority data
-        :param field_groups: The derived field groups to use
-        :param anns_validator: A validation function for each regex match
-            formed as a list of annotation row dictionaries, one row dictionary
-            for each matching regex group. If the validator returns False,
-            then the annotation rows will be rejected. The entity_text key
-            will hold matched text and the <auth_name>_field key will hold
-            the group name or number (if there are groups with or without names)
-            or the <auth_name> if there are no groups in the regular expression.
-            Note that the validator function takes the regex authority instance
-            as its first parameter to provide access to the field_groups, etc.
-            The validation_fn signature is: fn(regexAuthority, ann_row_dicts)
-            and returns a boolean.
-        :param parent_auth: This authority's parent authority (if any)
-        :param group_name_colname: The name of the annotations column for
-            the regex group names, or None to ignore group_names.
 
-        NOTE: If the regular expression has capturing groups, each group
-        will result in a separate entity, with the group name if provided
-        in the regular expression as ...(?P<group_name>group_regex)...
+        Note:
+            If the regular expression has capturing groups, each group
+            will result in a separate entity, with the group name if provided
+            in the regular expression as ...(?P<group_name>group_regex)...
+
+        Args:
+            name: The authority name.
+            regex: The regular expression to apply.
+            canonical_fn: A function, fn(match_text, group_name), to
+                transform input matches to a canonical form as a value_id.
+                Where group_name will be None and the full match text will be
+                passed in if there are no group names. Note that the canonical form
+                is computed before the match_validator is applied and its value
+                will be found as the value to the <auth_id> key.
+            auth_anns_builder: The authority annotations row builder to use
+                for building annotation rows.
+            authdata: The authority data.
+            field_groups: The derived field groups to use.
+            anns_validator: A validation function for each regex match
+                formed as a list of annotation row dictionaries, one row dictionary
+                for each matching regex group. If the validator returns False,
+                then the annotation rows will be rejected. The entity_text key
+                will hold matched text and the <auth_name>_field key will hold
+                the group name or number (if there are groups with or without names)
+                or the <auth_name> if there are no groups in the regular expression.
+                Note that the validator function takes the regex authority instance
+                as its first parameter to provide access to the field_groups, etc.
+                The validation_fn signature is: fn(regexAuthority, ann_row_dicts)
+                and returns a boolean.
+            parent_auth: This authority's parent authority (if any).
         """
         super().__init__(
             name,
@@ -638,8 +711,12 @@ class RegexAuthority(Authority):
 
     def has_value(self, value: Any) -> re.Match:
         """Determine whether the given value is in this authority.
-        :param value: A possible authority value.
-        :return: None if the value is not a valid entity value; otherwise,
+
+        Args:
+            value: A possible authority value.
+
+        Returns:
+            None if the value is not a valid entity value; otherwise,
             return the re.Match object.
         """
         return self.regex.match(str(value))
@@ -649,8 +726,12 @@ class RegexAuthority(Authority):
         text_obj: dk_annots.AnnotatedText,
     ) -> dk_annots.Annotations:
         """Method to do the work of finding, validating, and adding annotations.
-        :param text_obj: The annotated text object to process and add annotations.
-        :return: The added Annotations
+
+        Args:
+            text_obj: The annotated text object to process and add annotations.
+
+        Returns:
+            The added Annotations.
         """
         for match in re.finditer(self.regex, text_obj.text):
             ann_dicts = []
@@ -716,16 +797,19 @@ class AuthoritiesBundle(Authority):
         anns_validator: Callable[["Authority", Dict[str, Any]], bool] = None,
         auths: List[Authority] = None,
     ):
-        """:param name: This authority's entity name
-        :param auth_anns_builder: The authority annotations row builder to use
-            for building annotation rows.
-        :param authdata: The authority data
-        :param field_groups: The derived field groups to use
-        :param anns_validator: fn(auth, anns_dict_list) that returns True if
-           the list of annotation row dicts are valid to be added as
-           annotations for a single match or "entity".
-        :param parent_auth: This authority's parent authority (if any)
-        :param auths: The authorities to bundle together.
+        """Initialize the AuthoritiesBundle.
+
+        Args:
+            name: This authority's entity name.
+            auth_anns_builder: The authority annotations row builder to use
+                for building annotation rows.
+            authdata: The authority data.
+            field_groups: The derived field groups to use.
+            anns_validator: fn(auth, anns_dict_list) that returns True if
+                the list of annotation row dicts are valid to be added as
+                annotations for a single match or "entity".
+            parent_auth: This authority's parent authority (if any).
+            auths: The authorities to bundle together.
         """
         super().__init__(
             name,
@@ -738,15 +822,21 @@ class AuthoritiesBundle(Authority):
         self.auths = auths.copy() if auths is not None else []
 
     def add(self, auth: Authority):
-        """Add the authority to this bundle
-        :param auth: The authority to add.
+        """Add the authority to this bundle.
+
+        Args:
+            auth: The authority to add.
         """
         self.auths.append(auth)
 
     def has_value(self, value: Any) -> bool:
         """Determine whether the given value is in this authority.
-        :param value: A possible authority value.
-        :return: True if the value is a valid entity value.
+
+        Args:
+            value: A possible authority value.
+
+        Returns:
+            True if the value is a valid entity value.
         """
         for auth in self.auths:
             if auth.has_value(value):
@@ -758,8 +848,12 @@ class AuthoritiesBundle(Authority):
         text_obj: dk_annots.AnnotatedText,
     ) -> dk_annots.Annotations:
         """Method to do the work of finding, validating, and adding annotations.
-        :param text_obj: The annotated text object to process and add annotations.
-        :return: The added Annotations
+
+        Args:
+            text_obj: The annotated text object to process and add annotations.
+
+        Returns:
+            The added Annotations.
         """
         for auth in self.auths:
             auth.annotate_input(text_obj)

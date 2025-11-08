@@ -1,11 +1,305 @@
-"""Advanced API for full control over FSM execution.
+r"""Advanced API for debugging and profiling FSM workflows.
 
 This module provides advanced interfaces for users who need fine-grained
-control over FSM execution, resource management, and monitoring.
+control over FSM execution, debugging capabilities, performance profiling,
+and detailed execution monitoring. Use this API when building complex
+workflows or troubleshooting execution issues.
+
+Architecture:
+    The AdvancedFSM API provides three levels of control beyond SimpleFSM/AsyncSimpleFSM:
+
+    **1. Step-by-Step Execution:**
+    Execute FSM transitions one at a time with full inspection of state
+    between each step. Essential for debugging complex state machines.
+
+    **2. Breakpoint Debugging:**
+    Set breakpoints at specific states and inspect execution context when
+    reached. Similar to debugger breakpoints in code.
+
+    **3. Performance Profiling:**
+    Measure execution time for each state and transition, identify bottlenecks,
+    and optimize workflow performance.
+
+    **When to Use AdvancedFSM:**
+    - Debugging complex workflows with unexpected behavior
+    - Profiling performance to identify slow states
+    - Building custom execution strategies
+    - Implementing sophisticated error recovery
+    - Monitoring production workflows in detail
+    - Testing and validating FSM configurations
+
+    **When NOT to Use AdvancedFSM:**
+    - Simple production workflows (use AsyncSimpleFSM)
+    - High-throughput batch processing (use SimpleFSM.process_batch)
+    - Prototyping and scripts (use SimpleFSM)
+
+Execution Modes:
+    AdvancedFSM supports five execution modes:
+
+    **STEP_BY_STEP:**
+    Execute one transition at a time. After each step, execution pauses and
+    returns control to caller with current state and data. Call step() to
+    continue to next transition.
+
+    **BREAKPOINT:**
+    Set breakpoints at specific states. Execution runs normally until reaching
+    a breakpoint state, then pauses. Inspect state and data, then continue.
+
+    **TRACE:**
+    Record detailed execution trace including all state transitions, data
+    transformations, and timing information. Useful for auditing and debugging.
+
+    **PROFILE:**
+    Measure and record performance metrics for each state and transition.
+    Identify bottlenecks and optimize slow operations.
+
+    **DEBUG:**
+    Enable verbose logging and detailed error messages. All execution events
+    are logged with full context for debugging.
+
+Common Debugging Patterns:
+    **Step-by-Step Debugging:**
+    ```python
+    from dataknobs_fsm.api.advanced import AdvancedFSM, ExecutionMode
+    from dataknobs_fsm.config.loader import ConfigLoader
+    from dataknobs_fsm.config.builder import FSMBuilder
+
+    # Load and build FSM
+    config = ConfigLoader().load_from_file('pipeline.yaml')
+    fsm = FSMBuilder().build(config)
+
+    # Create advanced FSM in step mode
+    advanced = AdvancedFSM(fsm, execution_mode=ExecutionMode.STEP_BY_STEP)
+
+    # Execute one step at a time
+    data = {'input': 'test data'}
+    while True:
+        result = advanced.step(data)
+
+        print(f"Step: {result.from_state} -> {result.to_state}")
+        print(f"Data before: {result.data_before}")
+        print(f"Data after: {result.data_after}")
+        print(f"Duration: {result.duration:.3f}s")
+
+        if result.is_complete:
+            break
+        if not result.success:
+            print(f"Error: {result.error}")
+            break
+
+        data = result.data_after
+    ```
+
+    **Breakpoint Debugging:**
+    ```python
+    # Set breakpoints at specific states
+    advanced = AdvancedFSM(fsm, execution_mode=ExecutionMode.BREAKPOINT)
+    advanced.add_breakpoint('transform_state')
+    advanced.add_breakpoint('validate_state')
+
+    # Run until breakpoint
+    result = advanced.run_until_breakpoint({'input': 'data'})
+
+    if result.at_breakpoint:
+        print(f"Stopped at: {result.to_state}")
+        print(f"Current data: {result.data_after}")
+
+        # Inspect, modify data, then continue
+        result.data_after['debug_flag'] = True
+        final = advanced.run_until_breakpoint(result.data_after)
+    ```
+
+    **Performance Profiling:**
+    ```python
+    # Profile execution to find bottlenecks
+    advanced = AdvancedFSM(fsm, execution_mode=ExecutionMode.PROFILE)
+
+    # Execute with profiling
+    profile_data = advanced.profile_execution({'input': 'data'})
+
+    # Analyze results
+    print("Performance Profile:")
+    for state, metrics in profile_data['states'].items():
+        print(f"{state}:")
+        print(f"  Time: {metrics['duration']:.3f}s")
+        print(f"  Calls: {metrics['call_count']}")
+        print(f"  Avg: {metrics['avg_duration']:.3f}s")
+
+    # Find slowest state
+    slowest = max(profile_data['states'].items(),
+                 key=lambda x: x[1]['duration'])
+    print(f"\nBottleneck: {slowest[0]} ({slowest[1]['duration']:.2f}s)")
+    ```
+
+    **Execution Tracing:**
+    ```python
+    # Record full execution trace
+    advanced = AdvancedFSM(fsm, execution_mode=ExecutionMode.TRACE)
+    trace = advanced.trace_execution({'input': 'data'})
+
+    # Analyze trace
+    print(f"Total steps: {len(trace['steps'])}")
+    print(f"Total time: {trace['total_duration']:.2f}s")
+    print(f"\nExecution path:")
+    for step in trace['steps']:
+        print(f"  {step['timestamp']}: {step['from']} -> {step['to']}")
+        if step.get('error'):
+            print(f"    ERROR: {step['error']}")
+    ```
+
+Execution Hooks:
+    Monitor execution events in real-time with hooks:
+
+    ```python
+    from dataknobs_fsm.api.advanced import ExecutionHook
+
+    # Define hook functions
+    def on_state_enter(state_name, data):
+        print(f"Entering: {state_name}")
+
+    def on_state_exit(state_name, data, duration):
+        print(f"Exiting: {state_name} ({duration:.3f}s)")
+
+    def on_error(state_name, error):
+        print(f"Error in {state_name}: {error}")
+
+    # Create hooks
+    hooks = ExecutionHook(
+        on_state_enter=on_state_enter,
+        on_state_exit=on_state_exit,
+        on_error=on_error
+    )
+
+    # Set hooks
+    advanced = AdvancedFSM(fsm)
+    advanced.set_hooks(hooks)
+
+    # Hooks will be called during execution
+    result = advanced.execute({'input': 'data'})
+    ```
+
+Advanced Use Cases:
+    **Custom Execution Strategies:**
+    Implement custom traversal strategies for special workflow patterns:
+
+    ```python
+    from dataknobs_fsm.execution.engine import TraversalStrategy
+
+    class PriorityTraversal(TraversalStrategy):
+        \"\"\"Execute high-priority states first.\"\"\"
+
+        def select_next_arc(self, state, arcs):
+            # Custom logic to select next transition
+            return max(arcs, key=lambda a: a.priority)
+
+    advanced = AdvancedFSM(fsm)
+    advanced.set_execution_strategy(PriorityTraversal())
+    ```
+
+    **Transaction Management:**
+    Configure transactional execution with rollback:
+
+    ```python
+    from dataknobs_fsm.core.transactions import TransactionStrategy
+
+    # Configure transactions
+    advanced.configure_transactions(
+        strategy=TransactionStrategy.TWO_PHASE_COMMIT,
+        isolation_level='READ_COMMITTED'
+    )
+
+    # Execution will use transactions
+    try:
+        result = advanced.execute(data)
+    except Exception:
+        # Automatic rollback on error
+        pass
+    ```
+
+    **Resource Monitoring:**
+    Monitor resource acquisition and release:
+
+    ```python
+    def on_resource_acquire(name, resource):
+        print(f"Acquired: {name}")
+
+    def on_resource_release(name, resource):
+        print(f"Released: {name}")
+
+    hooks = ExecutionHook(
+        on_resource_acquire=on_resource_acquire,
+        on_resource_release=on_resource_release
+    )
+    advanced.set_hooks(hooks)
+    ```
+
+Example:
+    Complete debugging workflow:
+
+    ```python
+    from dataknobs_fsm.api.advanced import (
+        AdvancedFSM, ExecutionMode, ExecutionHook
+    )
+    from dataknobs_fsm.config.loader import ConfigLoader
+    from dataknobs_fsm.config.builder import FSMBuilder
+
+    # Load FSM
+    config = ConfigLoader().load_from_file('complex_pipeline.yaml')
+    fsm = FSMBuilder().build(config)
+
+    # Create advanced FSM with profiling
+    advanced = AdvancedFSM(fsm, execution_mode=ExecutionMode.PROFILE)
+
+    # Set up monitoring hooks
+    errors = []
+
+    def on_error(state, error):
+        errors.append({'state': state, 'error': str(error)})
+
+    hooks = ExecutionHook(on_error=on_error)
+    advanced.set_hooks(hooks)
+
+    # Add breakpoints at critical states
+    advanced.add_breakpoint('data_validation')
+    advanced.add_breakpoint('external_api_call')
+
+    # Execute with monitoring
+    try:
+        profile_data = advanced.profile_execution({
+            'input_file': 'data.json',
+            'config': {'mode': 'strict'}
+        })
+
+        # Analyze performance
+        print("Performance Analysis:")
+        for state, metrics in profile_data['states'].items():
+            if metrics['duration'] > 1.0:  # Slow states
+                print(f"⚠️  {state}: {metrics['duration']:.2f}s")
+
+        # Check for errors
+        if errors:
+            print("\nErrors encountered:")
+            for err in errors:
+                print(f"  {err['state']}: {err['error']}")
+
+    except Exception as e:
+        print(f"Fatal error: {e}")
+        # Get trace for debugging
+        trace = advanced.get_trace()
+        print(f"Failed at: {trace['steps'][-1]}")
+    ```
+
+See Also:
+    - :class:`SimpleFSM`: Simple synchronous API
+    - :class:`AsyncSimpleFSM`: Async production API
+    - :class:`ExecutionMode`: Available execution modes
+    - :class:`ExecutionHook`: Hook system for monitoring
+    - :mod:`dataknobs_fsm.execution.engine`: Execution engine
+    - :mod:`dataknobs_fsm.execution.history`: Execution history tracking
 """
 
 import time
-from collections.abc import Callable
+from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
@@ -116,7 +410,7 @@ class AdvancedFSM:
     def configure_transactions(
         self,
         strategy: TransactionStrategy,
-        **config
+        **config: Any
     ) -> None:
         """Configure transaction management.
         
@@ -284,7 +578,7 @@ class AdvancedFSM:
         data: dict[str, Any] | Record,
         data_mode: DataHandlingMode = DataHandlingMode.COPY,
         initial_state: str | None = None
-    ):
+    ) -> AsyncGenerator[ExecutionContext, None]:
         """Create an execution context for manual control.
 
         Args:
@@ -1396,7 +1690,7 @@ class FSMDebugger:
 def create_advanced_fsm(
     config: str | Path | dict[str, Any] | FSM,
     custom_functions: dict[str, Callable] | None = None,
-    **kwargs
+    **kwargs: Any
 ) -> AdvancedFSM:
     """Factory function to create an AdvancedFSM instance.
     

@@ -308,6 +308,85 @@ class DynaBot:
 
         return response_content
 
+    async def get_conversation(self, conversation_id: str) -> Any:
+        """Retrieve conversation history.
+
+        This method fetches the complete conversation state including all messages,
+        metadata, and the message tree structure. Useful for displaying conversation
+        history, debugging, analytics, or exporting conversations.
+
+        Args:
+            conversation_id: Unique identifier of the conversation to retrieve
+
+        Returns:
+            ConversationState object containing the full conversation history,
+            or None if the conversation does not exist
+
+        Example:
+            ```python
+            # Retrieve a conversation
+            conv_state = await bot.get_conversation("conv-123")
+
+            # Access messages
+            messages = conv_state.message_tree
+
+            # Access metadata
+            print(conv_state.metadata)
+            ```
+
+        See Also:
+            - clear_conversation(): Clear/delete a conversation
+            - chat(): Add messages to a conversation
+        """
+        return await self.conversation_storage.load_conversation(conversation_id)
+
+    async def clear_conversation(self, conversation_id: str) -> bool:
+        """Clear a conversation's history.
+
+        This method removes the conversation from both persistent storage and the
+        internal cache. The next chat() call with this conversation_id will start
+        a fresh conversation. Useful for:
+
+        - Implementing "start over" functionality
+        - Privacy/data deletion requirements
+        - Testing and cleanup
+        - Resetting conversation context
+
+        Args:
+            conversation_id: Unique identifier of the conversation to clear
+
+        Returns:
+            True if the conversation was deleted, False if it didn't exist
+
+        Example:
+            ```python
+            # Clear a conversation
+            deleted = await bot.clear_conversation("conv-123")
+
+            if deleted:
+                print("Conversation deleted")
+            else:
+                print("Conversation not found")
+
+            # Next chat will start fresh
+            response = await bot.chat("Hello!", context)
+            ```
+
+        Note:
+            This operation is permanent and cannot be undone. The conversation
+            cannot be recovered after deletion.
+
+        See Also:
+            - get_conversation(): Retrieve conversation before clearing
+            - chat(): Will create new conversation after clearing
+        """
+        # Remove from cache if present
+        if conversation_id in self._conversation_managers:
+            del self._conversation_managers[conversation_id]
+
+        # Delete from storage
+        return await self.conversation_storage.delete_conversation(conversation_id)
+
     async def _get_or_create_conversation(
         self, context: BotContext
     ) -> ConversationManager:
@@ -334,20 +413,48 @@ class DynaBot:
                 storage=self.conversation_storage,
             )
         except Exception:
-            # Create new conversation
+            # Create new conversation with specified conversation_id
+            from dataknobs_llm.conversations import ConversationNode, ConversationState
+            from dataknobs_llm.llm.base import LLMMessage
+            from dataknobs_structures.tree import Tree
+
             metadata = {
                 "client_id": context.client_id,
                 "user_id": context.user_id,
                 **context.session_metadata,
             }
 
-            manager = await ConversationManager.create(
+            # Create initial state with specified conversation_id
+            # Start with empty root node (will be replaced by system prompt if provided)
+            root_message = LLMMessage(role="system", content="")
+            root_node = ConversationNode(
+                message=root_message,
+                node_id="",
+            )
+            tree = Tree(root_node)
+            state = ConversationState(
+                conversation_id=conv_id,  # Use the conversation_id from context
+                message_tree=tree,
+                current_node_id="",
+                metadata=metadata,
+            )
+
+            # Create manager with pre-initialized state
+            manager = ConversationManager(
                 llm=self.llm,
                 prompt_builder=self.prompt_builder,
                 storage=self.conversation_storage,
-                system_prompt_name=self.system_prompt_name,
+                state=state,
                 metadata=metadata,
             )
+
+            # Add system prompt if specified
+            if self.system_prompt_name:
+                # This will update the root node with the actual system prompt
+                await manager.add_message(
+                    prompt_name=self.system_prompt_name,
+                    role="system",
+                )
 
         # Cache manager
         self._conversation_managers[conv_id] = manager

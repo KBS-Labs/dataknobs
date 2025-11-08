@@ -274,4 +274,4 @@ For complete details including:
 - Resource management
 - Streaming configuration
 
-See the [API documentation](../api/index.md) for complete details.
+See the [API documentation](../../../api/dataknobs-fsm.md) for complete details.

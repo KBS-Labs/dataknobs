@@ -1,6 +1,13 @@
+"""File system utility functions for traversing, reading, and writing files.
+
+Provides generators and helpers for working with files, directories,
+and compressed file formats.
+"""
+
 import gzip
 import os
 from collections.abc import Generator
+from pathlib import Path
 from typing import List, Set
 
 
@@ -12,12 +19,15 @@ def filepath_generator(
 ) -> Generator[str, None, None]:
     """Generate all filepaths under the root path.
 
-    :param rootpath: The root path under which to find files.
-    :param descend: True to descend into subdirectories
-    :param seen: Set of filepaths and/or directories to ignore
-    :param files_only: True to generate only paths to files; False to
-        include paths to directories.
-    :yield: Each file path
+    Args:
+        rootpath: The root path under which to find files.
+        descend: True to descend into subdirectories. Defaults to True.
+        seen: Set of filepaths and/or directories to ignore. Defaults to None.
+        files_only: True to generate only paths to files; False to include
+            paths to directories. Defaults to True.
+
+    Yields:
+        str: Each file path found under the root path.
     """
     if seen is None:
         seen = set()
@@ -26,13 +36,13 @@ def filepath_generator(
         if not descend and root != rootpath and root in seen:
             break
         for name in files:
-            fpath = os.path.join(root, name)
+            fpath = str(Path(root) / name)
             if fpath not in seen:
                 seen.add(fpath)
                 yield fpath
         if not descend or not files_only:
             for name in dirs:
-                next_root = os.path.join(root, name)
+                next_root = str(Path(root) / name)
                 if next_root not in seen:
                     seen.add(next_root)
                     yield next_root
@@ -40,12 +50,19 @@ def filepath_generator(
 
 def fileline_generator(filename: str, rootdir: str | None = None) -> Generator[str, None, None]:
     """Generate lines from the file.
-    :param filename: The name of the file.
-    :param rootdir: (optional) The directory of the file.
-    :yield: Each stripped file line
+
+    Automatically handles both plain text and gzip-compressed files based on
+    the .gz extension. All lines are stripped of leading/trailing whitespace.
+
+    Args:
+        filename: The name of the file to read.
+        rootdir: Optional directory path to prepend to filename. Defaults to None.
+
+    Yields:
+        str: Each stripped line from the file.
     """
     if rootdir is not None:
-        filename = os.path.join(rootdir, filename)
+        filename = str(Path(rootdir) / filename)
     if filename.endswith(".gz"):
         with gzip.open(filename, mode="rt", encoding="utf-8") as f:
             for line in f:
@@ -57,12 +74,18 @@ def fileline_generator(filename: str, rootdir: str | None = None) -> Generator[s
 
 
 def write_lines(outfile: str, lines: List[str], rootdir: str | None = None) -> None:
-    """Write the lines to the file.
-    :param outfile: The name of the file.
-    :param rootdir: (optional) The directory of the file.
+    """Write lines to a file in sorted order.
+
+    Automatically handles both plain text and gzip-compressed files based on
+    the .gz extension. Lines are sorted before writing.
+
+    Args:
+        outfile: The name of the output file.
+        lines: List of lines to write to the file.
+        rootdir: Optional directory path to prepend to outfile. Defaults to None.
     """
     if rootdir is not None:
-        outfile = os.path.join(rootdir, outfile)
+        outfile = str(Path(rootdir) / outfile)
     if outfile.endswith(".gz"):
         with gzip.open(outfile, mode="wt", encoding="utf-8") as f:
             for line in sorted(lines):
@@ -74,9 +97,15 @@ def write_lines(outfile: str, lines: List[str], rootdir: str | None = None) -> N
 
 
 def is_gzip_file(filepath: str) -> bool:
-    """Determine whether the file at filepath is gzipped.
-    :param filepath: The path to the file
-    :return: True if the file is gzipped
+    """Determine whether a file is gzip-compressed.
+
+    Checks the file's magic number (first 3 bytes) to identify gzip format.
+
+    Args:
+        filepath: Path to the file to check.
+
+    Returns:
+        bool: True if the file is gzip-compressed, False otherwise.
     """
     is_gzip = False
     if os.path.exists(filepath):

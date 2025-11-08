@@ -517,6 +517,12 @@ class FSMBuilder:
         
         # For JSON Schema format, create a simple validator wrapper
         class JSONSchemaValidator:
+            """Simple JSON Schema validator for FSM data validation.
+
+            Validates data against JSON Schema definitions, checking required fields
+            and type constraints. Supports object schemas with properties and required fields.
+            """
+
             def __init__(self, schema_def):
                 self.schema_def = schema_def
             

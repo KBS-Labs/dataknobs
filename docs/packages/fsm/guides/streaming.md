@@ -799,5 +799,5 @@ Use streaming when dealing with large datasets or continuous data flows.
 - [File Processing Pattern](../patterns/file-processing.md) - File processing with streaming
 - [ETL Pattern](../patterns/etl.md) - Database streaming ETL
 - [CLI Guide](../guides/cli.md) - Command-line interface guide
-- [API Reference](../api/index.md) - Streaming API documentation
+- [API Reference](../../../api/dataknobs-fsm.md) - Streaming API documentation
 

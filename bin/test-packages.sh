@@ -111,11 +111,18 @@ for package in "${PACKAGES[@]}"; do
     fi
     if [[ "$COVERAGE" == true ]]; then
         # Handle package name conversion (e.g., config -> dataknobs_config)
-        pkg_module="dataknobs_${package//-/_}"
-        
+        # Special case: legacy package is named "dataknobs" not "dataknobs_legacy"
+        if [[ "$package" == "legacy" ]]; then
+            pkg_module="dataknobs"
+        else
+            pkg_module="dataknobs_${package//-/_}"
+        fi
+
         # Check if src directory exists and adjust coverage path
         if [[ -d "src/$pkg_module" ]]; then
             PYTEST_CMD="$PYTEST_CMD --cov=src/$pkg_module --cov-report=term-missing"
+        elif [[ "$package" == "legacy" ]]; then
+            PYTEST_CMD="$PYTEST_CMD --cov=src/dataknobs --cov-report=term-missing"
         elif [[ -d "src/dataknobs_${package}" ]]; then
             PYTEST_CMD="$PYTEST_CMD --cov=src/dataknobs_${package} --cov-report=term-missing"
         else

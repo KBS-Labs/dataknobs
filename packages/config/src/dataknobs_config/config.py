@@ -3,7 +3,6 @@
 import copy
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
@@ -174,11 +173,11 @@ class Config:
             Loaded configuration dictionary
         """
         # Resolve relative paths using config_root
-        if not os.path.isabs(path):
+        if not Path(path).is_absolute():
             config_root = self._settings_manager.get_setting("config_root")
             if not config_root:
                 raise ConfigError("config_root not set for relative file reference")
-            path = os.path.join(config_root, path)
+            path = str(Path(config_root) / path)
 
         path_obj = Path(path).resolve()
 
@@ -258,7 +257,7 @@ class Config:
                 self.set(type_name, name_or_index, config)
             except Exception as e:
                 # Log warning but don't fail
-                print(f"Warning: Failed to apply environment override {ref}: {e}")
+                logger.warning(f"Failed to apply environment override {ref}: {e}")
 
     def get_types(self) -> List[str]:
         """Get all configuration types.
@@ -310,8 +309,8 @@ class Config:
             # Handle index access
             try:
                 return copy.deepcopy(configs[name_or_index])
-            except IndexError:
-                raise ConfigNotFoundError(f"Index out of range: {name_or_index}")
+            except IndexError as e:
+                raise ConfigNotFoundError(f"Index out of range: {name_or_index}") from e
         else:
             # Handle name access
             for config in configs:
@@ -560,6 +559,10 @@ class Config:
             factory: Factory instance or class
             
         Example:
+            >>> from dataknobs_config import Config
+            >>>
+            >>> # Assuming you have a database_factory defined
+            >>> config = Config()
             >>> config.register_factory("database", database_factory)
             >>> config.load({
             ...     "databases": [{

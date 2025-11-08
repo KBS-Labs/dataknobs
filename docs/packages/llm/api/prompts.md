@@ -296,6 +296,6 @@ metadata:
 ## See Also
 
 - [Prompt Engineering Guide](../guides/prompts.md) - Detailed guide
-- [LLM API](llm.md) - LLM provider interface
+- [LLM API](../../../api/dataknobs-llm.md) - LLM provider interface
 - [Versioning API](versioning.md) - Version management
 - [Examples](../examples/advanced-prompting.md) - Advanced examples

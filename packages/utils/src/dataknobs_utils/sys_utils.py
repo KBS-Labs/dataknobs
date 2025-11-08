@@ -1,3 +1,9 @@
+"""System and environment utility functions.
+
+Provides utilities for loading environment variables, network discovery,
+and system configuration management.
+"""
+
 import os
 import re
 import socket
@@ -11,18 +17,27 @@ from dotenv import dotenv_values  # type: ignore[import-not-found]
 def load_project_vars(
     pvname: str = ".project_vars", include_dot_env: bool = True
 ) -> Dict[str, str] | None:
-    """Load "closest" project variables.
+    """Load project variables from the closest configuration file.
 
-    :param pvname: The name of the project variables file.
-    :param include_dot_env: True to also find and load the closest ".env" file
-        NOTEs:
-          * project variable files can be checked in to the repo (public)
-          * .env files cannot be checked into the repo (secrets)
-          * .env vars will supercede project variables
-    :return: The project variables config or None
+    Walks up the directory tree from the current working directory to find
+    the closest project variables file and optionally merges with .env settings.
+
+    Notes:
+        - Project variable files can be checked into the repo (public)
+        - .env files should not be checked in (contain secrets)
+        - .env variables will override project variables
+
+    Args:
+        pvname: Name of the project variables file. Defaults to ".project_vars".
+        include_dot_env: If True, also loads and merges the closest .env file.
+            Defaults to True.
+
+    Returns:
+        Dict[str, str] | None: Dictionary of configuration variables, or None
+            if no configuration file is found.
     """
     config = None
-    path = Path(os.getcwd())
+    path = Path.cwd()
     while not os.path.exists(path.joinpath(pvname)) and path.parent != path:
         # Walk up the parents to find the closest project variables file
         path = path.parent
@@ -40,8 +55,16 @@ def load_project_vars(
 
 
 class MySubnet:
-    """Class to collect and store information about the subnet of the current
-    running process.
+    """Collect and store information about the current process's subnet.
+
+    Discovers and caches information about the local machine and other hosts
+    on the same subnet using nmap network scanning.
+
+    Attributes:
+        my_hostname: The local machine's hostname.
+        my_ip: The local machine's IP address.
+        all_ips: Dictionary mapping hostnames to IP addresses for all active
+            hosts on the subnet (cached).
     """
 
     def __init__(self) -> None:
@@ -50,7 +73,11 @@ class MySubnet:
         self._subnet_ips: Dict[str, str] | None = None
 
     def rescan(self) -> None:
-        """Rescan subnet hosts."""
+        """Clear cached subnet information to force a fresh scan.
+
+        Call this method to invalidate the cached subnet hosts data. The next
+        access to all_ips will trigger a new nmap scan.
+        """
         self._subnet_ips = None
 
     @property
@@ -104,18 +131,29 @@ class MySubnet:
         return self._subnet_ips if self._subnet_ips is not None else {}
 
     def get_ips(self, name_re: Union[str, re.Pattern]) -> Dict[str, str]:
-        """Get the IP addresses of the hosts whose names match the regex.
-        :param name_re: The name or regex pattern to match
-        :return: The dictionary mapping matched names to their IP addresses
+        """Get IP addresses of hosts matching a name pattern.
+
+        Args:
+            name_re: Regular expression pattern or string to match against
+                hostnames.
+
+        Returns:
+            Dict[str, str]: Dictionary mapping matching hostnames to their IP
+                addresses.
         """
         return {name: ip for name, ip in self.all_ips.items() if re.match(name_re, name)}
 
     def get_ip(self, name_re: Union[str, re.Pattern]) -> str | None:
-        """Get the "first" IP address of the hosts whose names match the regex.
-        :param name_re: The name or regex pattern to match
-        :return: The "first" matching IP address or None
+        """Get the first IP address matching a hostname pattern.
+
+        Args:
+            name_re: Regular expression pattern or string to match against
+                hostnames.
+
+        Returns:
+            str | None: The first matching IP address, or None if no matches found.
         """
         ips = self.get_ips(name_re)
         if len(ips) > 0:
-            return list(ips.values())[0]
+            return next(iter(ips.values()))
         return None

@@ -14,6 +14,113 @@ Schema Versioning:
     - PATCH: Bug fixes, no schema changes
 
     Current schema version: 1.0.0
+
+Storage Architecture:
+    Conversations are stored as trees where each node represents a message.
+    The tree structure is serialized as:
+    - **Nodes**: List of ConversationNode objects (messages with metadata)
+    - **Edges**: List of [parent_id, child_id] relationships
+    - **Current Position**: Node ID showing where you are in the conversation
+
+    This format supports:
+    - Full conversation history with branching
+    - Efficient deserialization and tree reconstruction
+    - Schema evolution with automatic migration
+    - Backend-agnostic storage (works with any dataknobs backend)
+
+Example:
+    ```python
+    from dataknobs_data import database_factory
+    from dataknobs_llm.conversations import (
+        ConversationState,
+        ConversationNode,
+        DataknobsConversationStorage
+    )
+    from dataknobs_llm.llm.base import LLMMessage
+    from dataknobs_structures.tree import Tree
+
+    # Create storage backend
+    db = database_factory.create(backend="memory")
+    storage = DataknobsConversationStorage(db)
+
+    # Create conversation state
+    root_node = ConversationNode(
+        message=LLMMessage(role="system", content="You are helpful"),
+        node_id=""
+    )
+    tree = Tree(root_node)
+    state = ConversationState(
+        conversation_id="conv-123",
+        message_tree=tree,
+        current_node_id="",
+        metadata={"user_id": "alice"}
+    )
+
+    # Save conversation
+    await storage.save_conversation(state)
+
+    # Load conversation
+    loaded = await storage.load_conversation("conv-123")
+    messages = loaded.get_current_messages()
+
+    # List all conversations for user
+    user_convos = await storage.list_conversations(
+        filter_metadata={"user_id": "alice"}
+    )
+    ```
+
+Serialization Format:
+    The serialized format (from `ConversationState.to_dict()`) looks like:
+
+    ```python
+    {
+        "schema_version": "1.0.0",
+        "conversation_id": "conv-123",
+        "current_node_id": "0.1",
+        "metadata": {"user_id": "alice"},
+        "created_at": "2024-01-01T00:00:00",
+        "updated_at": "2024-01-01T00:05:00",
+        "nodes": [
+            {
+                "node_id": "",
+                "message": {
+                    "role": "system",
+                    "content": "You are helpful",
+                    "name": None,
+                    "metadata": {}
+                },
+                "timestamp": "2024-01-01T00:00:00",
+                "prompt_name": None,
+                "branch_name": None,
+                "metadata": {}
+            },
+            {
+                "node_id": "0",
+                "message": {"role": "user", "content": "Hello", ...},
+                ...
+            },
+            {
+                "node_id": "0.0",
+                "message": {"role": "assistant", "content": "Hi!", ...},
+                "metadata": {"usage": {...}, "cost_usd": 0.0001}
+            },
+            {
+                "node_id": "0.1",  # Alternative response branch
+                "message": {"role": "assistant", "content": "Greetings!", ...},
+                "branch_name": "polite-variant"
+            }
+        ],
+        "edges": [
+            ["", "0"],        # Root -> user message
+            ["0", "0.0"],     # User -> assistant (first branch)
+            ["0", "0.1"]      # User -> assistant (alternative branch)
+        ]
+    }
+    ```
+
+See Also:
+    ConversationManager: High-level conversation orchestration
+    AsyncPromptBuilder: Prompt rendering with RAG integration
 """
 
 from abc import ABC, abstractmethod
@@ -355,7 +462,8 @@ class ConversationState:
         """Migrate data from one schema version to another.
 
         This method applies migrations sequentially to transform data from
-        an older schema version to the current version.
+        an older schema version to the current version. Migrations are applied
+        in order (e.g., 0.0.0 → 1.0.0 → 1.1.0 → 1.2.0).
 
         Args:
             data: Data in old schema format
@@ -367,6 +475,47 @@ class ConversationState:
 
         Raises:
             SchemaVersionError: If migration path is not supported
+
+        Example:
+            ```python
+            # Example migration from 1.0.0 to 1.1.0 might add a new field
+            old_data = {
+                "schema_version": "1.0.0",
+                "conversation_id": "conv-123",
+                "nodes": [...],
+                "edges": [...]
+            }
+
+            # After migration to 1.1.0
+            new_data = ConversationState._migrate_schema(
+                old_data,
+                from_version="1.0.0",
+                to_version="1.1.0"
+            )
+            # new_data might now include: {"tags": [], ...}
+            ```
+
+        Note:
+            **Adding New Migration Paths**:
+
+            When introducing schema changes, add a migration method:
+
+            ```python
+            @staticmethod
+            def _migrate_1_0_to_1_1(data: Dict[str, Any]) -> Dict[str, Any]:
+                '''Migrate from schema 1.0 to 1.1.'''
+                # Example: Add new optional field
+                data["tags"] = []
+                data["schema_version"] = "1.1.0"
+                return data
+            ```
+
+            Then update this method to call it:
+
+            ```python
+            if from_version == "1.0.0" and to_version >= "1.1.0":
+                data = cls._migrate_1_0_to_1_1(data)
+            ```
         """
         # Parse version strings
         from_major, _from_minor, _from_patch = map(int, from_version.split("."))
@@ -483,10 +632,80 @@ class DataknobsConversationStorage(ConversationStorage):
     Stores conversations as Records with the tree serialized as nodes + edges.
     Works with any dataknobs backend (Memory, File, S3, Postgres, etc.).
 
+    The storage layer handles:
+    - Automatic serialization/deserialization of conversation trees
+    - Schema version migration when loading old conversations
+    - Metadata-based filtering for listing conversations
+    - Upsert operations (insert or update)
+
+    Attributes:
+        backend: Dataknobs async database backend instance
+
     Example:
-        >>> from dataknobs_data.backends import AsyncMemoryDatabase
-        >>> storage = DataknobsConversationStorage(AsyncMemoryDatabase())
-        >>> await storage.save_conversation(state)
+        ```python
+        from dataknobs_data import database_factory
+        from dataknobs_llm.conversations import DataknobsConversationStorage
+
+        # Memory backend (development/testing)
+        db = database_factory.create(backend="memory")
+        storage = DataknobsConversationStorage(db)
+
+        # File backend (local persistence)
+        db = database_factory.create(
+            backend="file",
+            file_path="./conversations.jsonl"
+        )
+        storage = DataknobsConversationStorage(db)
+
+        # S3 backend (cloud storage)
+        db = database_factory.create(
+            backend="s3",
+            bucket="my-conversations",
+            region="us-west-2"
+        )
+        storage = DataknobsConversationStorage(db)
+
+        # Postgres backend (production)
+        db = database_factory.create(
+            backend="postgres",
+            host="db.example.com",
+            database="conversations",
+            user="app",
+            password="secret"
+        )
+        storage = DataknobsConversationStorage(db)
+
+        # Save conversation
+        await storage.save_conversation(state)
+
+        # Load conversation
+        state = await storage.load_conversation("conv-123")
+
+        # List user's conversations
+        user_convos = await storage.list_conversations(
+            filter_metadata={"user_id": "alice"},
+            limit=50
+        )
+
+        # Delete conversation
+        deleted = await storage.delete_conversation("conv-123")
+        ```
+
+    Note:
+        **Backend Selection**:
+
+        - **Memory**: Fast, no persistence. Use for testing or ephemeral conversations.
+        - **File**: Simple local persistence. Good for single-server deployments.
+        - **S3**: Scalable cloud storage. Best for serverless or distributed systems.
+        - **Postgres**: Full ACID guarantees. Best for production multi-server setups.
+
+        All backends support the same API, so you can switch between them
+        by changing the database_factory configuration.
+
+    See Also:
+        ConversationStorage: Abstract interface
+        ConversationState: State structure being stored
+        dataknobs_data.database_factory: Backend creation utilities
     """
 
     def __init__(self, backend: Any):

@@ -426,7 +426,7 @@ print(f"States visited: {profile.states_visited}")
 Now that you understand the basics:
 
 1. Explore [Integration Patterns](patterns/index.md) for pre-built solutions
-2. Read the [API Documentation](api/index.md) for detailed reference
+2. Read the [API Documentation](../../api/dataknobs-fsm.md) for detailed reference
 3. Check out [Examples](examples/index.md) for real-world use cases
 4. Learn about [Data Modes](guides/data-modes.md) for efficient data handling
 5. Understand [Resource Management](guides/resources.md) for external integrations
