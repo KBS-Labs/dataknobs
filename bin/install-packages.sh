@@ -149,9 +149,15 @@ else
     # Install from built wheels in root dist directory
     for package in "${PACKAGES[@]}"; do
         echo -e "\n${YELLOW}Installing dataknobs-$package...${NC}"
-        
+
         # Find the latest wheel for this specific package
-        WHEEL=$(find dist -name "dataknobs_${package//-/_}-*.whl" 2>/dev/null | sort -V | tail -n1)
+        # Special case: legacy package is named "dataknobs" not "dataknobs_legacy"
+        if [ "$package" = "legacy" ]; then
+            # Match "dataknobs-X.Y.Z-..." but not "dataknobs_anything-..."
+            WHEEL=$(find dist -name "dataknobs-*.whl" 2>/dev/null | grep -v "dataknobs_" | sort -V | tail -n1)
+        else
+            WHEEL=$(find dist -name "dataknobs_${package//-/_}-*.whl" 2>/dev/null | sort -V | tail -n1)
+        fi
         
         if [[ -z "$WHEEL" ]]; then
             echo -e "${RED}No wheel found for dataknobs-$package${NC}"

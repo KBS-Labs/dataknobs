@@ -348,7 +348,12 @@ run_path_tests() {
         # Try to extract package name for coverage
         local package=$(extract_package_from_path "$path")
         if [ -n "$package" ]; then
-            cov_args="--cov=packages/$package/src/dataknobs_${package}"
+            # Special case: legacy package is named "dataknobs" not "dataknobs_legacy"
+            if [ "$package" = "legacy" ]; then
+                cov_args="--cov=packages/$package/src/dataknobs"
+            else
+                cov_args="--cov=packages/$package/src/dataknobs_${package}"
+            fi
         else
             # Fall back to covering the test path itself
             cov_args="--cov=$path"
@@ -422,11 +427,16 @@ run_unit_tests() {
     if [ -d "packages/$package/tests/integration" ]; then
         exclude_args="--ignore=packages/$package/tests/integration"
     fi
-    
+
     # Build coverage args if enabled
     local cov_args=""
     if [ "$COVERAGE" = "yes" ]; then
-        cov_args="--cov=packages/$package/src/dataknobs_${package}"
+        # Special case: legacy package is named "dataknobs" not "dataknobs_legacy"
+        if [ "$package" = "legacy" ]; then
+            cov_args="--cov=packages/$package/src/dataknobs"
+        else
+            cov_args="--cov=packages/$package/src/dataknobs_${package}"
+        fi
         # Add coverage report types
         IFS=',' read -ra REPORT_TYPES <<< "$COV_REPORT"
         for report_type in "${REPORT_TYPES[@]}"; do
@@ -489,11 +499,16 @@ run_integration_tests() {
     
     # Set environment variables for tests
     set_integration_env_vars
-    
+
     # Build coverage args if enabled
     local cov_args=""
     if [ "$COVERAGE" = "yes" ]; then
-        cov_args="--cov=packages/$package/src/dataknobs_${package} --cov-append"
+        # Special case: legacy package is named "dataknobs" not "dataknobs_legacy"
+        if [ "$package" = "legacy" ]; then
+            cov_args="--cov=packages/$package/src/dataknobs --cov-append"
+        else
+            cov_args="--cov=packages/$package/src/dataknobs_${package} --cov-append"
+        fi
         # Add coverage report types
         IFS=',' read -ra REPORT_TYPES <<< "$COV_REPORT"
         for report_type in "${REPORT_TYPES[@]}"; do
@@ -554,11 +569,16 @@ run_combined_tests() {
         # Set environment variables for integration tests
         set_integration_env_vars
     fi
-    
+
     # Build coverage args if enabled
     local cov_args=""
     if [ "$COVERAGE" = "yes" ]; then
-        cov_args="--cov=packages/$package/src/dataknobs_${package}"
+        # Special case: legacy package is named "dataknobs" not "dataknobs_legacy"
+        if [ "$package" = "legacy" ]; then
+            cov_args="--cov=packages/$package/src/dataknobs"
+        else
+            cov_args="--cov=packages/$package/src/dataknobs_${package}"
+        fi
         # Add coverage report types
         IFS=',' read -ra REPORT_TYPES <<< "$COV_REPORT"
         for report_type in "${REPORT_TYPES[@]}"; do

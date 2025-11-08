@@ -661,9 +661,15 @@ if [ "$PR_MODE" = "yes" ]; then
                 for pkg_dir in "$PROJECT_ROOT"/packages/*/; do
                     if [ -d "$pkg_dir" ]; then
                         pkg_name=$(basename "$pkg_dir")
-                        if [ -d "$pkg_dir/src/dataknobs_${pkg_name}" ]; then
+                        # Special case: legacy package is named "dataknobs" not "dataknobs_legacy"
+                        if [ "$pkg_name" = "legacy" ]; then
+                            src_name="dataknobs"
+                        else
+                            src_name="dataknobs_${pkg_name}"
+                        fi
+                        if [ -d "$pkg_dir/src/${src_name}" ]; then
                             # Generate package-specific XML
-                            uv run coverage xml -o "coverage-${pkg_name}-combined.xml" --include="*/dataknobs_${pkg_name}/*" 2>/dev/null || true
+                            uv run coverage xml -o "coverage-${pkg_name}-combined.xml" --include="*/${src_name}/*" 2>/dev/null || true
                         fi
                     fi
                 done
@@ -698,13 +704,19 @@ if [ "$PR_MODE" = "yes" ]; then
             for pkg_dir in "$PROJECT_ROOT"/packages/*/; do
                 if [ -d "$pkg_dir" ]; then
                     pkg_name=$(basename "$pkg_dir")
+                    # Special case: legacy package is named "dataknobs" not "dataknobs_legacy"
+                    if [ "$pkg_name" = "legacy" ]; then
+                        src_name="dataknobs"
+                    else
+                        src_name="dataknobs_${pkg_name}"
+                    fi
                     # Skip packages without source code
-                    if [ -d "$pkg_dir/src/dataknobs_${pkg_name}" ]; then
+                    if [ -d "$pkg_dir/src/${src_name}" ]; then
                         echo "" >> test-coverage-summary.txt
                         echo "Package: $pkg_name" >> test-coverage-summary.txt
                         echo "--------" >> test-coverage-summary.txt
                         # Generate coverage report filtered to this package (from artifacts dir where .coverage is)
-                        uv run coverage report --data-file="$ARTIFACTS_DIR/.coverage" --include="*/dataknobs_${pkg_name}/*" 2>/dev/null >> test-coverage-summary.txt || echo "  No coverage data for $pkg_name" >> test-coverage-summary.txt
+                        uv run coverage report --data-file="$ARTIFACTS_DIR/.coverage" --include="*/${src_name}/*" 2>/dev/null >> test-coverage-summary.txt || echo "  No coverage data for $pkg_name" >> test-coverage-summary.txt
                     fi
                 fi
             done
@@ -718,9 +730,15 @@ if [ "$PR_MODE" = "yes" ]; then
             for pkg_dir in "$PROJECT_ROOT"/packages/*/; do
                 if [ -d "$pkg_dir" ]; then
                     pkg_name=$(basename "$pkg_dir")
-                    if [ -d "$pkg_dir/src/dataknobs_${pkg_name}" ]; then
+                    # Special case: legacy package is named "dataknobs" not "dataknobs_legacy"
+                    if [ "$pkg_name" = "legacy" ]; then
+                        src_name="dataknobs"
+                    else
+                        src_name="dataknobs_${pkg_name}"
+                    fi
+                    if [ -d "$pkg_dir/src/${src_name}" ]; then
                         # Get coverage percentage for this package (from artifacts dir where .coverage is)
-                        coverage_output=$(uv run coverage report --data-file="$ARTIFACTS_DIR/.coverage" --include="*/dataknobs_${pkg_name}/*" 2>/dev/null | tail -1)
+                        coverage_output=$(uv run coverage report --data-file="$ARTIFACTS_DIR/.coverage" --include="*/${src_name}/*" 2>/dev/null | tail -1)
                         if echo "$coverage_output" | grep -q "TOTAL"; then
                             # Extract coverage percentage from the TOTAL line
                             coverage_pct=$(echo "$coverage_output" | awk '{print $(NF)}' | sed 's/%//')
