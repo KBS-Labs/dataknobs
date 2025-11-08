@@ -202,6 +202,83 @@ response = await bot.chat(
 print(response)
 ```
 
+##### `get_conversation`
+
+Retrieve conversation history.
+
+```python
+async def get_conversation(self, conversation_id: str) -> ConversationState | None
+```
+
+**Parameters:**
+- `conversation_id` (str): Unique identifier of the conversation to retrieve
+
+**Returns:**
+- `ConversationState | None`: Conversation state object containing full message history, or None if not found
+
+**Description:**
+
+This method fetches the complete conversation state including all messages, metadata, and the message tree structure. Useful for:
+- Displaying conversation history in UI
+- Debugging conversations
+- Analytics and reporting
+- Exporting conversations
+
+**Example:**
+```python
+# Retrieve a conversation
+conversation_state = await bot.get_conversation("conv-123")
+
+if conversation_state:
+    # Access messages
+    messages = conversation_state.message_tree
+
+    # Access metadata
+    print(conversation_state.metadata)
+    print(f"Conversation ID: {conversation_state.conversation_id}")
+else:
+    print("Conversation not found")
+```
+
+##### `clear_conversation`
+
+Clear a conversation's history.
+
+```python
+async def clear_conversation(self, conversation_id: str) -> bool
+```
+
+**Parameters:**
+- `conversation_id` (str): Unique identifier of the conversation to clear
+
+**Returns:**
+- `bool`: True if the conversation was deleted, False if it didn't exist
+
+**Description:**
+
+This method removes the conversation from both persistent storage and the internal cache. The next `chat()` call with this conversation_id will start a fresh conversation. Useful for:
+- Implementing "start over" functionality
+- Privacy/data deletion requirements
+- Testing and cleanup
+- Resetting conversation context
+
+**Note:** This operation is permanent and cannot be undone. The conversation cannot be recovered after deletion.
+
+**Example:**
+```python
+# Clear a conversation
+deleted = await bot.clear_conversation("conv-123")
+
+if deleted:
+    print("Conversation deleted successfully")
+else:
+    print("Conversation not found")
+
+# Next chat will start fresh
+context = BotContext(conversation_id="conv-123", client_id="client-456")
+response = await bot.chat("Hello!", context)  # Creates new conversation
+```
+
 #### Attributes
 
 - `llm` (AsyncLLMProvider): LLM provider instance
