@@ -296,9 +296,15 @@ if [[ ${#VALIDATE_PACKAGES[@]} -gt 0 ]]; then
     echo -e "\n${BLUE}3. Checking imports...${NC}"
     for package in "${VALIDATE_PACKAGES[@]}"; do
         echo -e "${YELLOW}  Checking $package...${NC}"
-        
+
         # Try to import the package
-        PACKAGE_NAME="dataknobs_${package//-/_}"
+        # Special case: legacy package is named "dataknobs" not "dataknobs_legacy"
+        if [[ "$package" == "legacy" ]]; then
+            PACKAGE_NAME="dataknobs"
+        else
+            PACKAGE_NAME="dataknobs_${package//-/_}"
+        fi
+
         if uv run python -c "import $PACKAGE_NAME" 2>/dev/null; then
             echo -e "${GREEN}    ✓ Package imports successfully${NC}"
         else
