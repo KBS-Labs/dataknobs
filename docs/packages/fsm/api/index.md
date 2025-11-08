@@ -1,3 +1,7 @@
+---
+title: fsm (curated)
+---
+
 # FSM API Reference
 
 The FSM package provides two main APIs for different use cases, plus core components for direct use:

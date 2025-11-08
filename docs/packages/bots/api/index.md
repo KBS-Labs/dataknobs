@@ -1,3 +1,7 @@
+---
+title: bots (curated)
+---
+
 # API Reference
 
 Complete API reference for dataknobs-bots.

@@ -216,9 +216,9 @@ nav:
       - xization (complete): api/reference/xization.md
       - common (complete): api/reference/common.md
     - Curated Guides (Examples & Tutorials):
-      - bots (curated): packages/bots/api/index.md
-      - fsm (curated): packages/fsm/api/index.md
-      - llm (curated): packages/llm/api/llm.md
+      - bots (curated): api/dataknobs-bots.md
+      - fsm (curated): api/dataknobs-fsm.md
+      - llm (curated): api/dataknobs-llm.md
       - data (curated): api/dataknobs-data.md
       - config (curated): api/dataknobs-config.md
       - structures (curated): api/dataknobs-structures.md

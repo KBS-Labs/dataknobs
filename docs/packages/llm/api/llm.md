@@ -1,3 +1,7 @@
+---
+title: llm (curated)
+---
+
 # LLM Provider API
 
 Core LLM provider interface for interacting with language models.
