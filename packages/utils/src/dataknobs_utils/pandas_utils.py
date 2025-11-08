@@ -35,9 +35,9 @@ def dicts2df(
     dfs = [pd.DataFrame.from_records(rec) for rec in dicts]
     for idx, df in enumerate(dfs):
         if rename:
-            df.rename(columns=rename, inplace=True)
+            dfs[idx] = df.rename(columns=rename)
         if item_id:
-            df[item_id] = idx
+            dfs[idx][item_id] = idx
     df = pd.concat(dfs).reset_index(drop=True) if len(dfs) > 0 else pd.DataFrame()
     return df
 
@@ -77,10 +77,6 @@ def get_loc_range(bool_ser: pd.Series) -> Tuple[int, int]:
     if len(true_positions) == 0:
         # No True values, return (0, 0) or raise an error
         return (0, 0)
-
-    # Get first and last True positions
-    first_loc = true_positions[0]
-    last_loc = true_positions[-1]
 
     # Convert to int (handling both integer indices and other types)
     # Use tolist() to convert index values to Python types
@@ -143,7 +139,7 @@ class GroupManager:
         if df.index.value_counts().max() > 1 or not (df.index.sort_values() == df.index).all():
             # Index isn't unique or in order, so need to reset the index
             df = df.reset_index(
-                drop=("__orig_idx__" == None), allow_duplicates=False, names="__orig_idx__"
+                drop=False, allow_duplicates=False, names="__orig_idx__"
             )
         return df
 
@@ -246,7 +242,7 @@ class GroupManager:
                 locs = ~mcol[startloc : endloc + 1]
                 if locs.any():
                     result = locs[locs].index.tolist()
-        return result if result is not None else list()
+        return result if result is not None else []
 
     @property
     def grouped_locs(self) -> List[int]:
@@ -384,7 +380,7 @@ class GroupManager:
                     rv = json.dumps(list(groups)) if len(groups) > 0 else np.nan
                 return rv
 
-            gser.where(mask, gser.apply(del_group), inplace=True)
+            df[self.gcol] = gser.where(mask, gser.apply(del_group))
             self._reset_edf()
 
     def remove_groups(self, group_nums: Union[List[int], Set[int]]) -> None:

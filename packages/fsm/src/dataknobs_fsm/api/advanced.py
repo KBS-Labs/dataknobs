@@ -1,4 +1,4 @@
-"""Advanced API for debugging and profiling FSM workflows.
+r"""Advanced API for debugging and profiling FSM workflows.
 
 This module provides advanced interfaces for users who need fine-grained
 control over FSM execution, debugging capabilities, performance profiling,

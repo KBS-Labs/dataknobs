@@ -73,7 +73,7 @@ if TYPE_CHECKING:
 
 
 class AnthropicProvider(AsyncLLMProvider):
-    """Anthropic Claude LLM provider with full API support.
+    r"""Anthropic Claude LLM provider with full API support.
 
     Provides async access to Anthropic's Claude models including Claude 3
     (Opus, Sonnet, Haiku) and Claude 2. Supports advanced features like

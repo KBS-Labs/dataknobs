@@ -1,18 +1,14 @@
 {
-  "timestamp": "2025-11-07T17:50:34Z",
+  "timestamp": "2025-11-08T18:26:09Z",
   "overall_status": "PASS",
   "environment": "host",
   "packages": "all",
   "checks": {
-    "lint": {
-      "status": "warning",
-      "exit_code": 30,
-      "skipped": false
-    },
     "style": {
-      "status": "warning",
-      "exit_code": 1,
-      "skipped": false
+      "status": "pass",
+      "exit_code": 0,
+      "skipped": false,
+      "tool": "ruff"
     },
     "unit_tests": {
       "status": "pass",

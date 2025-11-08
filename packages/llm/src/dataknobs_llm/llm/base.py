@@ -272,7 +272,7 @@ class LLMResponse:
 
 @dataclass
 class LLMStreamResponse:
-    """Streaming response from LLM.
+    r"""Streaming response from LLM.
 
     Represents a single chunk in a streaming LLM response. Streaming
     allows displaying generated text incrementally as it's produced,
@@ -889,7 +889,7 @@ class AsyncLLMProvider(LLMProvider):
         messages: Union[str, List[LLMMessage]],
         **kwargs
     ) -> AsyncIterator[LLMStreamResponse]:
-        """Generate streaming completion asynchronously.
+        r"""Generate streaming completion asynchronously.
 
         Streams response chunks as they are generated, enabling real-time
         display of LLM output. Each chunk contains incremental content

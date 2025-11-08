@@ -188,7 +188,7 @@ class XmlStream(ABC):
     def to_string(
         elt_path: List[ET.Element], with_text_or_atts: Union[bool, str, List[str]] = True
     ) -> str:
-        """Convert element path to dot-delimited string with optional leaf value.
+        r"""Convert element path to dot-delimited string with optional leaf value.
 
         Creates an XPath-like string representation of the element hierarchy,
         optionally appending text or attribute values from the leaf element.

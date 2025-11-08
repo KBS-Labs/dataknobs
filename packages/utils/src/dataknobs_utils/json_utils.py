@@ -174,7 +174,7 @@ def build_path_tuple(jq_path: str, any_list_idx: int = -1) -> Tuple[Any, ...]:
         Tuple[Any, ...]: Path tuple in json_stream format alternating between
             keys (str) and array indices (int).
     """
-    path = list()
+    path = []
     for part in jq_path.split("."):
         if part == "":
             continue
@@ -242,7 +242,7 @@ def squash_data(
     """
     raw_depths = set()
     raw_elts = set()
-    elt_depths = dict()
+    elt_depths = {}
     depth_elts = defaultdict(set)
 
     def decode_item(item: Any) -> None:
@@ -262,7 +262,7 @@ def squash_data(
                     elt_depths[elt] = depth
                 else:
                     raw_elts.add(elt)
-            elif isinstance(item, list) or isinstance(item, tuple):
+            elif isinstance(item, (list, tuple)):
                 for i in item:
                     decode_item(i)
 
@@ -318,7 +318,7 @@ def collect_squashed(
         Dict[Any, Any]: Dictionary mapping jq-style paths to their values.
     """
     if result is None:
-        result = dict()
+        result = {}
 
     def collector_fn(jq_path: str, item: Any) -> None:
         result[jq_path] = item
@@ -445,7 +445,7 @@ def path_to_dict(
         Dict[Any, Any]: Dictionary with nested structure representing the path.
     """
     if result is None:
-        result = dict()
+        result = {}
     if isinstance(path, str):
         path = build_path_tuple(path, any_list_idx=-1)
 
@@ -473,7 +473,7 @@ def path_to_dict(
                 cur_list = cur_dict[path_elt]
                 if len(cur_list) <= list_idx:
                     if path_idx < pathlen:
-                        cur_dict = dict()
+                        cur_dict = {}
                         # simplifying assumption: idxs are in consecutive order fm 0
                         cur_list.append(cur_dict)
                     else:
@@ -484,16 +484,16 @@ def path_to_dict(
                     cur_list.append(value)
         elif list_idx is None:
             if path_idx < pathlen:
-                elt_dict: Dict[Any, Any] = dict()
+                elt_dict: Dict[Any, Any] = {}
                 cur_dict[path_elt] = elt_dict
                 cur_dict = elt_dict
             else:
                 cur_dict[path_elt] = value
         else:
-            cur_list = list()
+            cur_list = []
             cur_dict[path_elt] = cur_list
             if path_idx < pathlen:
-                cur_dict = dict()
+                cur_dict = {}
                 cur_list.append(cur_dict)
             else:
                 cur_list.append(value)
@@ -517,7 +517,7 @@ def explode(squashed: Dict[Any, Any]) -> Dict[Any, Any]:
     Returns:
         Dict[Any, Any]: Nested dictionary reconstructed from the paths.
     """
-    result: Dict[Any, Any] = dict()
+    result: Dict[Any, Any] = {}
     for jq_path, value in squashed.items():
         path_to_dict(jq_path, value, result)
     return result
@@ -596,7 +596,7 @@ class ValuePath:
         for node in self.indices.collect_terminal_nodes():
             node_path = node.get_path()
             node_idx = 0
-            gen_path = list()
+            gen_path = []
             for elt in path:
                 if isinstance(elt, int):
                     gen_path.append(int(node_path[node_idx].data))
@@ -621,7 +621,7 @@ class ValuesIndex:
 
     def __init__(self) -> None:
         self.path_values: Dict[str, Dict[Any, ValuePath]] = (
-            dict()
+            {}
         )  # Dict[jq_path, Dict[value, ValuePath]]
 
     def add(self, value: Any, jq_path: str, path: Tuple[Any, ...] | None = None) -> None:
@@ -635,7 +635,7 @@ class ValuesIndex:
         if jq_path in self.path_values:
             value_paths = self.path_values[jq_path]
         else:
-            value_paths = dict()
+            value_paths = {}
             self.path_values[jq_path] = value_paths
 
         if value == []:
@@ -722,7 +722,7 @@ class JsonSchema:
             values_limit: Maximum unique values to track per path. If 0, tracks
                 all unique values. Defaults to 0.
         """
-        self.schema = schema if schema is not None else dict()
+        self.schema = schema if schema is not None else {}
         self.values = ValuesIndex() if values is None else values
         self._values_limit = values_limit
         self._df: pd.DataFrame | None = None
@@ -773,7 +773,7 @@ class JsonSchema:
                 - value_count: Number of occurrences of this type
                 - unique_count: (optional) Number of unique values if tracked
         """
-        data = list()
+        data = []
         has_value = False
         for k1, v1 in self.schema.items():  # jq_path -> [value_type -> value_count]
             for k2, v2 in v1.items():  # value_type -> value_count
@@ -808,12 +808,11 @@ class JsonSchema:
             Union[List[Any], Set[Any]]: Set of unique values if unique=True,
                 otherwise list of all values.
         """
-        keep_list_idxs = False if "[]" in jq_path else False
         sresult = set()
-        lresult = list()
+        lresult = []
 
         def visitor(item: Any, path: Tuple[Any, ...]) -> None:
-            cur_jq_path = build_jq_path(path, keep_list_idxs=keep_list_idxs)
+            cur_jq_path = build_jq_path(path, keep_list_idxs=False)
             if jq_path == cur_jq_path:
                 if unique:
                     sresult.add(item)
@@ -1078,7 +1077,7 @@ class PathGroup:
 
     def as_dict(self) -> Dict[str, Any]:
         """Reconstruct the object from the paths"""
-        d: Dict[str, Any] = dict()
+        d: Dict[str, Any] = {}
         if self.paths is not None:
             for path in self.paths:
                 path_to_dict(path.jq_path, path.item, result=d)
@@ -1148,7 +1147,7 @@ class ArrayElementAcceptStrategy(GroupAcceptStrategy):
         else:
             if self.ref_path is None:
                 if group.main_paths is not None:
-                    self.ref_path = list(group.main_paths)[0]
+                    self.ref_path = next(iter(group.main_paths))
             # All elements up through max_array_level must fully match
             cur_array_level = -1
             if self.ref_path is not None:
@@ -1278,7 +1277,6 @@ class PathSorter:
         if check_size and self.group_size > 0 and len(self.groups) > 0:
             if latest_group.size < self.group_size:
                 # Last group not "filled" ... need to drop
-                print("POP!")
                 self.groups.pop()
 
         return latest_group

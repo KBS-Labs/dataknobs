@@ -7,6 +7,7 @@ and compressed file formats.
 import gzip
 import os
 from collections.abc import Generator
+from pathlib import Path
 from typing import List, Set
 
 
@@ -35,13 +36,13 @@ def filepath_generator(
         if not descend and root != rootpath and root in seen:
             break
         for name in files:
-            fpath = os.path.join(root, name)
+            fpath = str(Path(root) / name)
             if fpath not in seen:
                 seen.add(fpath)
                 yield fpath
         if not descend or not files_only:
             for name in dirs:
-                next_root = os.path.join(root, name)
+                next_root = str(Path(root) / name)
                 if next_root not in seen:
                     seen.add(next_root)
                     yield next_root
@@ -61,7 +62,7 @@ def fileline_generator(filename: str, rootdir: str | None = None) -> Generator[s
         str: Each stripped line from the file.
     """
     if rootdir is not None:
-        filename = os.path.join(rootdir, filename)
+        filename = str(Path(rootdir) / filename)
     if filename.endswith(".gz"):
         with gzip.open(filename, mode="rt", encoding="utf-8") as f:
             for line in f:
@@ -84,7 +85,7 @@ def write_lines(outfile: str, lines: List[str], rootdir: str | None = None) -> N
         rootdir: Optional directory path to prepend to outfile. Defaults to None.
     """
     if rootdir is not None:
-        outfile = os.path.join(rootdir, outfile)
+        outfile = str(Path(rootdir) / outfile)
     if outfile.endswith(".gz"):
         with gzip.open(outfile, mode="wt", encoding="utf-8") as f:
             for line in sorted(lines):

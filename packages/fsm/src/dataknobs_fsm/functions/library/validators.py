@@ -58,8 +58,15 @@ class RequiredFieldsValidator(IValidationFunction):
             raise FSMValidationError(
                 f"Fields cannot be None: {', '.join(none_fields)}"
             )
-        
+
         return True
+
+    def get_validation_rules(self) -> Dict[str, Any]:
+        """Get the validation rules."""
+        return {
+            "required_fields": self.fields,
+            "allow_none": self.allow_none
+        }
 
 
 class SchemaValidator(IValidationFunction):
@@ -159,8 +166,15 @@ class RangeValidator(IValidationFunction):
         
         if errors:
             raise FSMValidationError("; ".join(errors))
-        
+
         return True
+
+    def get_validation_rules(self) -> Dict[str, Any]:
+        """Get the validation rules."""
+        return {
+            "type": "range",
+            "field_ranges": self.field_ranges
+        }
 
 
 class PatternValidator(IValidationFunction):
@@ -206,11 +220,18 @@ class PatternValidator(IValidationFunction):
             
             if not pattern.match(value):
                 errors.append(f"{field}: Value '{value}' does not match pattern")
-        
+
         if errors:
             raise FSMValidationError("; ".join(errors))
-        
+
         return True
+
+    def get_validation_rules(self) -> Dict[str, Any]:
+        """Get the validation rules."""
+        return {
+            "type": "pattern",
+            "field_patterns": {field: pattern.pattern for field, pattern in self.field_patterns.items()}
+        }
 
 
 class TypeValidator(IValidationFunction):
@@ -271,11 +292,25 @@ class TypeValidator(IValidationFunction):
             extra_fields = set(data.keys()) - set(self.field_types.keys())
             if extra_fields:
                 errors.append(f"Unexpected fields: {', '.join(extra_fields)}")
-        
+
         if errors:
             raise FSMValidationError("; ".join(errors))
-        
+
         return True
+
+    def get_validation_rules(self) -> Dict[str, Any]:
+        """Get the validation rules."""
+        field_type_names = {}
+        for field, ftype in self.field_types.items():
+            if isinstance(ftype, list):
+                field_type_names[field] = [t.__name__ for t in ftype]
+            else:
+                field_type_names[field] = ftype.__name__
+        return {
+            "type": "type_check",
+            "field_types": field_type_names,
+            "strict": self.strict
+        }
 
 
 class LengthValidator(IValidationFunction):
@@ -328,11 +363,18 @@ class LengthValidator(IValidationFunction):
             
             if "max" in length_spec and length > length_spec["max"]:
                 errors.append(f"{field}: Length {length} is above maximum {length_spec['max']}")
-        
+
         if errors:
             raise FSMValidationError("; ".join(errors))
-        
+
         return True
+
+    def get_validation_rules(self) -> Dict[str, Any]:
+        """Get the validation rules."""
+        return {
+            "type": "length",
+            "field_lengths": self.field_lengths
+        }
 
 
 class UniqueValidator(IValidationFunction):
@@ -396,11 +438,19 @@ class UniqueValidator(IValidationFunction):
             
             if duplicates:
                 errors.append(f"{field}: Duplicate values found: {', '.join(duplicates)}")
-        
+
         if errors:
             raise FSMValidationError("; ".join(errors))
-        
+
         return True
+
+    def get_validation_rules(self) -> Dict[str, Any]:
+        """Get the validation rules."""
+        return {
+            "type": "unique",
+            "fields": self.fields,
+            "key": self.key
+        }
 
 
 class DependencyValidator(IValidationFunction):
@@ -443,11 +493,18 @@ class DependencyValidator(IValidationFunction):
                 errors.append(
                     f"Field '{field}' requires: {', '.join(missing_deps)}"
                 )
-        
+
         if errors:
             raise FSMValidationError("; ".join(errors))
-        
+
         return True
+
+    def get_validation_rules(self) -> Dict[str, Any]:
+        """Get the validation rules."""
+        return {
+            "type": "dependency",
+            "dependencies": self.dependencies
+        }
 
 
 class CompositeValidator(IValidationFunction):

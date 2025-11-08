@@ -643,7 +643,7 @@ class ConversationManager:
         metadata: Dict[str, Any] | None = None,
         **llm_kwargs,
     ) -> AsyncIterator[LLMStreamResponse]:
-        """Stream LLM completion and add as child of current node.
+        r"""Stream LLM completion and add as child of current node.
 
         Similar to complete() but streams the response incrementally for
         real-time display. The complete response is automatically added

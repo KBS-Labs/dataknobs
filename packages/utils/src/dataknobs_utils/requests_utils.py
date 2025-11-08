@@ -336,7 +336,7 @@ class ServerResponse:
             Dict[str, Any]: Extra data dictionary.
         """
         if self._extra is None:
-            self._extra = dict()
+            self._extra = {}
         return self._extra
 
     def has_extra(self) -> bool:
@@ -723,7 +723,7 @@ class MockRequests:
     """
 
     def __init__(self) -> None:
-        self.responses: Dict[str, MockResponse] = dict()
+        self.responses: Dict[str, MockResponse] = {}
         self.r404 = MockResponse(404, '"Not found"')
 
     def add(

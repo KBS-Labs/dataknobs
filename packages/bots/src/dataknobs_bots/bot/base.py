@@ -338,8 +338,6 @@ class DynaBot:
             - clear_conversation(): Clear/delete a conversation
             - chat(): Add messages to a conversation
         """
-        from dataknobs_llm.conversations import ConversationState
-
         return await self.conversation_storage.load_conversation(conversation_id)
 
     async def clear_conversation(self, conversation_id: str) -> bool:

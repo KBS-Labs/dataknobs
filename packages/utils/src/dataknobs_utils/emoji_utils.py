@@ -128,7 +128,7 @@ class EmojiData:
     """
 
     def __init__(self, emoji_test_path: str):
-        self.emojis: Dict[str, Emoji] = dict()  # emojichars -> EmojiData
+        self.emojis: Dict[str, Emoji] = {}  # emojichars -> EmojiData
         self._echars: List[int] | None = None
         self._ldepechars: Dict[int, Set[int]] | None = None
         self._rdepechars: Dict[int, Set[int]] | None = None
@@ -215,7 +215,7 @@ class EmojiData:
         Returns:
             str: BIO-tagged string of same length as input.
         """
-        result = list()
+        result = []
         start_pos = -1
         textlen = len(emoji_text)
         prevc: str | None = None
@@ -265,7 +265,7 @@ class EmojiData:
             List[Emoji]: List of emoji metadata objects found in the text
                 (empty if no emojis found).
         """
-        result = list()
+        result = []
         bio = self.emoji_bio(text)
         biolen = len(bio)
         start_pos = 0
@@ -293,9 +293,9 @@ class EmojiData:
                     for e in self.emojis.values():
                         c[e.status] += 1
                     # with expectations
-                    for l in f:
-                        if l.startswith("# "):
-                            m = STATUS_COUNT_RE.match(l)
+                    for line in f:
+                        if line.startswith("# "):
+                            m = STATUS_COUNT_RE.match(line)
                             if m:
                                 assert c[m.group(1)] == int(m.group(2))
                         else:

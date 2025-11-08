@@ -3,7 +3,7 @@
 from typing import List, Union, Dict, Any
 
 from ..base import (
-    LLMMessage, LLMResponse, LLMStreamResponse,
+    LLMMessage, LLMResponse,
     AsyncLLMProvider, ModelCapability
 )
 

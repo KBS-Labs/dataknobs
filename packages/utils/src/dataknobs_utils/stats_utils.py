@@ -74,7 +74,7 @@ class StatsAccumulator:
         self._modlock = Lock()
 
         if other is not None:
-            if not label == "":
+            if label != "":
                 self._label = other._label
             self._n = other._n
             self._min = other._min
@@ -436,7 +436,7 @@ class LinearRegression:
         Returns:
             str: The equation in the form "y = m x + b".
         """
-        return "y = %.4f x + %.4f" % (self.m, self.b)
+        return f"y = {self.m:.4f} x + {self.b:.4f}"
 
     def _compute_regression(self) -> None:
         """Internal method to compute the slope and intercept."""
@@ -487,7 +487,7 @@ class RollingStats:
         self._window_delta = timedelta(milliseconds=window_width)
         self._cumulative_stats = StatsAccumulator("cumulative")
 
-        self._num_segments = int(round(window_width / segment_width))
+        self._num_segments = round(window_width / segment_width)
         self._segment_stats = [
             StatsAccumulator("segment-" + str(i)) for i in range(self._num_segments)
         ]
@@ -551,7 +551,7 @@ class RollingStats:
     @property
     def current_label(self) -> str:
         """Get the label for the current window."""
-        return "Window-%s-%s" % (str(self._reftime), str(self._window_delta))
+        return f"Window-{self._reftime}-{self._window_delta}"
 
     def as_dict(self) -> Dict[str, Any]:
         """Get a dictionary containing a summary of this instance's information.
@@ -1198,5 +1198,5 @@ class KeyManager:
             index = len(descriptions)
             descriptions.append(description)
 
-        result = "%s-%d" % (keytype, index)
+        result = f"{keytype}-{index}"
         return result

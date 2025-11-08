@@ -37,7 +37,7 @@ def load_project_vars(
             if no configuration file is found.
     """
     config = None
-    path = Path(os.getcwd())
+    path = Path.cwd()
     while not os.path.exists(path.joinpath(pvname)) and path.parent != path:
         # Walk up the parents to find the closest project variables file
         path = path.parent
@@ -155,5 +155,5 @@ class MySubnet:
         """
         ips = self.get_ips(name_re)
         if len(ips) > 0:
-            return list(ips.values())[0]
+            return next(iter(ips.values()))
         return None

@@ -126,7 +126,7 @@ def decode_results(query_result: Dict[str, Any]) -> Dict[str, pd.DataFrame]:
         Dict[str, pd.DataFrame]: Dictionary with "hits_df" and/or "aggs_df" keys
             containing result DataFrames (only present if data exists).
     """
-    result = dict()
+    result = {}
     hits_df = build_hits_dataframe(query_result)
     if hits_df is not None:
         result["hits_df"] = hits_df
@@ -293,7 +293,7 @@ class ElasticsearchIndex:
             )
         else:
             self.request_helper = request_helper
-        self.tables = table_settings or list()
+        self.tables = table_settings or []
         self._init_tables()
 
     def _init_tables(self) -> None:

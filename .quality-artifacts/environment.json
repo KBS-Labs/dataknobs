@@ -1,11 +1,11 @@
 {
-  "timestamp": "2025-11-07T17:50:34Z",
+  "timestamp": "2025-11-08T18:26:09Z",
   "python_version": "Python 3.10.18",
-  "uv_version": "uv 0.9.7 (Homebrew 2025-10-30)",
+  "uv_version": "uv 0.9.8 (Homebrew 2025-11-07)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/refactor-llm-providers",
-  "git_commit": "930839e45e11e922da34770bac9d1521f72ec846",
+  "git_branch": "sbk/add-api-docs",
+  "git_commit": "fb873e77d75b08b6e21a180a884463f16b06ae90",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

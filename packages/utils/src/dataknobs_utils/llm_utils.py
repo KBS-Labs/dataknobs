@@ -370,7 +370,7 @@ class PromptTree:
         node = self.node
         level_node = self.get_level_node(level_offset)
         end_node = level_node.node if level_node is not None else None
-        messages: List[Dict[str, Any]] = list()
+        messages: List[Dict[str, Any]] = []
         while True:
             if node is None:
                 break
