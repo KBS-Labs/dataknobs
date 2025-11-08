@@ -159,16 +159,19 @@ def post_files_request(
         Tuple[requests.models.Response, Any]: Tuple of (response object, parsed result).
 
     Examples:
-        Simple file upload:
-
-        >>> post_files_request(url, {'myfile': open('report.xls', 'rb')})
-
-        With metadata:
-
-        >>> post_files_request(url, {
-        ...     'myfile': ('report.xls', open('report.xls', 'rb'),
-        ...                'application/vnd.ms-excel', {'Expires': '0'})
-        ... })
+        >>> from dataknobs_utils.requests_utils import post_files_request
+        >>> url = "http://example.com/upload"
+        >>>
+        >>> # Simple file upload
+        >>> with open('report.xls', 'rb') as f:
+        ...     post_files_request(url, {'myfile': f})
+        >>>
+        >>> # With metadata
+        >>> with open('report.xls', 'rb') as f:
+        ...     post_files_request(url, {
+        ...         'myfile': ('report.xls', f,
+        ...                    'application/vnd.ms-excel', {'Expires': '0'})
+        ...     })
     """
     return api_response_handler(
         requests.post(api_request, files=files, headers=headers, timeout=timeout)

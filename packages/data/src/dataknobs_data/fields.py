@@ -288,25 +288,31 @@ class Field:
 
 class VectorField(Field):
     """Represents a vector field with embeddings and metadata.
-    
+
     Examples:
         # Simple usage - name optional when used in Record
         record = Record({
             "embedding": VectorField(value=[0.1, 0.2, 0.3])
         })
-        
+
         # With explicit configuration
+        import numpy as np
+        embedding_array = np.array([0.1, 0.2, 0.3])
         field = VectorField(
             value=embedding_array,
             name="doc_embedding",
             model_name="all-MiniLM-L6-v2",
             source_field="content"
         )
-        
+
         # From text using embedding function
+        def my_embedding_fn(text):
+            # In practice, use a real model like sentence-transformers
+            return np.array([0.1, 0.2, 0.3])
+
         field = VectorField.from_text(
             "This is the text to embed",
-            embedding_fn=model.encode
+            embedding_fn=my_embedding_fn
         )
     """
 

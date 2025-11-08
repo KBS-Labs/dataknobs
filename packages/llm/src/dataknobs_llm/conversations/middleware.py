@@ -185,6 +185,7 @@ class ConversationMiddleware(ABC):
             Processed messages (can modify, add, or remove messages)
 
         Example:
+            >>> from datetime import datetime
             >>> async def process_request(self, messages, state):
             ...     # Add timestamp to metadata
             ...     for msg in messages:
@@ -211,6 +212,7 @@ class ConversationMiddleware(ABC):
             Processed response (can modify content, metadata, etc.)
 
         Example:
+            >>> from datetime import datetime
             >>> async def process_response(self, response, state):
             ...     # Add processing metadata
             ...     if not response.metadata:
@@ -364,7 +366,11 @@ class ValidationMiddleware(ConversationMiddleware):
     if responses meet certain criteria. Can optionally retry on validation failure.
 
     Example:
+        >>> from dataknobs_llm.llm.providers import OpenAIProvider
+        >>> from dataknobs_llm.llm.base import LLMConfig
+        >>>
         >>> # Create validation middleware
+        >>> config = LLMConfig(provider="openai", model="gpt-4")
         >>> validation_llm = OpenAIProvider(config)
         >>> middleware = ValidationMiddleware(
         ...     llm=validation_llm,
@@ -471,6 +477,8 @@ class MetadataMiddleware(ConversationMiddleware):
     which is useful for tracking, analytics, and debugging.
 
     Example:
+        >>> from datetime import datetime
+        >>>
         >>> # Add environment info to all messages
         >>> middleware = MetadataMiddleware(
         ...     request_metadata={"environment": "production"},

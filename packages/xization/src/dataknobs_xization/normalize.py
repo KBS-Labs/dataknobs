@@ -317,10 +317,15 @@ def zero_pad_variations(
     to max (exclusive) zero-pad lengths.
 
     Examples:
-        * zero_pad_variations(9, 2, 4) == {'09', '009'}
-        * zero_pad_variations(90, 2, 4) == {'090'}
-        * zero_pad_variations(90, 2, 3) == {}
-        * zero_pad_variations(3, 0, 5) == {'03', '003', '0003'}
+        >>> from dataknobs_xization.normalize import zero_pad_variations
+        >>> zero_pad_variations(9, 2, 4)
+        {'09', '009'}
+        >>> zero_pad_variations(90, 2, 4)
+        {'090'}
+        >>> zero_pad_variations(90, 2, 3)
+        set()
+        >>> zero_pad_variations(3, 0, 5)
+        {'03', '003', '0003'}
 
     Args:
         val: The integer value to zero-pad.

@@ -639,14 +639,15 @@ class MessageCollector:
     a branch. Produces identical results to PromptTree.get_messages().
 
     Examples:
-        Using MessageCollector:
-
+        >>> from dataknobs_utils.llm_utils import MessageCollector
+        >>>
+        >>> # Assuming you have a PromptTree instance cur_prompt_tree
+        >>> # Using MessageCollector:
         >>> mc = MessageCollector(with_metadata=False)
         >>> cur_prompt_tree.apply(mc, level_offset=-1)
         >>> messages = mc.messages
-
-        Equivalent using get_messages:
-
+        >>>
+        >>> # Equivalent using get_messages:
         >>> messages = cur_prompt_tree.get_messages(level_offset=-1, with_metadata=False)
 
     Note:

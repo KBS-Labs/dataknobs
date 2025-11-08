@@ -237,6 +237,7 @@ class XmlLeafStream(XmlStream):
         Show paths to first 10 leaf nodes with text or attribute values:
 
         >>> import dataknobs_utils.xml_utils as xml_utils
+        >>> xml_fpath = "path/to/file.xml"  # Replace with actual XML file path
         >>> s = xml_utils.XmlLeafStream(xml_fpath)
         >>> for idx, elts in enumerate(s):
         ...     print(f'{idx} ', s.to_string(elts, ["value", "extension", "code", "ID"]))
@@ -300,8 +301,9 @@ class XmlElementGrabber(XmlStream):
         Get first 10 elements with tag "foo":
 
         >>> import dataknobs_utils.xml_utils as xml_utils
+        >>> xml_fpath = "path/to/file.xml"  # Replace with actual XML file path
         >>> g = xml_utils.XmlElementGrabber(xml_fpath, "foo")
-        >>> first_10_foos = g.take(10)
+        >>> first_10_foos = list(g.take(10))
 
     Attributes:
         match: Tag name or callable for matching elements.

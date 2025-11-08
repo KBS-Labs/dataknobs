@@ -1162,6 +1162,7 @@ class KeyManager:
     always maps to the same key for a given keytype.
 
     Example:
+        >>> from dataknobs_utils.stats_utils import KeyManager
         >>> km = KeyManager()
         >>> km.get_key("endpoint", "/api/users")
         "endpoint-0"

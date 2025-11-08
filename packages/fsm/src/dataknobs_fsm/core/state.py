@@ -605,6 +605,12 @@ class StateInstance:
 
         **1. Creation:**
         ```python
+        from dataknobs_fsm.core.state import StateDefinition, StateInstance, StateType
+
+        # Define state first
+        state_def = StateDefinition(name="process", type=StateType.NORMAL)
+
+        # Create instance
         instance = StateInstance(definition=state_def)
         # Status: PENDING
         # No data yet

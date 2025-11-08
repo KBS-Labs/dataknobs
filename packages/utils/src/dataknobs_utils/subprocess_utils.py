@@ -29,10 +29,12 @@ def run_command(
         int: The command's return code, or 0 if poll returns None.
 
     Examples:
-        Print all files in the directory:
+        >>> from dataknobs_utils.subprocess_utils import run_command
+        >>>
+        >>> # Print all files in the directory:
         >>> run_command(lambda x: (print(x), True)[1], 'ls -1')
-
-        Print files until "foo" is found:
+        >>>
+        >>> # Print files until "foo" is found:
         >>> run_command(lambda x: (print(x), x!='foo')[1], 'ls -1')
     """
     the_args: Union[str, List[str]] = command

@@ -19,6 +19,7 @@ Example:
     ...     ConversationNode,
     ...     DataknobsConversationStorage
     ... )
+    >>> from dataknobs_llm.llm.base import LLMMessage
     >>> from dataknobs_structures.tree import Tree
     >>> from dataknobs_data.backends import AsyncMemoryDatabase
     >>>

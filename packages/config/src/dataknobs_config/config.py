@@ -559,6 +559,10 @@ class Config:
             factory: Factory instance or class
             
         Example:
+            >>> from dataknobs_config import Config
+            >>>
+            >>> # Assuming you have a database_factory defined
+            >>> config = Config()
             >>> config.register_factory("database", database_factory)
             >>> config.load({
             ...     "databases": [{
