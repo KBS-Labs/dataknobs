@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Union
 
 import yaml  # type: ignore[import-untyped]
+from dataknobs_common import NotFoundError, Registry
 
 from .builders import ObjectBuilder
 from .environment import EnvironmentOverrides
@@ -43,7 +44,7 @@ class Config:
         self._environment_overrides = EnvironmentOverrides()
         self._object_builder = ObjectBuilder(self)
         self._variable_substitution = VariableSubstitution()
-        self._registered_factories: Dict[str, Any] = {}
+        self._registered_factories = Registry[Any](name="factories", enable_metrics=True)
 
         # Load sources
         for source in sources:
@@ -528,8 +529,8 @@ class Config:
         factory_path = config["factory"]
 
         # Check if it's a registered factory first
-        if factory_path in self._registered_factories:
-            factory = self._registered_factories[factory_path]
+        if self._registered_factories.has(factory_path):
+            factory = self._registered_factories.get(factory_path)
         else:
             # Try to load as a module path
             factory_cls = self._object_builder._load_class(factory_path)
@@ -559,43 +560,46 @@ class Config:
             factory: Factory instance or class
             
         Example:
-            >>> from dataknobs_config import Config
-            >>>
-            >>> # Assuming you have a database_factory defined
-            >>> config = Config()
-            >>> config.register_factory("database", database_factory)
-            >>> config.load({
-            ...     "databases": [{
-            ...         "name": "main",
-            ...         "factory": "database",  # Uses registered factory
-            ...         "backend": "postgres"
-            ...     }]
-            ... })
+            ```python
+            from dataknobs_config import Config
+
+            # Assuming you have a database_factory defined
+            config = Config()
+            config.register_factory("database", database_factory)
+            config.load({
+                "databases": [{
+                    "name": "main",
+                    "factory": "database",  # Uses registered factory
+                    "backend": "postgres"
+                }]
+            })
+            ```
             
         Note:
             If a factory name matches both a registered factory and a module
             path, the registered factory takes precedence.
         """
-        self._registered_factories[name] = factory
+        self._registered_factories.register(name, factory, allow_overwrite=True)
         logger.debug(f"Registered factory '{name}': {factory}")
 
     def unregister_factory(self, name: str) -> None:
         """Unregister a factory.
-        
+
         Args:
             name: Name of the factory to unregister
-            
+
         Raises:
             KeyError: If factory is not registered
         """
-        if name not in self._registered_factories:
-            raise KeyError(f"Factory '{name}' is not registered")
-        del self._registered_factories[name]
-        logger.debug(f"Unregistered factory '{name}'")
+        try:
+            self._registered_factories.unregister(name)
+            logger.debug(f"Unregistered factory '{name}'")
+        except NotFoundError as e:
+            raise KeyError(f"Factory '{name}' is not registered") from e
 
     def get_registered_factories(self) -> Dict[str, Any]:
         """Get all registered factories.
-        
+
         Returns:
             Dictionary mapping factory names to factory instances
         """

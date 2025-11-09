@@ -131,6 +131,7 @@ import logging
 
 from dataknobs_structures.tree import Tree
 from dataknobs_llm.llm.base import LLMMessage
+from dataknobs_llm.exceptions import StorageError, SchemaVersionError
 
 # Current schema version - increment when making schema changes
 SCHEMA_VERSION = "1.0.0"
@@ -826,13 +827,3 @@ class DataknobsConversationStorage(ConversationStorage):
 
         except Exception as e:
             raise StorageError(f"Failed to list conversations: {e}") from e
-
-
-class StorageError(Exception):
-    """Exception raised for storage operation errors."""
-    pass
-
-
-class SchemaVersionError(Exception):
-    """Exception raised for schema version incompatibilities."""
-    pass

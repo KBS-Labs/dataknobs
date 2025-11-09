@@ -26,7 +26,7 @@ def echo_args():
 
 @app.route("/printenv")
 def printenv():
-    rv = os.environ
+    rv = os.environ.copy()
     verbose = request.args.get("verbose", type=bool, default=True)
     if verbose:
         print(json.dumps(rv, indent=2), file=sys.stdout)

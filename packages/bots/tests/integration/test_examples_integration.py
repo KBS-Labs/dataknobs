@@ -217,7 +217,7 @@ class TestReActIntegration:
         bot = await DynaBot.from_config(bot_config_react)
 
         # Register tool
-        bot.tool_registry.register(sample_tool)
+        bot.tool_registry.register_tool(sample_tool)
 
         context = BotContext(
             conversation_id="test-react-002",

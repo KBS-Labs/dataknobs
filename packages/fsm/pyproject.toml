@@ -19,6 +19,7 @@ classifiers = [
 
 dependencies = [
     "pydantic>=2.0.0",
+    "dataknobs-common>=1.0.1",
     "dataknobs-data>=0.2.0",
     "dataknobs-structures>=0.1.0",
     "dataknobs-utils>=0.1.0",

@@ -1,11 +1,11 @@
 {
-  "timestamp": "2025-11-08T18:26:09Z",
+  "timestamp": "2025-11-09T00:58:23Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.9.8 (Homebrew 2025-11-07)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/add-api-docs",
-  "git_commit": "fb873e77d75b08b6e21a180a884463f16b06ae90",
+  "git_branch": "sbk/migrate-to-common",
+  "git_commit": "41048764c094b36294b8182fc535360a87ac3abd",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

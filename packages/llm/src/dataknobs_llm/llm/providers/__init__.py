@@ -30,17 +30,19 @@ class LLMProviderFactory:
     allowing providers to be instantiated via Config.get_factory().
 
     Example:
-        >>> from dataknobs_config import Config
-        >>> config = Config({
-        ...     "llm": [{
-        ...         "name": "gpt4",
-        ...         "provider": "openai",
-        ...         "model": "gpt-4",
-        ...         "factory": "dataknobs_llm.LLMProviderFactory"
-        ...     }]
-        ... })
-        >>> factory = config.get_factory("llm", "gpt4")
-        >>> provider = factory.create(config.get("llm", "gpt4"))
+        ```python
+        from dataknobs_config import Config
+        config = Config({
+            "llm": [{
+                "name": "gpt4",
+                "provider": "openai",
+                "model": "gpt-4",
+                "factory": "dataknobs_llm.LLMProviderFactory"
+            }]
+        })
+        factory = config.get_factory("llm", "gpt4")
+        provider = factory.create(config.get("llm", "gpt4"))
+        ```
     """
 
     # Registry of provider classes
@@ -121,9 +123,11 @@ class LLMProviderFactory:
             provider_class: Provider class (must inherit from AsyncLLMProvider)
 
         Example:
-            >>> class CustomProvider(AsyncLLMProvider):
-            ...     pass
-            >>> LLMProviderFactory.register_provider('custom', CustomProvider)
+            ```python
+            class CustomProvider(AsyncLLMProvider):
+                pass
+            LLMProviderFactory.register_provider('custom', CustomProvider)
+            ```
         """
         cls._providers[name.lower()] = provider_class
 
@@ -163,17 +167,19 @@ def create_llm_provider(
         LLM provider instance
 
     Example:
-        >>> # Direct usage with dict
-        >>> provider = create_llm_provider({
-        ...     "provider": "openai",
-        ...     "model": "gpt-4",
-        ...     "api_key": "..."
-        ... })
+        ```python
+        # Direct usage with dict
+        provider = create_llm_provider({
+            "provider": "openai",
+            "model": "gpt-4",
+            "api_key": "..."
+        })
 
-        >>> # With Config object
-        >>> from dataknobs_config import Config
-        >>> config = Config({"llm": [{"provider": "openai", "model": "gpt-4"}]})
-        >>> provider = create_llm_provider(config)
+        # With Config object
+        from dataknobs_config import Config
+        config = Config({"llm": [{"provider": "openai", "model": "gpt-4"}]})
+        provider = create_llm_provider(config)
+        ```
     """
     factory = LLMProviderFactory(is_async=is_async)
     return factory.create(config)

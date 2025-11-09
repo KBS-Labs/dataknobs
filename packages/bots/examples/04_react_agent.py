@@ -185,9 +185,9 @@ async def main():
     weather = WeatherTool()
     time_tool = TimeTool()
 
-    bot.tool_registry.register(calculator)
-    bot.tool_registry.register(weather)
-    bot.tool_registry.register(time_tool)
+    bot.tool_registry.register_tool(calculator)
+    bot.tool_registry.register_tool(weather)
+    bot.tool_registry.register_tool(time_tool)
 
     print("✓ Bot created successfully")
     print(f"✓ Reasoning: ReAct (max {config['reasoning']['max_iterations']} iterations)")

@@ -1,37 +1,42 @@
-"""Custom exceptions for the config package."""
+"""Custom exceptions for the config package.
+
+This module defines exception types for the config package,
+built on the common exception framework from dataknobs_common.
+"""
+
+from dataknobs_common import (
+    ConfigurationError as BaseConfigurationError,
+    NotFoundError,
+    ValidationError as BaseValidationError,
+)
+
+# Create ConfigError as alias to ConfigurationError for backward compatibility
+ConfigError = BaseConfigurationError
 
 
-class ConfigError(Exception):
-    """Base exception for configuration errors."""
-
-    pass
-
-
-class ConfigNotFoundError(ConfigError):
+class ConfigNotFoundError(NotFoundError):
     """Raised when a requested configuration is not found."""
 
     pass
 
 
-class InvalidReferenceError(ConfigError):
+class InvalidReferenceError(BaseValidationError):
     """Raised when a configuration reference is invalid."""
 
     pass
 
 
-class ValidationError(ConfigError):
-    """Raised when configuration validation fails."""
-
-    pass
+# Use common ValidationError directly (no config-specific behavior needed)
+ValidationError = BaseValidationError
 
 
-class FileNotFoundError(ConfigError):
+class FileNotFoundError(NotFoundError):
     """Raised when a referenced configuration file is not found."""
 
     pass
 
 
-class CircularReferenceError(ConfigError):
+class CircularReferenceError(BaseValidationError):
     """Raised when circular references are detected."""
 
     pass
