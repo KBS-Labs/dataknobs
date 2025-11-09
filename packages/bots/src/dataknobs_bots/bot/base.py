@@ -177,7 +177,7 @@ class DynaBot:
             for tool_config in config["tools"]:
                 tool = cls._resolve_tool(tool_config, config)
                 if tool:
-                    tool_registry.register(tool)
+                    tool_registry.register_tool(tool)
 
         # Create memory
         memory = None

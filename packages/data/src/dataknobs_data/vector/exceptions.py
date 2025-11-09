@@ -1,15 +1,23 @@
-"""Vector-specific exceptions."""
+"""Vector-specific exceptions.
+
+This module defines exception types for vector operations,
+built on the common exception framework from dataknobs_common.
+"""
 
 from __future__ import annotations
 
+from dataknobs_common import (
+    DataknobsError,
+    OperationError,
+    ResourceError,
+    ValidationError,
+)
 
-class VectorError(Exception):
-    """Base exception for vector operations."""
-
-    pass
+# Create VectorError as alias to DataknobsError for backward compatibility
+VectorError = DataknobsError
 
 
-class VectorDimensionError(VectorError):
+class VectorDimensionError(ValidationError):
     """Raised when vector dimensions don't match expectations."""
 
     def __init__(self, expected: int, actual: int, field_name: str | None = None):
@@ -28,22 +36,26 @@ class VectorDimensionError(VectorError):
         if field_name:
             message = f"{message} for field '{field_name}'"
 
-        super().__init__(message)
+        context = {"expected": expected, "actual": actual}
+        if field_name:
+            context["field_name"] = field_name
+
+        super().__init__(message, context=context)
 
 
-class VectorBackendError(VectorError):
+class VectorBackendError(ResourceError):
     """Raised when vector backend operations fail."""
 
     pass
 
 
-class VectorIndexError(VectorError):
+class VectorIndexError(OperationError):
     """Raised when vector index operations fail."""
 
     pass
 
 
-class VectorNotSupportedError(VectorError):
+class VectorNotSupportedError(OperationError):
     """Raised when vector operations are not supported by backend."""
 
     def __init__(self, backend: str, operation: str | None = None):
@@ -60,10 +72,14 @@ class VectorNotSupportedError(VectorError):
         if operation:
             message = f"{message}: {operation}"
 
-        super().__init__(message)
+        context = {"backend": backend}
+        if operation:
+            context["operation"] = operation
+
+        super().__init__(message, context=context)
 
 
-class VectorValidationError(VectorError):
+class VectorValidationError(ValidationError):
     """Raised when vector validation fails."""
 
     pass

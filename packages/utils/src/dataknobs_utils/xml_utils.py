@@ -236,13 +236,15 @@ class XmlLeafStream(XmlStream):
     Examples:
         Show paths to first 10 leaf nodes with text or attribute values:
 
-        >>> import dataknobs_utils.xml_utils as xml_utils
-        >>> xml_fpath = "path/to/file.xml"  # Replace with actual XML file path
-        >>> s = xml_utils.XmlLeafStream(xml_fpath)
-        >>> for idx, elts in enumerate(s):
-        ...     print(f'{idx} ', s.to_string(elts, ["value", "extension", "code", "ID"]))
-        ...     if idx >= 9:
-        ...         break
+        ```python
+        import dataknobs_utils.xml_utils as xml_utils
+        xml_fpath = "path/to/file.xml"  # Replace with actual XML file path
+        s = xml_utils.XmlLeafStream(xml_fpath)
+        for idx, elts in enumerate(s):
+            print(f'{idx} ', s.to_string(elts, ["value", "extension", "code", "ID"]))
+            if idx >= 9:
+                break
+        ```
 
     Attributes:
         count: Number of leaf nodes processed.

@@ -131,8 +131,8 @@ class ObjectBuilder:
         config.pop("name", None)
 
         # Check registered factories first (if they exist)
-        if hasattr(self._config, '_registered_factories') and factory_path in self._config._registered_factories:
-            factory = self._config._registered_factories[factory_path]
+        if hasattr(self._config, '_registered_factories') and self._config._registered_factories.has(factory_path):
+            factory = self._config._registered_factories.get(factory_path)
         else:
             # Fall back to loading as a module path
             factory_cls = self._load_class(factory_path)

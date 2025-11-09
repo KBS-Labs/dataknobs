@@ -43,12 +43,13 @@ Quick Start:
     )
 """
 
+from dataknobs_llm.exceptions import VersioningError
+
 from .types import (
     PromptVersion,
     PromptExperiment,
     PromptVariant,
     PromptMetrics,
-    VersioningError,
     VersionStatus,
     MetricEvent,
 )

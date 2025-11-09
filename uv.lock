@@ -1362,6 +1362,16 @@ dependencies = [
     { name = "python-dotenv" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-benchmark" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "more-itertools", specifier = ">=8.10.0" },
@@ -1369,11 +1379,22 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=0.19.0" },
 ]
 
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=1.0.0" },
+    { name = "pytest", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", specifier = ">=0.21.0" },
+    { name = "pytest-benchmark", specifier = ">=4.0.0" },
+    { name = "pytest-cov", specifier = ">=4.0.0" },
+    { name = "ruff", specifier = ">=0.1.0" },
+]
+
 [[package]]
 name = "dataknobs-config"
 version = "0.2.0"
 source = { editable = "packages/config" }
 dependencies = [
+    { name = "dataknobs-common" },
     { name = "pyyaml" },
 ]
 
@@ -1390,6 +1411,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=22.0" },
+    { name = "dataknobs-common", editable = "packages/common" },
     { name = "flake8", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
@@ -1406,6 +1428,7 @@ source = { editable = "packages/data" }
 dependencies = [
     { name = "aiofiles" },
     { name = "boto3" },
+    { name = "dataknobs-common" },
     { name = "dataknobs-config" },
     { name = "dataknobs-utils" },
     { name = "moto" },
@@ -1485,6 +1508,7 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.38.27" },
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.26.0" },
     { name = "chromadb", marker = "extra == 'vector'", specifier = ">=0.4.0" },
+    { name = "dataknobs-common", editable = "packages/common" },
     { name = "dataknobs-config", editable = "packages/config" },
     { name = "dataknobs-data", extras = ["postgres", "sqlite", "s3", "elasticsearch", "parquet", "vector"], marker = "extra == 'all'", editable = "packages/data" },
     { name = "dataknobs-utils", editable = "packages/utils" },
@@ -1527,6 +1551,7 @@ source = { editable = "packages/fsm" }
 dependencies = [
     { name = "aiofiles" },
     { name = "click" },
+    { name = "dataknobs-common" },
     { name = "dataknobs-config" },
     { name = "dataknobs-data" },
     { name = "dataknobs-structures" },
@@ -1592,6 +1617,7 @@ requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=24.0.0" },
     { name = "chromadb", marker = "extra == 'vector'", specifier = ">=0.4.0" },
     { name = "click", specifier = ">=8.1.0" },
+    { name = "dataknobs-common", editable = "packages/common" },
     { name = "dataknobs-config", editable = "packages/config" },
     { name = "dataknobs-data", editable = "packages/data" },
     { name = "dataknobs-fsm", extras = ["llm", "http", "vector"], marker = "extra == 'all'", editable = "packages/fsm" },

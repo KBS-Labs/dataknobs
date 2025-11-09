@@ -152,19 +152,21 @@ class TestToolRegistry:
         registry = ToolRegistry()
         tool = CalculatorTool()
 
-        registry.register(tool)
+        registry.register_tool(tool)
         assert len(registry) == 1
         assert registry.has_tool("calculator")
 
     def test_register_duplicate_tool(self):
         """Test registering duplicate tool raises error."""
+        from dataknobs_common import OperationError
+
         registry = ToolRegistry()
         tool1 = CalculatorTool()
         tool2 = CalculatorTool()
 
-        registry.register(tool1)
-        with pytest.raises(ValueError, match="already registered"):
-            registry.register(tool2)
+        registry.register_tool(tool1)
+        with pytest.raises(OperationError, match="already registered"):
+            registry.register_tool(tool2)
 
     def test_register_many_tools(self):
         """Test registering multiple tools at once."""
@@ -180,7 +182,7 @@ class TestToolRegistry:
         """Test retrieving a tool by name."""
         registry = ToolRegistry()
         tool = CalculatorTool()
-        registry.register(tool)
+        registry.register_tool(tool)
 
         retrieved = registry.get_tool("calculator")
         assert retrieved is tool
@@ -188,15 +190,17 @@ class TestToolRegistry:
 
     def test_get_nonexistent_tool(self):
         """Test getting nonexistent tool raises error."""
+        from dataknobs_common import NotFoundError
+
         registry = ToolRegistry()
-        with pytest.raises(KeyError, match="Tool not found"):
+        with pytest.raises(NotFoundError, match="Tool not found"):
             registry.get_tool("nonexistent")
 
     def test_unregister_tool(self):
         """Test unregistering a tool."""
         registry = ToolRegistry()
         tool = CalculatorTool()
-        registry.register(tool)
+        registry.register_tool(tool)
 
         assert registry.has_tool("calculator")
         registry.unregister("calculator")
@@ -204,15 +208,17 @@ class TestToolRegistry:
 
     def test_unregister_nonexistent_tool(self):
         """Test unregistering nonexistent tool raises error."""
+        from dataknobs_common import NotFoundError
+
         registry = ToolRegistry()
-        with pytest.raises(KeyError, match="Tool not found"):
+        with pytest.raises(NotFoundError, match="not found"):
             registry.unregister("nonexistent")
 
     def test_list_tools(self):
         """Test listing all tools."""
         registry = ToolRegistry()
-        registry.register(CalculatorTool())
-        registry.register(WebSearchTool())
+        registry.register_tool(CalculatorTool())
+        registry.register_tool(WebSearchTool())
 
         tools = registry.list_tools()
         assert len(tools) == 2
@@ -228,8 +234,8 @@ class TestToolRegistry:
     def test_get_tool_names(self):
         """Test getting list of tool names."""
         registry = ToolRegistry()
-        registry.register(CalculatorTool())
-        registry.register(WebSearchTool())
+        registry.register_tool(CalculatorTool())
+        registry.register_tool(WebSearchTool())
 
         names = registry.get_tool_names()
         assert set(names) == {"calculator", "web_search"}
@@ -237,8 +243,8 @@ class TestToolRegistry:
     def test_clear_registry(self):
         """Test clearing all tools from registry."""
         registry = ToolRegistry()
-        registry.register(CalculatorTool())
-        registry.register(WebSearchTool())
+        registry.register_tool(CalculatorTool())
+        registry.register_tool(WebSearchTool())
 
         assert len(registry) == 2
         registry.clear()
@@ -247,8 +253,8 @@ class TestToolRegistry:
     def test_to_function_definitions(self):
         """Test converting all tools to function definitions."""
         registry = ToolRegistry()
-        registry.register(CalculatorTool())
-        registry.register(WebSearchTool())
+        registry.register_tool(CalculatorTool())
+        registry.register_tool(WebSearchTool())
 
         definitions = registry.to_function_definitions()
         assert len(definitions) == 2
@@ -258,8 +264,8 @@ class TestToolRegistry:
     def test_to_function_definitions_with_include(self):
         """Test converting specific tools to function definitions."""
         registry = ToolRegistry()
-        registry.register(CalculatorTool())
-        registry.register(WebSearchTool())
+        registry.register_tool(CalculatorTool())
+        registry.register_tool(WebSearchTool())
 
         definitions = registry.to_function_definitions(
             include_only={"calculator"}
@@ -270,8 +276,8 @@ class TestToolRegistry:
     def test_to_function_definitions_with_exclude(self):
         """Test excluding tools from function definitions."""
         registry = ToolRegistry()
-        registry.register(CalculatorTool())
-        registry.register(WebSearchTool())
+        registry.register_tool(CalculatorTool())
+        registry.register_tool(WebSearchTool())
 
         definitions = registry.to_function_definitions(
             exclude={"web_search"}
@@ -283,7 +289,7 @@ class TestToolRegistry:
     async def test_execute_tool(self):
         """Test executing a tool through the registry."""
         registry = ToolRegistry()
-        registry.register(CalculatorTool())
+        registry.register_tool(CalculatorTool())
 
         result = await registry.execute_tool("calculator", operation="add", a=5, b=3)
         assert result == 8
@@ -291,11 +297,11 @@ class TestToolRegistry:
     def test_filter_by_metadata(self):
         """Test filtering tools by metadata."""
         registry = ToolRegistry()
-        registry.register(WebSearchTool())  # Has category="search"
+        registry.register_tool(WebSearchTool())  # Has category="search"
 
         calc = CalculatorTool()
         calc.metadata = {"category": "math"}
-        registry.register(calc)
+        registry.register_tool(calc)
 
         search_tools = registry.filter_by_metadata(category="search")
         assert len(search_tools) == 1
@@ -308,8 +314,8 @@ class TestToolRegistry:
     def test_clone_registry(self):
         """Test cloning a registry."""
         registry = ToolRegistry()
-        registry.register(CalculatorTool())
-        registry.register(WebSearchTool())
+        registry.register_tool(CalculatorTool())
+        registry.register_tool(WebSearchTool())
 
         cloned = registry.clone()
         assert len(cloned) == len(registry)
@@ -324,7 +330,7 @@ class TestToolRegistry:
     def test_contains_operator(self):
         """Test 'in' operator for checking tool existence."""
         registry = ToolRegistry()
-        registry.register(CalculatorTool())
+        registry.register_tool(CalculatorTool())
 
         assert "calculator" in registry
         assert "nonexistent" not in registry
@@ -334,8 +340,8 @@ class TestToolRegistry:
         registry = ToolRegistry()
         calc = CalculatorTool()
         search = WebSearchTool()
-        registry.register(calc)
-        registry.register(search)
+        registry.register_tool(calc)
+        registry.register_tool(search)
 
         tools = list(registry)
         assert len(tools) == 2
@@ -347,7 +353,7 @@ class TestToolRegistry:
         registry = ToolRegistry()
         assert repr(registry) == "ToolRegistry(tools=0)"
 
-        registry.register(CalculatorTool())
+        registry.register_tool(CalculatorTool())
         assert repr(registry) == "ToolRegistry(tools=1)"
 
     def test_registry_str(self):
@@ -355,8 +361,8 @@ class TestToolRegistry:
         registry = ToolRegistry()
         assert str(registry) == "ToolRegistry(empty)"
 
-        registry.register(CalculatorTool())
-        registry.register(WebSearchTool())
+        registry.register_tool(CalculatorTool())
+        registry.register_tool(WebSearchTool())
         registry_str = str(registry)
         assert "ToolRegistry(2 tools:" in registry_str
         assert "calculator" in registry_str

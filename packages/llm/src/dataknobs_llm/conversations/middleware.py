@@ -95,6 +95,7 @@ from dataknobs_llm.llm import LLMMessage, LLMResponse
 from dataknobs_llm.llm.providers import AsyncLLMProvider
 from dataknobs_llm.conversations.storage import ConversationState
 from dataknobs_llm.prompts import AsyncPromptBuilder
+from dataknobs_llm.exceptions import RateLimitError
 
 
 class ConversationMiddleware(ABC):
@@ -802,8 +803,3 @@ class RateLimitMiddleware(ConversationMiddleware):
             self._request_history.clear()
         elif key in self._request_history:
             del self._request_history[key]
-
-
-class RateLimitError(Exception):
-    """Exception raised when rate limit is exceeded."""
-    pass

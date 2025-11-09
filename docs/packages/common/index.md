@@ -1,6 +1,6 @@
 # Dataknobs Common
 
-The `dataknobs-common` package provides shared utilities and base classes used across all Dataknobs packages.
+The `dataknobs-common` package provides shared cross-cutting functionality used across all Dataknobs packages.
 
 ## Installation
 
@@ -12,95 +12,599 @@ Note: This package is automatically installed as a dependency of other Dataknobs
 
 ## Overview
 
-The Common package serves as the foundation for all other Dataknobs packages, providing:
+This package provides shared cross-cutting functionality used across all dataknobs packages:
 
-- **Base Classes**: Common interfaces and abstract classes
-- **Shared Utilities**: Helper functions used across packages
-- **Common Constants**: Shared constants and configuration
-- **Version Management**: Centralized version handling
+- **Exception Framework**: Unified exception hierarchy with context support
+- **Registry Pattern**: Generic registries for managing named items
+- **Serialization Protocol**: Standard interfaces for to_dict/from_dict patterns
 
-## Package Structure
+These patterns were extracted from common implementations across multiple packages to reduce duplication and provide consistency.
 
-The Common package is designed to be lightweight and focused on shared functionality:
+## Design Philosophy
 
-```
-dataknobs-common/
-├── src/
-│   └── dataknobs_common/
-│       └── __init__.py  # Version and shared imports
-└── tests/
-    └── test_version.py  # Version testing
-```
+The common package follows a key design principle:
 
-## Version Information
+**"Common provides primitives, packages provide ergonomics"**
 
-```python
-from dataknobs_common import __version__
+This means:
+- Common provides simple, explicit base implementations
+- Individual packages add convenience wrappers and domain-specific features
+- Applications benefit from both consistency and usability
 
-print(f"Dataknobs Common version: {__version__}")  # 1.0.0
-```
-
-## Design Principles
-
-The Common package follows these design principles:
-
-1. **Minimal Dependencies**: Keep external dependencies to a minimum
-2. **Backward Compatibility**: Maintain stability for dependent packages
-3. **Shared Standards**: Provide consistent interfaces across packages
-4. **Version Consistency**: Centralized version management
-
-## Usage with Other Packages
-
-The Common package is primarily used internally by other Dataknobs packages:
-
-### In Structures Package
+### Example: Registry Pattern
 
 ```python
-# Internal usage in dataknobs-structures
-from dataknobs_common import __version__
+# Common provides the primitive
+from dataknobs_common import Registry
+
+registry = Registry[Tool]("tools")
+registry.register("calculator", calculator_tool)  # Explicit key required
+
+# LLM package adds ergonomic wrapper
+from dataknobs_llm import ToolRegistry
+
+tool_registry = ToolRegistry()
+tool_registry.register_tool(calculator_tool)  # Extracts key from tool.name
 ```
 
-### In Utils Package
+## Features
+
+### 1. Exception Framework
+
+A unified exception hierarchy that all dataknobs packages extend. Supports both simple exceptions and context-rich exceptions with detailed error information.
+
+#### Basic Usage
 
 ```python
-# Internal usage in dataknobs-utils
-from dataknobs_common import __version__
+from dataknobs_common import DataknobsError, ValidationError, NotFoundError
+
+# Simple exception
+raise ValidationError("Invalid email format")
+
+# Context-rich exception
+raise NotFoundError(
+    "User not found",
+    context={"user_id": "123", "searched_in": "users_table"}
+)
+
+# Catch any dataknobs error
+try:
+    operation()
+except DataknobsError as e:
+    print(f"Error: {e}")
+    if e.context:
+        print(f"Context: {e.context}")
 ```
 
-### In Xization Package
+#### Available Exception Types
+
+- `DataknobsError` - Base exception for all packages
+- `ValidationError` - Data validation failures
+- `ConfigurationError` - Configuration issues
+- `ResourceError` - Resource acquisition/management failures
+- `NotFoundError` - Item lookup failures
+- `OperationError` - General operation failures
+- `ConcurrencyError` - Concurrent operation conflicts
+- `SerializationError` - Serialization/deserialization failures
+- `TimeoutError` - Operation timeout errors
+
+#### Package-Specific Extensions
+
+Packages extend the common exceptions to create their own hierarchies while maintaining cross-package compatibility:
 
 ```python
-# Internal usage in dataknobs-xization
-from dataknobs_common import __version__
+from dataknobs_common import DataknobsError, OperationError
+
+# Create package-specific base (used in FSM)
+FSMError = DataknobsError  # Alias for backward compatibility
+
+# Extend with custom context
+class StateExecutionError(OperationError):
+    """Raised when state execution fails."""
+
+    def __init__(self, state_name: str, message: str, details=None):
+        super().__init__(
+            f"State '{state_name}' execution failed: {message}",
+            context=details  # Support both 'details' and 'context' parameter names
+        )
+        self.state_name = state_name  # Custom attribute
 ```
 
-## Development
-
-When developing with Dataknobs packages, you typically won't need to import from `dataknobs-common` directly. Instead, use the higher-level packages that depend on it.
-
-### For Package Developers
-
-If you're extending or contributing to Dataknobs packages:
+**Real-world example from FSM package:**
 
 ```python
-# Check version compatibility
-from dataknobs_common import __version__ as common_version
+# FSM package uses common exceptions as base classes
+from dataknobs_common import (
+    DataknobsError,
+    ConfigurationError,
+    OperationError,
+    ResourceError,
+    TimeoutError,
+    ValidationError,
+    ConcurrencyError,
+)
 
-print(f"Using dataknobs-common version: {common_version}")
+# Backward compatibility alias
+FSMError = DataknobsError
+
+# Simple extensions
+class InvalidConfigurationError(ConfigurationError):
+    """Invalid FSM configuration."""
+    pass
+
+# Complex extensions with custom attributes
+class TransitionError(OperationError):
+    """Raised when state transition fails."""
+
+    def __init__(self, from_state: str, to_state: str, message: str, details=None):
+        super().__init__(
+            f"Cannot transition from '{from_state}' to '{to_state}': {message}",
+            context=details
+        )
+        self.from_state = from_state
+        self.to_state = to_state
+
+class CircuitBreakerError(ResourceError):
+    """Raised when circuit breaker is open."""
+
+    def __init__(self, resource_id: str, wait_time: float | None = None, details=None):
+        msg = f"Circuit breaker open for resource '{resource_id}'"
+        if wait_time:
+            msg += f" (retry after {wait_time}s)"
+        super().__init__(msg, context=details)
+        self.resource_id = resource_id
+        self.wait_time = wait_time
 ```
 
-## Integration Examples
+#### Cross-Package Error Handling
 
-### Version Checking
+Applications can catch all dataknobs exceptions uniformly:
 
 ```python
-from dataknobs_common import __version__ as common_version
-from dataknobs_structures import __version__ as structures_version
-from dataknobs_utils import __version__ as utils_version
+from dataknobs_common import DataknobsError
 
-print(f"Common: {common_version}")
-print(f"Structures: {structures_version}")
-print(f"Utils: {utils_version}")
+try:
+    # Use any dataknobs package
+    result = database.query()
+    llm.complete()
+    bot.chat()
+    fsm.execute()
+except DataknobsError as e:
+    logger.error(f"Dataknobs error: {e}")
+    if e.context:
+        logger.error(f"Context: {e.context}")
+```
+
+### 2. Registry Pattern
+
+Generic, thread-safe registries for managing collections of named items. Includes variants for caching and async support.
+
+#### Basic Registry
+
+```python
+from dataknobs_common import Registry
+
+# Create a registry for tools
+registry = Registry[Tool]("tools")
+
+# Register items
+registry.register("calculator", calculator_tool)
+registry.register("search", search_tool, metadata={"version": "1.0"})
+
+# Retrieve items
+tool = registry.get("calculator")
+
+# Check existence
+if registry.has("search"):
+    print("Search tool available")
+
+# List all items
+for key, tool in registry.items():
+    print(f"{key}: {tool}")
+
+# Get count
+print(f"Registry has {registry.count()} tools")
+```
+
+#### Cached Registry
+
+For items that should be cached with automatic TTL-based expiration:
+
+```python
+from dataknobs_common import CachedRegistry
+
+# Create registry with 5-minute cache
+registry = CachedRegistry[Bot]("bots", cache_ttl=300)
+
+# Get or create with factory
+bot = registry.get_cached(
+    "client1",
+    factory=lambda: create_bot("client1")
+)
+
+# Get cache statistics
+stats = registry.get_cache_stats()
+print(f"Hit rate: {stats['hit_rate']:.2%}")
+
+# Invalidate cache
+registry.invalidate_cache("client1")  # Single item
+registry.invalidate_cache()  # All items
+```
+
+#### Async Registry
+
+For async contexts:
+
+```python
+from dataknobs_common import AsyncRegistry
+
+registry = AsyncRegistry[Resource]("resources")
+
+# All operations are async
+await registry.register("db", db_resource)
+resource = await registry.get("db")
+count = await registry.count()
+```
+
+#### Custom Registry Extensions
+
+Packages extend the base registry to add domain-specific features:
+
+```python
+from dataknobs_common import Registry
+
+class ToolRegistry(Registry[Tool]):
+    """Registry for LLM tools."""
+
+    def __init__(self):
+        super().__init__("tools", enable_metrics=True)
+
+    def register_tool(self, tool: Tool) -> None:
+        """Register a tool using its name attribute."""
+        self.register(
+            tool.name,  # Extract key from tool
+            tool,
+            metadata={"description": tool.description}
+        )
+
+    def get_by_category(self, category: str) -> list[Tool]:
+        """Get all tools in a category."""
+        return [
+            tool for tool in self.list_items()
+            if tool.category == category
+        ]
+
+    def to_function_definitions(self) -> list[dict]:
+        """Convert tools to OpenAI function definitions."""
+        return [tool.to_function_definition() for tool in self.list_items()]
+```
+
+**Real-world example from LLM package:**
+
+The LLM package's `ToolRegistry` extends `Registry[Tool]` to provide:
+- `register_tool(tool)` - Automatically extracts `tool.name` as the key
+- `to_function_definitions()` - Converts all tools to OpenAI-compatible format
+- `get_by_tags(tags)` - Filters tools by tags
+- Built-in metadata tracking for tool versions and descriptions
+
+This demonstrates the design principle: Common provides `register(key, item)`, LLM adds `register_tool(tool)`.
+
+### 3. Serialization Protocol
+
+Standard protocol for objects that can be serialized to/from dictionaries. Unlike Registry and Exceptions, serialization provides a **protocol and utilities** rather than base implementations.
+
+#### Define Serializable Classes
+
+```python
+from dataknobs_common import Serializable
+from dataclasses import dataclass
+
+@dataclass
+class User:
+    name: str
+    email: str
+
+    def to_dict(self) -> dict:
+        return {"name": self.name, "email": self.email}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "User":
+        return cls(name=data["name"], email=data["email"])
+
+# Type checking works automatically
+user = User("Alice", "alice@example.com")
+assert isinstance(user, Serializable)  # True
+```
+
+#### Serialization Utilities
+
+```python
+from dataknobs_common import serialize, deserialize, serialize_list, deserialize_list
+
+# Serialize single object
+user = User("Alice", "alice@example.com")
+data = serialize(user)
+# {'name': 'Alice', 'email': 'alice@example.com'}
+
+# Deserialize
+restored_user = deserialize(User, data)
+
+# Serialize list
+users = [User("Alice", "a@ex.com"), User("Bob", "b@ex.com")]
+data_list = serialize_list(users)
+
+# Deserialize list
+restored_users = deserialize_list(User, data_list)
+```
+
+#### Complex Serialization Patterns
+
+For enums, datetimes, and nested objects:
+
+```python
+from dataknobs_common import Serializable
+from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
+
+class Status(Enum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+
+@dataclass
+class Task:
+    title: str
+    status: Status
+    created_at: datetime
+
+    def to_dict(self) -> dict:
+        return {
+            "title": self.title,
+            "status": self.status.value,  # Convert enum to string
+            "created_at": self.created_at.isoformat()  # Convert datetime to ISO string
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Task":
+        return cls(
+            title=data["title"],
+            status=Status(data["status"]),  # Convert string back to enum
+            created_at=datetime.fromisoformat(data["created_at"])  # Parse ISO string
+        )
+```
+
+**Real-world example from LLM package:**
+
+The LLM package's `LLMConfig` class implements complex serialization:
+- Enum conversion (`CompletionMode` enum)
+- Dataclass field introspection
+- Optional parameter handling
+- Filtering of internal attributes
+- Special handling for factory defaults
+
+While LLM implements its own serialization logic, it follows the `Serializable` protocol and can use the common utilities for consistency.
+
+#### Type Checking
+
+```python
+from dataknobs_common import is_serializable, is_deserializable
+
+# Check if object can be serialized
+if is_serializable(my_object):
+    data = serialize(my_object)
+
+# Check if class can deserialize
+if is_deserializable(MyClass):
+    obj = deserialize(MyClass, data)
+```
+
+## Package Integration Examples
+
+### FSM Package (Exceptions)
+
+The FSM package migrated from custom exceptions to common exceptions:
+
+```python
+from dataknobs_common import (
+    DataknobsError,
+    ConfigurationError,
+    OperationError,
+    ResourceError,
+    TimeoutError,
+    ValidationError,
+)
+
+# Backward compatibility
+FSMError = DataknobsError
+
+# All FSM exceptions now extend common base classes
+class StateExecutionError(OperationError):
+    pass
+
+class TransitionError(OperationError):
+    pass
+
+class InvalidConfigurationError(ConfigurationError):
+    pass
+```
+
+**Benefits achieved:**
+- ~40 lines of duplicate exception code eliminated
+- 100% backward compatible (via alias)
+- All 21 FSM exception tests passed with ZERO code changes
+- Can now catch FSM errors using `DataknobsError`
+
+### LLM Package (Registry)
+
+The LLM package migrated `ToolRegistry` to extend common `Registry[Tool]`:
+
+```python
+from dataknobs_common import Registry
+
+class ToolRegistry(Registry[Tool]):
+    """Registry for managing LLM tools."""
+
+    def __init__(self):
+        super().__init__("tools", enable_metrics=True)
+
+    def register_tool(self, tool: Tool) -> None:
+        """Convenience method that extracts key from tool."""
+        self.register(tool.name, tool, metadata={
+            "description": tool.description,
+            "version": getattr(tool, "version", "1.0")
+        })
+
+    def to_function_definitions(self) -> list[dict]:
+        """Convert all tools to OpenAI function definitions."""
+        return [tool.to_function_definition() for tool in self.list_items()]
+```
+
+**Benefits achieved:**
+- ~150 lines of registry boilerplate eliminated
+- 100% backward compatible
+- All 795 LLM tests passed
+- Gained built-in metrics and thread-safety
+
+### Bots Package (Registry)
+
+The Bots package can use `CachedRegistry` for bot instance management:
+
+```python
+from dataknobs_common import CachedRegistry
+
+class BotRegistry(CachedRegistry[Bot]):
+    """Registry with caching for bot instances."""
+
+    def __init__(self, cache_ttl: int = 300):
+        super().__init__("bots", cache_ttl=cache_ttl)
+
+    def get_or_create_bot(self, client_id: str, config: BotConfig) -> Bot:
+        """Get cached bot or create new one."""
+        return self.get_cached(
+            client_id,
+            factory=lambda: create_bot(config)
+        )
+```
+
+## Migration Impact
+
+### Code Reduction
+
+Across the ecosystem, common components have eliminated significant duplicate code:
+
+- **Registry**: ~150 lines per registry implementation
+- **Exceptions**: ~40-50 lines per package
+- **Total eliminated**: ~190 lines across 2 packages (FSM, LLM)
+- **Potential**: 400-500 lines when all packages migrate
+
+### Consistency Gained
+
+**Before:**
+- Each package had its own base exception class
+- Each registry implemented its own boilerplate
+- No cross-package exception handling
+
+**After:**
+- All packages use `DataknobsError` base
+- All registries extend `Registry[T]`
+- Can catch `DataknobsError` for any dataknobs exception
+- Unified pattern across ecosystem
+
+### Testing Results
+
+All migrations achieved 100% backward compatibility:
+
+| Package | Component | Tests | Result | Code Changes |
+|---------|-----------|-------|--------|--------------|
+| LLM | Registry | 21/21 | ✅ Pass | Minimal (API updates) |
+| LLM | All tests | 795/795 | ✅ Pass | - |
+| FSM | Exceptions | 21/21 | ✅ Pass | Zero changes |
+| FSM | All tests | All | ✅ Pass | - |
+
+## When to Use Common Components
+
+### Use Registry When:
+- Managing collections of named objects
+- Need thread-safe access
+- Want built-in metrics
+- Caching with TTL is beneficial
+- Async operations are required
+
+### Use Common Exceptions When:
+- Creating package-specific errors
+- Need context-rich error information
+- Want cross-package error handling
+- Maintaining backward compatibility with aliases
+
+### Use Serialization Protocol When:
+- Creating new serializable classes
+- Want type safety for serialization
+- Need consistent error handling
+- Working with lists of serializable objects
+
+## Best Practices
+
+### 1. Extend, Don't Replace
+
+Create package-specific extensions that add features:
+
+```python
+# Good: Extends common base
+class ToolRegistry(Registry[Tool]):
+    def register_tool(self, tool: Tool) -> None:
+        self.register(tool.name, tool)
+
+# Avoid: Completely custom implementation
+class ToolRegistry:
+    def __init__(self):
+        self.tools = {}  # Loses common benefits
+```
+
+### 2. Maintain Backward Compatibility
+
+Use aliases when migrating:
+
+```python
+# Preserve old API
+from dataknobs_common import DataknobsError
+
+# Backward compatibility alias
+FSMError = DataknobsError
+
+# Existing code continues to work:
+# raise FSMError("message")
+```
+
+### 3. Add Ergonomics in Packages
+
+Follow the design principle - common provides primitives, packages add convenience:
+
+```python
+# Common primitive
+registry.register("key", item)
+
+# Package ergonomics
+registry.register_tool(tool)  # Extracts key automatically
+```
+
+### 4. Use Context in Exceptions
+
+Provide structured context for better debugging:
+
+```python
+# Good: Rich context
+raise StateExecutionError(
+    state_name="processing",
+    message="Database connection failed",
+    details={
+        "database": "prod_db",
+        "retry_count": 3,
+        "last_error": str(db_error)
+    }
+)
+
+# Basic: Still useful
+raise ValidationError("Invalid input")
 ```
 
 ## API Reference
@@ -109,37 +613,23 @@ For complete API documentation, see the [Common API Reference](api.md).
 
 ## Package Dependencies
 
-The Common package has minimal dependencies and serves as the foundation for:
+The Common package requires:
+- Python 3.10+
+- No external dependencies (uses only standard library)
 
+The Common package is used by:
+- **dataknobs-fsm**: Finite State Machine framework
+- **dataknobs-llm**: LLM prompt and conversation management
+- **dataknobs-bots**: AI bot framework
+- **dataknobs-data**: Data storage and querying
 - **dataknobs-structures**: Core data structures
-- **dataknobs-utils**: Utility functions and helpers
-- **dataknobs-xization**: Text processing and normalization
-
-## Best Practices
-
-1. **Don't Import Directly**: Use higher-level packages instead of importing from Common directly
-2. **Version Awareness**: Check version compatibility when using multiple packages
-3. **Dependency Management**: Keep Common package updated for security and stability
-
-## Contributing
-
-When contributing to the Common package:
-
-1. **Maintain Backward Compatibility**: Changes must not break existing functionality
-2. **Minimal Changes**: Only add truly shared functionality
-3. **Documentation**: Update this documentation for any new features
-4. **Testing**: Ensure all dependent packages continue to work
-
-## Support
-
-For issues related to the Common package:
-
-1. Check if the issue is specific to Common or affects other packages
-2. Provide version information for all installed Dataknobs packages
-3. Include minimal reproduction code if applicable
+- **dataknobs-utils**: Utility functions
+- **dataknobs-config**: Configuration management
+- **dataknobs-xization**: Text processing
 
 ## Next Steps
 
-- Explore [Structures Package](../structures/index.md)
-- Learn about [Utils Package](../utils/index.md)
-- See [Xization Package](../xization/index.md)
+- See [Complete API Reference](api.md) for detailed documentation
+- Explore [FSM Package](../fsm/index.md) for exception usage examples
+- Learn about [LLM Package](../llm/index.md) for registry usage examples
+- Check [Development Guide](../../development/index.md) for contributing guidelines

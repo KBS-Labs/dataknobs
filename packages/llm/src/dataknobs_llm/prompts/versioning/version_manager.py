@@ -12,10 +12,11 @@ import uuid
 from typing import Any, Dict, List
 from datetime import datetime
 
+from dataknobs_llm.exceptions import VersioningError
+
 from .types import (
     PromptVersion,
     VersionStatus,
-    VersioningError,
 )
 
 

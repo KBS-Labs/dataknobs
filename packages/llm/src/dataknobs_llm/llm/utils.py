@@ -139,13 +139,15 @@ class MessageTemplate:
             MessageTemplate configured with CONDITIONAL strategy
 
         Example:
-            >>> template = MessageTemplate.from_conditional(
-            ...     "Hello {{name}}((, you have {{count}} messages))"
-            ... )
-            >>> template.format(name="Alice", count=5)
-            "Hello Alice, you have 5 messages"
-            >>> template.format(name="Bob")
-            "Hello Bob"
+            ```python
+            template = MessageTemplate.from_conditional(
+                "Hello {{name}}((, you have {{count}} messages))"
+            )
+            template.format(name="Alice", count=5)
+            # "Hello Alice, you have 5 messages"
+            template.format(name="Bob")
+            # "Hello Bob"
+            ```
         """
         return cls(template=template, variables=variables or [], strategy=TemplateStrategy.CONDITIONAL)
 

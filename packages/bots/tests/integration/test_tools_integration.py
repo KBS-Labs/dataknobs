@@ -104,7 +104,7 @@ class TestToolRegistration:
         bot = await DynaBot.from_config(bot_config_simple)
 
         tool = CalculatorTool()
-        bot.tool_registry.register(tool)
+        bot.tool_registry.register_tool(tool)
 
         # Verify tool is registered
         assert len(list(bot.tool_registry)) == 1
@@ -118,8 +118,8 @@ class TestToolRegistration:
         calc_tool = CalculatorTool()
         counter_tool = CounterTool()
 
-        bot.tool_registry.register(calc_tool)
-        bot.tool_registry.register(counter_tool)
+        bot.tool_registry.register_tool(calc_tool)
+        bot.tool_registry.register_tool(counter_tool)
 
         # Verify both tools are registered
         tools = list(bot.tool_registry)
@@ -133,7 +133,7 @@ class TestToolRegistration:
         bot = await DynaBot.from_config(bot_config_simple)
 
         tool = CalculatorTool()
-        bot.tool_registry.register(tool)
+        bot.tool_registry.register_tool(tool)
 
         # Test function definition format
         func_def = tool.to_function_definition()
@@ -207,7 +207,7 @@ class TestReActWithTools:
 
         # Register calculator tool
         calc = CalculatorTool()
-        bot.tool_registry.register(calc)
+        bot.tool_registry.register_tool(calc)
 
         context = BotContext(
             conversation_id="test-react-calc-001",
@@ -231,8 +231,8 @@ class TestReActWithTools:
         calc = CalculatorTool()
         counter = CounterTool()
 
-        bot.tool_registry.register(calc)
-        bot.tool_registry.register(counter)
+        bot.tool_registry.register_tool(calc)
+        bot.tool_registry.register_tool(counter)
 
         context = BotContext(
             conversation_id="test-react-multi-001",
@@ -262,7 +262,7 @@ class TestReActWithTools:
 
         # Register a tool
         calc = CalculatorTool()
-        bot.tool_registry.register(calc)
+        bot.tool_registry.register_tool(calc)
 
         context = BotContext(
             conversation_id="test-react-iterations",
@@ -280,7 +280,7 @@ class TestReActWithTools:
 
         # Register tool
         calc = CalculatorTool()
-        bot.tool_registry.register(calc)
+        bot.tool_registry.register_tool(calc)
 
         context = BotContext(
             conversation_id="test-react-trace-tools",
@@ -323,7 +323,7 @@ class TestToolErrorHandling:
                 raise RuntimeError("Tool execution failed")
 
         failing_tool = FailingTool()
-        bot.tool_registry.register(failing_tool)
+        bot.tool_registry.register_tool(failing_tool)
 
         context = BotContext(
             conversation_id="test-failing-tool",
@@ -354,7 +354,7 @@ class TestToolIntegrationPatterns:
         bot = await DynaBot.from_config(bot_config_react)
 
         calc = CalculatorTool()
-        bot.tool_registry.register(calc)
+        bot.tool_registry.register_tool(calc)
 
         context = BotContext(
             conversation_id="test-tool-chain",
@@ -376,7 +376,7 @@ class TestToolIntegrationPatterns:
         bot = await DynaBot.from_config(bot_config_react)
 
         counter = CounterTool()
-        bot.tool_registry.register(counter)
+        bot.tool_registry.register_tool(counter)
 
         context = BotContext(
             conversation_id="test-tool-context",
