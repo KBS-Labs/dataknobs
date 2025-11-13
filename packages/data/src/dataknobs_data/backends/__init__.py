@@ -253,8 +253,10 @@ class AsyncBackendRegistry(Registry[Type[AsyncDatabase]]):
                 },
             )
             self.register("sqlite3", AsyncSQLiteDatabase)  # Alias
-        except ImportError:
-            pass
+        except ImportError as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.debug(f"AsyncSQLiteDatabase not available: {e}")
 
         # PostgreSQL backend
         try:

@@ -176,15 +176,15 @@ class SQLQueryBuilder:
 
     def build_create_query(self, record: Record, record_id: str | None = None) -> tuple[str, list[Any]]:
         """Build an INSERT query for creating a record.
-        
+
         Args:
             record: The record to insert
             record_id: Optional ID (will generate if not provided)
-            
+
         Returns:
             Tuple of (SQL query, parameters)
         """
-        record_id = record_id or str(uuid.uuid4())
+        record_id = record_id or record.storage_id or str(uuid.uuid4())
         data = SQLRecordSerializer.record_to_json(record)
         metadata = json.dumps(record.metadata) if record.metadata else None
 
