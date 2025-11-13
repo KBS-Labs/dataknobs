@@ -346,6 +346,7 @@ fi
 
 # Initialize status tracking
 STYLE_STATUS=0
+DOCS_STATUS=0
 TEST_STATUS=0
 UNIT_TEST_STATUS=0
 INTEGRATION_TEST_STATUS=0
@@ -382,6 +383,21 @@ else
     print_error "Package validation failed - see $ARTIFACTS_DIR/package-validation.log"
     cat "$ARTIFACTS_DIR/package-validation.log"
     exit 1
+fi
+
+# Build documentation (PR mode only)
+if [ "$PR_MODE" = "yes" ]; then
+    print_status "Building documentation (checking for errors)..."
+    if env PYTHONWARNINGS="ignore::DeprecationWarning:asttokens" uv run mkdocs build --strict > "$ARTIFACTS_DIR/docs-build.log" 2>&1; then
+        print_success "Documentation builds without errors or warnings"
+    else
+        DOCS_STATUS=$?
+        print_error "Documentation build failed - see $ARTIFACTS_DIR/docs-build.log"
+        echo ""
+        echo -e "${YELLOW}Documentation errors:${NC}"
+        cat "$ARTIFACTS_DIR/docs-build.log"
+        echo ""
+    fi
 fi
 
 # Run style checks (using ruff for linting and style)
@@ -765,9 +781,9 @@ if [ "$PR_MODE" = "yes" ]; then
     # Generate summary
     print_status "Generating quality summary..."
     OVERALL_STATUS="PASS"
-    
+
     # Check for failures
-    if [ $TEST_STATUS -ne 0 ]; then
+    if [ $DOCS_STATUS -ne 0 ] || [ $TEST_STATUS -ne 0 ]; then
         OVERALL_STATUS="FAIL"
     fi
     
@@ -778,6 +794,11 @@ if [ "$PR_MODE" = "yes" ]; then
   "environment": "$([ "$IN_DOCKER" = true ] && echo "docker" || echo "host")",
   "packages": "$([ -n "$PACKAGES" ] && echo "$PACKAGES" || echo "all")",
   "checks": {
+    "documentation": {
+      "status": $([ $DOCS_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
+      "exit_code": $DOCS_STATUS,
+      "tool": "mkdocs"
+    },
     "style": {
       "status": $([ $STYLE_STATUS -eq 0 ] && echo '"pass"' || echo '"warning"'),
       "exit_code": $STYLE_STATUS,
@@ -812,6 +833,15 @@ echo -e "${BLUE}═════════════════════�
 echo -e "${BLUE}                        Quality Check Summary                     ${NC}"
 echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
 echo ""
+
+if [ "$PR_MODE" = "yes" ]; then
+    # Show documentation build status (only in PR mode)
+    if [ $DOCS_STATUS -eq 0 ]; then
+        echo -e "  Documentation:      ${GREEN}✓ PASSED${NC}"
+    else
+        echo -e "  Documentation:      ${RED}✗ FAILED${NC}"
+    fi
+fi
 
 if [ "$SKIP_STYLE" = "yes" ]; then
     echo -e "  Style Check (ruff): ${CYAN}⊘ SKIPPED${NC}"
@@ -855,7 +885,7 @@ echo -e "${BLUE}═════════════════════�
 
 # Determine overall status
 OVERALL_STATUS="PASS"
-if [ $TEST_STATUS -ne 0 ]; then
+if [ $DOCS_STATUS -ne 0 ] || [ $TEST_STATUS -ne 0 ]; then
     OVERALL_STATUS="FAIL"
 fi
 
@@ -879,6 +909,13 @@ else
     
     if [ "$PR_MODE" = "yes" ]; then
         # In PR mode, show specific commands to investigate failures
+        if [ $DOCS_STATUS -ne 0 ] && [ -f "$ARTIFACTS_DIR/docs-build.log" ]; then
+            echo -e "  ${CYAN}Documentation Build Failures:${NC}"
+            echo "    View documentation errors:"
+            echo "      cat $ARTIFACTS_DIR/docs-build.log"
+            echo ""
+        fi
+
         if [ $UNIT_TEST_STATUS -ne 0 ] || [ $INTEGRATION_TEST_STATUS -ne 0 ]; then
             echo -e "  ${CYAN}Test Failures:${NC}"
             

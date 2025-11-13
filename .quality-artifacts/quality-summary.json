@@ -1,9 +1,14 @@
 {
-  "timestamp": "2025-11-13T17:07:18Z",
+  "timestamp": "2025-11-13T17:17:07Z",
   "overall_status": "PASS",
   "environment": "host",
   "packages": "all",
   "checks": {
+    "documentation": {
+      "status": "pass",
+      "exit_code": 0,
+      "tool": "mkdocs"
+    },
     "style": {
       "status": "pass",
       "exit_code": 0,
