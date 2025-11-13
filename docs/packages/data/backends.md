@@ -4,17 +4,18 @@ The dataknobs-data package supports multiple storage backends, each optimized fo
 
 ## Backend Comparison
 
-| Feature | Memory | File | SQLite | PostgreSQL | Elasticsearch | S3 |
-|---------|--------|------|--------|------------|---------------|-----|
-| **Persistence** | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Query Performance** | ⚡ Instant | 🚶 Slow | ⚡ Fast | ⚡ Fast | ⚡ Fast | 🐌 Very Slow |
-| **Scalability** | 📦 Limited | 📦 Limited | 📦 Limited | 🌐 High | 🌐 High | ♾️ Unlimited |
-| **Full-text Search** | ❌ | ❌ | 🔍 Basic | 🔍 Basic | 🔍 Advanced | ❌ |
-| **ACID Compliance** | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ |
-| **Cost** | Free | Free | Free | 💰 Low | 💰 Medium | 💰 Per GB |
-| **Setup Complexity** | None | None | None | 🔧 Medium | 🔧 High | 🔧 Medium |
-| **Concurrent Access** | ✅ | ❌ | 🔄 Limited | ✅ | ✅ | ✅ |
-| **Embedded** | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Feature | Memory | File | SQLite | DuckDB | PostgreSQL | Elasticsearch | S3 |
+|---------|--------|------|--------|--------|------------|---------------|-----|
+| **Persistence** | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Query Performance** | ⚡ Instant | 🚶 Slow | ⚡ Fast | ⚡⚡ Excellent | ⚡ Fast | ⚡ Fast | 🐌 Very Slow |
+| **Analytical Performance** | ⚡ Good | 🐌 Slow | 🚶 Moderate | ⚡⚡ Excellent | ⚡ Fast | ⚡ Fast | 🐌 Very Slow |
+| **Scalability** | 📦 Limited | 📦 Limited | 📦 Limited | 📦 Medium | 🌐 High | 🌐 High | ♾️ Unlimited |
+| **Full-text Search** | ❌ | ❌ | 🔍 Basic | ❌ | 🔍 Basic | 🔍 Advanced | ❌ |
+| **ACID Compliance** | ❌ | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| **Cost** | Free | Free | Free | Free | 💰 Low | 💰 Medium | 💰 Per GB |
+| **Setup Complexity** | None | None | None | None | 🔧 Medium | 🔧 High | 🔧 Medium |
+| **Concurrent Access** | ✅ | ❌ | 🔄 Limited | 🔄 Limited | ✅ | ✅ | ✅ |
+| **Embedded** | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
 
 ## Memory Backend
 
@@ -138,6 +139,68 @@ db = SyncSQLiteDatabase({
 })
 ```
 
+## DuckDB Backend
+
+High-performance embedded analytical database optimized for OLAP workloads with columnar storage. DuckDB is 10-100x faster than SQLite for analytical queries while maintaining zero configuration.
+
+```python
+from dataknobs_data import DatabaseFactory
+
+factory = DatabaseFactory()
+
+# File-based DuckDB database
+db = factory.create(
+    backend="duckdb",
+    path="/data/analytics.duckdb"
+)
+db.connect()
+
+# In-memory DuckDB database (fast analytics)
+db = factory.create(
+    backend="duckdb",
+    path=":memory:"
+)
+db.connect()
+
+# With custom configuration
+db = factory.create(
+    backend="duckdb",
+    path="/data/analytics.duckdb",
+    table="records",
+    timeout=10.0,
+    read_only=False
+)
+db.connect()
+```
+
+**Best for:**
+- Analytical queries and data analytics
+- OLAP workloads (aggregations, joins, window functions)
+- Business intelligence and reporting
+- ETL and data transformation
+- Large dataset analysis (millions of rows)
+- Data science and machine learning pipelines
+
+**Features:**
+- 10-100x faster than SQLite for analytics
+- Columnar storage for efficient querying
+- Parallel query execution
+- Advanced SQL support (CTEs, window functions)
+- Native JSON type
+- In-memory and file-based modes
+- Built-in compression
+
+**Installation:**
+```bash
+pip install duckdb
+```
+
+**When to Use DuckDB vs SQLite:**
+- Choose **DuckDB** for: Analytics, aggregations, OLAP, large datasets, fast reads
+- Choose **SQLite** for: Transactions, OLTP, vector search, concurrent writes, smaller datasets
+
+See [DuckDB Backend Documentation](duckdb-backend.md) for detailed usage.
+
 ## PostgreSQL Backend
 
 Full-featured SQL database with ACID compliance.
@@ -245,17 +308,31 @@ pip install dataknobs-data[s3]
 
 ### Development Workflow
 ```python
+from dataknobs_data import DatabaseFactory
+
+factory = DatabaseFactory()
+
 # Development: Use memory for speed
 dev_db = factory.create(backend="memory")
+dev_db.connect()
 
 # Testing: Use SQLite for persistence with SQL support
 test_db = factory.create(backend="sqlite", path=":memory:")
+test_db.connect()
 
-# Staging: Use SQLite with file persistence
+# Analytics/Reporting: Use DuckDB for fast analytical queries
+analytics_db = factory.create(backend="duckdb", path=":memory:")
+analytics_db.connect()
+
+# Staging: Use SQLite or DuckDB with file persistence
 staging_db = factory.create(backend="sqlite", path="/tmp/staging.db")
+# or
+staging_db = factory.create(backend="duckdb", path="/tmp/staging_analytics.duckdb")
+staging_db.connect()
 
 # Production: Use PostgreSQL or Elasticsearch
 prod_db = factory.create(backend="postgres", **db_config)
+prod_db.connect()
 ```
 
 ### Hybrid Architecture
@@ -335,6 +412,14 @@ migrate_data(file_db, sqlite_db)
 - Use transactions for batch operations
 - Consider PRAGMA optimizations for your use case
 - Use in-memory databases for temporary data
+
+### DuckDB Backend
+- Use in-memory mode for temporary analytics
+- Batch operations for 2-5x better insert performance
+- Use larger batch sizes (5000-10000 rows) for optimal throughput
+- Leverage columnar storage for analytical queries
+- Use read-only mode when only querying production data
+- Stream large datasets to avoid memory issues
 
 ### PostgreSQL Backend
 - Create indexes on frequently queried fields

@@ -83,6 +83,7 @@ nav:
         - packages/data/memory-backend.md
         - packages/data/file-backend.md
         - packages/data/sqlite-backend.md
+        - packages/data/duckdb-backend.md
         - packages/data/postgres-backend.md
         - packages/data/elasticsearch-backend.md
         - packages/data/s3-backend.md

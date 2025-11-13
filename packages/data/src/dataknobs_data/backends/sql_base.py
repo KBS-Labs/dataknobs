@@ -308,6 +308,8 @@ class SQLQueryBuilder:
                     order_parts.append(f"data->'{sort_spec.field}' {direction}")
                 elif self.dialect == "sqlite":
                     order_parts.append(f"json_extract(data, '$.{sort_spec.field}') {direction}")
+                elif self.dialect == "duckdb":
+                    order_parts.append(f"json_extract_string(data, '$.{sort_spec.field}') {direction}")
                 else:
                     order_parts.append(f"data {direction}")
             sql_parts.append("ORDER BY " + ", ".join(order_parts))
@@ -437,6 +439,8 @@ class SQLQueryBuilder:
                     order_parts.append(f"data->'{sort_spec.field}' {direction}")
                 elif self.dialect == "sqlite":
                     order_parts.append(f"json_extract(data, '$.{sort_spec.field}') {direction}")
+                elif self.dialect == "duckdb":
+                    order_parts.append(f"json_extract_string(data, '$.{sort_spec.field}') {direction}")
                 else:
                     order_parts.append(f"data {direction}")  # Fallback
             sql_parts.append("ORDER BY " + ", ".join(order_parts))
@@ -660,6 +664,35 @@ class SQLQueryBuilder:
                 field_expr = base_field_expr
 
             param_placeholder = self._get_param_placeholder(param_start)
+        # JSON field extraction with type casting for DuckDB
+        elif self.dialect == "duckdb":
+            # DuckDB uses json_extract_string for text extraction, with CAST for type conversion
+            base_field_expr = f"json_extract_string(data, '$.{field}')"
+
+            # Determine if we need type casting based on operator and value type
+            if op in [Operator.GT, Operator.GTE, Operator.LT, Operator.LTE, Operator.BETWEEN, Operator.NOT_BETWEEN]:
+                # These operators need numeric comparison
+                if isinstance(value, (int, float)) or (isinstance(value, (list, tuple)) and len(value) > 0 and isinstance(value[0], (int, float))):
+                    field_expr = f"CAST({base_field_expr} AS DOUBLE)"
+                elif isinstance(value, datetime) or (isinstance(value, (list, tuple)) and len(value) > 0 and isinstance(value[0], datetime)):
+                    field_expr = f"CAST({base_field_expr} AS TIMESTAMP)"
+                else:
+                    field_expr = base_field_expr
+            elif op in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
+                # For equality and IN operations, cast based on value type
+                if isinstance(value, bool):
+                    field_expr = f"CAST({base_field_expr} AS BOOLEAN)"
+                elif isinstance(value, (int, float)):
+                    field_expr = f"CAST({base_field_expr} AS DOUBLE)"
+                elif isinstance(value, list) and value and isinstance(value[0], (int, float)):
+                    # IN/NOT_IN with numeric values
+                    field_expr = f"CAST({base_field_expr} AS DOUBLE)"
+                else:
+                    field_expr = base_field_expr
+            else:
+                field_expr = base_field_expr
+
+            param_placeholder = self._get_param_placeholder(param_start)
         elif self.dialect == "sqlite":
             field_expr = f"json_extract(data, '$.{field}')"
             param_placeholder = self._get_param_placeholder(param_start)
@@ -703,9 +736,11 @@ class SQLQueryBuilder:
         elif op == Operator.NOT_EXISTS:
             return f"{field_expr} IS NULL", []
         elif op == Operator.REGEX:
-            # PostgreSQL uses ~ for regex, SQLite would use REGEXP
+            # PostgreSQL uses ~ for regex, SQLite and DuckDB use REGEXP
             if self.dialect == "postgres":
                 return f"{field_expr} ~ {param_placeholder}", [value]
+            elif self.dialect == "duckdb":
+                return f"regexp_matches({field_expr}, {param_placeholder})", [value]
             else:
                 return f"{field_expr} REGEXP {param_placeholder}", [value]
         else:
@@ -752,7 +787,7 @@ class SQLTableManager:
 
     def get_create_table_sql(self) -> str:
         """Get the CREATE TABLE SQL statement.
-        
+
         Returns:
             SQL statement for creating the table
         """
@@ -765,10 +800,10 @@ class SQLTableManager:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-            
-            CREATE INDEX IF NOT EXISTS idx_{self.table_name}_data 
+
+            CREATE INDEX IF NOT EXISTS idx_{self.table_name}_data
             ON {self.qualified_table} USING GIN (data);
-            
+
             CREATE INDEX IF NOT EXISTS idx_{self.table_name}_metadata
             ON {self.qualified_table} USING GIN (metadata);
             """
@@ -782,10 +817,27 @@ class SQLTableManager:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-            
+
             CREATE INDEX IF NOT EXISTS idx_{self.table_name}_created
             ON {self.qualified_table} (created_at);
-            
+
+            CREATE INDEX IF NOT EXISTS idx_{self.table_name}_updated
+            ON {self.qualified_table} (updated_at);
+            """
+        elif self.dialect == "duckdb":
+            # DuckDB has native JSON type for efficient JSON storage and querying
+            return f"""
+            CREATE TABLE IF NOT EXISTS {self.qualified_table} (
+                id VARCHAR(255) PRIMARY KEY,
+                data JSON NOT NULL,
+                metadata JSON,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_{self.table_name}_created
+            ON {self.qualified_table} (created_at);
+
             CREATE INDEX IF NOT EXISTS idx_{self.table_name}_updated
             ON {self.qualified_table} (updated_at);
             """

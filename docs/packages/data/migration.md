@@ -6,7 +6,7 @@ The DataKnobs data package provides comprehensive migration utilities to facilit
 
 The migration utilities enable:
 
-- **Backend-to-backend migration**: Move data between any supported backends (Memory, File, PostgreSQL, Elasticsearch, S3)
+- **Backend-to-backend migration**: Move data between any supported backends (Memory, File, SQLite, DuckDB, PostgreSQL, Elasticsearch, S3)
 - **Schema evolution**: Manage schema versions and automatic migration generation
 - **Data transformation**: Apply transformations during migration with pipeline support
 - **Progress tracking**: Monitor migration progress with detailed statistics
@@ -298,6 +298,52 @@ partitions = ["us-east", "us-west", "eu-west", "ap-south"]
 tasks = [migrate_partition(p) for p in partitions]
 results = await asyncio.gather(*tasks)
 ```
+
+### Migrating to DuckDB for Analytics
+
+When migrating from transactional databases (SQLite, PostgreSQL) to DuckDB for analytical workloads:
+
+```python
+from dataknobs_data import DatabaseFactory
+from dataknobs_data.migration import DataMigrator
+
+# Source: SQLite transactional database
+source_factory = DatabaseFactory()
+source_db = source_factory.create(backend="sqlite", path="app.db")
+source_db.connect()
+
+# Target: DuckDB for fast analytics
+target_db = source_factory.create(backend="duckdb", path="analytics.duckdb")
+target_db.connect()
+
+# Migrate historical data for analysis
+migrator = DataMigrator(source_db, target_db)
+
+# DuckDB performs best with larger batches
+result = migrator.migrate_sync(
+    batch_size=10000,  # Larger batches for DuckDB's columnar storage
+    transform=lambda r: r  # Optional: transform as needed
+)
+
+print(f"Migrated {result.successful_records} records to DuckDB")
+print(f"Duration: {result.duration:.2f} seconds")
+
+# Now use DuckDB for fast analytical queries
+from dataknobs_data.query import Query, Operator
+
+# Fast aggregation on DuckDB (much faster than SQLite)
+high_value_records = target_db.search(
+    Query().filter("amount", Operator.GT, 1000)
+)
+total = sum(r["amount"] for r in high_value_records)
+print(f"Total high-value transactions: ${total:,.2f}")
+```
+
+**Use Case**: Migrate historical transactional data from SQLite/PostgreSQL to DuckDB for:
+- Fast analytical queries and reporting
+- Business intelligence dashboards
+- Data science analysis
+- Historical trend analysis
 
 ### Two-Phase Migration
 

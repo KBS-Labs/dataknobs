@@ -105,7 +105,8 @@ archive_db = config.get_instance("databases", "archive")
 |---------|-------------|------------|----------|
 | Memory | In-memory storage | No | Caching, testing |
 | File | JSON/CSV/Parquet files | Yes | Small datasets, prototyping |
-| SQLite | Embedded SQL database | Yes | Desktop apps, testing, prototyping |
+| SQLite | Embedded SQL database | Yes | Desktop apps, testing, transactions |
+| DuckDB | Analytical database (OLAP) | Yes | Analytics, reporting, data science |
 | PostgreSQL | SQL database server | Yes | Production applications |
 | Elasticsearch | Search engine | Yes | Full-text search, analytics |
 | S3 | Object storage | Yes | Large files, archival |
@@ -127,7 +128,8 @@ With the new async connection pooling system:
 - [Async Connection Pooling](async-pooling.md) - High-performance async operations
 - [Performance Tuning](performance-tuning.md) - Optimization strategies
 - [Backends Overview](backends.md) - Learn about all available backends
-- [SQLite Backend](sqlite-backend.md) - Embedded SQL database
+- [SQLite Backend](sqlite-backend.md) - Embedded SQL database for transactions
+- [DuckDB Backend](duckdb-backend.md) - High-performance analytics database
 - [PostgreSQL Backend](postgres-backend.md) - Full-featured SQL server
 - [S3 Backend](s3-backend.md) - Cloud storage with AWS S3
 - [Factory Pattern](factory-pattern.md) - Dynamic backend selection

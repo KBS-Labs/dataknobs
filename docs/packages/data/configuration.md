@@ -61,6 +61,27 @@ file_db:
   format: ${FILE_FORMAT:json}  # json, csv, or parquet
 ```
 
+### SQLite Backend
+```yaml
+sqlite_db:
+  backend: sqlite
+  path: ${SQLITE_PATH:./data/app.db}  # or ":memory:" for in-memory
+  table: ${SQLITE_TABLE:records}  # Optional
+  timeout: ${SQLITE_TIMEOUT:5.0}  # Connection timeout in seconds
+  journal_mode: ${SQLITE_JOURNAL:WAL}  # WAL, DELETE, TRUNCATE, PERSIST, MEMORY, OFF
+  synchronous: ${SQLITE_SYNC:NORMAL}  # FULL, NORMAL, OFF
+```
+
+### DuckDB Backend
+```yaml
+duckdb_db:
+  backend: duckdb
+  path: ${DUCKDB_PATH:./data/analytics.duckdb}  # or ":memory:" for in-memory
+  table: ${DUCKDB_TABLE:records}  # Optional
+  timeout: ${DUCKDB_TIMEOUT:5.0}  # Connection timeout in seconds
+  read_only: ${DUCKDB_READONLY:false}  # Open in read-only mode
+```
+
 ### PostgreSQL Backend
 ```yaml
 postgres_db:
