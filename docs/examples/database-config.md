@@ -52,11 +52,18 @@ databases:
       application_name: myapp
     
   - name: analytics
-    host: ${DB_ANALYTICS_HOST:localhost}
-    port: ${DB_ANALYTICS_PORT:5432}
-    database: ${DB_ANALYTICS_NAME:analytics}
-    username: ${DB_ANALYTICS_USER:readonly}
-    password: ${DB_ANALYTICS_PASS}
+    backend: duckdb
+    path: ${DUCKDB_PATH:./data/analytics.duckdb}
+    table: ${DUCKDB_TABLE:records}
+    timeout: ${DUCKDB_TIMEOUT:10.0}
+    read_only: ${DUCKDB_READONLY:false}
+
+  - name: warehouse
+    host: ${DB_WAREHOUSE_HOST:localhost}
+    port: ${DB_WAREHOUSE_PORT:5432}
+    database: ${DB_WAREHOUSE_NAME:warehouse}
+    username: ${DB_WAREHOUSE_USER:readonly}
+    password: ${DB_WAREHOUSE_PASS}
     pool:
       min_size: 2
       max_size: 10
@@ -64,7 +71,7 @@ databases:
     options:
       sslmode: require
       statement_timeout: 300000  # 5 minutes
-    
+
   - name: cache
     type: redis
     host: ${REDIS_HOST:localhost}

@@ -96,8 +96,53 @@ def demonstrate_file_backend():
     # Clean up
     os.unlink(json_path)
     os.unlink(csv_path)
-    
+
     return json_db
+
+def demonstrate_duckdb_backend():
+    """Demonstrate DuckDB backend for fast analytics."""
+    print("\n=== DuckDB Backend (Analytics) ===")
+
+    factory = DatabaseFactory()
+
+    # Create in-memory DuckDB for fast analytics
+    duck_db = factory.create(backend="duckdb", path=":memory:")
+    duck_db.connect()
+
+    # Load analytical dataset
+    sales_data = [
+        Record({"product": "Widget", "sales": 15000, "region": "West", "quarter": "Q1"}),
+        Record({"product": "Gadget", "sales": 25000, "region": "East", "quarter": "Q1"}),
+        Record({"product": "Widget", "sales": 18000, "region": "West", "quarter": "Q2"}),
+        Record({"product": "Gadget", "sales": 30000, "region": "East", "quarter": "Q2"}),
+        Record({"product": "Doohickey", "sales": 12000, "region": "South", "quarter": "Q1"}),
+        Record({"product": "Doohickey", "sales": 16000, "region": "South", "quarter": "Q2"}),
+    ]
+
+    # Batch load for optimal performance
+    ids = duck_db.create_batch(sales_data)
+    print(f"Loaded {len(ids)} sales records")
+
+    # Fast analytical queries (much faster than SQLite)
+    from dataknobs_data.query import Query, Operator
+
+    # Aggregate by region
+    west_sales = duck_db.search(Query().filter("region", Operator.EQ, "West"))
+    west_total = sum(r["sales"] for r in west_sales)
+    print(f"West region total sales: ${west_total:,}")
+
+    # High-value products
+    high_value = duck_db.search(Query().filter("sales", Operator.GT, 20000))
+    print(f"High-value products (>$20K): {len(high_value)}")
+
+    # Complex analytical query
+    q2_analysis = duck_db.search(Query().filter("quarter", Operator.EQ, "Q2"))
+    q2_total = sum(r["sales"] for r in q2_analysis)
+    q2_avg = q2_total / len(q2_analysis) if q2_analysis else 0
+    print(f"Q2 Analysis: Total=${q2_total:,}, Avg=${q2_avg:,.2f}")
+
+    duck_db.close()
+    return duck_db
 
 def demonstrate_postgres_backend():
     """Demonstrate PostgreSQL backend (requires running instance)."""
@@ -318,18 +363,20 @@ def main():
     # Demonstrate each backend
     memory_db = demonstrate_memory_backend()
     file_db = demonstrate_file_backend()
+    duck_db = demonstrate_duckdb_backend()
     pg_db = demonstrate_postgres_backend()
     es_db = demonstrate_elasticsearch_backend()
     s3_db = demonstrate_s3_backend()
-    
+
     # Demonstrate migration
     demonstrate_backend_migration()
-    
+
     print("\n" + "=" * 50)
     print("✅ Backend examples completed!")
     print("\nKey Takeaways:")
     print("- Memory: Fast, temporary, good for caching")
     print("- File: Simple persistence, good for small datasets")
+    print("- DuckDB: Fast analytics, 10-100x faster than SQLite for OLAP")
     print("- PostgreSQL: ACID compliance, complex queries")
     print("- Elasticsearch: Full-text search, analytics")
     print("- S3: Unlimited storage, cost-effective archival")
