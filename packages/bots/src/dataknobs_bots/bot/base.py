@@ -390,8 +390,9 @@ class DynaBot:
     async def close(self) -> None:
         """Close the bot and clean up resources.
 
-        This method closes the LLM provider and releases associated resources
-        like HTTP connections. Should be called when the bot is no longer needed,
+        This method closes the LLM provider, conversation storage backend,
+        and releases associated resources like HTTP connections and database
+        connections. Should be called when the bot is no longer needed,
         especially in testing or when creating temporary bot instances.
 
         Example:
@@ -407,8 +408,33 @@ class DynaBot:
             After calling close(), the bot should not be used for further operations.
             Create a new bot instance if needed.
         """
+        # Close LLM provider
         if self.llm and hasattr(self.llm, 'close'):
             await self.llm.close()
+
+        # Close conversation storage backend
+        if self.conversation_storage and hasattr(self.conversation_storage, 'backend'):
+            backend = self.conversation_storage.backend
+            if backend and hasattr(backend, 'close'):
+                await backend.close()
+
+    async def __aenter__(self) -> "DynaBot":
+        """Async context manager entry.
+
+        Returns:
+            Self for use in async with statement
+        """
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """Async context manager exit - ensures cleanup.
+
+        Args:
+            exc_type: Exception type if an exception occurred
+            exc_val: Exception value if an exception occurred
+            exc_tb: Exception traceback if an exception occurred
+        """
+        await self.close()
 
     async def _get_or_create_conversation(
         self, context: BotContext
