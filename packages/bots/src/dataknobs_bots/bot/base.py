@@ -1,5 +1,6 @@
 """Core DynaBot implementation."""
 
+from types import TracebackType
 from typing import Any
 
 from dataknobs_llm.conversations import ConversationManager, DataknobsConversationStorage
@@ -426,7 +427,12 @@ class DynaBot:
         """
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
         """Async context manager exit - ensures cleanup.
 
         Args:
