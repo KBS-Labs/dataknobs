@@ -451,6 +451,14 @@ class DynaBot:
             if backend and hasattr(backend, 'close'):
                 await backend.close()
 
+        # Close knowledge base (releases embedding provider HTTP sessions)
+        if self.knowledge_base and hasattr(self.knowledge_base, 'close'):
+            await self.knowledge_base.close()
+
+        # Close memory store
+        if self.memory and hasattr(self.memory, 'close'):
+            await self.memory.close()
+
     async def __aenter__(self) -> "DynaBot":
         """Async context manager entry.
 
@@ -566,21 +574,36 @@ class DynaBot:
 
         # Add knowledge context
         if self.knowledge_base:
-            kb_results = await self.knowledge_base.query(message, k=3)
+            kb_results = await self.knowledge_base.query(message, k=5)
             if kb_results:
-                kb_context = "\n\n".join([r["text"] for r in kb_results])
-                contexts.append(f"Knowledge context:\n{kb_context}")
+                # Format each chunk with clear separation and source
+                formatted_chunks = []
+                for i, r in enumerate(kb_results, 1):
+                    # Get the actual content without redundant heading hierarchy
+                    text = r["text"]
+                    source = r.get("source", "")
+                    heading = r.get("heading_path", "")
+
+                    # Format with clear structure
+                    chunk_text = f"[{i}] {heading}\n{text}"
+                    if source:
+                        chunk_text += f"\n(Source: {source})"
+                    formatted_chunks.append(chunk_text)
+
+                kb_context = "\n\n---\n\n".join(formatted_chunks)
+                contexts.append(f"<knowledge_base>\n{kb_context}\n</knowledge_base>")
 
         # Add memory context
         if self.memory:
             mem_results = await self.memory.get_context(message)
             if mem_results:
                 mem_context = "\n\n".join([r["content"] for r in mem_results])
-                contexts.append(f"Relevant history:\n{mem_context}")
+                contexts.append(f"<conversation_history>\n{mem_context}\n</conversation_history>")
 
-        # Build full message
+        # Build full message with clear separation
         if contexts:
-            return f"{chr(10).join(contexts)}\n\nUser: {message}"
+            context_section = "\n\n".join(contexts)
+            return f"{context_section}\n\n<question>\n{message}\n</question>"
         return message
 
     @staticmethod
