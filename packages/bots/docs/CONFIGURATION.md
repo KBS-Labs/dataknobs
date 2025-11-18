@@ -145,9 +145,11 @@ prompts:
 
 # Optional: System Prompt
 system_prompt:
-  name: string
+  name: string        # Reference a prompt template by name
+  # or
+  content: string     # Inline content directly
   # or just
-system_prompt: string
+system_prompt: string # Short string = template name, multi-line/long = inline content
 
 # Optional: Middleware
 middleware:
@@ -780,6 +782,80 @@ context = BotContext(
     }
 )
 ```
+
+### System Prompt Configuration
+
+The `system_prompt` field supports multiple formats for flexibility:
+
+#### 1. Dict with Template Name
+
+Reference a prompt defined in the `prompts` section:
+
+```yaml
+prompts:
+  helpful_assistant: "You are a helpful AI assistant."
+
+system_prompt:
+  name: helpful_assistant
+```
+
+#### 2. Dict with Inline Content
+
+Provide the prompt content directly without defining it in `prompts`:
+
+```yaml
+system_prompt:
+  content: "You are a helpful AI assistant specialized in customer support."
+```
+
+#### 3. Short String as Template Name
+
+Short single-line strings (≤100 characters without newlines) are treated as template names:
+
+```yaml
+prompts:
+  helpful_assistant: "You are a helpful AI assistant."
+
+system_prompt: helpful_assistant  # References the template by name
+```
+
+#### 4. Multi-line or Long String as Inline Content
+
+Multi-line strings or strings longer than 100 characters are treated as inline content. This is particularly useful in YAML configurations:
+
+```yaml
+system_prompt: |
+  You are a helpful AI assistant specialized in customer support.
+
+  Key responsibilities:
+  - Answer questions accurately and helpfully
+  - Be polite and professional at all times
+  - Escalate complex issues to human agents when necessary
+
+  Remember to always verify customer identity before sharing sensitive information.
+```
+
+This format is ideal when:
+- Writing prompts directly in YAML without a separate prompts library
+- The prompt is specific to this configuration and won't be reused
+- You want to keep the entire configuration self-contained
+
+**Detection Rules:**
+- Contains `\n` (newline) → inline content
+- Length > 100 characters → inline content
+- Otherwise → template name
+
+#### Best Practices
+
+**Use template names when:**
+- The same prompt is reused across multiple configurations
+- You want centralized prompt management
+- Prompts need variables/templating
+
+**Use inline content when:**
+- The prompt is specific to one configuration
+- You want a self-contained YAML file
+- No templating is needed
 
 ---
 
