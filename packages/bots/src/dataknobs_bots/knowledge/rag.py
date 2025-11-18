@@ -1,5 +1,6 @@
 """RAG (Retrieval-Augmented Generation) knowledge base implementation."""
 
+import types
 from pathlib import Path
 from typing import Any
 
@@ -314,3 +315,78 @@ class RAGKnowledgeBase:
                 "Vector store does not support clearing. "
                 "Consider creating a new knowledge base with a fresh collection."
             )
+
+    async def save(self) -> None:
+        """Save the knowledge base to persistent storage.
+
+        This persists the vector store index and metadata to disk.
+        Only applicable for vector stores that support persistence (e.g., FAISS).
+
+        Example:
+            ```python
+            await kb.load_markdown_document("docs/api.md")
+            await kb.save()  # Persist to disk
+            ```
+        """
+        if hasattr(self.vector_store, "save"):
+            await self.vector_store.save()
+
+    async def close(self) -> None:
+        """Close the knowledge base and release resources.
+
+        This method:
+        - Saves the vector store to disk (if persistence is configured)
+        - Closes the vector store connection
+        - Closes the embedding provider (releases HTTP sessions)
+
+        Should be called when done using the knowledge base to prevent
+        resource leaks (e.g., unclosed aiohttp sessions).
+
+        Example:
+            ```python
+            kb = await RAGKnowledgeBase.from_config(config)
+            try:
+                await kb.load_markdown_document("docs/api.md")
+                results = await kb.query("How do I configure?")
+            finally:
+                await kb.close()
+            ```
+        """
+        # Close vector store (will save if persist_path is set)
+        if hasattr(self.vector_store, "close"):
+            await self.vector_store.close()
+
+        # Close embedding provider (releases HTTP client sessions)
+        if hasattr(self.embedding_provider, "close"):
+            await self.embedding_provider.close()
+
+    async def __aenter__(self) -> "RAGKnowledgeBase":
+        """Async context manager entry.
+
+        Returns:
+            Self for use in async with statement
+
+        Example:
+            ```python
+            async with await RAGKnowledgeBase.from_config(config) as kb:
+                await kb.load_markdown_document("docs/api.md")
+                results = await kb.query("How do I configure?")
+            # Automatically saved and closed
+            ```
+        """
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: types.TracebackType | None,
+    ) -> None:
+        """Async context manager exit - ensures cleanup.
+
+        Args:
+            exc_type: Exception type if an exception occurred
+            exc_val: Exception value if an exception occurred
+            exc_tb: Exception traceback if an exception occurred
+        """
+        await self.close()

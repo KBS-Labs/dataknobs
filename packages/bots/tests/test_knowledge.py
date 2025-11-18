@@ -1,5 +1,7 @@
 """Tests for knowledge base implementations."""
 
+import os
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -149,6 +151,146 @@ class TestRAGKnowledgeBase:
         # Should only return highly similar chunks
         assert isinstance(results, list)
         assert all(r["similarity"] >= 0.9 for r in results)
+
+    @pytest.mark.asyncio
+    async def test_save_with_persistence(self):
+        """Test saving knowledge base to disk."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            persist_path = os.path.join(tmpdir, "test_index")
+
+            config = {
+                "vector_store": {
+                    "backend": "memory",
+                    "dimensions": 384,
+                    "persist_path": persist_path,
+                },
+                "embedding_provider": "echo",
+                "embedding_model": "test",
+            }
+
+            kb = await RAGKnowledgeBase.from_config(config)
+
+            # Load test document
+            test_doc = Path(__file__).parent / "test_docs" / "quickstart.md"
+            await kb.load_markdown_document(test_doc)
+
+            # Save to disk
+            await kb.save()
+
+            # Verify file was created
+            assert os.path.exists(persist_path), "Vector store file not created"
+
+    @pytest.mark.asyncio
+    async def test_close_saves_and_releases_resources(self):
+        """Test that close() saves to disk and releases resources."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            persist_path = os.path.join(tmpdir, "test_index")
+
+            config = {
+                "vector_store": {
+                    "backend": "memory",
+                    "dimensions": 384,
+                    "persist_path": persist_path,
+                },
+                "embedding_provider": "echo",
+                "embedding_model": "test",
+            }
+
+            kb = await RAGKnowledgeBase.from_config(config)
+
+            # Load test document
+            test_doc = Path(__file__).parent / "test_docs" / "quickstart.md"
+            num_chunks = await kb.load_markdown_document(test_doc)
+            assert num_chunks > 0
+
+            # Close (should save automatically)
+            await kb.close()
+
+            # Verify file was created
+            assert os.path.exists(persist_path), "Vector store not saved on close"
+
+    @pytest.mark.asyncio
+    async def test_close_without_persist_path(self):
+        """Test that close() works even without persistence configured."""
+        config = {
+            "vector_store": {"backend": "memory", "dimensions": 384},
+            "embedding_provider": "echo",
+            "embedding_model": "test",
+        }
+
+        kb = await RAGKnowledgeBase.from_config(config)
+
+        # Load test document
+        test_doc = Path(__file__).parent / "test_docs" / "quickstart.md"
+        await kb.load_markdown_document(test_doc)
+
+        # Close should not raise even without persist_path
+        await kb.close()
+
+    @pytest.mark.asyncio
+    async def test_async_context_manager(self):
+        """Test async context manager saves and closes automatically."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            persist_path = os.path.join(tmpdir, "test_index")
+
+            config = {
+                "vector_store": {
+                    "backend": "memory",
+                    "dimensions": 384,
+                    "persist_path": persist_path,
+                },
+                "embedding_provider": "echo",
+                "embedding_model": "test",
+            }
+
+            # Use as async context manager
+            async with await RAGKnowledgeBase.from_config(config) as kb:
+                # Load test document
+                test_doc = Path(__file__).parent / "test_docs" / "quickstart.md"
+                num_chunks = await kb.load_markdown_document(test_doc)
+                assert num_chunks > 0
+
+                # Query to verify it works
+                results = await kb.query("installation", k=3)
+                assert len(results) > 0
+
+            # After exiting context, file should be saved
+            assert os.path.exists(persist_path), "Vector store not saved after context exit"
+
+    @pytest.mark.asyncio
+    async def test_persistence_round_trip(self):
+        """Test that saved data can be loaded back correctly."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            persist_path = os.path.join(tmpdir, "test_index")
+
+            config = {
+                "vector_store": {
+                    "backend": "memory",
+                    "dimensions": 384,
+                    "persist_path": persist_path,
+                },
+                "embedding_provider": "echo",
+                "embedding_model": "test",
+            }
+
+            # First: create and save
+            kb1 = await RAGKnowledgeBase.from_config(config)
+            test_doc = Path(__file__).parent / "test_docs" / "quickstart.md"
+            num_chunks = await kb1.load_markdown_document(test_doc)
+            await kb1.close()
+
+            # Second: load from disk and query
+            kb2 = await RAGKnowledgeBase.from_config(config)
+
+            # Should be able to query the loaded data
+            results = await kb2.query("installation", k=3)
+            assert len(results) > 0, "No results after loading from disk"
+
+            # Verify chunk count matches
+            count = await kb2.vector_store.count()
+            assert count == num_chunks, f"Expected {num_chunks} chunks, got {count}"
+
+            await kb2.close()
 
 
 class TestKnowledgeFactory:
