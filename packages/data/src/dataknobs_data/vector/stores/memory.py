@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import pickle
 from typing import Any
 from uuid import uuid4
 
@@ -26,11 +28,50 @@ class MemoryVectorStore(VectorStore):
 
     async def initialize(self) -> None:
         """Initialize the store."""
+        if self._initialized:
+            return
+
+        # Load existing data if persist path exists
+        if self.persist_path and os.path.exists(self.persist_path):
+            await self.load()
+
         self._initialized = True
 
     async def close(self) -> None:
-        """Close the store."""
+        """Save and close the store."""
+        if self.persist_path and self._initialized:
+            await self.save()
         self._initialized = False
+
+    async def save(self) -> None:
+        """Save vectors and metadata to disk."""
+        if not self.persist_path:
+            return
+
+        # Create directory if needed
+        os.makedirs(os.path.dirname(self.persist_path), exist_ok=True)
+
+        # Save all data
+        with open(self.persist_path, "wb") as f:
+            pickle.dump({
+                "vectors": {k: v.tolist() for k, v in self.vectors.items()},
+                "metadata_store": self.metadata_store,
+                "config": {
+                    "dimensions": self.dimensions,
+                    "metric": self.metric.value if hasattr(self.metric, 'value') else str(self.metric),
+                }
+            }, f)
+
+    async def load(self) -> None:
+        """Load vectors and metadata from disk."""
+        if not self.persist_path or not os.path.exists(self.persist_path):
+            return
+
+        with open(self.persist_path, "rb") as f:
+            data = pickle.load(f)
+            # Convert lists back to numpy arrays
+            self.vectors = {k: np.array(v, dtype=np.float32) for k, v in data["vectors"].items()}
+            self.metadata_store = data["metadata_store"]
 
     async def add_vectors(
         self,
