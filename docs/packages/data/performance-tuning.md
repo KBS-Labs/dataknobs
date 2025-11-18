@@ -519,6 +519,163 @@ databases:
       max_io_queue: 50
 ```
 
+## Backend-Specific Optimizations
+
+### DuckDB Backend
+
+DuckDB is optimized for analytical (OLAP) workloads and can be 10-100x faster than SQLite for aggregations and large scans.
+
+#### When to Use DuckDB vs SQLite
+
+```python
+# Use DuckDB for analytical queries
+analytics_db = factory.create(backend="duckdb", path=":memory:")
+
+# Analytical operations (fast with DuckDB)
+query = Query().filter("amount", Operator.GT, 1000)
+high_value_transactions = analytics_db.search(query)
+total = sum(t["amount"] for t in high_value_transactions)
+
+# Use SQLite for transactional workloads
+transactional_db = factory.create(backend="sqlite", path="app.db")
+
+# Transactional operations (better with SQLite)
+with transactional_db.transaction():
+    transactional_db.create(record1)
+    transactional_db.update(record2.id, record2)
+    transactional_db.delete(record3_id)
+```
+
+#### Batch Size Optimization
+
+DuckDB performs best with larger batch sizes:
+
+```python
+from dataknobs_data.streaming import StreamConfig
+
+# Optimal for DuckDB - larger batches
+duckdb_config = StreamConfig(
+    batch_size=10000,  # Larger batches for columnar storage
+    parallel=True
+)
+
+# Stream write with optimized batching
+result = db.stream_write(data_generator(), duckdb_config)
+```
+
+#### In-Memory Analytics
+
+For temporary analytics on datasets that fit in memory:
+
+```python
+# Load data into in-memory DuckDB for fast analysis
+analytics_db = factory.create(backend="duckdb", path=":memory:")
+analytics_db.connect()
+
+# Bulk load
+records = load_dataset()  # Your data source
+analytics_db.create_batch(records)
+
+# Fast analytical queries
+query = ComplexQuery(
+    condition=LogicCondition(
+        operator=LogicOperator.AND,
+        conditions=[
+            FilterCondition(Filter("year", Operator.EQ, 2024)),
+            FilterCondition(Filter("sales", Operator.GT, 50000))
+        ]
+    )
+)
+results = analytics_db.search(query)
+
+# Aggregate operations (very fast with DuckDB)
+total_sales = sum(r["sales"] for r in results)
+avg_sales = total_sales / len(results) if results else 0
+```
+
+#### Read-Only Mode for Safety
+
+Use read-only mode when querying production databases:
+
+```python
+# Open in read-only mode - cannot accidentally modify data
+readonly_db = factory.create(
+    backend="duckdb",
+    path="/production/analytics.duckdb",
+    read_only=True
+)
+readonly_db.connect()
+
+# Safe querying without risk of modifications
+results = readonly_db.search(Query())
+```
+
+#### Performance Comparison
+
+Typical performance characteristics (relative to SQLite):
+
+| Operation | DuckDB Performance | Best Use Case |
+|-----------|-------------------|---------------|
+| Aggregations (SUM, AVG, COUNT) | **10-100x faster** | Analytics dashboards |
+| Large scans (>100K rows) | **5-20x faster** | Report generation |
+| Complex joins | **10-50x faster** | Data analysis |
+| Window functions | **20-100x faster** | Time-series analysis |
+| Simple inserts | **Similar** | Data loading |
+| Batch inserts | **2-5x faster** | ETL pipelines |
+
+### SQLite Backend
+
+SQLite is optimized for transactional (OLTP) workloads with ACID guarantees.
+
+#### WAL Mode for Better Concurrency
+
+```python
+# Enable WAL mode for better concurrent read performance
+sqlite_db = factory.create(
+    backend="sqlite",
+    path="app.db",
+    journal_mode="WAL",  # Write-Ahead Logging
+    synchronous="NORMAL"  # Balance safety and speed
+)
+sqlite_db.connect()
+```
+
+#### Transaction Batching
+
+```python
+# Batch operations in transactions for better performance
+with sqlite_db.transaction():
+    for record in large_dataset:
+        sqlite_db.create(record)  # All in one transaction
+```
+
+### PostgreSQL Backend
+
+#### Connection Pool Tuning
+
+```python
+# Optimize pool size based on workload
+postgres_db = factory.create(
+    backend="postgres",
+    host="localhost",
+    database="myapp",
+    pool_size=20,  # Adjust based on concurrent connections
+    max_overflow=10
+)
+```
+
+#### Index Strategy
+
+```python
+# Create indexes on frequently queried JSON fields
+async def optimize_postgres(conn):
+    # GIN index for JSON queries
+    await conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_data_gin
+        ON records USING GIN (data)
+    """)
+```
+
 ## Benchmarking Tools
 
 ### Simple Benchmark Script

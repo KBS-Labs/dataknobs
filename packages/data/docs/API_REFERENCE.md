@@ -29,21 +29,27 @@ The DataKnobs Data Package provides a unified data abstraction layer with suppor
 The `Database` class provides async database operations, while `SyncDatabase` provides synchronous operations.
 
 ```python
-from dataknobs_data import Database, SyncDatabase
+from dataknobs_data import AsyncDatabaseFactory, DatabaseFactory, Record
 
 # Async usage
 async def main():
-    db = await AsyncDatabase.from_backend("memory")  # Auto-connects
-    record = Record({"name": "Alice", "age": 30})
-    id = await db.create(record)
-    retrieved = await db.read(id)
+    factory = AsyncDatabaseFactory()
+    db = factory.create(backend="memory")
+    await db.connect()
+
+    record = Record(data={"name": "Alice", "age": 30})
+    record_id = await db.create(record)
+    retrieved = await db.read(record_id)
     await db.close()
 
 # Sync usage
-db = SyncDatabase.from_backend("memory")  # Auto-connects
-record = Record({"name": "Bob", "age": 25})
-id = db.create(record)
-retrieved = db.read(id)
+factory = DatabaseFactory()
+db = factory.create(backend="memory")
+db.connect()
+
+record = Record(data={"name": "Bob", "age": 25})
+record_id = db.create(record)
+retrieved = db.read(record_id)
 db.close()
 ```
 
@@ -344,40 +350,238 @@ async def migrate():
 
 ## Backends
 
+The DataKnobs Data Package supports multiple storage backends to fit different use cases. Choose a backend based on your requirements for persistence, performance, scalability, and features.
+
+### Backend Comparison
+
+| Backend | Persistent | Vector Support | Best For | Installation |
+|---------|-----------|----------------|----------|--------------|
+| **Memory** | No | No | Testing, caching, temporary data | Built-in |
+| **File** | Yes | No | Simple storage, JSON/CSV/Parquet files | Built-in |
+| **SQLite** | Yes | Yes (Python) | Embedded database, single-user apps | Built-in |
+| **DuckDB** | Yes | No | Analytics, OLAP, large datasets | `pip install duckdb` |
+| **PostgreSQL** | Yes | Yes (pgvector) | Production, multi-user, ACID | `pip install dataknobs-data[postgres]` |
+| **Elasticsearch** | Yes | Yes (native KNN) | Full-text search, large-scale search | `pip install dataknobs-data[elasticsearch]` |
+| **S3** | Yes | No | Cloud storage, distributed systems | `pip install dataknobs-data[s3]` |
+
+### Choosing the Right Backend
+
+**For development and testing:**
+- Use **Memory** for unit tests and prototyping
+
+**For local file storage:**
+- Use **File** for simple JSON/CSV data persistence
+- Use **SQLite** for transactional workloads with relationships
+- Use **DuckDB** for analytical queries and large datasets
+
+**SQLite vs DuckDB:**
+- Choose **SQLite** when you need:
+  - ACID transactions and concurrent writes
+  - Vector similarity search
+  - Standard SQL database operations (OLTP)
+  - Maximum compatibility
+
+- Choose **DuckDB** when you need:
+  - Fast analytical queries (aggregations, joins, window functions)
+  - Columnar storage efficiency
+  - Reading large datasets (10M+ rows)
+  - Data warehousing and OLAP workloads
+
+**For production:**
+- Use **PostgreSQL** for multi-user applications requiring strong consistency
+- Use **Elasticsearch** for full-text search and complex queries
+- Use **S3** for cloud-native, distributed storage
+
 ### Memory Backend
 
 In-memory storage for testing and development:
 
 ```python
-db = await Database.create("memory")
+from dataknobs_data import DatabaseFactory
+
+# Create and connect
+factory = DatabaseFactory()
+db = factory.create(backend="memory")
+db.connect()
+
+# Use the database
+record = Record(data={"name": "Alice", "age": 30})
+record_id = db.create(record)
+
+# Close when done
+db.close()
+```
+
+Or using the async factory:
+
+```python
+from dataknobs_data import AsyncDatabaseFactory
+
+factory = AsyncDatabaseFactory()
+db = factory.create(backend="memory")
+await db.connect()
+
+# Use database
+record_id = await db.create(record)
+
+await db.close()
 ```
 
 ### File Backend
 
-JSON file-based storage:
+File-based storage supporting JSON, CSV, and Parquet formats:
 
 ```python
-db = await Database.create("file", {
-    "path": "/data/records.json",
-    "pretty": True,
-    "backup": True
-})
+from dataknobs_data import DatabaseFactory
+
+factory = DatabaseFactory()
+
+# JSON format (default)
+db = factory.create(
+    backend="file",
+    path="/data/records.json",
+    format="json",
+    pretty=True,
+    backup=True
+)
+db.connect()
+
+# CSV format
+db = factory.create(
+    backend="file",
+    path="/data/records.csv",
+    format="csv"
+)
+db.connect()
+
+# Parquet format
+db = factory.create(
+    backend="file",
+    path="/data/records.parquet",
+    format="parquet",
+    compression="gzip"
+)
+db.connect()
 ```
+
+### SQLite Backend
+
+SQLite database storage with optional vector support:
+
+```python
+from dataknobs_data import DatabaseFactory
+
+factory = DatabaseFactory()
+
+# Basic SQLite database
+db = factory.create(
+    backend="sqlite",
+    path="/data/database.db",
+    table="records"
+)
+db.connect()
+
+# In-memory SQLite database
+db = factory.create(
+    backend="sqlite",
+    path=":memory:"
+)
+db.connect()
+
+# With vector support for similarity search
+db = factory.create(
+    backend="sqlite",
+    path="/data/vector.db",
+    table="records",
+    vector_enabled=True,
+    vector_metric="cosine"  # Options: cosine, euclidean, dot_product
+)
+db.connect()
+```
+
+### DuckDB Backend
+
+DuckDB database backend optimized for analytical workloads with columnar storage:
+
+```python
+from dataknobs_data import DatabaseFactory, AsyncDatabaseFactory
+
+# Sync version
+factory = DatabaseFactory()
+
+# File-based DuckDB database
+db = factory.create(
+    backend="duckdb",
+    path="/data/analytics.duckdb",
+    table="records"
+)
+db.connect()
+
+# In-memory DuckDB database (fast analytics)
+db = factory.create(
+    backend="duckdb",
+    path=":memory:"
+)
+db.connect()
+
+# With custom configuration
+db = factory.create(
+    backend="duckdb",
+    path="/data/analytics.duckdb",
+    table="records",
+    timeout=10.0,
+    read_only=False
+)
+db.connect()
+
+# Async version
+async_factory = AsyncDatabaseFactory()
+db = async_factory.create(
+    backend="duckdb",
+    path="/data/analytics.duckdb"
+)
+await db.connect()
+```
+
+**DuckDB Features:**
+- Optimized for analytical (OLAP) workloads
+- Columnar storage for efficient querying
+- 10-100x faster than SQLite for analytics
+- Supports complex queries with aggregations
+- Both file-based and in-memory modes
+- Ideal for data analysis, reporting, and ETL
 
 ### PostgreSQL Backend
 
 PostgreSQL database storage:
 
 ```python
-db = await Database.create("postgres", {
-    "host": "localhost",
-    "port": 5432,
-    "database": "mydb",
-    "user": "user",
-    "password": "pass",
-    "table": "records",
-    "schema": "public"
-})
+from dataknobs_data import AsyncDatabaseFactory
+
+factory = AsyncDatabaseFactory()
+
+db = factory.create(
+    backend="postgres",
+    host="localhost",
+    port=5432,
+    database="mydb",
+    user="user",
+    password="pass",
+    table="records"
+)
+await db.connect()
+
+# With vector support (requires pgvector extension)
+db = factory.create(
+    backend="postgres",
+    host="localhost",
+    database="mydb",
+    user="user",
+    password="pass",
+    vector_enabled=True,
+    vector_metric="cosine"
+)
+await db.connect()
 ```
 
 ### S3 Backend
@@ -385,13 +589,37 @@ db = await Database.create("postgres", {
 AWS S3 storage:
 
 ```python
-db = await Database.create("s3", {
-    "bucket": "my-bucket",
-    "prefix": "records/",
-    "region": "us-west-2",
-    "aws_access_key_id": "key",
-    "aws_secret_access_key": "secret"
-})
+from dataknobs_data import AsyncDatabaseFactory
+
+factory = AsyncDatabaseFactory()
+
+db = factory.create(
+    backend="s3",
+    bucket="my-bucket",
+    prefix="records/",
+    region="us-west-2",
+    access_key_id="key",
+    secret_access_key="secret"
+)
+await db.connect()
+
+# Using IAM role (no credentials needed)
+db = factory.create(
+    backend="s3",
+    bucket="my-bucket",
+    prefix="records/"
+)
+await db.connect()
+
+# With custom S3-compatible endpoint (e.g., MinIO)
+db = factory.create(
+    backend="s3",
+    bucket="my-bucket",
+    endpoint_url="http://localhost:9000",
+    access_key_id="minioadmin",
+    secret_access_key="minioadmin"
+)
+await db.connect()
 ```
 
 ### Elasticsearch Backend
@@ -399,12 +627,37 @@ db = await Database.create("s3", {
 Elasticsearch storage:
 
 ```python
-db = await Database.create("elasticsearch", {
-    "host": "localhost",
-    "port": 9200,
-    "index": "records",
-    "refresh": True
-})
+from dataknobs_data import AsyncDatabaseFactory
+
+factory = AsyncDatabaseFactory()
+
+# Basic Elasticsearch connection
+db = factory.create(
+    backend="elasticsearch",
+    hosts=["http://localhost:9200"],
+    index="records"
+)
+await db.connect()
+
+# With authentication
+db = factory.create(
+    backend="elasticsearch",
+    hosts=["https://elastic.example.com:9200"],
+    index="records",
+    username="elastic",
+    password="changeme"
+)
+await db.connect()
+
+# With vector support for KNN search
+db = factory.create(
+    backend="elasticsearch",
+    hosts=["http://localhost:9200"],
+    index="records",
+    vector_enabled=True,
+    vector_metric="cosine"
+)
+await db.connect()
 ```
 
 ## Exceptions
@@ -439,15 +692,42 @@ except RecordNotFoundError as e:
 Convenient factory functions for creating databases:
 
 ```python
-from dataknobs_data import database_factory, async_database_factory
+from dataknobs_data import DatabaseFactory, AsyncDatabaseFactory
 
 # Synchronous factory
-db = database_factory("memory")
-db = database_factory("postgres", config)
+factory = DatabaseFactory()
+db = factory.create(backend="memory")
+db.connect()
+
+# With configuration
+db = factory.create(
+    backend="postgres",
+    host="localhost",
+    database="mydb",
+    user="user",
+    password="pass"
+)
+db.connect()
 
 # Asynchronous factory
-db = await async_database_factory("memory")
-db = await async_database_factory("s3", config)
+async_factory = AsyncDatabaseFactory()
+db = async_factory.create(backend="memory")
+await db.connect()
+
+# With configuration
+db = async_factory.create(
+    backend="s3",
+    bucket="my-bucket",
+    prefix="records/"
+)
+await db.connect()
+
+# Using singleton instances
+from dataknobs_data import database_factory, async_database_factory
+
+# These are pre-instantiated factory objects
+db = database_factory.create(backend="memory")
+db = async_database_factory.create(backend="postgres", host="localhost")
 ```
 
 ## Configuration
@@ -455,33 +735,65 @@ db = await async_database_factory("s3", config)
 Many components support configuration through dictionaries or environment variables:
 
 ```python
-# From environment variables (using python-dotenv)
-db = await Database.create("postgres")  # Uses .env file
+import os
+from dataknobs_data import AsyncDatabaseFactory
 
-# From explicit config
+factory = AsyncDatabaseFactory()
+
+# From environment variables (using python-dotenv)
+# Assumes you have .env file with DB_HOST, DB_PORT, etc.
+db = factory.create(
+    backend="postgres",
+    host=os.getenv("DB_HOST", "localhost"),
+    port=int(os.getenv("DB_PORT", 5432)),
+    database=os.getenv("DB_NAME"),
+    user=os.getenv("DB_USER"),
+    password=os.getenv("DB_PASSWORD")
+)
+await db.connect()
+
+# Or use a config dict
 config = {
     "host": os.getenv("DB_HOST"),
     "port": int(os.getenv("DB_PORT", 5432)),
-    "database": os.getenv("DB_NAME")
+    "database": os.getenv("DB_NAME"),
+    "user": os.getenv("DB_USER"),
+    "password": os.getenv("DB_PASSWORD")
 }
-db = await Database.create("postgres", config)
+db = factory.create(backend="postgres", **config)
+await db.connect()
 ```
 
 ## Best Practices
 
 1. **Always close connections**: Use context managers or explicitly call `close()`:
    ```python
-   async with await Database.create("memory") as db:
-       # Use db
-       pass  # Auto-closes
+   from dataknobs_data import AsyncDatabaseFactory
+
+   # Using context manager (recommended)
+   factory = AsyncDatabaseFactory()
+   db = factory.create(backend="memory")
+
+   async with db:
+       # db is auto-connected and will auto-close
+       record = Record(data={"name": "Alice"})
+       await db.create(record)
+
+   # Or manually manage connections
+   db = factory.create(backend="memory")
+   await db.connect()
+   try:
+       await db.create(record)
+   finally:
+       await db.close()
    ```
 
 2. **Use type hints**: The package is fully typed for better IDE support:
    ```python
-   from dataknobs_data import Database, Record
-   
-   async def process_record(db: Database, id: str) -> Record | None:
-       return await db.read(id)
+   from dataknobs_data import AsyncDatabase, Record
+
+   async def process_record(db: AsyncDatabase, record_id: str) -> Record | None:
+       return await db.read(record_id)
    ```
 
 3. **Handle exceptions**: Catch specific exceptions for better error handling:

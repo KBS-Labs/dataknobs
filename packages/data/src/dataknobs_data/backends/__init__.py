@@ -175,6 +175,29 @@ class BackendRegistry(Registry[Type[SyncDatabase]]):
         except ImportError:
             pass
 
+        # DuckDB backend
+        try:
+            from .duckdb import SyncDuckDBDatabase
+
+            self.register(
+                "duckdb",
+                SyncDuckDBDatabase,
+                metadata={
+                    "description": "DuckDB database backend for analytical workloads with columnar storage",
+                    "persistent": True,
+                    "requires_install": "pip install duckdb",
+                    "vector_support": False,
+                    "config_options": {
+                        "path": "Path to database file (required, use :memory: for in-memory)",
+                        "table": "Table name (default: records)",
+                        "timeout": "Connection timeout in seconds (default: 5.0)",
+                        "read_only": "Open database in read-only mode (default: False)",
+                    },
+                },
+            )
+        except ImportError:
+            pass
+
 
 class AsyncBackendRegistry(Registry[Type[AsyncDatabase]]):
     """Registry of available async database backends.
@@ -333,6 +356,30 @@ class AsyncBackendRegistry(Registry[Type[AsyncDatabase]]):
                         "endpoint_url": "Custom endpoint for S3-compatible services",
                         "access_key_id": "AWS access key (or use IAM role)",
                         "secret_access_key": "AWS secret key (or use IAM role)",
+                    },
+                },
+            )
+        except ImportError:
+            pass
+
+        # DuckDB backend
+        try:
+            from .duckdb import AsyncDuckDBDatabase
+
+            self.register(
+                "duckdb",
+                AsyncDuckDBDatabase,
+                metadata={
+                    "description": "DuckDB database backend for analytical workloads with columnar storage",
+                    "persistent": True,
+                    "requires_install": "pip install duckdb",
+                    "vector_support": False,
+                    "config_options": {
+                        "path": "Path to database file (required, use :memory: for in-memory)",
+                        "table": "Table name (default: records)",
+                        "timeout": "Connection timeout in seconds (default: 5.0)",
+                        "max_workers": "Number of threads in pool (default: 4)",
+                        "read_only": "Open database in read-only mode (default: False)",
                     },
                 },
             )
