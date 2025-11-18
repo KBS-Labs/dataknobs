@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any, cast
 
 from dataknobs_config import ConfigurableBase
@@ -54,8 +55,9 @@ class VectorStoreBase(ConfigurableBase):
         else:
             self.metric = metric
 
-        # Extract paths and sizes
-        self.persist_path = self.config.get("persist_path")
+        # Extract paths and sizes (expand ~ to home directory)
+        persist_path = self.config.get("persist_path")
+        self.persist_path = os.path.expanduser(persist_path) if persist_path else None
         self.batch_size = self.config.get("batch_size", 100)
 
         # Extract parameter dictionaries
