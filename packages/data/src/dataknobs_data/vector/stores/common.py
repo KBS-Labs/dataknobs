@@ -60,6 +60,12 @@ class VectorStoreBase(ConfigurableBase):
         self.persist_path = os.path.expanduser(persist_path) if persist_path else None
         self.batch_size = self.config.get("batch_size", 100)
 
+        # Debug logging for path resolution
+        import logging
+        logger = logging.getLogger(__name__)
+        if persist_path:
+            logger.info(f"VectorStore persist_path: {persist_path} -> {self.persist_path} (exists: {os.path.exists(self.persist_path) if self.persist_path else False})")
+
         # Extract parameter dictionaries
         self.index_params = self.config.get("index_params", {})
         self.search_params = self.config.get("search_params", {})

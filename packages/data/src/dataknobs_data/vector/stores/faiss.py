@@ -374,11 +374,16 @@ class FaissVectorStore(VectorStore):
 
     async def load(self) -> None:
         """Load index and metadata from disk."""
+        import logging
+        logger = logging.getLogger(__name__)
+
         if not self.persist_path or not os.path.exists(self.persist_path):
+            logger.debug(f"FAISS: No persist path or file not found: {self.persist_path}")
             return
 
         # Load index
         self.index = faiss.read_index(self.persist_path)
+        logger.info(f"FAISS: Loaded index from {self.persist_path} with {self.index.ntotal} vectors")
 
         # Load metadata and mappings
         metadata_path = self.persist_path + ".meta"
@@ -388,3 +393,4 @@ class FaissVectorStore(VectorStore):
                 self.id_map = data["id_map"]
                 self.metadata_store = data["metadata_store"]
                 self.next_idx = data["next_idx"]
+            logger.info(f"FAISS: Loaded metadata with {len(self.id_map)} entries")
