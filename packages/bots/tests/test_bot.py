@@ -174,16 +174,17 @@ Always be polite."""
         conversation_state = await bot.get_conversation("conv-system-test")
         assert conversation_state is not None
 
-        # Get messages from the tree
-        messages = []
-        for node in conversation_state.message_tree:
-            if node.message and node.message.content:
-                messages.append(node.message)
+        # Get messages from the tree using find_nodes to find all system messages
+        tree = conversation_state.message_tree
+        system_nodes = tree.find_nodes(
+            lambda node: node.data.message and node.data.message.role == "system"
+        )
 
-        # Find the system message
-        system_messages = [m for m in messages if m.role == "system"]
-        assert len(system_messages) >= 1
+        # Verify at least one system message exists
+        assert len(system_nodes) >= 1
+
         # The system message should contain our inline content
+        system_messages = [node.data.message for node in system_nodes]
         assert any(m.content == system_content for m in system_messages)
 
     @pytest.mark.asyncio
