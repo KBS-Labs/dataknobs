@@ -1,11 +1,11 @@
 {
-  "timestamp": "2025-11-19T19:59:38Z",
+  "timestamp": "2025-11-19T20:25:01Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.9.10 (Homebrew 2025-11-17)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/bot-fixes",
-  "git_commit": "bd5ff12df8dc4d2aa1392a0a06cf16e9f383bc5b",
+  "git_branch": "update-dependencies",
+  "git_commit": "e387c2798397484ac9ed0bf0e30c0f2300bf378b",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
