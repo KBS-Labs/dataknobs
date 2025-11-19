@@ -352,14 +352,19 @@ class FaissVectorStore(VectorStore):
         if not self.persist_path:
             return
 
+        # Convert Path to string for FAISS
+        persist_path_str = str(self.persist_path)
+
         # Create directory if needed
-        os.makedirs(os.path.dirname(self.persist_path), exist_ok=True)
+        parent_dir = os.path.dirname(persist_path_str)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
 
         # Save index
-        faiss.write_index(self.index, self.persist_path)
+        faiss.write_index(self.index, persist_path_str)
 
         # Save metadata and mappings
-        metadata_path = self.persist_path + ".meta"
+        metadata_path = persist_path_str + ".meta"
         with open(metadata_path, "wb") as f:
             pickle.dump({
                 "id_map": self.id_map,
@@ -381,12 +386,15 @@ class FaissVectorStore(VectorStore):
             logger.debug(f"FAISS: No persist path or file not found: {self.persist_path}")
             return
 
+        # Convert Path to string for FAISS
+        persist_path_str = str(self.persist_path)
+
         # Load index
-        self.index = faiss.read_index(self.persist_path)
-        logger.info(f"FAISS: Loaded index from {self.persist_path} with {self.index.ntotal} vectors")
+        self.index = faiss.read_index(persist_path_str)
+        logger.info(f"FAISS: Loaded index from {persist_path_str} with {self.index.ntotal} vectors")
 
         # Load metadata and mappings
-        metadata_path = self.persist_path + ".meta"
+        metadata_path = persist_path_str + ".meta"
         if os.path.exists(metadata_path):
             with open(metadata_path, "rb") as f:
                 data = pickle.load(f)
