@@ -352,14 +352,19 @@ class FaissVectorStore(VectorStore):
         if not self.persist_path:
             return
 
+        # Convert Path to string for FAISS
+        persist_path_str = str(self.persist_path)
+
         # Create directory if needed
-        os.makedirs(os.path.dirname(self.persist_path), exist_ok=True)
+        parent_dir = os.path.dirname(persist_path_str)
+        if parent_dir:
+            os.makedirs(parent_dir, exist_ok=True)
 
         # Save index
-        faiss.write_index(self.index, self.persist_path)
+        faiss.write_index(self.index, persist_path_str)
 
         # Save metadata and mappings
-        metadata_path = self.persist_path + ".meta"
+        metadata_path = persist_path_str + ".meta"
         with open(metadata_path, "wb") as f:
             pickle.dump({
                 "id_map": self.id_map,
@@ -374,17 +379,26 @@ class FaissVectorStore(VectorStore):
 
     async def load(self) -> None:
         """Load index and metadata from disk."""
+        import logging
+        logger = logging.getLogger(__name__)
+
         if not self.persist_path or not os.path.exists(self.persist_path):
+            logger.debug(f"FAISS: No persist path or file not found: {self.persist_path}")
             return
 
+        # Convert Path to string for FAISS
+        persist_path_str = str(self.persist_path)
+
         # Load index
-        self.index = faiss.read_index(self.persist_path)
+        self.index = faiss.read_index(persist_path_str)
+        logger.info(f"FAISS: Loaded index from {persist_path_str} with {self.index.ntotal} vectors")
 
         # Load metadata and mappings
-        metadata_path = self.persist_path + ".meta"
+        metadata_path = persist_path_str + ".meta"
         if os.path.exists(metadata_path):
             with open(metadata_path, "rb") as f:
                 data = pickle.load(f)
                 self.id_map = data["id_map"]
                 self.metadata_store = data["metadata_store"]
                 self.next_idx = data["next_idx"]
+            logger.info(f"FAISS: Loaded metadata with {len(self.id_map)} entries")

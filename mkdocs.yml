@@ -71,6 +71,7 @@ nav:
       - packages/config/configuration-system.md
       - packages/config/environment-variables.md
       - packages/config/factory-registration.md
+      - packages/config/inheritance.md
       - packages/config/api.md
     - Data:
       - packages/data/index.md
@@ -83,6 +84,7 @@ nav:
         - packages/data/memory-backend.md
         - packages/data/file-backend.md
         - packages/data/sqlite-backend.md
+        - packages/data/duckdb-backend.md
         - packages/data/postgres-backend.md
         - packages/data/elasticsearch-backend.md
         - packages/data/s3-backend.md
@@ -177,6 +179,8 @@ nav:
         - packages/bots/guides/configuration.md
         - packages/bots/guides/architecture.md
         - packages/bots/guides/tools.md
+        - packages/bots/guides/rag-retrieval.md
+        - packages/bots/guides/rag-query.md
       - API Reference:
         - packages/bots/api/reference.md
       - Examples:
@@ -192,8 +196,11 @@ nav:
       - packages/xization/tokenization.md
       - packages/xization/normalization.md
       - packages/xization/masking.md
+      - packages/xization/content-transformation.md
       - Markdown Chunking:
         - packages/xization/markdown-chunking.md
+        - packages/xization/quality-filtering.md
+        - packages/xization/heading-enrichment.md
       - packages/xization/api.md
     - Legacy:
       - packages/legacy/index.md

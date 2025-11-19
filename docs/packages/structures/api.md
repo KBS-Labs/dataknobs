@@ -2,6 +2,12 @@
 
 Complete API reference for the `dataknobs-structures` package.
 
+> **📖 Also see:** [Auto-generated API Reference](../../api/reference/structures.md) - Complete documentation from source code docstrings
+
+This page provides curated examples and usage patterns. The auto-generated reference provides exhaustive technical documentation with all methods, parameters, and type annotations.
+
+---
+
 ## Package Imports
 
 ```python

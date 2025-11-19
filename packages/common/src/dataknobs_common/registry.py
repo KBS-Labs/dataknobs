@@ -708,8 +708,446 @@ class AsyncRegistry(Generic[T]):
         return iter(list(self._items.values()))
 
 
+class PluginRegistry(Generic[T]):
+    """Registry for plugins with factory support and defaults.
+
+    A specialized registry pattern for managing plugins (adapters, handlers,
+    providers, etc.) that supports:
+    - Class or factory function registration
+    - Lazy instantiation with configuration
+    - Default fallback when plugin not found
+    - Instance caching
+    - Type validation
+
+    This pattern is useful when you need to:
+    - Register different implementations of an interface
+    - Create instances on-demand with configuration
+    - Provide graceful fallbacks for unregistered keys
+
+    Args:
+        name: Registry name
+        default_factory: Default factory to use when key not found
+
+    Example:
+        ```python
+        from dataknobs_common.registry import PluginRegistry
+
+        # Define base class
+        class Handler:
+            def __init__(self, name: str, config: dict):
+                self.name = name
+                self.config = config
+
+        class DefaultHandler(Handler):
+            pass
+
+        class CustomHandler(Handler):
+            pass
+
+        # Create registry with default
+        registry = PluginRegistry[Handler]("handlers", default_factory=DefaultHandler)
+
+        # Register plugins
+        registry.register("custom", CustomHandler)
+
+        # Get instances
+        handler = registry.get("custom", config={"timeout": 30})
+        default = registry.get("unknown", config={})  # Uses default
+        ```
+
+    With async factories:
+        ```python
+        async def create_async_handler(name, config):
+            handler = AsyncHandler(name, config)
+            await handler.initialize()
+            return handler
+
+        registry.register("async", create_async_handler)
+        handler = await registry.get_async("async", config={"url": "..."})
+        ```
+    """
+
+    def __init__(
+        self,
+        name: str,
+        default_factory: type[T] | Callable[..., T] | None = None,
+        validate_type: type | None = None,
+    ):
+        """Initialize plugin registry.
+
+        Args:
+            name: Registry name for identification
+            default_factory: Default class or factory to use when key not found
+            validate_type: Optional base type to validate registrations against
+        """
+        self._name = name
+        self._factories: Dict[str, type[T] | Callable[..., T]] = {}
+        self._instances: Dict[str, T] = {}
+        self._lock = threading.RLock()
+        self._default_factory = default_factory
+        self._validate_type = validate_type
+
+    @property
+    def name(self) -> str:
+        """Get registry name."""
+        return self._name
+
+    def register(
+        self,
+        key: str,
+        factory: type[T] | Callable[..., T],
+        override: bool = False,
+    ) -> None:
+        """Register a plugin class or factory.
+
+        Args:
+            key: Unique identifier for the plugin
+            factory: Plugin class or factory function that creates instances
+            override: If True, allow overriding existing registration
+
+        Raises:
+            OperationError: If key already registered and override=False
+            TypeError: If factory doesn't match validate_type
+
+        Example:
+            ```python
+            # Register a class
+            registry.register("handler1", MyHandler)
+
+            # Register a factory function
+            registry.register("handler2", lambda name, config: create_handler(name, config))
+            ```
+        """
+        with self._lock:
+            # Check for existing registration
+            if not override and key in self._factories:
+                raise OperationError(
+                    f"Plugin '{key}' already registered in {self._name}. "
+                    f"Use override=True to replace.",
+                    context={"key": key, "registry": self._name},
+                )
+
+            # Validate type if specified
+            if self._validate_type and isinstance(factory, type):
+                if not issubclass(factory, self._validate_type):
+                    raise TypeError(
+                        f"Factory class must be a subclass of {self._validate_type.__name__}, "
+                        f"got {factory.__name__}"
+                    )
+            elif not callable(factory):
+                raise TypeError(
+                    f"Factory must be a class or callable, got {type(factory).__name__}"
+                )
+
+            # Register
+            self._factories[key] = factory
+
+            # Clear cached instance if overriding
+            if key in self._instances:
+                del self._instances[key]
+
+    def unregister(self, key: str) -> None:
+        """Unregister a plugin.
+
+        Args:
+            key: Key to unregister
+
+        Raises:
+            NotFoundError: If key not registered
+        """
+        with self._lock:
+            if key not in self._factories:
+                raise NotFoundError(
+                    f"Plugin not found: {key}",
+                    context={"key": key, "registry": self._name},
+                )
+
+            del self._factories[key]
+
+            # Clear cached instance
+            if key in self._instances:
+                del self._instances[key]
+
+    def is_registered(self, key: str) -> bool:
+        """Check if a plugin is registered.
+
+        Args:
+            key: Key to check
+
+        Returns:
+            True if registered
+        """
+        with self._lock:
+            return key in self._factories
+
+    def get(
+        self,
+        key: str,
+        config: Dict[str, Any] | None = None,
+        use_cache: bool = True,
+        use_default: bool = True,
+    ) -> T:
+        """Get a plugin instance.
+
+        Creates instance if not cached, using the registered factory.
+
+        Args:
+            key: Plugin identifier
+            config: Configuration dictionary passed to factory
+            use_cache: Return cached instance if available
+            use_default: Use default factory if key not registered
+
+        Returns:
+            Plugin instance
+
+        Raises:
+            NotFoundError: If key not registered and use_default=False
+
+        Example:
+            ```python
+            handler = registry.get("custom", config={"timeout": 30})
+            ```
+        """
+        with self._lock:
+            # Check cache
+            if use_cache and key in self._instances:
+                return self._instances[key]
+
+            # Get factory
+            if key in self._factories:
+                factory = self._factories[key]
+            elif use_default and self._default_factory:
+                factory = self._default_factory
+            else:
+                raise NotFoundError(
+                    f"Plugin '{key}' not registered and no default available",
+                    context={
+                        "key": key,
+                        "registry": self._name,
+                        "available": list(self._factories.keys()),
+                    },
+                )
+
+            # Create instance
+            try:
+                if isinstance(factory, type):
+                    instance = factory(key, config or {})
+                else:
+                    instance = factory(key, config or {})
+
+                # Validate instance type if specified
+                if self._validate_type and not isinstance(instance, self._validate_type):
+                    raise TypeError(
+                        f"Factory must return a {self._validate_type.__name__} instance, "
+                        f"got {type(instance).__name__}"
+                    )
+
+            except Exception as e:
+                raise OperationError(
+                    f"Failed to create plugin '{key}': {e}",
+                    context={"key": key, "registry": self._name},
+                ) from e
+
+            # Cache instance
+            if use_cache:
+                self._instances[key] = instance
+
+            return instance
+
+    async def get_async(
+        self,
+        key: str,
+        config: Dict[str, Any] | None = None,
+        use_cache: bool = True,
+        use_default: bool = True,
+    ) -> T:
+        """Get a plugin instance, supporting async factories.
+
+        Like get() but awaits the factory if it's a coroutine function.
+
+        Args:
+            key: Plugin identifier
+            config: Configuration dictionary
+            use_cache: Return cached instance if available
+            use_default: Use default factory if key not registered
+
+        Returns:
+            Plugin instance
+
+        Example:
+            ```python
+            handler = await registry.get_async("async-handler", config={"url": "..."})
+            ```
+        """
+        with self._lock:
+            # Check cache
+            if use_cache and key in self._instances:
+                return self._instances[key]
+
+            # Get factory
+            if key in self._factories:
+                factory = self._factories[key]
+            elif use_default and self._default_factory:
+                factory = self._default_factory
+            else:
+                raise NotFoundError(
+                    f"Plugin '{key}' not registered and no default available",
+                    context={
+                        "key": key,
+                        "registry": self._name,
+                        "available": list(self._factories.keys()),
+                    },
+                )
+
+        # Create instance (outside lock for async)
+        try:
+            if isinstance(factory, type):
+                instance = factory(key, config or {})
+            else:
+                result = factory(key, config or {})
+                # Await if coroutine
+                if asyncio.iscoroutine(result):
+                    instance = await result
+                else:
+                    instance = result
+
+            # Validate instance type
+            if self._validate_type and not isinstance(instance, self._validate_type):
+                raise TypeError(
+                    f"Factory must return a {self._validate_type.__name__} instance, "
+                    f"got {type(instance).__name__}"
+                )
+
+        except Exception as e:
+            raise OperationError(
+                f"Failed to create plugin '{key}': {e}",
+                context={"key": key, "registry": self._name},
+            ) from e
+
+        # Cache instance
+        with self._lock:
+            if use_cache:
+                self._instances[key] = instance
+
+        return instance
+
+    def list_keys(self) -> List[str]:
+        """List all registered plugin keys.
+
+        Returns:
+            List of registered keys
+        """
+        with self._lock:
+            return list(self._factories.keys())
+
+    def clear_cache(self, key: str | None = None) -> None:
+        """Clear cached instances.
+
+        Args:
+            key: Specific key to clear, or None for all
+        """
+        with self._lock:
+            if key:
+                if key in self._instances:
+                    del self._instances[key]
+            else:
+                self._instances.clear()
+
+    def get_factory(self, key: str) -> type[T] | Callable[..., T] | None:
+        """Get the registered factory for a key.
+
+        Args:
+            key: Plugin identifier
+
+        Returns:
+            Factory class or function, or None if not registered
+        """
+        with self._lock:
+            return self._factories.get(key)
+
+    @property
+    def cached_instances(self) -> Dict[str, T]:
+        """Get the dictionary of cached instances.
+
+        Returns:
+            Dictionary mapping keys to cached instances
+
+        Note:
+            This returns the internal cache dictionary. Modifications
+            will affect the cache directly.
+        """
+        return self._instances
+
+    def set_default_factory(self, factory: type[T] | Callable[..., T]) -> None:
+        """Set the default factory.
+
+        Args:
+            factory: New default factory
+
+        Raises:
+            TypeError: If factory doesn't match validate_type
+        """
+        if self._validate_type and isinstance(factory, type):
+            if not issubclass(factory, self._validate_type):
+                raise TypeError(
+                    f"Default factory must be a subclass of {self._validate_type.__name__}"
+                )
+
+        self._default_factory = factory
+
+    def bulk_register(
+        self,
+        factories: Dict[str, type[T] | Callable[..., T]],
+        override: bool = False,
+    ) -> None:
+        """Register multiple plugins at once.
+
+        Args:
+            factories: Dictionary mapping keys to factories
+            override: Allow overriding existing registrations
+
+        Example:
+            ```python
+            registry.bulk_register({
+                "handler1": Handler1,
+                "handler2": Handler2,
+            })
+            ```
+        """
+        for key, factory in factories.items():
+            self.register(key, factory, override=override)
+
+    def copy(self) -> Dict[str, type[T] | Callable[..., T]]:
+        """Get a copy of all registered factories.
+
+        Returns:
+            Dictionary of key to factory mappings
+        """
+        with self._lock:
+            return dict(self._factories)
+
+    def __len__(self) -> int:
+        """Get number of registered plugins."""
+        return len(self._factories)
+
+    def __contains__(self, key: str) -> bool:
+        """Check if plugin is registered using 'in' operator."""
+        return self.is_registered(key)
+
+    def __repr__(self) -> str:
+        """Get string representation."""
+        return (
+            f"PluginRegistry("
+            f"name='{self._name}', "
+            f"plugins={len(self._factories)}, "
+            f"cached={len(self._instances)}"
+            f")"
+        )
+
+
 __all__ = [
     "Registry",
     "CachedRegistry",
     "AsyncRegistry",
+    "PluginRegistry",
 ]

@@ -2,6 +2,10 @@
 
 Prompt version management, A/B testing, and metrics tracking.
 
+> **📖 Also see:** [Auto-generated API Reference](../../../api/reference/llm.md) - Complete documentation from source code docstrings
+
+---
+
 ## Overview
 
 The versioning API provides comprehensive tools for tracking prompt versions, running A/B tests, and measuring performance.

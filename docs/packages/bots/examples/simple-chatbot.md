@@ -158,12 +158,35 @@ To add memory, see the [Memory Chatbot Example](memory-chatbot.md).
 
 ### Change System Prompt
 
+**Using a template name:**
+
 ```python
 "prompts": {
     "custom_assistant": "You are an expert in Python programming."
 },
 "system_prompt": {
     "name": "custom_assistant"
+}
+```
+
+**Using inline content directly:**
+
+```python
+# Multi-line prompts can be specified directly without a prompts library
+"system_prompt": """You are an expert Python programming assistant.
+
+Key responsibilities:
+- Help users write clean, idiomatic Python code
+- Explain Python concepts clearly
+- Suggest best practices and design patterns
+"""
+```
+
+**Or as a dict with content:**
+
+```python
+"system_prompt": {
+    "content": "You are an expert in Python programming. Help users write clean code."
 }
 ```
 

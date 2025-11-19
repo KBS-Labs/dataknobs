@@ -2,6 +2,12 @@
 
 Complete API reference for the `dataknobs-common` package.
 
+> **📖 Also see:** [Auto-generated API Reference](../../api/reference/common.md) - Complete documentation from source code docstrings
+
+This page provides curated examples and usage patterns. The auto-generated reference provides exhaustive technical documentation with all methods, parameters, and type annotations.
+
+---
+
 ## Module Overview
 
 The `dataknobs-common` package provides three main modules:

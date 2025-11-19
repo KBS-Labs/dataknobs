@@ -793,6 +793,39 @@ class DataknobsConversationStorage(ConversationStorage):
         except Exception as e:
             raise StorageError(f"Failed to delete conversation: {e}") from e
 
+    async def update_metadata(
+        self,
+        conversation_id: str,
+        metadata: Dict[str, Any]
+    ) -> None:
+        """Update conversation metadata.
+
+        Loads the conversation, updates its metadata, and saves it back.
+
+        Args:
+            conversation_id: ID of conversation to update
+            metadata: New metadata dict (replaces existing metadata)
+
+        Raises:
+            StorageError: If conversation not found or update fails
+        """
+        try:
+            # Load existing conversation
+            state = await self.load_conversation(conversation_id)
+            if state is None:
+                raise StorageError(f"Conversation not found: {conversation_id}")
+
+            # Update metadata
+            state.metadata = metadata
+
+            # Save back
+            await self.save_conversation(state)
+
+        except StorageError:
+            raise
+        except Exception as e:
+            raise StorageError(f"Failed to update metadata: {e}") from e
+
     async def list_conversations(
         self,
         filter_metadata: Dict[str, Any] | None = None,

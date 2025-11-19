@@ -148,6 +148,72 @@ resource = await registry.get("db")
 count = await registry.count()
 ```
 
+#### Plugin Registry
+
+For managing plugins with factory support, defaults, and lazy instantiation:
+
+```python
+from dataknobs_common import PluginRegistry
+
+# Define a base class
+class Handler:
+    def __init__(self, name: str, config: dict):
+        self.name = name
+        self.config = config
+
+class DefaultHandler(Handler):
+    pass
+
+class CustomHandler(Handler):
+    pass
+
+# Create registry with default factory
+registry = PluginRegistry[Handler]("handlers", default_factory=DefaultHandler)
+
+# Register plugins
+registry.register("custom", CustomHandler)
+
+# Get instances (lazy creation with caching)
+handler = registry.get("custom", config={"timeout": 30})
+default = registry.get("unknown", config={})  # Uses default
+
+# Async factory support
+async def create_async_handler(name, config):
+    handler = AsyncHandler(name, config)
+    await handler.initialize()
+    return handler
+
+registry.register("async", create_async_handler)
+handler = await registry.get_async("async", config={"url": "..."})
+```
+
+##### PluginRegistry Features
+
+```python
+# Bulk registration
+registry.bulk_register({
+    "handler1": Handler1,
+    "handler2": Handler2,
+})
+
+# Check registration
+if registry.is_registered("custom"):
+    print("Custom handler available")
+
+# List all registered plugins
+keys = registry.list_keys()
+
+# Clear cached instances
+registry.clear_cache("custom")  # Single
+registry.clear_cache()  # All
+
+# Get factory without creating instance
+factory = registry.get_factory("custom")
+
+# Set default after init
+registry.set_default_factory(NewDefault)
+```
+
 #### Custom Registry Extensions
 
 ```python

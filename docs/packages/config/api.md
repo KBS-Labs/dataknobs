@@ -1,5 +1,9 @@
 # Config Package API Reference
 
+> **📖 Also see:** [Auto-generated API Reference](../../api/reference/config.md) - Complete documentation from source code docstrings
+
+---
+
 ::: dataknobs_config.config
     options:
       show_source: true

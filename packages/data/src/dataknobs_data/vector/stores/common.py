@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from dataknobs_config import ConfigurableBase
@@ -54,9 +56,16 @@ class VectorStoreBase(ConfigurableBase):
         else:
             self.metric = metric
 
-        # Extract paths and sizes
-        self.persist_path = self.config.get("persist_path")
+        # Extract paths and sizes (expand ~ to home directory)
+        persist_path = self.config.get("persist_path")
+        self.persist_path = Path(persist_path).expanduser() if persist_path else None
         self.batch_size = self.config.get("batch_size", 100)
+
+        # Debug logging for path resolution
+        import logging
+        logger = logging.getLogger(__name__)
+        if persist_path:
+            logger.info(f"VectorStore persist_path: {persist_path} -> {self.persist_path} (exists: {os.path.exists(self.persist_path) if self.persist_path else False})")
 
         # Extract parameter dictionaries
         self.index_params = self.config.get("index_params", {})
