@@ -469,27 +469,77 @@ class OllamaProvider(AsyncLLMProvider):
         if self.config.response_format == 'json':
             payload['format'] = 'json'
 
+        # Handle tools if provided
+        tools = kwargs.get('tools')
+        if tools:
+            # Convert Tool objects to dict format for _adapt_tools
+            tool_dicts = []
+            for tool in tools:
+                tool_dicts.append({
+                    'name': tool.name,
+                    'description': tool.description,
+                    'parameters': tool.schema if hasattr(tool, 'schema') else {}
+                })
+            ollama_tools = self._adapt_tools(tool_dicts)
+            payload['tools'] = ollama_tools
+
         async with self._session.post(f"{self.base_url}/api/chat", json=payload) as response:
             if response.status != 200:
                 error_text = await response.text()
                 import logging
-                logging.error(f"Ollama API error (status {response.status}): {error_text}")
-                logging.error(f"Request payload: {json.dumps(payload, indent=2)}")
-                response.raise_for_status()
-            data = await response.json()
+                logger = logging.getLogger(__name__)
 
-        # Extract response
-        content = data.get('message', {}).get('content', '')
+                # Handle tools not supported - retry without tools
+                if response.status == 400 and "does not support tools" in error_text:
+                    model_name = self.config.model
+                    logger.warning(
+                        f"Model '{model_name}' does not support tools. "
+                        f"Continuing without tool support. "
+                        f"For tool support, use: llama3.1:8b, llama3.2:3b, mistral:7b, or qwen2.5:7b"
+                    )
+                    # Retry without tools
+                    payload.pop('tools', None)
+                    async with self._session.post(f"{self.base_url}/api/chat", json=payload) as retry_response:
+                        if retry_response.status != 200:
+                            retry_error = await retry_response.text()
+                            logger.error(f"Ollama API error on retry (status {retry_response.status}): {retry_error}")
+                            retry_response.raise_for_status()
+                        data = await retry_response.json()
+                else:
+                    logger.error(f"Ollama API error (status {response.status}): {error_text}")
+                    logger.error(f"Request payload: {json.dumps(payload, indent=2)}")
+                    response.raise_for_status()
+            else:
+                data = await response.json()
+
+        # Extract response and tool calls
+        message = data.get('message', {})
+        content = message.get('content', '')
+        raw_tool_calls = message.get('tool_calls', [])
+
+        # Convert tool calls to ToolCall objects
+        from ..base import ToolCall
+        tool_calls = None
+        if raw_tool_calls:
+            tool_calls = []
+            for tc in raw_tool_calls:
+                func = tc.get('function', {})
+                tool_calls.append(ToolCall(
+                    name=func.get('name', ''),
+                    parameters=func.get('arguments', {}),
+                    id=tc.get('id')
+                ))
 
         return LLMResponse(
             content=content,
             model=self.config.model,
-            finish_reason='stop' if data.get('done') else 'length',
+            finish_reason='tool_calls' if tool_calls else ('stop' if data.get('done') else 'length'),
             usage={
                 'prompt_tokens': data.get('prompt_eval_count', 0),
                 'completion_tokens': data.get('eval_count', 0),
                 'total_tokens': data.get('prompt_eval_count', 0) + data.get('eval_count', 0)
             } if 'eval_count' in data else None,
+            tool_calls=tool_calls,
             metadata={
                 'eval_duration': data.get('eval_duration'),
                 'total_duration': data.get('total_duration'),

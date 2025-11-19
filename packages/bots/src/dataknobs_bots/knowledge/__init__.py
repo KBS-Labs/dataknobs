@@ -3,8 +3,40 @@
 from typing import Any
 
 from .rag import RAGKnowledgeBase
+from .retrieval import (
+    ChunkMerger,
+    ContextFormatter,
+    FormatterConfig,
+    MergedChunk,
+    MergerConfig,
+)
+from .query import (
+    ContextualExpander,
+    Message,
+    QueryTransformer,
+    TransformerConfig,
+    create_transformer,
+    is_ambiguous_query,
+)
 
-__all__ = ["RAGKnowledgeBase", "create_knowledge_base_from_config"]
+__all__ = [
+    # Main knowledge base
+    "RAGKnowledgeBase",
+    "create_knowledge_base_from_config",
+    # Retrieval utilities
+    "ChunkMerger",
+    "MergedChunk",
+    "MergerConfig",
+    "ContextFormatter",
+    "FormatterConfig",
+    # Query utilities
+    "QueryTransformer",
+    "TransformerConfig",
+    "create_transformer",
+    "ContextualExpander",
+    "Message",
+    "is_ambiguous_query",
+]
 
 
 async def create_knowledge_base_from_config(config: dict[str, Any]) -> RAGKnowledgeBase:

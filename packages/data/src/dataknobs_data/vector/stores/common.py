@@ -58,7 +58,7 @@ class VectorStoreBase(ConfigurableBase):
 
         # Extract paths and sizes (expand ~ to home directory)
         persist_path = self.config.get("persist_path")
-        self.persist_path = Path.expanduser(persist_path) if persist_path else None
+        self.persist_path = Path(persist_path).expanduser() if persist_path else None
         self.batch_size = self.config.get("batch_size", 100)
 
         # Debug logging for path resolution

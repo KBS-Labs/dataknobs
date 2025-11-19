@@ -4,7 +4,18 @@ import types
 from pathlib import Path
 from typing import Any
 
-from dataknobs_xization import chunk_markdown_tree, parse_markdown
+from dataknobs_xization import (
+    ChunkQualityConfig,
+    HeadingInclusion,
+    chunk_markdown_tree,
+    parse_markdown,
+)
+from dataknobs_bots.knowledge.retrieval import (
+    ChunkMerger,
+    ContextFormatter,
+    FormatterConfig,
+    MergerConfig,
+)
 
 
 class RAGKnowledgeBase:
@@ -27,6 +38,8 @@ class RAGKnowledgeBase:
         vector_store: Any,
         embedding_provider: Any,
         chunking_config: dict[str, Any] | None = None,
+        merger_config: MergerConfig | None = None,
+        formatter_config: FormatterConfig | None = None,
     ):
         """Initialize RAG knowledge base.
 
@@ -37,6 +50,10 @@ class RAGKnowledgeBase:
                 - max_chunk_size: Maximum chunk size in characters
                 - chunk_overlap: Overlap between chunks
                 - combine_under_heading: Combine text under same heading
+                - quality_filter: ChunkQualityConfig for filtering
+                - generate_embeddings: Whether to generate enriched embedding text
+            merger_config: Configuration for chunk merging (optional)
+            formatter_config: Configuration for context formatting (optional)
         """
         self.vector_store = vector_store
         self.embedding_provider = embedding_provider
@@ -45,6 +62,10 @@ class RAGKnowledgeBase:
             "chunk_overlap": 50,
             "combine_under_heading": True,
         }
+
+        # Initialize merger and formatter
+        self.merger = ChunkMerger(merger_config) if merger_config else ChunkMerger()
+        self.formatter = ContextFormatter(formatter_config) if formatter_config else ContextFormatter()
 
     @classmethod
     async def from_config(cls, config: dict[str, Any]) -> "RAGKnowledgeBase":
@@ -100,11 +121,23 @@ class RAGKnowledgeBase:
         )
         await embedding_provider.initialize()
 
+        # Create merger config if specified
+        merger_config = None
+        if "merger" in config:
+            merger_config = MergerConfig(**config["merger"])
+
+        # Create formatter config if specified
+        formatter_config = None
+        if "formatter" in config:
+            formatter_config = FormatterConfig(**config["formatter"])
+
         # Create instance
         kb = cls(
             vector_store=vector_store,
             embedding_provider=embedding_provider,
             chunking_config=config.get("chunking", {}),
+            merger_config=merger_config,
+            formatter_config=formatter_config,
         )
 
         # Load documents if path provided
@@ -145,12 +178,24 @@ class RAGKnowledgeBase:
         # Parse markdown
         tree = parse_markdown(markdown_text)
 
-        # Chunk the document
+        # Build quality filter config if specified
+        quality_filter = None
+        if "quality_filter" in self.chunking_config:
+            qf_config = self.chunking_config["quality_filter"]
+            if isinstance(qf_config, ChunkQualityConfig):
+                quality_filter = qf_config
+            elif isinstance(qf_config, dict):
+                quality_filter = ChunkQualityConfig(**qf_config)
+
+        # Chunk the document with enhanced options
         chunks = chunk_markdown_tree(
             tree,
             max_chunk_size=self.chunking_config.get("max_chunk_size", 500),
             chunk_overlap=self.chunking_config.get("chunk_overlap", 50),
+            heading_inclusion=HeadingInclusion.IN_METADATA,  # Keep headings in metadata only
             combine_under_heading=self.chunking_config.get("combine_under_heading", True),
+            quality_filter=quality_filter,
+            generate_embeddings=self.chunking_config.get("generate_embeddings", True),
         )
 
         # Process and store chunks
@@ -159,23 +204,28 @@ class RAGKnowledgeBase:
         metadatas = []
 
         for i, chunk in enumerate(chunks):
+            # Use embedding_text if available, otherwise use chunk text
+            text_for_embedding = chunk.metadata.embedding_text or chunk.text
+
             # Generate embedding
-            embedding = await self.embedding_provider.embed(chunk.text)
+            embedding = await self.embedding_provider.embed(text_for_embedding)
 
             # Convert to numpy if needed
             if not isinstance(embedding, np.ndarray):
                 embedding = np.array(embedding, dtype=np.float32)
 
-            # Prepare metadata
+            # Prepare metadata with new fields
             chunk_id = f"{filepath.stem}_{i}"
             chunk_metadata = {
                 "text": chunk.text,
                 "source": str(filepath),
                 "chunk_index": i,
-                "heading_path": chunk.metadata.get_heading_path(),
+                "heading_path": chunk.metadata.heading_display or chunk.metadata.get_heading_path(),
                 "headings": chunk.metadata.headings,
+                "heading_levels": chunk.metadata.heading_levels,
                 "line_number": chunk.metadata.line_number,
                 "chunk_size": chunk.metadata.chunk_size,
+                "content_length": chunk.metadata.content_length,
             }
 
             # Merge with user metadata
@@ -242,6 +292,8 @@ class RAGKnowledgeBase:
         k: int = 5,
         filter_metadata: dict[str, Any] | None = None,
         min_similarity: float = 0.0,
+        merge_adjacent: bool = False,
+        max_chunk_size: int | None = None,
     ) -> list[dict[str, Any]]:
         """Query knowledge base for relevant chunks.
 
@@ -250,6 +302,8 @@ class RAGKnowledgeBase:
             k: Number of results to return
             filter_metadata: Optional metadata filters
             min_similarity: Minimum similarity score (0-1)
+            merge_adjacent: Whether to merge adjacent chunks with same heading
+            max_chunk_size: Maximum size for merged chunks (uses merger config default if not specified)
 
         Returns:
             List of result dictionaries with:
@@ -263,7 +317,8 @@ class RAGKnowledgeBase:
             ```python
             results = await kb.query(
                 "How do I configure the database?",
-                k=3
+                k=3,
+                merge_adjacent=True
             )
             for result in results:
                 print(f"[{result['similarity']:.2f}] {result['heading_path']}")
@@ -301,7 +356,39 @@ class RAGKnowledgeBase:
                     }
                 )
 
+        # Apply chunk merging if requested
+        if merge_adjacent and results:
+            # Update merger config if max_chunk_size specified
+            if max_chunk_size is not None:
+                merger = ChunkMerger(MergerConfig(max_merged_size=max_chunk_size))
+            else:
+                merger = self.merger
+
+            merged_chunks = merger.merge(results)
+            results = merger.to_result_list(merged_chunks)
+
         return results
+
+    def format_context(
+        self,
+        results: list[dict[str, Any]],
+        wrap_in_tags: bool = True,
+    ) -> str:
+        """Format search results for LLM context.
+
+        Convenience method to format results using the configured formatter.
+
+        Args:
+            results: Search results from query()
+            wrap_in_tags: Whether to wrap in <knowledge_base> tags
+
+        Returns:
+            Formatted context string
+        """
+        context = self.formatter.format(results)
+        if wrap_in_tags:
+            context = self.formatter.wrap_for_prompt(context)
+        return context
 
     async def clear(self) -> None:
         """Clear all documents from the knowledge base.

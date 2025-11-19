@@ -155,6 +155,22 @@ class ModelCapability(Enum):
 
 
 @dataclass
+class ToolCall:
+    """Represents a tool call from the LLM.
+
+    Used when the LLM wants to invoke a tool/function during reasoning.
+
+    Attributes:
+        name: Name of the tool to call
+        parameters: Arguments to pass to the tool
+        id: Optional unique identifier for the tool call
+    """
+    name: str
+    parameters: Dict[str, Any]
+    id: str | None = None
+
+
+@dataclass
 class LLMMessage:
     """Represents a message in LLM conversation.
 
@@ -259,9 +275,10 @@ class LLMResponse:
     """
     content: str
     model: str
-    finish_reason: str | None = None  # 'stop', 'length', 'function_call'
+    finish_reason: str | None = None  # 'stop', 'length', 'function_call', 'tool_calls'
     usage: Dict[str, int] | None = None  # tokens used
-    function_call: Dict[str, Any] | None = None
+    function_call: Dict[str, Any] | None = None  # Legacy single function call
+    tool_calls: list["ToolCall"] | None = None  # List of tool calls (preferred)
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
 

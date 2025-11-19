@@ -269,6 +269,7 @@ class DynaBot:
         temperature: float | None = None,
         max_tokens: int | None = None,
         stream: bool = False,
+        rag_query: str | None = None,
         **kwargs: Any,
     ) -> str:
         """Process a chat message.
@@ -279,6 +280,11 @@ class DynaBot:
             temperature: Optional temperature override
             max_tokens: Optional max tokens override
             stream: Whether to stream the response
+            rag_query: Optional explicit query for knowledge base retrieval.
+                      If provided, this is used instead of the message for RAG.
+                      Useful when the message contains literal text to analyze
+                      (e.g., "Analyze this prompt: [prompt text]") but you want
+                      to search for analysis techniques instead.
             **kwargs: Additional arguments
 
         Returns:
@@ -292,6 +298,13 @@ class DynaBot:
                 user_id="user-789"
             )
             response = await bot.chat("Hello!", context)
+
+            # With explicit RAG query
+            response = await bot.chat(
+                "Analyze this: Write a poem about cats",
+                context,
+                rag_query="prompt analysis techniques evaluation"
+            )
             ```
         """
         # Apply middleware (before)
@@ -300,7 +313,7 @@ class DynaBot:
                 await mw.before_message(message, context)
 
         # Build message with context from memory and knowledge
-        full_message = await self._build_message_with_context(message)
+        full_message = await self._build_message_with_context(message, rag_query=rag_query)
 
         # Get or create conversation manager
         manager = await self._get_or_create_conversation(context)
@@ -561,11 +574,17 @@ class DynaBot:
         self._conversation_managers[conv_id] = manager
         return manager
 
-    async def _build_message_with_context(self, message: str) -> str:
+    async def _build_message_with_context(
+        self,
+        message: str,
+        rag_query: str | None = None,
+    ) -> str:
         """Build message with knowledge and memory context.
 
         Args:
             message: Original user message
+            rag_query: Optional explicit query for knowledge base retrieval.
+                      If provided, this is used instead of the message for RAG.
 
         Returns:
             Message augmented with context
@@ -574,24 +593,31 @@ class DynaBot:
 
         # Add knowledge context
         if self.knowledge_base:
-            kb_results = await self.knowledge_base.query(message, k=5)
+            # Use explicit rag_query if provided, otherwise use message
+            search_query = rag_query if rag_query else message
+            kb_results = await self.knowledge_base.query(search_query, k=5)
             if kb_results:
-                # Format each chunk with clear separation and source
-                formatted_chunks = []
-                for i, r in enumerate(kb_results, 1):
-                    # Get the actual content without redundant heading hierarchy
-                    text = r["text"]
-                    source = r.get("source", "")
-                    heading = r.get("heading_path", "")
+                # Use format_context if available (new RAG utilities)
+                if hasattr(self.knowledge_base, "format_context"):
+                    kb_context = self.knowledge_base.format_context(
+                        kb_results, wrap_in_tags=True
+                    )
+                    contexts.append(kb_context)
+                else:
+                    # Fallback to legacy formatting
+                    formatted_chunks = []
+                    for i, r in enumerate(kb_results, 1):
+                        text = r["text"]
+                        source = r.get("source", "")
+                        heading = r.get("heading_path", "")
 
-                    # Format with clear structure
-                    chunk_text = f"[{i}] {heading}\n{text}"
-                    if source:
-                        chunk_text += f"\n(Source: {source})"
-                    formatted_chunks.append(chunk_text)
+                        chunk_text = f"[{i}] {heading}\n{text}"
+                        if source:
+                            chunk_text += f"\n(Source: {source})"
+                        formatted_chunks.append(chunk_text)
 
-                kb_context = "\n\n---\n\n".join(formatted_chunks)
-                contexts.append(f"<knowledge_base>\n{kb_context}\n</knowledge_base>")
+                    kb_context = "\n\n---\n\n".join(formatted_chunks)
+                    contexts.append(f"<knowledge_base>\n{kb_context}\n</knowledge_base>")
 
         # Add memory context
         if self.memory:
