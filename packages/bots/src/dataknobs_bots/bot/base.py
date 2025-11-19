@@ -27,7 +27,8 @@ class DynaBot:
         knowledge_base: Optional knowledge base for RAG
         reasoning_strategy: Optional reasoning strategy
         middleware: List of middleware for request/response processing
-        system_prompt_name: Name of the system prompt to use
+        system_prompt_name: Name of the system prompt template to use
+        system_prompt_content: Inline system prompt content (alternative to name)
         default_temperature: Default temperature for LLM generation
         default_max_tokens: Default max tokens for LLM generation
     """
@@ -43,6 +44,7 @@ class DynaBot:
         reasoning_strategy: Any | None = None,
         middleware: list[Any] | None = None,
         system_prompt_name: str | None = None,
+        system_prompt_content: str | None = None,
         default_temperature: float = 0.7,
         default_max_tokens: int = 1000,
     ):
@@ -57,7 +59,8 @@ class DynaBot:
             knowledge_base: Optional knowledge base
             reasoning_strategy: Optional reasoning strategy
             middleware: Optional middleware list
-            system_prompt_name: Name of system prompt
+            system_prompt_name: Name of system prompt template (mutually exclusive with content)
+            system_prompt_content: Inline system prompt content (mutually exclusive with name)
             default_temperature: Default temperature (0-1)
             default_max_tokens: Default max tokens to generate
         """
@@ -70,6 +73,7 @@ class DynaBot:
         self.reasoning_strategy = reasoning_strategy
         self.middleware = middleware or []
         self.system_prompt_name = system_prompt_name
+        self.system_prompt_content = system_prompt_content
         self.default_temperature = default_temperature
         self.default_max_tokens = default_max_tokens
         self._conversation_managers: dict[str, ConversationManager] = {}
@@ -88,13 +92,22 @@ class DynaBot:
                 - reasoning: Optional reasoning strategy configuration
                 - middleware: Optional middleware configurations
                 - prompts: Optional prompts library (dict of name -> content)
-                - system_prompt: Optional system prompt configuration
+                - system_prompt: Optional system prompt configuration (see below)
 
         Returns:
             Configured DynaBot instance
 
+        System Prompt Formats:
+            The system_prompt can be specified in multiple ways:
+
+            - Dict with name: `{"name": "template_name"}` - references a prompt template
+            - Dict with content: `{"content": "inline prompt text"}` - inline content
+            - Short string: `"template_name"` - treated as template name (≤100 chars, no newlines)
+            - Long/multi-line string: treated as inline content (>100 chars or contains newlines)
+
         Example:
             ```python
+            # Using a template name
             config = {
                 "llm": {
                     "provider": "openai",
@@ -104,10 +117,6 @@ class DynaBot:
                 "conversation_storage": {
                     "backend": "memory"
                 },
-                "memory": {
-                    "type": "buffer",
-                    "max_messages": 10
-                },
                 "prompts": {
                     "helpful_assistant": "You are a helpful AI assistant."
                 },
@@ -115,6 +124,16 @@ class DynaBot:
                     "name": "helpful_assistant"
                 }
             }
+
+            # Using inline content (multi-line string)
+            config = {
+                "llm": {"provider": "openai", "model": "gpt-4"},
+                "conversation_storage": {"backend": "memory"},
+                "system_prompt": '''You are a helpful AI assistant.
+                    Be concise and accurate in your responses.
+                    Always be polite and professional.'''
+            }
+
             bot = await DynaBot.from_config(config)
             ```
         """
@@ -187,10 +206,14 @@ class DynaBot:
 
         # Create knowledge base
         knowledge_base = None
-        if config.get("knowledge_base", {}).get("enabled"):
+        kb_config = config.get("knowledge_base", {})
+        if kb_config.get("enabled"):
             from ..knowledge import create_knowledge_base_from_config
-
-            knowledge_base = await create_knowledge_base_from_config(config["knowledge_base"])
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Initializing knowledge base with config: {kb_config.get('type', 'unknown')}")
+            knowledge_base = await create_knowledge_base_from_config(kb_config)
+            logger.info("Knowledge base initialized successfully")
 
         # Create reasoning strategy
         reasoning_strategy = None
@@ -207,14 +230,22 @@ class DynaBot:
                 if mw:
                     middleware.append(mw)
 
-        # Extract system prompt
+        # Extract system prompt (supports template name or inline content)
         system_prompt_name = None
+        system_prompt_content = None
         if "system_prompt" in config:
             system_prompt_config = config["system_prompt"]
             if isinstance(system_prompt_config, dict):
+                # Explicit dict format: {name: "template"} or {content: "inline..."}
                 system_prompt_name = system_prompt_config.get("name")
-            else:
-                system_prompt_name = system_prompt_config
+                system_prompt_content = system_prompt_config.get("content")
+            elif isinstance(system_prompt_config, str):
+                # String format: detect if it's a template name or inline content
+                # Multi-line strings or strings > 100 chars are assumed to be inline content
+                if "\n" in system_prompt_config or len(system_prompt_config) > 100:
+                    system_prompt_content = system_prompt_config
+                else:
+                    system_prompt_name = system_prompt_config
 
         return cls(
             llm=llm,
@@ -226,6 +257,7 @@ class DynaBot:
             reasoning_strategy=reasoning_strategy,
             middleware=middleware,
             system_prompt_name=system_prompt_name,
+            system_prompt_content=system_prompt_content,
             default_temperature=llm_config.get("temperature", 0.7),
             default_max_tokens=llm_config.get("max_tokens", 1000),
         )
@@ -237,6 +269,7 @@ class DynaBot:
         temperature: float | None = None,
         max_tokens: int | None = None,
         stream: bool = False,
+        rag_query: str | None = None,
         **kwargs: Any,
     ) -> str:
         """Process a chat message.
@@ -247,6 +280,11 @@ class DynaBot:
             temperature: Optional temperature override
             max_tokens: Optional max tokens override
             stream: Whether to stream the response
+            rag_query: Optional explicit query for knowledge base retrieval.
+                      If provided, this is used instead of the message for RAG.
+                      Useful when the message contains literal text to analyze
+                      (e.g., "Analyze this prompt: [prompt text]") but you want
+                      to search for analysis techniques instead.
             **kwargs: Additional arguments
 
         Returns:
@@ -260,6 +298,13 @@ class DynaBot:
                 user_id="user-789"
             )
             response = await bot.chat("Hello!", context)
+
+            # With explicit RAG query
+            response = await bot.chat(
+                "Analyze this: Write a poem about cats",
+                context,
+                rag_query="prompt analysis techniques evaluation"
+            )
             ```
         """
         # Apply middleware (before)
@@ -268,7 +313,7 @@ class DynaBot:
                 await mw.before_message(message, context)
 
         # Build message with context from memory and knowledge
-        full_message = await self._build_message_with_context(message)
+        full_message = await self._build_message_with_context(message, rag_query=rag_query)
 
         # Get or create conversation manager
         manager = await self._get_or_create_conversation(context)
@@ -419,6 +464,14 @@ class DynaBot:
             if backend and hasattr(backend, 'close'):
                 await backend.close()
 
+        # Close knowledge base (releases embedding provider HTTP sessions)
+        if self.knowledge_base and hasattr(self.knowledge_base, 'close'):
+            await self.knowledge_base.close()
+
+        # Close memory store
+        if self.memory and hasattr(self.memory, 'close'):
+            await self.memory.close()
+
     async def __aenter__(self) -> "DynaBot":
         """Async context manager entry.
 
@@ -503,11 +556,17 @@ class DynaBot:
                 metadata=metadata,
             )
 
-            # Add system prompt if specified
+            # Add system prompt if specified (either as template name or inline content)
             if self.system_prompt_name:
-                # This will update the root node with the actual system prompt
+                # Use template name - will be rendered by prompt builder
                 await manager.add_message(
                     prompt_name=self.system_prompt_name,
+                    role="system",
+                )
+            elif self.system_prompt_content:
+                # Use inline content directly
+                await manager.add_message(
+                    content=self.system_prompt_content,
                     role="system",
                 )
 
@@ -515,11 +574,17 @@ class DynaBot:
         self._conversation_managers[conv_id] = manager
         return manager
 
-    async def _build_message_with_context(self, message: str) -> str:
+    async def _build_message_with_context(
+        self,
+        message: str,
+        rag_query: str | None = None,
+    ) -> str:
         """Build message with knowledge and memory context.
 
         Args:
             message: Original user message
+            rag_query: Optional explicit query for knowledge base retrieval.
+                      If provided, this is used instead of the message for RAG.
 
         Returns:
             Message augmented with context
@@ -528,21 +593,43 @@ class DynaBot:
 
         # Add knowledge context
         if self.knowledge_base:
-            kb_results = await self.knowledge_base.query(message, k=3)
+            # Use explicit rag_query if provided, otherwise use message
+            search_query = rag_query if rag_query else message
+            kb_results = await self.knowledge_base.query(search_query, k=5)
             if kb_results:
-                kb_context = "\n\n".join([r["text"] for r in kb_results])
-                contexts.append(f"Knowledge context:\n{kb_context}")
+                # Use format_context if available (new RAG utilities)
+                if hasattr(self.knowledge_base, "format_context"):
+                    kb_context = self.knowledge_base.format_context(
+                        kb_results, wrap_in_tags=True
+                    )
+                    contexts.append(kb_context)
+                else:
+                    # Fallback to legacy formatting
+                    formatted_chunks = []
+                    for i, r in enumerate(kb_results, 1):
+                        text = r["text"]
+                        source = r.get("source", "")
+                        heading = r.get("heading_path", "")
+
+                        chunk_text = f"[{i}] {heading}\n{text}"
+                        if source:
+                            chunk_text += f"\n(Source: {source})"
+                        formatted_chunks.append(chunk_text)
+
+                    kb_context = "\n\n---\n\n".join(formatted_chunks)
+                    contexts.append(f"<knowledge_base>\n{kb_context}\n</knowledge_base>")
 
         # Add memory context
         if self.memory:
             mem_results = await self.memory.get_context(message)
             if mem_results:
                 mem_context = "\n\n".join([r["content"] for r in mem_results])
-                contexts.append(f"Relevant history:\n{mem_context}")
+                contexts.append(f"<conversation_history>\n{mem_context}\n</conversation_history>")
 
-        # Build full message
+        # Build full message with clear separation
         if contexts:
-            return f"{chr(10).join(contexts)}\n\nUser: {message}"
+            context_section = "\n\n".join(contexts)
+            return f"{context_section}\n\n<question>\n{message}\n</question>"
         return message
 
     @staticmethod

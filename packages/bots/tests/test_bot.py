@@ -80,6 +80,137 @@ class TestDynaBot:
         assert bot.system_prompt_name == "helpful_assistant"
 
     @pytest.mark.asyncio
+    async def test_from_config_system_prompt_dict_with_content(self):
+        """Test system prompt with dict containing content key."""
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "system_prompt": {"content": "You are a helpful assistant."},
+        }
+
+        bot = await DynaBot.from_config(config)
+        assert bot.system_prompt_name is None
+        assert bot.system_prompt_content == "You are a helpful assistant."
+
+    @pytest.mark.asyncio
+    async def test_from_config_system_prompt_short_string_as_template_name(self):
+        """Test short single-line string is treated as template name."""
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "system_prompt": "helpful_assistant",
+        }
+
+        bot = await DynaBot.from_config(config)
+        assert bot.system_prompt_name == "helpful_assistant"
+        assert bot.system_prompt_content is None
+
+    @pytest.mark.asyncio
+    async def test_from_config_system_prompt_multiline_as_inline_content(self):
+        """Test multi-line string is treated as inline content."""
+        multiline_prompt = """You are a helpful assistant.
+You should be concise and accurate.
+Always be polite."""
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "system_prompt": multiline_prompt,
+        }
+
+        bot = await DynaBot.from_config(config)
+        assert bot.system_prompt_name is None
+        assert bot.system_prompt_content == multiline_prompt
+
+    @pytest.mark.asyncio
+    async def test_from_config_system_prompt_long_string_as_inline_content(self):
+        """Test long string (>100 chars) is treated as inline content."""
+        long_prompt = "You are a helpful assistant. " * 5  # 150 characters
+        assert len(long_prompt) > 100  # Verify it's long enough
+
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "system_prompt": long_prompt,
+        }
+
+        bot = await DynaBot.from_config(config)
+        assert bot.system_prompt_name is None
+        assert bot.system_prompt_content == long_prompt
+
+    @pytest.mark.asyncio
+    async def test_from_config_system_prompt_exactly_100_chars_as_template_name(self):
+        """Test string with exactly 100 chars is treated as template name."""
+        # Create exactly 100 character string
+        exact_100_prompt = "x" * 100
+        assert len(exact_100_prompt) == 100
+
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "system_prompt": exact_100_prompt,
+        }
+
+        bot = await DynaBot.from_config(config)
+        assert bot.system_prompt_name == exact_100_prompt
+        assert bot.system_prompt_content is None
+
+    @pytest.mark.asyncio
+    async def test_system_prompt_content_used_in_conversation(self):
+        """Test that inline system prompt content is added to conversation."""
+        system_content = "You are a helpful coding assistant."
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "system_prompt": {"content": system_content},
+        }
+
+        bot = await DynaBot.from_config(config)
+        context = BotContext(conversation_id="conv-system-test", client_id="test-client")
+
+        # Chat to trigger conversation creation
+        await bot.chat("Hello", context)
+
+        # Verify conversation was created with system prompt
+        conversation_state = await bot.get_conversation("conv-system-test")
+        assert conversation_state is not None
+
+        # Get messages from the tree using find_nodes to find all system messages
+        tree = conversation_state.message_tree
+        system_nodes = tree.find_nodes(
+            lambda node: node.data.message and node.data.message.role == "system"
+        )
+
+        # Verify at least one system message exists
+        assert len(system_nodes) >= 1
+
+        # The system message should contain our inline content
+        system_messages = [node.data.message for node in system_nodes]
+        assert any(m.content == system_content for m in system_messages)
+
+    @pytest.mark.asyncio
+    async def test_system_prompt_multiline_yaml_style(self):
+        """Test multi-line system prompt as would appear in YAML config."""
+        # This simulates how YAML multi-line content would be loaded
+        yaml_style_prompt = """You are a helpful AI assistant specialized in customer support.
+
+Key responsibilities:
+- Answer questions accurately
+- Be polite and professional
+- Escalate complex issues
+
+Remember to always verify customer identity before sharing sensitive information."""
+
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "system_prompt": yaml_style_prompt,
+        }
+
+        bot = await DynaBot.from_config(config)
+        assert bot.system_prompt_name is None
+        assert bot.system_prompt_content == yaml_style_prompt
+
+    @pytest.mark.asyncio
     async def test_chat_basic(self):
         """Test basic chat functionality."""
         config = {

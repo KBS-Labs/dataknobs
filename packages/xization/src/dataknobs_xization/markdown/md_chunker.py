@@ -13,6 +13,8 @@ from typing import Any, Iterator
 from dataknobs_structures.tree import Tree
 
 from dataknobs_xization.markdown.md_parser import MarkdownNode
+from dataknobs_xization.markdown.enrichment import build_enriched_text
+from dataknobs_xization.markdown.filters import ChunkQualityConfig, ChunkQualityFilter
 
 
 class ChunkFormat(Enum):
@@ -42,6 +44,9 @@ class ChunkMetadata:
         line_number: Starting line number in source document
         chunk_index: Index of this chunk in the sequence
         chunk_size: Size of chunk text in characters
+        content_length: Size of content without headings (for quality decisions)
+        heading_display: Formatted heading path for display
+        embedding_text: Heading-enriched text for embedding (optional)
         custom: Additional custom metadata
     """
 
@@ -50,18 +55,27 @@ class ChunkMetadata:
     line_number: int = 0
     chunk_index: int = 0
     chunk_size: int = 0
+    content_length: int = 0
+    heading_display: str = ""
+    embedding_text: str = ""
     custom: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert metadata to dictionary."""
-        return {
+        result = {
             "headings": self.headings,
             "heading_levels": self.heading_levels,
             "line_number": self.line_number,
             "chunk_index": self.chunk_index,
             "chunk_size": self.chunk_size,
+            "content_length": self.content_length,
+            "heading_display": self.heading_display,
             **self.custom,
         }
+        # Only include embedding_text if it was generated
+        if self.embedding_text:
+            result["embedding_text"] = self.embedding_text
+        return result
 
     def get_heading_path(self, separator: str = " > ") -> str:
         """Get heading hierarchy as a single string.
@@ -135,6 +149,8 @@ class MarkdownChunker:
         heading_inclusion: HeadingInclusion = HeadingInclusion.BOTH,
         chunk_format: ChunkFormat = ChunkFormat.MARKDOWN,
         combine_under_heading: bool = True,
+        quality_filter: ChunkQualityConfig | None = None,
+        generate_embeddings: bool = False,
     ):
         """Initialize the markdown chunker.
 
@@ -144,13 +160,21 @@ class MarkdownChunker:
             heading_inclusion: How to include headings in chunks
             chunk_format: Output format for chunks
             combine_under_heading: Whether to combine body text under same heading
+            quality_filter: Optional config for filtering low-quality chunks
+            generate_embeddings: Whether to generate heading-enriched embedding text
         """
         self.max_chunk_size = max_chunk_size
         self.chunk_overlap = chunk_overlap
         self.heading_inclusion = heading_inclusion
         self.chunk_format = chunk_format
         self.combine_under_heading = combine_under_heading
+        self.generate_embeddings = generate_embeddings
         self._chunk_index = 0
+
+        # Initialize quality filter if config provided
+        self._quality_filter = None
+        if quality_filter is not None:
+            self._quality_filter = ChunkQualityFilter(quality_filter)
 
     def chunk(self, tree: Tree) -> Iterator[Chunk]:
         """Generate chunks from a markdown tree.
@@ -174,10 +198,15 @@ class MarkdownChunker:
 
         if self.combine_under_heading:
             # Group terminal nodes by their parent heading
-            yield from self._chunk_by_heading(terminal_nodes)
+            chunk_iter = self._chunk_by_heading(terminal_nodes)
         else:
             # Process each terminal node individually
-            yield from self._chunk_individually(terminal_nodes)
+            chunk_iter = self._chunk_individually(terminal_nodes)
+
+        # Apply quality filter if configured
+        for chunk in chunk_iter:
+            if self._quality_filter is None or self._quality_filter.is_valid(chunk):
+                yield chunk
 
     def _chunk_by_heading(self, terminal_nodes: list[Tree]) -> Iterator[Chunk]:
         """Group nodes under same heading and chunk them.
@@ -355,6 +384,9 @@ class MarkdownChunker:
         Returns:
             Formatted Chunk object
         """
+        # Store content length before adding headings
+        content_length = len(text)
+
         # Build chunk text based on heading inclusion setting
         chunk_text = text
 
@@ -375,19 +407,30 @@ class MarkdownChunker:
         if metadata:
             custom_metadata.update(metadata)
 
+        # Generate heading display string
+        heading_display = " > ".join(headings) if headings else ""
+
+        # Generate embedding text if enabled
+        embedding_text = ""
+        if self.generate_embeddings:
+            embedding_text = build_enriched_text(headings, text)
+
+        # Determine which headings to include in metadata
+        include_headings = self.heading_inclusion in (
+            HeadingInclusion.IN_METADATA,
+            HeadingInclusion.BOTH,
+        )
+
         # Create chunk metadata
         chunk_metadata = ChunkMetadata(
-            headings=headings if self.heading_inclusion in (
-                HeadingInclusion.IN_METADATA,
-                HeadingInclusion.BOTH,
-            ) else [],
-            heading_levels=heading_levels if self.heading_inclusion in (
-                HeadingInclusion.IN_METADATA,
-                HeadingInclusion.BOTH,
-            ) else [],
+            headings=headings if include_headings else [],
+            heading_levels=heading_levels if include_headings else [],
             line_number=line_number,
             chunk_index=self._chunk_index,
             chunk_size=len(chunk_text),
+            content_length=content_length,
+            heading_display=heading_display,
+            embedding_text=embedding_text,
             custom=custom_metadata,
         )
 
@@ -403,6 +446,8 @@ def chunk_markdown_tree(
     heading_inclusion: HeadingInclusion = HeadingInclusion.BOTH,
     chunk_format: ChunkFormat = ChunkFormat.MARKDOWN,
     combine_under_heading: bool = True,
+    quality_filter: ChunkQualityConfig | None = None,
+    generate_embeddings: bool = False,
 ) -> list[Chunk]:
     """Generate chunks from a markdown tree.
 
@@ -415,6 +460,8 @@ def chunk_markdown_tree(
         heading_inclusion: How to include headings in chunks
         chunk_format: Output format for chunks
         combine_under_heading: Whether to combine body text under same heading
+        quality_filter: Optional config for filtering low-quality chunks
+        generate_embeddings: Whether to generate heading-enriched embedding text
 
     Returns:
         List of Chunk objects
@@ -425,5 +472,7 @@ def chunk_markdown_tree(
         heading_inclusion=heading_inclusion,
         chunk_format=chunk_format,
         combine_under_heading=combine_under_heading,
+        quality_filter=quality_filter,
+        generate_embeddings=generate_embeddings,
     )
     return list(chunker.chunk(tree))

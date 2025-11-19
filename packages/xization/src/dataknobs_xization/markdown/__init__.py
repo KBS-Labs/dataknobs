@@ -23,6 +23,21 @@ from dataknobs_xization.markdown.md_streaming import (
     stream_markdown_file,
     stream_markdown_string,
 )
+from dataknobs_xization.markdown.filters import (
+    ChunkQualityConfig,
+    ChunkQualityFilter,
+)
+from dataknobs_xization.markdown.enrichment import (
+    EnrichedChunkData,
+    build_enriched_text,
+    enrich_chunk,
+    extract_heading_metadata,
+    format_heading_display,
+    format_heading_for_display,
+    get_dynamic_heading_display,
+    get_relevant_headings_for_display,
+    is_multiword,
+)
 
 __all__ = [
     # Parser
@@ -41,4 +56,17 @@ __all__ = [
     "StreamingMarkdownProcessor",
     "stream_markdown_file",
     "stream_markdown_string",
+    # Filters
+    "ChunkQualityConfig",
+    "ChunkQualityFilter",
+    # Enrichment
+    "EnrichedChunkData",
+    "build_enriched_text",
+    "enrich_chunk",
+    "extract_heading_metadata",
+    "format_heading_display",
+    "format_heading_for_display",
+    "get_dynamic_heading_display",
+    "get_relevant_headings_for_display",
+    "is_multiword",
 ]

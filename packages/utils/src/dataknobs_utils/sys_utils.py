@@ -10,12 +10,14 @@ import socket
 from pathlib import Path
 from typing import Any, Dict, Union
 
-import nmap3  # type: ignore[import-not-found]
 from dotenv import dotenv_values  # type: ignore[import-not-found]
 
 
 def load_project_vars(
-    pvname: str = ".project_vars", include_dot_env: bool = True
+    pvname: str = ".project_vars",
+    include_dot_env: bool = True,
+    set_environ: bool = False,
+    start_path: Path | None = None,
 ) -> Dict[str, str] | None:
     """Load project variables from the closest configuration file.
 
@@ -31,13 +33,16 @@ def load_project_vars(
         pvname: Name of the project variables file. Defaults to ".project_vars".
         include_dot_env: If True, also loads and merges the closest .env file.
             Defaults to True.
+        set_environ: If True, also sets loaded variables in os.environ.
+            Only sets variables not already in environment. Defaults to False.
+        start_path: Directory to start searching from. Defaults to cwd.
 
     Returns:
         Dict[str, str] | None: Dictionary of configuration variables, or None
             if no configuration file is found.
     """
     config = None
-    path = Path.cwd()
+    path = Path(start_path) if start_path else Path.cwd()
     while not os.path.exists(path.joinpath(pvname)) and path.parent != path:
         # Walk up the parents to find the closest project variables file
         path = path.parent
@@ -45,12 +50,24 @@ def load_project_vars(
     if os.path.exists(pvpath):
         config = dotenv_values(pvpath)
     if include_dot_env and pvname != ".env":
-        cfg = load_project_vars(pvname=".env", include_dot_env=False)
+        cfg = load_project_vars(
+            pvname=".env",
+            include_dot_env=False,
+            set_environ=False,
+            start_path=start_path,
+        )
         if cfg is not None:
             if config is not None:
                 config.update(cfg)
             else:
                 config = cfg
+
+    # Optionally set in os.environ
+    if set_environ and config:
+        for key, value in config.items():
+            if key not in os.environ:
+                os.environ[key] = value
+
     return config
 
 
@@ -118,6 +135,8 @@ class MySubnet:
                     hn = scan_data.get("hostname", [])
                     return hn[0].get("name", None) if len(hn) > 0 else None
                 return None
+
+            import nmap3  # type: ignore[import-not-found]
 
             nmap = nmap3.NmapHostDiscovery()
             subnet = ".".join(self.my_ip.split(".")[:3]) + ".*"

@@ -11,6 +11,13 @@ from .exceptions import (
     InvalidReferenceError,
     ValidationError,
 )
+from .inheritance import (
+    InheritableConfigLoader,
+    InheritanceError,
+    deep_merge,
+    load_config_with_inheritance,
+    substitute_env_vars,
+)
 from .substitution import VariableSubstitution
 
 __version__ = "0.1.0"
@@ -23,4 +30,10 @@ __all__ = [
     "InvalidReferenceError",
     "ValidationError",
     "VariableSubstitution",
+    # Inheritance utilities
+    "InheritableConfigLoader",
+    "InheritanceError",
+    "deep_merge",
+    "load_config_with_inheritance",
+    "substitute_env_vars",
 ]

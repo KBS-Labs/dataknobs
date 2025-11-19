@@ -37,6 +37,7 @@ from dataknobs_common.exceptions import (
 from dataknobs_common.registry import (
     AsyncRegistry,
     CachedRegistry,
+    PluginRegistry,
     Registry,
 )
 from dataknobs_common.serialization import (
@@ -68,6 +69,7 @@ __all__ = [
     "Registry",
     "CachedRegistry",
     "AsyncRegistry",
+    "PluginRegistry",
     # Serialization
     "Serializable",
     "serialize",

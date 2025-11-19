@@ -14,6 +14,7 @@ from .base import (
     LLMStreamResponse,
     CompletionMode,
     ModelCapability,
+    ToolCall,
     normalize_llm_config,
 )
 from .providers import (
@@ -48,6 +49,7 @@ __all__ = [
     'LLMStreamResponse',
     'CompletionMode',
     'ModelCapability',
+    'ToolCall',
     'normalize_llm_config',
     # Providers
     'OpenAIProvider',

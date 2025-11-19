@@ -2,6 +2,10 @@
 
 Tree-structured conversation management with branching and persistence.
 
+> **📖 Also see:** [Auto-generated API Reference](../../../api/reference/llm.md) - Complete documentation from source code docstrings
+
+---
+
 ## Overview
 
 The conversations API provides a powerful system for managing multi-turn conversations with support for branching, time-travel, persistence, and FSM-based flows.

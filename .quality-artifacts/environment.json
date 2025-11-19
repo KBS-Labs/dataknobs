@@ -1,11 +1,11 @@
 {
-  "timestamp": "2025-11-13T19:22:11Z",
+  "timestamp": "2025-11-19T19:59:38Z",
   "python_version": "Python 3.10.18",
-  "uv_version": "uv 0.9.9 (Homebrew 2025-11-12)",
+  "uv_version": "uv 0.9.10 (Homebrew 2025-11-17)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/add-duckdb",
-  "git_commit": "c8586e18ba414073de0d2722e0391ccf2e2ba0bb",
+  "git_branch": "sbk/bot-fixes",
+  "git_commit": "bd5ff12df8dc4d2aa1392a0a06cf16e9f383bc5b",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
