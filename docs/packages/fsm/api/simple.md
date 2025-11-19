@@ -2,6 +2,12 @@
 
 The `SimpleFSM` class provides a simplified, configuration-driven interface for executing finite state machines. It abstracts away the complexity of configuration, resource management, and execution strategies.
 
+> **📖 Also see:** [Auto-generated API Reference](../../../api/reference/fsm.md) - Complete documentation from source code docstrings
+
+This page provides curated examples and usage patterns. The auto-generated reference provides exhaustive technical documentation with all methods, parameters, and type annotations.
+
+---
+
 ## Class Definition
 
 ```python

@@ -2,6 +2,8 @@
 
 import os
 import pytest
+import psycopg2
+from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from dataknobs_data import Query, Record, SyncDatabase
 from dataknobs_data.query import Operator
 
@@ -19,23 +21,49 @@ class TestSqlBackendsIdFiltering:
     @pytest.fixture
     def db(self):
         """Create database instance for PostgreSQL backend."""
+        host = os.environ.get("POSTGRES_HOST", "localhost")
+        port = int(os.environ.get("POSTGRES_PORT", "5432"))
+        database = os.environ.get("POSTGRES_DB", "test_dataknobs")
+        user = os.environ.get("POSTGRES_USER", "postgres")
+        password = os.environ.get("POSTGRES_PASSWORD", "postgres")
+
+        # Ensure database exists by connecting to 'postgres' first
+        conn = psycopg2.connect(
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            database="postgres"
+        )
+        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(f"SELECT 1 FROM pg_database WHERE datname = '{database}'")
+            if not cursor.fetchone():
+                cursor.execute(f"CREATE DATABASE {database}")
+        except psycopg2.errors.DuplicateDatabase:
+            pass
+        finally:
+            cursor.close()
+            conn.close()
+
         config = {
-            "host": os.environ.get("POSTGRES_HOST", "localhost"),
-            "port": int(os.environ.get("POSTGRES_PORT", "5432")),
-            "database": os.environ.get("POSTGRES_DB", "test_dataknobs"),
-            "user": os.environ.get("POSTGRES_USER", "postgres"),
-            "password": os.environ.get("POSTGRES_PASSWORD", "postgres"),
+            "host": host,
+            "port": port,
+            "database": database,
+            "user": user,
+            "password": password,
             "table_name": "test_id_filtering"
         }
-        
+
         db = SyncDatabase.from_backend("postgres", config=config)
         db.connect()
-        
+
         # Clear any existing data
         db.clear()
-        
+
         yield db
-        
+
         # Cleanup
         db.clear()
         db.disconnect()

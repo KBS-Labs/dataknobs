@@ -2,6 +2,12 @@
 
 Complete API reference for the `dataknobs_xization` package - text normalization and tokenization tools.
 
+> **📖 Also see:** [Auto-generated API Reference](../../api/reference/xization.md) - Complete documentation from source code docstrings
+
+This page provides curated examples and usage patterns. The auto-generated reference provides exhaustive technical documentation with all methods, parameters, and type annotations.
+
+---
+
 ## Package Overview
 
 ```python

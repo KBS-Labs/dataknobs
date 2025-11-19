@@ -1,5 +1,11 @@
 # Advanced API Reference
 
+> **📖 Also see:** [Auto-generated API Reference](../../../api/reference/fsm.md) - Complete documentation from source code docstrings
+
+This page provides curated examples and usage patterns. The auto-generated reference provides exhaustive technical documentation with all methods, parameters, and type annotations.
+
+---
+
 ## Overview
 
 The Advanced API provides fine-grained control over FSM execution, including step-by-step execution, breakpoints, tracing, profiling, and debugging capabilities. This API is designed for complex workflows requiring detailed control and monitoring.

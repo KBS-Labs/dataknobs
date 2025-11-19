@@ -3,10 +3,17 @@
 from dataknobs_xization import (
     annotations,
     authorities,
+    content_transformer,
     lexicon,
     markdown,
     masking_tokenizer,
     normalize,
+)
+from dataknobs_xization.content_transformer import (
+    ContentTransformer,
+    csv_to_markdown,
+    json_to_markdown,
+    yaml_to_markdown,
 )
 from dataknobs_xization.markdown import (
     AdaptiveStreamingProcessor,
@@ -40,9 +47,15 @@ __all__ = [
     "TextFeatures",
     "annotations",
     "authorities",
+    "content_transformer",
     "lexicon",
     "masking_tokenizer",
     "normalize",
+    # Content transformation
+    "ContentTransformer",
+    "csv_to_markdown",
+    "json_to_markdown",
+    "yaml_to_markdown",
     # Markdown module
     "markdown",
     # Markdown chunking classes and functions

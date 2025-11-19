@@ -375,6 +375,113 @@ db = config.get("database", "primary")
 # Automatically uses environment-appropriate host
 ```
 
+## Configuration Inheritance
+
+For simple YAML/JSON configuration files with inheritance support, use `InheritableConfigLoader`:
+
+```python
+from dataknobs_config import InheritableConfigLoader, load_config_with_inheritance
+
+# Create a loader
+loader = InheritableConfigLoader("./configs")
+
+# Load configuration with inheritance
+config = loader.load("my-domain")
+```
+
+### Base Configuration
+
+```yaml
+# configs/base.yaml
+llm:
+  provider: openai
+  model: gpt-4
+  temperature: 0.7
+
+knowledge_base:
+  chunk_size: 500
+  overlap: 50
+```
+
+### Child Configuration
+
+```yaml
+# configs/domain.yaml
+extends: base
+
+llm:
+  model: gpt-4-turbo  # Override just this field
+
+domain_specific:
+  feature_enabled: true
+```
+
+### Environment Variable Substitution
+
+```yaml
+# configs/production.yaml
+extends: base
+
+llm:
+  api_key: ${OPENAI_API_KEY}
+  model: ${LLM_MODEL:gpt-4}  # With default value
+
+paths:
+  data_dir: ${DATA_DIR:~/data}  # Supports ~ expansion
+```
+
+### InheritableConfigLoader API
+
+```python
+class InheritableConfigLoader:
+    def __init__(self, config_dir: str | Path | None = None)
+
+    # Load configuration with inheritance
+    def load(
+        self,
+        name: str,
+        use_cache: bool = True,
+        substitute_vars: bool = True,
+    ) -> dict[str, Any]
+
+    # Load from specific file path
+    def load_from_file(
+        self,
+        filepath: str | Path,
+        substitute_vars: bool = True,
+    ) -> dict[str, Any]
+
+    # List available configurations
+    def list_available(self) -> list[str]
+
+    # Validate a configuration
+    def validate(self, name: str) -> tuple[bool, str | None]
+
+    # Clear cache
+    def clear_cache(self, name: str | None = None) -> None
+```
+
+### Convenience Function
+
+```python
+from dataknobs_config import load_config_with_inheritance
+
+# Quick one-liner for loading a config file
+config = load_config_with_inheritance("configs/my-domain.yaml")
+```
+
+### Utility Functions
+
+```python
+from dataknobs_config import deep_merge, substitute_env_vars
+
+# Deep merge two dictionaries
+merged = deep_merge(base_dict, override_dict)
+
+# Substitute environment variables in any data structure
+result = substitute_env_vars({"key": "${MY_VAR:default}"})
+```
+
 ## Best Practices
 
 1. **Use Type Organization**: Group related configurations by type
@@ -383,6 +490,7 @@ db = config.get("database", "primary")
 4. **File References**: Split large configurations into manageable files
 5. **Path Resolution**: Use relative paths in configs for portability
 6. **Object Caching**: Enable caching for expensive object construction
+7. **Use Inheritance**: Create base configs and extend them for specific environments/domains
 
 ## Testing
 

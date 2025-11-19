@@ -6,6 +6,7 @@ from typing import Any
 
 from dataknobs_xization import (
     ChunkQualityConfig,
+    ContentTransformer,
     HeadingInclusion,
     chunk_markdown_tree,
     parse_markdown,
@@ -285,6 +286,264 @@ class RAGKnowledgeBase:
                 results["errors"].append({"file": str(filepath), "error": str(e)})
 
         return results
+
+    async def load_json_document(
+        self,
+        filepath: str | Path,
+        metadata: dict[str, Any] | None = None,
+        schema: str | None = None,
+        transformer: ContentTransformer | None = None,
+        title: str | None = None,
+    ) -> int:
+        """Load and chunk a JSON document by converting it to markdown.
+
+        This method converts JSON data to markdown format using ContentTransformer,
+        then processes it like any other markdown document.
+
+        Args:
+            filepath: Path to JSON file
+            metadata: Optional metadata to attach to all chunks
+            schema: Optional schema name (requires transformer with registered schema)
+            transformer: Optional ContentTransformer instance with custom configuration
+            title: Optional document title for the markdown
+
+        Returns:
+            Number of chunks created
+
+        Example:
+            ```python
+            # Generic conversion
+            num_chunks = await kb.load_json_document(
+                "data/patterns.json",
+                metadata={"content_type": "patterns"}
+            )
+
+            # With custom schema
+            transformer = ContentTransformer()
+            transformer.register_schema("pattern", {
+                "title_field": "name",
+                "sections": [
+                    {"field": "description", "heading": "Description"},
+                    {"field": "example", "heading": "Example", "format": "code"}
+                ]
+            })
+            num_chunks = await kb.load_json_document(
+                "data/patterns.json",
+                transformer=transformer,
+                schema="pattern"
+            )
+            ```
+        """
+        import json
+
+        filepath = Path(filepath)
+
+        # Read JSON
+        with open(filepath, encoding="utf-8") as f:
+            data = json.load(f)
+
+        # Convert to markdown
+        if transformer is None:
+            transformer = ContentTransformer()
+
+        markdown_text = transformer.transform_json(
+            data,
+            schema=schema,
+            title=title or filepath.stem.replace("_", " ").title(),
+        )
+
+        return await self._load_markdown_text(
+            markdown_text,
+            source=str(filepath),
+            metadata=metadata,
+        )
+
+    async def load_yaml_document(
+        self,
+        filepath: str | Path,
+        metadata: dict[str, Any] | None = None,
+        schema: str | None = None,
+        transformer: ContentTransformer | None = None,
+        title: str | None = None,
+    ) -> int:
+        """Load and chunk a YAML document by converting it to markdown.
+
+        Args:
+            filepath: Path to YAML file
+            metadata: Optional metadata to attach to all chunks
+            schema: Optional schema name (requires transformer with registered schema)
+            transformer: Optional ContentTransformer instance with custom configuration
+            title: Optional document title for the markdown
+
+        Returns:
+            Number of chunks created
+
+        Example:
+            ```python
+            num_chunks = await kb.load_yaml_document(
+                "data/config.yaml",
+                metadata={"content_type": "configuration"}
+            )
+            ```
+        """
+        filepath = Path(filepath)
+
+        # Convert to markdown
+        if transformer is None:
+            transformer = ContentTransformer()
+
+        markdown_text = transformer.transform_yaml(
+            filepath,
+            schema=schema,
+            title=title or filepath.stem.replace("_", " ").title(),
+        )
+
+        return await self._load_markdown_text(
+            markdown_text,
+            source=str(filepath),
+            metadata=metadata,
+        )
+
+    async def load_csv_document(
+        self,
+        filepath: str | Path,
+        metadata: dict[str, Any] | None = None,
+        title: str | None = None,
+        title_field: str | None = None,
+        transformer: ContentTransformer | None = None,
+    ) -> int:
+        """Load and chunk a CSV document by converting it to markdown.
+
+        Each row becomes a section with the first column (or title_field) as heading.
+
+        Args:
+            filepath: Path to CSV file
+            metadata: Optional metadata to attach to all chunks
+            title: Optional document title for the markdown
+            title_field: Column to use as section title (default: first column)
+            transformer: Optional ContentTransformer instance with custom configuration
+
+        Returns:
+            Number of chunks created
+
+        Example:
+            ```python
+            num_chunks = await kb.load_csv_document(
+                "data/faq.csv",
+                title="Frequently Asked Questions",
+                title_field="question"
+            )
+            ```
+        """
+        filepath = Path(filepath)
+
+        # Convert to markdown
+        if transformer is None:
+            transformer = ContentTransformer()
+
+        markdown_text = transformer.transform_csv(
+            filepath,
+            title=title or filepath.stem.replace("_", " ").title(),
+            title_field=title_field,
+        )
+
+        return await self._load_markdown_text(
+            markdown_text,
+            source=str(filepath),
+            metadata=metadata,
+        )
+
+    async def _load_markdown_text(
+        self,
+        markdown_text: str,
+        source: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> int:
+        """Internal method to load markdown text directly.
+
+        Used by load_json_document, load_yaml_document, and load_csv_document.
+
+        Args:
+            markdown_text: Markdown content to load
+            source: Source identifier for metadata
+            metadata: Optional metadata to attach to all chunks
+
+        Returns:
+            Number of chunks created
+        """
+        import numpy as np
+
+        # Parse markdown
+        tree = parse_markdown(markdown_text)
+
+        # Build quality filter config if specified
+        quality_filter = None
+        if "quality_filter" in self.chunking_config:
+            qf_config = self.chunking_config["quality_filter"]
+            if isinstance(qf_config, ChunkQualityConfig):
+                quality_filter = qf_config
+            elif isinstance(qf_config, dict):
+                quality_filter = ChunkQualityConfig(**qf_config)
+
+        # Chunk the document with enhanced options
+        chunks = chunk_markdown_tree(
+            tree,
+            max_chunk_size=self.chunking_config.get("max_chunk_size", 500),
+            chunk_overlap=self.chunking_config.get("chunk_overlap", 50),
+            heading_inclusion=HeadingInclusion.IN_METADATA,
+            combine_under_heading=self.chunking_config.get("combine_under_heading", True),
+            quality_filter=quality_filter,
+            generate_embeddings=self.chunking_config.get("generate_embeddings", True),
+        )
+
+        # Process and store chunks
+        vectors = []
+        ids = []
+        metadatas = []
+
+        # Generate a base ID from source
+        source_stem = Path(source).stem if source else "doc"
+
+        for i, chunk in enumerate(chunks):
+            # Use embedding_text if available, otherwise use chunk text
+            text_for_embedding = chunk.metadata.embedding_text or chunk.text
+
+            # Generate embedding
+            embedding = await self.embedding_provider.embed(text_for_embedding)
+
+            # Convert to numpy if needed
+            if not isinstance(embedding, np.ndarray):
+                embedding = np.array(embedding, dtype=np.float32)
+
+            # Prepare metadata with new fields
+            chunk_id = f"{source_stem}_{i}"
+            chunk_metadata = {
+                "text": chunk.text,
+                "source": source,
+                "chunk_index": i,
+                "heading_path": chunk.metadata.heading_display or chunk.metadata.get_heading_path(),
+                "headings": chunk.metadata.headings,
+                "heading_levels": chunk.metadata.heading_levels,
+                "line_number": chunk.metadata.line_number,
+                "chunk_size": chunk.metadata.chunk_size,
+                "content_length": chunk.metadata.content_length,
+            }
+
+            # Merge with user metadata
+            if metadata:
+                chunk_metadata.update(metadata)
+
+            vectors.append(embedding)
+            ids.append(chunk_id)
+            metadatas.append(chunk_metadata)
+
+        # Batch insert into vector store
+        if vectors:
+            await self.vector_store.add_vectors(
+                vectors=vectors, ids=ids, metadata=metadatas
+            )
+
+        return len(chunks)
 
     async def query(
         self,

@@ -71,6 +71,7 @@ nav:
       - packages/config/configuration-system.md
       - packages/config/environment-variables.md
       - packages/config/factory-registration.md
+      - packages/config/inheritance.md
       - packages/config/api.md
     - Data:
       - packages/data/index.md
@@ -195,6 +196,7 @@ nav:
       - packages/xization/tokenization.md
       - packages/xization/normalization.md
       - packages/xization/masking.md
+      - packages/xization/content-transformation.md
       - Markdown Chunking:
         - packages/xization/markdown-chunking.md
         - packages/xization/quality-filtering.md
