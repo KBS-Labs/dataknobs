@@ -30,6 +30,8 @@ $(echo -e "${BOLD}Usage:${NC}") $0 <command> [options]
 
 $(echo -e "${BOLD}Commands:${NC}")
   $(echo -e "${CYAN}check${NC}")      Check what changed since last release
+  $(echo -e "${CYAN}changes${NC}")    List all commits for a package or all packages
+  $(echo -e "${CYAN}diffs${NC}")      Browse commit diffs interactively
   $(echo -e "${CYAN}bump${NC}")       Bump package versions interactively
   $(echo -e "${CYAN}notes${NC}")      Generate release notes from commits
   $(echo -e "${CYAN}tag${NC}")        Create release tags (calls tag-releases.sh)
@@ -39,6 +41,11 @@ $(echo -e "${BOLD}Commands:${NC}")
 
 $(echo -e "${BOLD}Examples:${NC}")
   $0 check            # See what changed
+  $0 changes          # List all commits for all packages
+  $0 changes core     # List commits for a specific package
+  $0 diffs            # Browse diffs interactively
+  $0 diffs core       # Browse diffs for a specific package
+  $0 diffs --no-pager # Browse diffs without pager
   $0 bump             # Update versions
   $0 notes            # Generate changelog entries
   $0 all              # Full guided release
@@ -75,6 +82,422 @@ get_last_tag() {
     local package=$1
     # Get all tags for this package, sort by version
     git tag -l "${package}/v*" 2>/dev/null | sort -V | tail -1
+}
+
+# Function to list all changes (detailed commit list)
+list_changes() {
+    local target_package="${1:-}"
+
+    # Get all packages
+    PACKAGES=($(get_packages_in_order))
+
+    if [ -n "$target_package" ] && [ "$target_package" != "all" ]; then
+        # Validate package exists
+        local found=false
+        for pkg in "${PACKAGES[@]}"; do
+            if [ "$pkg" = "$target_package" ]; then
+                found=true
+                break
+            fi
+        done
+
+        if [ "$found" = false ]; then
+            echo -e "${RED}Error: Unknown package '${target_package}'${NC}"
+            echo -e "Available packages: ${PACKAGES[*]}"
+            exit 1
+        fi
+
+        # Show changes for specific package
+        local package_dir="packages/$target_package"
+        local last_tag=$(get_last_tag "$target_package")
+        local current_version=$(get_version "$package_dir")
+
+        echo -e "${BOLD}${CYAN}Changes for ${target_package}${NC}"
+        echo -e "Current version: v${current_version}"
+
+        if [ -z "$last_tag" ]; then
+            echo -e "Last release: ${YELLOW}none (new package)${NC}"
+            echo ""
+            echo -e "${BOLD}All commits:${NC}"
+            git log --oneline --no-merges -- "$package_dir" 2>/dev/null || echo "  No commits found"
+        else
+            local tag_version="${last_tag#*/v}"
+            echo -e "Last release: v${tag_version} (${last_tag})"
+            echo ""
+            echo -e "${BOLD}Commits since ${last_tag}:${NC}"
+            local changes=$(git log --oneline --no-merges "${last_tag}..HEAD" -- "$package_dir" 2>/dev/null)
+            if [ -n "$changes" ]; then
+                echo "$changes"
+            else
+                echo -e "  ${GREEN}No changes since last release${NC}"
+            fi
+        fi
+    else
+        # Show changes for all packages
+        echo -e "${BOLD}${CYAN}Changes for all packages${NC}"
+        echo ""
+
+        local any_changes=false
+
+        for package in "${PACKAGES[@]}"; do
+            local package_dir="packages/$package"
+            local last_tag=$(get_last_tag "$package")
+            local current_version=$(get_version "$package_dir")
+
+            local changes=""
+            if [ -z "$last_tag" ]; then
+                changes=$(git log --oneline --no-merges -- "$package_dir" 2>/dev/null)
+                if [ -n "$changes" ]; then
+                    echo -e "${BOLD}${package}${NC} (v${current_version}) - ${YELLOW}new package${NC}"
+                    echo "$changes" | sed 's/^/  /'
+                    echo ""
+                    any_changes=true
+                fi
+            else
+                changes=$(git log --oneline --no-merges "${last_tag}..HEAD" -- "$package_dir" 2>/dev/null)
+                if [ -n "$changes" ]; then
+                    local tag_version="${last_tag#*/v}"
+                    echo -e "${BOLD}${package}${NC} (v${tag_version} → v${current_version})"
+                    echo "$changes" | sed 's/^/  /'
+                    echo ""
+                    any_changes=true
+                fi
+            fi
+        done
+
+        if [ "$any_changes" = false ]; then
+            echo -e "${GREEN}No changes detected since last releases${NC}"
+        fi
+    fi
+}
+
+# Function to interactively browse diffs
+browse_diffs() {
+    local arg_package="${1:-}"
+    local arg_commit="${2:-}"
+    local arg_file="${3:-}"
+    local use_pager="${4:-true}"
+
+    # Get all packages
+    PACKAGES=($(get_packages_in_order))
+
+    # Build list of packages with changes
+    local packages_with_changes=()
+    for package in "${PACKAGES[@]}"; do
+        local package_dir="packages/$package"
+        local last_tag=$(get_last_tag "$package")
+        local changes=""
+
+        if [ -z "$last_tag" ]; then
+            changes=$(git log --oneline --no-merges -- "$package_dir" 2>/dev/null)
+        else
+            changes=$(git log --oneline --no-merges "${last_tag}..HEAD" -- "$package_dir" 2>/dev/null)
+        fi
+
+        if [ -n "$changes" ]; then
+            packages_with_changes+=("$package")
+        fi
+    done
+
+    if [ ${#packages_with_changes[@]} -eq 0 ]; then
+        echo -e "${GREEN}No changes detected since last releases${NC}"
+        return
+    fi
+
+    # Main interactive loop
+    while true; do
+        local selected_package=""
+        local selected_commit=""
+        local selected_file=""
+
+        # Package selection
+        if [ -n "$arg_package" ]; then
+            # Validate provided package
+            local found=false
+            for pkg in "${packages_with_changes[@]}"; do
+                if [ "$pkg" = "$arg_package" ]; then
+                    found=true
+                    break
+                fi
+            done
+
+            if [ "$found" = false ]; then
+                echo -e "${RED}Error: Package '${arg_package}' not found or has no changes${NC}"
+                echo -e "Packages with changes: ${packages_with_changes[*]}"
+                return 1
+            fi
+            selected_package="$arg_package"
+        else
+            # Interactive package selection
+            echo -e "${BOLD}${CYAN}Select a package:${NC}"
+            local i=1
+            for pkg in "${packages_with_changes[@]}"; do
+                echo "  $i) $pkg"
+                ((i++))
+            done
+            echo "  q) Quit"
+            echo -n "Choice: "
+            read -r choice
+
+            if [ "$choice" = "q" ] || [ "$choice" = "Q" ]; then
+                return 0
+            fi
+
+            if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt ${#packages_with_changes[@]} ]; then
+                echo -e "${RED}Invalid choice${NC}"
+                continue
+            fi
+
+            selected_package="${packages_with_changes[$((choice - 1))]}"
+        fi
+
+        echo ""
+
+        # Get commits for selected package
+        local package_dir="packages/$selected_package"
+        local last_tag=$(get_last_tag "$selected_package")
+        local commits=()
+        local commit_messages=()
+
+        if [ -z "$last_tag" ]; then
+            while IFS= read -r line; do
+                commits+=("${line%% *}")
+                commit_messages+=("${line#* }")
+            done < <(git log --oneline --no-merges -- "$package_dir" 2>/dev/null)
+        else
+            while IFS= read -r line; do
+                commits+=("${line%% *}")
+                commit_messages+=("${line#* }")
+            done < <(git log --oneline --no-merges "${last_tag}..HEAD" -- "$package_dir" 2>/dev/null)
+        fi
+
+        if [ ${#commits[@]} -eq 0 ]; then
+            echo -e "${YELLOW}No commits found for ${selected_package}${NC}"
+            if [ -n "$arg_package" ]; then
+                return 0
+            fi
+            continue
+        fi
+
+        # Commit selection loop
+        while true; do
+            if [ -n "$arg_commit" ]; then
+                # Validate provided commit
+                local found=false
+                for c in "${commits[@]}"; do
+                    if [ "$c" = "$arg_commit" ]; then
+                        found=true
+                        break
+                    fi
+                done
+
+                if [ "$found" = false ]; then
+                    echo -e "${RED}Error: Commit '${arg_commit}' not found in ${selected_package}${NC}"
+                    return 1
+                fi
+                selected_commit="$arg_commit"
+            else
+                # Interactive commit selection
+                echo -e "${BOLD}${CYAN}Commits for ${selected_package}:${NC}"
+                local i=1
+                for idx in "${!commits[@]}"; do
+                    echo "  $i) ${commits[$idx]} ${commit_messages[$idx]}"
+                    ((i++))
+                done
+                echo "  b) Back to packages"
+                echo "  q) Quit"
+                echo -n "Choice: "
+                read -r choice
+
+                if [ "$choice" = "q" ] || [ "$choice" = "Q" ]; then
+                    return 0
+                fi
+
+                if [ "$choice" = "b" ] || [ "$choice" = "B" ]; then
+                    if [ -n "$arg_package" ]; then
+                        return 0
+                    fi
+                    echo ""
+                    break
+                fi
+
+                if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt ${#commits[@]} ]; then
+                    echo -e "${RED}Invalid choice${NC}"
+                    continue
+                fi
+
+                selected_commit="${commits[$((choice - 1))]}"
+            fi
+
+            echo ""
+
+            # Get files for selected commit in selected package
+            local files=()
+            while IFS= read -r file; do
+                files+=("$file")
+            done < <(git show "$selected_commit" --name-only --format="" | grep "^packages/$selected_package/" 2>/dev/null)
+
+            if [ ${#files[@]} -eq 0 ]; then
+                echo -e "${YELLOW}No files found for commit ${selected_commit} in ${selected_package}${NC}"
+                if [ -n "$arg_commit" ]; then
+                    return 0
+                fi
+                continue
+            fi
+
+            # File selection loop
+            while true; do
+                if [ -n "$arg_file" ]; then
+                    # Find matching file
+                    local found=false
+                    for f in "${files[@]}"; do
+                        if [ "$f" = "$arg_file" ] || [[ "$f" == *"$arg_file" ]]; then
+                            selected_file="$f"
+                            found=true
+                            break
+                        fi
+                    done
+
+                    if [ "$found" = false ]; then
+                        echo -e "${RED}Error: File '${arg_file}' not found in commit${NC}"
+                        return 1
+                    fi
+                else
+                    # Interactive file selection
+                    echo -e "${BOLD}${CYAN}Files in commit ${selected_commit}:${NC}"
+                    local i=1
+                    for file in "${files[@]}"; do
+                        # Show relative path from package dir for readability
+                        local display_file="${file#packages/$selected_package/}"
+                        echo "  $i) $display_file"
+                        ((i++))
+                    done
+                    echo "  b) Back to commits"
+                    echo "  q) Quit"
+                    echo -n "Choice: "
+                    read -r choice
+
+                    if [ "$choice" = "q" ] || [ "$choice" = "Q" ]; then
+                        return 0
+                    fi
+
+                    if [ "$choice" = "b" ] || [ "$choice" = "B" ]; then
+                        if [ -n "$arg_commit" ]; then
+                            return 0
+                        fi
+                        echo ""
+                        break
+                    fi
+
+                    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt ${#files[@]} ]; then
+                        echo -e "${RED}Invalid choice${NC}"
+                        continue
+                    fi
+
+                    selected_file="${files[$((choice - 1))]}"
+                fi
+
+                # Get commit message for display
+                local commit_msg=$(git log -1 --format="%s" "$selected_commit" 2>/dev/null)
+
+                # Display the diff
+                echo ""
+                echo -e "${BOLD}${MAGENTA}════════════════════════════════════════${NC}"
+                echo -e "${BOLD}Commit:${NC} ${selected_commit}"
+                echo -e "${BOLD}Message:${NC} ${commit_msg}"
+                echo -e "${BOLD}File:${NC} ${selected_file}"
+                echo -e "${BOLD}${MAGENTA}════════════════════════════════════════${NC}"
+                echo ""
+
+                if [ "$use_pager" = "true" ]; then
+                    git show "$selected_commit" -- "$selected_file" | less -R
+                else
+                    git show "$selected_commit" -- "$selected_file"
+                fi
+
+                # If all arguments were provided, exit after showing diff
+                if [ -n "$arg_package" ] && [ -n "$arg_commit" ] && [ -n "$arg_file" ]; then
+                    return 0
+                fi
+
+                # Post-diff options
+                echo ""
+                echo -e "${CYAN}Options:${NC}"
+                echo "  n) Next file"
+                echo "  p) Toggle pager (currently: $use_pager)"
+                echo "  b) Back to file list"
+                echo "  c) Back to commits"
+                echo "  k) Back to packages"
+                echo "  q) Quit"
+                echo -n "Choice: "
+                read -r choice
+
+                case "$choice" in
+                    n|N)
+                        # Find next file
+                        local current_idx=0
+                        for idx in "${!files[@]}"; do
+                            if [ "${files[$idx]}" = "$selected_file" ]; then
+                                current_idx=$idx
+                                break
+                            fi
+                        done
+
+                        local next_idx=$((current_idx + 1))
+                        if [ $next_idx -ge ${#files[@]} ]; then
+                            echo -e "${YELLOW}No more files in this commit${NC}"
+                            continue
+                        fi
+
+                        selected_file="${files[$next_idx]}"
+                        ;;
+                    p|P)
+                        if [ "$use_pager" = "true" ]; then
+                            use_pager="false"
+                            echo -e "${YELLOW}Pager disabled${NC}"
+                        else
+                            use_pager="true"
+                            echo -e "${GREEN}Pager enabled${NC}"
+                        fi
+                        ;;
+                    b|B)
+                        echo ""
+                        continue 2  # Back to file selection in file loop
+                        ;;
+                    c|C)
+                        if [ -n "$arg_commit" ]; then
+                            return 0
+                        fi
+                        echo ""
+                        break 2  # Back to commit selection
+                        ;;
+                    k|K)
+                        if [ -n "$arg_package" ]; then
+                            return 0
+                        fi
+                        echo ""
+                        break 3  # Back to package selection
+                        ;;
+                    q|Q)
+                        return 0
+                        ;;
+                    *)
+                        echo -e "${RED}Invalid choice${NC}"
+                        ;;
+                esac
+            done
+
+            # Break out of commit loop if we need to go back to packages
+            if [ -n "$arg_commit" ]; then
+                return 0
+            fi
+        done
+
+        # If package was provided as argument, exit after processing
+        if [ -n "$arg_package" ]; then
+            return 0
+        fi
+    done
 }
 
 # Function to check what changed
@@ -660,6 +1083,39 @@ full_release() {
 case "${1:-help}" in
     check)
         check_changes
+        ;;
+    changes)
+        shift
+        list_changes "${1:-}"
+        ;;
+    diffs)
+        shift
+        # Parse arguments for diffs command
+        diffs_package=""
+        diffs_commit=""
+        diffs_file=""
+        diffs_pager="true"
+
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                --no-pager)
+                    diffs_pager="false"
+                    ;;
+                *)
+                    # Positional arguments: package, commit, file
+                    if [ -z "$diffs_package" ]; then
+                        diffs_package="$1"
+                    elif [ -z "$diffs_commit" ]; then
+                        diffs_commit="$1"
+                    elif [ -z "$diffs_file" ]; then
+                        diffs_file="$1"
+                    fi
+                    ;;
+            esac
+            shift
+        done
+
+        browse_diffs "$diffs_package" "$diffs_commit" "$diffs_file" "$diffs_pager"
         ;;
     bump)
         bump_versions
