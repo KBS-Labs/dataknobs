@@ -19,8 +19,12 @@ dk fix           # Auto-fix style issues
 dk check         # Quick quality check
 dk pr            # Full PR preparation
 
-# Release phase  
-bin/release-helper.sh check    # Check what changed
+# Review changes
+bin/release-helper.sh check    # Summary of what changed
+bin/release-helper.sh changes  # List all commits
+bin/release-helper.sh diffs    # Browse commit diffs interactively
+
+# Release phase
 bin/release-helper.sh bump     # Bump versions
 bin/release-helper.sh notes    # Generate release notes
 bin/release-helper.sh tag      # Create tags
@@ -48,6 +52,93 @@ git push origin <branch>
 # Wait for CI to pass
 # Merge PR
 ```
+
+## Reviewing Changes
+
+Before bumping versions, you can review what has changed since the last release using three complementary commands.
+
+### Check Command (Summary)
+
+The `check` command provides a high-level summary of changes with version bump recommendations:
+
+```bash
+bin/release-helper.sh check
+```
+
+This shows:
+- Changed packages with version transitions
+- Type of changes detected (features, fixes, breaking)
+- Recommended version bumps
+
+### Changes Command (Commit List)
+
+The `changes` command lists all individual commits since the last release:
+
+```bash
+# List commits for all packages
+bin/release-helper.sh changes
+
+# List commits for a specific package
+bin/release-helper.sh changes core
+```
+
+Output shows commit hash and message for each commit, grouped by package.
+
+### Diffs Command (Interactive Browser)
+
+The `diffs` command provides an interactive interface to browse the actual code changes:
+
+```bash
+# Full interactive mode
+bin/release-helper.sh diffs
+
+# Start with a specific package
+bin/release-helper.sh diffs core
+
+# Start with a specific commit
+bin/release-helper.sh diffs core abc1234
+
+# Show a specific file directly
+bin/release-helper.sh diffs core abc1234 src/module.py
+
+# Disable pager by default
+bin/release-helper.sh diffs --no-pager
+```
+
+#### Interactive Navigation
+
+The diffs browser guides you through three levels of selection:
+
+1. **Package selection** - Choose from packages with changes
+2. **Commit selection** - View commits with hash and description
+3. **File selection** - See files changed in that commit
+
+After viewing a diff, you have these options:
+
+| Key | Action |
+|-----|--------|
+| `n` | Next file in the commit |
+| `p` | Toggle pager on/off |
+| `b` | Back to file list |
+| `c` | Back to commits |
+| `k` | Back to packages |
+| `q` | Quit |
+
+#### Diff Display
+
+Each diff shows context information before the actual changes:
+
+```
+════════════════════════════════════════
+Commit: abc1234
+Message: Add new validation function
+File: packages/core/src/validator.py
+════════════════════════════════════════
+
+<diff content>
+```
+
+The pager (`less`) is enabled by default for easier navigation of large diffs. Use `--no-pager` to disable, or press `p` to toggle during interactive use.
 
 ## Release Checklist
 
@@ -209,6 +300,10 @@ GitHub Actions automatically:
 | Fix style issues | `dk fix` | Auto-fix linting and formatting |
 | Quick check | `dk check [package]` | Fast quality check |
 | Full PR check | `dk pr` | Complete quality validation |
+| **Review Changes** | | |
+| Check summary | `bin/release-helper.sh check` | Summary with version recommendations |
+| List commits | `bin/release-helper.sh changes [pkg]` | List all commits since last release |
+| Browse diffs | `bin/release-helper.sh diffs [pkg]` | Interactive diff browser |
 | **Release Prep** | | |
 | Check changes | `dk release-check` | See what changed since last release |
 | Bump versions | `dk release-bump` | Interactive version updates |
