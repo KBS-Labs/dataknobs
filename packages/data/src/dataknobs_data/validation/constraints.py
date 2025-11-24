@@ -153,17 +153,27 @@ class Required(Constraint):
 class Range(Constraint):
     """Numeric value must be in specified range."""
 
-    def __init__(self, min: Number | None = None, max: Number | None = None):
+    def __init__(
+        self,
+        min: Number | None = None,
+        max: Number | None = None,
+        min_exclusive: bool = False,
+        max_exclusive: bool = False,
+    ):
         """Initialize range constraint.
-        
+
         Args:
-            min: Minimum value (inclusive)
-            max: Maximum value (inclusive)
+            min: Minimum value (inclusive by default)
+            max: Maximum value (inclusive by default)
+            min_exclusive: If True, minimum is exclusive (value must be > min)
+            max_exclusive: If True, maximum is exclusive (value must be < max)
         """
         if min is not None and max is not None and float(min) > float(max):  # type: ignore[arg-type]
             raise ValueError(f"min ({min}) cannot be greater than max ({max})")
         self.min = min
         self.max = max
+        self.min_exclusive = min_exclusive
+        self.max_exclusive = max_exclusive
 
     def check(self, value: AnyType, context: ValidationContext | None = None) -> ValidationResult:
         """Check if value is in range."""
@@ -184,10 +194,21 @@ class Range(Constraint):
             )
 
         errors = []
-        if self.min is not None and float(value) < float(self.min):  # type: ignore[arg-type]
-            errors.append(f"Value {value} is less than minimum {self.min}")
-        if self.max is not None and float(value) > float(self.max):  # type: ignore[arg-type]
-            errors.append(f"Value {value} is greater than maximum {self.max}")
+        if self.min is not None:
+            if self.min_exclusive:
+                if float(value) <= float(self.min):  # type: ignore[arg-type]
+                    errors.append(f"Value {value} must be greater than {self.min}")
+            else:
+                if float(value) < float(self.min):  # type: ignore[arg-type]
+                    errors.append(f"Value {value} is less than minimum {self.min}")
+
+        if self.max is not None:
+            if self.max_exclusive:
+                if float(value) >= float(self.max):  # type: ignore[arg-type]
+                    errors.append(f"Value {value} must be less than {self.max}")
+            else:
+                if float(value) > float(self.max):  # type: ignore[arg-type]
+                    errors.append(f"Value {value} is greater than maximum {self.max}")
 
         if errors:
             return ValidationResult.failure(value, errors)
@@ -275,27 +296,46 @@ class Pattern(Constraint):
 class Enum(Constraint):
     """Value must be in allowed set."""
 
-    def __init__(self, values: list[AnyType]):
+    def __init__(self, values: list[AnyType], case_sensitive: bool = True):
         """Initialize enum constraint.
-        
+
         Args:
             values: List of allowed values
+            case_sensitive: If False, string comparisons ignore case
         """
         if not values:
             raise ValueError("Enum constraint requires at least one allowed value")
-        self.allowed = set(values)
+        self.values = values
+        self.case_sensitive = case_sensitive
         self.allowed_str = ', '.join(repr(v) for v in values)
+
+        if case_sensitive:
+            self.allowed = set(values)
+        else:
+            # For case-insensitive, store lowercase versions for comparison
+            self.allowed_lower = {
+                v.lower() if isinstance(v, str) else v for v in values
+            }
 
     def check(self, value: AnyType, context: ValidationContext | None = None) -> ValidationResult:
         """Check if value is in allowed set."""
         if value is None:
             return ValidationResult.success(value)
 
-        if value not in self.allowed:
-            return ValidationResult.failure(
-                value,
-                [f"Value '{value}' is not in allowed values: {self.allowed_str}"]
-            )
+        if self.case_sensitive:
+            if value not in self.allowed:
+                return ValidationResult.failure(
+                    value,
+                    [f"Value '{value}' is not in allowed values: {self.allowed_str}"]
+                )
+        else:
+            # Case-insensitive comparison
+            check_value = value.lower() if isinstance(value, str) else value
+            if check_value not in self.allowed_lower:
+                return ValidationResult.failure(
+                    value,
+                    [f"Value '{value}' is not in allowed values: {self.allowed_str}"]
+                )
 
         return ValidationResult.success(value)
 
