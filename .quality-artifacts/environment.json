@@ -1,11 +1,11 @@
 {
-  "timestamp": "2025-11-24T14:18:49Z",
+  "timestamp": "2025-11-24T14:32:28Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.9.11 (Homebrew 2025-11-20)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/validation-fixes",
-  "git_commit": "60cd31f3b180634ec20f540368f461769d120670",
+  "git_branch": "update-dependencies",
+  "git_commit": "c9b37ed4fb3e22ba3ae2071ce0d183b17200c689",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
