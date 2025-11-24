@@ -1293,7 +1293,7 @@ wheels = [
 
 [[package]]
 name = "dataknobs"
-version = "0.0.16"
+version = "0.1.0"
 source = { editable = "packages/legacy" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1314,7 +1314,7 @@ requires-dist = [
 
 [[package]]
 name = "dataknobs-bots"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "packages/bots" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1357,7 +1357,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-common"
-version = "1.0.1"
+version = "1.1.0"
 source = { editable = "packages/common" }
 dependencies = [
     { name = "more-itertools" },
@@ -1395,7 +1395,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-config"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "packages/config" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1427,7 +1427,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "dataknobs-data"
-version = "0.3.2"
+version = "0.4.0"
 source = { editable = "packages/data" }
 dependencies = [
     { name = "aiofiles" },
@@ -1557,7 +1557,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-fsm"
-version = "0.1.2"
+version = "0.1.3"
 source = { editable = "packages/fsm" }
 dependencies = [
     { name = "aiofiles" },
@@ -1666,7 +1666,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-llm"
-version = "0.1.1"
+version = "0.2.0"
 source = { editable = "packages/llm" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1707,7 +1707,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-structures"
-version = "1.0.1"
+version = "1.0.2"
 source = { editable = "packages/structures" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1726,7 +1726,7 @@ requires-dist = [
 
 [[package]]
 name = "dataknobs-utils"
-version = "1.1.0"
+version = "1.2.0"
 source = { editable = "packages/utils" }
 dependencies = [
     { name = "beautifulsoup4" },
@@ -1845,7 +1845,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-xization"
-version = "1.1.0"
+version = "1.2.0"
 source = { editable = "packages/xization" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -2043,7 +2043,7 @@ name = "exceptiongroup"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0b/9f/a65090624ecf468cdca03533906e7c69ed7588582240cfe7cc9e770b50eb/exceptiongroup-1.3.0.tar.gz", hash = "sha256:b241f5885f560bc56a59ee63ca4c6a8bfa46ae4ad651af316d4e81817bb9fd88", size = 29749, upload-time = "2025-05-10T17:42:51.123Z" }
 wheels = [
