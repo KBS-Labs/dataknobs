@@ -30,7 +30,7 @@ async def main():
     config = {
         "llm": {
             "provider": "ollama",
-            "model": "gemma3:3b",
+            "model": "gemma3:1b",
             "temperature": 0.7,
             "max_tokens": 1000
         },

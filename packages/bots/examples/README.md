@@ -17,7 +17,7 @@ A basic conversational bot with no memory or advanced features.
 
 **Required Ollama Model:**
 ```bash
-ollama pull gemma3:3b
+ollama pull gemma3:1b
 ```
 
 **Features Demonstrated:**
@@ -37,7 +37,7 @@ A chatbot that remembers previous messages using buffer memory.
 
 **Required Ollama Model:**
 ```bash
-ollama pull gemma3:3b
+ollama pull gemma3:1b
 ```
 
 **Features Demonstrated:**
@@ -56,7 +56,7 @@ A chatbot with Retrieval Augmented Generation using a knowledge base.
 
 **Required Ollama Model:**
 ```bash
-ollama pull gemma3:3b
+ollama pull gemma3:1b
 ollama pull nomic-embed-text  # For embeddings
 ```
 
@@ -82,7 +82,7 @@ An agent that uses ReAct reasoning with tools to solve multi-step problems.
 
 **Required Ollama Model:**
 ```bash
-ollama pull gemma3:3b
+ollama pull gemma3:1b
 ```
 
 **Features Demonstrated:**
@@ -103,7 +103,7 @@ Demonstrates how a single bot instance can serve multiple clients with isolated 
 
 **Required Ollama Model:**
 ```bash
-ollama pull gemma3:3b
+ollama pull gemma3:1b
 ```
 
 **Features Demonstrated:**
@@ -200,7 +200,7 @@ The examples are also tested via integration tests. To run them:
 
 ```bash
 # Ensure Ollama is running with required models
-ollama pull gemma3:3b
+ollama pull gemma3:1b
 ollama pull nomic-embed-text
 
 # Run integration tests
@@ -214,7 +214,7 @@ TEST_OLLAMA=true pytest tests/integration/
 If you get connection errors:
 - Ensure Ollama is running: `ollama list`
 - Check the default port (11434) is accessible
-- Try pulling the model again: `ollama pull gemma3:3b`
+- Try pulling the model again: `ollama pull gemma3:1b`
 
 ### PostgreSQL Connection Issues
 
@@ -226,7 +226,7 @@ If PostgreSQL examples fail:
 ### Memory Issues
 
 If you run out of memory:
-- Use smaller Ollama models (gemma3:3b instead of larger models)
+- Use smaller Ollama models (gemma3:1b instead of larger models)
 - Reduce `max_messages` in memory configuration
 - Reduce `max_tokens` in LLM configuration
 
@@ -234,8 +234,8 @@ If you run out of memory:
 
 | Model | Size | Use Case |
 |-------|------|----------|
-| gemma3:3b | 3.3 GB | General chatbots, examples, testing |
-| gemma3:7b | 7 GB | Better quality responses |
+| gemma3:1b | ~1 GB | General chatbots, examples, testing |
+| gemma3:4b | ~4 GB | Better quality responses |
 | llama3.1:8b | 8 GB | Advanced reasoning, tool use |
 | nomic-embed-text | ~270 MB | Embeddings for RAG |
 

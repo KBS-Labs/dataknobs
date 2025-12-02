@@ -17,7 +17,7 @@ This example shows how to:
 # Install Ollama: https://ollama.ai/
 
 # Pull the required model
-ollama pull gemma3:3b
+ollama pull gemma3:1b
 
 # Install dataknobs-bots
 pip install dataknobs-bots
@@ -33,7 +33,7 @@ The bot is configured entirely through a dictionary:
 config = {
     "llm": {
         "provider": "ollama",  # Use Ollama for local inference
-        "model": "gemma3:3b",  # Lightweight model
+        "model": "gemma3:1b",  # Lightweight model
         "temperature": 0.7,
         "max_tokens": 500
     },
@@ -100,7 +100,7 @@ Simple Chatbot Example
 ============================================================
 
 This example shows a basic chatbot with no memory.
-Required: ollama pull gemma3:3b
+Required: ollama pull gemma3:1b
 
 Creating bot from configuration...
 ✓ Bot created successfully
@@ -151,7 +151,7 @@ To add memory, see the [Memory Chatbot Example](memory-chatbot.md).
 ```python
 "llm": {
     "provider": "ollama",
-    "model": "gemma3:3b",
+    "model": "gemma3:1b",
     "max_tokens": 1000,  # Longer responses
 }
 ```

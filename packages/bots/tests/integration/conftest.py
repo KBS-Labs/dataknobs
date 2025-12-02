@@ -8,6 +8,74 @@ import pytest
 import requests
 
 
+# =============================================================================
+# Echo LLM Configuration (for tests that don't need real LLM responses)
+# =============================================================================
+
+@pytest.fixture
+def echo_config() -> dict:
+    """Provide Echo LLM configuration for tests that don't need real LLM."""
+    return {
+        "provider": "echo",
+        "model": "echo-model",
+        "temperature": 0.7,
+        "max_tokens": 500,
+    }
+
+
+@pytest.fixture
+def bot_config_echo(echo_config) -> dict:
+    """Provide bot configuration using Echo LLM."""
+    return {
+        "llm": echo_config,
+        "conversation_storage": {"backend": "memory"},
+        "prompts": {
+            "test_assistant": "You are a helpful test assistant. Keep responses very brief."
+        },
+        "system_prompt": {"name": "test_assistant"},
+    }
+
+
+@pytest.fixture
+def bot_config_echo_with_memory(echo_config) -> dict:
+    """Provide bot configuration with memory using Echo LLM."""
+    return {
+        "llm": echo_config,
+        "conversation_storage": {"backend": "memory"},
+        "memory": {
+            "type": "buffer",
+            "max_messages": 10,
+        },
+        "prompts": {
+            "test_assistant": "You are a helpful test assistant with memory. Keep responses very brief."
+        },
+        "system_prompt": {"name": "test_assistant"},
+    }
+
+
+@pytest.fixture
+def bot_config_echo_react(echo_config) -> dict:
+    """Provide bot configuration with ReAct reasoning using Echo LLM."""
+    return {
+        "llm": echo_config,
+        "conversation_storage": {"backend": "memory"},
+        "reasoning": {
+            "strategy": "react",
+            "max_iterations": 3,
+            "verbose": False,
+            "store_trace": True,
+        },
+        "prompts": {
+            "test_agent": "You are a test agent with tool access. Keep responses very brief."
+        },
+        "system_prompt": {"name": "test_agent"},
+    }
+
+
+# =============================================================================
+# Ollama Configuration (for tests that need real LLM responses)
+# =============================================================================
+
 def wait_for_ollama(host: str = "localhost", port: int = 11434, max_retries: int = 30):
     """Wait for Ollama to be ready.
 
@@ -39,7 +107,7 @@ def verify_ollama_model(model: str, host: str = "localhost", port: int = 11434) 
     """Verify that a specific Ollama model is available.
 
     Args:
-        model: Model name (e.g., "gemma3:3b")
+        model: Model name (e.g., "gemma3:1b")
         host: Ollama host
         port: Ollama port
 
@@ -80,7 +148,7 @@ def ensure_ollama_ready(ollama_connection_params):
     )
 
     # Verify required models are available
-    required_models = ["gemma3:3b", "gemma3"]  # Try both with and without tag
+    required_models = ["gemma3:1b", "gemma3"]  # Try both with and without tag
     model_available = False
 
     for model in required_models:
@@ -93,17 +161,17 @@ def ensure_ollama_ready(ollama_connection_params):
             break
 
     if not model_available:
-        print("\nWARNING: gemma3:3b model not found in Ollama")
-        print("Run: ollama pull gemma3:3b")
+        print("\nWARNING: gemma3:1b model not found in Ollama")
+        print("Run: ollama pull gemma3:1b")
         print("Tests will attempt to run but may fail if model is not available")
 
 
 @pytest.fixture
 def ollama_config(ensure_ollama_ready, ollama_connection_params) -> dict:
-    """Provide Ollama configuration for tests."""
+    """Provide Ollama configuration for tests that need real LLM."""
     return {
         "provider": "ollama",
-        "model": "gemma3:3b",
+        "model": "gemma3:1b",
         "temperature": 0.7,
         "max_tokens": 500,
         **ollama_connection_params,

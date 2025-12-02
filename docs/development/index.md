@@ -41,15 +41,16 @@ Dataknobs is a modular Python ecosystem for AI knowledge base structures and tex
 If you're new to Dataknobs development:
 
 1. **[Developer Workflow (dk)](dk-command.md)** - 🚀 **Start here** - The easy way to develop
-2. **[Contributing Guide](contributing.md)** - Learn how to contribute
-3. **[New Package Checklist](new-package-checklist.md)** - 📦 Create and integrate new packages
-4. **[Configuration System](configuration-system.md)** - Understand the DataKnobs configuration patterns
-5. **[UV Virtual Environment Guide](uv-environment.md)** - How to work with UV package manager
-6. **[Quality Checks Process](quality-checks.md)** - Developer-driven quality assurance
-7. **[Architecture Overview](architecture.md)** - Understand the system design
-8. **[Testing Guide](testing.md)** - Learn about our testing approach
-9. **[Integration Testing & CI](integration-testing-ci.md)** - Integration testing in CI/CD pipeline
-10. **[CI/CD Pipeline](ci-cd.md)** - Understand our deployment process
+2. **[Linux Setup Guide](linux-setup.md)** - 🐧 **Linux users** - Platform-specific setup and troubleshooting
+3. **[Contributing Guide](contributing.md)** - Learn how to contribute
+4. **[New Package Checklist](new-package-checklist.md)** - 📦 Create and integrate new packages
+5. **[Configuration System](configuration-system.md)** - Understand the DataKnobs configuration patterns
+6. **[UV Virtual Environment Guide](uv-environment.md)** - How to work with UV package manager
+7. **[Quality Checks Process](quality-checks.md)** - Developer-driven quality assurance
+8. **[Architecture Overview](architecture.md)** - Understand the system design
+9. **[Testing Guide](testing.md)** - Learn about our testing approach
+10. **[Integration Testing & CI](integration-testing-ci.md)** - Integration testing in CI/CD pipeline
+11. **[CI/CD Pipeline](ci-cd.md)** - Understand our deployment process
 
 ## Development Topics
 

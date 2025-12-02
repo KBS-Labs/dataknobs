@@ -16,7 +16,7 @@ For this quickstart, we'll use Ollama for local LLM inference:
 # Install Ollama: https://ollama.ai/
 
 # Pull the model
-ollama pull gemma3:3b
+ollama pull gemma3:1b
 ```
 
 ## Your First Chatbot
@@ -32,7 +32,7 @@ async def main():
     config = {
         "llm": {
             "provider": "ollama",
-            "model": "gemma3:3b",
+            "model": "gemma3:1b",
             "temperature": 0.7,
             "max_tokens": 1000
         },
@@ -80,7 +80,7 @@ python quickstart.py
 ### What's Happening?
 
 1. **Configuration** - We define the bot's behavior using a dictionary:
-   - `llm`: Specifies the LLM provider (Ollama) and model (gemma3:3b)
+   - `llm`: Specifies the LLM provider (Ollama) and model (gemma3:1b)
    - `conversation_storage`: Where conversations are stored (memory)
    - `memory`: How the bot remembers context (buffer with 10 messages)
 
@@ -126,7 +126,7 @@ async def main():
     config = {
         "llm": {
             "provider": "ollama",
-            "model": "gemma3:3b"
+            "model": "gemma3:1b"
         },
         "conversation_storage": {
             "backend": "memory"
@@ -346,7 +346,7 @@ async def main():
     base_config = {
         "llm": {
             "provider": "ollama",
-            "model": "gemma3:3b"
+            "model": "gemma3:1b"
         },
         "conversation_storage": {
             "backend": "memory"
@@ -426,12 +426,12 @@ Now that you've built your first bots, explore more advanced features:
 ### Model Not Found
 
 ```
-Error: model 'gemma3:3b' not found
+Error: model 'gemma3:1b' not found
 ```
 
 **Solution**: Pull the model first:
 ```bash
-ollama pull gemma3:3b
+ollama pull gemma3:1b
 ```
 
 ### Import Error

@@ -25,7 +25,7 @@ Visit [https://ollama.ai/](https://ollama.ai/) and install Ollama for your platf
 
 ```bash
 # For basic chatbot examples
-ollama pull gemma3:3b
+ollama pull gemma3:1b
 
 # For agent examples
 ollama pull phi3:mini
@@ -99,7 +99,7 @@ Learn configuration best practices:
 from dataknobs_bots import DynaBot, BotContext
 
 config = {
-    "llm": {"provider": "ollama", "model": "gemma3:3b"},
+    "llm": {"provider": "ollama", "model": "gemma3:1b"},
     "conversation_storage": {"backend": "memory"}
 }
 
@@ -116,7 +116,7 @@ response = await bot.chat("Hello!", context)
 
 ```python
 config = {
-    "llm": {"provider": "ollama", "model": "gemma3:3b"},
+    "llm": {"provider": "ollama", "model": "gemma3:1b"},
     "conversation_storage": {"backend": "memory"},
     "memory": {
         "type": "buffer",
@@ -129,7 +129,7 @@ config = {
 
 ```python
 config = {
-    "llm": {"provider": "ollama", "model": "gemma3:3b"},
+    "llm": {"provider": "ollama", "model": "gemma3:1b"},
     "conversation_storage": {"backend": "memory"},
     "knowledge_base": {
         "enabled": True,
@@ -165,12 +165,12 @@ config = {
 ### Model Not Found
 
 ```
-Error: model 'gemma3:3b' not found
+Error: model 'gemma3:1b' not found
 ```
 
 **Solution**: Pull the model first:
 ```bash
-ollama pull gemma3:3b
+ollama pull gemma3:1b
 ```
 
 ### Connection Error
