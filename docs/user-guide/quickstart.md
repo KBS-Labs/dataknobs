@@ -33,7 +33,7 @@ from dataknobs_bots import DynaBot, BotContext
 async def main():
     # Configure and create bot
     bot = await DynaBot.from_config({
-        "llm": {"provider": "ollama", "model": "gemma3:3b"},
+        "llm": {"provider": "ollama", "model": "gemma3:1b"},
         "conversation_storage": {"backend": "memory"},
         "memory": {"type": "buffer", "max_messages": 10}
     })

@@ -17,7 +17,7 @@ This example demonstrates:
 # Install Ollama: https://ollama.ai/
 
 # Pull required models
-ollama pull gemma3:3b          # For chat
+ollama pull gemma3:1b          # For chat
 ollama pull nomic-embed-text   # For embeddings
 
 # Install dataknobs-bots with FAISS
@@ -51,7 +51,7 @@ Add a `knowledge_base` section:
 config = {
     "llm": {
         "provider": "ollama",
-        "model": "gemma3:3b"
+        "model": "gemma3:1b"
     },
     "conversation_storage": {
         "backend": "memory"

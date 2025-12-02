@@ -74,7 +74,7 @@ async def main():
     config = {
         "llm": {
             "provider": "ollama",
-            "model": "gemma3:3b",
+            "model": "gemma3:1b",
             "temperature": 0.7,
             "max_tokens": 1000
         },
@@ -116,7 +116,7 @@ Create a bot with knowledge retrieval:
 config = {
     "llm": {
         "provider": "ollama",
-        "model": "gemma3:3b"
+        "model": "gemma3:1b"
     },
     "conversation_storage": {
         "backend": "memory"
@@ -233,7 +233,7 @@ DynaBot uses a configuration-first approach. All bot behavior is defined through
 # LLM Configuration
 llm:
   provider: ollama
-  model: gemma3:3b
+  model: gemma3:1b
   temperature: 0.7
   max_tokens: 1000
 
@@ -297,7 +297,7 @@ All examples use Ollama for local LLM inference:
 # Install Ollama: https://ollama.ai/
 
 # Pull required models
-ollama pull gemma3:3b
+ollama pull gemma3:1b
 ollama pull phi3:mini
 ollama pull nomic-embed-text
 

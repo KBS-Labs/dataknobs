@@ -8,7 +8,7 @@ This example demonstrates:
 - Swapping storage backends (memory vs postgres)
 
 Required Ollama models:
-    ollama pull gemma3:3b           # For chat
+    ollama pull gemma3:1b           # For chat
     ollama pull nomic-embed-text    # For embeddings
 
 Usage:
@@ -80,7 +80,7 @@ async def main():
     print("=" * 60)
     print()
     print("This example shows a chatbot with knowledge base integration.")
-    print("Required: ollama pull gemma3:3b nomic-embed-text")
+    print("Required: ollama pull gemma3:1b nomic-embed-text")
     print()
 
     # Determine storage backend from environment
@@ -109,7 +109,7 @@ async def main():
     config = {
         "llm": {
             "provider": "ollama",
-            "model": "gemma3:3b",
+            "model": "gemma3:1b",
             "temperature": 0.7,
             "max_tokens": 500,
         },

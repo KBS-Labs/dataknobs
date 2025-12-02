@@ -1,14 +1,15 @@
 """Integration tests for tools and ReAct reasoning.
 
-These tests verify tool execution and ReAct reasoning with real LLM.
+These tests verify tool execution and ReAct reasoning.
 
-Required setup:
-- Ollama must be running (default: localhost:11434)
-- gemma3:3b model must be pulled: ollama pull gemma3:3b
-- Set TEST_OLLAMA=true environment variable to run these tests
+Most tests use the Echo LLM provider for fast, deterministic testing.
+Tests that require real LLM tool-calling decisions use Ollama.
 
-Run tests:
-    TEST_OLLAMA=true pytest tests/integration/test_tools_integration.py
+Run all tests:
+    pytest tests/integration/test_tools_integration.py
+
+Run only Echo-based tests (no Ollama needed):
+    pytest tests/integration/test_tools_integration.py -m "not ollama_required"
 """
 
 import os
@@ -18,12 +19,6 @@ import pytest
 
 from dataknobs_bots import BotContext, DynaBot
 from dataknobs_llm.tools import Tool
-
-# Skip all tests if Ollama is not available
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_OLLAMA", "").lower() == "true",
-    reason="Ollama tests require TEST_OLLAMA=true and a running Ollama instance with gemma3:3b model",
-)
 
 
 class CalculatorTool(Tool):
@@ -95,13 +90,18 @@ class CounterTool(Tool):
         return self.count
 
 
+# =============================================================================
+# Tests using Echo LLM (fast, no external dependencies)
+# =============================================================================
+
+
 class TestToolRegistration:
-    """Test tool registration and management."""
+    """Test tool registration and management using Echo LLM."""
 
     @pytest.mark.asyncio
-    async def test_register_single_tool(self, bot_config_simple):
+    async def test_register_single_tool(self, bot_config_echo):
         """Test registering a single tool."""
-        bot = await DynaBot.from_config(bot_config_simple)
+        bot = await DynaBot.from_config(bot_config_echo)
 
         tool = CalculatorTool()
         bot.tool_registry.register_tool(tool)
@@ -111,9 +111,9 @@ class TestToolRegistration:
         assert tool in list(bot.tool_registry)
 
     @pytest.mark.asyncio
-    async def test_register_multiple_tools(self, bot_config_simple):
+    async def test_register_multiple_tools(self, bot_config_echo):
         """Test registering multiple tools."""
-        bot = await DynaBot.from_config(bot_config_simple)
+        bot = await DynaBot.from_config(bot_config_echo)
 
         calc_tool = CalculatorTool()
         counter_tool = CounterTool()
@@ -128,9 +128,9 @@ class TestToolRegistration:
         assert counter_tool in tools
 
     @pytest.mark.asyncio
-    async def test_tool_definitions(self, bot_config_simple):
+    async def test_tool_definitions(self, bot_config_echo):
         """Test tool definition generation."""
-        bot = await DynaBot.from_config(bot_config_simple)
+        bot = await DynaBot.from_config(bot_config_echo)
 
         tool = CalculatorTool()
         bot.tool_registry.register_tool(tool)
@@ -148,7 +148,7 @@ class TestToolRegistration:
 
 
 class TestToolExecution:
-    """Test direct tool execution."""
+    """Test direct tool execution (no LLM needed)."""
 
     @pytest.mark.asyncio
     async def test_calculator_tool_execution(self):
@@ -197,13 +197,13 @@ class TestToolExecution:
         assert result == 8
 
 
-class TestReActWithTools:
-    """Test ReAct reasoning with tools."""
+class TestReActWithToolsEcho:
+    """Test ReAct reasoning with tools using Echo LLM."""
 
     @pytest.mark.asyncio
-    async def test_react_tool_execution_flow(self, bot_config_react):
-        """Test complete ReAct flow with tool execution."""
-        bot = await DynaBot.from_config(bot_config_react)
+    async def test_react_with_registered_tools(self, bot_config_echo_react):
+        """Test ReAct with registered tools (Echo LLM)."""
+        bot = await DynaBot.from_config(bot_config_echo_react)
 
         # Register calculator tool
         calc = CalculatorTool()
@@ -214,18 +214,17 @@ class TestReActWithTools:
             client_id="test-client",
         )
 
-        # Ask a calculation question
-        # Note: Whether the LLM uses the tool depends on the model's judgment
+        # With Echo LLM, we're testing that the infrastructure works
         response = await bot.chat("What is 15 plus 27?", context)
 
-        # Should get a response
+        # Should get a response (Echo response)
         assert response is not None
         assert isinstance(response, str)
 
     @pytest.mark.asyncio
-    async def test_react_with_multiple_tools(self, bot_config_react):
+    async def test_react_with_multiple_tools(self, bot_config_echo_react):
         """Test ReAct with multiple available tools."""
-        bot = await DynaBot.from_config(bot_config_react)
+        bot = await DynaBot.from_config(bot_config_echo_react)
 
         # Register multiple tools
         calc = CalculatorTool()
@@ -245,10 +244,10 @@ class TestReActWithTools:
         assert response is not None
 
     @pytest.mark.asyncio
-    async def test_react_max_iterations(self, ollama_config):
-        """Test ReAct respects max_iterations limit."""
+    async def test_react_max_iterations_config(self, echo_config):
+        """Test ReAct respects max_iterations configuration."""
         config = {
-            "llm": ollama_config,
+            "llm": echo_config,
             "conversation_storage": {"backend": "memory"},
             "reasoning": {
                 "strategy": "react",
@@ -259,6 +258,9 @@ class TestReActWithTools:
         }
 
         bot = await DynaBot.from_config(config)
+
+        # Verify config was applied
+        assert bot.reasoning_strategy.max_iterations == 2
 
         # Register a tool
         calc = CalculatorTool()
@@ -274,9 +276,9 @@ class TestReActWithTools:
         assert response is not None
 
     @pytest.mark.asyncio
-    async def test_react_trace_with_tools(self, bot_config_react):
-        """Test ReAct stores trace when using tools."""
-        bot = await DynaBot.from_config(bot_config_react)
+    async def test_react_trace_storage_config(self, bot_config_echo_react):
+        """Test ReAct stores trace when configured."""
+        bot = await DynaBot.from_config(bot_config_echo_react)
 
         # Register tool
         calc = CalculatorTool()
@@ -298,9 +300,9 @@ class TestToolErrorHandling:
     """Test error handling in tool execution."""
 
     @pytest.mark.asyncio
-    async def test_tool_execution_error(self, bot_config_react):
+    async def test_tool_execution_error_handling(self, bot_config_echo_react):
         """Test handling of tool execution errors."""
-        bot = await DynaBot.from_config(bot_config_react)
+        bot = await DynaBot.from_config(bot_config_echo_react)
 
         # Create a tool that will fail
         class FailingTool(Tool):
@@ -330,8 +332,7 @@ class TestToolErrorHandling:
             client_id="test-client",
         )
 
-        # Should handle error gracefully
-        # (The ReAct loop should catch the error and continue)
+        # Should handle error gracefully (not crash)
         response = await bot.chat("Use the failing tool", context)
         assert response is not None
 
@@ -346,11 +347,71 @@ class TestToolErrorHandling:
 
 
 class TestToolIntegrationPatterns:
-    """Test common tool integration patterns."""
+    """Test common tool integration patterns using Echo LLM."""
 
     @pytest.mark.asyncio
+    async def test_tool_state_persistence(self, bot_config_echo_react):
+        """Test that tool state persists across calls."""
+        bot = await DynaBot.from_config(bot_config_echo_react)
+
+        counter = CounterTool()
+        bot.tool_registry.register_tool(counter)
+
+        context = BotContext(
+            conversation_id="test-tool-state",
+            client_id="test-client",
+        )
+
+        # First message
+        await bot.chat("Increment the counter", context)
+
+        # Second message
+        await bot.chat("Increment it again", context)
+
+        # Counter exists and is accessible (may or may not be incremented by Echo LLM)
+        assert counter.count >= 0
+
+
+# =============================================================================
+# Tests requiring real LLM (Ollama)
+# =============================================================================
+
+
+class TestReActWithToolsOllama:
+    """Test ReAct reasoning with tools using real Ollama LLM."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        not os.environ.get("TEST_OLLAMA", "").lower() == "true",
+        reason="Real LLM tool execution requires TEST_OLLAMA=true",
+    )
+    async def test_react_tool_execution_flow(self, bot_config_react):
+        """Test complete ReAct flow with tool execution (requires real LLM)."""
+        bot = await DynaBot.from_config(bot_config_react)
+
+        # Register calculator tool
+        calc = CalculatorTool()
+        bot.tool_registry.register_tool(calc)
+
+        context = BotContext(
+            conversation_id="test-react-calc-ollama",
+            client_id="test-client",
+        )
+
+        # Ask a calculation question
+        response = await bot.chat("What is 15 plus 27?", context)
+
+        # Should get a response
+        assert response is not None
+        assert isinstance(response, str)
+
+    @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        not os.environ.get("TEST_OLLAMA", "").lower() == "true",
+        reason="Real LLM tool chaining requires TEST_OLLAMA=true",
+    )
     async def test_tool_chaining(self, bot_config_react):
-        """Test using multiple tool calls in sequence."""
+        """Test using multiple tool calls in sequence (requires real LLM)."""
         bot = await DynaBot.from_config(bot_config_react)
 
         calc = CalculatorTool()
@@ -362,37 +423,9 @@ class TestToolIntegrationPatterns:
         )
 
         # Ask for multi-step calculation
-        # (The agent might chain tool calls: first multiply, then add)
         response = await bot.chat(
             "Calculate 5 times 3, then add 10 to the result",
             context,
         )
 
         assert response is not None
-
-    @pytest.mark.asyncio
-    async def test_tool_with_context(self, bot_config_react):
-        """Test tool usage with conversation context."""
-        bot = await DynaBot.from_config(bot_config_react)
-
-        counter = CounterTool()
-        bot.tool_registry.register_tool(counter)
-
-        context = BotContext(
-            conversation_id="test-tool-context",
-            client_id="test-client",
-        )
-
-        # First message
-        response1 = await bot.chat("Increment the counter", context)
-        assert response1 is not None
-
-        # Second message - maintains conversation context
-        response2 = await bot.chat("Increment it again", context)
-        assert response2 is not None
-
-        # Note: We can't guarantee the LLM will actually call the tool
-        # (depends on model capabilities and interpretation)
-        # This test verifies the pattern works, not that tools are always called
-        # If the tool was called, the counter would be incremented
-        assert counter.count >= 0  # Counter exists and is accessible

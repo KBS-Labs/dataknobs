@@ -252,7 +252,7 @@ Agents can use multiple tools:
 
 | Model | Use Case |
 |-------|----------|
-| gemma3:3b | Simple conversations |
+| gemma3:1b | Simple conversations |
 | phi3:mini | Tool use, reasoning |
 | llama3.1:8b | Complex reasoning |
 

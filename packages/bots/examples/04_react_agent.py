@@ -8,7 +8,7 @@ This example demonstrates:
 - Verbose logging
 
 Required Ollama model:
-    ollama pull gemma3:3b
+    ollama pull gemma3:1b
 """
 
 import asyncio
@@ -147,14 +147,14 @@ async def main():
     print("=" * 60)
     print()
     print("This example shows an agent using ReAct reasoning with tools.")
-    print("Required: ollama pull gemma3:3b")
+    print("Required: ollama pull gemma3:1b")
     print()
 
     # Configuration with ReAct reasoning
     config = {
         "llm": {
             "provider": "ollama",
-            "model": "gemma3:3b",
+            "model": "gemma3:1b",
             "temperature": 0.7,
             "max_tokens": 1000,
         },

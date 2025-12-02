@@ -21,7 +21,7 @@ The main bot orchestrator that coordinates conversations, memory, knowledge retr
 from dataknobs_bots import DynaBot, BotContext
 
 config = {
-    "llm": {"provider": "ollama", "model": "gemma3:3b"},
+    "llm": {"provider": "ollama", "model": "gemma3:1b"},
     "conversation_storage": {"backend": "memory"}
 }
 
@@ -188,7 +188,7 @@ def get_time() -> str:
 config = {
     "llm": {
         "provider": "ollama",
-        "model": "gemma3:3b"
+        "model": "gemma3:1b"
     },
     "conversation_storage": {
         "backend": "memory"
