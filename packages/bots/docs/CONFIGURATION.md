@@ -35,7 +35,7 @@ DynaBot supports multiple configuration formats:
 **Python Dictionary:**
 ```python
 config = {
-    "llm": {"provider": "ollama", "model": "gemma3:3b"},
+    "llm": {"provider": "ollama", "model": "gemma3:1b"},
     "conversation_storage": {"backend": "memory"}
 }
 bot = await DynaBot.from_config(config)
@@ -46,7 +46,7 @@ bot = await DynaBot.from_config(config)
 # bot_config.yaml
 llm:
   provider: ollama
-  model: gemma3:3b
+  model: gemma3:1b
 
 conversation_storage:
   backend: memory
@@ -66,7 +66,7 @@ bot = await DynaBot.from_config(config)
 {
   "llm": {
     "provider": "ollama",
-    "model": "gemma3:3b"
+    "model": "gemma3:1b"
   },
   "conversation_storage": {
     "backend": "memory"
@@ -85,7 +85,7 @@ The minimal configuration requires only LLM and conversation storage:
 ```yaml
 llm:
   provider: ollama
-  model: gemma3:3b
+  model: gemma3:1b
 
 conversation_storage:
   backend: memory
@@ -182,14 +182,14 @@ llm:
 ```yaml
 llm:
   provider: ollama
-  model: gemma3:3b
+  model: gemma3:1b
   base_url: http://localhost:11434  # Optional, default
   temperature: 0.7
   max_tokens: 1000
 ```
 
 **Supported Models:**
-- `gemma3:3b` - Small, fast model
+- `gemma3:1b` - Small, fast model
 - `gemma3:7b` - Larger, better quality
 - `llama3.1:8b` - Advanced reasoning
 - `phi3:mini` - Compact model
@@ -201,7 +201,7 @@ llm:
 curl -fsSL https://ollama.ai/install.sh | sh
 
 # Pull model
-ollama pull gemma3:3b
+ollama pull gemma3:1b
 ```
 
 #### OpenAI
@@ -1055,7 +1055,7 @@ middleware:
 
 llm:
   provider: ollama
-  model: gemma3:3b
+  model: gemma3:1b
   temperature: 0.7
 
 conversation_storage:

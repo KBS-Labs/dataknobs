@@ -16,7 +16,7 @@ This example demonstrates:
 # Install Ollama: https://ollama.ai/
 
 # Pull the required model
-ollama pull gemma3:3b
+ollama pull gemma3:1b
 
 # Install dataknobs-bots
 pip install dataknobs-bots
@@ -30,7 +30,7 @@ We added a `memory` section to the configuration:
 config = {
     "llm": {
         "provider": "ollama",
-        "model": "gemma3:3b"
+        "model": "gemma3:1b"
     },
     "conversation_storage": {
         "backend": "memory"

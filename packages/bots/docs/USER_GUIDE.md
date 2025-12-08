@@ -47,7 +47,7 @@ pip install dataknobs-bots[all]
 curl -fsSL https://ollama.ai/install.sh | sh
 
 # Pull a model
-ollama pull gemma3:3b
+ollama pull gemma3:1b
 ```
 
 ---
@@ -70,7 +70,7 @@ async def main():
     config = {
         "llm": {
             "provider": "ollama",
-            "model": "gemma3:3b",
+            "model": "gemma3:1b",
             "temperature": 0.7,
             "max_tokens": 500
         },
@@ -151,7 +151,7 @@ async def main():
     config = {
         "llm": {
             "provider": "ollama",
-            "model": "gemma3:3b",
+            "model": "gemma3:1b",
         },
         "conversation_storage": {
             "backend": "memory"
@@ -252,7 +252,7 @@ async def main():
     config = {
         "llm": {
             "provider": "ollama",
-            "model": "gemma3:3b",
+            "model": "gemma3:1b",
         },
         "conversation_storage": {
             "backend": "memory"
@@ -573,7 +573,7 @@ async def handle_client_request(
 async def main():
     # Shared bot configuration
     config = {
-        "llm": {"provider": "ollama", "model": "gemma3:3b"},
+        "llm": {"provider": "ollama", "model": "gemma3:1b"},
         "conversation_storage": {
             "backend": "postgres",  # Shared storage
             "host": "localhost",
@@ -882,7 +882,7 @@ async def escalate_to_human(conversation_id: str):
 **Solutions**:
 ```python
 # Use a faster model
-config["llm"]["model"] = "gemma3:3b"  # Instead of "llama3.1:70b"
+config["llm"]["model"] = "gemma3:1b"  # Instead of "llama3.1:70b"
 
 # Reduce max_tokens
 config["llm"]["max_tokens"] = 500  # Instead of 2000

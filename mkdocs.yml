@@ -232,6 +232,7 @@ nav:
   
   - Development:
     - Overview: development/index.md
+    - Linux Setup: development/linux-setup.md
     - Developer Workflow (dk): development/dk-command.md
     - Contributing: development/contributing.md
     - New Package Checklist: development/new-package-checklist.md

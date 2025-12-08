@@ -6,13 +6,10 @@ These tests verify that:
 3. Tool parameters are properly applied from config
 4. Tools work correctly with ReAct reasoning
 
-Required setup:
-- Ollama must be running (default: localhost:11434)
-- phi3:mini model must be pulled: ollama pull phi3:mini
-- Set TEST_OLLAMA=true environment variable to run these tests
+Most tests use the Echo LLM provider for fast, deterministic testing.
 
-Run tests:
-    TEST_OLLAMA=true pytest tests/integration/test_config_tools_integration.py
+Run all tests:
+    pytest tests/integration/test_config_tools_integration.py
 """
 
 import os
@@ -22,21 +19,20 @@ import pytest
 from dataknobs_bots import BotContext, DynaBot
 from tests.fixtures.test_tools import SimpleTestTool, ParameterizedTestTool
 
-# Skip all tests if Ollama is not available
-pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEST_OLLAMA", "").lower() == "true",
-    reason="Ollama tests require TEST_OLLAMA=true and a running Ollama instance with phi3:mini model",
-)
+
+# =============================================================================
+# Tests using Echo LLM (fast, no external dependencies)
+# =============================================================================
 
 
 class TestDirectToolInstantiation:
-    """Test direct tool instantiation from config."""
+    """Test direct tool instantiation from config using Echo LLM."""
 
     @pytest.mark.asyncio
-    async def test_single_tool_from_config(self, ollama_config):
+    async def test_single_tool_from_config(self, echo_config):
         """Test loading a single tool via direct class instantiation."""
         config = {
-            "llm": ollama_config,
+            "llm": echo_config,
             "conversation_storage": {"backend": "memory"},
             "tools": [
                 {
@@ -54,10 +50,10 @@ class TestDirectToolInstantiation:
         assert isinstance(tools[0], SimpleTestTool)
 
     @pytest.mark.asyncio
-    async def test_tool_with_parameters(self, ollama_config):
+    async def test_tool_with_parameters(self, echo_config):
         """Test loading a tool with custom parameters."""
         config = {
-            "llm": ollama_config,
+            "llm": echo_config,
             "conversation_storage": {"backend": "memory"},
             "tools": [
                 {
@@ -78,10 +74,10 @@ class TestDirectToolInstantiation:
         assert tool.multiplier == 3
 
     @pytest.mark.asyncio
-    async def test_multiple_tools_from_config(self, ollama_config):
+    async def test_multiple_tools_from_config(self, echo_config):
         """Test loading multiple tools from config."""
         config = {
-            "llm": ollama_config,
+            "llm": echo_config,
             "conversation_storage": {"backend": "memory"},
             "tools": [
                 {
@@ -107,13 +103,13 @@ class TestDirectToolInstantiation:
 
 
 class TestXRefToolLoading:
-    """Test xref-based tool loading."""
+    """Test xref-based tool loading using Echo LLM."""
 
     @pytest.mark.asyncio
-    async def test_xref_string_format(self, ollama_config):
+    async def test_xref_string_format(self, echo_config):
         """Test loading tool via xref string format."""
         config = {
-            "llm": ollama_config,
+            "llm": echo_config,
             "conversation_storage": {"backend": "memory"},
             "tool_definitions": {
                 "my_tool": {
@@ -132,10 +128,10 @@ class TestXRefToolLoading:
         assert isinstance(tools[0], SimpleTestTool)
 
     @pytest.mark.asyncio
-    async def test_xref_with_parameters(self, ollama_config):
+    async def test_xref_with_parameters(self, echo_config):
         """Test xref tool with custom parameters."""
         config = {
-            "llm": ollama_config,
+            "llm": echo_config,
             "conversation_storage": {"backend": "memory"},
             "tool_definitions": {
                 "parameterized": {
@@ -157,10 +153,10 @@ class TestXRefToolLoading:
         assert tool.multiplier == 5
 
     @pytest.mark.asyncio
-    async def test_multiple_xref_tools(self, ollama_config):
+    async def test_multiple_xref_tools(self, echo_config):
         """Test loading multiple tools via xref."""
         config = {
-            "llm": ollama_config,
+            "llm": echo_config,
             "conversation_storage": {"backend": "memory"},
             "tool_definitions": {
                 "tool1": {
@@ -182,10 +178,10 @@ class TestXRefToolLoading:
         assert len(tools) == 2
 
     @pytest.mark.asyncio
-    async def test_nested_xref(self, ollama_config):
+    async def test_nested_xref(self, echo_config):
         """Test nested xref references."""
         config = {
-            "llm": ollama_config,
+            "llm": echo_config,
             "conversation_storage": {"backend": "memory"},
             "tool_definitions": {
                 "base": {
@@ -209,13 +205,13 @@ class TestXRefToolLoading:
 
 
 class TestMixedToolLoading:
-    """Test mixing direct and xref-based tool loading."""
+    """Test mixing direct and xref-based tool loading using Echo LLM."""
 
     @pytest.mark.asyncio
-    async def test_direct_and_xref_together(self, ollama_config):
+    async def test_direct_and_xref_together(self, echo_config):
         """Test using both direct instantiation and xref in same config."""
         config = {
-            "llm": ollama_config,
+            "llm": echo_config,
             "conversation_storage": {"backend": "memory"},
             "tool_definitions": {
                 "defined_tool": {
@@ -243,10 +239,10 @@ class TestMixedToolLoading:
         assert ParameterizedTestTool in tool_types
 
     @pytest.mark.asyncio
-    async def test_reusable_tool_definitions(self, ollama_config):
+    async def test_reusable_tool_definitions(self, echo_config):
         """Test that tool definitions can be reused multiple times."""
         config = {
-            "llm": ollama_config,
+            "llm": echo_config,
             "conversation_storage": {"backend": "memory"},
             "tool_definitions": {
                 "template": {
@@ -271,13 +267,13 @@ class TestMixedToolLoading:
 
 
 class TestToolExecutionWithConfig:
-    """Test that config-loaded tools execute correctly."""
+    """Test that config-loaded tools execute correctly using Echo LLM."""
 
     @pytest.mark.asyncio
-    async def test_tool_execution_direct(self, ollama_config):
+    async def test_tool_execution_direct(self, echo_config):
         """Test executing a tool loaded via direct instantiation."""
         config = {
-            "llm": ollama_config,
+            "llm": echo_config,
             "conversation_storage": {"backend": "memory"},
             "tools": [
                 {
@@ -298,10 +294,10 @@ class TestToolExecutionWithConfig:
         assert result == "exec:testexec:test"  # multiplier=2
 
     @pytest.mark.asyncio
-    async def test_tool_execution_xref(self, ollama_config):
+    async def test_tool_execution_xref(self, echo_config):
         """Test executing a tool loaded via xref."""
         config = {
-            "llm": ollama_config,
+            "llm": echo_config,
             "conversation_storage": {"backend": "memory"},
             "tool_definitions": {
                 "my_tool": {
@@ -324,13 +320,13 @@ class TestToolExecutionWithConfig:
 
 
 class TestConfigToolsWithReAct:
-    """Test config-loaded tools with ReAct reasoning."""
+    """Test config-loaded tools with ReAct reasoning using Echo LLM."""
 
     @pytest.mark.asyncio
-    async def test_react_with_config_tools(self, ollama_config):
+    async def test_react_with_config_tools(self, echo_config):
         """Test ReAct agent with config-loaded tools."""
         config = {
-            "llm": ollama_config,
+            "llm": echo_config,
             "conversation_storage": {"backend": "memory"},
             "reasoning": {
                 "strategy": "react",
@@ -365,10 +361,10 @@ class TestConfigToolsWithReAct:
         assert bot.reasoning_strategy.store_trace is True
 
     @pytest.mark.asyncio
-    async def test_react_with_xref_tools(self, ollama_config):
+    async def test_react_with_xref_tools(self, echo_config):
         """Test ReAct agent with xref-loaded tools."""
         config = {
-            "llm": ollama_config,
+            "llm": echo_config,
             "conversation_storage": {"backend": "memory"},
             "reasoning": {
                 "strategy": "react",
@@ -405,13 +401,13 @@ class TestConfigToolsWithReAct:
 
 
 class TestErrorHandling:
-    """Test error handling in config-based tool loading."""
+    """Test error handling in config-based tool loading using Echo LLM."""
 
     @pytest.mark.asyncio
-    async def test_invalid_tool_skipped(self, ollama_config):
+    async def test_invalid_tool_skipped(self, echo_config):
         """Test that invalid tools are skipped gracefully."""
         config = {
-            "llm": ollama_config,
+            "llm": echo_config,
             "conversation_storage": {"backend": "memory"},
             "tools": [
                 {
@@ -433,10 +429,10 @@ class TestErrorHandling:
         assert isinstance(tools[0], SimpleTestTool)
 
     @pytest.mark.asyncio
-    async def test_invalid_xref_skipped(self, ollama_config):
+    async def test_invalid_xref_skipped(self, echo_config):
         """Test that invalid xrefs are skipped gracefully."""
         config = {
-            "llm": ollama_config,
+            "llm": echo_config,
             "conversation_storage": {"backend": "memory"},
             "tool_definitions": {
                 "valid": {
@@ -458,10 +454,10 @@ class TestErrorHandling:
         assert isinstance(tools[0], SimpleTestTool)
 
     @pytest.mark.asyncio
-    async def test_bot_creation_succeeds_with_no_valid_tools(self, ollama_config):
+    async def test_bot_creation_succeeds_with_no_valid_tools(self, echo_config):
         """Test that bot creation succeeds even if no tools are valid."""
         config = {
-            "llm": ollama_config,
+            "llm": echo_config,
             "conversation_storage": {"backend": "memory"},
             "tools": [
                 {"class": "non.existent.Tool1", "params": {}},

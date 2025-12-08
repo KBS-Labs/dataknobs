@@ -21,6 +21,72 @@ COMPOSE_OVERRIDE="docker-compose.override.yml"
 SERVICES_STARTED_FLAG="/tmp/.dataknobs_services_started_$$"
 VERBOSE=false
 
+# Detect docker compose command (docker-compose vs docker compose)
+detect_docker_compose() {
+    if command -v docker-compose &> /dev/null; then
+        echo "docker-compose"
+    elif docker compose version &> /dev/null; then
+        echo "docker compose"
+    else
+        echo ""
+    fi
+}
+
+DOCKER_COMPOSE_CMD=$(detect_docker_compose)
+
+if [ -z "$DOCKER_COMPOSE_CMD" ]; then
+    print_error "Neither 'docker-compose' nor 'docker compose' is available"
+    exit 1
+fi
+
+# Helper function to run docker compose commands
+run_compose() {
+    if [ "$DOCKER_COMPOSE_CMD" = "docker compose" ]; then
+        docker compose -f "$COMPOSE_FILE" -f "$COMPOSE_OVERRIDE" "$@"
+    else
+        docker-compose -f "$COMPOSE_FILE" -f "$COMPOSE_OVERRIDE" "$@"
+    fi
+}
+
+# Linux-specific Docker configuration
+setup_linux_docker_env() {
+    if [[ "$(uname)" == "Linux" ]]; then
+        # Export UID/GID for docker-compose user mapping
+        export DOCKER_UID=$(id -u)
+        export DOCKER_GID=$(id -g)
+
+        # Ensure data directories exist with correct permissions
+        local data_dirs=(
+            "$HOME/.dataknobs/data/postgres"
+            "$HOME/.dataknobs/data/elasticsearch"
+            "$HOME/.dataknobs/data/localstack"
+            "$HOME/data"
+        )
+
+        for dir in "${data_dirs[@]}"; do
+            if [ ! -d "$dir" ]; then
+                mkdir -p "$dir"
+                print_status "Created directory: $dir"
+            fi
+        done
+
+        # Elasticsearch runs as UID 1000 inside the container.
+        # On Linux, we need to ensure the data directory is writable by that user.
+        local es_dir="$HOME/.dataknobs/data/elasticsearch"
+
+        # Check if directory is owned by UID 1000 (elasticsearch user in container)
+        local es_owner=$(stat -c '%u' "$es_dir" 2>/dev/null || echo "unknown")
+        if [ "$es_owner" != "1000" ]; then
+            # Directory not owned by elasticsearch user - try chmod 777 as fallback
+            chmod 777 "$es_dir" 2>/dev/null || true
+
+            # If still not writable by UID 1000, suggest fix
+            print_warning "Elasticsearch data directory should be owned by UID 1000"
+            print_status "Run: sudo chown -R 1000:1000 $es_dir"
+        fi
+    fi
+}
+
 # Default action
 ACTION=""
 SELECTED_SERVICES=()
@@ -84,10 +150,10 @@ get_health_check() {
                 ;;
         esac
     else
-        # On host - use docker-compose exec
+        # On host - use run_compose exec
         case "$service" in
             postgres)
-                echo "docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE exec -T postgres pg_isready -U postgres"
+                echo "run_compose exec -T postgres pg_isready -U postgres"
                 ;;
             elasticsearch)
                 echo "curl -s http://$ELASTICSEARCH_HOST:9200/_cluster/health | grep -qE '\"status\":\"(green|yellow)\"'"
@@ -265,8 +331,11 @@ start_services() {
         print_status "Services should be managed from the host machine"
         return 1
     fi
-    
+
     check_docker
+
+    # Set up Linux-specific environment (directories, permissions, env vars)
+    setup_linux_docker_env
     
     # Determine which services to start
     local services_to_start=()
@@ -285,7 +354,7 @@ start_services() {
     docker network create devnet 2>/dev/null || true
     
     # Start services
-    if docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE up -d "${services_to_start[@]}" 2>/dev/null; then
+    if run_compose up -d "${services_to_start[@]}" 2>/dev/null; then
         print_success "Services started"
     else
         print_warning "Some services may already be running"
@@ -325,9 +394,9 @@ start_services() {
     if [[ " ${services_to_start[@]} " =~ " postgres " ]]; then
         # Create test database if PostgreSQL was started
         print_status "Ensuring test database exists..."
-        docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE exec -T postgres \
+        run_compose exec -T postgres \
             psql -U postgres -tc "SELECT 1 FROM pg_database WHERE datname = 'dataknobs_test'" | grep -q 1 || \
-            docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE exec -T postgres \
+            run_compose exec -T postgres \
             psql -U postgres -c "CREATE DATABASE dataknobs_test;" 2>/dev/null || true
     fi
     
@@ -359,8 +428,8 @@ stop_services() {
         # Stop all with docker-compose down
         print_status "Stopping all Docker services..."
         cd "$ROOT_DIR"
-        
-        if docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE down 2>/dev/null; then
+
+        if run_compose down 2>/dev/null; then
             print_success "All services stopped"
         else
             print_warning "Services may not have been running"
@@ -370,9 +439,9 @@ stop_services() {
         services_to_stop=("${SELECTED_SERVICES[@]}")
         print_status "Stopping selected services: ${services_to_stop[*]}"
         cd "$ROOT_DIR"
-        
-        if docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE stop "${services_to_stop[@]}" 2>/dev/null; then
-            docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE rm -f "${services_to_stop[@]}" 2>/dev/null
+
+        if run_compose stop "${services_to_stop[@]}" 2>/dev/null; then
+            run_compose rm -f "${services_to_stop[@]}" 2>/dev/null
             print_success "Selected services stopped"
         else
             print_warning "Some services may not have been running"
@@ -414,9 +483,9 @@ show_status() {
     if ! is_in_docker; then
         echo ""
         if [ ${#SELECTED_SERVICES[@]} -eq 0 ]; then
-            docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE ps
+            run_compose ps
         else
-            docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE ps "${services_to_check[@]}"
+            run_compose ps "${services_to_check[@]}"
         fi
         echo ""
     else
@@ -439,8 +508,8 @@ show_status() {
                         echo -e "  PostgreSQL:    ${RED}✗ Not responding${NC}"
                     fi
                 else
-                    # On host - use docker-compose
-                    if docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE exec -T postgres pg_isready -U postgres >/dev/null 2>&1; then
+                    # On host - use run_compose
+                    if run_compose exec -T postgres pg_isready -U postgres >/dev/null 2>&1; then
                         echo -e "  PostgreSQL:    ${GREEN}✓ Healthy${NC}"
                     else
                         echo -e "  PostgreSQL:    ${RED}✗ Not responding${NC}"
@@ -486,7 +555,7 @@ show_status() {
                     fi
                 else
                     # On host - check if container is running
-                    if docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE ps "$service" 2>/dev/null | grep -q "Up"; then
+                    if run_compose ps "$service" 2>/dev/null | grep -q "Up"; then
                         echo -e "  ${service}:    ${GREEN}✓ Running${NC}"
                     else
                         echo -e "  ${service}:    ${RED}✗ Not running${NC}"
@@ -534,9 +603,9 @@ show_logs() {
     fi
     
     if [ ${#services_to_log[@]} -eq 0 ]; then
-        docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE logs --tail=$tail_lines
+        run_compose logs --tail=$tail_lines
     else
-        docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE logs --tail=$tail_lines "${services_to_log[@]}"
+        run_compose logs --tail=$tail_lines "${services_to_log[@]}"
     fi
     
     return 0
@@ -589,7 +658,7 @@ list_services() {
     else
         # On host - check if containers are running
         for service in "${AVAILABLE_SERVICES[@]}"; do
-            if docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE ps "$service" 2>/dev/null | grep -q "Up"; then
+            if run_compose ps "$service" 2>/dev/null | grep -q "Up"; then
                 echo -e "  ${GREEN}●${NC} $service (running)"
             else
                 echo -e "  ${RED}○${NC} $service (stopped)"
@@ -616,7 +685,7 @@ cleanup_services() {
     
     cd "$ROOT_DIR"
     
-    if docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE down -v 2>/dev/null; then
+    if run_compose down -v 2>/dev/null; then
         print_success "Services stopped and volumes removed"
     else
         print_warning "Services may not have been running"
@@ -671,9 +740,9 @@ ensure_services() {
     
     # Check if services are already running
     SERVICES_RUNNING=true
-    
+
     # Check PostgreSQL
-    if ! docker-compose -f $COMPOSE_FILE -f $COMPOSE_OVERRIDE exec -T postgres pg_isready -U postgres >/dev/null 2>&1; then
+    if ! run_compose exec -T postgres pg_isready -U postgres >/dev/null 2>&1; then
         SERVICES_RUNNING=false
     fi
     

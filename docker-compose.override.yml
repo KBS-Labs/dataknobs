@@ -1,5 +1,6 @@
 services:
   dataknobs-dev:
+    user: "${DOCKER_UID:-}:${DOCKER_GID:-}"
     environment:
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/dataknobs
       - ELASTICSEARCH_URL=http://elasticsearch:9200

@@ -7,7 +7,7 @@ This example demonstrates:
 - How the bot remembers previous conversation
 
 Required Ollama model:
-    ollama pull gemma3:3b
+    ollama pull gemma3:1b
 """
 
 import asyncio
@@ -22,14 +22,14 @@ async def main():
     print("=" * 60)
     print()
     print("This example shows a chatbot that remembers context.")
-    print("Required: ollama pull gemma3:3b")
+    print("Required: ollama pull gemma3:1b")
     print()
 
     # Configuration with buffer memory
     config = {
         "llm": {
             "provider": "ollama",
-            "model": "gemma3:3b",
+            "model": "gemma3:1b",
             "temperature": 0.7,
             "max_tokens": 500,
         },
