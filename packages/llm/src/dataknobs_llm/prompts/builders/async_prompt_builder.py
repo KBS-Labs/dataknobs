@@ -287,6 +287,128 @@ class AsyncPromptBuilder(BasePromptBuilder):
             **kwargs
         )
 
+    async def render_inline_system_prompt(
+        self,
+        content: str,
+        params: Dict[str, Any] | None = None,
+        rag_configs: list[RAGConfig] | None = None,
+        include_rag: bool = True,
+        validation_override: ValidationLevel | None = None,
+        return_rag_metadata: bool = False,
+        cached_rag: Dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> RenderResult:
+        """Render inline system prompt content with optional RAG enhancement.
+
+        This method allows users to provide raw prompt content while still
+        benefiting from RAG context injection and template parameter substitution.
+
+        Args:
+            content: The raw system prompt content (may contain Jinja2 templates)
+            params: Runtime parameters for template rendering
+            rag_configs: Optional RAG configurations for context retrieval
+            include_rag: Whether to execute RAG queries (default: True)
+            validation_override: Override default validation level
+            return_rag_metadata: Include RAG metadata in result
+            cached_rag: Pre-cached RAG results to reuse
+            **kwargs: Additional parameters
+
+        Returns:
+            RenderResult with rendered content and metadata
+
+        Example:
+            >>> result = await builder.render_inline_system_prompt(
+            ...     content="You are a helpful {{ role }} assistant.",
+            ...     params={"role": "coding"},
+            ...     rag_configs=[{
+            ...         "adapter_name": "docs",
+            ...         "query": "{{ topic }}",
+            ...         "placeholder": "CONTEXT",
+            ...         "k": 3
+            ...     }]
+            ... )
+        """
+        # Construct a template_dict from inline content
+        template_dict: PromptTemplateDict = {
+            "template": content,
+            "defaults": {},
+            "metadata": {"source": "inline", "type": "system"},
+            "rag_configs": rag_configs or [],
+        }
+
+        return await self._render_prompt_impl(
+            prompt_name="<inline:system>",
+            prompt_type="system",
+            template_dict=template_dict,
+            runtime_params=params or {},
+            include_rag=include_rag and bool(rag_configs),
+            validation_override=validation_override,
+            return_rag_metadata=return_rag_metadata,
+            cached_rag=cached_rag,
+            **kwargs,
+        )
+
+    async def render_inline_user_prompt(
+        self,
+        content: str,
+        params: Dict[str, Any] | None = None,
+        rag_configs: list[RAGConfig] | None = None,
+        include_rag: bool = True,
+        validation_override: ValidationLevel | None = None,
+        return_rag_metadata: bool = False,
+        cached_rag: Dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> RenderResult:
+        """Render inline user prompt content with optional RAG enhancement.
+
+        This method allows users to provide raw prompt content while still
+        benefiting from RAG context injection and template parameter substitution.
+
+        Args:
+            content: The raw user prompt content (may contain Jinja2 templates)
+            params: Runtime parameters for template rendering
+            rag_configs: Optional RAG configurations for context retrieval
+            include_rag: Whether to execute RAG queries (default: True)
+            validation_override: Override default validation level
+            return_rag_metadata: Include RAG metadata in result
+            cached_rag: Pre-cached RAG results to reuse
+            **kwargs: Additional parameters
+
+        Returns:
+            RenderResult with rendered content and metadata
+
+        Example:
+            >>> result = await builder.render_inline_user_prompt(
+            ...     content="Help me understand {{ topic }}",
+            ...     params={"topic": "decorators"},
+            ...     rag_configs=[{
+            ...         "adapter_name": "docs",
+            ...         "query": "python {{ topic }} tutorial",
+            ...         "placeholder": "DOCS",
+            ...         "k": 5
+            ...     }]
+            ... )
+        """
+        # Construct a template_dict from inline content
+        template_dict: PromptTemplateDict = {
+            "template": content,
+            "defaults": {},
+            "metadata": {"source": "inline", "type": "user"},
+            "rag_configs": rag_configs or [],
+        }
+
+        return await self._render_prompt_impl(
+            prompt_name="<inline:user>",
+            prompt_type="user",
+            template_dict=template_dict,
+            runtime_params=params or {},
+            include_rag=include_rag and bool(rag_configs),
+            validation_override=validation_override,
+            return_rag_metadata=return_rag_metadata,
+            cached_rag=cached_rag,
+            **kwargs,
+        )
+
     async def _render_prompt_impl(
         self,
         prompt_name: str,
@@ -320,6 +442,10 @@ class AsyncPromptBuilder(BasePromptBuilder):
         template = template_dict.get("template", "")
         template_metadata = template_dict.get("metadata", {})
 
+        # Extract RAG configs from template_dict (for inline prompts)
+        # or None to let _execute_rag_searches_impl fetch from library
+        inline_rag_configs = template_dict.get("rag_configs")
+
         # Step 1: Merge defaults with runtime params
         all_params = self._merge_params_with_defaults(template_dict, runtime_params)
 
@@ -338,6 +464,7 @@ class AsyncPromptBuilder(BasePromptBuilder):
                     prompt_type=prompt_type,
                     params=all_params,
                     capture_metadata=return_rag_metadata,
+                    rag_configs_override=inline_rag_configs,
                     **kwargs
                 )
 
@@ -375,6 +502,7 @@ class AsyncPromptBuilder(BasePromptBuilder):
         prompt_type: str,
         params: Dict[str, Any],
         capture_metadata: bool = False,
+        rag_configs_override: list[RAGConfig] | None = None,
         **kwargs: Any
     ) -> tuple[Dict[str, str], Dict[str, Any] | None]:
         """Execute RAG searches in parallel and format results for injection.
@@ -384,6 +512,8 @@ class AsyncPromptBuilder(BasePromptBuilder):
             prompt_type: Type of prompt ("system" or "user")
             params: Resolved parameters for query templating
             capture_metadata: If True, capture RAG metadata
+            rag_configs_override: If provided, use these RAG configs instead of
+                                 fetching from the library (for inline prompts)
             **kwargs: Additional parameters
 
         Returns:
@@ -391,12 +521,15 @@ class AsyncPromptBuilder(BasePromptBuilder):
             - rag_content: Dictionary mapping placeholder names to formatted content
             - rag_metadata: Optional dict with full RAG details (if capture_metadata=True)
         """
-        # Get RAG configurations for this prompt
-        rag_configs = self.library.get_prompt_rag_configs(
-            prompt_name=prompt_name,
-            prompt_type=prompt_type,
-            **kwargs
-        )
+        # Get RAG configurations - use override if provided, otherwise fetch from library
+        if rag_configs_override is not None:
+            rag_configs = rag_configs_override
+        else:
+            rag_configs = self.library.get_prompt_rag_configs(
+                prompt_name=prompt_name,
+                prompt_type=prompt_type,
+                **kwargs
+            )
 
         if not rag_configs:
             return {}, None

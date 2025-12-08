@@ -219,20 +219,59 @@ from dataknobs_llm.prompts import AsyncPromptBuilder
 
 builder = AsyncPromptBuilder(library=library)
 
-# Render system prompt
+# Render system prompt from library
 result = await builder.render_system_prompt(
     "helpful_assistant",
     params={"domain": "Python programming"}
 )
 print(result.content)
 
-# Render user prompt
+# Render user prompt from library
 result = await builder.render_user_prompt(
     "ask_question",
     params={"question": "What is async/await?"}
 )
 print(result.content)
 ```
+
+### Inline Prompt Rendering
+
+For quick prototyping or dynamic prompts, use inline rendering without defining templates in the library:
+
+```python
+# Render inline system prompt
+result = await builder.render_inline_system_prompt(
+    content="You are a helpful {{role}} assistant.",
+    params={"role": "coding"}
+)
+print(result.content)  # "You are a helpful coding assistant."
+
+# Render inline user prompt
+result = await builder.render_inline_user_prompt(
+    content="Help me understand {{topic}}",
+    params={"topic": "decorators"}
+)
+```
+
+Inline prompts also support RAG enhancement:
+
+```python
+# Inline system prompt with RAG
+result = await builder.render_inline_system_prompt(
+    content="You are a helpful assistant.\n\nContext:\n{{CONTEXT}}",
+    rag_configs=[{
+        "adapter_name": "docs",
+        "query": "assistant guidelines",
+        "placeholder": "CONTEXT",
+        "k": 3
+    }]
+)
+```
+
+This is useful for:
+- Prototyping prompts before adding to a library
+- Creating one-off prompts that don't need versioning
+- Dynamically constructing prompts at runtime
 
 ### Validation Levels
 
@@ -416,6 +455,18 @@ await manager.add_message(
 await manager.add_message(
     role="user",
     content="Can you explain with examples?"
+)
+
+# Add inline content with RAG enhancement
+await manager.add_message(
+    role="system",
+    content="You are a helpful assistant.\n\nContext:\n{{CONTEXT}}",
+    rag_configs=[{
+        "adapter_name": "docs",
+        "query": "assistant guidelines",
+        "placeholder": "CONTEXT",
+        "k": 3
+    }]
 )
 
 # Get LLM response

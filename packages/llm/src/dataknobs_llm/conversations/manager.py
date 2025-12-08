@@ -351,6 +351,7 @@ class ConversationManager:
         prompt_name: str | None = None,
         params: Dict[str, Any] | None = None,
         include_rag: bool = True,
+        rag_configs: List[Dict[str, Any]] | None = None,
         metadata: Dict[str, Any] | None = None,
     ) -> ConversationNode:
         """Add a message to the current conversation node.
@@ -365,6 +366,9 @@ class ConversationManager:
             prompt_name: Name of prompt template to render
             params: Parameters for prompt rendering
             include_rag: Whether to execute RAG searches for prompts
+            rag_configs: RAG configurations for inline content (only used when
+                        content is provided without prompt_name). Allows inline
+                        prompts to benefit from RAG enhancement.
             metadata: Optional metadata for this message node
 
         Returns:
@@ -386,6 +390,18 @@ class ConversationManager:
             await manager.add_message(
                 role="user",
                 content="What is Python?"
+            )
+
+            # Add inline message with RAG enhancement
+            await manager.add_message(
+                role="system",
+                content="You are a helpful assistant. Use the context below.",
+                rag_configs=[{
+                    "adapter_name": "docs",
+                    "query": "assistant guidelines",
+                    "placeholder": "CONTEXT",
+                    "k": 3
+                }]
             )
 
             # Add system prompt with custom metadata
@@ -451,6 +467,34 @@ class ConversationManager:
             # Store RAG metadata if caching is enabled and metadata was captured
             if self.cache_rag_results and result.rag_metadata:
                 rag_metadata_to_store = result.rag_metadata
+
+        elif content and include_rag and rag_configs:
+            # Render inline content with RAG enhancement
+            params = params or {}
+            if role == "system":
+                result = await self.prompt_builder.render_inline_system_prompt(
+                    content,
+                    params=params,
+                    rag_configs=rag_configs,
+                    include_rag=True,
+                    return_rag_metadata=self.cache_rag_results,
+                )
+            elif role == "user":
+                result = await self.prompt_builder.render_inline_user_prompt(
+                    content,
+                    params=params,
+                    rag_configs=rag_configs,
+                    include_rag=True,
+                    return_rag_metadata=self.cache_rag_results,
+                )
+            else:
+                # For assistant role, just use content as-is
+                result = None
+
+            if result:
+                content = result.content
+                if self.cache_rag_results and result.rag_metadata:
+                    rag_metadata_to_store = result.rag_metadata
 
         # Create message
         message = LLMMessage(role=role, content=content)

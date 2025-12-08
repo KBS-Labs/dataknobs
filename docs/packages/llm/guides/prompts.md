@@ -91,6 +91,65 @@ The LLM package includes detailed documentation in `packages/llm/docs/`:
 
 These files are available in the source package at `packages/llm/docs/` or in the [GitHub repository](https://github.com/kbs-labs/dataknobs/tree/main/packages/llm/docs)
 
+## Inline Prompts
+
+For quick prototyping or one-off prompts, you can render inline content directly without defining templates in a library:
+
+```python
+from dataknobs_llm.prompts import AsyncPromptBuilder, ConfigPromptLibrary
+
+library = ConfigPromptLibrary()  # Can be empty
+builder = AsyncPromptBuilder(library=library)
+
+# Render inline system prompt with template variables
+result = await builder.render_inline_system_prompt(
+    content="You are a helpful {{role}} assistant.",
+    params={"role": "coding"}
+)
+print(result.content)  # "You are a helpful coding assistant."
+
+# Render inline user prompt
+result = await builder.render_inline_user_prompt(
+    content="Help me understand {{topic}}",
+    params={"topic": "decorators"}
+)
+```
+
+### Inline Prompts with RAG
+
+Inline prompts also support RAG enhancement by providing `rag_configs`:
+
+```python
+# Setup adapter
+docs_adapter = AsyncDictResourceAdapter({
+    "guidelines": {"content": "Be helpful and concise."},
+})
+
+builder = AsyncPromptBuilder(
+    library=library,
+    adapters={"docs": docs_adapter}
+)
+
+# Inline system prompt with RAG
+result = await builder.render_inline_system_prompt(
+    content="You are a helpful assistant.\n\nGuidelines:\n{{GUIDELINES}}",
+    rag_configs=[{
+        "adapter_name": "docs",
+        "query": "assistant guidelines",
+        "placeholder": "GUIDELINES",
+        "k": 3,
+        "header": "",
+        "item_template": "- {{content}}\n"
+    }]
+)
+```
+
+This is particularly useful when:
+- Prototyping prompts before adding to a library
+- Creating one-off prompts that don't need versioning
+- Dynamically constructing prompts at runtime
+- Testing RAG integration quickly
+
 ## Common Patterns
 
 ### 1. Multi-RAG Prompts
