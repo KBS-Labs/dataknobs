@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## Release - 2025-12-08
+
+### dataknobs-common [1.1.1]
+
+#### Added
+- Added testing utilities
+
+### dataknobs-data [0.4.1]
+
+#### Fixed
+- Validation constraint fixes
+
+### dataknobs-llm [0.2.1]
+
+#### Changed
+- Prompt definition and management enhancements
+
+### dataknobs-bots [0.2.1]
+
+#### Changed
+- Leverage the LLM package prompt enhancements
+- Added progress tracking and logging middleware
+- Added a Multi-Tenant Bot Manager
+- Added API exception and dependency management
+- Added examples, documentation, and tests
+
 ## Release - 2025-11-05
 
 ### dataknobs-bots [0.1.0]

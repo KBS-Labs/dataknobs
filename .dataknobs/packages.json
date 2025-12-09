@@ -5,7 +5,7 @@
       "name": "common",
       "pypi_name": "dataknobs-common",
       "description": "Shared components and base classes",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -23,7 +23,7 @@
       "name": "data",
       "pypi_name": "dataknobs-data",
       "description": "Data abstraction layer with multiple backend support",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -41,7 +41,7 @@
       "name": "llm",
       "pypi_name": "dataknobs-llm",
       "description": "LLM integration with prompt management and tools",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -50,7 +50,7 @@
       "name": "bots",
       "pypi_name": "dataknobs-bots",
       "description": "Configuration-driven AI agents for DataKnobs",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
