@@ -29,6 +29,7 @@ class DynaBot:
         middleware: List of middleware for request/response processing
         system_prompt_name: Name of the system prompt template to use
         system_prompt_content: Inline system prompt content (alternative to name)
+        system_prompt_rag_configs: RAG configurations for inline system prompts
         default_temperature: Default temperature for LLM generation
         default_max_tokens: Default max tokens for LLM generation
     """
@@ -45,6 +46,7 @@ class DynaBot:
         middleware: list[Any] | None = None,
         system_prompt_name: str | None = None,
         system_prompt_content: str | None = None,
+        system_prompt_rag_configs: list[dict[str, Any]] | None = None,
         default_temperature: float = 0.7,
         default_max_tokens: int = 1000,
     ):
@@ -61,6 +63,7 @@ class DynaBot:
             middleware: Optional middleware list
             system_prompt_name: Name of system prompt template (mutually exclusive with content)
             system_prompt_content: Inline system prompt content (mutually exclusive with name)
+            system_prompt_rag_configs: RAG configurations for inline system prompts
             default_temperature: Default temperature (0-1)
             default_max_tokens: Default max tokens to generate
         """
@@ -74,6 +77,7 @@ class DynaBot:
         self.middleware = middleware or []
         self.system_prompt_name = system_prompt_name
         self.system_prompt_content = system_prompt_content
+        self.system_prompt_rag_configs = system_prompt_rag_configs
         self.default_temperature = default_temperature
         self.default_max_tokens = default_max_tokens
         self._conversation_managers: dict[str, ConversationManager] = {}
@@ -100,38 +104,58 @@ class DynaBot:
         System Prompt Formats:
             The system_prompt can be specified in multiple ways:
 
-            - Dict with name: `{"name": "template_name"}` - references a prompt template
+            - String: Smart detection - if the string exists as a template name
+              in the prompt library, it's used as a template reference; otherwise
+              it's treated as inline content.
+
+            - Dict with name: `{"name": "template_name"}` - explicit template reference
+            - Dict with name + strict: `{"name": "template_name", "strict": true}` -
+              raises error if template doesn't exist
             - Dict with content: `{"content": "inline prompt text"}` - inline content
-            - Short string: `"template_name"` - treated as template name (≤100 chars, no newlines)
-            - Long/multi-line string: treated as inline content (>100 chars or contains newlines)
+            - Dict with content + rag_configs: inline content with RAG enhancement
 
         Example:
             ```python
-            # Using a template name
-            config = {
-                "llm": {
-                    "provider": "openai",
-                    "model": "gpt-4",
-                    "temperature": 0.7
-                },
-                "conversation_storage": {
-                    "backend": "memory"
-                },
-                "prompts": {
-                    "helpful_assistant": "You are a helpful AI assistant."
-                },
-                "system_prompt": {
-                    "name": "helpful_assistant"
-                }
-            }
-
-            # Using inline content (multi-line string)
+            # Smart detection: uses as template if it exists in prompts library
             config = {
                 "llm": {"provider": "openai", "model": "gpt-4"},
                 "conversation_storage": {"backend": "memory"},
-                "system_prompt": '''You are a helpful AI assistant.
-                    Be concise and accurate in your responses.
-                    Always be polite and professional.'''
+                "prompts": {
+                    "helpful_assistant": "You are a helpful AI assistant."
+                },
+                "system_prompt": "helpful_assistant"  # Found in prompts, used as template
+            }
+
+            # Smart detection: treated as inline content (not in prompts library)
+            config = {
+                "llm": {"provider": "openai", "model": "gpt-4"},
+                "conversation_storage": {"backend": "memory"},
+                "system_prompt": "You are a helpful assistant."  # Not a template name
+            }
+
+            # Explicit inline content with RAG enhancement
+            config = {
+                "llm": {"provider": "openai", "model": "gpt-4"},
+                "conversation_storage": {"backend": "memory"},
+                "system_prompt": {
+                    "content": "You are a helpful assistant. Use this context: {{ CONTEXT }}",
+                    "rag_configs": [{
+                        "adapter_name": "docs",
+                        "query": "assistant guidelines",
+                        "placeholder": "CONTEXT",
+                        "k": 3
+                    }]
+                }
+            }
+
+            # Strict mode: error if template doesn't exist
+            config = {
+                "llm": {"provider": "openai", "model": "gpt-4"},
+                "conversation_storage": {"backend": "memory"},
+                "system_prompt": {
+                    "name": "my_template",
+                    "strict": true  # Raises ValueError if my_template doesn't exist
+                }
             }
 
             bot = await DynaBot.from_config(config)
@@ -233,19 +257,29 @@ class DynaBot:
         # Extract system prompt (supports template name or inline content)
         system_prompt_name = None
         system_prompt_content = None
+        system_prompt_rag_configs = None
         if "system_prompt" in config:
             system_prompt_config = config["system_prompt"]
             if isinstance(system_prompt_config, dict):
                 # Explicit dict format: {name: "template"} or {content: "inline..."}
                 system_prompt_name = system_prompt_config.get("name")
                 system_prompt_content = system_prompt_config.get("content")
+                system_prompt_rag_configs = system_prompt_config.get("rag_configs")
+
+                # If strict mode is enabled, require the template to exist
+                if system_prompt_name and system_prompt_config.get("strict"):
+                    if library.get_system_prompt(system_prompt_name) is None:
+                        raise ValueError(
+                            f"System prompt template not found: {system_prompt_name} "
+                            "(strict mode enabled)"
+                        )
             elif isinstance(system_prompt_config, str):
-                # String format: detect if it's a template name or inline content
-                # Multi-line strings or strings > 100 chars are assumed to be inline content
-                if "\n" in system_prompt_config or len(system_prompt_config) > 100:
-                    system_prompt_content = system_prompt_config
-                else:
+                # String format: smart detection
+                # If it exists in the library, use as template name; otherwise treat as inline
+                if library.get_system_prompt(system_prompt_config) is not None:
                     system_prompt_name = system_prompt_config
+                else:
+                    system_prompt_content = system_prompt_config
 
         return cls(
             llm=llm,
@@ -258,6 +292,7 @@ class DynaBot:
             middleware=middleware,
             system_prompt_name=system_prompt_name,
             system_prompt_content=system_prompt_content,
+            system_prompt_rag_configs=system_prompt_rag_configs,
             default_temperature=llm_config.get("temperature", 0.7),
             default_max_tokens=llm_config.get("max_tokens", 1000),
         )
@@ -564,10 +599,12 @@ class DynaBot:
                     role="system",
                 )
             elif self.system_prompt_content:
-                # Use inline content directly
+                # Use inline content - pass RAG configs if available
                 await manager.add_message(
                     content=self.system_prompt_content,
                     role="system",
+                    rag_configs=self.system_prompt_rag_configs,
+                    include_rag=bool(self.system_prompt_rag_configs),
                 )
 
         # Cache manager

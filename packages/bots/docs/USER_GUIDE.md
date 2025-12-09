@@ -128,11 +128,35 @@ You: quit
 3. **Context**: Identifies the conversation
 4. **Chat**: `bot.chat()` processes messages and returns responses
 
+#### Adding a System Prompt
+
+You can add a system prompt to customize the bot's behavior:
+
+```python
+config = {
+    "llm": {
+        "provider": "ollama",
+        "model": "gemma3:1b",
+    },
+    "conversation_storage": {
+        "backend": "memory"
+    },
+    # Add a system prompt (smart detection: if not in prompts library,
+    # treated as inline content)
+    "system_prompt": "You are a helpful coding assistant. Be concise and technical."
+}
+```
+
+DynaBot uses **smart detection** for system prompts:
+- If the string exists in the `prompts` library → used as a template reference
+- If not → treated as inline content
+
 #### Next Steps
 
 - Try different models: `llama3.1:8b`, `phi3:mini`
 - Adjust temperature (0.0 = focused, 1.0 = creative)
 - Change max_tokens for longer/shorter responses
+- See [CONFIGURATION.md](configuration.md) for all system prompt options
 
 ---
 

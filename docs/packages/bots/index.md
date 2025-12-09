@@ -146,7 +146,15 @@ dataknobs_bots/
 ├── bot/                    # Core bot implementation
 │   ├── base.py            # DynaBot class
 │   ├── context.py         # BotContext dataclass
-│   └── registry.py        # Multi-tenant bot registry
+│   ├── manager.py         # BotManager for multi-tenant
+│   └── registry.py        # Bot registry
+├── middleware/            # Request/response middleware
+│   ├── base.py           # Middleware interface
+│   ├── cost.py           # Cost tracking
+│   └── logging.py        # Logging middleware
+├── api/                   # FastAPI integration
+│   ├── dependencies.py   # Dependency injection
+│   └── exceptions.py     # API exceptions
 ├── memory/                # Memory implementations
 │   ├── base.py           # Memory interface
 │   ├── buffer.py         # Buffer memory
@@ -168,6 +176,8 @@ dataknobs_bots/
 
 - [**User Guide**](guides/user-guide.md) - Complete tutorials from beginner to advanced
 - [**Configuration Reference**](guides/configuration.md) - All configuration options
+- [**Bot Manager Guide**](guides/bot-manager.md) - Multi-tenant bot management and FastAPI integration
+- [**Middleware Guide**](guides/middleware.md) - Request/response middleware for logging and cost tracking
 - [**Tools Development**](guides/tools.md) - Creating and configuring custom tools
 - [**Architecture**](guides/architecture.md) - System design and scaling considerations
 

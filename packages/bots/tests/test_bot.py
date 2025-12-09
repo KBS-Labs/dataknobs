@@ -94,16 +94,34 @@ class TestDynaBot:
 
     @pytest.mark.asyncio
     async def test_from_config_system_prompt_short_string_as_template_name(self):
-        """Test short single-line string is treated as template name."""
+        """Test short string is used as template name when it exists in library."""
         config = {
             "llm": {"provider": "echo", "model": "test"},
             "conversation_storage": {"backend": "memory"},
+            "prompts": {
+                "helpful_assistant": "You are a helpful assistant."
+            },
             "system_prompt": "helpful_assistant",
         }
 
         bot = await DynaBot.from_config(config)
+        # Since "helpful_assistant" exists in prompts, it should be used as template name
         assert bot.system_prompt_name == "helpful_assistant"
         assert bot.system_prompt_content is None
+
+    @pytest.mark.asyncio
+    async def test_from_config_system_prompt_string_not_in_library_as_inline(self):
+        """Test string NOT in library is treated as inline content (smart detection)."""
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "system_prompt": "helpful_assistant",  # Not in prompts library
+        }
+
+        bot = await DynaBot.from_config(config)
+        # Since "helpful_assistant" does NOT exist in prompts, it's inline content
+        assert bot.system_prompt_name is None
+        assert bot.system_prompt_content == "helpful_assistant"
 
     @pytest.mark.asyncio
     async def test_from_config_system_prompt_multiline_as_inline_content(self):
@@ -138,21 +156,22 @@ Always be polite."""
         assert bot.system_prompt_content == long_prompt
 
     @pytest.mark.asyncio
-    async def test_from_config_system_prompt_exactly_100_chars_as_template_name(self):
-        """Test string with exactly 100 chars is treated as template name."""
-        # Create exactly 100 character string
+    async def test_from_config_system_prompt_any_length_as_inline_if_not_in_library(self):
+        """Test any length string is treated as inline if not in library (smart detection)."""
+        # With smart detection, length doesn't matter - only library membership does
         exact_100_prompt = "x" * 100
         assert len(exact_100_prompt) == 100
 
         config = {
             "llm": {"provider": "echo", "model": "test"},
             "conversation_storage": {"backend": "memory"},
-            "system_prompt": exact_100_prompt,
+            "system_prompt": exact_100_prompt,  # Not in prompts library
         }
 
         bot = await DynaBot.from_config(config)
-        assert bot.system_prompt_name == exact_100_prompt
-        assert bot.system_prompt_content is None
+        # Since it's not in the library, it's treated as inline content
+        assert bot.system_prompt_name is None
+        assert bot.system_prompt_content == exact_100_prompt
 
     @pytest.mark.asyncio
     async def test_system_prompt_content_used_in_conversation(self):

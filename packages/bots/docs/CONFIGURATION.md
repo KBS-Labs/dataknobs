@@ -143,13 +143,15 @@ prompts:
     template: string
     type: string
 
-# Optional: System Prompt
+# Optional: System Prompt (smart detection)
 system_prompt:
-  name: string        # Reference a prompt template by name
+  name: string            # Explicit template reference
+  strict: boolean         # If true, error if template not found
   # or
-  content: string     # Inline content directly
+  content: string         # Inline content
+  rag_configs: list       # RAG configs for inline content
   # or just
-system_prompt: string # Short string = template name, multi-line/long = inline content
+system_prompt: string     # Smart detection: template if exists in library, else inline
 
 # Optional: Middleware
 middleware:
@@ -785,11 +787,35 @@ context = BotContext(
 
 ### System Prompt Configuration
 
-The `system_prompt` field supports multiple formats for flexibility:
+The `system_prompt` field supports multiple formats for flexibility with **smart detection**.
 
-#### 1. Dict with Template Name
+#### Smart Detection (Recommended)
 
-Reference a prompt defined in the `prompts` section:
+When you provide a string, DynaBot uses **smart detection** to determine if it's a template name or inline content:
+
+- If the string **exists in the prompt library** → treated as template name
+- If the string **does not exist in the library** → treated as inline content
+
+```yaml
+# Example 1: String exists in prompts - used as template name
+prompts:
+  helpful_assistant: "You are a helpful AI assistant."
+
+system_prompt: helpful_assistant  # Found in prompts → template reference
+```
+
+```yaml
+# Example 2: String does NOT exist in prompts - used as inline content
+prompts: {}  # Empty or no prompts section
+
+system_prompt: "You are a helpful AI assistant."  # Not found → inline content
+```
+
+This means you can write short, simple prompts directly without needing to define them in the prompts library first.
+
+#### 1. Dict with Template Name (Explicit)
+
+Explicitly reference a prompt defined in the `prompts` section:
 
 ```yaml
 prompts:
@@ -799,7 +825,17 @@ system_prompt:
   name: helpful_assistant
 ```
 
-#### 2. Dict with Inline Content
+#### 2. Dict with Strict Mode
+
+Use `strict: true` to raise an error if the template doesn't exist:
+
+```yaml
+system_prompt:
+  name: my_template
+  strict: true  # Raises ValueError if my_template doesn't exist
+```
+
+#### 3. Dict with Inline Content
 
 Provide the prompt content directly without defining it in `prompts`:
 
@@ -808,20 +844,27 @@ system_prompt:
   content: "You are a helpful AI assistant specialized in customer support."
 ```
 
-#### 3. Short String as Template Name
+#### 4. Dict with Inline Content + RAG
 
-Short single-line strings (≤100 characters without newlines) are treated as template names:
+Inline content can also include RAG configurations for context injection:
 
 ```yaml
-prompts:
-  helpful_assistant: "You are a helpful AI assistant."
+system_prompt:
+  content: |
+    You are a helpful assistant.
 
-system_prompt: helpful_assistant  # References the template by name
+    Use the following context to answer questions:
+    {{CONTEXT}}
+  rag_configs:
+    - adapter_name: docs
+      query: "assistant guidelines"
+      placeholder: CONTEXT
+      k: 3
 ```
 
-#### 4. Multi-line or Long String as Inline Content
+#### 5. Multi-line String as Inline Content
 
-Multi-line strings or strings longer than 100 characters are treated as inline content. This is particularly useful in YAML configurations:
+Multi-line strings are common for inline prompts in YAML:
 
 ```yaml
 system_prompt: |
@@ -840,37 +883,62 @@ This format is ideal when:
 - The prompt is specific to this configuration and won't be reused
 - You want to keep the entire configuration self-contained
 
-**Detection Rules:**
-- Contains `\n` (newline) → inline content
-- Length > 100 characters → inline content
-- Otherwise → template name
-
 #### Best Practices
 
 **Use template names when:**
 - The same prompt is reused across multiple configurations
 - You want centralized prompt management
 - Prompts need variables/templating
+- You want to version control prompts separately
 
 **Use inline content when:**
 - The prompt is specific to one configuration
 - You want a self-contained YAML file
-- No templating is needed
+- Quick prototyping or testing
+
+**Use strict mode when:**
+- You want to catch configuration errors early
+- The template MUST exist (e.g., production configs)
 
 ---
 
 ## Middleware Configuration
 
-Add request/response processing middleware.
+Add request/response processing middleware for logging, cost tracking, and more.
 
-### Structure
+### Built-in Middleware
+
+DataKnobs Bots provides two built-in middleware classes:
+
+**CostTrackingMiddleware** - Tracks LLM costs and token usage:
 
 ```yaml
 middleware:
-  - class: my_middleware.LoggingMiddleware
+  - class: dataknobs_bots.middleware.CostTrackingMiddleware
+    params:
+      track_tokens: true
+      cost_rates:  # Optional: override default rates
+        openai:
+          gpt-4o:
+            input: 0.0025
+            output: 0.01
+```
+
+**LoggingMiddleware** - Logs all interactions:
+
+```yaml
+middleware:
+  - class: dataknobs_bots.middleware.LoggingMiddleware
     params:
       log_level: INFO
+      include_metadata: true
+      json_format: false  # Set true for log aggregation
+```
 
+### Custom Middleware
+
+```yaml
+middleware:
   - class: my_middleware.RateLimitMiddleware
     params:
       max_requests: 100
@@ -883,22 +951,36 @@ middleware:
 
 ### Middleware Interface
 
-Custom middleware should implement:
+Custom middleware should extend the `Middleware` base class:
 
 ```python
-class MyMiddleware:
+from dataknobs_bots.middleware import Middleware
+from dataknobs_bots import BotContext
+from typing import Any
+
+class MyMiddleware(Middleware):
     def __init__(self, **params):
         # Initialize with params
         pass
 
-    async def before_message(self, message: str, context: BotContext):
+    async def before_message(self, message: str, context: BotContext) -> None:
         # Pre-processing
         pass
 
-    async def after_message(self, response: Any, context: BotContext):
-        # Post-processing
+    async def after_message(
+        self, response: str, context: BotContext, **kwargs: Any
+    ) -> None:
+        # Post-processing (kwargs includes tokens_used, provider, model)
+        pass
+
+    async def on_error(
+        self, error: Exception, message: str, context: BotContext
+    ) -> None:
+        # Error handling
         pass
 ```
+
+For comprehensive middleware documentation, see the [Middleware Guide](middleware.md).
 
 ---
 
