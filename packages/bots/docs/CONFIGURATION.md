@@ -904,16 +904,41 @@ This format is ideal when:
 
 ## Middleware Configuration
 
-Add request/response processing middleware.
+Add request/response processing middleware for logging, cost tracking, and more.
 
-### Structure
+### Built-in Middleware
+
+DataKnobs Bots provides two built-in middleware classes:
+
+**CostTrackingMiddleware** - Tracks LLM costs and token usage:
 
 ```yaml
 middleware:
-  - class: my_middleware.LoggingMiddleware
+  - class: dataknobs_bots.middleware.CostTrackingMiddleware
+    params:
+      track_tokens: true
+      cost_rates:  # Optional: override default rates
+        openai:
+          gpt-4o:
+            input: 0.0025
+            output: 0.01
+```
+
+**LoggingMiddleware** - Logs all interactions:
+
+```yaml
+middleware:
+  - class: dataknobs_bots.middleware.LoggingMiddleware
     params:
       log_level: INFO
+      include_metadata: true
+      json_format: false  # Set true for log aggregation
+```
 
+### Custom Middleware
+
+```yaml
+middleware:
   - class: my_middleware.RateLimitMiddleware
     params:
       max_requests: 100
@@ -926,22 +951,36 @@ middleware:
 
 ### Middleware Interface
 
-Custom middleware should implement:
+Custom middleware should extend the `Middleware` base class:
 
 ```python
-class MyMiddleware:
+from dataknobs_bots.middleware import Middleware
+from dataknobs_bots import BotContext
+from typing import Any
+
+class MyMiddleware(Middleware):
     def __init__(self, **params):
         # Initialize with params
         pass
 
-    async def before_message(self, message: str, context: BotContext):
+    async def before_message(self, message: str, context: BotContext) -> None:
         # Pre-processing
         pass
 
-    async def after_message(self, response: Any, context: BotContext):
-        # Post-processing
+    async def after_message(
+        self, response: str, context: BotContext, **kwargs: Any
+    ) -> None:
+        # Post-processing (kwargs includes tokens_used, provider, model)
+        pass
+
+    async def on_error(
+        self, error: Exception, message: str, context: BotContext
+    ) -> None:
+        # Error handling
         pass
 ```
+
+For comprehensive middleware documentation, see the [Middleware Guide](middleware.md).
 
 ---
 

@@ -5,6 +5,7 @@ This package provides shared functionality used across all dataknobs packages:
 - **Exceptions**: Unified exception hierarchy with context support
 - **Registry**: Generic registry pattern for managing named items
 - **Serialization**: Protocols and utilities for to_dict/from_dict patterns
+- **Testing**: Test utilities, markers, and configuration factories
 
 Example:
     ```python
@@ -49,6 +50,24 @@ from dataknobs_common.serialization import (
     serialize,
     serialize_list,
 )
+from dataknobs_common.testing import (
+    create_test_json_files,
+    create_test_markdown_files,
+    get_test_bot_config,
+    get_test_rag_config,
+    is_chromadb_available,
+    is_faiss_available,
+    is_ollama_available,
+    is_ollama_model_available,
+    is_package_available,
+    is_redis_available,
+    requires_chromadb,
+    requires_faiss,
+    requires_ollama,
+    requires_ollama_model,
+    requires_package,
+    requires_redis,
+)
 
 __version__ = "1.0.0"
 
@@ -78,4 +97,24 @@ __all__ = [
     "deserialize_list",
     "is_serializable",
     "is_deserializable",
+    # Testing - Availability Checks
+    "is_ollama_available",
+    "is_ollama_model_available",
+    "is_faiss_available",
+    "is_chromadb_available",
+    "is_redis_available",
+    "is_package_available",
+    # Testing - Pytest Markers
+    "requires_ollama",
+    "requires_faiss",
+    "requires_chromadb",
+    "requires_redis",
+    "requires_package",
+    "requires_ollama_model",
+    # Testing - Configuration Factories
+    "get_test_bot_config",
+    "get_test_rag_config",
+    # Testing - File Helpers
+    "create_test_markdown_files",
+    "create_test_json_files",
 ]

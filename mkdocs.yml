@@ -179,6 +179,8 @@ nav:
         - packages/bots/guides/configuration.md
         - packages/bots/guides/architecture.md
         - packages/bots/guides/tools.md
+        - packages/bots/guides/middleware.md
+        - packages/bots/guides/bot-manager.md
         - packages/bots/guides/rag-retrieval.md
         - packages/bots/guides/rag-query.md
       - API Reference:
