@@ -8,6 +8,7 @@ from pathlib import Path
 from click.testing import CliRunner
 import asyncio
 
+from dataknobs_fsm import __version__
 from dataknobs_fsm.cli.main import cli
 from dataknobs_fsm.api.simple import SimpleFSM
 from dataknobs_fsm.api.advanced import AdvancedFSM
@@ -167,7 +168,7 @@ class TestCLIMain:
         """Test version display."""
         result = runner.invoke(cli, ['--version'])
         assert result.exit_code == 0
-        assert '0.1.0' in result.output
+        assert __version__ in result.output
     
     def test_cli_help(self, runner):
         """Test help display."""

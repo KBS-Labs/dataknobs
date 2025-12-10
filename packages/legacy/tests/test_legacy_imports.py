@@ -60,7 +60,8 @@ def test_legacy_package_version():
 
     assert hasattr(dataknobs, "__version__")
     assert isinstance(dataknobs.__version__, str)
-    assert dataknobs.__version__ == "0.0.15"
+    # Version should match pyproject.toml - do not hardcode specific version
+    assert len(dataknobs.__version__.split(".")) == 3  # semver format
 
 
 def test_backward_compatibility_json_utils():

@@ -29,15 +29,16 @@ $(echo -e "${BOLD}${CYAN}DataKnobs Release Helper${NC}")
 $(echo -e "${BOLD}Usage:${NC}") $0 <command> [options]
 
 $(echo -e "${BOLD}Commands:${NC}")
-  $(echo -e "${CYAN}check${NC}")      Check what changed since last release
-  $(echo -e "${CYAN}changes${NC}")    List all commits for a package or all packages
-  $(echo -e "${CYAN}diffs${NC}")      Browse commit diffs interactively
-  $(echo -e "${CYAN}bump${NC}")       Bump package versions interactively
-  $(echo -e "${CYAN}notes${NC}")      Generate release notes from commits
-  $(echo -e "${CYAN}tag${NC}")        Create release tags (calls tag-releases.sh)
-  $(echo -e "${CYAN}publish${NC}")    Publish to PyPI (calls publish-pypi.sh)
-  $(echo -e "${CYAN}verify${NC}")     Verify packages can be installed from PyPI
-  $(echo -e "${CYAN}all${NC}")        Run complete release process interactively
+  $(echo -e "${CYAN}check${NC}")         Check what changed since last release
+  $(echo -e "${CYAN}changes${NC}")       List all commits for a package or all packages
+  $(echo -e "${CYAN}diffs${NC}")         Browse commit diffs interactively
+  $(echo -e "${CYAN}bump${NC}")          Bump package versions interactively
+  $(echo -e "${CYAN}sync-versions${NC}") Sync __init__.py versions from pyproject.toml
+  $(echo -e "${CYAN}notes${NC}")         Generate release notes from commits
+  $(echo -e "${CYAN}tag${NC}")           Create release tags (calls tag-releases.sh)
+  $(echo -e "${CYAN}publish${NC}")       Publish to PyPI (calls publish-pypi.sh)
+  $(echo -e "${CYAN}verify${NC}")        Verify packages can be installed from PyPI
+  $(echo -e "${CYAN}all${NC}")           Run complete release process interactively
 
 $(echo -e "${BOLD}Examples:${NC}")
   $0 check            # See what changed
@@ -68,13 +69,42 @@ EOF
 get_version() {
     local package_dir=$1
     local pyproject="$package_dir/pyproject.toml"
-    
+
     if [ ! -f "$pyproject" ]; then
         echo "0.0.0"
         return
     fi
-    
+
     grep '^version = ' "$pyproject" | cut -d'"' -f2
+}
+
+# Function to get the __init__.py path for a package
+get_init_py_path() {
+    local package=$1
+    local package_dir="packages/$package"
+
+    if [ "$package" = "legacy" ]; then
+        echo "$package_dir/src/dataknobs/__init__.py"
+    else
+        echo "$package_dir/src/dataknobs_${package}/__init__.py"
+    fi
+}
+
+# Function to update __version__ in __init__.py
+update_init_version() {
+    local package=$1
+    local new_version=$2
+    local init_py=$(get_init_py_path "$package")
+
+    if [ ! -f "$init_py" ]; then
+        echo -e "${YELLOW}Warning: $init_py not found${NC}" >&2
+        return 1
+    fi
+
+    # Update the __version__ line
+    sed -i.bak "s/^__version__ = \"[^\"]*\"/__version__ = \"${new_version}\"/" "$init_py"
+    rm -f "${init_py}.bak"
+    return 0
 }
 
 # Function to get last tag for a package
@@ -701,6 +731,17 @@ bump_version() {
         sed -i.bak "s/^version = \"${current_version}\"/version = \"${new_version}\"/" "$pyproject"
         rm "${pyproject}.bak"
 
+        # Track what was updated
+        local updated_files="pyproject.toml"
+        local all_success=true
+
+        # Update version in __init__.py
+        if update_init_version "$package" "$new_version"; then
+            updated_files="$updated_files, __init__.py"
+        else
+            all_success=false
+        fi
+
         # Update version in packages.json
         local packages_json="$ROOT_DIR/.dataknobs/packages.json"
         if [ -f "$packages_json" ]; then
@@ -731,12 +772,16 @@ except Exception as e:
     sys.exit(1)
 EOF
             if [ $? -eq 0 ]; then
-                echo -e "${GREEN}✓ Updated ${package} to v${new_version} (pyproject.toml and packages.json)${NC}"
+                updated_files="$updated_files, packages.json"
             else
-                echo -e "${YELLOW}⚠ Updated ${package} to v${new_version} in pyproject.toml but packages.json update failed${NC}"
+                all_success=false
             fi
+        fi
+
+        if [ "$all_success" = true ]; then
+            echo -e "${GREEN}✓ Updated ${package} to v${new_version} (${updated_files})${NC}"
         else
-            echo -e "${GREEN}✓ Updated ${package} to v${new_version}${NC}"
+            echo -e "${YELLOW}⚠ Updated ${package} to v${new_version} (${updated_files}) - some updates failed${NC}"
         fi
     fi
 }
@@ -856,6 +901,66 @@ bump_versions() {
             echo -e "${RED}Invalid choice${NC}"
             ;;
     esac
+}
+
+# Function to sync __init__.py versions from pyproject.toml
+sync_versions() {
+    echo -e "${CYAN}Syncing __init__.py versions from pyproject.toml...${NC}"
+    echo ""
+
+    # Get all packages
+    PACKAGES=($(get_packages_in_order))
+
+    local any_mismatch=false
+    local mismatched_packages=()
+
+    # First, check for mismatches
+    for package in "${PACKAGES[@]}"; do
+        local package_dir="packages/$package"
+        local pyproject_version=$(get_version "$package_dir")
+        local init_py=$(get_init_py_path "$package")
+
+        if [ -f "$init_py" ]; then
+            local init_version=$(grep '^__version__ = ' "$init_py" | cut -d'"' -f2)
+            if [ "$pyproject_version" != "$init_version" ]; then
+                echo -e "${YELLOW}${package}:${NC} __init__.py=${init_version} → pyproject.toml=${pyproject_version}"
+                mismatched_packages+=("$package")
+                any_mismatch=true
+            else
+                echo -e "${GREEN}${package}:${NC} ${pyproject_version} ✓"
+            fi
+        else
+            echo -e "${RED}${package}:${NC} __init__.py not found"
+        fi
+    done
+
+    echo ""
+
+    if [ "$any_mismatch" = false ]; then
+        echo -e "${GREEN}All __init__.py versions are in sync with pyproject.toml${NC}"
+        return 0
+    fi
+
+    echo -e "${BOLD}Found ${#mismatched_packages[@]} package(s) with version mismatches${NC}"
+    echo -n "Update all mismatched __init__.py files? (y/n): "
+    read -r reply
+
+    if [[ $reply =~ ^[Yy]$ ]]; then
+        for package in "${mismatched_packages[@]}"; do
+            local package_dir="packages/$package"
+            local pyproject_version=$(get_version "$package_dir")
+
+            if update_init_version "$package" "$pyproject_version"; then
+                echo -e "${GREEN}✓ Updated ${package} __init__.py to v${pyproject_version}${NC}"
+            else
+                echo -e "${RED}✗ Failed to update ${package}${NC}"
+            fi
+        done
+        echo ""
+        echo -e "${GREEN}Version sync complete!${NC}"
+    else
+        echo -e "${YELLOW}Skipping version sync${NC}"
+    fi
 }
 
 # Function to generate release notes
@@ -1119,6 +1224,9 @@ case "${1:-help}" in
         ;;
     bump)
         bump_versions
+        ;;
+    sync-versions)
+        sync_versions
         ;;
     notes)
         generate_notes
