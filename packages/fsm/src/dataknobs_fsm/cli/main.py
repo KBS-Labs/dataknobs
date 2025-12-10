@@ -20,6 +20,7 @@ from rich.tree import Tree
 from rich.progress import Progress, SpinnerColumn, TextColumn
 import asyncio
 
+from .. import __version__
 from ..api.simple import SimpleFSM
 from ..api.advanced import AdvancedFSM
 from ..config.loader import ConfigLoader
@@ -32,7 +33,7 @@ console = Console()
 
 
 @click.group()
-@click.version_option(version='0.1.0')
+@click.version_option(version=__version__)
 def cli():
     """FSM CLI - Finite State Machine Management Tool"""
     pass

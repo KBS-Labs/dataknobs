@@ -18,7 +18,7 @@ from dataknobs_utils import (
     xml_utils,
 )
 
-__version__ = "1.0.0"
+__version__ = "1.2.0"
 
 __all__ = [
     "elasticsearch_utils",

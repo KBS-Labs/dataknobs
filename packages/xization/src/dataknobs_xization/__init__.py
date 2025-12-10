@@ -39,7 +39,7 @@ from dataknobs_xization.markdown import (
 )
 from dataknobs_xization.masking_tokenizer import CharacterFeatures, TextFeatures
 
-__version__ = "1.0.0"
+__version__ = "1.2.0"
 
 __all__ = [
     # Existing exports
