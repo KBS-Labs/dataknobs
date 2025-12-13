@@ -26,6 +26,9 @@ Middleware provides hooks into the bot request/response lifecycle, enabling:
 
 ### Lifecycle Hooks
 
+The middleware lifecycle differs slightly between non-streaming (`chat()`) and streaming (`stream_chat()`) responses:
+
+**Non-Streaming Flow (`chat()`)**:
 ```
 User Message
     │
@@ -46,6 +49,29 @@ User Message
     │                        │
     ▼                        ▼
 Response                Error Response
+```
+
+**Streaming Flow (`stream_chat()`)**:
+```
+User Message
+    │
+    ▼
+┌─────────────────────┐
+│  before_message()   │  ← Pre-processing
+└─────────────────────┘
+    │
+    ▼
+┌─────────────────────┐
+│   Stream Response   │ ──► chunks yielded to caller
+└─────────────────────┘
+    │
+    ▼ (stream complete)  ▼ (error)
+┌─────────────────────┐  ┌─────────────────────┐
+│   post_stream()     │  │     on_error()      │
+└─────────────────────┘  └─────────────────────┘
+    │                        │
+    ▼                        ▼
+Complete               Error Response
 ```
 
 ---
@@ -200,10 +226,17 @@ class MyMiddleware(Middleware):
     async def after_message(
         self, response: str, context: BotContext, **kwargs: Any
     ) -> None:
-        """Called after generating bot response."""
-        # Post-processing logic
+        """Called after generating bot response (non-streaming)."""
+        # Post-processing logic for chat()
         tokens = kwargs.get("tokens_used", {})
         print(f"Response generated, tokens used: {tokens}")
+
+    async def post_stream(
+        self, message: str, response: str, context: BotContext
+    ) -> None:
+        """Called after streaming response completes."""
+        # Post-processing logic for stream_chat()
+        print(f"Streamed response to '{message[:30]}...': {len(response)} chars")
 
     async def on_error(
         self, error: Exception, message: str, context: BotContext
@@ -252,6 +285,11 @@ class RateLimitMiddleware(Middleware):
     ) -> None:
         pass
 
+    async def post_stream(
+        self, message: str, response: str, context: BotContext
+    ) -> None:
+        pass  # Rate limiting handled in before_message
+
     async def on_error(
         self, error: Exception, message: str, context: BotContext
     ) -> None:
@@ -296,6 +334,19 @@ class MetricsMiddleware(Middleware):
                 await self._send_metric("bot.tokens_input", tokens.get("input", 0))
                 await self._send_metric("bot.tokens_output", tokens.get("output", 0))
 
+    async def post_stream(
+        self, message: str, response: str, context: BotContext
+    ) -> None:
+        """Track metrics for streaming responses."""
+        key = f"{context.client_id}:{context.conversation_id}"
+        start = self._start_times.pop(key, None)
+
+        if start:
+            duration_ms = (time.time() - start) * 1000
+            await self._send_metric("bot.stream_response_time", duration_ms)
+            await self._send_metric("bot.stream_response_length", len(response))
+            await self._send_metric("bot.stream_message_length", len(message))
+
     async def on_error(
         self, error: Exception, message: str, context: BotContext
     ) -> None:
@@ -336,7 +387,7 @@ class Middleware(ABC):
     async def after_message(
         self, response: str, context: BotContext, **kwargs: Any
     ) -> None:
-        """Called after generating bot response.
+        """Called after generating bot response (non-streaming).
 
         Args:
             response: Bot's generated response
@@ -346,6 +397,23 @@ class Middleware(ABC):
                 - response_time_ms: Response generation time
                 - provider: LLM provider name
                 - model: Model identifier
+        """
+        ...
+
+    @abstractmethod
+    async def post_stream(
+        self, message: str, response: str, context: BotContext
+    ) -> None:
+        """Called after streaming response completes.
+
+        This hook is called after stream_chat() finishes streaming all chunks.
+        It provides both the original user message and the complete accumulated
+        response, useful for logging, analytics, or post-processing.
+
+        Args:
+            message: Original user message that triggered the stream
+            response: Complete accumulated response from streaming
+            context: Bot context
         """
         ...
 

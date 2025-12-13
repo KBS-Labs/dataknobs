@@ -444,3 +444,257 @@ Remember to always verify customer identity before sharing sensitive information
 
         # Verify new conversation was created
         assert "conv-fresh-test" in bot._conversation_managers
+
+    @pytest.mark.asyncio
+    async def test_stream_chat_basic(self):
+        """Test basic streaming chat functionality."""
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+        }
+
+        bot = await DynaBot.from_config(config)
+        context = BotContext(conversation_id="conv-stream-1", client_id="test-client")
+
+        # Stream response
+        chunks = []
+        async for chunk in bot.stream_chat("Hello, bot!", context):
+            chunks.append(chunk)
+
+        # Should receive multiple chunks (echo provider streams char by char)
+        assert len(chunks) > 0
+
+        # Concatenated chunks should form a non-empty response
+        full_response = "".join(chunks)
+        assert len(full_response) > 0
+
+        await bot.close()
+
+    @pytest.mark.asyncio
+    async def test_stream_chat_updates_conversation_history(self):
+        """Test that streaming updates conversation history."""
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+        }
+
+        bot = await DynaBot.from_config(config)
+        context = BotContext(conversation_id="conv-stream-history", client_id="test-client")
+
+        # Stream a response
+        full_response = ""
+        async for chunk in bot.stream_chat("Test message", context):
+            full_response += chunk
+
+        # Verify conversation was updated with both user and assistant messages
+        conversation_state = await bot.get_conversation("conv-stream-history")
+        assert conversation_state is not None
+
+        # Get all messages from the tree
+        tree = conversation_state.message_tree
+        all_nodes = tree.find_nodes(lambda node: node.data.message is not None)
+
+        # Should have at least user and assistant messages
+        messages = [node.data.message for node in all_nodes]
+        roles = [m.role for m in messages if m]
+
+        assert "user" in roles
+        assert "assistant" in roles
+
+        await bot.close()
+
+    @pytest.mark.asyncio
+    async def test_stream_chat_with_memory(self):
+        """Test streaming chat with memory context."""
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "memory": {"type": "buffer", "max_messages": 10},
+        }
+
+        bot = await DynaBot.from_config(config)
+        context = BotContext(conversation_id="conv-stream-memory", client_id="test-client")
+
+        # Stream first message
+        async for _ in bot.stream_chat("First message", context):
+            pass
+
+        # Memory should have been updated
+        memory_context = await bot.memory.get_context("test")
+        assert len(memory_context) >= 1
+
+        await bot.close()
+
+    @pytest.mark.asyncio
+    async def test_stream_chat_yields_incremental_content(self):
+        """Test that stream_chat yields incremental content."""
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+        }
+
+        bot = await DynaBot.from_config(config)
+        context = BotContext(conversation_id="conv-stream-chunks", client_id="test-client")
+
+        # Collect chunks to verify streaming
+        chunks = []
+        async for chunk in bot.stream_chat("Hello world", context):
+            chunks.append(chunk)
+            # Each chunk should be a string
+            assert isinstance(chunk, str)
+
+        # Echo provider yields character by character, so we should have multiple chunks
+        assert len(chunks) > 1
+
+        await bot.close()
+
+    @pytest.mark.asyncio
+    async def test_stream_chat_multiple_messages(self):
+        """Test streaming multiple messages in same conversation."""
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+        }
+
+        bot = await DynaBot.from_config(config)
+        context = BotContext(conversation_id="conv-stream-multi", client_id="test-client")
+
+        # First streamed message
+        response1_chunks = []
+        async for chunk in bot.stream_chat("First", context):
+            response1_chunks.append(chunk)
+
+        # Second streamed message
+        response2_chunks = []
+        async for chunk in bot.stream_chat("Second", context):
+            response2_chunks.append(chunk)
+
+        # Both should have produced responses
+        assert len(response1_chunks) > 0
+        assert len(response2_chunks) > 0
+
+        # Conversation should have multiple exchanges
+        conversation_state = await bot.get_conversation("conv-stream-multi")
+        tree = conversation_state.message_tree
+        user_nodes = tree.find_nodes(
+            lambda node: node.data.message and node.data.message.role == "user"
+        )
+        assert len(user_nodes) >= 2
+
+        await bot.close()
+
+    @pytest.mark.asyncio
+    async def test_stream_chat_temperature_override(self):
+        """Test streaming with temperature override."""
+        config = {
+            "llm": {"provider": "echo", "model": "test", "temperature": 0.5},
+            "conversation_storage": {"backend": "memory"},
+        }
+
+        bot = await DynaBot.from_config(config)
+        context = BotContext(conversation_id="conv-stream-temp", client_id="test-client")
+
+        # Stream with temperature override
+        chunks = []
+        async for chunk in bot.stream_chat("Hello", context, temperature=0.9):
+            chunks.append(chunk)
+
+        assert len(chunks) > 0
+
+        await bot.close()
+
+    @pytest.mark.asyncio
+    async def test_stream_chat_with_system_prompt(self):
+        """Test streaming with system prompt configured."""
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "system_prompt": {"content": "You are a helpful assistant."},
+        }
+
+        bot = await DynaBot.from_config(config)
+        context = BotContext(conversation_id="conv-stream-sysprompt", client_id="test-client")
+
+        # Stream response
+        chunks = []
+        async for chunk in bot.stream_chat("Hello", context):
+            chunks.append(chunk)
+
+        assert len(chunks) > 0
+
+        # Verify conversation has system prompt
+        conversation_state = await bot.get_conversation("conv-stream-sysprompt")
+        tree = conversation_state.message_tree
+        system_nodes = tree.find_nodes(
+            lambda node: node.data.message and node.data.message.role == "system"
+        )
+        assert len(system_nodes) >= 1
+
+        await bot.close()
+
+    @pytest.mark.asyncio
+    async def test_stream_chat_post_stream_middleware_hook(self):
+        """Test that post_stream middleware hook is called after streaming."""
+        from dataknobs_bots.middleware.base import Middleware
+        from typing import Any
+
+        # Create a test middleware that tracks post_stream calls
+        class TestMiddleware(Middleware):
+            def __init__(self):
+                self.post_stream_calls = []
+                self.before_message_calls = []
+
+            async def before_message(self, message: str, context: BotContext) -> None:
+                self.before_message_calls.append(message)
+
+            async def after_message(
+                self, response: str, context: BotContext, **kwargs: Any
+            ) -> None:
+                pass  # Not called for streaming
+
+            async def post_stream(
+                self, message: str, response: str, context: BotContext
+            ) -> None:
+                self.post_stream_calls.append({
+                    "message": message,
+                    "response": response,
+                    "conversation_id": context.conversation_id,
+                })
+
+            async def on_error(
+                self, error: Exception, message: str, context: BotContext
+            ) -> None:
+                pass
+
+        # Create bot with test middleware
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+        }
+        bot = await DynaBot.from_config(config)
+
+        # Add test middleware
+        test_mw = TestMiddleware()
+        bot.middleware.append(test_mw)
+
+        context = BotContext(conversation_id="conv-post-stream", client_id="test-client")
+
+        # Stream a message
+        chunks = []
+        async for chunk in bot.stream_chat("Hello middleware!", context):
+            chunks.append(chunk)
+
+        full_response = "".join(chunks)
+
+        # Verify before_message was called
+        assert len(test_mw.before_message_calls) == 1
+        assert test_mw.before_message_calls[0] == "Hello middleware!"
+
+        # Verify post_stream was called with correct arguments
+        assert len(test_mw.post_stream_calls) == 1
+        call = test_mw.post_stream_calls[0]
+        assert call["message"] == "Hello middleware!"
+        assert call["response"] == full_response
+        assert call["conversation_id"] == "conv-post-stream"
+
+        await bot.close()

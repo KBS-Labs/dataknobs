@@ -1,11 +1,11 @@
 {
-  "timestamp": "2025-12-10T22:52:53Z",
+  "timestamp": "2025-12-13T23:17:02Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.9.17 (Homebrew 2025-12-09)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/versions-sync",
-  "git_commit": "96adcc031d906bdd61620785491fc13c5eb160f1",
+  "git_branch": "sbk/bot-streaming",
+  "git_commit": "bf36554ab36ddd67a2805ea5816f351796b3ea44",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

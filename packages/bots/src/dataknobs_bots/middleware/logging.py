@@ -125,6 +125,39 @@ class LoggingMiddleware(Middleware):
         # Log content at DEBUG level (first 200 chars)
         self._logger.debug(f"Response content: {response[:200]}...")
 
+    async def post_stream(
+        self, message: str, response: str, context: BotContext
+    ) -> None:
+        """Called after streaming response completes.
+
+        Args:
+            message: Original user message
+            response: Complete accumulated response from streaming
+            context: Bot context
+        """
+        log_data = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event": "stream_complete",
+            "client_id": context.client_id,
+            "user_id": context.user_id,
+            "conversation_id": context.conversation_id,
+            "message_length": len(message),
+            "response_length": len(response),
+        }
+
+        if self.include_metadata:
+            log_data["session_metadata"] = context.session_metadata
+            log_data["request_metadata"] = context.request_metadata
+
+        if self.json_format:
+            self._logger.info(json.dumps(log_data))
+        else:
+            self._logger.info(f"Stream complete: {log_data}")
+
+        # Log content at DEBUG level (first 200 chars each)
+        self._logger.debug(f"Streamed message: {message[:200]}...")
+        self._logger.debug(f"Streamed response: {response[:200]}...")
+
     async def on_error(
         self, error: Exception, message: str, context: BotContext
     ) -> None:

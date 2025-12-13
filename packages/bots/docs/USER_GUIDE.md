@@ -8,8 +8,9 @@ Complete guide to using DataKnobs Bots with tutorials and how-to guides.
 - [Basic Tutorials](#basic-tutorials)
   - [Tutorial 1: Your First Chatbot](#tutorial-1-your-first-chatbot)
   - [Tutorial 2: Adding Memory](#tutorial-2-adding-memory)
-  - [Tutorial 3: Building a RAG Chatbot](#tutorial-3-building-a-rag-chatbot)
-  - [Tutorial 4: Creating Tool-Using Agents](#tutorial-4-creating-tool-using-agents)
+  - [Tutorial 3: Streaming Responses](#tutorial-3-streaming-responses)
+  - [Tutorial 4: Building a RAG Chatbot](#tutorial-4-building-a-rag-chatbot)
+  - [Tutorial 5: Creating Tool-Using Agents](#tutorial-5-creating-tool-using-agents)
 - [Advanced Topics](#advanced-topics)
   - [Multi-Tenant Deployment](#multi-tenant-deployment)
   - [Custom Tools Development](#custom-tools-development)
@@ -249,7 +250,136 @@ Bot: I'm an AI assistant designed to have helpful, harmless conversations...
 
 ---
 
-### Tutorial 3: Building a RAG Chatbot
+### Tutorial 3: Streaming Responses
+
+Stream LLM responses token-by-token for better user experience.
+
+#### Why Streaming?
+
+- **Better UX**: Users see responses as they're generated
+- **Lower Latency**: First tokens appear immediately
+- **Interactive**: Users can interrupt or cancel if response isn't useful
+
+#### Step 1: Basic Streaming
+
+```python
+# streaming_bot.py
+import asyncio
+from dataknobs_bots import DynaBot, BotContext
+
+async def main():
+    config = {
+        "llm": {
+            "provider": "ollama",
+            "model": "gemma3:1b",
+        },
+        "conversation_storage": {
+            "backend": "memory"
+        }
+    }
+
+    bot = await DynaBot.from_config(config)
+
+    context = BotContext(
+        conversation_id="streaming-demo",
+        client_id="my-app"
+    )
+
+    print("Bot: ", end="", flush=True)
+
+    # Stream response token by token
+    async for chunk in bot.stream_chat("Write a haiku about coding", context):
+        print(chunk, end="", flush=True)
+
+    print()  # Newline after response
+
+    await bot.close()
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+#### Step 2: Run and See Streaming
+
+```bash
+python streaming_bot.py
+```
+
+**Output** (tokens appear one-by-one):
+```
+Bot: Fingers on the keys
+Bugs hide in the midnight code
+Coffee grows cold now
+```
+
+#### Step 3: Accumulating the Full Response
+
+```python
+# If you need the complete response
+full_response = ""
+async for chunk in bot.stream_chat("Tell me a joke", context):
+    full_response += chunk
+    print(chunk, end="", flush=True)
+
+print()
+print(f"\n[Total length: {len(full_response)} characters]")
+```
+
+#### Step 4: Streaming with a Web API
+
+```python
+# api_streaming.py
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+from dataknobs_bots import DynaBot, BotContext
+
+app = FastAPI()
+bot = None
+
+@app.on_event("startup")
+async def startup():
+    global bot
+    bot = await DynaBot.from_config(config)
+
+@app.post("/chat/stream")
+async def stream_chat(request: ChatRequest):
+    context = BotContext(
+        conversation_id=request.conversation_id,
+        client_id=request.client_id
+    )
+
+    async def generate():
+        async for chunk in bot.stream_chat(request.message, context):
+            yield chunk
+
+    return StreamingResponse(generate(), media_type="text/plain")
+```
+
+#### Streaming vs Non-Streaming
+
+| Feature | `chat()` | `stream_chat()` |
+|---------|----------|-----------------|
+| Return type | `str` | `AsyncGenerator[str, None]` |
+| Response timing | All at once | Token by token |
+| Middleware hook | `after_message()` | `post_stream()` |
+| Memory updates | After response | After stream completes |
+| Best for | Simple integrations | Interactive UIs |
+
+#### Error Handling in Streaming
+
+```python
+try:
+    async for chunk in bot.stream_chat("Hello", context):
+        print(chunk, end="", flush=True)
+except Exception as e:
+    print(f"\nStreaming error: {e}")
+    # Middleware's on_error() is automatically called
+    # Memory is NOT updated with partial responses
+```
+
+---
+
+### Tutorial 4: Building a RAG Chatbot
 
 Create a chatbot that answers questions using your documents.
 
@@ -369,7 +499,7 @@ User Question
 
 ---
 
-### Tutorial 4: Creating Tool-Using Agents
+### Tutorial 5: Creating Tool-Using Agents
 
 Build an agent that can use tools to perform actions.
 
