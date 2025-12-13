@@ -97,7 +97,7 @@ if __name__ == "__main__":
 - **Vector Search** - FAISS, Chroma, Pinecone support
 - **Context Injection** - Automatic context injection into prompts
 
-[Learn more →](guides/user-guide.md#tutorial-3-building-a-rag-chatbot)
+[Learn more →](guides/user-guide.md#tutorial-4-building-a-rag-chatbot)
 
 ### 🛠️ Tool Integration
 
@@ -115,7 +115,7 @@ if __name__ == "__main__":
 - **Configurable** - Switch reasoning strategies via configuration
 - **Extensible** - Implement custom reasoning strategies
 
-[Learn more →](guides/user-guide.md#tutorial-4-creating-tool-using-agents)
+[Learn more →](guides/user-guide.md#tutorial-5-creating-tool-using-agents)
 
 ## Architecture
 

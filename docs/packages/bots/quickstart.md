@@ -93,6 +93,55 @@ python quickstart.py
 
 4. **Chatting** - `bot.chat(message, context)` sends a message and gets a response
 
+## Streaming Responses
+
+For a better user experience, you can stream responses token-by-token:
+
+```python
+import asyncio
+from dataknobs_bots import DynaBot, BotContext
+
+async def main():
+    config = {
+        "llm": {
+            "provider": "ollama",
+            "model": "gemma3:1b"
+        },
+        "conversation_storage": {
+            "backend": "memory"
+        }
+    }
+
+    bot = await DynaBot.from_config(config)
+
+    context = BotContext(
+        conversation_id="streaming-demo",
+        client_id="demo-client"
+    )
+
+    # Stream the response
+    print("Bot: ", end="", flush=True)
+    async for chunk in bot.stream_chat("Tell me a short story", context):
+        print(chunk, end="", flush=True)
+    print()  # Newline after streaming
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### Streaming Benefits
+
+- **Better UX** - Users see responses immediately as they're generated
+- **Lower Perceived Latency** - First tokens appear right away
+- **Interruptible** - Users can stop generation if needed
+
+### Streaming vs Non-Streaming
+
+| Method | Returns | Best For |
+|--------|---------|----------|
+| `chat()` | Complete `str` | Simple integrations, batch processing |
+| `stream_chat()` | `AsyncGenerator[str]` | Interactive UIs, real-time display |
+
 ## Adding a Knowledge Base (RAG)
 
 Let's enhance our bot with RAG (Retrieval Augmented Generation):
@@ -470,6 +519,7 @@ pip install faiss-gpu  # For GPU
 You've learned how to:
 
 - ✅ Create a basic chatbot with memory
+- ✅ Stream responses in real-time
 - ✅ Add a knowledge base (RAG)
 - ✅ Build a tool-using agent
 - ✅ Set up multi-tenant bots

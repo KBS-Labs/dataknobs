@@ -1,5 +1,6 @@
 """Core DynaBot implementation."""
 
+from collections.abc import AsyncGenerator
 from types import TracebackType
 from typing import Any
 
@@ -388,6 +389,107 @@ class DynaBot:
                 await mw.after_message(response, context)
 
         return response_content
+
+    async def stream_chat(
+        self,
+        message: str,
+        context: BotContext,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        rag_query: str | None = None,
+        **kwargs: Any,
+    ) -> AsyncGenerator[str, None]:
+        """Stream chat response token by token.
+
+        Similar to chat() but yields response chunks as they are generated,
+        providing better UX for interactive applications.
+
+        Args:
+            message: User message to process
+            context: Bot execution context
+            temperature: Optional temperature override
+            max_tokens: Optional max tokens override
+            rag_query: Optional explicit query for knowledge base retrieval.
+                      If provided, this is used instead of the message for RAG.
+            **kwargs: Additional arguments passed to LLM
+
+        Yields:
+            Response text chunks as strings
+
+        Example:
+            ```python
+            context = BotContext(
+                conversation_id="conv-123",
+                client_id="client-456",
+                user_id="user-789"
+            )
+
+            # Stream and display in real-time
+            async for chunk in bot.stream_chat("Explain quantum computing", context):
+                print(chunk, end="", flush=True)
+            print()  # Newline after streaming
+
+            # Accumulate response
+            full_response = ""
+            async for chunk in bot.stream_chat("Hello!", context):
+                full_response += chunk
+            ```
+
+        Note:
+            Conversation history is automatically updated after streaming completes.
+            The reasoning_strategy is not supported with streaming - use chat() instead.
+        """
+        # Apply middleware (before)
+        for mw in self.middleware:
+            if hasattr(mw, "before_message"):
+                await mw.before_message(message, context)
+
+        # Build message with context from memory and knowledge
+        full_message = await self._build_message_with_context(message, rag_query=rag_query)
+
+        # Get or create conversation manager
+        manager = await self._get_or_create_conversation(context)
+
+        # Add user message
+        await manager.add_message(content=full_message, role="user")
+
+        # Update memory
+        if self.memory:
+            await self.memory.add_message(message, role="user")
+
+        # Stream response (reasoning_strategy not supported for streaming)
+        full_response_chunks: list[str] = []
+        streaming_error: Exception | None = None
+
+        try:
+            async for chunk in manager.stream_complete(
+                temperature=temperature or self.default_temperature,
+                max_tokens=max_tokens or self.default_max_tokens,
+                **kwargs,
+            ):
+                full_response_chunks.append(chunk.delta)
+                yield chunk.delta
+        except Exception as e:
+            streaming_error = e
+            # Call on_error middleware
+            for mw in self.middleware:
+                if hasattr(mw, "on_error"):
+                    await mw.on_error(e, message, context)
+            # Re-raise to inform the caller
+            raise
+
+        # Only update memory and run post_stream middleware on success
+        if streaming_error is None:
+            complete_response = "".join(full_response_chunks)
+
+            # Update memory with complete response
+            if self.memory:
+                await self.memory.add_message(complete_response, role="assistant")
+
+            # Apply post_stream middleware hook (provides both message and response)
+            for mw in self.middleware:
+                if hasattr(mw, "post_stream"):
+                    await mw.post_stream(message, complete_response, context)
 
     async def get_conversation(self, conversation_id: str) -> Any:
         """Retrieve conversation history.

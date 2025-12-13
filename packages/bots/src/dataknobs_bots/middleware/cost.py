@@ -210,6 +210,72 @@ class CostTrackingMiddleware(Middleware):
             f"cost: ${cost:.6f}, total: ${stats['total_cost_usd']:.6f}"
         )
 
+    async def post_stream(
+        self, message: str, response: str, context: BotContext
+    ) -> None:
+        """Track costs after streaming completes.
+
+        For streaming responses, token counts are estimated from text length
+        since exact counts may not be available until the stream completes.
+
+        Args:
+            message: Original user message
+            response: Complete accumulated response from streaming
+            context: Bot context
+        """
+        if not self.track_tokens:
+            return
+
+        client_id = context.client_id
+
+        # For streaming, we estimate tokens from text length (~4 chars per token)
+        input_tokens = len(message) // 4
+        output_tokens = len(response) // 4
+
+        # Get provider/model from context metadata if available
+        provider = context.session_metadata.get("provider", "unknown")
+        model = context.session_metadata.get("model", "unknown")
+
+        # Calculate cost
+        cost = self._calculate_cost(provider, model, input_tokens, output_tokens)
+
+        # Update stats
+        if client_id not in self._usage_stats:
+            self._usage_stats[client_id] = {
+                "total_requests": 0,
+                "total_input_tokens": 0,
+                "total_output_tokens": 0,
+                "total_cost_usd": 0.0,
+                "by_provider": {},
+            }
+
+        stats = self._usage_stats[client_id]
+        stats["total_requests"] += 1
+        stats["total_input_tokens"] += input_tokens
+        stats["total_output_tokens"] += output_tokens
+        stats["total_cost_usd"] += cost
+
+        # Track by provider
+        if provider not in stats["by_provider"]:
+            stats["by_provider"][provider] = {
+                "requests": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cost_usd": 0.0,
+            }
+
+        provider_stats = stats["by_provider"][provider]
+        provider_stats["requests"] += 1
+        provider_stats["input_tokens"] += input_tokens
+        provider_stats["output_tokens"] += output_tokens
+        provider_stats["cost_usd"] += cost
+
+        self._logger.info(
+            f"Stream complete - Client {client_id}: {provider}/{model} - "
+            f"~{input_tokens} in + ~{output_tokens} out tokens (estimated), "
+            f"cost: ${cost:.6f}, total: ${stats['total_cost_usd']:.6f}"
+        )
+
     async def on_error(
         self, error: Exception, message: str, context: BotContext
     ) -> None:

@@ -11,7 +11,8 @@ class Middleware(ABC):
 
     Middleware provides hooks into the bot request/response lifecycle:
     - before_message: Called before processing user message
-    - after_message: Called after generating bot response
+    - after_message: Called after generating bot response (non-streaming)
+    - post_stream: Called after streaming response completes
     - on_error: Called when an error occurs
 
     Example:
@@ -24,6 +25,11 @@ class Middleware(ABC):
                 self, response: str, context: BotContext, **kwargs: Any
             ) -> None:
                 print(f"Response: {response}")
+
+            async def post_stream(
+                self, message: str, response: str, context: BotContext
+            ) -> None:
+                print(f"Streamed response to '{message}': {response}")
 
             async def on_error(
                 self, error: Exception, message: str, context: BotContext
@@ -46,12 +52,29 @@ class Middleware(ABC):
     async def after_message(
         self, response: str, context: BotContext, **kwargs: Any
     ) -> None:
-        """Called after generating bot response.
+        """Called after generating bot response (non-streaming).
 
         Args:
             response: Bot's generated response
             context: Bot context
             **kwargs: Additional data (e.g., tokens_used, response_time_ms, provider, model)
+        """
+        ...
+
+    @abstractmethod
+    async def post_stream(
+        self, message: str, response: str, context: BotContext
+    ) -> None:
+        """Called after streaming response completes.
+
+        This hook is called after stream_chat() finishes streaming all chunks.
+        It provides both the original user message and the complete accumulated
+        response, useful for logging, analytics, or post-processing.
+
+        Args:
+            message: Original user message that triggered the stream
+            response: Complete accumulated response from streaming
+            context: Bot context
         """
         ...
 

@@ -14,6 +14,9 @@ Middleware provides hooks into the bot request/response lifecycle, enabling:
 
 ### Lifecycle Hooks
 
+The middleware lifecycle differs slightly between non-streaming (`chat()`) and streaming (`stream_chat()`) responses:
+
+**Non-Streaming Flow (`chat()`)**:
 ```
 User Message
     │
@@ -34,6 +37,29 @@ User Message
     │                        │
     ▼                        ▼
 Response                Error Response
+```
+
+**Streaming Flow (`stream_chat()`)**:
+```
+User Message
+    │
+    ▼
+┌─────────────────────┐
+│  before_message()   │  ← Pre-processing
+└─────────────────────┘
+    │
+    ▼
+┌─────────────────────┐
+│   Stream Response   │ ──► chunks yielded to caller
+└─────────────────────┘
+    │
+    ▼ (stream complete)  ▼ (error)
+┌─────────────────────┐  ┌─────────────────────┐
+│   post_stream()     │  │     on_error()      │
+└─────────────────────┘  └─────────────────────┘
+    │                        │
+    ▼                        ▼
+Complete               Error Response
 ```
 
 ## Built-in Middleware
@@ -181,9 +207,15 @@ class MyMiddleware(Middleware):
     async def after_message(
         self, response: str, context: BotContext, **kwargs: Any
     ) -> None:
-        """Called after generating bot response."""
+        """Called after generating bot response (non-streaming)."""
         tokens = kwargs.get("tokens_used", {})
         print(f"Response generated, tokens used: {tokens}")
+
+    async def post_stream(
+        self, message: str, response: str, context: BotContext
+    ) -> None:
+        """Called after streaming response completes."""
+        print(f"Streamed response to '{message[:30]}...': {len(response)} chars")
 
     async def on_error(
         self, error: Exception, message: str, context: BotContext
@@ -231,6 +263,11 @@ class RateLimitMiddleware(Middleware):
         self, response: str, context: BotContext, **kwargs
     ) -> None:
         pass
+
+    async def post_stream(
+        self, message: str, response: str, context: BotContext
+    ) -> None:
+        pass  # Rate limiting handled in before_message
 
     async def on_error(
         self, error: Exception, message: str, context: BotContext
