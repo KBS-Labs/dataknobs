@@ -6,6 +6,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## Release - 2025-12-13
+
+### dataknobs-common [1.1.2]
+
+#### Fixed
+- Fixed version sync:ing between pyproject.toml and __version__ attributes.
+
+### dataknobs-config [0.3.1]
+
+#### Fixed
+- Fixed version sync:ing between pyproject.toml and __version__ attributes.
+
+### dataknobs-structures [1.0.3]
+
+#### Fixed
+- Fixed version sync:ing between pyproject.toml and __version__ attributes.
+
+### dataknobs-utils [1.2.1]
+
+#### Fixed
+- Fixed version sync:ing between pyproject.toml and __version__ attributes.
+
+### dataknobs-xization [1.2.1]
+
+#### Fixed
+- Fixed version sync:ing between pyproject.toml and __version__ attributes.
+
+### dataknobs-data [0.4.2]
+
+#### Fixed
+- Fixed version sync:ing between pyproject.toml and __version__ attributes.
+
+### dataknobs-fsm [0.1.4]
+
+#### Fixed
+- Fixed version sync:ing between pyproject.toml and __version__ attributes.
+
+### dataknobs-legacy [0.1.1]
+
+#### Fixed
+- Fixed version sync:ing between pyproject.toml and __version__ attributes.
+
+### dataknobs-llm [0.2.2]
+
+#### Fixed
+- Fixed version sync:ing between pyproject.toml and __version__ attributes.
+
+### dataknobs-bots [0.2.2]
+
+#### Added
+- Connected streaming responses; Added middleware access to full response.
+
+#### Fixed
+- Fixed version sync:ing between pyproject.toml and __version__ attributes.
+
+
 ## Release - 2025-12-08
 
 ### dataknobs-common [1.1.1]

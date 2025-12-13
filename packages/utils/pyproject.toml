@@ -1,6 +1,6 @@
 [project]
 name = "dataknobs-utils"
-version = "1.2.0"
+version = "1.2.1"
 description = "Utility functions for dataknobs packages"
 readme = "README.md"
 authors = [
