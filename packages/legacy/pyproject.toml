@@ -1,6 +1,6 @@
 [project]
 name = "dataknobs"
-version = "0.1.0"
+version = "0.1.1"
 description = "Useful implementations of data structures and design patterns for AI knowledge bases. (Legacy package - please use modular packages instead)"
 readme = "README.md"
 authors = [

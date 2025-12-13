@@ -5,7 +5,7 @@
       "name": "common",
       "pypi_name": "dataknobs-common",
       "description": "Shared components and base classes",
-      "version": "1.1.1",
+      "version": "1.1.2",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -14,7 +14,7 @@
       "name": "config",
       "pypi_name": "dataknobs-config",
       "description": "Flexible and modular configuration management",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -23,7 +23,7 @@
       "name": "data",
       "pypi_name": "dataknobs-data",
       "description": "Data abstraction layer with multiple backend support",
-      "version": "0.4.1",
+      "version": "0.4.2",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -32,7 +32,7 @@
       "name": "fsm",
       "pypi_name": "dataknobs-fsm",
       "description": "Finite State Machine framework for building workflows",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -41,7 +41,7 @@
       "name": "llm",
       "pypi_name": "dataknobs-llm",
       "description": "LLM integration with prompt management and tools",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -50,7 +50,7 @@
       "name": "bots",
       "pypi_name": "dataknobs-bots",
       "description": "Configuration-driven AI agents for DataKnobs",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -59,7 +59,7 @@
       "name": "structures",
       "pypi_name": "dataknobs-structures",
       "description": "Core data structures (Tree, Document, RecordStore)",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -68,7 +68,7 @@
       "name": "utils",
       "pypi_name": "dataknobs-utils",
       "description": "Utility functions for JSON, files, and integrations",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -77,7 +77,7 @@
       "name": "xization",
       "pypi_name": "dataknobs-xization",
       "description": "Text processing, tokenization, and normalization",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -86,7 +86,7 @@
       "name": "legacy",
       "pypi_name": "dataknobs",
       "description": "Legacy compatibility package",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "category": "legacy",
       "requires_docs_build": false,
       "deprecated": true

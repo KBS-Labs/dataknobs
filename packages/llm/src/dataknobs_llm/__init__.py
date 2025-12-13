@@ -30,7 +30,7 @@ from dataknobs_llm.tools import (
     ToolRegistry,
 )
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 __all__ = [
     # Base classes
