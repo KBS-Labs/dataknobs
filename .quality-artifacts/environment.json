@@ -1,11 +1,11 @@
 {
-  "timestamp": "2025-12-15T18:51:38Z",
+  "timestamp": "2025-12-15T20:55:13Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.9.17 (Homebrew 2025-12-09)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/dynamic-llm-overrides",
-  "git_commit": "a61fb3c0c748181917fb555be8604e549292ae38",
+  "git_branch": "sbk/add-pgvector-backend",
+  "git_commit": "3161cfddb60e56dba3bb1c117b5636cbf3dd495a",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

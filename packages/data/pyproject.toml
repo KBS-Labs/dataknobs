@@ -55,6 +55,7 @@ vector = [
     "pgvector>=0.2.0",  # PostgreSQL vector extension
     "faiss-cpu>=1.7.4",  # Optional for Faiss backend
     "chromadb>=0.4.0",  # Optional for Chroma backend
+    "asyncpg>=0.29.0",  # Required for PgVectorStore backend
 ]
 all = [
     "dataknobs-data[postgres,sqlite,duckdb,s3,elasticsearch,parquet,vector]",
