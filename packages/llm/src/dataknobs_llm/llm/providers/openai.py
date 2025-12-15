@@ -289,23 +289,34 @@ class OpenAIProvider(AsyncLLMProvider):
     async def complete(
         self,
         messages: Union[str, List[LLMMessage]],
-        **kwargs
+        config_overrides: Dict[str, Any] | None = None,
+        **kwargs: Any
     ) -> LLMResponse:
-        """Generate completion."""
+        """Generate completion.
+
+        Args:
+            messages: Input messages or prompt
+            config_overrides: Optional dict to override config fields (model,
+                temperature, max_tokens, top_p, stop_sequences, seed)
+            **kwargs: Additional provider-specific parameters
+        """
         if not self._is_initialized:
             await self.initialize()
+
+        # Get runtime config (with overrides applied if provided)
+        runtime_config = self._get_runtime_config(config_overrides)
 
         # Convert string to message list
         if isinstance(messages, str):
             messages = [LLMMessage(role='user', content=messages)]
 
         # Add system prompt if configured
-        if self.config.system_prompt and messages[0].role != 'system':
-            messages.insert(0, LLMMessage(role='system', content=self.config.system_prompt))
+        if runtime_config.system_prompt and messages[0].role != 'system':
+            messages.insert(0, LLMMessage(role='system', content=runtime_config.system_prompt))
 
         # Adapt messages and config
         adapted_messages = self.adapter.adapt_messages(messages)
-        params = self.adapter.adapt_config(self.config)
+        params = self.adapter.adapt_config(runtime_config)
         params.update(kwargs)
 
         # Make API call
@@ -319,23 +330,34 @@ class OpenAIProvider(AsyncLLMProvider):
     async def stream_complete(
         self,
         messages: Union[str, List[LLMMessage]],
-        **kwargs
+        config_overrides: Dict[str, Any] | None = None,
+        **kwargs: Any
     ) -> AsyncIterator[LLMStreamResponse]:
-        """Generate streaming completion."""
+        """Generate streaming completion.
+
+        Args:
+            messages: Input messages or prompt
+            config_overrides: Optional dict to override config fields (model,
+                temperature, max_tokens, top_p, stop_sequences, seed)
+            **kwargs: Additional provider-specific parameters
+        """
         if not self._is_initialized:
             await self.initialize()
+
+        # Get runtime config (with overrides applied if provided)
+        runtime_config = self._get_runtime_config(config_overrides)
 
         # Convert string to message list
         if isinstance(messages, str):
             messages = [LLMMessage(role='user', content=messages)]
 
         # Add system prompt if configured
-        if self.config.system_prompt and messages[0].role != 'system':
-            messages.insert(0, LLMMessage(role='system', content=self.config.system_prompt))
+        if runtime_config.system_prompt and messages[0].role != 'system':
+            messages.insert(0, LLMMessage(role='system', content=runtime_config.system_prompt))
 
         # Adapt messages and config
         adapted_messages = self.adapter.adapt_messages(messages)
-        params = self.adapter.adapt_config(self.config)
+        params = self.adapter.adapt_config(runtime_config)
         params['stream'] = True
         params.update(kwargs)
 

@@ -15,6 +15,10 @@
 5. [Conversation Management](#conversation-management)
 6. [Middleware](#middleware)
 7. [Advanced Features](#advanced-features)
+   - [Synchronous vs Asynchronous](#synchronous-vs-asynchronous)
+   - [Error Handling](#error-handling)
+   - [Per-Request Config Overrides](#per-request-config-overrides)
+   - [Metadata Tracking](#metadata-tracking)
 8. [Complete Examples](#complete-examples)
 9. [Troubleshooting](#troubleshooting)
 
@@ -916,6 +920,221 @@ try:
     )
 except ValueError as e:
     print(f"Validation failed: {e}")
+```
+
+### Per-Request Config Overrides
+
+Override LLM configuration on a per-request basis without modifying the provider's base config. This enables A/B testing, fallback routing, cost optimization, and dynamic model switching.
+
+#### Basic Usage
+
+```python
+from dataknobs_llm.llm import OpenAIProvider, LLMConfig
+
+# Create provider with default config
+config = LLMConfig(
+    provider="openai",
+    model="gpt-4",
+    temperature=0.7
+)
+llm = OpenAIProvider(config)
+
+# Override config for a specific request
+response = await llm.complete(
+    "Write a creative story",
+    config_overrides={
+        "model": "gpt-4-turbo",  # Use different model
+        "temperature": 1.2,      # More creative
+        "max_tokens": 2000
+    }
+)
+
+# Streaming with overrides
+async for chunk in llm.stream_complete(
+    "Explain quantum physics",
+    config_overrides={"model": "gpt-3.5-turbo", "temperature": 0.3}
+):
+    print(chunk.delta, end="")
+```
+
+#### Supported Override Fields
+
+| Field | Description |
+|-------|-------------|
+| `model` | Switch models per-request |
+| `temperature` | Adjust creativity (0.0-2.0) |
+| `max_tokens` | Control response length |
+| `top_p` | Nucleus sampling parameter |
+| `stop_sequences` | Custom stop tokens |
+| `seed` | Reproducibility seed |
+| `presence_penalty` | Presence penalty (-2.0 to 2.0) |
+| `frequency_penalty` | Frequency penalty (-2.0 to 2.0) |
+| `logit_bias` | Token biases |
+| `response_format` | Output format ("text" or "json") |
+| `functions` | Dynamic function definitions |
+| `function_call` | Function calling mode |
+| `options` | Provider-specific options (merged with base) |
+
+#### Override Presets
+
+Register named presets for common override combinations:
+
+```python
+from dataknobs_llm.llm import AsyncLLMProvider
+
+# Register presets (class-level, shared across all providers)
+AsyncLLMProvider.register_preset("creative", {
+    "temperature": 1.2,
+    "top_p": 0.95,
+    "presence_penalty": 0.5
+})
+
+AsyncLLMProvider.register_preset("precise", {
+    "temperature": 0.1,
+    "top_p": 0.9
+})
+
+AsyncLLMProvider.register_preset("fast", {
+    "model": "gpt-3.5-turbo",
+    "max_tokens": 500
+})
+
+# Use preset
+response = await llm.complete(
+    "Write a poem",
+    config_overrides={"preset": "creative"}
+)
+
+# Override preset values
+response = await llm.complete(
+    "Write a short poem",
+    config_overrides={
+        "preset": "creative",
+        "max_tokens": 100  # Override preset's lack of max_tokens
+    }
+)
+
+# List available presets
+print(AsyncLLMProvider.list_presets())  # ["creative", "precise", "fast"]
+
+# Get preset config
+print(AsyncLLMProvider.get_preset("creative"))
+# {"temperature": 1.2, "top_p": 0.95, "presence_penalty": 0.5}
+```
+
+#### Override Callbacks for Logging/Metrics
+
+Register callbacks to track override usage:
+
+```python
+from dataknobs_llm.llm import AsyncLLMProvider, LLMConfig
+
+# Define callback
+def log_overrides(provider, overrides: dict, runtime_config: LLMConfig):
+    print(f"Overrides applied: {overrides}")
+    print(f"Runtime model: {runtime_config.model}")
+    print(f"Runtime temperature: {runtime_config.temperature}")
+
+# Register callback (class-level)
+AsyncLLMProvider.on_override_applied(log_overrides)
+
+# Now every request with overrides will trigger the callback
+response = await llm.complete(
+    "Hello",
+    config_overrides={"temperature": 0.5}
+)
+# Output:
+# Overrides applied: {'temperature': 0.5}
+# Runtime model: gpt-4
+# Runtime temperature: 0.5
+
+# Clear callbacks when done (important for testing)
+AsyncLLMProvider.clear_override_callbacks()
+```
+
+**Use cases for callbacks:**
+- Logging override usage for debugging
+- Collecting metrics on model/parameter usage
+- A/B testing analytics
+- Cost tracking per-request
+
+#### Options Dict Merging
+
+The `options` field is shallowly merged with the base config's options:
+
+```python
+# Base config with options
+config = LLMConfig(
+    provider="echo",
+    model="echo-model",
+    options={
+        "echo_prefix": "Response: ",
+        "mock_tokens": True
+    }
+)
+llm = EchoProvider(config)
+
+# Override merges with base options
+response = await llm.complete(
+    "Hello",
+    config_overrides={
+        "options": {"echo_prefix": "Custom: "}  # Override one option
+    }
+)
+# Result: options = {"echo_prefix": "Custom: ", "mock_tokens": True}
+```
+
+#### ConversationManager Integration
+
+Overrides work with ConversationManager via `llm_config_overrides`:
+
+```python
+from dataknobs_llm.conversations import ConversationManager
+
+manager = await ConversationManager.create(
+    llm=llm,
+    prompt_builder=builder,
+    storage=storage,
+    system_prompt_name="assistant"
+)
+
+# Add message and complete with overrides
+await manager.add_message(role="user", content="Hello")
+response = await manager.complete(
+    llm_config_overrides={"model": "gpt-4-turbo", "temperature": 0.9}
+)
+
+# Streaming with overrides
+async for chunk in manager.stream_complete(
+    llm_config_overrides={"model": "gpt-3.5-turbo"}
+):
+    print(chunk.delta, end="")
+```
+
+#### Error Handling
+
+Invalid override fields raise `ValueError`:
+
+```python
+try:
+    response = await llm.complete(
+        "Hello",
+        config_overrides={"invalid_field": "value"}
+    )
+except ValueError as e:
+    print(e)
+    # "Unsupported config overrides: {'invalid_field'}.
+    #  Allowed fields: {'model', 'temperature', ...}"
+
+# Unknown preset raises ValueError
+try:
+    response = await llm.complete(
+        "Hello",
+        config_overrides={"preset": "nonexistent"}
+    )
+except ValueError as e:
+    print(e)
+    # "Unknown preset: 'nonexistent'. Available presets: ['creative', 'precise']"
 ```
 
 ### Metadata Tracking

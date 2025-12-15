@@ -142,6 +142,67 @@ if __name__ == "__main__":
 | `chat()` | Complete `str` | Simple integrations, batch processing |
 | `stream_chat()` | `AsyncGenerator[str]` | Interactive UIs, real-time display |
 
+## Per-Request Config Overrides
+
+Override LLM settings per-request without creating a new bot. Useful for A/B testing,
+dynamic model selection, and cost optimization.
+
+```python
+import asyncio
+from dataknobs_bots import DynaBot, BotContext
+
+async def main():
+    config = {
+        "llm": {
+            "provider": "ollama",
+            "model": "gemma3:1b",  # Default model
+            "temperature": 0.7
+        },
+        "conversation_storage": {"backend": "memory"}
+    }
+
+    bot = await DynaBot.from_config(config)
+    context = BotContext(conversation_id="override-demo", client_id="demo")
+
+    # Use default settings
+    response = await bot.chat("Hello!", context)
+
+    # Override model for a specific request
+    response = await bot.chat(
+        "Explain quantum computing",
+        context,
+        llm_config_overrides={
+            "model": "llama3.1:8b",  # Use a more capable model
+            "temperature": 0.3,
+            "max_tokens": 2000
+        }
+    )
+
+    # Works with streaming too
+    async for chunk in bot.stream_chat(
+        "Write a creative poem",
+        context,
+        llm_config_overrides={"temperature": 0.9}
+    ):
+        print(chunk, end="", flush=True)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### Supported Override Fields
+
+| Field | Description |
+|-------|-------------|
+| `model` | Model identifier (e.g., "gpt-4-turbo") |
+| `temperature` | Sampling temperature (0.0-2.0) |
+| `max_tokens` | Maximum tokens in response |
+| `top_p` | Nucleus sampling threshold |
+| `stop_sequences` | Stop generation sequences |
+| `seed` | Random seed for reproducibility |
+
+[Learn more about config overrides →](guides/user-guide.md#per-request-config-overrides)
+
 ## Adding a Knowledge Base (RAG)
 
 Let's enhance our bot with RAG (Retrieval Augmented Generation):
@@ -520,6 +581,7 @@ You've learned how to:
 
 - ✅ Create a basic chatbot with memory
 - ✅ Stream responses in real-time
+- ✅ Override LLM config per-request (A/B testing, model switching)
 - ✅ Add a knowledge base (RAG)
 - ✅ Build a tool-using agent
 - ✅ Set up multi-tenant bots

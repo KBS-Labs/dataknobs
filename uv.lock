@@ -1313,7 +1313,7 @@ wheels = [
 
 [[package]]
 name = "dataknobs"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "packages/legacy" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1334,7 +1334,7 @@ requires-dist = [
 
 [[package]]
 name = "dataknobs-bots"
-version = "0.2.1"
+version = "0.2.2"
 source = { editable = "packages/bots" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1377,7 +1377,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-common"
-version = "1.1.1"
+version = "1.1.2"
 source = { editable = "packages/common" }
 dependencies = [
     { name = "more-itertools" },
@@ -1415,7 +1415,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-config"
-version = "0.3.0"
+version = "0.3.1"
 source = { editable = "packages/config" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1447,7 +1447,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "dataknobs-data"
-version = "0.4.1"
+version = "0.4.2"
 source = { editable = "packages/data" }
 dependencies = [
     { name = "aiofiles" },
@@ -1577,7 +1577,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-fsm"
-version = "0.1.3"
+version = "0.1.4"
 source = { editable = "packages/fsm" }
 dependencies = [
     { name = "aiofiles" },
@@ -1686,7 +1686,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-llm"
-version = "0.2.1"
+version = "0.2.2"
 source = { editable = "packages/llm" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1727,7 +1727,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-structures"
-version = "1.0.2"
+version = "1.0.3"
 source = { editable = "packages/structures" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1746,7 +1746,7 @@ requires-dist = [
 
 [[package]]
 name = "dataknobs-utils"
-version = "1.2.0"
+version = "1.2.1"
 source = { editable = "packages/utils" }
 dependencies = [
     { name = "beautifulsoup4" },
@@ -1865,7 +1865,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-xization"
-version = "1.2.0"
+version = "1.2.1"
 source = { editable = "packages/xization" }
 dependencies = [
     { name = "dataknobs-common" },

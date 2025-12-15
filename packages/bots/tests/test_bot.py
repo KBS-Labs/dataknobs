@@ -280,6 +280,97 @@ Remember to always verify customer identity before sharing sensitive information
         assert response is not None
 
     @pytest.mark.asyncio
+    async def test_chat_llm_config_overrides(self):
+        """Test passing llm_config_overrides to chat."""
+        config = {
+            "llm": {"provider": "echo", "model": "test", "temperature": 0.5},
+            "conversation_storage": {"backend": "memory"},
+        }
+
+        bot = await DynaBot.from_config(config)
+        context = BotContext(conversation_id="conv-config-override", client_id="test-client")
+
+        # Chat with llm_config_overrides
+        response = await bot.chat(
+            "Hello",
+            context,
+            llm_config_overrides={"model": "gpt-4-turbo", "temperature": 0.9}
+        )
+        assert response is not None
+        assert isinstance(response, str)
+
+        # Verify the conversation was created and has the message
+        conversation_state = await bot.get_conversation("conv-config-override")
+        assert conversation_state is not None
+
+        # Check that config_overrides_applied was tracked in assistant node metadata
+        tree = conversation_state.message_tree
+        assistant_nodes = tree.find_nodes(
+            lambda node: node.data.message and node.data.message.role == "assistant"
+        )
+        assert len(assistant_nodes) >= 1
+
+        # The assistant node should have config_overrides_applied in metadata
+        assistant_metadata = assistant_nodes[0].data.metadata
+        assert "config_overrides_applied" in assistant_metadata
+        assert assistant_metadata["config_overrides_applied"] == {
+            "model": "gpt-4-turbo",
+            "temperature": 0.9
+        }
+
+        await bot.close()
+
+    @pytest.mark.asyncio
+    async def test_chat_llm_config_overrides_model_only(self):
+        """Test llm_config_overrides with just model override."""
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+        }
+
+        bot = await DynaBot.from_config(config)
+        context = BotContext(conversation_id="conv-model-override", client_id="test-client")
+
+        # Override just the model
+        response = await bot.chat(
+            "Hello",
+            context,
+            llm_config_overrides={"model": "different-model"}
+        )
+        assert response is not None
+
+        await bot.close()
+
+    @pytest.mark.asyncio
+    async def test_chat_llm_config_overrides_none(self):
+        """Test that llm_config_overrides=None works (default behavior)."""
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+        }
+
+        bot = await DynaBot.from_config(config)
+        context = BotContext(conversation_id="conv-no-override", client_id="test-client")
+
+        # Explicitly pass None (should work same as not passing it)
+        response = await bot.chat("Hello", context, llm_config_overrides=None)
+        assert response is not None
+
+        # Verify no config_overrides_applied in metadata
+        conversation_state = await bot.get_conversation("conv-no-override")
+        tree = conversation_state.message_tree
+        assistant_nodes = tree.find_nodes(
+            lambda node: node.data.message and node.data.message.role == "assistant"
+        )
+        assert len(assistant_nodes) >= 1
+
+        # Should NOT have config_overrides_applied when None
+        assistant_metadata = assistant_nodes[0].data.metadata
+        assert "config_overrides_applied" not in assistant_metadata
+
+        await bot.close()
+
+    @pytest.mark.asyncio
     async def test_multiple_conversations(self):
         """Test managing multiple conversations."""
         config = {
@@ -597,6 +688,76 @@ Remember to always verify customer identity before sharing sensitive information
         # Stream with temperature override
         chunks = []
         async for chunk in bot.stream_chat("Hello", context, temperature=0.9):
+            chunks.append(chunk)
+
+        assert len(chunks) > 0
+
+        await bot.close()
+
+    @pytest.mark.asyncio
+    async def test_stream_chat_llm_config_overrides(self):
+        """Test streaming with llm_config_overrides."""
+        config = {
+            "llm": {"provider": "echo", "model": "test", "temperature": 0.5},
+            "conversation_storage": {"backend": "memory"},
+        }
+
+        bot = await DynaBot.from_config(config)
+        context = BotContext(
+            conversation_id="conv-stream-config-override", client_id="test-client"
+        )
+
+        # Stream with llm_config_overrides
+        chunks = []
+        async for chunk in bot.stream_chat(
+            "Hello",
+            context,
+            llm_config_overrides={"model": "gpt-4-turbo", "temperature": 0.9}
+        ):
+            chunks.append(chunk)
+
+        assert len(chunks) > 0
+
+        # Verify the conversation was updated with config_overrides_applied
+        conversation_state = await bot.get_conversation("conv-stream-config-override")
+        assert conversation_state is not None
+
+        tree = conversation_state.message_tree
+        assistant_nodes = tree.find_nodes(
+            lambda node: node.data.message and node.data.message.role == "assistant"
+        )
+        assert len(assistant_nodes) >= 1
+
+        # The assistant node should have config_overrides_applied in metadata
+        assistant_metadata = assistant_nodes[0].data.metadata
+        assert "config_overrides_applied" in assistant_metadata
+        assert assistant_metadata["config_overrides_applied"] == {
+            "model": "gpt-4-turbo",
+            "temperature": 0.9
+        }
+
+        await bot.close()
+
+    @pytest.mark.asyncio
+    async def test_stream_chat_llm_config_overrides_model_only(self):
+        """Test streaming with just model override."""
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+        }
+
+        bot = await DynaBot.from_config(config)
+        context = BotContext(
+            conversation_id="conv-stream-model-override", client_id="test-client"
+        )
+
+        # Stream with model override
+        chunks = []
+        async for chunk in bot.stream_chat(
+            "Hello",
+            context,
+            llm_config_overrides={"model": "different-model"}
+        ):
             chunks.append(chunk)
 
         assert len(chunks) > 0

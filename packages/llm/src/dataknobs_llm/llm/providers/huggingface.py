@@ -70,11 +70,22 @@ class HuggingFaceProvider(AsyncLLMProvider):
     async def complete(
         self,
         messages: Union[str, List[LLMMessage]],
-        **kwargs
+        config_overrides: Dict[str, Any] | None = None,
+        **kwargs: Any
     ) -> LLMResponse:
-        """Generate completion."""
+        """Generate completion.
+
+        Args:
+            messages: Input messages or prompt
+            config_overrides: Optional dict to override config fields (model,
+                temperature, max_tokens, top_p, stop_sequences, seed)
+            **kwargs: Additional provider-specific parameters
+        """
         if not self._is_initialized:
             await self.initialize()
+
+        # Get runtime config (with overrides applied if provided)
+        runtime_config = self._get_runtime_config(config_overrides)
 
         # Convert to prompt
         if isinstance(messages, str):
@@ -83,13 +94,13 @@ class HuggingFaceProvider(AsyncLLMProvider):
             prompt = self._build_prompt(messages)
 
         # Make API call
-        url = f"{self.base_url}/{self.config.model}"
+        url = f"{self.base_url}/{runtime_config.model}"
         payload = {
             'inputs': prompt,
             'parameters': {
-                'temperature': self.config.temperature,
-                'top_p': self.config.top_p,
-                'max_new_tokens': self.config.max_tokens or 100,
+                'temperature': runtime_config.temperature,
+                'top_p': runtime_config.top_p,
+                'max_new_tokens': runtime_config.max_tokens or 100,
                 'return_full_text': False
             }
         }
@@ -106,18 +117,26 @@ class HuggingFaceProvider(AsyncLLMProvider):
 
         return LLMResponse(
             content=text,
-            model=self.config.model,
+            model=runtime_config.model,
             finish_reason='stop'
         )
 
     async def stream_complete(
         self,
         messages: Union[str, List[LLMMessage]],
-        **kwargs
+        config_overrides: Dict[str, Any] | None = None,
+        **kwargs: Any
     ) -> AsyncIterator[LLMStreamResponse]:
-        """HuggingFace Inference API doesn't support streaming."""
+        """HuggingFace Inference API doesn't support streaming.
+
+        Args:
+            messages: Input messages or prompt
+            config_overrides: Optional dict to override config fields (model,
+                temperature, max_tokens, top_p, stop_sequences, seed)
+            **kwargs: Additional provider-specific parameters
+        """
         # Simulate streaming by yielding complete response
-        response = await self.complete(messages, **kwargs)
+        response = await self.complete(messages, config_overrides=config_overrides, **kwargs)
         yield LLMStreamResponse(
             delta=response.content,
             is_final=True,

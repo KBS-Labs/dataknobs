@@ -558,6 +558,7 @@ class ConversationManager:
         self,
         branch_name: str | None = None,
         metadata: Dict[str, Any] | None = None,
+        llm_config_overrides: Dict[str, Any] | None = None,
         **llm_kwargs: Any,
     ) -> LLMResponse:
         """Get LLM completion and add as child of current node.
@@ -574,6 +575,9 @@ class ConversationManager:
         Args:
             branch_name: Optional human-readable label for this branch
             metadata: Optional metadata for the assistant message node
+            llm_config_overrides: Optional dict to override LLM config fields
+                for this request only. Supported fields: model, temperature,
+                max_tokens, top_p, stop_sequences, seed.
             **llm_kwargs: Additional arguments for LLM.complete()
 
         Returns:
@@ -594,6 +598,11 @@ class ConversationManager:
 
             # With LLM parameters
             result = await manager.complete(temperature=0.9, max_tokens=500)
+
+            # With config overrides (switch model per-request)
+            result = await manager.complete(
+                llm_config_overrides={"model": "gpt-4-turbo", "temperature": 0.9}
+            )
             ```
 
         Note:
@@ -628,8 +637,12 @@ class ConversationManager:
         for mw in self.middleware:
             messages = await mw.process_request(messages, self.state)
 
-        # Call LLM
-        response = await self.llm.complete(messages, **llm_kwargs)
+        # Call LLM with config overrides if provided
+        response = await self.llm.complete(
+            messages,
+            config_overrides=llm_config_overrides,
+            **llm_kwargs
+        )
 
         # Execute middleware (post-LLM) in reverse order (onion model)
         for mw in reversed(self.middleware):
@@ -652,6 +665,10 @@ class ConversationManager:
             "model": response.model,
             "finish_reason": response.finish_reason,
         })
+
+        # Track config overrides if they were applied
+        if llm_config_overrides:
+            assistant_metadata["config_overrides_applied"] = llm_config_overrides
 
         # Calculate and track cost
         self._calculate_and_track_cost(response, assistant_metadata)
@@ -685,6 +702,7 @@ class ConversationManager:
         self,
         branch_name: str | None = None,
         metadata: Dict[str, Any] | None = None,
+        llm_config_overrides: Dict[str, Any] | None = None,
         **llm_kwargs,
     ) -> AsyncIterator[LLMStreamResponse]:
         r"""Stream LLM completion and add as child of current node.
@@ -696,6 +714,9 @@ class ConversationManager:
         Args:
             branch_name: Optional human-readable label for this branch
             metadata: Optional metadata for the assistant message node
+            llm_config_overrides: Optional dict to override LLM config fields
+                for this request only. Supported fields: model, temperature,
+                max_tokens, top_p, stop_sequences, seed.
             **llm_kwargs: Additional arguments for LLM.stream_complete()
 
         Yields:
@@ -719,10 +740,9 @@ class ConversationManager:
                     print(f"\nFinished. Total: {len(full_text)} chars")
                     print(f"Cost: ${chunk.usage.get('cost_usd', 0):.4f}")
 
-            # With branch label
+            # With config overrides (switch model per-request)
             async for chunk in manager.stream_complete(
-                branch_name="creative-response",
-                temperature=0.9
+                llm_config_overrides={"model": "gpt-4-turbo", "temperature": 0.9}
             ):
                 print(chunk.delta, end="", flush=True)
             ```
@@ -752,7 +772,11 @@ class ConversationManager:
         # Stream LLM response and accumulate
         full_content = ""
         final_chunk = None
-        async for chunk in self.llm.stream_complete(messages, **llm_kwargs):
+        async for chunk in self.llm.stream_complete(
+            messages,
+            config_overrides=llm_config_overrides,
+            **llm_kwargs
+        ):
             full_content += chunk.delta
             final_chunk = chunk
             yield chunk
@@ -782,6 +806,10 @@ class ConversationManager:
             "model": response.model,
             "finish_reason": response.finish_reason,
         })
+
+        # Track config overrides if they were applied
+        if llm_config_overrides:
+            assistant_metadata["config_overrides_applied"] = llm_config_overrides
 
         # Calculate and track cost
         self._calculate_and_track_cost(response, assistant_metadata)

@@ -691,13 +691,258 @@ class LLMProvider(ABC):
         self.close()
 
 
-class AsyncLLMProvider(LLMProvider):
+class ConfigOverrideMixin:
+    """Mixin providing config override functionality for LLM providers.
+
+    This mixin provides shared functionality for handling per-request config
+    overrides, presets, and callbacks. Both AsyncLLMProvider and SyncLLMProvider
+    inherit from this mixin.
+
+    Features:
+        - Per-request config overrides (model, temperature, etc.)
+        - Named presets for common override combinations
+        - Callback hooks for logging/metrics
+        - Options dict merging
+    """
+
+    # Supported fields for config overrides (base set)
+    ALLOWED_CONFIG_OVERRIDES = {
+        # Core generation parameters
+        "model", "temperature", "max_tokens", "top_p", "stop_sequences", "seed",
+        # Provider-specific parameters
+        "presence_penalty", "frequency_penalty", "logit_bias", "response_format",
+        # Function calling (dynamic)
+        "functions", "function_call",
+        # Provider-specific options dict
+        "options",
+    }
+
+    # Override presets registry (class-level, shared across all providers)
+    _override_presets: Dict[str, Dict[str, Any]] = {}
+
+    # Override event callbacks (class-level)
+    _override_callbacks: List[Callable[[Any, Dict[str, Any], LLMConfig], None]] = []
+
+    @classmethod
+    def register_preset(cls, name: str, overrides: Dict[str, Any]) -> None:
+        """Register a named override preset.
+
+        Presets allow you to define common override combinations that can be
+        referenced by name instead of repeating the same overrides.
+
+        Args:
+            name: Preset name (e.g., "creative", "precise", "fast")
+            overrides: Dictionary of override values
+
+        Example:
+            >>> AsyncLLMProvider.register_preset("creative", {
+            ...     "temperature": 1.2,
+            ...     "top_p": 0.95,
+            ...     "presence_penalty": 0.5
+            ... })
+            >>> response = await provider.complete(
+            ...     "Write a poem",
+            ...     config_overrides={"preset": "creative"}
+            ... )
+        """
+        cls._override_presets[name] = overrides.copy()
+
+    @classmethod
+    def on_override_applied(
+        cls,
+        callback: Callable[[Any, Dict[str, Any], LLMConfig], None]
+    ) -> None:
+        """Register a callback for when overrides are applied.
+
+        Use this for logging, metrics collection, or auditing override usage.
+        Callbacks receive the provider instance, the applied overrides dict,
+        and the resulting runtime config.
+
+        Args:
+            callback: Function(provider, overrides, runtime_config) -> None
+
+        Example:
+            >>> def log_overrides(provider, overrides, runtime_config):
+            ...     print(f"Overrides applied: {overrides}")
+            ...     print(f"Runtime model: {runtime_config.model}")
+            ...
+            >>> AsyncLLMProvider.on_override_applied(log_overrides)
+        """
+        cls._override_callbacks.append(callback)
+
+    @classmethod
+    def clear_override_callbacks(cls) -> None:
+        """Clear all registered override callbacks."""
+        cls._override_callbacks.clear()
+
+    @classmethod
+    def get_preset(cls, name: str) -> Dict[str, Any] | None:
+        """Get a registered override preset by name.
+
+        Args:
+            name: Preset name
+
+        Returns:
+            Preset overrides dict, or None if not found
+        """
+        return cls._override_presets.get(name)
+
+    @classmethod
+    def list_presets(cls) -> List[str]:
+        """List all registered preset names.
+
+        Returns:
+            List of preset names
+        """
+        return list(cls._override_presets.keys())
+
+    def _validate_config_overrides(
+        self,
+        overrides: Dict[str, Any] | None
+    ) -> None:
+        """Validate that config override fields are supported.
+
+        Args:
+            overrides: Dictionary of config overrides to validate
+
+        Raises:
+            ValueError: If overrides contains unsupported fields
+        """
+        if not overrides:
+            return
+
+        # Allow "preset" as a special key for named presets
+        allowed = self.ALLOWED_CONFIG_OVERRIDES | {"preset"}
+        invalid = set(overrides.keys()) - allowed
+        if invalid:
+            raise ValueError(
+                f"Unsupported config overrides: {invalid}. "
+                f"Allowed fields: {self.ALLOWED_CONFIG_OVERRIDES}"
+            )
+
+    def _expand_preset(
+        self,
+        overrides: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Expand preset reference to actual override values.
+
+        If overrides contains a 'preset' key, replaces it with the
+        registered preset values. Explicit overrides take precedence
+        over preset values.
+
+        Args:
+            overrides: Override dict that may contain a preset reference
+
+        Returns:
+            Expanded overrides dict
+
+        Raises:
+            ValueError: If preset is not registered
+        """
+        if "preset" not in overrides:
+            return overrides
+
+        preset_name = overrides["preset"]
+        preset_values = self.get_preset(preset_name)
+        if preset_values is None:
+            raise ValueError(
+                f"Unknown preset: '{preset_name}'. "
+                f"Available presets: {self.list_presets()}"
+            )
+
+        # Preset values as base, explicit overrides take precedence
+        expanded = preset_values.copy()
+        for key, value in overrides.items():
+            if key != "preset":
+                expanded[key] = value
+
+        return expanded
+
+    def _merge_options(
+        self,
+        base_options: Dict[str, Any],
+        override_options: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Deep merge options dicts.
+
+        Args:
+            base_options: Base options from config
+            override_options: Override options to merge
+
+        Returns:
+            Merged options dict
+        """
+        merged = base_options.copy()
+        merged.update(override_options)
+        return merged
+
+    def _notify_override_callbacks(
+        self,
+        overrides: Dict[str, Any],
+        runtime_config: LLMConfig
+    ) -> None:
+        """Notify registered callbacks about applied overrides.
+
+        Args:
+            overrides: The overrides that were applied
+            runtime_config: The resulting runtime config
+        """
+        for callback in self._override_callbacks:
+            try:
+                callback(self, overrides, runtime_config)
+            except Exception:
+                # Don't let callback errors break the main flow
+                pass
+
+    def _get_runtime_config(
+        self,
+        config_overrides: Dict[str, Any] | None = None
+    ) -> LLMConfig:
+        """Get runtime config, applying overrides if provided.
+
+        Supports:
+        - Direct field overrides (model, temperature, etc.)
+        - Named presets via 'preset' key
+        - Deep merging of 'options' dict
+        - Override callback notifications for logging/metrics
+
+        Args:
+            config_overrides: Optional overrides to apply
+
+        Returns:
+            LLMConfig to use for this request (original or cloned with overrides)
+        """
+        if not config_overrides:
+            return self.config  # type: ignore[attr-defined]
+
+        self._validate_config_overrides(config_overrides)
+
+        # Expand preset if present
+        expanded = self._expand_preset(config_overrides)
+
+        # Handle options merging specially
+        if "options" in expanded and self.config.options:  # type: ignore[attr-defined]
+            expanded["options"] = self._merge_options(
+                self.config.options,  # type: ignore[attr-defined]
+                expanded["options"]
+            )
+
+        runtime_config = self.config.clone(**expanded)  # type: ignore[attr-defined]
+
+        # Notify callbacks
+        self._notify_override_callbacks(config_overrides, runtime_config)
+
+        return runtime_config
+
+
+class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
     """Async LLM provider interface."""
 
     @abstractmethod
     async def complete(
         self,
         messages: Union[str, List[LLMMessage]],
+        config_overrides: Dict[str, Any] | None = None,
         **kwargs
     ) -> LLMResponse:
         """Generate completion asynchronously.
@@ -709,6 +954,9 @@ class AsyncLLMProvider(LLMProvider):
         Args:
             messages: Either a single string prompt or a list of LLMMessage
                 objects for multi-turn conversations.
+            config_overrides: Optional dict to override config fields for this
+                request only. Supported fields: model, temperature, max_tokens,
+                top_p, stop_sequences, seed. The original config is not modified.
             **kwargs: Additional provider-specific parameters. Common options:
                 - temperature (float): Sampling temperature (0.0-2.0)
                 - max_tokens (int): Maximum tokens to generate
@@ -721,7 +969,8 @@ class AsyncLLMProvider(LLMProvider):
             LLMResponse containing generated content, usage stats, and metadata
 
         Raises:
-            ValueError: If messages format is invalid
+            ValueError: If messages format is invalid or config_overrides contains
+                unsupported fields
             ConnectionError: If API connection fails
             TimeoutError: If request exceeds timeout
 
@@ -737,11 +986,10 @@ class AsyncLLMProvider(LLMProvider):
             print(response.content)
             # => "Python is a high-level programming language..."
 
-            # With parameters
+            # With config overrides (switch model per-request)
             response = await llm.complete(
                 "Write a haiku about coding",
-                temperature=0.9,
-                max_tokens=100
+                config_overrides={"model": "gpt-4-turbo", "temperature": 0.9}
             )
 
             # Multi-turn conversation
@@ -904,6 +1152,7 @@ class AsyncLLMProvider(LLMProvider):
     async def stream_complete(
         self,
         messages: Union[str, List[LLMMessage]],
+        config_overrides: Dict[str, Any] | None = None,
         **kwargs
     ) -> AsyncIterator[LLMStreamResponse]:
         r"""Generate streaming completion asynchronously.
@@ -914,6 +1163,9 @@ class AsyncLLMProvider(LLMProvider):
 
         Args:
             messages: Either a single string prompt or list of LLMMessage objects
+            config_overrides: Optional dict to override config fields for this
+                request only. Supported fields: model, temperature, max_tokens,
+                top_p, stop_sequences, seed. The original config is not modified.
             **kwargs: Provider-specific parameters (same as complete())
 
         Yields:
@@ -921,7 +1173,8 @@ class AsyncLLMProvider(LLMProvider):
             chunk has is_final=True and includes finish_reason and usage stats.
 
         Raises:
-            ValueError: If messages format is invalid
+            ValueError: If messages format is invalid or config_overrides contains
+                unsupported fields
             ConnectionError: If API connection fails
             TimeoutError: If request exceeds timeout
 
@@ -939,6 +1192,13 @@ class AsyncLLMProvider(LLMProvider):
                     print(f"\n\nFinished: {chunk.finish_reason}")
                     print(f"Total tokens: {chunk.usage['total_tokens']}")
 
+            # Stream with config overrides
+            async for chunk in llm.stream_complete(
+                "Write a poem",
+                config_overrides={"model": "gpt-4-turbo", "temperature": 1.0}
+            ):
+                print(chunk.delta, end="", flush=True)
+
             # Accumulate full response
             full_text = ""
             chunk_count = 0
@@ -949,18 +1209,6 @@ class AsyncLLMProvider(LLMProvider):
 
             print(f"Received {chunk_count} chunks")
             print(f"Total length: {len(full_text)} characters")
-
-            # Stream with progress callback
-            async def stream_with_progress(prompt: str):
-                chunks = []
-                async for chunk in llm.stream_complete(prompt):
-                    chunks.append(chunk)
-                    # Update progress UI
-                    if len(chunks) % 5 == 0:
-                        print(f"Processing... ({len(chunks)} chunks)")
-                return "".join(c.delta for c in chunks)
-
-            result = await stream_with_progress("Write a tutorial")
             ```
 
         See Also:
@@ -1180,19 +1428,23 @@ class AsyncLLMProvider(LLMProvider):
         await self.close()
 
 
-class SyncLLMProvider(LLMProvider):
+class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
     """Synchronous LLM provider interface."""
 
     @abstractmethod
     def complete(
         self,
         messages: Union[str, List[LLMMessage]],
+        config_overrides: Dict[str, Any] | None = None,
         **kwargs
     ) -> LLMResponse:
         """Generate completion synchronously.
 
         Args:
             messages: Input messages or prompt
+            config_overrides: Optional dict to override config fields for this
+                request only. Supported fields: model, temperature, max_tokens,
+                top_p, stop_sequences, seed. The original config is not modified.
             **kwargs: Additional parameters
 
         Returns:
@@ -1340,12 +1592,16 @@ class SyncLLMProvider(LLMProvider):
     def stream_complete(
         self,
         messages: Union[str, List[LLMMessage]],
+        config_overrides: Dict[str, Any] | None = None,
         **kwargs
     ) -> Iterator[LLMStreamResponse]:
         """Generate streaming completion synchronously.
 
         Args:
             messages: Input messages or prompt
+            config_overrides: Optional dict to override config fields for this
+                request only. Supported fields: model, temperature, max_tokens,
+                top_p, stop_sequences, seed. The original config is not modified.
             **kwargs: Additional parameters
 
         Yields:

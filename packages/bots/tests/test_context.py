@@ -149,3 +149,74 @@ class TestBotContext:
 
         assert ctx["nested"]["a"] == 1
         assert ctx["list"][1] == 2
+
+    def test_copy_no_overrides(self) -> None:
+        """Test copy creates identical context."""
+        ctx = BotContext(
+            conversation_id="conv-123",
+            client_id="client-456",
+            user_id="user-789",
+            session_metadata={"session": "data"},
+            request_metadata={"request": "data"},
+        )
+
+        copy = ctx.copy()
+
+        assert copy.conversation_id == "conv-123"
+        assert copy.client_id == "client-456"
+        assert copy.user_id == "user-789"
+        assert copy.session_metadata == {"session": "data"}
+        assert copy.request_metadata == {"request": "data"}
+
+    def test_copy_with_overrides(self) -> None:
+        """Test copy with field overrides."""
+        ctx = BotContext(
+            conversation_id="conv-123",
+            client_id="client-456",
+            user_id="user-789",
+        )
+
+        copy = ctx.copy(conversation_id="conv-new", user_id="user-new")
+
+        assert copy.conversation_id == "conv-new"
+        assert copy.client_id == "client-456"  # unchanged
+        assert copy.user_id == "user-new"
+
+    def test_copy_metadata_isolation(self) -> None:
+        """Test that copy creates independent dict copies."""
+        ctx = BotContext(
+            conversation_id="conv-123",
+            client_id="client-456",
+            session_metadata={"key": "value"},
+            request_metadata={"req": "data"},
+        )
+
+        copy = ctx.copy()
+
+        # Modify copy's metadata
+        copy.session_metadata["new_key"] = "new_value"
+        copy.request_metadata["new_req"] = "new_data"
+
+        # Original should be unchanged
+        assert "new_key" not in ctx.session_metadata
+        assert "new_req" not in ctx.request_metadata
+
+    def test_copy_override_metadata(self) -> None:
+        """Test copy can override metadata dicts entirely."""
+        ctx = BotContext(
+            conversation_id="conv-123",
+            client_id="client-456",
+            session_metadata={"old": "session"},
+            request_metadata={"old": "request"},
+        )
+
+        copy = ctx.copy(
+            session_metadata={"new": "session"},
+            request_metadata={"new": "request"},
+        )
+
+        assert copy.session_metadata == {"new": "session"}
+        assert copy.request_metadata == {"new": "request"}
+        # Original unchanged
+        assert ctx.session_metadata == {"old": "session"}
+        assert ctx.request_metadata == {"old": "request"}

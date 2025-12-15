@@ -9,6 +9,7 @@ Complete guide to using DataKnobs Bots with tutorials and how-to guides.
   - [Tutorial 1: Your First Chatbot](#tutorial-1-your-first-chatbot)
   - [Tutorial 2: Adding Memory](#tutorial-2-adding-memory)
   - [Tutorial 3: Streaming Responses](#tutorial-3-streaming-responses)
+  - [Per-Request Config Overrides](#per-request-config-overrides)
   - [Tutorial 4: Building a RAG Chatbot](#tutorial-4-building-a-rag-chatbot)
   - [Tutorial 5: Creating Tool-Using Agents](#tutorial-5-creating-tool-using-agents)
 - [Advanced Topics](#advanced-topics)
@@ -375,6 +376,128 @@ except Exception as e:
     print(f"\nStreaming error: {e}")
     # Middleware's on_error() is automatically called
     # Memory is NOT updated with partial responses
+```
+
+---
+
+### Per-Request Config Overrides
+
+Override LLM configuration on a per-request basis without creating a new bot instance.
+
+#### Why Use Config Overrides?
+
+- **A/B Testing**: Compare models or parameters without redeployment
+- **Dynamic Model Selection**: Switch models based on request type
+- **Cost Optimization**: Use cheaper models for simple queries
+- **Fallback Routing**: Route to different models for specific use cases
+
+#### Basic Usage
+
+```python
+# Override model and temperature for a single request
+response = await bot.chat(
+    "Explain quantum computing in simple terms",
+    context,
+    llm_config_overrides={
+        "model": "gpt-4-turbo",
+        "temperature": 0.3
+    }
+)
+```
+
+#### Streaming with Overrides
+
+```python
+async for chunk in bot.stream_chat(
+    "Write a creative poem",
+    context,
+    llm_config_overrides={
+        "model": "claude-3-opus",
+        "temperature": 0.9,
+        "max_tokens": 2000
+    }
+):
+    print(chunk, end="", flush=True)
+```
+
+#### Supported Override Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `model` | `str` | Model identifier (e.g., "gpt-4-turbo", "llama3.2:8b") |
+| `temperature` | `float` | Sampling temperature (0.0-2.0) |
+| `max_tokens` | `int` | Maximum tokens in response |
+| `top_p` | `float` | Nucleus sampling threshold |
+| `stop_sequences` | `list[str]` | Stop generation at these sequences |
+| `seed` | `int` | Random seed for reproducibility |
+| `options` | `dict` | Provider-specific options |
+
+#### Tracking Override Usage
+
+The bot automatically tracks which overrides were applied in the conversation metadata:
+
+```python
+# Chat with overrides
+response = await bot.chat(
+    "Hello",
+    context,
+    llm_config_overrides={"model": "gpt-4-turbo"}
+)
+
+# Check what was used
+conversation = await bot.get_conversation(context.conversation_id)
+tree = conversation.message_tree
+assistant_nodes = tree.find_nodes(
+    lambda node: node.data.message and node.data.message.role == "assistant"
+)
+
+# See which overrides were applied
+metadata = assistant_nodes[-1].data.metadata
+print(metadata.get("config_overrides_applied"))
+# Output: {"model": "gpt-4-turbo"}
+```
+
+#### Use Cases
+
+**A/B Testing Models**:
+```python
+import random
+
+model = random.choice(["gpt-4", "claude-3-sonnet"])
+response = await bot.chat(
+    message,
+    context,
+    llm_config_overrides={"model": model}
+)
+```
+
+**Query Complexity Routing**:
+```python
+# Simple queries → faster/cheaper model
+# Complex queries → more capable model
+if len(message) < 50:
+    overrides = {"model": "gpt-3.5-turbo"}
+else:
+    overrides = {"model": "gpt-4"}
+
+response = await bot.chat(message, context, llm_config_overrides=overrides)
+```
+
+**Creative vs Factual Responses**:
+```python
+# High temperature for creative tasks
+creative_response = await bot.chat(
+    "Write a poem about coding",
+    context,
+    llm_config_overrides={"temperature": 0.9}
+)
+
+# Low temperature for factual queries
+factual_response = await bot.chat(
+    "What is the capital of France?",
+    context,
+    llm_config_overrides={"temperature": 0.1}
+)
 ```
 
 ---
