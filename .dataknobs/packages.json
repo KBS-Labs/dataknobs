@@ -23,7 +23,7 @@
       "name": "data",
       "pypi_name": "dataknobs-data",
       "description": "Data abstraction layer with multiple backend support",
-      "version": "0.4.2",
+      "version": "0.4.3",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
