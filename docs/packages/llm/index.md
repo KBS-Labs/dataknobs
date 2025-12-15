@@ -91,6 +91,16 @@ response = await llm.chat([
 
 [Learn more →](guides/versioning.md)
 
+### ⚙️ Per-Request Config Overrides
+
+- **Dynamic Configuration**: Override model, temperature, max_tokens per request
+- **Named Presets**: Register common configurations for reuse
+- **Callback Hooks**: Track override usage for logging/metrics
+- **Options Merging**: Provider-specific options support
+- **A/B Testing**: Easily switch models or parameters per request
+
+[Learn more →](guides/config-overrides.md)
+
 ### ⚡ Performance
 
 - **Benchmarking**: Comprehensive performance measurement framework
@@ -147,6 +157,7 @@ dataknobs_llm/
 - [**Prompt Engineering**](guides/prompts.md) - Complete prompt system guide
 - [**Conversation Management**](guides/conversations.md) - Managing conversations
 - [**FSM-Based Flows**](guides/flows.md) - Building conversation workflows
+- [**Config Overrides**](guides/config-overrides.md) - Per-request configuration
 - [**Versioning & A/B Testing**](guides/versioning.md) - Version control and experiments
 - [**Performance & Benchmarking**](guides/performance.md) - Optimization and metrics
 

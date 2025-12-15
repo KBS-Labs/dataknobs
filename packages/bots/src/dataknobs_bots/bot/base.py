@@ -306,6 +306,7 @@ class DynaBot:
         max_tokens: int | None = None,
         stream: bool = False,
         rag_query: str | None = None,
+        llm_config_overrides: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> str:
         """Process a chat message.
@@ -321,6 +322,9 @@ class DynaBot:
                       Useful when the message contains literal text to analyze
                       (e.g., "Analyze this prompt: [prompt text]") but you want
                       to search for analysis techniques instead.
+            llm_config_overrides: Optional dict to override LLM config fields
+                      for this request only. Supported fields: model, temperature,
+                      max_tokens, top_p, stop_sequences, seed, options.
             **kwargs: Additional arguments
 
         Returns:
@@ -340,6 +344,13 @@ class DynaBot:
                 "Analyze this: Write a poem about cats",
                 context,
                 rag_query="prompt analysis techniques evaluation"
+            )
+
+            # With LLM config overrides (switch model per-request)
+            response = await bot.chat(
+                "Explain quantum computing",
+                context,
+                llm_config_overrides={"model": "gpt-4-turbo", "temperature": 0.9}
             )
             ```
         """
@@ -369,9 +380,11 @@ class DynaBot:
                 tools=list(self.tool_registry),
                 temperature=temperature or self.default_temperature,
                 max_tokens=max_tokens or self.default_max_tokens,
+                llm_config_overrides=llm_config_overrides,
             )
         else:
             response = await manager.complete(
+                llm_config_overrides=llm_config_overrides,
                 temperature=temperature or self.default_temperature,
                 max_tokens=max_tokens or self.default_max_tokens,
             )
@@ -397,6 +410,7 @@ class DynaBot:
         temperature: float | None = None,
         max_tokens: int | None = None,
         rag_query: str | None = None,
+        llm_config_overrides: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncGenerator[str, None]:
         """Stream chat response token by token.
@@ -411,6 +425,9 @@ class DynaBot:
             max_tokens: Optional max tokens override
             rag_query: Optional explicit query for knowledge base retrieval.
                       If provided, this is used instead of the message for RAG.
+            llm_config_overrides: Optional dict to override LLM config fields
+                      for this request only. Supported fields: model, temperature,
+                      max_tokens, top_p, stop_sequences, seed, options.
             **kwargs: Additional arguments passed to LLM
 
         Yields:
@@ -433,6 +450,14 @@ class DynaBot:
             full_response = ""
             async for chunk in bot.stream_chat("Hello!", context):
                 full_response += chunk
+
+            # With LLM config overrides
+            async for chunk in bot.stream_chat(
+                "Explain quantum computing",
+                context,
+                llm_config_overrides={"model": "gpt-4-turbo"}
+            ):
+                print(chunk, end="", flush=True)
             ```
 
         Note:
@@ -463,6 +488,7 @@ class DynaBot:
 
         try:
             async for chunk in manager.stream_complete(
+                llm_config_overrides=llm_config_overrides,
                 temperature=temperature or self.default_temperature,
                 max_tokens=max_tokens or self.default_max_tokens,
                 **kwargs,

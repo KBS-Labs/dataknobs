@@ -117,6 +117,16 @@ if __name__ == "__main__":
 
 [Learn more →](guides/user-guide.md#tutorial-5-creating-tool-using-agents)
 
+### ⚙️ Per-Request Config Overrides
+
+- **Dynamic Model Selection** - Switch models per-request without creating new bots
+- **Parameter Tuning** - Override temperature, max_tokens, top_p per request
+- **A/B Testing** - Compare models or parameters without redeployment
+- **Cost Optimization** - Route simple queries to cheaper models
+- **Usage Tracking** - Metadata tracks which overrides were applied
+
+[Learn more →](guides/user-guide.md#per-request-config-overrides)
+
 ## Architecture
 
 ```mermaid
@@ -318,11 +328,11 @@ MIT License - see [LICENSE](../../license.md) for details.
 
 ## Roadmap
 
-- [ ] Streaming responses
+- [x] Streaming responses
+- [x] Per-request LLM config overrides (A/B testing, dynamic model selection)
 - [ ] Multi-modal support (images, audio)
 - [ ] Advanced memory strategies (hybrid, hierarchical)
 - [ ] Tool marketplace
 - [ ] Web UI for bot management
 - [ ] Performance monitoring and analytics
-- [ ] A/B testing framework
 - [ ] Voice interface support

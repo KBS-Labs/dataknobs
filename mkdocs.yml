@@ -157,6 +157,7 @@ nav:
         - packages/llm/guides/prompts.md
         - packages/llm/guides/conversations.md
         - packages/llm/guides/flows.md
+        - packages/llm/guides/config-overrides.md
         - packages/llm/guides/versioning.md
         - packages/llm/guides/performance.md
         - packages/llm/guides/tools-and-enhancements.md

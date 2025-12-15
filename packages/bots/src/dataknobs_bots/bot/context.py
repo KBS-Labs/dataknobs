@@ -70,3 +70,33 @@ class BotContext:
             Value from request_metadata or default
         """
         return self.request_metadata.get(key, default)
+
+    def copy(self, **overrides: Any) -> "BotContext":
+        """Create a copy of this context with optional field overrides.
+
+        Creates shallow copies of session_metadata and request_metadata dicts
+        to avoid mutation issues between the original and copy.
+
+        Args:
+            **overrides: Field values to override in the copy
+
+        Returns:
+            New BotContext instance with copied values
+
+        Example:
+            >>> ctx = BotContext(conversation_id="conv-1", client_id="client-1")
+            >>> ctx2 = ctx.copy(conversation_id="conv-2")
+            >>> ctx2.conversation_id
+            'conv-2'
+        """
+        return BotContext(
+            conversation_id=overrides.get("conversation_id", self.conversation_id),
+            client_id=overrides.get("client_id", self.client_id),
+            user_id=overrides.get("user_id", self.user_id),
+            session_metadata=overrides.get(
+                "session_metadata", dict(self.session_metadata)
+            ),
+            request_metadata=overrides.get(
+                "request_metadata", dict(self.request_metadata)
+            ),
+        )

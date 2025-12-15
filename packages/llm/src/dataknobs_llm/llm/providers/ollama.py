@@ -276,31 +276,35 @@ class OllamaProvider(AsyncLLMProvider):
         # Allow environment variable override
         self.base_url = llm_config.api_base or os.environ.get('OLLAMA_BASE_URL', default_url)
 
-    def _build_options(self) -> Dict[str, Any]:
+    def _build_options(self, config: LLMConfig | None = None) -> Dict[str, Any]:
         """Build options dict for Ollama API calls.
+
+        Args:
+            config: Config to use for options. If None, uses self.config.
 
         Returns:
             Dictionary of options for the API request.
         """
+        cfg = config or self.config
         options: Dict[str, Any] = {}
 
         # Only add temperature if it's not the default to avoid issues
-        if self.config.temperature != 1.0:
-            options['temperature'] = float(self.config.temperature)
+        if cfg.temperature != 1.0:
+            options['temperature'] = float(cfg.temperature)
 
         # Only add top_p if explicitly set and different from default
-        if self.config.top_p != 1.0:
-            options['top_p'] = float(self.config.top_p)
+        if cfg.top_p != 1.0:
+            options['top_p'] = float(cfg.top_p)
 
-        if self.config.seed is not None:
-            options['seed'] = int(self.config.seed)
+        if cfg.seed is not None:
+            options['seed'] = int(cfg.seed)
 
-        if self.config.max_tokens:
+        if cfg.max_tokens:
             # Ensure it's an integer
-            options['num_predict'] = int(self.config.max_tokens)
+            options['num_predict'] = int(cfg.max_tokens)
 
-        if self.config.stop_sequences:
-            options['stop'] = list(self.config.stop_sequences)
+        if cfg.stop_sequences:
+            options['stop'] = list(cfg.stop_sequences)
 
         return options
 
@@ -440,33 +444,44 @@ class OllamaProvider(AsyncLLMProvider):
     async def complete(
         self,
         messages: Union[str, List[LLMMessage]],
-        **kwargs
+        config_overrides: Dict[str, Any] | None = None,
+        **kwargs: Any
     ) -> LLMResponse:
-        """Generate completion using Ollama chat endpoint."""
+        """Generate completion using Ollama chat endpoint.
+
+        Args:
+            messages: Input messages or prompt
+            config_overrides: Optional dict to override config fields (model,
+                temperature, max_tokens, top_p, stop_sequences, seed)
+            **kwargs: Additional provider-specific parameters
+        """
         if not self._is_initialized:
             await self.initialize()
+
+        # Get runtime config (with overrides applied if provided)
+        runtime_config = self._get_runtime_config(config_overrides)
 
         # Convert to message list
         if isinstance(messages, str):
             messages = [LLMMessage(role='user', content=messages)]
 
         # Add system prompt if configured
-        if self.config.system_prompt and (not messages or messages[0].role != 'system'):
-            messages = [LLMMessage(role='system', content=self.config.system_prompt)] + list(messages)
+        if runtime_config.system_prompt and (not messages or messages[0].role != 'system'):
+            messages = [LLMMessage(role='system', content=runtime_config.system_prompt)] + list(messages)
 
         # Convert to Ollama format
         ollama_messages = self._messages_to_ollama(messages)
 
         # Build payload for chat endpoint
         payload = {
-            'model': self.config.model,
+            'model': runtime_config.model,
             'messages': ollama_messages,
             'stream': False,
-            'options': self._build_options()
+            'options': self._build_options(runtime_config)
         }
 
         # Add format if JSON mode requested
-        if self.config.response_format == 'json':
+        if runtime_config.response_format == 'json':
             payload['format'] = 'json'
 
         # Handle tools if provided
@@ -491,7 +506,7 @@ class OllamaProvider(AsyncLLMProvider):
 
                 # Handle tools not supported - retry without tools
                 if response.status == 400 and "does not support tools" in error_text:
-                    model_name = self.config.model
+                    model_name = runtime_config.model
                     logger.warning(
                         f"Model '{model_name}' does not support tools. "
                         f"Continuing without tool support. "
@@ -532,7 +547,7 @@ class OllamaProvider(AsyncLLMProvider):
 
         return LLMResponse(
             content=content,
-            model=self.config.model,
+            model=runtime_config.model,
             finish_reason='tool_calls' if tool_calls else ('stop' if data.get('done') else 'length'),
             usage={
                 'prompt_tokens': data.get('prompt_eval_count', 0),
@@ -550,11 +565,22 @@ class OllamaProvider(AsyncLLMProvider):
     async def stream_complete(
         self,
         messages: Union[str, List[LLMMessage]],
-        **kwargs
+        config_overrides: Dict[str, Any] | None = None,
+        **kwargs: Any
     ) -> AsyncIterator[LLMStreamResponse]:
-        """Generate streaming completion."""
+        """Generate streaming completion.
+
+        Args:
+            messages: Input messages or prompt
+            config_overrides: Optional dict to override config fields (model,
+                temperature, max_tokens, top_p, stop_sequences, seed)
+            **kwargs: Additional provider-specific parameters
+        """
         if not self._is_initialized:
             await self.initialize()
+
+        # Get runtime config (with overrides applied if provided)
+        runtime_config = self._get_runtime_config(config_overrides)
 
         # Convert to Ollama format
         if isinstance(messages, str):
@@ -564,10 +590,10 @@ class OllamaProvider(AsyncLLMProvider):
 
         # Stream API call
         payload = {
-            'model': self.config.model,
+            'model': runtime_config.model,
             'prompt': prompt,
             'stream': True,
-            'options': self._build_options()
+            'options': self._build_options(runtime_config)
         }
 
         async with self._session.post(f"{self.base_url}/api/generate", json=payload) as response:

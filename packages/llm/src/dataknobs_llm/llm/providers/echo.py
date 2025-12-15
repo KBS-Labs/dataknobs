@@ -117,12 +117,15 @@ class EchoProvider(AsyncLLMProvider):
     async def complete(
         self,
         messages: Union[str, List[LLMMessage]],
+        config_overrides: Dict[str, Any] | None = None,
         **kwargs: Any
     ) -> LLMResponse:
         """Echo back the input messages.
 
         Args:
             messages: Input messages or prompt
+            config_overrides: Optional dict to override config fields (model,
+                temperature, max_tokens, top_p, stop_sequences, seed)
             **kwargs: Additional parameters (ignored)
 
         Returns:
@@ -130,6 +133,9 @@ class EchoProvider(AsyncLLMProvider):
         """
         if not self._is_initialized:
             await self.initialize()
+
+        # Get runtime config (with overrides applied if provided)
+        runtime_config = self._get_runtime_config(config_overrides)
 
         # Convert to message list
         if isinstance(messages, str):
@@ -143,8 +149,8 @@ class EchoProvider(AsyncLLMProvider):
             content = self.echo_prefix + "(no user message)"
 
         # Add system prompt if configured and in echo
-        if self.config.system_prompt and self.config.options.get('echo_system', False):
-            content = f"[System: {self.config.system_prompt}]\n{content}"
+        if runtime_config.system_prompt and runtime_config.options.get('echo_system', False):
+            content = f"[System: {runtime_config.system_prompt}]\n{content}"
 
         # Mock token usage
         prompt_tokens = sum(self._count_tokens(msg.content) for msg in messages)
@@ -152,7 +158,7 @@ class EchoProvider(AsyncLLMProvider):
 
         return LLMResponse(
             content=content,
-            model=self.config.model or 'echo-model',
+            model=runtime_config.model or 'echo-model',
             finish_reason='stop',
             usage={
                 'prompt_tokens': prompt_tokens,
@@ -164,12 +170,15 @@ class EchoProvider(AsyncLLMProvider):
     async def stream_complete(
         self,
         messages: Union[str, List[LLMMessage]],
+        config_overrides: Dict[str, Any] | None = None,
         **kwargs: Any
     ) -> AsyncIterator[LLMStreamResponse]:
         """Stream echo response character by character.
 
         Args:
             messages: Input messages or prompt
+            config_overrides: Optional dict to override config fields (model,
+                temperature, max_tokens, top_p, stop_sequences, seed)
             **kwargs: Additional parameters (ignored)
 
         Yields:
@@ -179,7 +188,7 @@ class EchoProvider(AsyncLLMProvider):
             await self.initialize()
 
         # Get full response
-        response = await self.complete(messages, **kwargs)
+        response = await self.complete(messages, config_overrides=config_overrides, **kwargs)
 
         # Stream character by character
         for i, char in enumerate(response.content):
