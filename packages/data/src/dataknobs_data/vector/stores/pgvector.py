@@ -41,6 +41,14 @@ class PgVectorStore(VectorStore):
         auto_create_table: Create table if missing (default: True)
         id_type: ID column type - 'uuid' or 'text' (default: 'uuid')
 
+        Index configuration:
+        index_type: Type of vector index - 'none', 'hnsw', or 'ivfflat' (default: 'none')
+        auto_create_index: Automatically create index when conditions are met (default: False)
+        min_rows_for_index: Minimum rows before auto-creating IVFFlat index (default: 1000)
+        index_params: Parameters for index creation (optional dict)
+            - For HNSW: m (default: 16), ef_construction (default: 64)
+            - For IVFFlat: lists (default: 100)
+
     Example - Default schema:
         ```python
         store = PgVectorStore({
@@ -48,6 +56,29 @@ class PgVectorStore(VectorStore):
             "dimensions": 768,
             "metric": "cosine",
             "schema": "edubot",
+        })
+        ```
+
+    Example - With HNSW index (created immediately, works with any data size):
+        ```python
+        store = PgVectorStore({
+            "connection_string": "postgresql://user:pass@host:5432/db",
+            "dimensions": 768,
+            "index_type": "hnsw",
+            "auto_create_index": True,
+            "index_params": {"m": 16, "ef_construction": 64},
+        })
+        ```
+
+    Example - With IVFFlat index (auto-created when data exceeds threshold):
+        ```python
+        store = PgVectorStore({
+            "connection_string": "postgresql://user:pass@host:5432/db",
+            "dimensions": 768,
+            "index_type": "ivfflat",
+            "auto_create_index": True,
+            "min_rows_for_index": 1000,
+            "index_params": {"lists": 100},
         })
         ```
 
@@ -130,9 +161,161 @@ class PgVectorStore(VectorStore):
         if self.id_type not in ("uuid", "text"):
             raise ValueError(f"id_type must be 'uuid' or 'text', got: {self.id_type}")
 
+        # Index configuration
+        self.index_type = self.config.get("index_type", "none")
+        if self.index_type not in ("none", "hnsw", "ivfflat"):
+            raise ValueError(
+                f"index_type must be 'none', 'hnsw', or 'ivfflat', got: {self.index_type}"
+            )
+        self.auto_create_index = self.config.get("auto_create_index", False)
+        self.min_rows_for_index = self.config.get("min_rows_for_index", 1000)
+        self.index_params = self.config.get("index_params", {})
+
     def _col(self, name: str) -> str:
         """Get the actual column name for a logical field name."""
         return self.columns.get(name, name)
+
+    def _get_operator_class(self) -> str:
+        """Get the pgvector operator class for the configured metric."""
+        if self.metric == DistanceMetric.COSINE:
+            return "vector_cosine_ops"
+        elif self.metric in (DistanceMetric.EUCLIDEAN, DistanceMetric.L2):
+            return "vector_l2_ops"
+        elif self.metric in (DistanceMetric.DOT_PRODUCT, DistanceMetric.INNER_PRODUCT):
+            return "vector_ip_ops"
+        else:
+            return "vector_cosine_ops"  # Default
+
+    async def _check_index_exists(self) -> bool:
+        """Check if a vector index exists on the embedding column.
+
+        Queries PostgreSQL's pg_indexes catalog to check for any index
+        on the embedding column. Works reliably in distributed environments.
+        """
+        if not self._pool:
+            return False
+
+        col_embedding = self._col("embedding")
+        async with self._pool.acquire() as conn:
+            # Check pg_indexes for any index on our table that includes the embedding column
+            exists = await conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_indexes
+                    WHERE schemaname = $1
+                    AND tablename = $2
+                    AND indexdef LIKE $3
+                )
+                """,
+                self.schema,
+                self.table_name,
+                f"%{col_embedding}%",
+            )
+        return bool(exists)
+
+    async def create_index(
+        self,
+        index_type: str | None = None,
+        params: dict[str, Any] | None = None,
+        if_not_exists: bool = True,
+    ) -> bool:
+        """Create a vector index on the embedding column.
+
+        Args:
+            index_type: Type of index - 'hnsw' or 'ivfflat'. Defaults to configured index_type.
+            params: Index parameters. Defaults to configured index_params.
+                - For HNSW: m (connections per layer), ef_construction (build quality)
+                - For IVFFlat: lists (number of clusters)
+            if_not_exists: Skip creation if index already exists (default: True)
+
+        Returns:
+            True if index was created, False if skipped (already exists)
+
+        Raises:
+            ValueError: If index_type is invalid or 'none'
+            RuntimeError: If store not initialized
+
+        Example:
+            ```python
+            # Create HNSW index with custom parameters
+            await store.create_index("hnsw", {"m": 32, "ef_construction": 128})
+
+            # Create IVFFlat index (requires sufficient data)
+            await store.create_index("ivfflat", {"lists": 200})
+            ```
+        """
+        if not self._initialized:
+            raise RuntimeError("Store must be initialized before creating index")
+
+        # Use configured values as defaults
+        idx_type = index_type or self.index_type
+        idx_params = params if params is not None else self.index_params
+
+        if idx_type == "none":
+            raise ValueError("Cannot create index with index_type='none'")
+        if idx_type not in ("hnsw", "ivfflat"):
+            raise ValueError(f"index_type must be 'hnsw' or 'ivfflat', got: {idx_type}")
+
+        # Check if index already exists
+        if if_not_exists and await self._check_index_exists():
+            logger.info(f"Index already exists on {self.schema}.{self.table_name}")
+            return False
+
+        col_embedding = self._col("embedding")
+        operator_class = self._get_operator_class()
+        index_name = f"idx_{self.table_name}_{col_embedding}_{idx_type}"
+
+        async with self._pool.acquire() as conn:
+            if idx_type == "hnsw":
+                m = idx_params.get("m", 16)
+                ef_construction = idx_params.get("ef_construction", 64)
+                await conn.execute(f"""
+                    CREATE INDEX {"IF NOT EXISTS" if if_not_exists else ""} {index_name}
+                    ON {self.schema}.{self.table_name}
+                    USING hnsw ({col_embedding} {operator_class})
+                    WITH (m = {m}, ef_construction = {ef_construction})
+                """)
+            else:  # ivfflat
+                lists = idx_params.get("lists", 100)
+                await conn.execute(f"""
+                    CREATE INDEX {"IF NOT EXISTS" if if_not_exists else ""} {index_name}
+                    ON {self.schema}.{self.table_name}
+                    USING ivfflat ({col_embedding} {operator_class})
+                    WITH (lists = {lists})
+                """)
+
+        logger.info(
+            f"Created {idx_type} index on {self.schema}.{self.table_name}.{col_embedding}"
+        )
+        return True
+
+    async def _maybe_create_index(self) -> None:
+        """Conditionally create index based on configuration and data size.
+
+        Called during search() to auto-create IVFFlat index when:
+        - auto_create_index is True
+        - index_type is 'ivfflat'
+        - Row count exceeds min_rows_for_index
+        - No index exists yet
+        """
+        if not self.auto_create_index:
+            return
+        if self.index_type != "ivfflat":
+            return  # HNSW is created at table creation time
+
+        # Check if index already exists (distributed-safe)
+        if await self._check_index_exists():
+            return
+
+        # Check row count
+        row_count = await self.count()
+        if row_count < self.min_rows_for_index:
+            return
+
+        logger.info(
+            f"Auto-creating IVFFlat index: {row_count} rows >= {self.min_rows_for_index} threshold"
+        )
+        await self.create_index("ivfflat", self.index_params, if_not_exists=True)
 
     async def initialize(self) -> None:
         """Initialize database connection pool."""
@@ -211,14 +394,24 @@ class PgVectorStore(VectorStore):
             )
         """)
 
-        # Create vector index using configured embedding column
-        index_name = f"idx_{self.table_name}_{self._col('embedding')}"
-        await conn.execute(f"""
-            CREATE INDEX IF NOT EXISTS {index_name}
-            ON {self.schema}.{self.table_name}
-            USING ivfflat ({self._col('embedding')} vector_cosine_ops)
-            WITH (lists = 100)
-        """)
+        # Create HNSW index immediately if configured (HNSW works with empty tables)
+        if self.auto_create_index and self.index_type == "hnsw":
+            col_embedding = self._col("embedding")
+            operator_class = self._get_operator_class()
+            index_name = f"idx_{self.table_name}_{col_embedding}_hnsw"
+            m = self.index_params.get("m", 16)
+            ef_construction = self.index_params.get("ef_construction", 64)
+            await conn.execute(f"""
+                CREATE INDEX IF NOT EXISTS {index_name}
+                ON {self.schema}.{self.table_name}
+                USING hnsw ({col_embedding} {operator_class})
+                WITH (m = {m}, ef_construction = {ef_construction})
+            """)
+            logger.info(f"Created HNSW index on {self.schema}.{self.table_name}")
+
+        # Note: IVFFlat index is not created here because it requires existing data.
+        # It will be auto-created during search() if auto_create_index=True and
+        # row count exceeds min_rows_for_index. Or use create_index() explicitly.
 
         logger.info(
             f"Created table {self.schema}.{self.table_name} with columns: {self.columns}"
@@ -375,6 +568,9 @@ class PgVectorStore(VectorStore):
         """Search for similar vectors using pgvector."""
         if not self._initialized:
             await self.initialize()
+
+        # Auto-create IVFFlat index if conditions are met
+        await self._maybe_create_index()
 
         # Prepare query vector
         query = self._prepare_vector(

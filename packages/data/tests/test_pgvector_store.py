@@ -340,6 +340,9 @@ class TestPgVectorStoreSearch:
             "table_name": f"test_cosine_{uuid.uuid4().hex[:8]}",
             "id_type": "text",  # Use text IDs for readable test assertions
             "auto_create_table": True,
+            # Use HNSW index for reliable results with small datasets
+            "index_type": "hnsw",
+            "auto_create_index": True,
         }
         store = PgVectorStore(config)
         await store.initialize()
@@ -690,3 +693,271 @@ class TestPgVectorStoreEdgeCases:
         query = vectors[50]
         results = await pgvector_store.search(query, k=10)
         assert len(results) == 10
+
+
+@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
+class TestPgVectorStoreIndexConfiguration:
+    """Test index configuration options."""
+
+    def test_config_invalid_index_type(self, pgvector_config):
+        """Test that invalid index_type raises ValueError."""
+        pgvector_config["index_type"] = "invalid"
+        with pytest.raises(ValueError, match="index_type must be"):
+            PgVectorStore(pgvector_config)
+
+    def test_config_valid_index_types(self, ensure_pgvector_extension):
+        """Test valid index_type options."""
+        conn_str = get_test_connection_string()
+
+        for idx_type in ("none", "hnsw", "ivfflat"):
+            store = PgVectorStore({
+                "connection_string": conn_str,
+                "dimensions": 128,
+                "index_type": idx_type,
+            })
+            assert store.index_type == idx_type
+
+    def test_config_index_defaults(self, pgvector_config):
+        """Test default index configuration values."""
+        store = PgVectorStore(pgvector_config)
+
+        assert store.index_type == "none"
+        assert store.auto_create_index is False
+        assert store.min_rows_for_index == 1000
+        assert store.index_params == {}
+
+    def test_config_custom_index_params(self, pgvector_config):
+        """Test custom index configuration values."""
+        pgvector_config["index_type"] = "hnsw"
+        pgvector_config["auto_create_index"] = True
+        pgvector_config["min_rows_for_index"] = 500
+        pgvector_config["index_params"] = {"m": 32, "ef_construction": 128}
+
+        store = PgVectorStore(pgvector_config)
+
+        assert store.index_type == "hnsw"
+        assert store.auto_create_index is True
+        assert store.min_rows_for_index == 500
+        assert store.index_params["m"] == 32
+        assert store.index_params["ef_construction"] == 128
+
+
+@pytest.mark.skipif(not ASYNCPG_AVAILABLE, reason="asyncpg not installed")
+@pytest.mark.asyncio
+class TestPgVectorStoreIndexOperations:
+    """Test index creation and management operations."""
+
+    async def test_check_index_exists_no_index(self, pgvector_store):
+        """Test _check_index_exists returns False when no index exists."""
+        exists = await pgvector_store._check_index_exists()
+        assert exists is False
+
+    async def test_create_index_hnsw_explicit(self, ensure_pgvector_extension):
+        """Test explicit HNSW index creation."""
+        config = {
+            "connection_string": get_test_connection_string(),
+            "dimensions": 128,
+            "schema": "public",
+            "table_name": f"test_hnsw_explicit_{uuid.uuid4().hex[:8]}",
+            "auto_create_table": True,
+        }
+        store = PgVectorStore(config)
+        await store.initialize()
+
+        try:
+            # No index initially
+            assert await store._check_index_exists() is False
+
+            # Create HNSW index explicitly
+            created = await store.create_index("hnsw", {"m": 16, "ef_construction": 64})
+            assert created is True
+
+            # Index should now exist
+            assert await store._check_index_exists() is True
+
+            # Creating again should return False (already exists)
+            created = await store.create_index("hnsw")
+            assert created is False
+        finally:
+            async with store._pool.acquire() as conn:
+                await conn.execute(f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}")
+            await store.close()
+
+    async def test_create_index_ivfflat_explicit(self, ensure_pgvector_extension):
+        """Test explicit IVFFlat index creation."""
+        config = {
+            "connection_string": get_test_connection_string(),
+            "dimensions": 128,
+            "schema": "public",
+            "table_name": f"test_ivf_explicit_{uuid.uuid4().hex[:8]}",
+            "auto_create_table": True,
+        }
+        store = PgVectorStore(config)
+        await store.initialize()
+
+        try:
+            # Add some data first (IVFFlat works better with data)
+            vectors = np.random.rand(50, 128).astype(np.float32)
+            await store.add_vectors(vectors)
+
+            # Create IVFFlat index
+            created = await store.create_index("ivfflat", {"lists": 10})
+            assert created is True
+            assert await store._check_index_exists() is True
+        finally:
+            async with store._pool.acquire() as conn:
+                await conn.execute(f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}")
+            await store.close()
+
+    async def test_create_index_invalid_type(self, pgvector_store):
+        """Test create_index with invalid type raises error."""
+        with pytest.raises(ValueError, match="index_type must be"):
+            await pgvector_store.create_index("invalid")
+
+    async def test_create_index_none_type(self, pgvector_store):
+        """Test create_index with 'none' type raises error."""
+        with pytest.raises(ValueError, match="Cannot create index"):
+            await pgvector_store.create_index("none")
+
+    async def test_hnsw_auto_created_on_table_creation(self, ensure_pgvector_extension):
+        """Test HNSW index is auto-created when table is created."""
+        config = {
+            "connection_string": get_test_connection_string(),
+            "dimensions": 128,
+            "schema": "public",
+            "table_name": f"test_hnsw_auto_{uuid.uuid4().hex[:8]}",
+            "auto_create_table": True,
+            "index_type": "hnsw",
+            "auto_create_index": True,
+        }
+        store = PgVectorStore(config)
+        await store.initialize()
+
+        try:
+            # HNSW index should exist immediately after initialization
+            assert await store._check_index_exists() is True
+        finally:
+            async with store._pool.acquire() as conn:
+                await conn.execute(f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}")
+            await store.close()
+
+    async def test_ivfflat_not_auto_created_below_threshold(self, ensure_pgvector_extension):
+        """Test IVFFlat index is NOT auto-created when below threshold."""
+        config = {
+            "connection_string": get_test_connection_string(),
+            "dimensions": 128,
+            "schema": "public",
+            "table_name": f"test_ivf_threshold_{uuid.uuid4().hex[:8]}",
+            "auto_create_table": True,
+            "index_type": "ivfflat",
+            "auto_create_index": True,
+            "min_rows_for_index": 100,  # Threshold of 100 rows
+        }
+        store = PgVectorStore(config)
+        await store.initialize()
+
+        try:
+            # Add only 50 vectors (below threshold)
+            vectors = np.random.rand(50, 128).astype(np.float32)
+            await store.add_vectors(vectors)
+
+            # Search should trigger _maybe_create_index but not create index
+            query = np.random.rand(128).astype(np.float32)
+            await store.search(query, k=5)
+
+            # Index should NOT exist (below threshold)
+            assert await store._check_index_exists() is False
+        finally:
+            async with store._pool.acquire() as conn:
+                await conn.execute(f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}")
+            await store.close()
+
+    async def test_ivfflat_auto_created_above_threshold(self, ensure_pgvector_extension):
+        """Test IVFFlat index IS auto-created when above threshold."""
+        config = {
+            "connection_string": get_test_connection_string(),
+            "dimensions": 128,
+            "schema": "public",
+            "table_name": f"test_ivf_auto_{uuid.uuid4().hex[:8]}",
+            "auto_create_table": True,
+            "index_type": "ivfflat",
+            "auto_create_index": True,
+            "min_rows_for_index": 50,  # Low threshold for testing
+            "index_params": {"lists": 10},
+        }
+        store = PgVectorStore(config)
+        await store.initialize()
+
+        try:
+            # Add 100 vectors (above threshold)
+            vectors = np.random.rand(100, 128).astype(np.float32)
+            await store.add_vectors(vectors)
+
+            # No index yet (not searched)
+            assert await store._check_index_exists() is False
+
+            # Search should trigger auto-creation
+            query = np.random.rand(128).astype(np.float32)
+            await store.search(query, k=5)
+
+            # Index should now exist
+            assert await store._check_index_exists() is True
+        finally:
+            async with store._pool.acquire() as conn:
+                await conn.execute(f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}")
+            await store.close()
+
+    async def test_no_auto_create_when_disabled(self, ensure_pgvector_extension):
+        """Test index is NOT auto-created when auto_create_index=False."""
+        config = {
+            "connection_string": get_test_connection_string(),
+            "dimensions": 128,
+            "schema": "public",
+            "table_name": f"test_no_auto_{uuid.uuid4().hex[:8]}",
+            "auto_create_table": True,
+            "index_type": "ivfflat",
+            "auto_create_index": False,  # Disabled
+            "min_rows_for_index": 10,
+        }
+        store = PgVectorStore(config)
+        await store.initialize()
+
+        try:
+            # Add vectors above threshold
+            vectors = np.random.rand(50, 128).astype(np.float32)
+            await store.add_vectors(vectors)
+
+            # Search
+            query = np.random.rand(128).astype(np.float32)
+            await store.search(query, k=5)
+
+            # Index should NOT exist (auto_create_index=False)
+            assert await store._check_index_exists() is False
+        finally:
+            async with store._pool.acquire() as conn:
+                await conn.execute(f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}")
+            await store.close()
+
+    async def test_index_with_different_metrics(self, ensure_pgvector_extension):
+        """Test index creation with different distance metrics."""
+        for metric in ("cosine", "euclidean", "inner_product"):
+            config = {
+                "connection_string": get_test_connection_string(),
+                "dimensions": 64,
+                "metric": metric,
+                "schema": "public",
+                "table_name": f"test_metric_{metric}_{uuid.uuid4().hex[:8]}",
+                "auto_create_table": True,
+            }
+            store = PgVectorStore(config)
+            await store.initialize()
+
+            try:
+                # Create HNSW index - should use correct operator class
+                created = await store.create_index("hnsw")
+                assert created is True
+                assert await store._check_index_exists() is True
+            finally:
+                async with store._pool.acquire() as conn:
+                    await conn.execute(f"DROP TABLE IF EXISTS {store.schema}.{store.table_name}")
+                await store.close()
