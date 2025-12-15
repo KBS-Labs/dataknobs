@@ -50,14 +50,14 @@ llm = create_llm_provider(config)
 
 ```python
 # Asynchronous (recommended)
-response = await llm.acomplete("What is Python?")
+response = await llm.complete("What is Python?")
 print(response.content)
 
-# Or using synchronous provider
-config = LLMConfig(provider="openai", api_key="your-api-key")
-llm_sync = create_llm_provider(config, is_async=False)
-response = llm_sync.complete("What is Python?")
-print(response.content)
+# Override config per-request (model, temperature, max_tokens, etc.)
+response = await llm.complete(
+    "Write a creative story",
+    config_overrides={"model": "gpt-4-turbo", "temperature": 1.2}
+)
 ```
 
 ### 3. Structured Prompts
@@ -211,6 +211,7 @@ variant = await ab.get_variant_for_user(exp.experiment_id, "user123")
 
 - **[Prompt Engineering Guide](guides/prompts.md)** - Master prompt templates
 - **[Conversation Management](guides/conversations.md)** - Multi-turn conversations
+- **[Config Overrides](guides/config-overrides.md)** - Per-request configuration
 - **[Versioning & A/B Testing](guides/versioning.md)** - Track and test prompts
 - **[Performance & Benchmarking](guides/performance.md)** - Optimize your application
 

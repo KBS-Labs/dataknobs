@@ -33,8 +33,14 @@ config = LLMConfig(
 provider = create_llm_provider(config)
 
 # Generate completion
-response = provider.complete("What is the capital of France?")
+response = await provider.complete("What is the capital of France?")
 print(response.content)
+
+# Override config per-request (model, temperature, max_tokens, etc.)
+response = await provider.complete(
+    "Write a creative story",
+    config_overrides={"model": "gpt-4-turbo", "temperature": 1.2}
+)
 ```
 
 ### Prompt Templates

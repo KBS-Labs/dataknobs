@@ -82,6 +82,13 @@
 - Custom middleware support
 - Onion model execution
 
+### Per-Request Config Overrides
+- Override model, temperature, max_tokens per request
+- Named presets for common configurations
+- Callback hooks for logging/metrics
+- Options dict merging
+- Works with providers and ConversationManager
+
 ### Storage
 - Abstract storage interface
 - Dataknobs backend adapter

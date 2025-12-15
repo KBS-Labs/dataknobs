@@ -251,11 +251,22 @@ class AnthropicProvider(AsyncLLMProvider):
     async def complete(
         self,
         messages: Union[str, List[LLMMessage]],
-        **kwargs
+        config_overrides: Dict[str, Any] | None = None,
+        **kwargs: Any
     ) -> LLMResponse:
-        """Generate completion."""
+        """Generate completion.
+
+        Args:
+            messages: Input messages or prompt
+            config_overrides: Optional dict to override config fields (model,
+                temperature, max_tokens, top_p, stop_sequences, seed)
+            **kwargs: Additional provider-specific parameters
+        """
         if not self._is_initialized:
             await self.initialize()
+
+        # Get runtime config (with overrides applied if provided)
+        runtime_config = self._get_runtime_config(config_overrides)
 
         # Convert to Anthropic format
         if isinstance(messages, str):
@@ -274,12 +285,12 @@ class AnthropicProvider(AsyncLLMProvider):
 
         # Make API call
         response = await self._client.messages.create(
-            model=self.config.model,
+            model=runtime_config.model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=self.config.max_tokens or 1024,
-            temperature=self.config.temperature,
-            top_p=self.config.top_p,
-            stop_sequences=self.config.stop_sequences
+            max_tokens=runtime_config.max_tokens or 1024,
+            temperature=runtime_config.temperature,
+            top_p=runtime_config.top_p,
+            stop_sequences=runtime_config.stop_sequences
         )
 
         return LLMResponse(
@@ -296,11 +307,22 @@ class AnthropicProvider(AsyncLLMProvider):
     async def stream_complete(
         self,
         messages: Union[str, List[LLMMessage]],
-        **kwargs
+        config_overrides: Dict[str, Any] | None = None,
+        **kwargs: Any
     ) -> AsyncIterator[LLMStreamResponse]:
-        """Generate streaming completion."""
+        """Generate streaming completion.
+
+        Args:
+            messages: Input messages or prompt
+            config_overrides: Optional dict to override config fields (model,
+                temperature, max_tokens, top_p, stop_sequences, seed)
+            **kwargs: Additional provider-specific parameters
+        """
         if not self._is_initialized:
             await self.initialize()
+
+        # Get runtime config (with overrides applied if provided)
+        runtime_config = self._get_runtime_config(config_overrides)
 
         # Convert to Anthropic format
         if isinstance(messages, str):
@@ -310,10 +332,10 @@ class AnthropicProvider(AsyncLLMProvider):
 
         # Stream API call
         async with self._client.messages.stream(
-            model=self.config.model,
+            model=runtime_config.model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=self.config.max_tokens or 1024,
-            temperature=self.config.temperature
+            max_tokens=runtime_config.max_tokens or 1024,
+            temperature=runtime_config.temperature
         ) as stream:
             async for chunk in stream:
                 if chunk.type == 'content_block_delta':

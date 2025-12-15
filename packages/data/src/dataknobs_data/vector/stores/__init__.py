@@ -88,6 +88,36 @@ class VectorBackendRegistry(Registry[Type[VectorStore]]):
         except ImportError:
             pass
 
+        # pgvector backend
+        try:
+            from .pgvector import PgVectorStore
+
+            self.register(
+                "pgvector",
+                PgVectorStore,
+                metadata={
+                    "description": "PostgreSQL with pgvector extension - production vector database",
+                    "persistent": True,
+                    "requires_install": "pip install asyncpg",
+                    "config_options": {
+                        "connection_string": "PostgreSQL connection URL (or use DATABASE_URL env)",
+                        "dimensions": "Vector dimensions (required)",
+                        "metric": "Distance metric: cosine, euclidean, inner_product",
+                        "schema": "Database schema (default: edubot)",
+                        "table_name": "Table name (default: knowledge_embeddings)",
+                        "domain_id": "Domain ID for multi-tenant isolation (optional)",
+                        "pool_min_size": "Min connection pool size (default: 2)",
+                        "pool_max_size": "Max connection pool size (default: 10)",
+                        "columns": "Column name mappings dict (optional)",
+                        "auto_create_table": "Create table if missing (default: True)",
+                        "id_type": "ID column type: uuid or text (default: uuid)",
+                    },
+                },
+            )
+            self.register("postgresql", PgVectorStore)  # Alias
+        except ImportError:
+            pass
+
 
 # Create singleton instance BEFORE importing factory to avoid circular import
 vector_backends = VectorBackendRegistry()
@@ -115,5 +145,12 @@ try:
     from .chroma import ChromaVectorStore
 
     __all__ += ["ChromaVectorStore"]
+except ImportError:
+    pass
+
+try:
+    from .pgvector import PgVectorStore
+
+    __all__ += ["PgVectorStore"]
 except ImportError:
     pass

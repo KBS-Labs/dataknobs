@@ -41,7 +41,7 @@
       "name": "llm",
       "pypi_name": "dataknobs-llm",
       "description": "LLM integration with prompt management and tools",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -50,7 +50,7 @@
       "name": "bots",
       "pypi_name": "dataknobs-bots",
       "description": "Configuration-driven AI agents for DataKnobs",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false

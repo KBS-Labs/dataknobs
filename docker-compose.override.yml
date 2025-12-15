@@ -24,9 +24,19 @@ services:
       - "5432:5432"
     volumes:
       - ~/data:/data
+      # Bind mount for host access. If you experience permission errors like
+      # "could not open file base/...: Permission denied", reset with:
+      #   bin/dk down && rm -rf ~/.dataknobs/data/postgres && bin/dk up
+      # For more stability (but no host access), use a named volume instead:
+      #   - postgres_data:/var/lib/postgresql/data
       - ~/.dataknobs/data/postgres:/var/lib/postgresql/data
     networks:
       - devnet
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
@@ -55,4 +65,9 @@ services:
       - ~/.dataknobs/data/localstack:/var/lib/localstack
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
-      - devnet 
+      - devnet
+
+# Uncomment if using named volumes for PostgreSQL (see postgres service above):
+# volumes:
+#   postgres_data:
+#     driver: local

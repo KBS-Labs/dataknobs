@@ -16,6 +16,9 @@ The DataKnobs Data Package provides a unified data abstraction layer for consist
 - [API Reference](API_REFERENCE.md) - Complete API documentation
 - [Design Plan](DESIGN_PLAN.md) - Original design architecture
 
+### Vector Store Backends
+- [pgvector Backend](PGVECTOR_BACKEND.md) - PostgreSQL pgvector vector store
+
 ### Feature Guides
 - [Boolean Logic Operators](BOOLEAN_LOGIC_OPERATORS.md) - Complex query construction
 - [Batch Processing](BATCH_PROCESSING_GUIDE.md) - Efficient bulk operations
