@@ -436,3 +436,34 @@ migrate_data(file_db, sqlite_db)
 - Enable multipart upload for large files
 - Cache frequently accessed objects locally
 - Use prefixes for logical grouping
+
+## Vector Store Backends
+
+For vector similarity search, dataknobs-data provides specialized vector store backends that implement the `VectorStore` interface. These are separate from the database backends above and are optimized for embedding storage and similarity search.
+
+| Backend | Use Case | Index Types |
+|---------|----------|-------------|
+| Memory | Testing, small datasets | None (exact search) |
+| Faiss | Local high-performance search | Flat, IVFFlat, HNSW |
+| Chroma | AI-native vector database | HNSW |
+| **pgvector** | Production PostgreSQL integration | HNSW, IVFFlat |
+
+### pgvector Backend
+
+Production-ready vector storage using PostgreSQL with the pgvector extension:
+
+```python
+from dataknobs_data.vector.stores import VectorStoreFactory
+
+factory = VectorStoreFactory()
+store = factory.create(
+    backend="pgvector",
+    connection_string="postgresql://user:pass@localhost:5432/db",
+    dimensions=768,
+    metric="cosine",
+    index_type="hnsw"
+)
+await store.initialize()
+```
+
+See [pgvector Backend](pgvector-backend.md) for complete documentation.
