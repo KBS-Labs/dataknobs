@@ -1,6 +1,6 @@
 [project]
 name = "dataknobs-data"
-version = "0.4.2"
+version = "0.4.3"
 description = "Unified data abstraction layer for consistent database operations across multiple storage technologies"
 readme = "README.md"
 requires-python = ">=3.10"

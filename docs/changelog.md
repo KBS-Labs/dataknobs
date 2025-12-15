@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Release - 2025-12-15
 
+### dataknobs-data [0.4.3]
+
+#### Added
+- Added pgvector backend
+
 ### dataknobs-llm [0.2.3]
 
 #### Added
