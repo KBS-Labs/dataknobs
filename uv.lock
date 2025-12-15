@@ -1334,7 +1334,7 @@ requires-dist = [
 
 [[package]]
 name = "dataknobs-bots"
-version = "0.2.2"
+version = "0.2.3"
 source = { editable = "packages/bots" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1510,6 +1510,7 @@ sqlite = [
     { name = "aiosqlite" },
 ]
 vector = [
+    { name = "asyncpg" },
     { name = "chromadb" },
     { name = "faiss-cpu" },
     { name = "pgvector" },
@@ -1533,6 +1534,7 @@ requires-dist = [
     { name = "aiofiles", specifier = ">=23.0.0" },
     { name = "aiosqlite", marker = "extra == 'sqlite'", specifier = ">=0.19.0" },
     { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.29.0" },
+    { name = "asyncpg", marker = "extra == 'vector'", specifier = ">=0.29.0" },
     { name = "black", marker = "extra == 'dev'", specifier = ">=24.0.0" },
     { name = "boto3", specifier = ">=1.38.27" },
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.26.0" },
@@ -1686,7 +1688,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-llm"
-version = "0.2.2"
+version = "0.2.3"
 source = { editable = "packages/llm" }
 dependencies = [
     { name = "dataknobs-common" },
