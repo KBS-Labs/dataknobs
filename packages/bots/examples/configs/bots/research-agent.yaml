@@ -1,0 +1,69 @@
+# Portable Bot Configuration - Research Agent
+#
+# An advanced portable bot configuration for research tasks.
+# Uses multiple resource references and tools.
+
+name: research-agent
+version: "1.0.0"
+description: Research agent with tools and knowledge base
+
+bot:
+  # Use the "fast" LLM for quick iterations in ReAct loops
+  llm:
+    $resource: fast
+    type: llm_providers
+    temperature: 0.3
+    max_tokens: 1500
+
+  # Conversation storage
+  conversation_storage:
+    $resource: conversations
+    type: databases
+
+  # Vector memory for long research sessions
+  memory:
+    type: vector
+    max_messages: 100
+    vector_store:
+      $resource: default
+      type: vector_stores
+    embedding_provider:
+      $resource: default
+      type: embedding_providers
+
+  # Knowledge base for reference materials
+  knowledge_base:
+    enabled: true
+    vector_store:
+      $resource: knowledge
+      type: vector_stores
+    embedding_provider:
+      $resource: default
+      type: embedding_providers
+    retrieval:
+      top_k: 10
+      score_threshold: 0.5
+
+  # System prompt for research tasks
+  system_prompt: |
+    You are a research assistant. Your role is to:
+
+    - Search the knowledge base for relevant information
+    - Analyze and synthesize findings
+    - Provide well-sourced answers
+    - Use tools when needed to complete research tasks
+
+    Always cite your sources and be transparent about uncertainty.
+
+  # ReAct reasoning for tool use
+  reasoning:
+    strategy: react
+    max_iterations: 10
+    verbose: true
+    store_trace: true
+
+  # Tools configuration (portable class references)
+  tools:
+    - class: dataknobs_bots.tools.KnowledgeSearchTool
+      params:
+        k: 5

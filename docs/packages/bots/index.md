@@ -186,6 +186,8 @@ dataknobs_bots/
 
 - [**User Guide**](guides/user-guide.md) - Complete tutorials from beginner to advanced
 - [**Configuration Reference**](guides/configuration.md) - All configuration options
+- [**Environment-Aware Configuration**](guides/environment-aware.md) - Portable configs for multi-environment deployments
+- [**Migration Guide**](guides/migration.md) - Migrate existing configs to environment-aware pattern
 - [**Bot Manager Guide**](guides/bot-manager.md) - Multi-tenant bot management and FastAPI integration
 - [**Middleware Guide**](guides/middleware.md) - Request/response middleware for logging and cost tracking
 - [**Tools Development**](guides/tools.md) - Creating and configuring custom tools

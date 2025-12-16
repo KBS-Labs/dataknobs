@@ -51,3 +51,37 @@
         - InvalidReferenceError
         - ValidationError
         - FileNotFoundError
+
+---
+
+## Environment-Aware Configuration
+
+::: dataknobs_config.environment_config
+    options:
+      show_source: true
+      show_bases: true
+      members:
+        - EnvironmentConfig
+        - ResourceBinding
+        - EnvironmentConfigError
+        - ResourceNotFoundError
+
+::: dataknobs_config.environment_aware
+    options:
+      show_source: true
+      show_bases: true
+      members:
+        - EnvironmentAwareConfig
+        - EnvironmentAwareConfigError
+
+::: dataknobs_config.binding_resolver
+    options:
+      show_source: true
+      show_bases: true
+      members:
+        - ConfigBindingResolver
+        - SimpleFactory
+        - CallableFactory
+        - AsyncCallableFactory
+        - BindingResolverError
+        - FactoryNotFoundError

@@ -1,0 +1,68 @@
+# Development Environment Configuration
+#
+# This file defines resource bindings for local development.
+# Environment variables are resolved at instantiation time (late binding),
+# so this config remains portable.
+#
+# To use: Set DATAKNOBS_ENVIRONMENT=development (or leave unset for auto-detect)
+
+name: development
+description: Local development environment
+
+# Environment-wide settings
+settings:
+  log_level: DEBUG
+  enable_metrics: false
+  enable_tracing: false
+
+# Resource bindings: logical_name -> concrete implementation
+resources:
+  # LLM providers - local Ollama for development
+  llm_providers:
+    default:
+      provider: ollama
+      model: qwen3:8b
+      base_url: http://localhost:11434
+      temperature: 0.7
+      max_tokens: 2000
+
+    fast:
+      provider: ollama
+      model: gemma3:1b
+      base_url: http://localhost:11434
+      temperature: 0.5
+      max_tokens: 1000
+
+  # Database backends - in-memory for development
+  databases:
+    default:
+      backend: memory
+
+    conversations:
+      backend: memory
+
+    # Or use SQLite for persistent local development:
+    # conversations:
+    #   backend: sqlite
+    #   path: ${DATABASE_PATH:~/.local/share/dataknobs/conversations.db}
+
+  # Vector stores - FAISS for local development
+  vector_stores:
+    default:
+      backend: memory
+      dimensions: 768
+
+    knowledge:
+      backend: memory
+      dimensions: 768
+      # Or use FAISS for persistent storage:
+      # backend: faiss
+      # persist_path: ${VECTOR_STORE_PATH:~/.local/share/dataknobs/vectors}
+      # dimensions: 768
+
+  # Embedding providers - local Ollama
+  embedding_providers:
+    default:
+      provider: ollama
+      model: nomic-embed-text
+      base_url: http://localhost:11434

@@ -1,0 +1,79 @@
+# Portable Bot Configuration - Customer Support Assistant
+#
+# This bot configuration is PORTABLE - it uses logical resource references
+# instead of concrete infrastructure details. The same config works in
+# development, staging, and production environments.
+#
+# Key concepts:
+#   - $resource: References a logical resource name from the environment config
+#   - type: Specifies the resource type for resolution
+#   - Other fields are behavioral settings that apply regardless of environment
+
+name: assistant
+version: "1.0.0"
+description: Customer support assistant with knowledge base
+
+bot:
+  # LLM configuration - references "default" LLM provider
+  # In development: Ollama qwen3:8b
+  # In production: OpenAI GPT-4
+  llm:
+    $resource: default
+    type: llm_providers
+    # Behavioral settings (portable - same in all environments)
+    temperature: 0.7
+    max_tokens: 2048
+
+  # Conversation storage - references "conversations" database
+  # In development: In-memory storage
+  # In production: PostgreSQL
+  conversation_storage:
+    $resource: conversations
+    type: databases
+
+  # Memory configuration (portable)
+  memory:
+    type: buffer
+    max_messages: 20
+
+  # Knowledge base with vector store reference
+  knowledge_base:
+    enabled: true
+    vector_store:
+      $resource: knowledge
+      type: vector_stores
+    embedding_provider:
+      $resource: default
+      type: embedding_providers
+    # Retrieval settings (portable)
+    retrieval:
+      top_k: 5
+      score_threshold: 0.6
+    # Chunking settings (portable)
+    chunking:
+      max_chunk_size: 500
+      chunk_overlap: 50
+
+  # System prompt (portable)
+  system_prompt: |
+    You are a helpful customer support assistant. Your responsibilities:
+
+    - Answer customer questions accurately and helpfully
+    - Use the knowledge base to find relevant information
+    - Be polite and professional at all times
+    - Escalate complex issues when necessary
+
+    Always provide clear, concise answers. If you're unsure about something,
+    say so rather than making up information.
+
+  # Reasoning configuration (portable)
+  reasoning:
+    strategy: react
+    max_iterations: 5
+    verbose: false
+
+  # Middleware configuration (portable)
+  middleware:
+    - class: dataknobs_bots.middleware.LoggingMiddleware
+      params:
+        log_level: INFO

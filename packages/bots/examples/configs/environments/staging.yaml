@@ -1,0 +1,69 @@
+# Staging Environment Configuration
+#
+# This file defines resource bindings for staging/testing environment.
+# Uses same infrastructure as production but with separate resources.
+#
+# Required environment variables:
+#   - OPENAI_API_KEY: OpenAI API key for LLM and embeddings
+#   - DATABASE_URL: PostgreSQL connection string (staging database)
+#
+# To use: Set DATAKNOBS_ENVIRONMENT=staging
+
+name: staging
+description: Staging/testing environment
+
+# Environment-wide settings
+settings:
+  log_level: DEBUG
+  enable_metrics: true
+  enable_tracing: true
+
+# Resource bindings: logical_name -> concrete implementation
+resources:
+  # LLM providers - OpenAI with lower-cost models for staging
+  llm_providers:
+    default:
+      provider: openai
+      model: gpt-3.5-turbo
+      api_key: ${OPENAI_API_KEY}
+      temperature: 0.7
+      max_tokens: 2000
+
+    fast:
+      provider: openai
+      model: gpt-3.5-turbo
+      api_key: ${OPENAI_API_KEY}
+      temperature: 0.5
+      max_tokens: 1000
+
+  # Database backends - PostgreSQL (staging database)
+  databases:
+    default:
+      backend: postgres
+      connection_string: ${DATABASE_URL}
+      pool_size: 5
+
+    conversations:
+      backend: postgres
+      connection_string: ${DATABASE_URL}
+      pool_size: 10
+
+  # Vector stores - pgvector (staging database)
+  vector_stores:
+    default:
+      backend: pgvector
+      connection_string: ${DATABASE_URL}
+      dimensions: 1536
+
+    knowledge:
+      backend: pgvector
+      connection_string: ${DATABASE_URL}
+      dimensions: 1536
+      table: knowledge_vectors_staging
+
+  # Embedding providers - OpenAI
+  embedding_providers:
+    default:
+      provider: openai
+      model: text-embedding-3-small
+      api_key: ${OPENAI_API_KEY}
