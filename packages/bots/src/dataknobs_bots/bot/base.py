@@ -1,8 +1,13 @@
 """Core DynaBot implementation."""
 
+from __future__ import annotations
+
 from collections.abc import AsyncGenerator
+from pathlib import Path
 from types import TracebackType
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from typing_extensions import Self
 
 from dataknobs_llm.conversations import ConversationManager, DataknobsConversationStorage
 from dataknobs_llm.llm import AsyncLLMProvider
@@ -11,6 +16,9 @@ from dataknobs_llm.tools import ToolRegistry
 
 from .context import BotContext
 from ..memory.base import Memory
+
+if TYPE_CHECKING:
+    from dataknobs_config import EnvironmentAwareConfig, EnvironmentConfig
 
 
 class DynaBot:
@@ -84,7 +92,7 @@ class DynaBot:
         self._conversation_managers: dict[str, ConversationManager] = {}
 
     @classmethod
-    async def from_config(cls, config: dict[str, Any]) -> "DynaBot":
+    async def from_config(cls, config: dict[str, Any]) -> DynaBot:
         """Create DynaBot from configuration.
 
         Args:
@@ -297,6 +305,157 @@ class DynaBot:
             default_temperature=llm_config.get("temperature", 0.7),
             default_max_tokens=llm_config.get("max_tokens", 1000),
         )
+
+    @classmethod
+    async def from_environment_aware_config(
+        cls,
+        config: EnvironmentAwareConfig | dict[str, Any],
+        environment: EnvironmentConfig | str | None = None,
+        env_dir: str | Path = "config/environments",
+        config_key: str = "bot",
+    ) -> DynaBot:
+        """Create DynaBot with environment-aware configuration.
+
+        This is the recommended entry point for environment-portable bots.
+        Resource references ($resource) are resolved against the environment
+        config, and environment variables are substituted at instantiation time
+        (late binding).
+
+        Args:
+            config: EnvironmentAwareConfig instance or dict with $resource references.
+                   If dict, will be wrapped in EnvironmentAwareConfig.
+            environment: Environment name or EnvironmentConfig instance.
+                        If None, auto-detects from DATAKNOBS_ENVIRONMENT env var.
+                        Ignored if config is already an EnvironmentAwareConfig.
+            env_dir: Directory containing environment config files.
+                    Only used if environment is a string name.
+            config_key: Key within config containing bot configuration.
+                       Defaults to "bot". Set to None to use root config.
+
+        Returns:
+            Fully initialized DynaBot instance with resolved resources
+
+        Example:
+            ```python
+            # With portable config dict
+            config = {
+                "bot": {
+                    "llm": {
+                        "$resource": "default",
+                        "type": "llm_providers",
+                        "temperature": 0.7,
+                    },
+                    "conversation_storage": {
+                        "$resource": "conversations",
+                        "type": "databases",
+                    },
+                }
+            }
+            bot = await DynaBot.from_environment_aware_config(config)
+
+            # With explicit environment
+            bot = await DynaBot.from_environment_aware_config(
+                config,
+                environment="production",
+                env_dir="configs/environments"
+            )
+
+            # With EnvironmentAwareConfig instance
+            from dataknobs_config import EnvironmentAwareConfig
+            env_config = EnvironmentAwareConfig.load_app("my-bot", ...)
+            bot = await DynaBot.from_environment_aware_config(env_config)
+            ```
+
+        Note:
+            The config should use $resource references for infrastructure:
+            ```yaml
+            bot:
+              llm:
+                $resource: default      # Logical name
+                type: llm_providers     # Resource type
+                temperature: 0.7        # Behavioral param (portable)
+            ```
+
+            The environment config provides concrete bindings:
+            ```yaml
+            resources:
+              llm_providers:
+                default:
+                  provider: openai
+                  model: gpt-4
+                  api_key: ${OPENAI_API_KEY}
+            ```
+        """
+        from dataknobs_config import EnvironmentAwareConfig, EnvironmentConfig
+
+        # Wrap dict in EnvironmentAwareConfig if needed
+        if isinstance(config, dict):
+            # Load or use provided environment
+            if isinstance(environment, EnvironmentConfig):
+                env_config = environment
+            else:
+                env_config = EnvironmentConfig.load(environment, env_dir)
+
+            config = EnvironmentAwareConfig(
+                config=config,
+                environment=env_config,
+            )
+        elif environment is not None:
+            # Switch environment on existing EnvironmentAwareConfig
+            config = config.with_environment(environment, env_dir)
+
+        # Resolve resources and env vars (late binding happens here)
+        if config_key:
+            resolved = config.resolve_for_build(config_key)
+        else:
+            resolved = config.resolve_for_build()
+
+        # Delegate to existing from_config
+        return await cls.from_config(resolved)
+
+    @staticmethod
+    def get_portable_config(
+        config: EnvironmentAwareConfig | dict[str, Any],
+    ) -> dict[str, Any]:
+        """Extract portable configuration for storage.
+
+        Returns configuration with $resource references intact
+        and environment variables unresolved. This is the config
+        that should be stored in registries or databases for
+        cross-environment portability.
+
+        Args:
+            config: EnvironmentAwareConfig instance or portable dict
+
+        Returns:
+            Portable configuration dictionary
+
+        Example:
+            ```python
+            from dataknobs_config import EnvironmentAwareConfig
+
+            # From EnvironmentAwareConfig
+            env_config = EnvironmentAwareConfig.load_app("my-bot", ...)
+            portable = DynaBot.get_portable_config(env_config)
+
+            # Store portable config in registry
+            await registry.store(bot_id, portable)
+
+            # Dict passes through unchanged
+            portable = DynaBot.get_portable_config({"bot": {...}})
+            ```
+        """
+        # Import here to avoid circular dependency at module level
+        try:
+            from dataknobs_config import EnvironmentAwareConfig
+
+            if isinstance(config, EnvironmentAwareConfig):
+                return config.get_portable_config()
+        except ImportError:
+            pass
+
+        # Dict passes through (assumed already portable)
+        return config
 
     async def chat(
         self,
@@ -635,7 +794,7 @@ class DynaBot:
         if self.memory and hasattr(self.memory, 'close'):
             await self.memory.close()
 
-    async def __aenter__(self) -> "DynaBot":
+    async def __aenter__(self) -> Self:
         """Async context manager entry.
 
         Returns:
