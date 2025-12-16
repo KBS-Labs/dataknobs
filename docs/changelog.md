@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## Release - 2025-12-16
+
+### dataknobs-config [0.3.2]
+
+#### Added
+- multi-layered environment-aware configuration support
+
+### dataknobs-bots [0.2.4]
+
+#### Added
+- multi-layered environment-aware configuration support
+- BotRegistry enhancements
+- Deprecated BotManager -- use BotRegistry instead
+
+
 ## Release - 2025-12-15
 
 ### dataknobs-data [0.4.3]

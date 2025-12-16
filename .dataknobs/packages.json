@@ -14,7 +14,7 @@
       "name": "config",
       "pypi_name": "dataknobs-config",
       "description": "Flexible and modular configuration management",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -50,7 +50,7 @@
       "name": "bots",
       "pypi_name": "dataknobs-bots",
       "description": "Configuration-driven AI agents for DataKnobs",
-      "version": "0.2.3",
+      "version": "0.2.4",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
