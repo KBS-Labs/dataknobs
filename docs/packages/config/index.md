@@ -13,6 +13,9 @@ The `dataknobs-config` package provides a flexible and powerful configuration ma
 - **Path resolution** for relative paths
 - **Object construction** from configurations
 - **Global and type-specific settings**
+- **Environment-aware configuration** for portable configs across dev/staging/prod
+- **Late-binding resolution** of environment variables at instantiation time
+- **Logical resource references** that map to environment-specific implementations
 
 ## Installation
 
@@ -108,6 +111,30 @@ logger:
 ```python
 logger = config.build_object("xref:logger[main]")
 ```
+
+### 6. Environment-Aware Configuration
+
+Deploy the same app config across different environments with logical resource references:
+
+```yaml
+# Portable app config
+bot:
+  database:
+    $resource: conversations
+    type: databases
+```
+
+```python
+from dataknobs_config import EnvironmentAwareConfig
+
+# Auto-detects environment (dev/staging/prod)
+config = EnvironmentAwareConfig.load_app("my-bot")
+
+# Late-bind resources at instantiation time
+resolved = config.resolve_for_build()
+```
+
+See the [Environment-Aware Configuration Guide](environment-aware.md) for details.
 
 ## Configuration File Format
 
@@ -205,6 +232,9 @@ print(db["host"])  # "prod.db.com"
 
 ## Further Reading
 
+- [Environment-Aware Configuration](environment-aware.md) - Portable configs for multi-environment deployments
+- [Configuration System](configuration-system.md) - Core Config class details
+- [Environment Variables](environment-variables.md) - Override system
 - [API Reference](api.md)
 - [Advanced Usage Guide](../../user-guide/advanced-usage.md)
 - [Migration Guide](../../migration-guide.md)

@@ -165,6 +165,74 @@ config = {
 bot = await DynaBot.from_config(config)
 ```
 
+## Environment-Aware Configuration
+
+DynaBot supports **environment-aware configuration** for deploying the same bot across different environments. This separates portable bot behavior from environment-specific infrastructure.
+
+### Portable Bot Configs
+
+Bot configs use **logical resource references** instead of hardcoded infrastructure:
+
+```yaml
+# config/bots/assistant.yaml - PORTABLE
+bot:
+  llm:
+    $resource: default          # Logical name
+    type: llm_providers         # Resource type
+    temperature: 0.7            # Behavioral setting
+
+  conversation_storage:
+    $resource: conversations
+    type: databases
+```
+
+### Environment-Specific Bindings
+
+Environment configs define concrete implementations:
+
+```yaml
+# config/environments/development.yaml
+name: development
+resources:
+  llm_providers:
+    default:
+      provider: ollama
+      model: qwen3:8b
+  databases:
+    conversations:
+      backend: memory
+
+# config/environments/production.yaml
+name: production
+resources:
+  llm_providers:
+    default:
+      provider: openai
+      model: gpt-4
+      api_key: ${OPENAI_API_KEY}
+  databases:
+    conversations:
+      backend: postgres
+      connection_string: ${DATABASE_URL}
+```
+
+### Resolving Resources
+
+```python
+from dataknobs_config import EnvironmentConfig
+from dataknobs_bots.config import BotResourceResolver
+
+# Auto-detects environment from DATAKNOBS_ENVIRONMENT
+env = EnvironmentConfig.load()
+resolver = BotResourceResolver(env)
+
+# Get initialized resources
+llm = await resolver.get_llm("default")
+db = await resolver.get_database("conversations")
+```
+
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md#environment-aware-configuration) for complete documentation.
+
 ## Core Concepts
 
 ### DynaBot
@@ -313,6 +381,8 @@ See [examples/README.md](examples/README.md) for detailed information on each ex
 
 - [User Guide](docs/USER_GUIDE.md) - Tutorials and how-to guides
 - [Configuration Reference](docs/CONFIGURATION.md) - Complete configuration options
+- [Environment-Aware Configuration](docs/CONFIGURATION.md#environment-aware-configuration) - Portable configs for multi-environment deployments
+- [Migration Guide](docs/MIGRATION.md) - Migrate existing configs to environment-aware pattern
 - [Tools Development](docs/TOOLS.md) - Creating and configuring tools
 
 ### Developer Documentation

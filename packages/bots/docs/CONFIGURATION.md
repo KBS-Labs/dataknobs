@@ -6,6 +6,7 @@ Complete reference for configuring DynaBot instances.
 
 - [Overview](#overview)
 - [Configuration Structure](#configuration-structure)
+- [Environment-Aware Configuration](#environment-aware-configuration)
 - [LLM Configuration](#llm-configuration)
 - [Conversation Storage](#conversation-storage)
 - [Memory Configuration](#memory-configuration)
@@ -14,6 +15,7 @@ Complete reference for configuring DynaBot instances.
 - [Tools Configuration](#tools-configuration)
 - [Prompts Configuration](#prompts-configuration)
 - [Middleware Configuration](#middleware-configuration)
+- [Resource Resolution](#resource-resolution)
 - [Environment Variables](#environment-variables)
 - [Complete Examples](#complete-examples)
 
@@ -158,6 +160,189 @@ middleware:
   - class: string
     params: dict
 ```
+
+---
+
+## Environment-Aware Configuration
+
+DynaBot supports environment-aware configuration for deploying the same bot across different environments (development, staging, production) where infrastructure differs. This is the **recommended approach** for production deployments.
+
+### The Problem
+
+Without environment-aware configuration, bot configs contain environment-specific details:
+
+```yaml
+# PROBLEMATIC: This config is not portable
+llm:
+  provider: ollama
+  model: qwen3:8b
+  base_url: http://localhost:11434  # Local only!
+
+conversation_storage:
+  backend: sqlite
+  path: ~/.local/share/myapp/conversations.db  # Local path!
+```
+
+When stored in a shared registry or database, this config fails in production because:
+- The Ollama URL doesn't exist in production
+- The local path doesn't exist in containers
+
+### The Solution: Resource References
+
+Use **logical resource references** (`$resource`) to separate bot behavior from infrastructure:
+
+```yaml
+# PORTABLE: This config works in any environment
+bot:
+  llm:
+    $resource: default        # Logical name
+    type: llm_providers       # Resource type
+    temperature: 0.7          # Behavioral setting (portable)
+
+  conversation_storage:
+    $resource: conversations
+    type: databases
+```
+
+The logical names (`default`, `conversations`) are resolved at **instantiation time** against environment-specific bindings.
+
+### Environment Configuration Files
+
+Environment configs define concrete implementations for logical names:
+
+**Development** (`config/environments/development.yaml`):
+```yaml
+name: development
+resources:
+  llm_providers:
+    default:
+      provider: ollama
+      model: qwen3:8b
+      base_url: http://localhost:11434
+
+  databases:
+    conversations:
+      backend: memory
+```
+
+**Production** (`config/environments/production.yaml`):
+```yaml
+name: production
+resources:
+  llm_providers:
+    default:
+      provider: openai
+      model: gpt-4
+      api_key: ${OPENAI_API_KEY}
+
+  databases:
+    conversations:
+      backend: postgres
+      connection_string: ${DATABASE_URL}
+```
+
+### Using Environment-Aware Configuration
+
+#### Method 1: BotResourceResolver (Recommended)
+
+```python
+from dataknobs_config import EnvironmentConfig
+from dataknobs_bots.config import BotResourceResolver
+
+# Load environment (auto-detects from DATAKNOBS_ENVIRONMENT)
+env = EnvironmentConfig.load()
+
+# Create resolver with all DynaBot factories registered
+resolver = BotResourceResolver(env)
+
+# Get initialized resources
+llm = await resolver.get_llm("default")
+db = await resolver.get_database("conversations")
+vs = await resolver.get_vector_store("knowledge")
+embedder = await resolver.get_embedding_provider("default")
+```
+
+#### Method 2: Lower-Level Resolution
+
+```python
+from dataknobs_config import EnvironmentConfig
+from dataknobs_bots.config import create_bot_resolver
+
+# Load environment
+env = EnvironmentConfig.load("production", config_dir="config/environments")
+
+# Create resolver
+resolver = create_bot_resolver(env)
+
+# Resolve resources manually
+llm = resolver.resolve("llm_providers", "default")
+await llm.initialize()
+
+db = resolver.resolve("databases", "conversations")
+await db.connect()
+```
+
+### Environment Detection
+
+The environment is determined in this order:
+
+1. **Explicit**: `DATAKNOBS_ENVIRONMENT=production`
+2. **Cloud indicators**: AWS Lambda, ECS, Kubernetes, Google Cloud Run, Azure Functions
+3. **Default**: `development`
+
+```bash
+# Set environment explicitly
+export DATAKNOBS_ENVIRONMENT=production
+
+# Or auto-detect based on cloud environment
+# (AWS_EXECUTION_ENV, KUBERNETES_SERVICE_HOST, etc.)
+```
+
+### Resource Reference Syntax
+
+```yaml
+# Full syntax with type
+llm:
+  $resource: default
+  type: llm_providers
+  temperature: 0.7  # Override/default value
+
+# Supported resource types
+# - llm_providers
+# - databases
+# - vector_stores
+# - embedding_providers
+```
+
+Additional fields in a resource reference are merged with the resolved config:
+
+```yaml
+# In bot config
+llm:
+  $resource: default
+  type: llm_providers
+  temperature: 0.9  # Override the environment's default
+
+# If environment defines:
+# llm_providers:
+#   default:
+#     provider: openai
+#     model: gpt-4
+#     temperature: 0.7
+
+# Resolved config:
+# provider: openai
+# model: gpt-4
+# temperature: 0.9  # Overridden!
+```
+
+### Best Practices
+
+1. **Store portable configs**: Only store configs with `$resource` references in databases
+2. **Resolve at instantiation**: Call `resolve_for_build()` immediately before creating objects
+3. **Use environment variables for secrets**: Never hardcode API keys or credentials
+4. **Define all environments**: Create config files for development, staging, and production
+5. **Use logical names consistently**: Use the same logical names across all environment configs
 
 ---
 
@@ -984,6 +1169,104 @@ For comprehensive middleware documentation, see the [Middleware Guide](middlewar
 
 ---
 
+## Resource Resolution
+
+The `dataknobs_bots.config` module provides utilities for resolving resources from environment configurations.
+
+### BotResourceResolver
+
+High-level resolver that automatically initializes resources:
+
+```python
+from dataknobs_config import EnvironmentConfig
+from dataknobs_bots.config import BotResourceResolver
+
+# Load environment
+env = EnvironmentConfig.load()  # Auto-detects environment
+
+# Create resolver
+resolver = BotResourceResolver(env)
+
+# Get initialized LLM (calls initialize() automatically)
+llm = await resolver.get_llm("default")
+
+# Get connected database (calls connect() automatically)
+db = await resolver.get_database("conversations")
+
+# Get initialized vector store (calls initialize() automatically)
+vs = await resolver.get_vector_store("knowledge")
+
+# Get initialized embedding provider
+embedder = await resolver.get_embedding_provider("default")
+
+# With config overrides
+llm = await resolver.get_llm("default", temperature=0.9)
+
+# Without caching (create new instance)
+llm = await resolver.get_llm("default", use_cache=False)
+
+# Clear cache
+resolver.clear_cache()  # All resources
+resolver.clear_cache("llm_providers")  # Specific type
+```
+
+### create_bot_resolver
+
+Lower-level function for creating a ConfigBindingResolver with DynaBot factories:
+
+```python
+from dataknobs_config import EnvironmentConfig
+from dataknobs_bots.config import create_bot_resolver
+
+env = EnvironmentConfig.load("production")
+resolver = create_bot_resolver(env)
+
+# Resolve without auto-initialization
+llm = resolver.resolve("llm_providers", "default")
+await llm.initialize()  # Manual initialization
+
+# Check registered factories
+resolver.has_factory("llm_providers")  # True
+resolver.get_registered_types()  # ['llm_providers', 'databases', ...]
+```
+
+### Individual Factory Registration
+
+Register factories individually for custom resolvers:
+
+```python
+from dataknobs_config import ConfigBindingResolver, EnvironmentConfig
+from dataknobs_bots.config import (
+    register_llm_factory,
+    register_database_factory,
+    register_vector_store_factory,
+    register_embedding_factory,
+)
+
+env = EnvironmentConfig.load()
+resolver = ConfigBindingResolver(env)
+
+# Register only what you need
+register_llm_factory(resolver)
+register_database_factory(resolver)
+
+# Or use create_bot_resolver with register_defaults=False
+from dataknobs_bots.config import create_bot_resolver
+resolver = create_bot_resolver(env, register_defaults=False)
+register_llm_factory(resolver)  # Register only LLM factory
+```
+
+### Factory Overview
+
+| Resource Type | Factory | Creates |
+|---------------|---------|---------|
+| `llm_providers` | `LLMProviderFactory(is_async=True)` | Async LLM providers |
+| `databases` | `AsyncDatabaseFactory()` | Database backends |
+| `vector_stores` | `VectorStoreFactory()` | Vector store backends |
+| `embedding_providers` | `LLMProviderFactory(is_async=True)` | Embedding providers |
+
+---
+
 ## Environment Variables
 
 ### Using Environment Variables
@@ -1207,8 +1490,8 @@ def validate_config(config: dict) -> None:
 
 ## See Also
 
+- [Migration Guide](migration.md) - Migrate existing configs to environment-aware pattern
 - [API Reference](../api/reference.md) - Complete API documentation
 - [User Guide](user-guide.md) - Tutorials and how-to guides
 - [Tools Development](tools.md) - Creating custom tools
 - [Architecture](architecture.md) - System design
-- [Examples](../examples/index.md) - Working configurations

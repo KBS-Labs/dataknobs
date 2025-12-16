@@ -1,0 +1,70 @@
+# Production Environment Configuration
+#
+# This file defines resource bindings for production deployment.
+# Environment variables are resolved at instantiation time (late binding),
+# so sensitive values like API keys are never stored in configuration files.
+#
+# Required environment variables:
+#   - OPENAI_API_KEY: OpenAI API key for LLM and embeddings
+#   - DATABASE_URL: PostgreSQL connection string
+#
+# To use: Set DATAKNOBS_ENVIRONMENT=production
+
+name: production
+description: Production environment
+
+# Environment-wide settings
+settings:
+  log_level: INFO
+  enable_metrics: true
+  enable_tracing: true
+
+# Resource bindings: logical_name -> concrete implementation
+resources:
+  # LLM providers - OpenAI for production
+  llm_providers:
+    default:
+      provider: openai
+      model: gpt-4
+      api_key: ${OPENAI_API_KEY}
+      temperature: 0.7
+      max_tokens: 2000
+
+    fast:
+      provider: openai
+      model: gpt-3.5-turbo
+      api_key: ${OPENAI_API_KEY}
+      temperature: 0.5
+      max_tokens: 1000
+
+  # Database backends - PostgreSQL for production
+  databases:
+    default:
+      backend: postgres
+      connection_string: ${DATABASE_URL}
+      pool_size: 10
+
+    conversations:
+      backend: postgres
+      connection_string: ${DATABASE_URL}
+      pool_size: 20
+
+  # Vector stores - pgvector for production
+  vector_stores:
+    default:
+      backend: pgvector
+      connection_string: ${DATABASE_URL}
+      dimensions: 1536
+
+    knowledge:
+      backend: pgvector
+      connection_string: ${DATABASE_URL}
+      dimensions: 1536
+      table: knowledge_vectors
+
+  # Embedding providers - OpenAI for production
+  embedding_providers:
+    default:
+      provider: openai
+      model: text-embedding-3-small
+      api_key: ${OPENAI_API_KEY}

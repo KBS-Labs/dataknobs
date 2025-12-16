@@ -1,0 +1,33 @@
+# Portable Bot Configuration - Simple Chatbot
+#
+# A minimal portable bot configuration demonstrating basic resource references.
+# This configuration works across all environments without modification.
+
+name: simple-chatbot
+version: "1.0.0"
+description: Simple chatbot with memory
+
+bot:
+  # LLM configuration with resource reference
+  llm:
+    $resource: default
+    type: llm_providers
+    temperature: 0.8
+    max_tokens: 1000
+
+  # Conversation storage with resource reference
+  conversation_storage:
+    $resource: conversations
+    type: databases
+
+  # Memory configuration (portable - no resource reference needed)
+  memory:
+    type: buffer
+    max_messages: 10
+
+  # Simple system prompt (portable)
+  system_prompt: "You are a friendly chatbot. Be helpful and concise."
+
+  # Simple reasoning (portable)
+  reasoning:
+    strategy: simple

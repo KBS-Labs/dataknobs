@@ -239,6 +239,35 @@ If you run out of memory:
 | llama3.1:8b | 8 GB | Advanced reasoning, tool use |
 | nomic-embed-text | ~270 MB | Embeddings for RAG |
 
+## Configuration Examples
+
+The `configs/` directory contains example configuration files demonstrating environment-aware patterns:
+
+### Environment Configs (`configs/environments/`)
+
+- **development.yaml** - Local development with Ollama and in-memory storage
+- **staging.yaml** - Staging environment with OpenAI and PostgreSQL
+- **production.yaml** - Production environment with OpenAI and PostgreSQL
+
+### Bot Configs (`configs/bots/`)
+
+- **assistant.yaml** - Full-featured customer support assistant with RAG
+- **simple-chatbot.yaml** - Minimal portable chatbot configuration
+- **research-agent.yaml** - Research agent with tools and vector memory
+
+These configs use **logical resource references** (`$resource`) instead of hardcoded infrastructure, making them portable across environments:
+
+```yaml
+# Portable config - works in any environment
+bot:
+  llm:
+    $resource: default          # Resolved at runtime
+    type: llm_providers
+    temperature: 0.7
+```
+
+See the [Migration Guide](../docs/MIGRATION.md) for how to convert existing configs.
+
 ## Next Steps
 
 After trying the examples:
@@ -247,3 +276,4 @@ After trying the examples:
 3. Add your own documents to the knowledge base
 4. Implement custom memory strategies
 5. Build your own middleware for logging/monitoring
+6. Try environment-aware configuration patterns
