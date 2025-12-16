@@ -264,6 +264,7 @@ class TestEnvVarResolution:
     def test_resolve_env_vars(self, config_with_env_vars, monkeypatch):
         """Test resolving environment variables."""
         monkeypatch.setenv("API_KEY", "secret123")
+        monkeypatch.delenv("DATABASE_URL", raising=False)
 
         config = EnvironmentAwareConfig(config=config_with_env_vars)
         resolved = config.resolve_for_build()
