@@ -1,10 +1,33 @@
-"""Bot manager for multi-tenant bot instances."""
+"""Bot manager for multi-tenant bot instances.
+
+.. deprecated::
+    This module is deprecated. Use :class:`dataknobs_bots.bot.BotRegistry` instead,
+    which provides the same functionality plus persistent storage backends,
+    environment-aware configuration resolution, and TTL-based caching.
+
+    For simple in-memory usage, use :class:`dataknobs_bots.bot.InMemoryBotRegistry`.
+
+    Migration example::
+
+        # Old (deprecated)
+        from dataknobs_bots import BotManager
+        manager = BotManager()
+        bot = await manager.get_or_create("my-bot", config)
+
+        # New (recommended)
+        from dataknobs_bots.bot import InMemoryBotRegistry
+        registry = InMemoryBotRegistry(validate_on_register=False)
+        await registry.initialize()
+        await registry.register("my-bot", config)
+        bot = await registry.get_bot("my-bot")
+"""
 
 from __future__ import annotations
 
 import asyncio
 import inspect
 import logging
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
 
@@ -14,6 +37,13 @@ if TYPE_CHECKING:
     from dataknobs_config import EnvironmentAwareConfig, EnvironmentConfig
 
 logger = logging.getLogger(__name__)
+
+_DEPRECATION_MESSAGE = (
+    "BotManager is deprecated and will be removed in a future version. "
+    "Use BotRegistry or InMemoryBotRegistry instead, which provide persistent "
+    "storage backends, environment-aware resolution, and TTL caching. "
+    "See dataknobs_bots.bot.BotRegistry for details."
+)
 
 
 @runtime_checkable
@@ -44,6 +74,9 @@ ConfigLoaderType = (
 
 class BotManager:
     """Manages multiple DynaBot instances for multi-tenancy.
+
+    .. deprecated::
+        Use :class:`BotRegistry` or :class:`InMemoryBotRegistry` instead.
 
     BotManager handles:
     - Bot instance creation and caching
@@ -112,6 +145,8 @@ class BotManager:
             env_dir: Directory containing environment config files.
                 Only used if environment is a string name.
         """
+        warnings.warn(_DEPRECATION_MESSAGE, DeprecationWarning, stacklevel=2)
+
         self._bots: dict[str, DynaBot] = {}
         self._config_loader = config_loader
         self._env_dir = Path(env_dir)
