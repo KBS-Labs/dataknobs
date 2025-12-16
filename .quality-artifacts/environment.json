@@ -1,11 +1,11 @@
 {
-  "timestamp": "2025-12-15T21:31:06Z",
+  "timestamp": "2025-12-16T20:26:06Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.9.17 (Homebrew 2025-12-09)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "update-dependencies",
-  "git_commit": "6171804cec60d838a8c6d6860465878099dc5311",
+  "git_branch": "sbk/multi-layered-bot-config",
+  "git_commit": "96e0130a4fabc56a401b9303d482ffc2e50f3abd",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
