@@ -1,45 +1,102 @@
-"""Multi-tenant bot registry with caching."""
+"""Multi-tenant bot registry with pluggable storage backends.
+
+This module provides a registry for managing bot configurations and instances
+across multiple tenants. It combines:
+- Pluggable storage backends (via RegistryBackend protocol)
+- Environment-aware configuration resolution
+- Portability validation for cross-environment deployments
+- Bot instance caching with TTL
+
+Example:
+    ```python
+    from dataknobs_bots.bot import BotRegistry
+    from dataknobs_bots.registry import InMemoryBackend
+
+    # Create registry with in-memory storage
+    registry = BotRegistry(
+        backend=InMemoryBackend(),
+        environment="production",
+    )
+    await registry.initialize()
+
+    # Register a portable bot configuration
+    await registry.register("my-bot", {
+        "bot": {
+            "llm": {"$resource": "default", "type": "llm_providers"},
+            "conversation_storage": {"$resource": "db", "type": "databases"},
+        }
+    })
+
+    # Get bot instance (resolves $resource references)
+    bot = await registry.get_bot("my-bot")
+    response = await bot.chat(message, context)
+
+    # Cleanup
+    await registry.close()
+    ```
+"""
+
+from __future__ import annotations
 
 import asyncio
+import logging
 import time
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-from dataknobs_config import Config
-
+from ..registry import InMemoryBackend, RegistryBackend, validate_portability
 from .base import DynaBot
+
+if TYPE_CHECKING:
+    from dataknobs_config import EnvironmentConfig
+
+    from ..registry import Registration
+
+logger = logging.getLogger(__name__)
 
 
 class BotRegistry:
-    """Multi-tenant bot registry with caching.
+    """Multi-tenant bot registry with caching and environment support.
 
     The BotRegistry manages multiple bot instances for different clients/tenants.
     It provides:
-    - Automatic bot creation from configuration
-    - LRU-style caching with TTL
+    - Pluggable storage backends via RegistryBackend protocol
+    - Environment-aware configuration resolution
+    - Portability validation to ensure configs work across environments
+    - LRU-style caching with TTL for bot instances
     - Thread-safe access
-    - Dynamic configuration updates
 
     This enables:
     - Multi-tenant SaaS platforms
     - A/B testing with different bot configurations
     - Horizontal scaling with stateless bot instances
+    - Cross-environment deployment with portable configs
 
     Attributes:
-        config: Configuration object
+        backend: Storage backend for configurations
+        environment: Environment for $resource resolution
         cache_ttl: Time-to-live for cached bots in seconds
         max_cache_size: Maximum number of bots to cache
-        _cache: Internal cache mapping client_id to (bot, timestamp)
-        _lock: Asyncio lock for thread-safe access
 
     Example:
         ```python
-        from dataknobs_config import Config
-
-        # Load configuration
-        config = Config("config/bots.yaml")
+        from dataknobs_bots.bot import BotRegistry
+        from dataknobs_bots.registry import InMemoryBackend
 
         # Create registry
-        registry = BotRegistry(config, cache_ttl=300)
+        registry = BotRegistry(
+            backend=InMemoryBackend(),
+            environment="production",
+            cache_ttl=300,
+        )
+        await registry.initialize()
+
+        # Register portable configuration
+        await registry.register("client-123", {
+            "bot": {
+                "llm": {"$resource": "default", "type": "llm_providers"},
+            }
+        })
 
         # Get bot for a client
         bot = await registry.get_bot("client-123")
@@ -51,134 +108,180 @@ class BotRegistry:
 
     def __init__(
         self,
-        config: Config | dict[str, Any],
+        backend: RegistryBackend | None = None,
+        environment: EnvironmentConfig | str | None = None,
+        env_dir: str | Path = "config/environments",
         cache_ttl: int = 300,
         max_cache_size: int = 1000,
+        validate_on_register: bool = True,
+        config_key: str = "bot",
     ):
         """Initialize bot registry.
 
         Args:
-            config: Configuration object or dictionary
+            backend: Storage backend for configurations.
+                If None, uses InMemoryBackend.
+            environment: Environment name or EnvironmentConfig for
+                $resource resolution. If None, configs are used as-is
+                without environment resolution.
+            env_dir: Directory containing environment config files.
+                Only used if environment is a string name.
             cache_ttl: Cache time-to-live in seconds (default: 300)
             max_cache_size: Maximum cached bots (default: 1000)
+            validate_on_register: If True, validate config portability
+                when registering (default: True)
+            config_key: Key within config containing bot configuration.
+                Defaults to "bot". Used during environment resolution.
         """
-        # Store config as-is (don't wrap dicts in Config since Config
-        # transforms the structure in ways that make nested access difficult)
-        self.config = config
+        self._backend = backend or InMemoryBackend()
+        self._env_dir = Path(env_dir)
+        self._cache_ttl = cache_ttl
+        self._max_cache_size = max_cache_size
+        self._validate_on_register = validate_on_register
+        self._config_key = config_key
 
-        self.cache_ttl = cache_ttl
-        self.max_cache_size = max_cache_size
+        # Bot instance cache: bot_id -> (DynaBot, cached_timestamp)
         self._cache: dict[str, tuple[DynaBot, float]] = {}
         self._lock = asyncio.Lock()
+        self._initialized = False
 
-    def _get_bot_config(self, client_id: str) -> dict[str, Any]:
-        """Get bot configuration for a client.
+        # Load environment config if specified
+        self._environment: EnvironmentConfig | None = None
+        if environment is not None:
+            try:
+                from dataknobs_config import EnvironmentConfig as EnvConfig
+
+                if isinstance(environment, str):
+                    self._environment = EnvConfig.load(environment, env_dir)
+                else:
+                    self._environment = environment
+                logger.info(f"BotRegistry using environment: {self._environment.name}")
+            except ImportError:
+                logger.warning(
+                    "dataknobs_config not installed, environment-aware features disabled"
+                )
+
+    @property
+    def backend(self) -> RegistryBackend:
+        """Get the storage backend."""
+        return self._backend
+
+    @property
+    def environment(self) -> EnvironmentConfig | None:
+        """Get current environment config, or None if not environment-aware."""
+        return self._environment
+
+    @property
+    def environment_name(self) -> str | None:
+        """Get current environment name, or None if not environment-aware."""
+        return self._environment.name if self._environment else None
+
+    @property
+    def cache_ttl(self) -> int:
+        """Get cache TTL in seconds."""
+        return self._cache_ttl
+
+    @property
+    def max_cache_size(self) -> int:
+        """Get maximum cache size."""
+        return self._max_cache_size
+
+    async def initialize(self) -> None:
+        """Initialize the registry and backend.
+
+        Must be called before using the registry.
+        """
+        if not self._initialized:
+            await self._backend.initialize()
+            self._initialized = True
+            logger.info("BotRegistry initialized")
+
+    async def close(self) -> None:
+        """Close the registry and backend.
+
+        Clears the bot cache and closes the storage backend.
+        """
+        async with self._lock:
+            self._cache.clear()
+        await self._backend.close()
+        self._initialized = False
+        logger.info("BotRegistry closed")
+
+    async def register(
+        self,
+        bot_id: str,
+        config: dict[str, Any],
+        status: str = "active",
+        skip_validation: bool = False,
+    ) -> Registration:
+        """Register or update a bot configuration.
+
+        Stores a portable configuration in the backend. By default, validates
+        that the configuration is portable (no resolved local values).
 
         Args:
-            client_id: Client/tenant identifier
+            bot_id: Unique bot identifier
+            config: Bot configuration dictionary (should be portable)
+            status: Registration status (default: active)
+            skip_validation: If True, skip portability validation
 
         Returns:
-            Bot configuration dictionary
+            Registration object with metadata
 
         Raises:
-            KeyError: If no configuration exists for the client
+            PortabilityError: If config is not portable and validation is enabled
+
+        Example:
+            ```python
+            # Register with portable config
+            reg = await registry.register("support-bot", {
+                "bot": {
+                    "llm": {"$resource": "default", "type": "llm_providers"},
+                }
+            })
+            print(f"Registered at: {reg.created_at}")
+
+            # Update existing registration
+            reg = await registry.register("support-bot", new_config)
+            print(f"Updated at: {reg.updated_at}")
+            ```
         """
-        if isinstance(self.config, dict):
-            # Plain dict: {"bots": {"client-1": {...}, ...}}
-            if "bots" not in self.config:
-                raise KeyError(f"No bot configuration found for client: {client_id}")
-            bots = self.config["bots"]
+        # Validate portability if enabled
+        if self._validate_on_register and not skip_validation:
+            validate_portability(config)
 
-            if isinstance(bots, dict):
-                bot_config = bots.get(client_id)
-            else:
-                raise ValueError(f"Invalid bots configuration format: {type(bots)}")
+        # Store in backend
+        registration = await self._backend.register(bot_id, config, status)
 
-            if bot_config is None:
-                raise KeyError(f"No bot configuration found for client: {client_id}")
-            return bot_config
-        else:
-            # Config object: _data is Dict[str, List[Dict]]
-            if "bots" not in self.config._data:
-                raise KeyError(f"No bot configuration found for client: {client_id}")
+        # Invalidate cache for this bot
+        async with self._lock:
+            if bot_id in self._cache:
+                del self._cache[bot_id]
+                logger.debug(f"Invalidated cache for bot: {bot_id}")
 
-            bots_list = self.config._data["bots"]
-            # Find bot in list by matching client_id key or name field
-            for bot_dict in bots_list:
-                if client_id in bot_dict:
-                    return bot_dict[client_id]
-                elif bot_dict.get("name") == client_id:
-                    return bot_dict
+        logger.info(f"Registered bot: {bot_id}")
+        return registration
 
-            raise KeyError(f"No bot configuration found for client: {client_id}")
-
-    def _set_bot_config(self, client_id: str, bot_config: dict[str, Any]) -> None:
-        """Set bot configuration for a client.
-
-        Args:
-            client_id: Client/tenant identifier
-            bot_config: Bot configuration dictionary
-        """
-        if isinstance(self.config, dict):
-            # Plain dict format
-            if "bots" not in self.config:
-                self.config["bots"] = {}
-
-            if not isinstance(self.config["bots"], dict):
-                self.config["bots"] = {}
-
-            self.config["bots"][client_id] = bot_config
-        else:
-            # Config object format
-            if "bots" not in self.config._data:
-                self.config._data["bots"] = []
-
-            bots_list = self.config._data["bots"]
-            # Find and update existing, or append new
-            found = False
-            for i, bot_dict in enumerate(bots_list):
-                if client_id in bot_dict or bot_dict.get("name") == client_id:
-                    bots_list[i] = {client_id: bot_config}
-                    found = True
-                    break
-
-            if not found:
-                bots_list.append({client_id: bot_config})
-
-    def _remove_bot_config(self, client_id: str) -> None:
-        """Remove bot configuration for a client.
-
-        Args:
-            client_id: Client/tenant identifier
-        """
-        if isinstance(self.config, dict):
-            # Plain dict format
-            if "bots" in self.config and isinstance(self.config["bots"], dict):
-                self.config["bots"].pop(client_id, None)
-        else:
-            # Config object format
-            if "bots" in self.config._data:
-                bots_list = self.config._data["bots"]
-                self.config._data["bots"] = [
-                    bot_dict for bot_dict in bots_list
-                    if client_id not in bot_dict and bot_dict.get("name") != client_id
-                ]
-
-    async def get_bot(self, client_id: str, force_refresh: bool = False) -> DynaBot:
+    async def get_bot(
+        self,
+        bot_id: str,
+        force_refresh: bool = False,
+    ) -> DynaBot:
         """Get bot instance for a client.
 
         Bots are cached for performance. If a cached bot exists and hasn't
-        expired, it's returned. Otherwise, a new bot is created from configuration.
+        expired, it's returned. Otherwise, a new bot is created from the
+        stored configuration with environment resolution applied.
 
         Args:
-            client_id: Client/tenant identifier
+            bot_id: Bot identifier
             force_refresh: If True, bypass cache and create fresh bot
 
         Returns:
             DynaBot instance for the client
 
         Raises:
-            KeyError: If no configuration exists for the client
+            KeyError: If no registration exists for the bot_id
             ValueError: If bot configuration is invalid
 
         Example:
@@ -192,103 +295,148 @@ class BotRegistry:
         """
         async with self._lock:
             # Check cache
-            if not force_refresh and client_id in self._cache:
-                bot, cached_at = self._cache[client_id]
-                if time.time() - cached_at < self.cache_ttl:
+            if not force_refresh and bot_id in self._cache:
+                bot, cached_at = self._cache[bot_id]
+                if time.time() - cached_at < self._cache_ttl:
+                    logger.debug(f"Returning cached bot: {bot_id}")
                     return bot
 
-            # Load bot configuration using helper
-            bot_config = self._get_bot_config(client_id)
+            # Load configuration from backend
+            config = await self._backend.get_config(bot_id)
+            if config is None:
+                raise KeyError(f"No bot configuration found for: {bot_id}")
 
-            # Create bot from configuration
-            bot = await DynaBot.from_config(bot_config)
+            # Create bot with environment resolution if configured
+            if self._environment is not None:
+                logger.debug(f"Creating bot with environment resolution: {bot_id}")
+                bot = await DynaBot.from_environment_aware_config(
+                    config,
+                    environment=self._environment,
+                    env_dir=self._env_dir,
+                    config_key=self._config_key,
+                )
+            else:
+                # Traditional path - use config as-is
+                # Extract bot config if wrapped in config_key
+                bot_config = config.get(self._config_key, config)
+                logger.debug(f"Creating bot without environment resolution: {bot_id}")
+                bot = await DynaBot.from_config(bot_config)
 
             # Cache the bot
-            self._cache[client_id] = (bot, time.time())
+            self._cache[bot_id] = (bot, time.time())
+            logger.info(f"Created bot: {bot_id}")
 
             # Evict old entries if cache is full
-            if len(self._cache) > self.max_cache_size:
+            if len(self._cache) > self._max_cache_size:
                 self._evict_oldest()
 
             return bot
 
-    async def register_client(
-        self, client_id: str, bot_config: dict[str, Any]
-    ) -> None:
-        """Register or update a client's bot configuration.
+    async def get_config(self, bot_id: str) -> dict[str, Any] | None:
+        """Get stored configuration for a bot.
 
-        This allows dynamic registration of new clients or updating
-        existing client configurations at runtime.
+        Returns the portable configuration as stored, without
+        environment resolution applied.
 
         Args:
-            client_id: Client/tenant identifier
-            bot_config: Bot configuration dictionary
-
-        Example:
-            ```python
-            # Register new client
-            await registry.register_client("new-client", {
-                "llm": {"provider": "openai", "model": "gpt-4"},
-                "conversation_storage": {"backend": "postgres"},
-                "memory": {"type": "buffer", "max_messages": 10}
-            })
-
-            # Bot is now available
-            bot = await registry.get_bot("new-client")
-            ```
-        """
-        async with self._lock:
-            # Update configuration using helper
-            self._set_bot_config(client_id, bot_config)
-
-            # Invalidate cache for this client
-            if client_id in self._cache:
-                del self._cache[client_id]
-
-    async def remove_client(self, client_id: str) -> None:
-        """Remove a client from the registry.
-
-        Args:
-            client_id: Client/tenant identifier
-
-        Example:
-            ```python
-            # Remove client
-            await registry.remove_client("old-client")
-            ```
-        """
-        async with self._lock:
-            # Remove from cache
-            if client_id in self._cache:
-                del self._cache[client_id]
-
-            # Remove from config using helper
-            self._remove_bot_config(client_id)
-
-    def get_cached_clients(self) -> list[str]:
-        """Get list of currently cached client IDs.
+            bot_id: Bot identifier
 
         Returns:
-            List of client IDs with cached bots
+            Configuration dict if found, None otherwise
+        """
+        return await self._backend.get_config(bot_id)
 
-        Example:
-            ```python
-            clients = registry.get_cached_clients()
-            print(f"Cached bots: {clients}")
-            ```
+    async def get_registration(self, bot_id: str) -> Registration | None:
+        """Get full registration including metadata.
+
+        Args:
+            bot_id: Bot identifier
+
+        Returns:
+            Registration if found, None otherwise
+        """
+        return await self._backend.get(bot_id)
+
+    async def unregister(self, bot_id: str) -> bool:
+        """Remove a bot registration (hard delete).
+
+        Args:
+            bot_id: Bot identifier
+
+        Returns:
+            True if removed, False if not found
+        """
+        # Remove from cache
+        async with self._lock:
+            if bot_id in self._cache:
+                del self._cache[bot_id]
+
+        result = await self._backend.unregister(bot_id)
+        if result:
+            logger.info(f"Unregistered bot: {bot_id}")
+        return result
+
+    async def deactivate(self, bot_id: str) -> bool:
+        """Deactivate a bot registration (soft delete).
+
+        Args:
+            bot_id: Bot identifier
+
+        Returns:
+            True if deactivated, False if not found
+        """
+        # Remove from cache
+        async with self._lock:
+            if bot_id in self._cache:
+                del self._cache[bot_id]
+
+        result = await self._backend.deactivate(bot_id)
+        if result:
+            logger.info(f"Deactivated bot: {bot_id}")
+        return result
+
+    async def exists(self, bot_id: str) -> bool:
+        """Check if an active bot registration exists.
+
+        Args:
+            bot_id: Bot identifier
+
+        Returns:
+            True if registration exists and is active
+        """
+        return await self._backend.exists(bot_id)
+
+    async def list_bots(self) -> list[str]:
+        """List all active bot IDs.
+
+        Returns:
+            List of active bot identifiers
+        """
+        return await self._backend.list_ids()
+
+    async def count(self) -> int:
+        """Count active bot registrations.
+
+        Returns:
+            Number of active registrations
+        """
+        return await self._backend.count()
+
+    def get_cached_bots(self) -> list[str]:
+        """Get list of currently cached bot IDs.
+
+        Returns:
+            List of bot IDs with cached instances
         """
         return list(self._cache.keys())
 
     def clear_cache(self) -> None:
-        """Clear all cached bots.
+        """Clear all cached bot instances.
 
-        Example:
-            ```python
-            # Clear cache after config update
-            registry.clear_cache()
-            ```
+        Does not affect stored registrations.
         """
         self._cache.clear()
+        logger.debug("Cleared bot cache")
 
     def _evict_oldest(self) -> None:
         """Evict oldest cache entries when cache is full.
@@ -300,5 +448,104 @@ class BotRegistry:
 
         # Remove oldest 10%
         num_to_remove = max(1, len(sorted_items) // 10)
-        for client_id, _ in sorted_items[:num_to_remove]:
-            del self._cache[client_id]
+        for bot_id, _ in sorted_items[:num_to_remove]:
+            del self._cache[bot_id]
+        logger.debug(f"Evicted {num_to_remove} bots from cache")
+
+    # Legacy compatibility methods
+
+    async def register_client(
+        self, client_id: str, bot_config: dict[str, Any]
+    ) -> None:
+        """Register or update a client's bot configuration.
+
+        .. deprecated::
+            Use :meth:`register` instead.
+
+        Args:
+            client_id: Client/tenant identifier
+            bot_config: Bot configuration dictionary
+        """
+        await self.register(client_id, bot_config)
+
+    async def remove_client(self, client_id: str) -> None:
+        """Remove a client from the registry.
+
+        .. deprecated::
+            Use :meth:`unregister` instead.
+
+        Args:
+            client_id: Client/tenant identifier
+        """
+        await self.unregister(client_id)
+
+    def get_cached_clients(self) -> list[str]:
+        """Get list of currently cached client IDs.
+
+        .. deprecated::
+            Use :meth:`get_cached_bots` instead.
+
+        Returns:
+            List of client IDs with cached bots
+        """
+        return self.get_cached_bots()
+
+    def __repr__(self) -> str:
+        """String representation."""
+        env = f", environment={self._environment.name!r}" if self._environment else ""
+        return (
+            f"BotRegistry(backend={self._backend!r}, "
+            f"cached={len(self._cache)}{env})"
+        )
+
+
+def create_memory_registry(
+    environment: EnvironmentConfig | str | None = None,
+    env_dir: str | Path = "config/environments",
+    cache_ttl: int = 300,
+    max_cache_size: int = 1000,
+    validate_on_register: bool = True,
+    config_key: str = "bot",
+) -> BotRegistry:
+    """Create a BotRegistry with in-memory backend.
+
+    Convenience factory for creating registries suitable for testing
+    or single-instance deployments without external storage.
+
+    Args:
+        environment: Environment name or EnvironmentConfig for
+            $resource resolution. If None, configs are used as-is.
+        env_dir: Directory containing environment config files.
+        cache_ttl: Cache time-to-live in seconds (default: 300)
+        max_cache_size: Maximum cached bots (default: 1000)
+        validate_on_register: If True, validate config portability
+        config_key: Key within config containing bot configuration
+
+    Returns:
+        BotRegistry configured with InMemoryBackend
+
+    Example:
+        ```python
+        from dataknobs_bots.bot import create_memory_registry
+
+        # For testing - no environment resolution
+        registry = create_memory_registry(validate_on_register=False)
+        await registry.initialize()
+
+        await registry.register("test-bot", {"llm": {"provider": "echo"}})
+        bot = await registry.get_bot("test-bot")
+
+        # For development with environment
+        registry = create_memory_registry(environment="development")
+        await registry.initialize()
+        ```
+    """
+    return BotRegistry(
+        backend=InMemoryBackend(),
+        environment=environment,
+        env_dir=env_dir,
+        cache_ttl=cache_ttl,
+        max_cache_size=max_cache_size,
+        validate_on_register=validate_on_register,
+        config_key=config_key,
+    )
