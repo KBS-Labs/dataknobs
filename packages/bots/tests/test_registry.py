@@ -5,7 +5,11 @@ import asyncio
 import pytest
 
 from dataknobs_bots import BotContext
-from dataknobs_bots.bot import BotRegistry, create_memory_registry
+from dataknobs_bots.bot import (
+    BotRegistry,
+    InMemoryBotRegistry,
+    create_memory_registry,
+)
 from dataknobs_bots.registry import InMemoryBackend, PortabilityError
 
 
@@ -15,7 +19,7 @@ class TestBotRegistry:
     @pytest.fixture
     async def registry(self):
         """Create a fresh registry for each test."""
-        reg = create_memory_registry(validate_on_register=False)
+        reg = InMemoryBotRegistry(validate_on_register=False)
         await reg.initialize()
         yield reg
         await reg.close()
@@ -34,7 +38,7 @@ class TestBotRegistry:
     @pytest.mark.asyncio
     async def test_initialize_and_close(self):
         """Test initialize and close lifecycle."""
-        registry = create_memory_registry()
+        registry = InMemoryBotRegistry()
 
         await registry.initialize()
         await registry.register(
@@ -84,7 +88,7 @@ class TestBotRegistry:
     @pytest.mark.asyncio
     async def test_cache_expiry(self):
         """Test cache expiration."""
-        registry = create_memory_registry(
+        registry = InMemoryBotRegistry(
             cache_ttl=0,  # Immediate expiry
             validate_on_register=False,
         )
@@ -375,7 +379,7 @@ class TestBotRegistry:
     @pytest.mark.asyncio
     async def test_cache_eviction(self):
         """Test cache eviction when max size reached."""
-        registry = create_memory_registry(
+        registry = InMemoryBotRegistry(
             max_cache_size=10,
             validate_on_register=False,
         )
@@ -474,7 +478,7 @@ class TestBotRegistryPortability:
     @pytest.fixture
     async def registry_with_validation(self):
         """Create registry with portability validation enabled."""
-        reg = create_memory_registry(validate_on_register=True)
+        reg = InMemoryBotRegistry(validate_on_register=True)
         await reg.initialize()
         yield reg
         await reg.close()
@@ -546,7 +550,7 @@ class TestBotRegistryPortability:
     @pytest.mark.asyncio
     async def test_validation_disabled_in_registry(self):
         """Test registry-level validation disable."""
-        registry = create_memory_registry(validate_on_register=False)
+        registry = InMemoryBotRegistry(validate_on_register=False)
         await registry.initialize()
 
         try:
@@ -568,7 +572,7 @@ class TestBotRegistryLegacyMethods:
     @pytest.fixture
     async def registry(self):
         """Create a fresh registry for each test."""
-        reg = create_memory_registry(validate_on_register=False)
+        reg = InMemoryBotRegistry(validate_on_register=False)
         await reg.initialize()
         yield reg
         await reg.close()
@@ -683,23 +687,45 @@ class TestCreateMemoryRegistry:
             await registry.close()
 
 
-class TestBotRegistryRepr:
-    """Tests for string representation."""
+class TestInMemoryBotRegistry:
+    """Tests for InMemoryBotRegistry class."""
 
     @pytest.mark.asyncio
-    async def test_repr_without_environment(self):
-        """Test repr without environment."""
-        registry = create_memory_registry()
+    async def test_uses_inmemory_backend(self):
+        """Test InMemoryBotRegistry uses InMemoryBackend."""
+        registry = InMemoryBotRegistry()
+        assert isinstance(registry.backend, InMemoryBackend)
+
+    @pytest.mark.asyncio
+    async def test_passes_through_options(self):
+        """Test constructor passes options to base class."""
+        registry = InMemoryBotRegistry(
+            cache_ttl=600,
+            max_cache_size=500,
+            validate_on_register=False,
+            config_key="custom",
+        )
+
+        assert registry.cache_ttl == 600
+        assert registry.max_cache_size == 500
+        assert registry._validate_on_register is False
+        assert registry._config_key == "custom"
+
+    @pytest.mark.asyncio
+    async def test_repr(self):
+        """Test InMemoryBotRegistry repr."""
+        registry = InMemoryBotRegistry()
         repr_str = repr(registry)
 
-        assert "BotRegistry" in repr_str
-        assert "InMemoryBackend" in repr_str
+        assert "InMemoryBotRegistry" in repr_str
         assert "cached=0" in repr_str
+        # Should not show backend (it's implied by the class name)
+        assert "InMemoryBackend" not in repr_str
 
     @pytest.mark.asyncio
     async def test_repr_with_cached_bots(self):
         """Test repr shows cached count."""
-        registry = create_memory_registry(validate_on_register=False)
+        registry = InMemoryBotRegistry(validate_on_register=False)
         await registry.initialize()
 
         try:
@@ -713,6 +739,137 @@ class TestBotRegistryRepr:
             await registry.get_bot("bot-1")
 
             repr_str = repr(registry)
+            assert "InMemoryBotRegistry" in repr_str
+            assert "cached=1" in repr_str
+        finally:
+            await registry.close()
+
+    @pytest.mark.asyncio
+    async def test_clear(self):
+        """Test clear() removes all registrations and cache."""
+        registry = InMemoryBotRegistry(validate_on_register=False)
+        await registry.initialize()
+
+        try:
+            # Register and cache some bots
+            await registry.register(
+                "bot-1",
+                {
+                    "llm": {"provider": "echo", "model": "test"},
+                    "conversation_storage": {"backend": "memory"},
+                },
+            )
+            await registry.register(
+                "bot-2",
+                {
+                    "llm": {"provider": "echo", "model": "test"},
+                    "conversation_storage": {"backend": "memory"},
+                },
+            )
+            await registry.get_bot("bot-1")
+            await registry.get_bot("bot-2")
+
+            assert await registry.count() == 2
+            assert len(registry.get_cached_bots()) == 2
+
+            # Clear everything
+            await registry.clear()
+
+            assert await registry.count() == 0
+            assert len(registry.get_cached_bots()) == 0
+        finally:
+            await registry.close()
+
+
+class TestCreateMemoryRegistry:
+    """Tests for create_memory_registry factory."""
+
+    @pytest.mark.asyncio
+    async def test_creates_inmemory_bot_registry(self):
+        """Test factory creates InMemoryBotRegistry."""
+        registry = create_memory_registry()
+        await registry.initialize()
+
+        try:
+            assert isinstance(registry, InMemoryBotRegistry)
+            assert isinstance(registry.backend, InMemoryBackend)
+        finally:
+            await registry.close()
+
+    @pytest.mark.asyncio
+    async def test_passes_through_options(self):
+        """Test factory passes options to InMemoryBotRegistry."""
+        registry = create_memory_registry(
+            cache_ttl=600,
+            max_cache_size=500,
+            validate_on_register=False,
+            config_key="custom",
+        )
+
+        assert registry.cache_ttl == 600
+        assert registry.max_cache_size == 500
+        assert registry._validate_on_register is False
+        assert registry._config_key == "custom"
+
+    @pytest.mark.asyncio
+    async def test_for_testing_workflow(self):
+        """Test typical testing workflow."""
+        registry = create_memory_registry(validate_on_register=False)
+        await registry.initialize()
+
+        try:
+            # Register test bot
+            await registry.register(
+                "test-bot",
+                {
+                    "llm": {"provider": "echo", "model": "test"},
+                    "conversation_storage": {"backend": "memory"},
+                },
+            )
+
+            # Get bot
+            bot = await registry.get_bot("test-bot")
+            assert bot is not None
+
+            # Count
+            assert await registry.count() == 1
+        finally:
+            await registry.close()
+
+
+class TestBotRegistryRepr:
+    """Tests for BotRegistry string representation."""
+
+    @pytest.mark.asyncio
+    async def test_repr_without_environment(self):
+        """Test repr without environment."""
+        backend = InMemoryBackend()
+        registry = BotRegistry(backend=backend)
+        repr_str = repr(registry)
+
+        assert "BotRegistry" in repr_str
+        assert "InMemoryBackend" in repr_str
+        assert "cached=0" in repr_str
+
+    @pytest.mark.asyncio
+    async def test_repr_with_cached_bots(self):
+        """Test repr shows cached count."""
+        backend = InMemoryBackend()
+        registry = BotRegistry(backend=backend, validate_on_register=False)
+        await registry.initialize()
+
+        try:
+            await registry.register(
+                "bot-1",
+                {
+                    "llm": {"provider": "echo", "model": "test"},
+                    "conversation_storage": {"backend": "memory"},
+                },
+            )
+            await registry.get_bot("bot-1")
+
+            repr_str = repr(registry)
+            assert "BotRegistry" in repr_str
             assert "cached=1" in repr_str
         finally:
             await registry.close()

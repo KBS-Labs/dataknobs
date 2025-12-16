@@ -499,6 +499,90 @@ class BotRegistry:
         )
 
 
+class InMemoryBotRegistry(BotRegistry):
+    """BotRegistry with in-memory storage backend.
+
+    A convenience subclass that uses InMemoryBackend for storage,
+    suitable for testing, CLIs, and single-instance deployments.
+
+    Unlike the base BotRegistry which accepts a pluggable backend,
+    this class always uses in-memory storage and doesn't require
+    external dependencies like databases.
+
+    Example:
+        ```python
+        from dataknobs_bots.bot import InMemoryBotRegistry
+
+        # For testing - no environment resolution
+        registry = InMemoryBotRegistry(validate_on_register=False)
+        await registry.initialize()
+
+        await registry.register("test-bot", {"llm": {"provider": "echo"}})
+        bot = await registry.get_bot("test-bot")
+
+        # For development with environment
+        registry = InMemoryBotRegistry(environment="development")
+        await registry.initialize()
+        ```
+    """
+
+    def __init__(
+        self,
+        environment: EnvironmentConfig | str | None = None,
+        env_dir: str | Path = "config/environments",
+        cache_ttl: int = 300,
+        max_cache_size: int = 1000,
+        validate_on_register: bool = True,
+        config_key: str = "bot",
+    ):
+        """Initialize in-memory bot registry.
+
+        Args:
+            environment: Environment name or EnvironmentConfig for
+                $resource resolution. If None, configs are used as-is
+                without environment resolution.
+            env_dir: Directory containing environment config files.
+                Only used if environment is a string name.
+            cache_ttl: Cache time-to-live in seconds (default: 300)
+            max_cache_size: Maximum cached bots (default: 1000)
+            validate_on_register: If True, validate config portability
+                when registering (default: True)
+            config_key: Key within config containing bot configuration.
+                Defaults to "bot". Used during environment resolution.
+        """
+        super().__init__(
+            backend=InMemoryBackend(),
+            environment=environment,
+            env_dir=env_dir,
+            cache_ttl=cache_ttl,
+            max_cache_size=max_cache_size,
+            validate_on_register=validate_on_register,
+            config_key=config_key,
+        )
+
+    async def clear(self) -> None:
+        """Clear all registrations and cached bots.
+
+        Convenience method for test cleanup that clears both the
+        backend storage and the bot instance cache.
+
+        Example:
+            ```python
+            # In tests - reset between test cases
+            await registry.clear()
+            assert await registry.count() == 0
+            ```
+        """
+        await self._backend.clear()
+        self._cache.clear()
+        logger.debug("Cleared all registrations and cache")
+
+    def __repr__(self) -> str:
+        """String representation."""
+        env = f", environment={self._environment.name!r}" if self._environment else ""
+        return f"InMemoryBotRegistry(cached={len(self._cache)}{env})"
+
+
 def create_memory_registry(
     environment: EnvironmentConfig | str | None = None,
     env_dir: str | Path = "config/environments",
@@ -506,11 +590,11 @@ def create_memory_registry(
     max_cache_size: int = 1000,
     validate_on_register: bool = True,
     config_key: str = "bot",
-) -> BotRegistry:
-    """Create a BotRegistry with in-memory backend.
+) -> InMemoryBotRegistry:
+    """Create an InMemoryBotRegistry.
 
-    Convenience factory for creating registries suitable for testing
-    or single-instance deployments without external storage.
+    Convenience factory for creating in-memory registries suitable for
+    testing, CLIs, or single-instance deployments.
 
     Args:
         environment: Environment name or EnvironmentConfig for
@@ -522,26 +606,20 @@ def create_memory_registry(
         config_key: Key within config containing bot configuration
 
     Returns:
-        BotRegistry configured with InMemoryBackend
+        InMemoryBotRegistry instance
 
     Example:
         ```python
         from dataknobs_bots.bot import create_memory_registry
 
-        # For testing - no environment resolution
         registry = create_memory_registry(validate_on_register=False)
         await registry.initialize()
 
         await registry.register("test-bot", {"llm": {"provider": "echo"}})
         bot = await registry.get_bot("test-bot")
-
-        # For development with environment
-        registry = create_memory_registry(environment="development")
-        await registry.initialize()
         ```
     """
-    return BotRegistry(
-        backend=InMemoryBackend(),
+    return InMemoryBotRegistry(
         environment=environment,
         env_dir=env_dir,
         cache_ttl=cache_ttl,
