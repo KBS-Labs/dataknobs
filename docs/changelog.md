@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## Release - 2025-12-26
+
+### dataknobs-xization [1.2.2]
+
+#### Added
+- JSON chunking
+- Knowledge base ingestion
+
+### dataknobs-data [0.4.4]
+
+#### Added
+- Hybrid search types
+- Backend hybrid search integration
+
+### dataknobs-bots [0.2.5]
+
+#### Added
+- RAGKnowledgeBase hybrid search enhancements
+
+
 ## Release - 2025-12-16
 
 ### dataknobs-config [0.3.2]
