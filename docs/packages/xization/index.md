@@ -22,6 +22,14 @@ The Xization package specializes in text preprocessing and includes:
   - Supports code blocks, tables, lists, and other markdown constructs
   - Streaming support for large documents
   - Flexible configuration for chunk size, overlap, and heading inclusion
+- **JSON Chunking**: Chunk JSON and JSONL documents for RAG applications
+  - Template-based or field-selection text generation
+  - Streaming support for large JSONL files
+  - GZIP compression support
+- **Knowledge Base Ingestion**: Batch process directories of documents
+  - Pattern-based file selection with exclusions
+  - Per-file type configuration
+  - Config file support (JSON/YAML)
 - **Tokenization**: Advanced character-based and feature-driven tokenization
 - **Normalization**: Text normalization with camelCase expansion, symbol handling
 - **Masking**: Character-level masking and feature extraction
@@ -489,6 +497,8 @@ For complete API documentation, see the [Xization API Reference](api.md).
 ## Module Documentation
 
 - [Markdown Chunking](markdown-chunking.md) - Parse and chunk markdown for RAG
+- [JSON Chunking](json-chunking.md) - Chunk JSON and JSONL documents
+- [Ingestion Module](ingestion.md) - Batch directory processing
 - [Tokenization](tokenization.md) - Character-based tokenization
 - [Normalization](normalization.md) - Text normalization functions
 - [Masking](masking.md) - Character masking and features

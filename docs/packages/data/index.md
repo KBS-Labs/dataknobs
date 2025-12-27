@@ -127,10 +127,12 @@ With the new async connection pooling system:
 
 - [Async Connection Pooling](async-pooling.md) - High-performance async operations
 - [Performance Tuning](performance-tuning.md) - Optimization strategies
+- [Hybrid Search](hybrid-search.md) - Combined text + vector search
 - [Backends Overview](backends.md) - Learn about all available backends
 - [SQLite Backend](sqlite-backend.md) - Embedded SQL database for transactions
 - [DuckDB Backend](duckdb-backend.md) - High-performance analytics database
 - [PostgreSQL Backend](postgres-backend.md) - Full-featured SQL server
+- [Elasticsearch Backend](elasticsearch-backend.md) - Full-text search and analytics
 - [S3 Backend](s3-backend.md) - Cloud storage with AWS S3
 - [Factory Pattern](factory-pattern.md) - Dynamic backend selection
 - [Configuration](configuration.md) - Advanced configuration options

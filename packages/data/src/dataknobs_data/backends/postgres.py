@@ -33,6 +33,7 @@ from .postgres_mixins import (
     PostgresVectorSupport,
 )
 from .sql_base import SQLQueryBuilder, SQLRecordSerializer
+from ..vector.types import DistanceMetric
 
 if TYPE_CHECKING:
     import numpy as np
@@ -40,7 +41,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator, Callable, Awaitable
     from ..fields import VectorField
     from ..records import Record
-    from ..vector.types import DistanceMetric, VectorSearchResult
+    from ..vector.types import VectorSearchResult
 
 logger = logging.getLogger(__name__)
 
@@ -1707,3 +1708,308 @@ class AsyncPostgresDatabase(
             )
 
         return ids
+
+    async def _supports_native_hybrid(self) -> bool:
+        """Check if this PostgreSQL backend supports native hybrid search.
+
+        PostgreSQL with pgvector and full-text search (tsvector) supports
+        native hybrid search.
+
+        Returns:
+            True if vector support is enabled (pgvector available)
+        """
+        return self._vector_enabled
+
+    async def hybrid_search(
+        self,
+        query_text: str,
+        query_vector: np.ndarray | list[float],
+        text_fields: list[str] | None = None,
+        vector_field: str = "embedding",
+        k: int = 10,
+        config: Any = None,  # HybridSearchConfig
+        filter: Query | None = None,
+        metric: DistanceMetric | str = DistanceMetric.COSINE,
+    ) -> list[Any]:  # list[HybridSearchResult]
+        """Perform hybrid search using PostgreSQL full-text search and pgvector.
+
+        Combines PostgreSQL's tsvector full-text search with pgvector similarity
+        search using configurable fusion strategies.
+
+        Args:
+            query_text: Text query for full-text matching
+            query_vector: Vector for pgvector similarity search
+            text_fields: Fields to search for text matching
+            vector_field: Name of the vector field to search
+            k: Number of results to return
+            config: Hybrid search configuration (weights, fusion strategy)
+            filter: Optional additional filters to apply
+            metric: Distance metric for vector search
+
+        Returns:
+            List of HybridSearchResult ordered by combined score (descending)
+        """
+        from ..vector.hybrid import (
+            FusionStrategy,
+            HybridSearchConfig,
+            HybridSearchResult,
+            reciprocal_rank_fusion,
+        )
+        from .postgres_vector import format_vector_for_postgres, get_vector_operator
+
+        self._check_connection()
+
+        config = config or HybridSearchConfig()
+
+        # For NATIVE strategy with pgvector, we can do a combined query
+        # For other strategies, use the parent implementation
+        if config.fusion_strategy not in (FusionStrategy.NATIVE, FusionStrategy.RRF):
+            from ..vector.mixins import VectorOperationsMixin
+            return await VectorOperationsMixin.hybrid_search(
+                self,
+                query_text=query_text,
+                query_vector=query_vector,
+                text_fields=text_fields,
+                vector_field=vector_field,
+                k=k,
+                config=config,
+                filter=filter,
+                metric=metric,
+            )
+
+        # Use config.text_fields if provided, otherwise use parameter
+        search_text_fields = config.text_fields or text_fields or ["content", "title", "text"]
+
+        # Get more results for fusion
+        fetch_k = min(k * 3, 100)
+
+        # Prepare vector search
+        if isinstance(query_vector, (list, tuple)):
+            import numpy as np
+            query_vector = np.array(query_vector, dtype=np.float32)
+
+        vector_str = format_vector_for_postgres(query_vector)
+
+        # Get metric operator
+        if isinstance(metric, str):
+            metric_str = metric.lower()
+        else:
+            metric_str = metric.value
+        operator = get_vector_operator(metric_str)
+
+        vector_column = f"vector_{vector_field}"
+
+        # Build combined query using CTE for efficient hybrid search
+        # This performs both searches in a single query
+        sql = f"""
+        WITH text_search AS (
+            SELECT
+                id,
+                data,
+                metadata,
+                ts_rank_cd(
+                    to_tsvector('english', {self._build_text_field_concat(search_text_fields)}),
+                    plainto_tsquery('english', $1)
+                ) as text_score,
+                ROW_NUMBER() OVER (
+                    ORDER BY ts_rank_cd(
+                        to_tsvector('english', {self._build_text_field_concat(search_text_fields)}),
+                        plainto_tsquery('english', $1)
+                    ) DESC
+                ) as text_rank
+            FROM {self.schema_name}.{self.table_name}
+            WHERE to_tsvector('english', {self._build_text_field_concat(search_text_fields)}) @@ plainto_tsquery('english', $1)
+            LIMIT {fetch_k}
+        ),
+        vector_search AS (
+            SELECT
+                id,
+                data,
+                metadata,
+                {vector_column},
+                1.0 - ({vector_column} {operator} $2::vector) as vector_score,
+                ROW_NUMBER() OVER (
+                    ORDER BY {vector_column} {operator} $2::vector
+                ) as vector_rank
+            FROM {self.schema_name}.{self.table_name}
+            WHERE {vector_column} IS NOT NULL
+            LIMIT {fetch_k}
+        ),
+        combined AS (
+            SELECT
+                COALESCE(t.id, v.id) as id,
+                COALESCE(t.data, v.data) as data,
+                COALESCE(t.metadata, v.metadata) as metadata,
+                t.text_score,
+                t.text_rank,
+                v.vector_score,
+                v.vector_rank
+            FROM text_search t
+            FULL OUTER JOIN vector_search v ON t.id = v.id
+        )
+        SELECT * FROM combined
+        """
+
+        params = [query_text, vector_str]
+
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(sql, *params)
+        except Exception as e:
+            # If full-text search fails, fall back to client-side fusion
+            logger.warning(f"Native PostgreSQL hybrid search failed ({e}), falling back to client-side")
+            from ..vector.mixins import VectorOperationsMixin
+            return await VectorOperationsMixin.hybrid_search(
+                self,
+                query_text=query_text,
+                query_vector=query_vector,
+                text_fields=text_fields,
+                vector_field=vector_field,
+                k=k,
+                config=HybridSearchConfig(
+                    text_weight=config.text_weight,
+                    vector_weight=config.vector_weight,
+                    fusion_strategy=FusionStrategy.RRF,
+                    rrf_k=config.rrf_k,
+                    text_fields=config.text_fields,
+                ),
+                filter=filter,
+                metric=metric,
+            )
+
+        # Build result lists for fusion
+        records_by_id: dict[str, Record] = {}
+        text_scores: list[tuple[str, float]] = []
+        vector_scores: list[tuple[str, float]] = []
+
+        for row in rows:
+            record = self._row_to_record(row)
+            record_id = row['id']
+            records_by_id[record_id] = record
+
+            if row['text_score'] is not None:
+                text_scores.append((record_id, float(row['text_score'])))
+            if row['vector_score'] is not None:
+                vector_scores.append((record_id, float(row['vector_score'])))
+
+        # Sort by score for rank-based fusion
+        text_scores.sort(key=lambda x: x[1], reverse=True)
+        vector_scores.sort(key=lambda x: x[1], reverse=True)
+
+        # Apply RRF fusion
+        fused = reciprocal_rank_fusion(
+            text_results=text_scores,
+            vector_results=vector_scores,
+            k=config.rrf_k,
+            text_weight=config.text_weight,
+            vector_weight=config.vector_weight,
+        )
+
+        # Build HybridSearchResult objects
+        text_score_map = dict(text_scores)
+        vector_score_map = dict(vector_scores)
+        text_rank_map = {rid: i + 1 for i, (rid, _) in enumerate(text_scores)}
+        vector_rank_map = {rid: i + 1 for i, (rid, _) in enumerate(vector_scores)}
+
+        results: list[HybridSearchResult] = []
+        for record_id, combined_score in fused[:k]:
+            if record_id not in records_by_id:
+                continue
+
+            results.append(HybridSearchResult(
+                record=records_by_id[record_id],
+                combined_score=combined_score,
+                text_score=text_score_map.get(record_id),
+                vector_score=vector_score_map.get(record_id),
+                text_rank=text_rank_map.get(record_id),
+                vector_rank=vector_rank_map.get(record_id),
+                metadata={
+                    "fusion_strategy": config.fusion_strategy.value,
+                    "text_weight": config.text_weight,
+                    "vector_weight": config.vector_weight,
+                    "backend": "postgresql",
+                },
+            ))
+
+        return results
+
+    def _build_text_field_concat(self, text_fields: list[str]) -> str:
+        """Build SQL expression to concatenate text fields for full-text search.
+
+        Args:
+            text_fields: List of field names to concatenate
+
+        Returns:
+            SQL expression for concatenated text fields
+        """
+        if not text_fields:
+            return "COALESCE(data->>'content', '')"
+
+        parts = [f"COALESCE(data->>'{field}', '')" for field in text_fields]
+        return " || ' ' || ".join(parts)
+
+    async def _text_search_for_hybrid(
+        self,
+        query_text: str,
+        text_fields: list[str] | None,
+        k: int,
+        filter: Query | None = None,
+    ) -> list[tuple[Record, float]]:
+        """Perform PostgreSQL full-text search for hybrid search fusion.
+
+        Uses PostgreSQL's tsvector/tsquery full-text search with ts_rank_cd scoring.
+
+        Args:
+            query_text: Text to search for
+            text_fields: Fields to search in
+            k: Maximum results to return
+            filter: Additional filters
+
+        Returns:
+            List of (record, score) tuples ordered by text relevance
+        """
+        self._check_connection()
+
+        search_fields = text_fields or ["content", "title", "text"]
+        text_concat = self._build_text_field_concat(search_fields)
+
+        sql = f"""
+        SELECT
+            id,
+            data,
+            metadata,
+            ts_rank_cd(
+                to_tsvector('english', {text_concat}),
+                plainto_tsquery('english', $1)
+            ) as score
+        FROM {self.schema_name}.{self.table_name}
+        WHERE to_tsvector('english', {text_concat}) @@ plainto_tsquery('english', $1)
+        ORDER BY score DESC
+        LIMIT {k}
+        """
+
+        try:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(sql, query_text)
+        except Exception as e:
+            # Fall back to LIKE-based search if full-text search fails
+            logger.warning(f"PostgreSQL full-text search failed ({e}), falling back to LIKE")
+            from ..vector.mixins import VectorOperationsMixin
+            return await VectorOperationsMixin._text_search_for_hybrid(
+                self,
+                query_text=query_text,
+                text_fields=text_fields,
+                k=k,
+                filter=filter,
+            )
+
+        # Normalize scores
+        results: list[tuple[Record, float]] = []
+        max_score = max((float(row['score']) for row in rows), default=1.0) or 1.0
+
+        for row in rows:
+            record = self._row_to_record(row)
+            score = float(row['score']) / max_score if max_score > 0 else 0.0
+            results.append((record, score))
+
+        return results

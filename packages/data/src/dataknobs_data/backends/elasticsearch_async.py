@@ -779,3 +779,246 @@ class AsyncElasticsearchDatabase(
         except Exception as e:
             self._handle_elasticsearch_error(e, "create vector index")
             return False
+
+    async def _supports_native_hybrid(self) -> bool:
+        """Check if this Elasticsearch backend supports native hybrid search.
+
+        Elasticsearch 8.x supports native RRF hybrid search.
+
+        Returns:
+            True since Elasticsearch supports native hybrid search
+        """
+        return True
+
+    async def hybrid_search(
+        self,
+        query_text: str,
+        query_vector: np.ndarray | list[float],
+        text_fields: list[str] | None = None,
+        vector_field: str = "embedding",
+        k: int = 10,
+        config: Any = None,  # HybridSearchConfig
+        filter: Query | None = None,
+        metric: DistanceMetric = DistanceMetric.COSINE,
+    ) -> list[Any]:  # list[HybridSearchResult]
+        """Perform native Elasticsearch hybrid search using RRF.
+
+        Uses Elasticsearch's native RRF (Reciprocal Rank Fusion) for combining
+        BM25 text search with KNN vector search. This is more efficient than
+        client-side fusion as it's executed in a single request.
+
+        Args:
+            query_text: Text query for BM25 matching
+            query_vector: Vector for KNN similarity search
+            text_fields: Fields to search for text matching
+            vector_field: Name of the vector field to search
+            k: Number of results to return
+            config: Hybrid search configuration (weights, fusion strategy)
+            filter: Optional additional filters to apply
+            metric: Distance metric for vector search
+
+        Returns:
+            List of HybridSearchResult ordered by RRF score (descending)
+        """
+        from ..vector.hybrid import (
+            FusionStrategy,
+            HybridSearchConfig,
+            HybridSearchResult,
+        )
+
+        self._check_connection()
+
+        config = config or HybridSearchConfig()
+
+        # If not using native strategy, fall back to parent implementation
+        if config.fusion_strategy != FusionStrategy.NATIVE:
+            # Import parent class to call its implementation
+            from ..vector.mixins import VectorOperationsMixin
+            return await VectorOperationsMixin.hybrid_search(
+                self,
+                query_text=query_text,
+                query_vector=query_vector,
+                text_fields=text_fields,
+                vector_field=vector_field,
+                k=k,
+                config=config,
+                filter=filter,
+                metric=metric,
+            )
+
+        # Use config.text_fields if provided, otherwise use parameter
+        search_text_fields = config.text_fields or text_fields or ["content", "title", "text"]
+
+        # Build filter query if provided
+        filter_query = self._build_filter_query(filter) if filter else None
+
+        # Build text search query with multi_match
+        text_query: dict[str, Any] = {
+            "multi_match": {
+                "query": query_text,
+                "fields": [f"data.{f}" for f in search_text_fields],
+                "type": "best_fields",
+                "operator": "or",
+            }
+        }
+
+        # Build RRF query combining both searches
+        # Note: RRF requires Elasticsearch 8.8+ with appropriate license
+        # For older versions, we need to use sub_searches
+        try:
+            # Try native RRF (ES 8.8+)
+            body: dict[str, Any] = {
+                "retriever": {
+                    "rrf": {
+                        "retrievers": [
+                            {
+                                "standard": {
+                                    "query": text_query
+                                }
+                            },
+                            {
+                                "knn": {
+                                    "field": f"data.{vector_field}",
+                                    "query_vector": query_vector.tolist() if hasattr(query_vector, 'tolist') else list(query_vector),
+                                    "k": k,
+                                    "num_candidates": k * 3,
+                                }
+                            }
+                        ],
+                        "rank_constant": config.rrf_k,
+                        "rank_window_size": k * 3,
+                    }
+                },
+                "size": k,
+            }
+
+            if filter_query:
+                body["post_filter"] = filter_query
+
+            response = await self._client.search(
+                index=self.index_name,
+                body=body,
+            )
+        except Exception as e:
+            # Fall back to client-side fusion if native RRF not available
+            logger.warning(f"Native RRF not available ({e}), falling back to client-side fusion")
+            from ..vector.mixins import VectorOperationsMixin
+            return await VectorOperationsMixin.hybrid_search(
+                self,
+                query_text=query_text,
+                query_vector=query_vector,
+                text_fields=text_fields,
+                vector_field=vector_field,
+                k=k,
+                config=HybridSearchConfig(
+                    text_weight=config.text_weight,
+                    vector_weight=config.vector_weight,
+                    fusion_strategy=FusionStrategy.RRF,
+                    rrf_k=config.rrf_k,
+                    text_fields=config.text_fields,
+                ),
+                filter=filter,
+                metric=metric,
+            )
+
+        # Process results
+        results: list[HybridSearchResult] = []
+        hits = response.get("hits", {}).get("hits", [])
+
+        for i, hit in enumerate(hits):
+            record = self._doc_to_record(hit)
+            if record:
+                if not record.has_storage_id():
+                    record.storage_id = hit["_id"]
+
+                # RRF doesn't provide individual scores, just the fused score
+                combined_score = hit.get("_score", 1.0 / (config.rrf_k + i + 1))
+
+                results.append(HybridSearchResult(
+                    record=record,
+                    combined_score=combined_score,
+                    text_score=None,  # Not available with native RRF
+                    vector_score=None,  # Not available with native RRF
+                    text_rank=None,
+                    vector_rank=None,
+                    metadata={
+                        "fusion_strategy": "native_rrf",
+                        "index": self.index_name,
+                        "doc_id": hit["_id"],
+                    },
+                ))
+
+        return results
+
+    async def _text_search_for_hybrid(
+        self,
+        query_text: str,
+        text_fields: list[str] | None,
+        k: int,
+        filter: Query | None = None,
+    ) -> list[tuple[Record, float]]:
+        """Perform BM25 text search for hybrid search fusion.
+
+        Uses Elasticsearch's native BM25 scoring for text relevance.
+
+        Args:
+            query_text: Text to search for
+            text_fields: Fields to search in
+            k: Maximum results to return
+            filter: Additional filters
+
+        Returns:
+            List of (record, score) tuples ordered by BM25 relevance
+        """
+        self._check_connection()
+
+        search_fields = text_fields or ["content", "title", "text"]
+
+        # Build multi_match query
+        query: dict[str, Any] = {
+            "multi_match": {
+                "query": query_text,
+                "fields": [f"data.{f}" for f in search_fields],
+                "type": "best_fields",
+                "operator": "or",
+            }
+        }
+
+        # Build filter if provided
+        filter_query = self._build_filter_query(filter) if filter else None
+
+        body: dict[str, Any] = {
+            "query": query if not filter_query else {
+                "bool": {
+                    "must": query,
+                    "filter": filter_query,
+                }
+            },
+            "size": k,
+        }
+
+        try:
+            response = await self._client.search(
+                index=self.index_name,
+                body=body,
+            )
+        except Exception as e:
+            self._handle_elasticsearch_error(e, "text search for hybrid")
+            return []
+
+        # Process results
+        results: list[tuple[Record, float]] = []
+        hits = response.get("hits", {}).get("hits", [])
+        max_score = response.get("hits", {}).get("max_score", 1.0) or 1.0
+
+        for hit in hits:
+            record = self._doc_to_record(hit)
+            if record:
+                if not record.has_storage_id():
+                    record.storage_id = hit["_id"]
+
+                # Normalize BM25 score to 0-1 range
+                score = hit.get("_score", 0.0) / max_score if max_score > 0 else 0.0
+                results.append((record, score))
+
+        return results

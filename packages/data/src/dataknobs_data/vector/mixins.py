@@ -6,6 +6,13 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ..fields import FieldType
+from .hybrid import (
+    FusionStrategy,
+    HybridSearchConfig,
+    HybridSearchResult,
+    reciprocal_rank_fusion,
+    weighted_score_fusion,
+)
 from .types import DistanceMetric, VectorSearchResult
 
 if TYPE_CHECKING:
@@ -226,6 +233,235 @@ class VectorOperationsMixin(ABC):
             "indexed": False,
             "vector_count": 0,
         }
+
+    async def hybrid_search(
+        self,
+        query_text: str,
+        query_vector: np.ndarray | list[float],
+        text_fields: list[str] | None = None,
+        vector_field: str = "embedding",
+        k: int = 10,
+        config: HybridSearchConfig | None = None,
+        filter: Query | None = None,
+        metric: DistanceMetric = DistanceMetric.COSINE,
+    ) -> list[HybridSearchResult]:
+        """Perform hybrid search combining text and vector similarity.
+
+        This method combines traditional text search with vector similarity search
+        using configurable fusion strategies. The default implementation performs
+        both searches and merges results client-side. Backends with native hybrid
+        search support (like Elasticsearch) can override this for better performance.
+
+        Args:
+            query_text: Text query for keyword/text matching
+            query_vector: Vector for semantic similarity search
+            text_fields: Fields to search for text matching (default: search all text fields)
+            vector_field: Name of the vector field to search
+            k: Number of results to return
+            config: Hybrid search configuration (weights, fusion strategy)
+            filter: Optional additional filters to apply
+            metric: Distance metric for vector search
+
+        Returns:
+            List of HybridSearchResult ordered by combined score (descending)
+
+        Example:
+            ```python
+            from dataknobs_data.vector import HybridSearchConfig, FusionStrategy
+
+            # Default RRF fusion
+            results = await db.hybrid_search(
+                query_text="machine learning",
+                query_vector=embedding,
+                text_fields=["title", "content"],
+                k=10,
+            )
+
+            # Custom weighted fusion
+            config = HybridSearchConfig(
+                text_weight=0.3,
+                vector_weight=0.7,
+                fusion_strategy=FusionStrategy.WEIGHTED_SUM,
+            )
+            results = await db.hybrid_search(
+                query_text="machine learning",
+                query_vector=embedding,
+                config=config,
+            )
+            ```
+        """
+        config = config or HybridSearchConfig()
+
+        # If using NATIVE strategy but backend doesn't support it, fall back to RRF
+        if config.fusion_strategy == FusionStrategy.NATIVE:
+            if not await self._supports_native_hybrid():  # type: ignore[attr-defined]
+                config = HybridSearchConfig(
+                    text_weight=config.text_weight,
+                    vector_weight=config.vector_weight,
+                    fusion_strategy=FusionStrategy.RRF,
+                    rrf_k=config.rrf_k,
+                    text_fields=config.text_fields,
+                )
+
+        # Use config.text_fields if provided, otherwise use parameter
+        search_text_fields = config.text_fields or text_fields
+
+        # Get more results for fusion (we'll filter to k after combining)
+        fetch_k = min(k * 3, 100)
+
+        # Perform text search
+        text_results = await self._text_search_for_hybrid(
+            query_text=query_text,
+            text_fields=search_text_fields,
+            k=fetch_k,
+            filter=filter,
+        )
+
+        # Perform vector search
+        vector_results = await self.vector_search(
+            query_vector=query_vector,
+            vector_field=vector_field,
+            k=fetch_k,
+            metric=metric,
+            filter=filter,
+        )
+
+        # Build ID->Record and ID->score maps
+        records_by_id: dict[str, Record] = {}
+        text_scores: list[tuple[str, float]] = []
+        vector_scores: list[tuple[str, float]] = []
+
+        for record, score in text_results:
+            record_id = record.id or record.storage_id
+            if record_id:
+                records_by_id[record_id] = record
+                text_scores.append((record_id, score))
+
+        for result in vector_results:
+            record_id = result.record.id or result.record.storage_id
+            if record_id:
+                records_by_id[record_id] = result.record
+                vector_scores.append((record_id, result.score))
+
+        # Fuse results
+        if config.fusion_strategy == FusionStrategy.RRF:
+            fused = reciprocal_rank_fusion(
+                text_results=text_scores,
+                vector_results=vector_scores,
+                k=config.rrf_k,
+                text_weight=config.text_weight,
+                vector_weight=config.vector_weight,
+            )
+        else:  # WEIGHTED_SUM
+            text_w, vector_w = config.normalize_weights()
+            fused = weighted_score_fusion(
+                text_results=text_scores,
+                vector_results=vector_scores,
+                text_weight=text_w,
+                vector_weight=vector_w,
+                normalize_scores=True,
+            )
+
+        # Build HybridSearchResult objects
+        text_score_map = dict(text_scores)
+        vector_score_map = dict(vector_scores)
+        text_rank_map = {rid: i + 1 for i, (rid, _) in enumerate(text_scores)}
+        vector_rank_map = {rid: i + 1 for i, (rid, _) in enumerate(vector_scores)}
+
+        results: list[HybridSearchResult] = []
+        for record_id, combined_score in fused[:k]:
+            if record_id not in records_by_id:
+                continue
+
+            results.append(HybridSearchResult(
+                record=records_by_id[record_id],
+                combined_score=combined_score,
+                text_score=text_score_map.get(record_id),
+                vector_score=vector_score_map.get(record_id),
+                text_rank=text_rank_map.get(record_id),
+                vector_rank=vector_rank_map.get(record_id),
+                metadata={
+                    "fusion_strategy": config.fusion_strategy.value,
+                    "text_weight": config.text_weight,
+                    "vector_weight": config.vector_weight,
+                },
+            ))
+
+        return results
+
+    async def _text_search_for_hybrid(
+        self,
+        query_text: str,
+        text_fields: list[str] | None,
+        k: int,
+        filter: Query | None = None,
+    ) -> list[tuple[Record, float]]:
+        """Perform text search for hybrid search fusion.
+
+        Default implementation uses LIKE query on text fields.
+        Backends can override for better text search (e.g., full-text search).
+
+        Args:
+            query_text: Text to search for
+            text_fields: Fields to search in
+            k: Maximum results to return
+            filter: Additional filters
+
+        Returns:
+            List of (record, score) tuples ordered by relevance
+        """
+        from ..query import Filter, Operator, Query
+
+        # Build text search query
+        query = filter.copy() if filter else Query()
+        query.limit_value = k
+
+        # Add text matching filters
+        # For simple implementation, use LIKE on each text field with OR logic
+        # This is a basic implementation; backends should override for better text search
+        if text_fields:
+            # Use first field for simplicity in default implementation
+            # Backends with full-text search should override this
+            for field in text_fields[:1]:  # Only use first field to avoid complex OR
+                query.filters.append(Filter(
+                    field=field,
+                    operator=Operator.LIKE,
+                    value=f"%{query_text}%",
+                ))
+
+        # Perform search
+        records = await self.search(query)  # type: ignore[attr-defined]
+
+        # Assign basic scores based on match quality
+        results: list[tuple[Record, float]] = []
+        query_lower = query_text.lower()
+        for i, record in enumerate(records):
+            # Calculate a simple relevance score
+            score = 1.0 / (i + 1)  # Rank-based score
+
+            # Boost exact matches
+            for field in (text_fields or []):
+                value = record.get_value(field)
+                if value and isinstance(value, str):
+                    if query_lower in value.lower():
+                        score *= 1.5
+                    if query_lower == value.lower():
+                        score *= 2.0
+
+            results.append((record, min(score, 1.0)))
+
+        return results
+
+    async def _supports_native_hybrid(self) -> bool:
+        """Check if this backend supports native hybrid search.
+
+        Override in backends that have native hybrid search support
+        (e.g., Elasticsearch with RRF).
+
+        Returns:
+            True if native hybrid search is supported
+        """
+        return False
 
 
 class VectorSyncMixin:

@@ -4,6 +4,8 @@ from dataknobs_xization import (
     annotations,
     authorities,
     content_transformer,
+    ingestion,
+    json,
     lexicon,
     markdown,
     masking_tokenizer,
@@ -38,6 +40,19 @@ from dataknobs_xization.markdown import (
     stream_markdown_string,
 )
 from dataknobs_xization.masking_tokenizer import CharacterFeatures, TextFeatures
+from dataknobs_xization.json import (
+    JSONChunk,
+    JSONChunkConfig,
+    JSONChunker,
+)
+from dataknobs_xization.ingestion import (
+    DirectoryProcessor,
+    FilePatternConfig,
+    IngestionConfigError,
+    KnowledgeBaseConfig,
+    ProcessedDocument,
+    process_directory,
+)
 
 __version__ = "1.2.1"
 
@@ -56,6 +71,11 @@ __all__ = [
     "csv_to_markdown",
     "json_to_markdown",
     "yaml_to_markdown",
+    # JSON module
+    "json",
+    "JSONChunk",
+    "JSONChunkConfig",
+    "JSONChunker",
     # Markdown module
     "markdown",
     # Markdown chunking classes and functions
@@ -79,4 +99,12 @@ __all__ = [
     "parse_markdown",
     "stream_markdown_file",
     "stream_markdown_string",
+    # Ingestion module
+    "ingestion",
+    "DirectoryProcessor",
+    "FilePatternConfig",
+    "IngestionConfigError",
+    "KnowledgeBaseConfig",
+    "ProcessedDocument",
+    "process_directory",
 ]

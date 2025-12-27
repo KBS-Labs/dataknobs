@@ -415,3 +415,298 @@ class TestKnowledgeSearchTool:
         result = await tool.execute(query="test", max_results=0)
         # Should be clamped to at least 1
         assert isinstance(result, dict)
+
+
+class TestLoadFromDirectory:
+    """Tests for load_from_directory method."""
+
+    @pytest.mark.asyncio
+    async def test_load_from_directory_default_config(self):
+        """Test loading from directory with auto-loaded config."""
+        config = {
+            "vector_store": {"backend": "memory", "dimensions": 384},
+            "embedding_provider": "echo",
+            "embedding_model": "test",
+        }
+
+        kb = await RAGKnowledgeBase.from_config(config)
+
+        # Load test documents directory
+        test_docs_dir = Path(__file__).parent / "test_docs"
+        results = await kb.load_from_directory(test_docs_dir)
+
+        assert results["total_files"] >= 2
+        assert results["total_chunks"] > 0
+        assert "files_by_type" in results
+        assert "documents" in results
+        assert len(results["errors"]) == 0
+
+    @pytest.mark.asyncio
+    async def test_load_from_directory_with_config(self):
+        """Test loading from directory with explicit config."""
+        from dataknobs_bots.knowledge import KnowledgeBaseConfig, FilePatternConfig
+
+        config = {
+            "vector_store": {"backend": "memory", "dimensions": 384},
+            "embedding_provider": "echo",
+            "embedding_model": "test",
+        }
+
+        kb = await RAGKnowledgeBase.from_config(config)
+
+        # Create explicit config
+        kb_config = KnowledgeBaseConfig(
+            name="test-docs",
+            default_chunking={"max_chunk_size": 300, "chunk_overlap": 30},
+            patterns=[
+                FilePatternConfig(pattern="**/*.md"),
+            ],
+        )
+
+        test_docs_dir = Path(__file__).parent / "test_docs"
+        results = await kb.load_from_directory(test_docs_dir, config=kb_config)
+
+        assert results["total_files"] >= 2
+        assert results["files_by_type"]["markdown"] >= 2
+
+    @pytest.mark.asyncio
+    async def test_load_from_directory_with_json(self):
+        """Test loading directory with JSON files."""
+        import json
+
+        config = {
+            "vector_store": {"backend": "memory", "dimensions": 384},
+            "embedding_provider": "echo",
+            "embedding_model": "test",
+        }
+
+        kb = await RAGKnowledgeBase.from_config(config)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create test files
+            md_file = Path(tmpdir) / "guide.md"
+            md_file.write_text("# Guide\n\nThis is a test guide.")
+
+            json_file = Path(tmpdir) / "data.json"
+            with open(json_file, "w") as f:
+                json.dump([{"title": "Item 1"}, {"title": "Item 2"}], f)
+
+            results = await kb.load_from_directory(tmpdir)
+
+            assert results["total_files"] == 2
+            assert results["files_by_type"]["markdown"] == 1
+            assert results["files_by_type"]["json"] == 1
+
+    @pytest.mark.asyncio
+    async def test_load_from_directory_with_progress_callback(self):
+        """Test progress callback is called."""
+        config = {
+            "vector_store": {"backend": "memory", "dimensions": 384},
+            "embedding_provider": "echo",
+            "embedding_model": "test",
+        }
+
+        kb = await RAGKnowledgeBase.from_config(config)
+
+        progress_calls = []
+
+        def progress_callback(file_path, num_chunks):
+            progress_calls.append((file_path, num_chunks))
+
+        test_docs_dir = Path(__file__).parent / "test_docs"
+        await kb.load_from_directory(test_docs_dir, progress_callback=progress_callback)
+
+        assert len(progress_calls) >= 2
+
+    @pytest.mark.asyncio
+    async def test_load_from_directory_excludes_files(self):
+        """Test that exclude patterns work."""
+        from dataknobs_bots.knowledge import KnowledgeBaseConfig
+
+        config = {
+            "vector_store": {"backend": "memory", "dimensions": 384},
+            "embedding_provider": "echo",
+            "embedding_model": "test",
+        }
+
+        kb = await RAGKnowledgeBase.from_config(config)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create files
+            (Path(tmpdir) / "guide.md").write_text("# Guide")
+            drafts = Path(tmpdir) / "drafts"
+            drafts.mkdir()
+            (drafts / "draft.md").write_text("# Draft")
+
+            kb_config = KnowledgeBaseConfig(
+                name="test",
+                exclude_patterns=["drafts/**", "**/drafts/**"],
+            )
+
+            results = await kb.load_from_directory(tmpdir, config=kb_config)
+
+            assert results["total_files"] == 1
+
+
+class TestHybridQuery:
+    """Tests for hybrid_query method."""
+
+    @pytest.mark.asyncio
+    async def test_hybrid_query_basic(self):
+        """Test basic hybrid query."""
+        config = {
+            "vector_store": {"backend": "memory", "dimensions": 384},
+            "embedding_provider": "echo",
+            "embedding_model": "test",
+        }
+
+        kb = await RAGKnowledgeBase.from_config(config)
+
+        # Load test document
+        test_doc = Path(__file__).parent / "test_docs" / "quickstart.md"
+        await kb.load_markdown_document(test_doc)
+
+        # Hybrid query
+        results = await kb.hybrid_query("How do I install DynaBot?", k=3)
+
+        assert len(results) > 0
+        assert all("text" in r for r in results)
+        assert all("similarity" in r for r in results)
+        # Hybrid query should include text_score and vector_score
+        assert all("text_score" in r for r in results)
+        assert all("vector_score" in r for r in results)
+
+    @pytest.mark.asyncio
+    async def test_hybrid_query_rrf_fusion(self):
+        """Test hybrid query with RRF fusion."""
+        config = {
+            "vector_store": {"backend": "memory", "dimensions": 384},
+            "embedding_provider": "echo",
+            "embedding_model": "test",
+        }
+
+        kb = await RAGKnowledgeBase.from_config(config)
+
+        test_doc = Path(__file__).parent / "test_docs" / "quickstart.md"
+        await kb.load_markdown_document(test_doc)
+
+        results = await kb.hybrid_query(
+            "install",
+            k=5,
+            fusion_strategy="rrf",
+        )
+
+        assert len(results) > 0
+
+    @pytest.mark.asyncio
+    async def test_hybrid_query_weighted_sum_fusion(self):
+        """Test hybrid query with weighted sum fusion."""
+        config = {
+            "vector_store": {"backend": "memory", "dimensions": 384},
+            "embedding_provider": "echo",
+            "embedding_model": "test",
+        }
+
+        kb = await RAGKnowledgeBase.from_config(config)
+
+        test_doc = Path(__file__).parent / "test_docs" / "quickstart.md"
+        await kb.load_markdown_document(test_doc)
+
+        results = await kb.hybrid_query(
+            "install",
+            k=5,
+            fusion_strategy="weighted_sum",
+        )
+
+        assert len(results) > 0
+
+    @pytest.mark.asyncio
+    async def test_hybrid_query_custom_weights(self):
+        """Test hybrid query with custom weights."""
+        config = {
+            "vector_store": {"backend": "memory", "dimensions": 384},
+            "embedding_provider": "echo",
+            "embedding_model": "test",
+        }
+
+        kb = await RAGKnowledgeBase.from_config(config)
+
+        test_doc = Path(__file__).parent / "test_docs" / "quickstart.md"
+        await kb.load_markdown_document(test_doc)
+
+        # Heavy vector weight
+        results = await kb.hybrid_query(
+            "installation",
+            k=5,
+            text_weight=0.2,
+            vector_weight=0.8,
+        )
+
+        assert len(results) > 0
+
+    @pytest.mark.asyncio
+    async def test_hybrid_query_min_similarity(self):
+        """Test hybrid query with minimum similarity threshold."""
+        config = {
+            "vector_store": {"backend": "memory", "dimensions": 384},
+            "embedding_provider": "echo",
+            "embedding_model": "test",
+        }
+
+        kb = await RAGKnowledgeBase.from_config(config)
+
+        test_doc = Path(__file__).parent / "test_docs" / "quickstart.md"
+        await kb.load_markdown_document(test_doc)
+
+        # Query with threshold
+        results = await kb.hybrid_query(
+            "install",
+            k=10,
+            min_similarity=0.001,  # Low threshold to get some results
+        )
+
+        assert all(r["similarity"] >= 0.001 for r in results)
+
+    @pytest.mark.asyncio
+    async def test_hybrid_query_text_fields(self):
+        """Test hybrid query with custom text fields."""
+        config = {
+            "vector_store": {"backend": "memory", "dimensions": 384},
+            "embedding_provider": "echo",
+            "embedding_model": "test",
+        }
+
+        kb = await RAGKnowledgeBase.from_config(config)
+
+        test_doc = Path(__file__).parent / "test_docs" / "quickstart.md"
+        await kb.load_markdown_document(test_doc)
+
+        results = await kb.hybrid_query(
+            "install",
+            k=5,
+            text_fields=["text", "heading_path"],
+        )
+
+        assert len(results) > 0
+
+    @pytest.mark.asyncio
+    async def test_hybrid_query_merge_adjacent(self):
+        """Test hybrid query with adjacent chunk merging."""
+        config = {
+            "vector_store": {"backend": "memory", "dimensions": 384},
+            "embedding_provider": "echo",
+            "embedding_model": "test",
+        }
+
+        kb = await RAGKnowledgeBase.from_config(config)
+
+        test_doc = Path(__file__).parent / "test_docs" / "quickstart.md"
+        await kb.load_markdown_document(test_doc)
+
+        results = await kb.hybrid_query(
+            "install",
+            k=5,
+            merge_adjacent=True,
+        )
+
+        assert isinstance(results, list)

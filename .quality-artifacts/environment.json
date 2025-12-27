@@ -1,11 +1,11 @@
 {
-  "timestamp": "2025-12-22T18:15:35Z",
+  "timestamp": "2025-12-27T00:17:33Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.9.18 (Homebrew 2025-12-16)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "update-dependencies",
-  "git_commit": "b7382a8c5edffb0560a755e3955067fdeea6049b",
+  "git_branch": "sbk/hybrid-search",
+  "git_commit": "9dd6e4362b7e68741e7d899ef3c78b7c5d82ead4",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
