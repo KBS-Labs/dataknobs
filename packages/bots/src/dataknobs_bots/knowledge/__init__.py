@@ -19,6 +19,21 @@ from .query import (
     is_ambiguous_query,
 )
 
+# Re-export ingestion types for convenience
+from dataknobs_xization.ingestion import (
+    DirectoryProcessor,
+    FilePatternConfig,
+    KnowledgeBaseConfig,
+    ProcessedDocument,
+)
+
+# Re-export hybrid search types
+from dataknobs_data.vector.hybrid import (
+    FusionStrategy,
+    HybridSearchConfig,
+    HybridSearchResult,
+)
+
 __all__ = [
     # Main knowledge base
     "RAGKnowledgeBase",
@@ -36,6 +51,15 @@ __all__ = [
     "ContextualExpander",
     "Message",
     "is_ambiguous_query",
+    # Ingestion types
+    "DirectoryProcessor",
+    "FilePatternConfig",
+    "KnowledgeBaseConfig",
+    "ProcessedDocument",
+    # Hybrid search types
+    "FusionStrategy",
+    "HybridSearchConfig",
+    "HybridSearchResult",
 ]
 
 

@@ -33,6 +33,13 @@ from .types import (
     VectorMetadata,
     VectorSearchResult,
 )
+from .hybrid import (
+    FusionStrategy,
+    HybridSearchConfig,
+    HybridSearchResult,
+    reciprocal_rank_fusion,
+    weighted_score_fusion,
+)
 
 __all__ = [
     # Field
@@ -43,6 +50,12 @@ __all__ = [
     "VectorIndexConfig",
     "VectorMetadata",
     "VectorSearchResult",
+    # Hybrid Search
+    "FusionStrategy",
+    "HybridSearchConfig",
+    "HybridSearchResult",
+    "reciprocal_rank_fusion",
+    "weighted_score_fusion",
     # Mixins
     "VectorCapable",
     "VectorOperationsMixin",

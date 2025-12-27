@@ -92,12 +92,13 @@ if __name__ == "__main__":
 
 ### 📚 RAG (Retrieval Augmented Generation)
 
-- **Document Ingestion** - Load markdown documents from directories
+- **Document Ingestion** - Load markdown, JSON, JSONL documents from directories
 - **Smart Chunking** - Uses dataknobs-xization for intelligent document chunking
+- **Hybrid Search** - Combined text + vector search with RRF fusion
 - **Vector Search** - FAISS, Chroma, Pinecone support
 - **Context Injection** - Automatic context injection into prompts
 
-[Learn more →](guides/user-guide.md#tutorial-4-building-a-rag-chatbot)
+[Learn more →](guides/rag-ingestion.md)
 
 ### 🛠️ Tool Integration
 
@@ -185,6 +186,9 @@ dataknobs_bots/
 ### Guides
 
 - [**User Guide**](guides/user-guide.md) - Complete tutorials from beginner to advanced
+- [**RAG Ingestion & Hybrid Search**](guides/rag-ingestion.md) - Directory loading and hybrid queries
+- [**RAG Retrieval**](guides/rag-retrieval.md) - Chunk merging and context formatting
+- [**RAG Query**](guides/rag-query.md) - Query transformation and expansion
 - [**Configuration Reference**](guides/configuration.md) - All configuration options
 - [**Environment-Aware Configuration**](guides/environment-aware.md) - Portable configs for multi-environment deployments
 - [**Migration Guide**](guides/migration.md) - Migrate existing configs to environment-aware pattern

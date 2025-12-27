@@ -11,6 +11,10 @@ from dataknobs_xization import (
     chunk_markdown_tree,
     parse_markdown,
 )
+from dataknobs_xization.ingestion import (
+    DirectoryProcessor,
+    KnowledgeBaseConfig,
+)
 from dataknobs_bots.knowledge.retrieval import (
     ChunkMerger,
     ContextFormatter,
@@ -453,6 +457,153 @@ class RAGKnowledgeBase:
             metadata=metadata,
         )
 
+    async def load_from_directory(
+        self,
+        directory: str | Path,
+        config: KnowledgeBaseConfig | None = None,
+        progress_callback: Any | None = None,
+    ) -> dict[str, Any]:
+        """Load documents from a directory using KnowledgeBaseConfig.
+
+        This method uses the xization DirectoryProcessor to process documents
+        with configurable patterns, chunking, and metadata. It supports markdown,
+        JSON, and JSONL files with streaming for large files.
+
+        Args:
+            directory: Directory path containing documents
+            config: Optional KnowledgeBaseConfig. If not provided, attempts to load
+                   from knowledge_base.json/yaml in the directory, or uses defaults.
+            progress_callback: Optional callback function(file_path, num_chunks) for progress
+
+        Returns:
+            Dictionary with loading statistics:
+                - total_files: Number of files processed
+                - total_chunks: Total chunks created
+                - files_by_type: Count of files by type (markdown, json, jsonl)
+                - errors: List of errors encountered
+                - documents: List of processed document info
+
+        Example:
+            ```python
+            # With auto-loaded config from directory
+            results = await kb.load_from_directory("./docs")
+
+            # With explicit config
+            config = KnowledgeBaseConfig(
+                name="product-docs",
+                default_chunking={"max_chunk_size": 800},
+                patterns=[
+                    FilePatternConfig(pattern="api/**/*.json", text_fields=["title", "description"]),
+                    FilePatternConfig(pattern="**/*.md"),
+                ],
+                exclude_patterns=["**/drafts/**"],
+            )
+            results = await kb.load_from_directory("./docs", config=config)
+            print(f"Loaded {results['total_chunks']} chunks from {results['total_files']} files")
+            ```
+        """
+        import numpy as np
+
+        directory = Path(directory)
+
+        # Load or use provided config
+        if config is None:
+            config = KnowledgeBaseConfig.load(directory)
+
+        # Create processor
+        processor = DirectoryProcessor(config, directory)
+
+        # Track results
+        results: dict[str, Any] = {
+            "total_files": 0,
+            "total_chunks": 0,
+            "files_by_type": {"markdown": 0, "json": 0, "jsonl": 0},
+            "errors": [],
+            "documents": [],
+        }
+
+        # Process each document
+        for doc in processor.process():
+            doc_info: dict[str, Any] = {
+                "source": doc.source_file,
+                "type": doc.document_type,
+                "chunks": 0,
+                "errors": doc.errors,
+            }
+
+            if doc.has_errors:
+                results["errors"].extend([
+                    {"file": doc.source_file, "error": err}
+                    for err in doc.errors
+                ])
+                results["documents"].append(doc_info)
+                continue
+
+            # Process chunks for this document
+            vectors = []
+            ids = []
+            metadatas = []
+
+            source_stem = Path(doc.source_file).stem
+
+            for chunk in doc.chunks:
+                # Get text for embedding
+                text_for_embedding = chunk.get("embedding_text") or chunk.get("text", "")
+
+                if not text_for_embedding:
+                    continue
+
+                # Generate embedding
+                embedding = await self.embedding_provider.embed(text_for_embedding)
+
+                # Convert to numpy if needed
+                if not isinstance(embedding, np.ndarray):
+                    embedding = np.array(embedding, dtype=np.float32)
+
+                # Build chunk ID
+                chunk_index = chunk.get("chunk_index", len(vectors))
+                chunk_id = f"{source_stem}_{chunk_index}"
+
+                # Build metadata
+                chunk_metadata = {
+                    "text": chunk.get("text", ""),
+                    "source": doc.source_file,
+                    "chunk_index": chunk_index,
+                    "document_type": doc.document_type,
+                }
+
+                # Add chunk-specific metadata
+                if "metadata" in chunk:
+                    chunk_metadata.update(chunk["metadata"])
+
+                # Add document-level metadata
+                if doc.metadata:
+                    for key, value in doc.metadata.items():
+                        if key not in chunk_metadata:
+                            chunk_metadata[key] = value
+
+                vectors.append(embedding)
+                ids.append(chunk_id)
+                metadatas.append(chunk_metadata)
+
+            # Batch insert into vector store
+            if vectors:
+                await self.vector_store.add_vectors(
+                    vectors=vectors, ids=ids, metadata=metadatas
+                )
+
+            doc_info["chunks"] = len(vectors)
+            results["total_files"] += 1
+            results["total_chunks"] += len(vectors)
+            results["files_by_type"][doc.document_type] += 1
+            results["documents"].append(doc_info)
+
+            # Call progress callback if provided
+            if progress_callback:
+                progress_callback(doc.source_file, len(vectors))
+
+        return results
+
     async def _load_markdown_text(
         self,
         markdown_text: str,
@@ -618,6 +769,256 @@ class RAGKnowledgeBase:
         # Apply chunk merging if requested
         if merge_adjacent and results:
             # Update merger config if max_chunk_size specified
+            if max_chunk_size is not None:
+                merger = ChunkMerger(MergerConfig(max_merged_size=max_chunk_size))
+            else:
+                merger = self.merger
+
+            merged_chunks = merger.merge(results)
+            results = merger.to_result_list(merged_chunks)
+
+        return results
+
+    async def hybrid_query(
+        self,
+        query: str,
+        k: int = 5,
+        text_weight: float = 0.5,
+        vector_weight: float = 0.5,
+        fusion_strategy: str = "rrf",
+        text_fields: list[str] | None = None,
+        filter_metadata: dict[str, Any] | None = None,
+        min_similarity: float = 0.0,
+        merge_adjacent: bool = False,
+        max_chunk_size: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Query knowledge base using hybrid search (text + vector).
+
+        Combines keyword matching with semantic vector search for improved
+        retrieval quality. Uses Reciprocal Rank Fusion (RRF) or weighted
+        score fusion to combine results.
+
+        Args:
+            query: Query text to search for
+            k: Number of results to return
+            text_weight: Weight for text search (0.0 to 1.0)
+            vector_weight: Weight for vector search (0.0 to 1.0)
+            fusion_strategy: Fusion method - "rrf" (default), "weighted_sum", or "native"
+            text_fields: Fields to search for text matching (default: ["text"])
+            filter_metadata: Optional metadata filters
+            min_similarity: Minimum combined score (0-1)
+            merge_adjacent: Whether to merge adjacent chunks with same heading
+            max_chunk_size: Maximum size for merged chunks
+
+        Returns:
+            List of result dictionaries with:
+                - text: Chunk text
+                - source: Source file
+                - heading_path: Heading hierarchy
+                - similarity: Combined similarity score
+                - text_score: Score from text search (if available)
+                - vector_score: Score from vector search (if available)
+                - metadata: Full chunk metadata
+
+        Example:
+            ```python
+            # Default RRF fusion
+            results = await kb.hybrid_query(
+                "How do I configure the database?",
+                k=5,
+            )
+
+            # Weighted toward vector search
+            results = await kb.hybrid_query(
+                "database configuration",
+                k=5,
+                text_weight=0.3,
+                vector_weight=0.7,
+            )
+
+            # Weighted sum fusion
+            results = await kb.hybrid_query(
+                "configure database",
+                k=5,
+                fusion_strategy="weighted_sum",
+            )
+
+            for result in results:
+                print(f"[{result['similarity']:.2f}] {result['heading_path']}")
+                print(f"  text_score={result.get('text_score', 'N/A')}")
+                print(f"  vector_score={result.get('vector_score', 'N/A')}")
+                print(result['text'])
+            ```
+        """
+        from dataknobs_data.vector.hybrid import (
+            FusionStrategy,
+            HybridSearchConfig,
+            reciprocal_rank_fusion,
+            weighted_score_fusion,
+        )
+        import numpy as np
+
+        # Generate query embedding
+        query_embedding = await self.embedding_provider.embed(query)
+
+        # Convert to numpy if needed
+        if not isinstance(query_embedding, np.ndarray):
+            query_embedding = np.array(query_embedding, dtype=np.float32)
+
+        # Check if vector store supports hybrid search natively
+        has_hybrid = hasattr(self.vector_store, "hybrid_search")
+
+        # Default text fields for knowledge base chunks
+        search_text_fields = text_fields or ["text"]
+
+        # Map string to FusionStrategy enum
+        strategy_map = {
+            "rrf": FusionStrategy.RRF,
+            "weighted_sum": FusionStrategy.WEIGHTED_SUM,
+            "native": FusionStrategy.NATIVE,
+        }
+        strategy = strategy_map.get(fusion_strategy.lower(), FusionStrategy.RRF)
+
+        if has_hybrid and strategy == FusionStrategy.NATIVE:
+            # Use vector store's native hybrid search
+            config = HybridSearchConfig(
+                text_weight=text_weight,
+                vector_weight=vector_weight,
+                fusion_strategy=strategy,
+                text_fields=search_text_fields,
+            )
+            hybrid_results = await self.vector_store.hybrid_search(
+                query_text=query,
+                query_vector=query_embedding,
+                text_fields=search_text_fields,
+                k=k,
+                config=config,
+                filter=filter_metadata,
+            )
+
+            # Convert HybridSearchResult to our result format
+            results = []
+            for hr in hybrid_results:
+                if hr.combined_score >= min_similarity:
+                    # Extract metadata from record
+                    record_metadata = {}
+                    if hasattr(hr.record, "data"):
+                        record_metadata = hr.record.data or {}
+                    elif hasattr(hr.record, "metadata"):
+                        record_metadata = hr.record.metadata or {}
+
+                    results.append({
+                        "text": record_metadata.get("text", ""),
+                        "source": record_metadata.get("source", ""),
+                        "heading_path": record_metadata.get("heading_path", ""),
+                        "similarity": hr.combined_score,
+                        "text_score": hr.text_score,
+                        "vector_score": hr.vector_score,
+                        "metadata": record_metadata,
+                    })
+        else:
+            # Client-side hybrid search implementation
+            # Step 1: Vector search
+            vector_results = await self.vector_store.search(
+                query_vector=query_embedding,
+                k=k * 2,  # Get more for fusion
+                filter=filter_metadata,
+                include_metadata=True,
+            )
+
+            # Step 2: Text search (simple keyword matching on stored chunks)
+            # For vector stores without text search, we search in retrieved chunks
+            # and also do a broader metadata-based text match if supported
+
+            # Build vector result map
+            vector_scores: list[tuple[str, float]] = []
+            chunks_by_id: dict[str, dict[str, Any]] = {}
+
+            for chunk_id, similarity, chunk_metadata in vector_results:
+                if chunk_metadata:
+                    vector_scores.append((chunk_id, similarity))
+                    chunks_by_id[chunk_id] = chunk_metadata
+
+            # Simple text matching on chunk content
+            query_lower = query.lower()
+            query_terms = query_lower.split()
+            text_scores: list[tuple[str, float]] = []
+
+            for chunk_id, chunk_metadata in chunks_by_id.items():
+                text_content = ""
+                for field in search_text_fields:
+                    value = chunk_metadata.get(field, "")
+                    if value:
+                        text_content += " " + str(value)
+
+                text_content_lower = text_content.lower()
+
+                # Calculate text match score
+                if query_lower in text_content_lower:
+                    # Exact phrase match
+                    score = 1.0
+                else:
+                    # Term overlap score
+                    matched_terms = sum(1 for term in query_terms if term in text_content_lower)
+                    score = matched_terms / len(query_terms) if query_terms else 0.0
+
+                if score > 0:
+                    text_scores.append((chunk_id, score))
+
+            # Sort text scores descending
+            text_scores.sort(key=lambda x: x[1], reverse=True)
+
+            # Step 3: Fuse results
+            if strategy == FusionStrategy.WEIGHTED_SUM:
+                total = text_weight + vector_weight
+                if total > 0:
+                    norm_text = text_weight / total
+                    norm_vector = vector_weight / total
+                else:
+                    norm_text = norm_vector = 0.5
+
+                fused = weighted_score_fusion(
+                    text_results=text_scores,
+                    vector_results=vector_scores,
+                    text_weight=norm_text,
+                    vector_weight=norm_vector,
+                    normalize_scores=True,
+                )
+            else:
+                # Default to RRF
+                fused = reciprocal_rank_fusion(
+                    text_results=text_scores,
+                    vector_results=vector_scores,
+                    k=60,
+                    text_weight=text_weight,
+                    vector_weight=vector_weight,
+                )
+
+            # Build result list
+            text_score_map = dict(text_scores)
+            vector_score_map = dict(vector_scores)
+
+            results = []
+            for chunk_id, combined_score in fused[:k]:
+                if combined_score < min_similarity:
+                    continue
+
+                chunk_metadata = chunks_by_id.get(chunk_id)
+                if not chunk_metadata:
+                    continue
+
+                results.append({
+                    "text": chunk_metadata.get("text", ""),
+                    "source": chunk_metadata.get("source", ""),
+                    "heading_path": chunk_metadata.get("heading_path", ""),
+                    "similarity": combined_score,
+                    "text_score": text_score_map.get(chunk_id),
+                    "vector_score": vector_score_map.get(chunk_id),
+                    "metadata": chunk_metadata,
+                })
+
+        # Apply chunk merging if requested
+        if merge_adjacent and results:
             if max_chunk_size is not None:
                 merger = ChunkMerger(MergerConfig(max_merged_size=max_chunk_size))
             else:
