@@ -119,7 +119,7 @@ from .query_logic import (
 from .records import Record
 from .streaming import StreamConfig, StreamProcessor, StreamResult
 
-__version__ = "0.4.3"
+__version__ = "0.4.4"
 
 __all__ = [
     # Core classes

@@ -23,7 +23,7 @@
       "name": "data",
       "pypi_name": "dataknobs-data",
       "description": "Data abstraction layer with multiple backend support",
-      "version": "0.4.3",
+      "version": "0.4.4",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -50,7 +50,7 @@
       "name": "bots",
       "pypi_name": "dataknobs-bots",
       "description": "Configuration-driven AI agents for DataKnobs",
-      "version": "0.2.4",
+      "version": "0.2.5",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -77,7 +77,7 @@
       "name": "xization",
       "pypi_name": "dataknobs-xization",
       "description": "Text processing, tokenization, and normalization",
-      "version": "1.2.1",
+      "version": "1.2.2",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
