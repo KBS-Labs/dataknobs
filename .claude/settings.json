@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tree:*)",
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)"
+    ],
+    "deny": []
+  },
+  "_suggested_permissions_to_enable_later": [
+    "Bash(bin/dk:*)",
+    "Bash(uv:*)",
+    "Bash(git:*)",
+    "Bash(gh:*)"
+  ]
+}
