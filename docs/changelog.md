@@ -5,6 +5,19 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-01-05
+
+To all packages except legacy, added py.typed markers to enable PEP 561 type checking support for downstream consumers.
+Patched versions:
+- dataknobs-common [1.1.3]
+- dataknobs-config [0.3.3]
+- dataknobs-structures [1.0.4]
+- dataknobs-utils [1.2.2]
+- dataknobs-xization [1.2.3]
+- dataknobs-data [0.4.5]
+- dataknobs-fsm [0.1.5]
+- dataknobs-llm [0.2.4]
+- dataknobs-bots [0.2.6]
 
 ## Release - 2025-12-26
 

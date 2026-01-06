@@ -1,6 +1,6 @@
 [project]
 name = "dataknobs-fsm"
-version = "0.1.4"
+version = "0.1.5"
 description = "Finite State Machine framework with data modes, resource management, and streaming support"
 readme = "README.md"
 requires-python = ">=3.10"
