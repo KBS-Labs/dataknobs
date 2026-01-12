@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-01-06T01:45:08Z",
+  "timestamp": "2026-01-12T15:52:10Z",
   "python_version": "Python 3.10.18",
-  "uv_version": "uv 0.9.21 (Homebrew 2025-12-30)",
+  "uv_version": "uv 0.9.22 (Homebrew 2026-01-06)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/add-py-typed-markers",
-  "git_commit": "3905300f90639c02363fd4acf398fd39bffc6333",
+  "git_branch": "update-dependencies",
+  "git_commit": "213a4ff3537a38db4b2193813f53e10a742a5c8b",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
