@@ -38,7 +38,7 @@ from collections.abc import Callable
 from typing import Any, Deque, List, Tuple, Union
 
 import graphviz
-from pyparsing import OneOrMore, nestedExpr
+from pyparsing import OneOrMore, nested_expr
 
 
 class Tree:
@@ -925,7 +925,7 @@ def build_tree_from_string(from_string: str) -> Tree:
     """
     if not from_string.strip().startswith("("):
         return Tree(from_string)
-    data = OneOrMore(nestedExpr()).parseString(from_string)
+    data = OneOrMore(nested_expr()).parse_string(from_string)
     return build_tree_from_list(data.as_list())
 
 
