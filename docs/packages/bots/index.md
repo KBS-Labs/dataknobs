@@ -128,6 +128,16 @@ if __name__ == "__main__":
 
 [Learn more →](guides/user-guide.md#per-request-config-overrides)
 
+### 🔄 Dynamic Registration
+
+- **Registry Backends** - Store bot configs in PostgreSQL, S3, or HTTP services
+- **Caching with TTL** - LRU cache with time-based expiration
+- **Hot Reload** - Update bot configs without application restarts
+- **Event-Driven Invalidation** - Event bus integration for cache invalidation
+- **Knowledge Storage** - S3/file storage for raw knowledge files before embedding
+
+[Learn more →](guides/dynamic-registration.md)
+
 ## Architecture
 
 ```mermaid
@@ -191,6 +201,7 @@ dataknobs_bots/
 - [**RAG Query**](guides/rag-query.md) - Query transformation and expansion
 - [**Configuration Reference**](guides/configuration.md) - All configuration options
 - [**Environment-Aware Configuration**](guides/environment-aware.md) - Portable configs for multi-environment deployments
+- [**Dynamic Registration**](guides/dynamic-registration.md) - Runtime bot config and knowledge management with hot reload
 - [**Migration Guide**](guides/migration.md) - Migrate existing configs to environment-aware pattern
 - [**Bot Manager Guide**](guides/bot-manager.md) - Multi-tenant bot management and FastAPI integration
 - [**Middleware Guide**](guides/middleware.md) - Request/response middleware for logging and cost tracking

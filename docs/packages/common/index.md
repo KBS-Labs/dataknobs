@@ -17,6 +17,7 @@ This package provides shared cross-cutting functionality used across all datakno
 - **Exception Framework**: Unified exception hierarchy with context support
 - **Registry Pattern**: Generic registries for managing named items
 - **Serialization Protocol**: Standard interfaces for to_dict/from_dict patterns
+- **Event Bus**: Pub/sub event system for distributed applications
 
 These patterns were extracted from common implementations across multiple packages to reduce duplication and provide consistency.
 
@@ -542,6 +543,12 @@ All migrations achieved 100% backward compatibility:
 - Need consistent error handling
 - Working with lists of serializable objects
 
+### Use Event Bus When:
+- Need decoupled communication between components
+- Want event-driven cache invalidation
+- Building distributed applications
+- Need to switch between in-memory, PostgreSQL, or Redis backends
+
 ## Best Practices
 
 ### 1. Extend, Don't Replace
@@ -630,6 +637,7 @@ The Common package is used by:
 ## Next Steps
 
 - See [Complete API Reference](api.md) for detailed documentation
+- Learn about [Event Bus](events.md) for pub/sub event handling
 - Explore [FSM Package](../fsm/index.md) for exception usage examples
 - Learn about [LLM Package](../llm/index.md) for registry usage examples
 - Check [Development Guide](../../development/index.md) for contributing guidelines
