@@ -7,6 +7,7 @@ from .react import ReActReasoning
 from .simple import SimpleReasoning
 from .wizard import WizardReasoning, WizardStageContext, WizardState
 from .wizard_fsm import WizardFSM
+from .wizard_hooks import WizardHooks
 from .wizard_loader import WizardConfigLoader, load_wizard_config
 
 __all__ = [
@@ -17,6 +18,7 @@ __all__ = [
     "WizardStageContext",
     "WizardState",
     "WizardFSM",
+    "WizardHooks",
     "WizardConfigLoader",
     "load_wizard_config",
     "create_reasoning_from_config",

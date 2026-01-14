@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .base import ReasoningStrategy
+from .wizard_hooks import WizardHooks
 
 if TYPE_CHECKING:
     from .wizard_fsm import WizardFSM
@@ -103,7 +104,7 @@ class WizardReasoning(ReasoningStrategy):
         wizard_fsm: "WizardFSM",
         extractor: Any | None = None,
         strict_validation: bool = True,
-        hooks: Any | None = None,
+        hooks: WizardHooks | None = None,
     ):
         """Initialize WizardReasoning.
 
@@ -127,12 +128,26 @@ class WizardReasoning(ReasoningStrategy):
                 - wizard_config: Path to wizard YAML config
                 - extraction_config: Optional extraction configuration
                 - strict_validation: Whether to enforce validation
+                - hooks: Optional hooks configuration dict
 
         Returns:
             Configured WizardReasoning instance
 
         Raises:
             ValueError: If wizard_config is not provided
+
+        Example:
+            ```yaml
+            reasoning:
+              strategy: wizard
+              wizard_config: wizards/onboarding.yaml
+              strict_validation: true
+              hooks:
+                on_enter:
+                  - function: "myapp.hooks:log_entry"
+                on_complete:
+                  - "myapp.hooks:save_results"
+            ```
         """
         from .wizard_loader import WizardConfigLoader
 
@@ -160,10 +175,17 @@ class WizardReasoning(ReasoningStrategy):
                     "extraction will be disabled"
                 )
 
+        # Create hooks if hooks config specified
+        hooks = None
+        hooks_config = config.get("hooks")
+        if hooks_config:
+            hooks = WizardHooks.from_config(hooks_config)
+
         return cls(
             wizard_fsm=wizard_fsm,
             extractor=extractor,
             strict_validation=config.get("strict_validation", True),
+            hooks=hooks,
         )
 
     async def generate(
@@ -419,6 +441,10 @@ class WizardReasoning(ReasoningStrategy):
 
         # Restart
         if lower in ("restart", "start over"):
+            # Trigger restart hook if configured
+            if self._hooks:
+                await self._hooks.trigger_restart()
+
             self._fsm.restart()
             state.current_stage = self._fsm.current_stage
             state.data = {}
