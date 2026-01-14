@@ -1240,6 +1240,70 @@ class ConversationManager:
         """Get current node ID."""
         return self.state.current_node_id if self.state else None
 
+    @property
+    def metadata(self) -> Dict[str, Any]:
+        """Direct access to conversation metadata dict.
+
+        Provides direct dict-like access to metadata for convenience.
+        For more controlled access, use get_metadata(), set_metadata(),
+        update_metadata(), or remove_metadata() methods.
+
+        Returns:
+            Metadata dictionary (empty dict if no state)
+
+        Example:
+            >>> manager.metadata["wizard"] = {"stage": "welcome"}
+            >>> stage = manager.metadata.get("wizard", {}).get("stage")
+        """
+        if not self.state:
+            return {}
+        return self.state.metadata
+
+    @property
+    def messages(self) -> List[Dict[str, Any]]:
+        """Get conversation messages as a list of dicts.
+
+        Provides sync access to messages in a simple dict format,
+        compatible with reasoning strategies like WizardReasoning.
+
+        Returns:
+            List of message dicts with 'role' and 'content' keys.
+
+        Example:
+            >>> for msg in manager.messages:
+            ...     print(f"{msg['role']}: {msg['content']}")
+        """
+        if not self.state:
+            return []
+        llm_messages = self.state.get_current_messages()
+        return [{"role": m.role, "content": m.content} for m in llm_messages]
+
+    def get_messages(self) -> List[Dict[str, Any]]:
+        """Get conversation messages as a list of dicts.
+
+        Alias for the messages property, providing method-style access
+        for API compatibility with test fixtures and other managers.
+
+        Returns:
+            List of message dicts with 'role' and 'content' keys.
+        """
+        return self.messages
+
+    @property
+    def system_prompt(self) -> str:
+        """Get the system prompt for this conversation.
+
+        Returns the content of the first system message in the conversation,
+        or a default if no system message exists.
+
+        Returns:
+            System prompt string.
+        """
+        for msg in self.messages:
+            if msg.get("role") == "system":
+                return msg.get("content", "")
+        return "You are a helpful assistant."
+
     def get_metadata(self, key: str | None = None, default: Any = None) -> Any:
         """Get conversation metadata.
 

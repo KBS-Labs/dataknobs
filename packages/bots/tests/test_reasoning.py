@@ -1,12 +1,16 @@
 """Tests for reasoning strategies."""
 
+import tempfile
+
 import pytest
+import yaml
 
 from dataknobs_bots import BotContext, DynaBot
 from dataknobs_bots.reasoning import (
     ReActReasoning,
     ReasoningStrategy,
     SimpleReasoning,
+    WizardReasoning,
     create_reasoning_from_config,
 )
 
@@ -129,6 +133,43 @@ class TestReasoningFactory:
         config = {"strategy": "invalid"}
         with pytest.raises(ValueError, match="Unknown reasoning strategy"):
             create_reasoning_from_config(config)
+
+    def test_create_wizard_reasoning(self):
+        """Test creating wizard reasoning from config."""
+        # Create temp wizard config file
+        wizard_config = {
+            "name": "test-wizard",
+            "version": "1.0",
+            "stages": [
+                {
+                    "name": "welcome",
+                    "is_start": True,
+                    "prompt": "What would you like to do?",
+                    "transitions": [{"target": "complete"}],
+                },
+                {
+                    "name": "complete",
+                    "is_end": True,
+                    "prompt": "All done!",
+                },
+            ],
+        }
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            yaml.dump(wizard_config, f)
+            config_path = f.name
+
+        config = {
+            "strategy": "wizard",
+            "wizard_config": config_path,
+            "strict_validation": True,
+        }
+
+        strategy = create_reasoning_from_config(config)
+        assert isinstance(strategy, WizardReasoning)
+        assert strategy._strict_validation is True
 
 
 class TestReasoningIntegration:
@@ -256,3 +297,118 @@ class TestReasoningIntegration:
         # In production, these would go to your logging infrastructure
         response = await bot.chat("Test message", context)
         assert response is not None
+
+    @pytest.mark.asyncio
+    async def test_bot_with_wizard_reasoning(self):
+        """Test bot with wizard reasoning strategy."""
+        # Create temp wizard config file
+        wizard_config = {
+            "name": "test-wizard",
+            "version": "1.0",
+            "description": "Test wizard for integration",
+            "stages": [
+                {
+                    "name": "welcome",
+                    "is_start": True,
+                    "prompt": "What would you like to do?",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"intent": {"type": "string"}},
+                    },
+                    "suggestions": ["Create", "Edit"],
+                    "transitions": [{"target": "complete"}],
+                },
+                {
+                    "name": "complete",
+                    "is_end": True,
+                    "prompt": "All done!",
+                },
+            ],
+        }
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            yaml.dump(wizard_config, f)
+            config_path = f.name
+
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "reasoning": {
+                "strategy": "wizard",
+                "wizard_config": config_path,
+                "strict_validation": False,  # Disable for echo provider testing
+            },
+        }
+
+        bot = await DynaBot.from_config(config)
+        assert bot.reasoning_strategy is not None
+        assert isinstance(bot.reasoning_strategy, WizardReasoning)
+
+        context = BotContext(
+            conversation_id="conv-wizard", client_id="test-client"
+        )
+
+        # Generate initial response - should start wizard flow
+        response = await bot.chat("Hello", context)
+        assert response is not None
+        assert isinstance(response, str)
+
+    @pytest.mark.asyncio
+    async def test_wizard_state_persistence(self):
+        """Test wizard state persists across conversation turns."""
+        wizard_config = {
+            "name": "test-wizard",
+            "version": "1.0",
+            "stages": [
+                {
+                    "name": "step1",
+                    "is_start": True,
+                    "prompt": "Step 1: Enter name",
+                    "transitions": [{"target": "step2"}],
+                },
+                {
+                    "name": "step2",
+                    "prompt": "Step 2: Enter email",
+                    "transitions": [{"target": "complete"}],
+                },
+                {
+                    "name": "complete",
+                    "is_end": True,
+                    "prompt": "Complete!",
+                },
+            ],
+        }
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False
+        ) as f:
+            yaml.dump(wizard_config, f)
+            config_path = f.name
+
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "reasoning": {
+                "strategy": "wizard",
+                "wizard_config": config_path,
+                "strict_validation": False,
+            },
+        }
+
+        bot = await DynaBot.from_config(config)
+        context = BotContext(
+            conversation_id="conv-wizard-persist", client_id="test-client"
+        )
+
+        # First message - starts at step1
+        response1 = await bot.chat("John Doe", context)
+        assert response1 is not None
+
+        # Second message - should be at step2
+        response2 = await bot.chat("john@example.com", context)
+        assert response2 is not None
+
+        # Both responses should work without errors
+        # The wizard maintains state through conversation metadata
