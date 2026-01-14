@@ -200,6 +200,7 @@ nav:
         - packages/bots/examples/memory-chatbot.md
         - packages/bots/examples/rag-chatbot.md
         - packages/bots/examples/react-agent.md
+        - packages/bots/examples/wizard-bot.md
         - packages/bots/examples/multi-tenant.md
         - packages/bots/examples/custom-tools.md
     - Xization:
@@ -274,6 +275,7 @@ nav:
       - packages/bots/examples/memory-chatbot.md
       - packages/bots/examples/rag-chatbot.md
       - packages/bots/examples/react-agent.md
+      - packages/bots/examples/wizard-bot.md
       - packages/bots/examples/multi-tenant.md
       - packages/bots/examples/custom-tools.md
     - LLM Examples:

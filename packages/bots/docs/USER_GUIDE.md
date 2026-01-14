@@ -12,6 +12,7 @@ Complete guide to using DataKnobs Bots with tutorials and how-to guides.
   - [Per-Request Config Overrides](#per-request-config-overrides)
   - [Tutorial 4: Building a RAG Chatbot](#tutorial-4-building-a-rag-chatbot)
   - [Tutorial 5: Creating Tool-Using Agents](#tutorial-5-creating-tool-using-agents)
+  - [Tutorial 6: Building Guided Wizard Flows](#tutorial-6-building-guided-wizard-flows)
 - [Advanced Topics](#advanced-topics)
   - [Multi-Tenant Deployment](#multi-tenant-deployment)
   - [Custom Tools Development](#custom-tools-development)
@@ -812,6 +813,285 @@ Each iteration:
 2. **Action**: Which tool to use?
 3. **Observation**: What did the tool return?
 4. **Repeat or Answer**: Continue or provide final answer
+
+---
+
+### Tutorial 6: Building Guided Wizard Flows
+
+Create multi-step conversational wizards with validation and branching.
+
+**You'll Learn:**
+- Creating wizard configuration files
+- Stage-based data collection
+- JSON Schema validation
+- Navigation commands (back, skip, restart)
+- Lifecycle hooks
+
+**Use Cases:**
+- User onboarding flows
+- Form-based data collection
+- Multi-step configuration wizards
+- Guided decision trees
+
+#### Step 1: Create Wizard Configuration
+
+Create a `wizard.yaml` file:
+
+```yaml
+# wizard.yaml
+name: onboarding-wizard
+version: "1.0"
+description: User onboarding flow
+
+stages:
+  - name: welcome
+    is_start: true
+    prompt: "Welcome! What type of project are you creating?"
+    schema:
+      type: object
+      properties:
+        project_type:
+          type: string
+          enum: [web, mobile, api]
+    suggestions:
+      - "Web application"
+      - "Mobile app"
+      - "API service"
+    transitions:
+      - target: name_project
+        condition: "data.get('project_type')"
+
+  - name: name_project
+    prompt: "What would you like to name your project?"
+    help_text: "Choose a descriptive name (3-30 characters)"
+    schema:
+      type: object
+      properties:
+        project_name:
+          type: string
+          minLength: 3
+          maxLength: 30
+      required: ["project_name"]
+    transitions:
+      - target: features
+
+  - name: features
+    prompt: "Which features do you need? (comma-separated)"
+    can_skip: true
+    schema:
+      type: object
+      properties:
+        features:
+          type: array
+          items:
+            type: string
+    suggestions:
+      - "Authentication"
+      - "Database"
+      - "File uploads"
+    transitions:
+      - target: complete
+
+  - name: complete
+    is_end: true
+    prompt: |
+      Your project is configured!
+      - Name: {{project_name}}
+      - Type: {{project_type}}
+      - Features: {{features}}
+```
+
+#### Step 2: Create Wizard Bot
+
+```python
+# wizard_bot.py
+import asyncio
+from dataknobs_bots import DynaBot, BotContext
+
+async def main():
+    config = {
+        "llm": {
+            "provider": "ollama",
+            "model": "gemma3:1b"
+        },
+        "conversation_storage": {
+            "backend": "memory"
+        },
+        "reasoning": {
+            "strategy": "wizard",
+            "wizard_config": "wizard.yaml",
+            "strict_validation": True
+        }
+    }
+
+    print("Creating wizard bot...\n")
+    bot = await DynaBot.from_config(config)
+    print("✓ Wizard ready!\n")
+
+    context = BotContext(
+        conversation_id="onboarding-001",
+        client_id="my-app"
+    )
+
+    # Interactive loop
+    print("Start the wizard by sending any message.")
+    print("Type 'quit' to exit.\n")
+
+    while True:
+        user_input = input("You: ").strip()
+        if user_input.lower() == 'quit':
+            break
+
+        response = await bot.chat(user_input, context)
+        print(f"Bot: {response}\n")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+#### Step 3: Run the Wizard
+
+```bash
+python wizard_bot.py
+```
+
+**Example Session:**
+```
+Creating wizard bot...
+✓ Wizard ready!
+
+Start the wizard by sending any message.
+Type 'quit' to exit.
+
+You: hello
+Bot: Welcome! What type of project are you creating?
+     Suggestions: Web application, Mobile app, API service
+
+You: I want to build a web app
+Bot: Great choice! What would you like to name your project?
+
+You: MyAwesomeProject
+Bot: Which features do you need? (comma-separated)
+     Suggestions: Authentication, Database, File uploads
+     (You can skip this step by saying "skip")
+
+You: authentication, database
+Bot: Your project is configured!
+     - Name: MyAwesomeProject
+     - Type: web
+     - Features: ['authentication', 'database']
+```
+
+#### Navigation Commands
+
+Users can navigate naturally:
+
+| Say | Effect |
+|-----|--------|
+| "back" / "go back" / "previous" | Return to previous stage |
+| "skip" / "skip this" | Skip optional stage (if `can_skip: true`) |
+| "restart" / "start over" | Begin from start |
+
+**Example:**
+```
+You: Actually, go back
+Bot: Returning to previous step. What would you like to name your project?
+
+You: restart
+Bot: Starting over. Welcome! What type of project are you creating?
+```
+
+#### Adding Lifecycle Hooks
+
+Customize behavior at stage transitions:
+
+```python
+from dataknobs_bots.reasoning.wizard_hooks import WizardHooks
+
+# Create hooks instance
+hooks = WizardHooks()
+
+# Log every stage entry
+def log_entry(stage: str, data: dict):
+    print(f"[Entering {stage}] Data so far: {data}")
+
+hooks.on_enter(log_entry)
+
+# Validate before exit (stage-specific)
+async def validate_exit(stage: str, data: dict):
+    name = data.get("project_name", "")
+    if name.lower() in ["test", "temp"]:
+        raise ValueError("Please choose a more descriptive name")
+
+hooks.on_exit(validate_exit, stage="name_project")
+
+# Save on completion
+async def save_project(data: dict):
+    print(f"Saving project: {data}")
+    # Save to database, create files, etc.
+
+hooks.on_complete(save_project)
+```
+
+**Configuration-based hooks** (for YAML configs):
+
+```yaml
+reasoning:
+  strategy: wizard
+  wizard_config: wizard.yaml
+  hooks:
+    on_enter:
+      - "myapp.hooks:log_entry"
+      - function: "myapp.hooks:validate_welcome"
+        stage: welcome  # Stage-specific hook
+    on_complete:
+      - "myapp.hooks:save_project"
+```
+
+#### Conditional Branching
+
+Create dynamic flows based on user input:
+
+```yaml
+stages:
+  - name: experience
+    prompt: "What's your experience level?"
+    schema:
+      type: object
+      properties:
+        level:
+          type: string
+          enum: [beginner, intermediate, advanced]
+    transitions:
+      - target: beginner_path
+        condition: "data.get('level') == 'beginner'"
+      - target: advanced_path
+        condition: "data.get('level') == 'advanced'"
+      - target: intermediate_path  # Default
+
+  - name: beginner_path
+    prompt: "Let's start with the basics..."
+    # ... beginner-specific flow
+
+  - name: advanced_path
+    prompt: "Here are the advanced options..."
+    # ... advanced-specific flow
+```
+
+#### Understanding Wizard Reasoning
+
+| Strategy | Best For | Key Feature |
+|----------|----------|-------------|
+| Simple | Basic Q&A | Single LLM call |
+| ReAct | Tool use | Iterative reasoning |
+| **Wizard** | Multi-step flows | FSM-backed stages |
+
+Wizard reasoning is ideal when you need:
+- Structured data collection
+- Input validation per step
+- Conditional flow branching
+- Progress tracking
+- User navigation (back/skip)
 
 ---
 

@@ -10,6 +10,7 @@ Complete working examples demonstrating dataknobs-bots features.
 | [Memory Chatbot](memory-chatbot.md) | Bot with conversation memory | Buffer memory, context management |
 | [RAG Chatbot](rag-chatbot.md) | Knowledge base integration | Document loading, vector search, RAG |
 | [ReAct Agent](react-agent.md) | Tool-using agent | Custom tools, ReAct reasoning |
+| [Wizard Bot](wizard-bot.md) | Guided conversational wizard | FSM stages, validation, data collection |
 | [Multi-Tenant Bot](multi-tenant.md) | Multiple clients setup | Bot registry, client isolation |
 | [Config-Based Tools](custom-tools.md) | Configuration-driven tools | Tool configuration, XRef system |
 
@@ -70,6 +71,7 @@ For users building production bots:
 
 - [RAG Chatbot](rag-chatbot.md) - Knowledge retrieval
 - [ReAct Agent](react-agent.md) - Tool integration
+- [Wizard Bot](wizard-bot.md) - Guided conversational flows
 - [Multi-Tenant Bot](multi-tenant.md) - Multi-tenancy
 
 ### Configuration Patterns
