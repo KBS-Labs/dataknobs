@@ -1,5 +1,7 @@
 """Tests for API exceptions and dependencies."""
 
+import warnings
+
 import pytest
 
 from dataknobs_bots.api.exceptions import (
@@ -17,7 +19,6 @@ from dataknobs_bots.api.dependencies import (
     init_bot_manager,
     reset_bot_manager,
 )
-from dataknobs_bots.bot.manager import BotManager
 from dataknobs_common.exceptions import (
     ConfigurationError as CommonConfigurationError,
 )
@@ -202,28 +203,39 @@ class TestRateLimitError:
         assert error.detail["retry_after"] == 60
 
 
+@pytest.mark.filterwarnings("ignore:BotManager is deprecated:DeprecationWarning")
+@pytest.mark.filterwarnings("ignore:.*is deprecated.*Use.*instead:DeprecationWarning")
 class TestBotManagerSingleton:
-    """Tests for BotManager singleton management."""
+    """Tests for BotManager singleton management (deprecated)."""
 
     def setup_method(self):
         """Reset singleton before each test."""
-        reset_bot_manager()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            reset_bot_manager()
 
     def teardown_method(self):
         """Reset singleton after each test."""
-        reset_bot_manager()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            reset_bot_manager()
 
     def test_get_creates_default(self):
         """Test that get creates a default BotManager if none exists."""
-        manager = get_bot_manager()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            manager = get_bot_manager()
 
         assert manager is not None
-        assert isinstance(manager, BotManager)
+        # Check class name rather than importing BotManager
+        assert type(manager).__name__ == "BotManager"
 
     def test_get_returns_same_instance(self):
         """Test that get returns the same instance."""
-        manager1 = get_bot_manager()
-        manager2 = get_bot_manager()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            manager1 = get_bot_manager()
+            manager2 = get_bot_manager()
 
         assert manager1 is manager2
 
@@ -233,28 +245,32 @@ class TestBotManagerSingleton:
         def loader(bot_id: str) -> dict:
             return {}
 
-        manager = init_bot_manager(config_loader=loader)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            manager = init_bot_manager(config_loader=loader)
 
-        assert manager is not None
-        assert get_bot_manager() is manager
+            assert manager is not None
+            assert get_bot_manager() is manager
 
     def test_reset_clears_instance(self):
         """Test that reset clears the singleton."""
-        manager1 = get_bot_manager()
-        reset_bot_manager()
-        manager2 = get_bot_manager()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            manager1 = get_bot_manager()
+            reset_bot_manager()
+            manager2 = get_bot_manager()
 
         assert manager1 is not manager2
 
     def test_singleton_class_get(self):
         """Test _BotManagerSingleton.get()."""
         manager = _BotManagerSingleton.get()
-        assert isinstance(manager, BotManager)
+        assert type(manager).__name__ == "BotManager"
 
     def test_singleton_class_init(self):
         """Test _BotManagerSingleton.init()."""
         manager = _BotManagerSingleton.init()
-        assert isinstance(manager, BotManager)
+        assert type(manager).__name__ == "BotManager"
         assert _BotManagerSingleton.get() is manager
 
     def test_singleton_class_reset(self):
