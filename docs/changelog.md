@@ -5,6 +5,54 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-01-14
+
+### dataknobs-bots [0.3.0]
+
+#### Added
+- Dynamic Registration
+  - DataKnobsRegistryAdapter for pluggable config storage
+  - CachingRegistryManager with TTL and event invalidation
+  - Hot-reload infrastructure (HotReloadManager, RegistryPoller)
+  - HTTPRegistryBackend for REST API config sources
+  - Knowledge storage backends (InMemory, File, S3)
+  - KnowledgeIngestionManager for file→vector ingestion
+- Wizard Reasoning
+  - Wizard Reasoning Strategy for FSM-backed guided conversational flows
+  - WizardFSM - Thin wrapper around AdvancedFSM with wizard-specific conveniences (navigation, stage metadata, state serialization)
+  - WizardConfigLoader - Translates user-friendly wizard YAML to FSM configuration at load time
+  - WizardHooks - Lifecycle hooks for stage events: on_enter, on_exit, on_complete, on_restart, on_error
+  - Navigation Commands - Built-in support for "back"/"go back", "skip", and "restart" navigation
+  - Stage Features - Per-stage prompts, JSON Schema validation, suggestions, help text, can_skip, can_go_back, and stage-scoped tools
+  - Response Metadata - Wizard progress tracking, current stage info, and available actions
+  - Two-Phase Validation - Extraction confidence check followed by JSON Schema validation with graceful degradation
+  - State Persistence - Wizard state stored in ConversationManager.metadata for cross-turn persistence
+
+#### Changed
+- integration and factory update
+
+#### Fixed
+- fixed self-deprecation warnings in tests
+
+### dataknobs-llm [0.3.0]
+
+#### Added
+- SchemaExtractor - LLM-based structured data extraction from natural language using JSON Schema
+- ExtractionConfig - Configuration for extraction provider, model, and confidence threshold
+- ExtractionResult - Result object with extracted data, confidence score, and validation errors
+- Multi-Provider Support - Extraction works with Ollama (dev), Anthropic, and OpenAI providers
+- Per-Stage Model Override - Stages can specify different extraction models for varying complexity
+
+### dataknobs-common [1.2.0]
+
+#### Added
+- EventBus abstraction with Memory/Postgres/Redis backends
+
+### dataknobs-structures [1.0.5]
+
+#### Fixed
+- Updated pyparsing API calls to use non-deprecated names (nested_expr, parse_string)
+
 ## Release - 2026-01-05
 
 To all packages except legacy, added py.typed markers to enable PEP 561 type checking support for downstream consumers.

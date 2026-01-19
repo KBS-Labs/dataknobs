@@ -18,6 +18,20 @@ from .query import (
     create_transformer,
     is_ambiguous_query,
 )
+from .storage import (
+    create_knowledge_backend,
+    FileKnowledgeBackend,
+    IngestionStatus,
+    InMemoryKnowledgeBackend,
+    KnowledgeBaseInfo,
+    KnowledgeFile,
+    KnowledgeResourceBackend,
+    S3KnowledgeBackend,
+)
+from .ingestion import (
+    IngestionResult,
+    KnowledgeIngestionManager,
+)
 
 # Re-export ingestion types for convenience
 from dataknobs_xization.ingestion import (
@@ -51,7 +65,19 @@ __all__ = [
     "ContextualExpander",
     "Message",
     "is_ambiguous_query",
-    # Ingestion types
+    # Storage backends
+    "KnowledgeResourceBackend",
+    "KnowledgeFile",
+    "KnowledgeBaseInfo",
+    "IngestionStatus",
+    "create_knowledge_backend",
+    "InMemoryKnowledgeBackend",
+    "FileKnowledgeBackend",
+    "S3KnowledgeBackend",
+    # Ingestion manager
+    "KnowledgeIngestionManager",
+    "IngestionResult",
+    # Ingestion types (from xization)
     "DirectoryProcessor",
     "FilePatternConfig",
     "KnowledgeBaseConfig",

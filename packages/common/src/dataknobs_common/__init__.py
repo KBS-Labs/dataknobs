@@ -5,6 +5,7 @@ This package provides shared functionality used across all dataknobs packages:
 - **Exceptions**: Unified exception hierarchy with context support
 - **Registry**: Generic registry pattern for managing named items
 - **Serialization**: Protocols and utilities for to_dict/from_dict patterns
+- **Events**: Event bus abstraction for pub/sub messaging
 - **Testing**: Test utilities, markers, and configuration factories
 
 Example:
@@ -20,10 +21,22 @@ Example:
 
     # Serialize objects
     data = serialize(my_object)
+
+    # Use event bus
+    from dataknobs_common.events import create_event_bus, Event, EventType
+    bus = create_event_bus({"backend": "memory"})
     ```
 """
 
 # Import all public APIs from submodules
+from dataknobs_common.events import (
+    Event,
+    EventBus,
+    EventType,
+    InMemoryEventBus,
+    Subscription,
+    create_event_bus,
+)
 from dataknobs_common.exceptions import (
     ConcurrencyError,
     ConfigurationError,
@@ -69,11 +82,18 @@ from dataknobs_common.testing import (
     requires_redis,
 )
 
-__version__ = "1.1.3"
+__version__ = "1.2.0"
 
 __all__ = [
     # Version
     "__version__",
+    # Events
+    "Event",
+    "EventBus",
+    "EventType",
+    "InMemoryEventBus",
+    "Subscription",
+    "create_event_bus",
     # Exceptions
     "DataknobsError",
     "ValidationError",

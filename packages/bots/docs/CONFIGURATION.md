@@ -769,6 +769,128 @@ Iteration 2:
   Final Answer: 15 multiplied by 7 is 105
 ```
 
+### Wizard Reasoning
+
+Guided conversational flows with FSM-backed state management:
+
+```yaml
+reasoning:
+  strategy: wizard
+  wizard_config: path/to/wizard.yaml  # Required: wizard definition file
+  strict_validation: true              # Enforce JSON Schema validation
+  extraction_config:                   # Optional: LLM for data extraction
+    provider: ollama
+    model: qwen3:1b
+  hooks:                               # Optional: lifecycle callbacks
+    on_enter:
+      - "myapp.hooks:log_stage_entry"
+    on_complete:
+      - "myapp.hooks:save_wizard_results"
+```
+
+**Configuration Options:**
+- `wizard_config` (string, required): Path to wizard YAML configuration file
+- `strict_validation` (bool): Enforce JSON Schema validation per stage (default: true)
+- `extraction_config` (dict): LLM configuration for extracting structured data from user input
+- `custom_functions` (dict): Custom Python functions for transition conditions
+- `hooks` (dict): Lifecycle hooks for stage transitions and completion
+
+**Use Cases:**
+- Multi-step data collection (onboarding, forms)
+- Guided workflows with validation
+- Branching conversational flows
+- Complex wizards with conditional logic
+
+**Wizard Configuration File Format:**
+
+```yaml
+# wizard.yaml
+name: onboarding-wizard
+version: "1.0"
+description: User onboarding flow
+
+stages:
+  - name: welcome
+    is_start: true
+    prompt: "What kind of bot would you like to create?"
+    schema:
+      type: object
+      properties:
+        intent:
+          type: string
+          enum: [tutor, quiz, companion]
+    suggestions: ["Create a tutor", "Build a quiz", "Make a companion"]
+    transitions:
+      - target: select_template
+        condition: "data.get('intent')"
+
+  - name: select_template
+    prompt: "Would you like to start from a template?"
+    can_skip: true
+    help_text: "Templates provide pre-configured settings for common use cases."
+    schema:
+      type: object
+      properties:
+        use_template:
+          type: boolean
+    transitions:
+      - target: configure
+        condition: "data.get('use_template') == True"
+      - target: configure
+
+  - name: configure
+    prompt: "Enter the bot name:"
+    schema:
+      type: object
+      properties:
+        bot_name:
+          type: string
+          minLength: 3
+      required: ["bot_name"]
+    transitions:
+      - target: complete
+
+  - name: complete
+    is_end: true
+    prompt: "Your bot '{{bot_name}}' is ready!"
+```
+
+**Stage Properties:**
+| Property | Type | Description |
+|----------|------|-------------|
+| `name` | string | Unique stage identifier (required) |
+| `prompt` | string | User-facing message for this stage (required) |
+| `is_start` | bool | Mark as wizard entry point |
+| `is_end` | bool | Mark as wizard completion point |
+| `schema` | object | JSON Schema for data validation |
+| `suggestions` | list | Quick-reply buttons for users |
+| `help_text` | string | Additional help shown on request |
+| `can_skip` | bool | Allow users to skip this stage |
+| `can_go_back` | bool | Allow back navigation (default: true) |
+| `tools` | list | Tool names available in this stage |
+| `transitions` | list | Rules for transitioning to next stage |
+
+**Navigation Commands:**
+Users can navigate the wizard with natural language:
+- "back" / "go back" / "previous" - Return to previous stage
+- "skip" / "skip this" - Skip current stage (if `can_skip: true`)
+- "restart" / "start over" - Restart from beginning
+
+**Lifecycle Hooks:**
+```yaml
+hooks:
+  on_enter:                    # Called when entering any stage
+    - "myapp.hooks:log_entry"
+  on_exit:                     # Called when leaving any stage
+    - "myapp.hooks:validate_exit"
+  on_complete:                 # Called when wizard finishes
+    - "myapp.hooks:submit_results"
+  on_restart:                  # Called when wizard is restarted
+    - "myapp.hooks:log_restart"
+  on_error:                    # Called on processing errors
+    - "myapp.hooks:handle_error"
+```
+
 ---
 
 ## Tools Configuration

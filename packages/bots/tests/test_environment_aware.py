@@ -211,8 +211,9 @@ class TestDynaBotGetPortableConfig:
         assert portable["bot"]["database"]["$resource"] == "main"
 
 
+@pytest.mark.filterwarnings("ignore:BotManager is deprecated:DeprecationWarning")
 class TestBotManagerEnvironmentAware:
-    """Tests for BotManager with environment support."""
+    """Tests for BotManager with environment support (deprecated)."""
 
     @pytest.fixture
     def env_config(self):

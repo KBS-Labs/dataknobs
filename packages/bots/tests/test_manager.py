@@ -1,4 +1,9 @@
-"""Tests for BotManager."""
+"""Tests for BotManager (deprecated).
+
+These tests cover the deprecated BotManager class which is being
+replaced by BotRegistry. The filterwarnings decorator suppresses
+the expected deprecation warnings during testing.
+"""
 
 import pytest
 
@@ -30,8 +35,9 @@ def config_loader(echo_bot_config: dict):
     return loader
 
 
+@pytest.mark.filterwarnings("ignore:BotManager is deprecated:DeprecationWarning")
 class TestBotManager:
-    """Tests for BotManager."""
+    """Tests for BotManager (deprecated)."""
 
     @pytest.mark.asyncio
     async def test_get_or_create_with_config(self, echo_bot_config: dict):

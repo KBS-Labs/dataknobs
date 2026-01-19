@@ -65,6 +65,7 @@ nav:
     - packages/index.md
     - Common:
       - packages/common/index.md
+      - packages/common/events.md
       - packages/common/api.md
     - Config:
       - packages/config/index.md
@@ -93,6 +94,7 @@ nav:
       - Advanced Features:
         - packages/data/async-pooling-quickstart.md
         - packages/data/async-pooling.md
+        - packages/data/hybrid-search.md
         - packages/data/performance-tuning.md
         - packages/data/migration.md
         - packages/data/validation.md
@@ -181,11 +183,13 @@ nav:
         - packages/bots/guides/user-guide.md
         - packages/bots/guides/configuration.md
         - packages/bots/guides/environment-aware.md
+        - packages/bots/guides/dynamic-registration.md
         - packages/bots/guides/migration.md
         - packages/bots/guides/architecture.md
         - packages/bots/guides/tools.md
         - packages/bots/guides/middleware.md
         - packages/bots/guides/bot-manager.md
+        - packages/bots/guides/rag-ingestion.md
         - packages/bots/guides/rag-retrieval.md
         - packages/bots/guides/rag-query.md
       - API Reference:
@@ -196,6 +200,7 @@ nav:
         - packages/bots/examples/memory-chatbot.md
         - packages/bots/examples/rag-chatbot.md
         - packages/bots/examples/react-agent.md
+        - packages/bots/examples/wizard-bot.md
         - packages/bots/examples/multi-tenant.md
         - packages/bots/examples/custom-tools.md
     - Xization:
@@ -208,6 +213,8 @@ nav:
         - packages/xization/markdown-chunking.md
         - packages/xization/quality-filtering.md
         - packages/xization/heading-enrichment.md
+      - packages/xization/json-chunking.md
+      - packages/xization/ingestion.md
       - packages/xization/api.md
     - Legacy:
       - packages/legacy/index.md
@@ -268,6 +275,7 @@ nav:
       - packages/bots/examples/memory-chatbot.md
       - packages/bots/examples/rag-chatbot.md
       - packages/bots/examples/react-agent.md
+      - packages/bots/examples/wizard-bot.md
       - packages/bots/examples/multi-tenant.md
       - packages/bots/examples/custom-tools.md
     - LLM Examples:

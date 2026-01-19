@@ -1,6 +1,6 @@
 [project]
 name = "dataknobs-bots"
-version = "0.2.6"
+version = "0.3.0"
 description = "Configuration-driven AI agents for DataKnobs"
 readme = "README.md"
 authors = [
@@ -36,6 +36,7 @@ dev = [
     "pytest-benchmark>=4.0.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
+    "aioresponses>=0.7.8",
 ]
 
 [tool.hatch.build.targets.wheel]
