@@ -1382,12 +1382,6 @@ dev = [
 name = "dataknobs-common"
 version = "1.2.0"
 source = { editable = "packages/common" }
-dependencies = [
-    { name = "more-itertools" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "python-dotenv" },
-]
 
 [package.dev-dependencies]
 dev = [
@@ -1400,11 +1394,6 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [
-    { name = "more-itertools", specifier = ">=8.10.0" },
-    { name = "numpy", specifier = ">=1.21.0" },
-    { name = "python-dotenv", specifier = ">=0.19.0" },
-]
 
 [package.metadata.requires-dev]
 dev = [
@@ -1877,6 +1866,7 @@ dependencies = [
     { name = "dataknobs-common" },
     { name = "dataknobs-structures" },
     { name = "dataknobs-utils" },
+    { name = "more-itertools" },
     { name = "nltk" },
 ]
 
@@ -1885,6 +1875,7 @@ requires-dist = [
     { name = "dataknobs-common", editable = "packages/common" },
     { name = "dataknobs-structures", editable = "packages/structures" },
     { name = "dataknobs-utils", editable = "packages/utils" },
+    { name = "more-itertools", specifier = ">=8.10.0" },
     { name = "nltk", specifier = ">=3.9.1" },
 ]
 
