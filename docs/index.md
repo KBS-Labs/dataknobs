@@ -61,16 +61,16 @@ Dataknobs is open-source because we believe in **democratizing access to data** 
 
 | Package | Description | Version |
 |---------|-------------|---------|
-| [dataknobs-config](packages/config/index.md) | Flexible and modular configuration management | 0.2.0 |
-| [dataknobs-data](packages/data/index.md) | Data abstraction layer with multiple backend support | 0.3.2 |
-| [dataknobs-fsm](packages/fsm/index.md) | Finite State Machine framework for building workflows | 0.1.2 |
-| [dataknobs-llm](packages/llm/index.md) | LLM integration with prompt management and tools | 0.1.1 |
-| [dataknobs-bots](packages/bots/index.md) | Configuration-driven AI agents and chatbots | 0.1.0 |
-| [dataknobs-structures](packages/structures/index.md) | Core data structures (Tree, Document, RecordStore) | 1.0.1 |
-| [dataknobs-utils](packages/utils/index.md) | Utility functions for JSON, files, and integrations | 1.1.0 |
-| [dataknobs-xization](packages/xization/index.md) | Text processing, tokenization, and normalization | 1.1.1 |
-| [dataknobs-common](packages/common/index.md) | Shared components and base classes | 1.0.1 |
-| [dataknobs](packages/legacy/index.md) | Legacy compatibility package (deprecated) | 0.0.16 |
+| [dataknobs-bots](packages/bots/index.md) | Configuration-driven AI agents with RAG, memory, and reasoning strategies | 0.3.0 |
+| [dataknobs-common](packages/common/index.md) | Foundation library with exceptions, registries, serialization, and event bus | 1.2.0 |
+| [dataknobs-config](packages/config/index.md) | Modular configuration system with environment variable overrides and factories | 0.3.3 |
+| [dataknobs-data](packages/data/index.md) | Unified data abstraction layer with multiple backends | 0.4.5 |
+| [dataknobs-fsm](packages/fsm/index.md) | Finite State Machine framework for workflows with data modes and resource management | 0.1.5 |
+| [dataknobs-llm](packages/llm/index.md) | Unified LLM abstraction with prompt management and conversations | 0.3.0 |
+| [dataknobs-structures](packages/structures/index.md) | Core data structures for AI knowledge bases and document processing | 1.0.5 |
+| [dataknobs-utils](packages/utils/index.md) | Utilities for file I/O, JSON processing, HTTP requests, and integrations | 1.2.2 |
+| [dataknobs-xization](packages/xization/index.md) | Text normalization, tokenization, annotation, and markdown chunking library | 1.2.3 |
+| [dataknobs](packages/legacy/index.md) | Legacy compatibility package (deprecated) | 0.1.1 |
 
 ## Quick Installation
 

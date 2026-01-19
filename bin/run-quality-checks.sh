@@ -347,6 +347,7 @@ fi
 # Initialize status tracking
 STYLE_STATUS=0
 DOCS_STATUS=0
+DOCS_VERSIONS_STATUS=0
 TEST_STATUS=0
 UNIT_TEST_STATUS=0
 INTEGRATION_TEST_STATUS=0
@@ -396,6 +397,21 @@ if [ "$PR_MODE" = "yes" ]; then
         echo ""
         echo -e "${YELLOW}Documentation errors:${NC}"
         cat "$ARTIFACTS_DIR/docs-build.log"
+        echo ""
+    fi
+
+    # Check documentation versions are in sync with packages.json
+    print_status "Checking documentation versions..."
+    if "$SCRIPT_DIR/docs-update-versions.sh" --check > "$ARTIFACTS_DIR/docs-versions.log" 2>&1; then
+        print_success "Documentation versions are in sync"
+    else
+        DOCS_VERSIONS_STATUS=$?
+        print_error "Documentation versions are out of sync"
+        echo ""
+        echo -e "${YELLOW}Version sync errors:${NC}"
+        cat "$ARTIFACTS_DIR/docs-versions.log"
+        echo ""
+        echo -e "${CYAN}Run 'bin/docs-update-versions.sh' to fix${NC}"
         echo ""
     fi
 fi
@@ -783,7 +799,7 @@ if [ "$PR_MODE" = "yes" ]; then
     OVERALL_STATUS="PASS"
 
     # Check for failures
-    if [ $DOCS_STATUS -ne 0 ] || [ $TEST_STATUS -ne 0 ]; then
+    if [ $DOCS_STATUS -ne 0 ] || [ $DOCS_VERSIONS_STATUS -ne 0 ] || [ $TEST_STATUS -ne 0 ]; then
         OVERALL_STATUS="FAIL"
     fi
     
@@ -798,6 +814,11 @@ if [ "$PR_MODE" = "yes" ]; then
       "status": $([ $DOCS_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
       "exit_code": $DOCS_STATUS,
       "tool": "mkdocs"
+    },
+    "documentation_versions": {
+      "status": $([ $DOCS_VERSIONS_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
+      "exit_code": $DOCS_VERSIONS_STATUS,
+      "tool": "docs-update-versions.sh"
     },
     "style": {
       "status": $([ $STYLE_STATUS -eq 0 ] && echo '"pass"' || echo '"warning"'),
@@ -840,6 +861,13 @@ if [ "$PR_MODE" = "yes" ]; then
         echo -e "  Documentation:      ${GREEN}✓ PASSED${NC}"
     else
         echo -e "  Documentation:      ${RED}✗ FAILED${NC}"
+    fi
+
+    # Show documentation versions status
+    if [ $DOCS_VERSIONS_STATUS -eq 0 ]; then
+        echo -e "  Doc Versions:       ${GREEN}✓ PASSED${NC}"
+    else
+        echo -e "  Doc Versions:       ${RED}✗ FAILED${NC}"
     fi
 fi
 
@@ -885,7 +913,7 @@ echo -e "${BLUE}═════════════════════�
 
 # Determine overall status
 OVERALL_STATUS="PASS"
-if [ $DOCS_STATUS -ne 0 ] || [ $TEST_STATUS -ne 0 ]; then
+if [ $DOCS_STATUS -ne 0 ] || [ $DOCS_VERSIONS_STATUS -ne 0 ] || [ $TEST_STATUS -ne 0 ]; then
     OVERALL_STATUS="FAIL"
 fi
 
@@ -913,6 +941,15 @@ else
             echo -e "  ${CYAN}Documentation Build Failures:${NC}"
             echo "    View documentation errors:"
             echo "      cat $ARTIFACTS_DIR/docs-build.log"
+            echo ""
+        fi
+
+        if [ $DOCS_VERSIONS_STATUS -ne 0 ] && [ -f "$ARTIFACTS_DIR/docs-versions.log" ]; then
+            echo -e "  ${CYAN}Documentation Version Mismatch:${NC}"
+            echo "    View version differences:"
+            echo "      cat $ARTIFACTS_DIR/docs-versions.log"
+            echo "    To fix:"
+            echo "      bin/docs-update-versions.sh"
             echo ""
         fi
 

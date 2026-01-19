@@ -12,6 +12,7 @@ dependencies = [
     "dataknobs-structures>=1.0.0",
     "dataknobs-utils>=1.0.0",
     "nltk>=3.9.1",
+    "more-itertools>=8.10.0",
 ]
 
 [tool.uv.sources]

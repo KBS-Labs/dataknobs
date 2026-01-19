@@ -10,6 +10,18 @@ Welcome to the Dataknobs User Guide. This section provides detailed information 
 
 ## Core Capabilities
 
+### AI Agents & Chatbots
+**Package**: [dataknobs-bots](../packages/bots/index.md)
+
+Configuration-driven AI agents with memory, RAG, reasoning strategies, and multi-tenancy.
+
+- [User Guide](../packages/bots/guides/user-guide.md) - Comprehensive tutorials
+- [Configuration](../packages/bots/guides/configuration.md) - Bot configuration options
+- [Architecture](../packages/bots/guides/architecture.md) - Understanding bot components
+- [Tools](../packages/bots/guides/tools.md) - Built-in and custom tools
+
+**Use Cases**: Customer support bots, virtual assistants, knowledge base Q&A, multi-user chat systems
+
 ### Configuration Management
 **Package**: [dataknobs-config](../packages/config/index.md)
 
@@ -61,18 +73,6 @@ Multi-provider LLM integration with prompt management, conversations, versioning
 
 **Use Cases**: Chatbots, content generation, code analysis, document summarization, Q&A systems
 
-### AI Agents & Chatbots
-**Package**: [dataknobs-bots](../packages/bots/index.md)
-
-Configuration-driven AI agents with memory, RAG, reasoning strategies, and multi-tenancy.
-
-- [User Guide](../packages/bots/guides/user-guide.md) - Comprehensive tutorials
-- [Configuration](../packages/bots/guides/configuration.md) - Bot configuration options
-- [Architecture](../packages/bots/guides/architecture.md) - Understanding bot components
-- [Tools](../packages/bots/guides/tools.md) - Built-in and custom tools
-
-**Use Cases**: Customer support bots, virtual assistants, knowledge base Q&A, multi-user chat systems
-
 ### Data Structures
 **Package**: [dataknobs-structures](../packages/structures/index.md)
 
@@ -85,6 +85,18 @@ Core data structures for organizing knowledge: trees, documents, record stores, 
 
 **Use Cases**: Hierarchical data, document management, knowledge graphs, data organization
 
+### Utilities
+**Package**: [dataknobs-utils](../packages/utils/index.md)
+
+Utility functions for JSON manipulation, file operations, HTTP requests, and more.
+
+- [JSON Utils](../packages/utils/json-utils.md) - JSON navigation and manipulation
+- [File Utils](../packages/utils/file-utils.md) - File I/O operations
+- [Elasticsearch](../packages/utils/elasticsearch.md) - Elasticsearch helpers
+- [LLM Utils](../packages/utils/llm-utils.md) - LLM-related utilities
+
+**Use Cases**: JSON processing, file handling, search integration, API interactions
+
 ### Text Processing
 **Package**: [dataknobs-xization](../packages/xization/index.md)
 
@@ -95,18 +107,6 @@ Text normalization, tokenization, masking, and lexical analysis for NLP and data
 - [Masking](../packages/xization/masking.md) - PII and sensitive data masking
 
 **Use Cases**: Data anonymization, text preprocessing, NLP pipelines, search indexing
-
-### Utilities
-**Package**: [dataknobs-utils](../packages/utils/index.md)
-
-Utility functions for JSON manipulation, file operations, Elasticsearch integration, and more.
-
-- [JSON Utils](../packages/utils/json-utils.md) - JSON navigation and manipulation
-- [File Utils](../packages/utils/file-utils.md) - File I/O operations
-- [Elasticsearch](../packages/utils/elasticsearch.md) - Elasticsearch helpers
-- [LLM Utils](../packages/utils/llm-utils.md) - LLM-related utilities
-
-**Use Cases**: JSON processing, file handling, search integration, API interactions
 
 ## Common Workflows
 

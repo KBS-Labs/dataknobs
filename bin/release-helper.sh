@@ -901,6 +901,15 @@ bump_versions() {
             echo -e "${RED}Invalid choice${NC}"
             ;;
     esac
+
+    # After version bumps, update lock file and documentation
+    if [ "$choice" != "4" ] && [ "$choice" != "" ]; then
+        echo -e "\n${CYAN}Updating lock file...${NC}"
+        uv lock
+
+        echo -e "\n${CYAN}Updating documentation versions...${NC}"
+        "$ROOT_DIR/bin/docs-update-versions.sh"
+    fi
 }
 
 # Function to sync __init__.py versions from pyproject.toml
