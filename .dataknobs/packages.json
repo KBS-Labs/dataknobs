@@ -2,9 +2,18 @@
   "$schema": "./packages-schema.json",
   "packages": [
     {
+      "name": "bots",
+      "pypi_name": "dataknobs-bots",
+      "description": "Configuration-driven AI agents with RAG and memory",
+      "version": "0.3.0",
+      "category": "core",
+      "requires_docs_build": true,
+      "deprecated": false
+    },
+    {
       "name": "common",
       "pypi_name": "dataknobs-common",
-      "description": "Shared components and base classes",
+      "description": "Shared components, registries, and base classes",
       "version": "1.2.0",
       "category": "core",
       "requires_docs_build": true,
@@ -13,7 +22,7 @@
     {
       "name": "config",
       "pypi_name": "dataknobs-config",
-      "description": "Flexible and modular configuration management",
+      "description": "Flexible configuration with environment overrides",
       "version": "0.3.3",
       "category": "core",
       "requires_docs_build": true,
@@ -22,7 +31,7 @@
     {
       "name": "data",
       "pypi_name": "dataknobs-data",
-      "description": "Data abstraction layer with multiple backend support",
+      "description": "Data abstraction layer with multiple backends",
       "version": "0.4.5",
       "category": "core",
       "requires_docs_build": true,
@@ -31,7 +40,7 @@
     {
       "name": "fsm",
       "pypi_name": "dataknobs-fsm",
-      "description": "Finite State Machine framework for building workflows",
+      "description": "Finite State Machine framework for workflows",
       "version": "0.1.5",
       "category": "core",
       "requires_docs_build": true,
@@ -40,16 +49,7 @@
     {
       "name": "llm",
       "pypi_name": "dataknobs-llm",
-      "description": "LLM integration with prompt management and tools",
-      "version": "0.3.0",
-      "category": "core",
-      "requires_docs_build": true,
-      "deprecated": false
-    },
-    {
-      "name": "bots",
-      "pypi_name": "dataknobs-bots",
-      "description": "Configuration-driven AI agents for DataKnobs",
+      "description": "LLM integration with prompts and conversations",
       "version": "0.3.0",
       "category": "core",
       "requires_docs_build": true,
@@ -67,7 +67,7 @@
     {
       "name": "utils",
       "pypi_name": "dataknobs-utils",
-      "description": "Utility functions for JSON, files, and integrations",
+      "description": "Utilities for JSON, files, HTTP, and integrations",
       "version": "1.2.2",
       "category": "core",
       "requires_docs_build": true,

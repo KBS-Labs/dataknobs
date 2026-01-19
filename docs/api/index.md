@@ -22,64 +22,48 @@ Complete API documentation for all Dataknobs packages.
 
 ## Package APIs
 
-### AI & LLM Packages
+All packages listed alphabetically:
+
 - [dataknobs-bots](dataknobs-bots.md) - AI chatbots and agents API
-- [dataknobs-llm](dataknobs-llm.md) - LLM integration API
-
-### Data & Configuration Packages
-- [dataknobs-data](dataknobs-data.md) - Data abstraction API
+- [dataknobs-common](dataknobs-common.md) - Common components, registries, and exceptions API
 - [dataknobs-config](dataknobs-config.md) - Configuration management API
-
-### Workflow & Processing Packages
+- [dataknobs-data](dataknobs-data.md) - Data abstraction API
 - [dataknobs-fsm](dataknobs-fsm.md) - Finite State Machine framework API
-
-### Core Utilities Packages
+- [dataknobs-llm](dataknobs-llm.md) - LLM integration API
 - [dataknobs-structures](dataknobs-structures.md) - Core data structures API
 - [dataknobs-utils](dataknobs-utils.md) - Utility functions API
 - [dataknobs-xization](dataknobs-xization.md) - Text processing API
-- [dataknobs-common](dataknobs-common.md) - Common components API
 
 ## Quick Reference
 
 ### Bots
 ```python
-from dataknobs_bots import DynaBot, BotContext
+from dataknobs_bots import DynaBot, BotContext, BotRegistry
 ```
 
-### LLM
+### Common
 ```python
-from dataknobs_llm import (
-    create_llm_provider,
-    LLMMessage,
-    LLMResponse,
-    MessageTemplate,
-    MessageBuilder,
-    Tool,
-    ToolRegistry
-)
+from dataknobs_common import DataknobsError, ValidationError, Registry, serialize
 ```
 
-### FSM
+### Config
 ```python
-from dataknobs_fsm import SimpleFSM, AdvancedFSM, AsyncSimpleFSM, DataHandlingMode
+from dataknobs_config import Config, EnvironmentConfig, EnvironmentAwareConfig
 ```
 
 ### Data
 ```python
-from dataknobs_data import (
-    database_factory,
-    async_database_factory,
-    Record,
-    Query,
-    Filter,
-    Operator
-)
+from dataknobs_data import database_factory, async_database_factory, Record, Query, Filter, Operator
 ```
-- See [dataknobs-data API reference](../packages/data/api-reference.md) for complete documentation
 
-### Config
+### FSM
 ```python
-from dataknobs_config import Config
+from dataknobs_fsm import SimpleFSM, AsyncSimpleFSM, AdvancedFSM, DataHandlingMode
+```
+
+### LLM
+```python
+from dataknobs_llm import create_llm_provider, LLMConfig, LLMMessage, ConversationManager, Tool
 ```
 
 ### Structures
@@ -89,12 +73,12 @@ from dataknobs_structures import Tree, Text, TextMetaData, RecordStore, cdict
 
 ### Utils
 ```python
-from dataknobs_utils import json_utils, file_utils, elasticsearch_utils
+from dataknobs_utils import json_utils, file_utils, requests_utils, pandas_utils
 ```
 
 ### Xization
 ```python
-from dataknobs_xization import normalize, masking_tokenizer, annotations
+from dataknobs_xization import MarkdownChunker, parse_markdown, Annotations, normalize
 ```
 
 ## Documentation Conventions

@@ -61,15 +61,15 @@ Dataknobs is open-source because we believe in **democratizing access to data** 
 
 | Package | Description | Version |
 |---------|-------------|---------|
-| [dataknobs-config](packages/config/index.md) | Flexible and modular configuration management | 0.3.3 |
-| [dataknobs-data](packages/data/index.md) | Data abstraction layer with multiple backend support | 0.4.5 |
-| [dataknobs-fsm](packages/fsm/index.md) | Finite State Machine framework for building workflows | 0.1.5 |
-| [dataknobs-llm](packages/llm/index.md) | LLM integration with prompt management and tools | 0.3.0 |
-| [dataknobs-bots](packages/bots/index.md) | Configuration-driven AI agents for DataKnobs | 0.3.0 |
+| [dataknobs-bots](packages/bots/index.md) | Configuration-driven AI agents with RAG and memory | 0.3.0 |
+| [dataknobs-common](packages/common/index.md) | Shared components, registries, and base classes | 1.2.0 |
+| [dataknobs-config](packages/config/index.md) | Flexible configuration with environment overrides | 0.3.3 |
+| [dataknobs-data](packages/data/index.md) | Data abstraction layer with multiple backends | 0.4.5 |
+| [dataknobs-fsm](packages/fsm/index.md) | Finite State Machine framework for workflows | 0.1.5 |
+| [dataknobs-llm](packages/llm/index.md) | LLM integration with prompts and conversations | 0.3.0 |
 | [dataknobs-structures](packages/structures/index.md) | Core data structures (Tree, Document, RecordStore) | 1.0.5 |
-| [dataknobs-utils](packages/utils/index.md) | Utility functions for JSON, files, and integrations | 1.2.2 |
+| [dataknobs-utils](packages/utils/index.md) | Utilities for JSON, files, HTTP, and integrations | 1.2.2 |
 | [dataknobs-xization](packages/xization/index.md) | Text processing, tokenization, and normalization | 1.2.3 |
-| [dataknobs-common](packages/common/index.md) | Shared components and base classes | 1.2.0 |
 | [dataknobs](packages/legacy/index.md) | Legacy compatibility package (deprecated) | 0.1.1 |
 
 ## Quick Installation

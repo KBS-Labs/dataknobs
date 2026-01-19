@@ -50,8 +50,8 @@ fi
 # Build the expected version table content from packages.json
 # Uses jq to extract package info and format as markdown table rows
 build_version_table() {
-    # Order of packages in documentation (matches current docs/index.md order)
-    local pkg_order=("config" "data" "fsm" "llm" "bots" "structures" "utils" "xization" "common" "legacy")
+    # Order of packages in documentation (alphabetical, with legacy last)
+    local pkg_order=("bots" "common" "config" "data" "fsm" "llm" "structures" "utils" "xization" "legacy")
 
     for pkg in "${pkg_order[@]}"; do
         local pypi_name version description link
