@@ -63,7 +63,7 @@ from dataknobs_fsm import SimpleFSM, AsyncSimpleFSM, AdvancedFSM, DataHandlingMo
 
 ### LLM
 ```python
-from dataknobs_llm import create_llm_provider, LLMConfig, LLMMessage, ConversationManager, Tool
+from dataknobs_llm import create_llm_provider, LLMConfig, LLMMessage, Tool, ToolRegistry
 ```
 
 ### Structures
@@ -78,7 +78,8 @@ from dataknobs_utils import json_utils, file_utils, requests_utils, pandas_utils
 
 ### Xization
 ```python
-from dataknobs_xization import MarkdownChunker, parse_markdown, Annotations, normalize
+from dataknobs_xization import MarkdownChunker, parse_markdown, normalize, annotations
+# Access: normalize.basic_normalization_fn(), annotations.Annotations
 ```
 
 ## Documentation Conventions
