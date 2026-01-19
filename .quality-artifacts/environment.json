@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-01-14T22:13:08Z",
+  "timestamp": "2026-01-19T17:25:58Z",
   "python_version": "Python 3.10.18",
-  "uv_version": "uv 0.9.25 (Homebrew 2026-01-13)",
+  "uv_version": "uv 0.9.26 (Homebrew 2026-01-15)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/wizard-reasoning",
-  "git_commit": "4c46500b9d5a1dac7329087c66d1d9c33a6687fd",
+  "git_branch": "update-dependencies",
+  "git_commit": "77ca4fdd9a5c502bb462c60288c0b263da8cfa0f",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
