@@ -36,19 +36,79 @@ pip install dataknobs-structures
 
 ## Package Dependencies
 
+The diagram below shows how packages depend on each other. Arrows point from dependencies to dependents (e.g., `common --> config` means config depends on common).
+
 ```mermaid
 graph TD
-    A[dataknobs-common] --> B[dataknobs-data]
-    A --> C[dataknobs-structures]
-    A --> D[dataknobs-utils]
-    B --> C
-    C --> D
-    A --> E[dataknobs-xization]
-    C --> E
-    D --> E
-    C --> F[dataknobs-legacy]
-    D --> F
-    E --> F
+    subgraph Foundation
+        common[dataknobs-common]
+    end
+
+    subgraph Core
+        config[dataknobs-config]
+        structures[dataknobs-structures]
+        utils[dataknobs-utils]
+    end
+
+    subgraph Processing
+        xization[dataknobs-xization]
+        data[dataknobs-data]
+    end
+
+    subgraph Workflows
+        fsm[dataknobs-fsm]
+        llm[dataknobs-llm]
+    end
+
+    subgraph AI
+        bots[dataknobs-bots]
+    end
+
+    subgraph Deprecated
+        legacy[dataknobs-legacy]
+    end
+
+    %% Foundation dependencies
+    common --> config
+    common --> structures
+    common --> utils
+    common --> xization
+    common --> data
+    common --> fsm
+    common --> llm
+    common --> bots
+    common --> legacy
+
+    %% Core layer
+    structures --> utils
+    utils --> xization
+    structures --> xization
+
+    %% Data layer
+    config --> data
+    utils --> data
+
+    %% LLM layer
+    config --> llm
+    data --> llm
+
+    %% FSM layer
+    config --> fsm
+    data --> fsm
+    structures --> fsm
+    utils --> fsm
+
+    %% Bots layer (highest level)
+    config --> bots
+    llm --> bots
+    data --> bots
+    xization --> bots
+    fsm --> bots
+
+    %% Legacy
+    structures --> legacy
+    utils --> legacy
+    xization --> legacy
 ```
 
 ## Choosing Packages

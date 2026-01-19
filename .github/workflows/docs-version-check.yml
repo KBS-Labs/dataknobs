@@ -7,6 +7,7 @@ on:
       - 'packages/*/pyproject.toml'
       - '.dataknobs/packages.json'
       - 'docs/index.md'
+      - 'docs/installation.md'
 
 jobs:
   check-versions:
@@ -42,7 +43,11 @@ jobs:
               repo: repo,
               body: `## ❌ Documentation Version Mismatch
 
-          The version table in \`docs/index.md\` is out of sync with \`.dataknobs/packages.json\`.
+          Documentation version references are out of sync with \`.dataknobs/packages.json\`.
+
+          Files checked:
+          - \`docs/index.md\` - Version table
+          - \`docs/installation.md\` - Requirements example
 
           **To fix this, run:**
           \`\`\`bash

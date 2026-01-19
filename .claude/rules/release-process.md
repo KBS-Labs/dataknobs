@@ -17,7 +17,10 @@ The `release-helper.sh` script keeps these synchronized during version bumps.
 
 ### Documentation Sync
 
-The version table in `docs/index.md` is automatically updated from `.dataknobs/packages.json`:
+Documentation version references are automatically updated from `.dataknobs/packages.json`:
+
+- `docs/index.md` - Version table in Package Overview section
+- `docs/installation.md` - Requirements.txt example versions
 
 ```bash
 # Manual update

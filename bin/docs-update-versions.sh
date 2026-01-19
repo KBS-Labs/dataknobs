@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Update documentation version table from packages.json
-# This script reads versions from .dataknobs/packages.json and updates
-# the version table in docs/index.md to keep them in sync.
+# Update documentation versions from packages.json
+# This script reads versions from .dataknobs/packages.json and updates:
+# 1. The version table in docs/index.md
+# 2. The requirements.txt example in docs/installation.md
 
 set -euo pipefail
 
@@ -19,12 +20,16 @@ NC='\033[0m' # No Color
 # Files
 PACKAGES_JSON=".dataknobs/packages.json"
 DOCS_INDEX="docs/index.md"
+DOCS_INSTALL="docs/installation.md"
 
 # Check mode (--check flag)
 CHECK_MODE=false
 if [[ "${1:-}" == "--check" ]]; then
     CHECK_MODE=true
 fi
+
+# Track if any updates are needed
+UPDATES_NEEDED=false
 
 # Verify required files exist
 if [[ ! -f "$PACKAGES_JSON" ]]; then
@@ -34,6 +39,11 @@ fi
 
 if [[ ! -f "$DOCS_INDEX" ]]; then
     echo -e "${RED}Error: $DOCS_INDEX not found${NC}" >&2
+    exit 1
+fi
+
+if [[ ! -f "$DOCS_INSTALL" ]]; then
+    echo -e "${RED}Error: $DOCS_INSTALL not found${NC}" >&2
     exit 1
 fi
 
@@ -77,7 +87,7 @@ extract_current_table() {
 }
 
 # Update docs/index.md with new version table
-update_docs() {
+update_docs_index() {
     local table_file="$1"
     local temp_file
     temp_file=$(mktemp)
@@ -115,10 +125,79 @@ update_docs() {
     mv "$temp_file" "$DOCS_INDEX"
 }
 
+# Get version for a package from packages.json
+get_package_version() {
+    local pkg_name="$1"
+    jq -r ".packages[] | select(.pypi_name == \"$pkg_name\") | .version" "$PACKAGES_JSON"
+}
+
+# Update version references in installation.md
+# Updates lines matching pattern: dataknobs-<name>>=X.Y.Z
+update_installation_versions() {
+    local temp_file
+    temp_file=$(mktemp)
+
+    # Process the file, updating version numbers for dataknobs packages
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^dataknobs-([a-z]+)\>=([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            local pkg_name="dataknobs-${BASH_REMATCH[1]}"
+            local current_version
+            current_version=$(get_package_version "$pkg_name")
+            if [[ -n "$current_version" && "$current_version" != "null" ]]; then
+                echo "${pkg_name}>=${current_version}"
+            else
+                echo "$line"
+            fi
+        else
+            echo "$line"
+        fi
+    done < "$DOCS_INSTALL" > "$temp_file"
+
+    mv "$temp_file" "$DOCS_INSTALL"
+}
+
+# Check if installation.md versions are in sync
+check_installation_versions() {
+    local out_of_sync=false
+    local pkg_order=("config" "data" "fsm" "llm" "bots" "structures" "utils" "xization")
+
+    for pkg in "${pkg_order[@]}"; do
+        local pypi_name="dataknobs-$pkg"
+        local expected_version
+        expected_version=$(get_package_version "$pypi_name")
+
+        if [[ -z "$expected_version" || "$expected_version" == "null" ]]; then
+            continue
+        fi
+
+        # Check if installation.md has the correct version
+        if ! grep -q "^${pypi_name}>=${expected_version}$" "$DOCS_INSTALL"; then
+            out_of_sync=true
+            if $CHECK_MODE; then
+                local current_line
+                current_line=$(grep "^${pypi_name}>=" "$DOCS_INSTALL" 2>/dev/null || echo "not found")
+                echo -e "  ${YELLOW}${pypi_name}${NC}: expected >=${expected_version}, found: ${current_line}"
+            fi
+        fi
+    done
+
+    if $out_of_sync; then
+        return 1
+    fi
+    return 0
+}
+
 # Main execution
 main() {
     echo -e "${CYAN}Documentation Version Sync${NC}"
     echo ""
+
+    local has_errors=false
+
+    # ===========================================
+    # Check 1: docs/index.md version table
+    # ===========================================
+    echo -e "${CYAN}Checking docs/index.md version table...${NC}"
 
     # Build expected table to temp file
     local expected_table_file
@@ -131,37 +210,73 @@ main() {
     extract_current_table > "$current_table_file"
 
     # Compare tables
-    if diff -q "$expected_table_file" "$current_table_file" > /dev/null 2>&1; then
-        echo -e "${GREEN}✓ Documentation versions are in sync${NC}"
-        rm -f "$expected_table_file" "$current_table_file"
-        exit 0
+    local index_in_sync=true
+    if ! diff -q "$expected_table_file" "$current_table_file" > /dev/null 2>&1; then
+        index_in_sync=false
+        has_errors=true
     fi
 
-    if $CHECK_MODE; then
+    if $index_in_sync; then
+        echo -e "${GREEN}  ✓ docs/index.md versions are in sync${NC}"
+    else
+        if $CHECK_MODE; then
+            echo -e "${RED}  ✗ docs/index.md versions are out of sync${NC}"
+            echo ""
+            echo -e "${YELLOW}  Expected (from packages.json):${NC}"
+            cat "$expected_table_file" | sed 's/^/    /'
+            echo ""
+            echo -e "${YELLOW}  Current (in docs/index.md):${NC}"
+            cat "$current_table_file" | sed 's/^/    /'
+        else
+            echo -e "${YELLOW}  Updating docs/index.md with current versions...${NC}"
+            update_docs_index "$expected_table_file"
+            echo -e "${GREEN}  ✓ docs/index.md updated successfully${NC}"
+        fi
+    fi
+
+    echo ""
+
+    # ===========================================
+    # Check 2: docs/installation.md requirements
+    # ===========================================
+    echo -e "${CYAN}Checking docs/installation.md requirements...${NC}"
+
+    local install_in_sync=true
+    if ! check_installation_versions 2>/dev/null; then
+        install_in_sync=false
+        has_errors=true
+    fi
+
+    if $install_in_sync; then
+        echo -e "${GREEN}  ✓ docs/installation.md versions are in sync${NC}"
+    else
+        if $CHECK_MODE; then
+            echo -e "${RED}  ✗ docs/installation.md versions are out of sync${NC}"
+            check_installation_versions  # Print details
+        else
+            echo -e "${YELLOW}  Updating docs/installation.md with current versions...${NC}"
+            update_installation_versions
+            echo -e "${GREEN}  ✓ docs/installation.md updated successfully${NC}"
+        fi
+    fi
+
+    # Cleanup
+    rm -f "$expected_table_file" "$current_table_file"
+
+    echo ""
+
+    # Final status
+    if $CHECK_MODE && $has_errors; then
         echo -e "${RED}✗ Documentation versions are out of sync${NC}"
-        echo ""
-        echo -e "${YELLOW}Expected (from packages.json):${NC}"
-        cat "$expected_table_file"
-        echo ""
-        echo -e "${YELLOW}Current (in docs/index.md):${NC}"
-        cat "$current_table_file"
-        echo ""
         echo -e "${CYAN}Run 'bin/docs-update-versions.sh' to update documentation${NC}"
-        rm -f "$expected_table_file" "$current_table_file"
         exit 1
     fi
 
-    # Update mode
-    echo -e "${YELLOW}Updating docs/index.md with current versions...${NC}"
-    update_docs "$expected_table_file"
-    echo -e "${GREEN}✓ Documentation updated successfully${NC}"
-
-    # Show what changed
-    echo ""
-    echo -e "${CYAN}Updated version table:${NC}"
-    cat "$expected_table_file"
-
-    rm -f "$expected_table_file" "$current_table_file"
+    if ! $has_errors; then
+        echo -e "${GREEN}✓ All documentation versions are in sync${NC}"
+    else
+        echo -e "${GREEN}✓ Documentation updated successfully${NC}"
+    fi
 }
 
 main "$@"
