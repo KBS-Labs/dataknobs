@@ -1,4 +1,4 @@
-"""Tests for wizard transition observability."""
+"""Tests for wizard transition observability and task tracking."""
 
 import time
 
@@ -10,6 +10,8 @@ from dataknobs_bots.reasoning.observability import (
     TransitionStats,
     TransitionTracker,
     WizardStateSnapshot,
+    WizardTask,
+    WizardTaskList,
     create_transition_record,
     # Conversion utilities
     execution_record_to_transition_record,
@@ -533,6 +535,424 @@ class TestTransitionTracker:
         assert tracker.query() == []
 
 
+class TestWizardTask:
+    """Tests for WizardTask dataclass."""
+
+    def test_create_task(self) -> None:
+        """Test creating a task with default values."""
+        task = WizardTask(
+            id="collect_name",
+            description="Collect user name",
+        )
+
+        assert task.id == "collect_name"
+        assert task.description == "Collect user name"
+        assert task.status == "pending"
+        assert task.stage is None
+        assert task.required is True
+        assert task.completed_at is None
+        assert task.depends_on == []
+        assert task.completed_by is None
+        assert task.field_name is None
+        assert task.tool_name is None
+
+    def test_create_task_with_all_fields(self) -> None:
+        """Test creating a task with all fields specified."""
+        task = WizardTask(
+            id="collect_bot_name",
+            description="Collect bot name",
+            status="pending",
+            stage="configure_identity",
+            required=True,
+            depends_on=["validate_config"],
+            completed_by="field_extraction",
+            field_name="bot_name",
+        )
+
+        assert task.id == "collect_bot_name"
+        assert task.stage == "configure_identity"
+        assert task.completed_by == "field_extraction"
+        assert task.field_name == "bot_name"
+        assert task.depends_on == ["validate_config"]
+
+    def test_create_tool_task(self) -> None:
+        """Test creating a task triggered by tool result."""
+        task = WizardTask(
+            id="run_validate",
+            description="Run validation tool",
+            completed_by="tool_result",
+            tool_name="validate_config",
+            required=True,
+        )
+
+        assert task.completed_by == "tool_result"
+        assert task.tool_name == "validate_config"
+
+    def test_is_complete_property(self) -> None:
+        """Test is_complete property."""
+        task = WizardTask(id="t1", description="Task 1")
+        assert task.is_complete is False
+
+        task.status = "completed"
+        assert task.is_complete is True
+
+        task.status = "skipped"
+        assert task.is_complete is False
+
+    def test_is_pending_property(self) -> None:
+        """Test is_pending property."""
+        task = WizardTask(id="t1", description="Task 1")
+        assert task.is_pending is True
+
+        task.status = "in_progress"
+        assert task.is_pending is False
+
+        task.status = "completed"
+        assert task.is_pending is False
+
+    def test_is_global_property(self) -> None:
+        """Test is_global property."""
+        # Global task (no stage)
+        global_task = WizardTask(id="save", description="Save")
+        assert global_task.is_global is True
+
+        # Stage-specific task
+        stage_task = WizardTask(id="collect", description="Collect", stage="welcome")
+        assert stage_task.is_global is False
+
+    def test_to_dict(self) -> None:
+        """Test converting task to dictionary."""
+        task = WizardTask(
+            id="test_task",
+            description="Test task",
+            status="completed",
+            stage="configure",
+            required=True,
+            completed_at=1234567890.0,
+            depends_on=["other_task"],
+            completed_by="field_extraction",
+            field_name="test_field",
+        )
+
+        data = task.to_dict()
+
+        assert data["id"] == "test_task"
+        assert data["description"] == "Test task"
+        assert data["status"] == "completed"
+        assert data["stage"] == "configure"
+        assert data["required"] is True
+        assert data["completed_at"] == 1234567890.0
+        assert data["depends_on"] == ["other_task"]
+        assert data["completed_by"] == "field_extraction"
+        assert data["field_name"] == "test_field"
+
+    def test_from_dict(self) -> None:
+        """Test creating task from dictionary."""
+        data = {
+            "id": "my_task",
+            "description": "My task",
+            "status": "in_progress",
+            "stage": "step1",
+            "required": False,
+            "completed_at": None,
+            "depends_on": ["dep1", "dep2"],
+            "completed_by": "tool_result",
+            "field_name": None,
+            "tool_name": "my_tool",
+        }
+
+        task = WizardTask.from_dict(data)
+
+        assert task.id == "my_task"
+        assert task.status == "in_progress"
+        assert task.stage == "step1"
+        assert task.required is False
+        assert task.depends_on == ["dep1", "dep2"]
+        assert task.completed_by == "tool_result"
+        assert task.tool_name == "my_tool"
+
+
+class TestWizardTaskList:
+    """Tests for WizardTaskList class."""
+
+    def test_empty_task_list(self) -> None:
+        """Test empty task list."""
+        task_list = WizardTaskList()
+
+        assert len(task_list) == 0
+        assert task_list.get_pending_tasks() == []
+        assert task_list.get_completed_tasks() == []
+        assert task_list.calculate_progress() == 100.0  # No required tasks
+
+    def test_get_task(self) -> None:
+        """Test getting a task by ID."""
+        task_list = WizardTaskList(tasks=[
+            WizardTask(id="t1", description="Task 1"),
+            WizardTask(id="t2", description="Task 2"),
+        ])
+
+        assert task_list.get_task("t1") is not None
+        assert task_list.get_task("t1").description == "Task 1"
+        assert task_list.get_task("t2") is not None
+        assert task_list.get_task("nonexistent") is None
+
+    def test_complete_task(self) -> None:
+        """Test completing a task."""
+        task_list = WizardTaskList(tasks=[
+            WizardTask(id="t1", description="Task 1"),
+        ])
+
+        before = time.time()
+        result = task_list.complete_task("t1")
+        after = time.time()
+
+        assert result is True
+        task = task_list.get_task("t1")
+        assert task.status == "completed"
+        assert task.completed_at is not None
+        assert before <= task.completed_at <= after
+
+    def test_complete_nonexistent_task(self) -> None:
+        """Test completing a task that doesn't exist."""
+        task_list = WizardTaskList(tasks=[
+            WizardTask(id="t1", description="Task 1"),
+        ])
+
+        result = task_list.complete_task("nonexistent")
+        assert result is False
+
+    def test_complete_task_with_dependencies(self) -> None:
+        """Test that tasks with unmet dependencies cannot be completed."""
+        task_list = WizardTaskList(tasks=[
+            WizardTask(id="validate", description="Validate"),
+            WizardTask(id="save", description="Save", depends_on=["validate"]),
+        ])
+
+        # Cannot complete "save" before "validate"
+        result = task_list.complete_task("save")
+        assert result is False
+        assert task_list.get_task("save").status == "pending"
+
+        # Complete "validate" first
+        task_list.complete_task("validate")
+
+        # Now "save" can be completed
+        result = task_list.complete_task("save")
+        assert result is True
+        assert task_list.get_task("save").status == "completed"
+
+    def test_skip_task(self) -> None:
+        """Test skipping a task."""
+        task_list = WizardTaskList(tasks=[
+            WizardTask(id="t1", description="Task 1"),
+        ])
+
+        result = task_list.skip_task("t1")
+
+        assert result is True
+        assert task_list.get_task("t1").status == "skipped"
+
+    def test_skip_nonexistent_task(self) -> None:
+        """Test skipping a task that doesn't exist."""
+        task_list = WizardTaskList(tasks=[
+            WizardTask(id="t1", description="Task 1"),
+        ])
+
+        result = task_list.skip_task("nonexistent")
+        assert result is False
+
+    def test_skipped_dependency_allows_completion(self) -> None:
+        """Test that skipped dependencies count as met."""
+        task_list = WizardTaskList(tasks=[
+            WizardTask(id="validate", description="Validate"),
+            WizardTask(id="save", description="Save", depends_on=["validate"]),
+        ])
+
+        # Skip "validate"
+        task_list.skip_task("validate")
+
+        # "save" should now be completable
+        result = task_list.complete_task("save")
+        assert result is True
+
+    def test_get_pending_tasks(self) -> None:
+        """Test getting pending tasks."""
+        task_list = WizardTaskList(tasks=[
+            WizardTask(id="t1", description="Task 1", status="pending"),
+            WizardTask(id="t2", description="Task 2", status="completed"),
+            WizardTask(id="t3", description="Task 3", status="pending"),
+        ])
+
+        pending = task_list.get_pending_tasks()
+
+        assert len(pending) == 2
+        assert all(t.status == "pending" for t in pending)
+        assert {t.id for t in pending} == {"t1", "t3"}
+
+    def test_get_completed_tasks(self) -> None:
+        """Test getting completed tasks."""
+        task_list = WizardTaskList(tasks=[
+            WizardTask(id="t1", description="Task 1", status="completed"),
+            WizardTask(id="t2", description="Task 2", status="pending"),
+            WizardTask(id="t3", description="Task 3", status="completed"),
+        ])
+
+        completed = task_list.get_completed_tasks()
+
+        assert len(completed) == 2
+        assert all(t.status == "completed" for t in completed)
+        assert {t.id for t in completed} == {"t1", "t3"}
+
+    def test_get_available_tasks(self) -> None:
+        """Test getting tasks that are ready to execute."""
+        task_list = WizardTaskList(tasks=[
+            WizardTask(id="validate", description="Validate"),
+            WizardTask(id="save", description="Save", depends_on=["validate"]),
+            WizardTask(id="preview", description="Preview"),
+        ])
+
+        # Initially only "validate" and "preview" are available
+        available = task_list.get_available_tasks()
+        assert len(available) == 2
+        assert {t.id for t in available} == {"validate", "preview"}
+
+        # Complete "validate"
+        task_list.complete_task("validate")
+
+        # Now all pending tasks are available
+        available = task_list.get_available_tasks()
+        assert len(available) == 2
+        assert {t.id for t in available} == {"save", "preview"}
+
+    def test_get_tasks_for_stage(self) -> None:
+        """Test getting tasks for a specific stage."""
+        task_list = WizardTaskList(tasks=[
+            WizardTask(id="t1", description="Task 1", stage="configure"),
+            WizardTask(id="t2", description="Task 2", stage="complete"),
+            WizardTask(id="t3", description="Task 3", stage="configure"),
+            WizardTask(id="global", description="Global task"),  # No stage
+        ])
+
+        configure_tasks = task_list.get_tasks_for_stage("configure")
+
+        assert len(configure_tasks) == 2
+        assert all(t.stage == "configure" for t in configure_tasks)
+        assert {t.id for t in configure_tasks} == {"t1", "t3"}
+
+    def test_get_global_tasks(self) -> None:
+        """Test getting global (stage-independent) tasks."""
+        task_list = WizardTaskList(tasks=[
+            WizardTask(id="t1", description="Task 1", stage="configure"),
+            WizardTask(id="validate", description="Validate"),  # Global
+            WizardTask(id="save", description="Save"),  # Global
+        ])
+
+        global_tasks = task_list.get_global_tasks()
+
+        assert len(global_tasks) == 2
+        assert all(t.stage is None for t in global_tasks)
+        assert {t.id for t in global_tasks} == {"validate", "save"}
+
+    def test_calculate_progress_all_pending(self) -> None:
+        """Test progress calculation with all tasks pending."""
+        task_list = WizardTaskList(tasks=[
+            WizardTask(id="t1", description="Task 1", required=True),
+            WizardTask(id="t2", description="Task 2", required=True),
+        ])
+
+        assert task_list.calculate_progress() == 0.0
+
+    def test_calculate_progress_partial(self) -> None:
+        """Test progress calculation with some tasks completed."""
+        task_list = WizardTaskList(tasks=[
+            WizardTask(id="t1", description="Task 1", required=True, status="completed"),
+            WizardTask(id="t2", description="Task 2", required=True, status="pending"),
+        ])
+
+        assert task_list.calculate_progress() == 50.0
+
+    def test_calculate_progress_all_completed(self) -> None:
+        """Test progress calculation with all tasks completed."""
+        task_list = WizardTaskList(tasks=[
+            WizardTask(id="t1", description="Task 1", required=True, status="completed"),
+            WizardTask(id="t2", description="Task 2", required=True, status="completed"),
+        ])
+
+        assert task_list.calculate_progress() == 100.0
+
+    def test_calculate_progress_optional_ignored(self) -> None:
+        """Test that optional tasks don't affect progress."""
+        task_list = WizardTaskList(tasks=[
+            WizardTask(id="t1", description="Task 1", required=True, status="completed"),
+            WizardTask(id="t2", description="Task 2", required=True, status="pending"),
+            WizardTask(id="opt", description="Optional", required=False, status="pending"),
+        ])
+
+        # Progress is 1/2 required = 50%
+        assert task_list.calculate_progress() == 50.0
+
+    def test_calculate_progress_skipped_counts(self) -> None:
+        """Test that skipped tasks count toward progress."""
+        task_list = WizardTaskList(tasks=[
+            WizardTask(id="t1", description="Task 1", required=True, status="skipped"),
+            WizardTask(id="t2", description="Task 2", required=True, status="pending"),
+        ])
+
+        # 1/2 tasks skipped = 50%
+        assert task_list.calculate_progress() == 50.0
+
+    def test_to_dict(self) -> None:
+        """Test converting task list to dictionary."""
+        task_list = WizardTaskList(tasks=[
+            WizardTask(id="t1", description="Task 1"),
+            WizardTask(id="t2", description="Task 2"),
+        ])
+
+        data = task_list.to_dict()
+
+        assert "tasks" in data
+        assert len(data["tasks"]) == 2
+        assert data["tasks"][0]["id"] == "t1"
+        assert data["tasks"][1]["id"] == "t2"
+
+    def test_from_dict(self) -> None:
+        """Test creating task list from dictionary."""
+        data = {
+            "tasks": [
+                {"id": "t1", "description": "Task 1", "status": "pending",
+                 "stage": None, "required": True, "completed_at": None,
+                 "depends_on": [], "completed_by": None, "field_name": None,
+                 "tool_name": None},
+                {"id": "t2", "description": "Task 2", "status": "completed",
+                 "stage": "step1", "required": True, "completed_at": 1234567890.0,
+                 "depends_on": ["t1"], "completed_by": None, "field_name": None,
+                 "tool_name": None},
+            ]
+        }
+
+        task_list = WizardTaskList.from_dict(data)
+
+        assert len(task_list) == 2
+        assert task_list.get_task("t1").status == "pending"
+        assert task_list.get_task("t2").status == "completed"
+        assert task_list.get_task("t2").stage == "step1"
+
+    def test_from_dict_empty(self) -> None:
+        """Test creating task list from empty dictionary."""
+        task_list = WizardTaskList.from_dict({})
+        assert len(task_list) == 0
+
+    def test_len(self) -> None:
+        """Test __len__ method."""
+        task_list = WizardTaskList(tasks=[
+            WizardTask(id="t1", description="Task 1"),
+            WizardTask(id="t2", description="Task 2"),
+            WizardTask(id="t3", description="Task 3"),
+        ])
+
+        assert len(task_list) == 3
+
+
 class TestWizardStateSnapshot:
     """Tests for WizardStateSnapshot dataclass."""
 
@@ -557,6 +977,45 @@ class TestWizardStateSnapshot:
         assert snapshot.snapshot_timestamp == timestamp
         assert snapshot.clarification_attempts == 0
 
+    def test_create_snapshot_with_tasks(self) -> None:
+        """Test creating a snapshot with task data."""
+        snapshot = WizardStateSnapshot(
+            current_stage="configure",
+            tasks=[
+                {"id": "t1", "description": "Task 1", "status": "completed"},
+                {"id": "t2", "description": "Task 2", "status": "pending"},
+            ],
+            pending_tasks=1,
+            completed_tasks=1,
+            total_tasks=2,
+            available_task_ids=["t2"],
+            task_progress_percent=50.0,
+        )
+
+        assert len(snapshot.tasks) == 2
+        assert snapshot.pending_tasks == 1
+        assert snapshot.completed_tasks == 1
+        assert snapshot.total_tasks == 2
+        assert snapshot.available_task_ids == ["t2"]
+        assert snapshot.task_progress_percent == 50.0
+
+    def test_create_snapshot_with_stage_context(self) -> None:
+        """Test creating a snapshot with stage context fields."""
+        snapshot = WizardStateSnapshot(
+            current_stage="configure",
+            stage_index=2,
+            total_stages=5,
+            can_skip=True,
+            can_go_back=False,
+            suggestions=["Option A", "Option B"],
+        )
+
+        assert snapshot.stage_index == 2
+        assert snapshot.total_stages == 5
+        assert snapshot.can_skip is True
+        assert snapshot.can_go_back is False
+        assert snapshot.suggestions == ["Option A", "Option B"]
+
     def test_to_dict(self) -> None:
         """Test converting snapshot to dictionary."""
         transition = TransitionRecord(
@@ -570,6 +1029,10 @@ class TestWizardStateSnapshot:
             data={"key": "value"},
             history=["welcome", "configure"],
             transitions=[transition],
+            tasks=[{"id": "t1", "status": "pending"}],
+            pending_tasks=1,
+            completed_tasks=0,
+            total_tasks=1,
         )
 
         data = snapshot.to_dict()
@@ -579,6 +1042,10 @@ class TestWizardStateSnapshot:
         assert data["history"] == ["welcome", "configure"]
         assert len(data["transitions"]) == 1
         assert data["transitions"][0]["from_stage"] == "welcome"
+        assert data["tasks"] == [{"id": "t1", "status": "pending"}]
+        assert data["pending_tasks"] == 1
+        assert data["completed_tasks"] == 0
+        assert data["total_tasks"] == 1
 
     def test_from_dict(self) -> None:
         """Test creating snapshot from dictionary."""
@@ -603,6 +1070,12 @@ class TestWizardStateSnapshot:
             "completed": True,
             "snapshot_timestamp": 1234567899.0,
             "clarification_attempts": 0,
+            "tasks": [{"id": "t1", "description": "Task 1", "status": "completed"}],
+            "pending_tasks": 0,
+            "completed_tasks": 1,
+            "total_tasks": 1,
+            "available_task_ids": [],
+            "task_progress_percent": 100.0,
         }
 
         snapshot = WizardStateSnapshot.from_dict(data)
@@ -615,6 +1088,101 @@ class TestWizardStateSnapshot:
         assert snapshot.transitions[0].condition_evaluated == "data.get('intent')"
         assert snapshot.transitions[0].condition_result is True
         assert snapshot.completed is True
+        assert len(snapshot.tasks) == 1
+        assert snapshot.completed_tasks == 1
+        assert snapshot.task_progress_percent == 100.0
+
+    def test_get_task(self) -> None:
+        """Test getting a task by ID from snapshot."""
+        snapshot = WizardStateSnapshot(
+            current_stage="configure",
+            tasks=[
+                {"id": "t1", "description": "Task 1", "status": "completed"},
+                {"id": "t2", "description": "Task 2", "status": "pending"},
+            ],
+        )
+
+        task = snapshot.get_task("t1")
+        assert task is not None
+        assert task["id"] == "t1"
+        assert task["status"] == "completed"
+
+        assert snapshot.get_task("nonexistent") is None
+
+    def test_get_tasks_for_stage(self) -> None:
+        """Test getting tasks for a specific stage."""
+        snapshot = WizardStateSnapshot(
+            current_stage="configure",
+            tasks=[
+                {"id": "t1", "stage": "configure"},
+                {"id": "t2", "stage": "complete"},
+                {"id": "t3", "stage": "configure"},
+            ],
+        )
+
+        configure_tasks = snapshot.get_tasks_for_stage("configure")
+
+        assert len(configure_tasks) == 2
+        assert all(t["stage"] == "configure" for t in configure_tasks)
+
+    def test_get_global_tasks(self) -> None:
+        """Test getting global tasks from snapshot."""
+        snapshot = WizardStateSnapshot(
+            current_stage="configure",
+            tasks=[
+                {"id": "t1", "stage": "configure"},
+                {"id": "validate", "stage": None},
+                {"id": "save", "stage": None},
+            ],
+        )
+
+        global_tasks = snapshot.get_global_tasks()
+
+        assert len(global_tasks) == 2
+        assert all(t["stage"] is None for t in global_tasks)
+
+    def test_is_task_available(self) -> None:
+        """Test checking if task is available."""
+        snapshot = WizardStateSnapshot(
+            current_stage="configure",
+            available_task_ids=["t1", "t3"],
+        )
+
+        assert snapshot.is_task_available("t1") is True
+        assert snapshot.is_task_available("t2") is False
+        assert snapshot.is_task_available("t3") is True
+
+    def test_get_latest_transition(self) -> None:
+        """Test getting the most recent transition."""
+        snapshot = WizardStateSnapshot(
+            current_stage="complete",
+            transitions=[
+                TransitionRecord(
+                    from_stage="welcome",
+                    to_stage="configure",
+                    timestamp=1000.0,
+                    trigger="user_input",
+                ),
+                TransitionRecord(
+                    from_stage="configure",
+                    to_stage="complete",
+                    timestamp=2000.0,
+                    trigger="user_input",
+                ),
+            ],
+        )
+
+        latest = snapshot.get_latest_transition()
+
+        assert latest is not None
+        assert latest["from_stage"] == "configure"
+        assert latest["to_stage"] == "complete"
+
+    def test_get_latest_transition_empty(self) -> None:
+        """Test getting latest transition when no transitions exist."""
+        snapshot = WizardStateSnapshot(current_stage="welcome")
+
+        assert snapshot.get_latest_transition() is None
 
 
 class TestConversionUtilities:

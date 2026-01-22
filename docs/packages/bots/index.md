@@ -119,6 +119,16 @@ if __name__ == "__main__":
 
 [Learn more →](guides/user-guide.md#tutorial-5-creating-tool-using-agents)
 
+### 📊 Wizard Observability & Task Tracking
+
+- **Task Tracking** - Granular progress tracking within wizard stages
+- **Transition Audit Trail** - Complete history of state transitions with timestamps
+- **State Snapshots** - Read-only snapshots for UI display and debugging
+- **Dependency Management** - Task dependencies with automatic availability tracking
+- **Progress Calculation** - Task-based or stage-based progress metrics
+
+[Learn more →](guides/observability.md)
+
 ### ⚙️ Per-Request Config Overrides
 
 - **Dynamic Model Selection** - Switch models per-request without creating new bots
@@ -190,7 +200,8 @@ dataknobs_bots/
 │   ├── wizard.py       # Wizard reasoning
 │   ├── wizard_fsm.py   # FSM wrapper for wizards
 │   ├── wizard_loader.py # Config loader
-│   └── wizard_hooks.py # Lifecycle hooks
+│   ├── wizard_hooks.py # Lifecycle hooks
+│   └── observability.py # Task tracking & state snapshots
 ├── tools/              # Built-in tools
 │   └── knowledge_search.py
 └── utils/              # Utilities
@@ -211,6 +222,7 @@ dataknobs_bots/
 - [**Bot Manager Guide**](guides/bot-manager.md) - Multi-tenant bot management and FastAPI integration
 - [**Middleware Guide**](guides/middleware.md) - Request/response middleware for logging and cost tracking
 - [**Tools Development**](guides/tools.md) - Creating and configuring custom tools
+- [**Wizard Observability**](guides/observability.md) - Task tracking, state snapshots, and transition auditing
 - [**Architecture**](guides/architecture.md) - System design and scaling considerations
 
 ### API Reference

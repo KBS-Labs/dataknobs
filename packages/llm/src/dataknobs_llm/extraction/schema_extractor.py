@@ -376,7 +376,7 @@ class SchemaExtractor:
             )
 
             # Record failed extraction if tracking
-            if tracker:
+            if tracker is not None:
                 self._record_extraction(
                     tracker=tracker,
                     text=text,
@@ -408,7 +408,7 @@ class SchemaExtractor:
         )
 
         # Record extraction if tracking
-        if tracker:
+        if tracker is not None:
             self._record_extraction(
                 tracker=tracker,
                 text=text,
