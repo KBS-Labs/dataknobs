@@ -8,7 +8,7 @@ import json
 import os
 import time
 from dataclasses import dataclass, field as dataclass_field
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, cast
 from enum import Enum
 
 from dataknobs_fsm.functions.base import ResourceError
@@ -781,9 +781,10 @@ class LLMResource(BaseResourceProvider):
             
             # Ensure we return List[List[float]]
             if isinstance(embeddings[0], list):
-                return embeddings
+                return cast("List[List[float]]", embeddings)
             else:
-                return [embeddings]  # Single text case
+                # Single text was embedded - wrap in list
+                return [cast("List[float]", embeddings)]
                 
         except Exception:
             # Fallback to placeholder dimensions on error

@@ -408,6 +408,81 @@ class TestSchemaExtractorFromConfig:
         assert result.data == {"value": 42}
         assert result.is_confident
 
+    def test_from_env_config_is_alias_for_from_config(self) -> None:
+        """Test that from_env_config() is an alias for from_config().
+
+        WizardReasoning.from_config() uses from_env_config() to create
+        the SchemaExtractor, so this verifies the expected API.
+        """
+        config = {
+            "provider": "echo",
+            "model": "test-model",
+            "temperature": 0.1,
+        }
+
+        extractor = SchemaExtractor.from_env_config(config)
+
+        assert extractor._provider is not None
+        assert isinstance(extractor._provider, EchoProvider)
+
+
+class TestSchemaExtractorProviderCreation:
+    """Tests for provider creation via _create_provider()."""
+
+    def test_create_provider_ollama(self) -> None:
+        """Test creating Ollama provider."""
+        from dataknobs_llm.llm.providers.ollama import OllamaProvider
+
+        config = {
+            "provider": "ollama",
+            "model": "qwen3-coder",
+            "temperature": 0.0,
+        }
+
+        provider = SchemaExtractor._create_provider(config)
+
+        assert isinstance(provider, OllamaProvider)
+
+    def test_create_provider_openai(self) -> None:
+        """Test creating OpenAI provider."""
+        from dataknobs_llm.llm.providers.openai import OpenAIProvider
+
+        config = {
+            "provider": "openai",
+            "model": "gpt-4",
+            "temperature": 0.0,
+        }
+
+        provider = SchemaExtractor._create_provider(config)
+
+        assert isinstance(provider, OpenAIProvider)
+
+    def test_create_provider_anthropic(self) -> None:
+        """Test creating Anthropic provider."""
+        from dataknobs_llm.llm.providers.anthropic import AnthropicProvider
+
+        config = {
+            "provider": "anthropic",
+            "model": "claude-3-haiku-20240307",
+            "temperature": 0.0,
+        }
+
+        provider = SchemaExtractor._create_provider(config)
+
+        assert isinstance(provider, AnthropicProvider)
+
+    def test_create_provider_echo(self) -> None:
+        """Test creating Echo provider."""
+        config = {
+            "provider": "echo",
+            "model": "test",
+            "temperature": 0.0,
+        }
+
+        provider = SchemaExtractor._create_provider(config)
+
+        assert isinstance(provider, EchoProvider)
+
 
 class TestSchemaExtractorPromptBuilding:
     """Tests for extraction prompt building."""
