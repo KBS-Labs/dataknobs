@@ -10,6 +10,12 @@ Classes:
     ToolRegistry: Registry for managing available tools
     ToolExecutionContext: Context passed to context-aware tools
     WizardStateSnapshot: Snapshot of wizard state for tool context
+
+Observability:
+    ToolExecutionRecord: Record of a single tool execution
+    ExecutionHistoryQuery: Query parameters for filtering history
+    ExecutionStats: Aggregated statistics for tool executions
+    ExecutionTracker: Standalone tracker for tool executions
 """
 
 from dataknobs_llm.tools.base import Tool
@@ -19,9 +25,16 @@ from dataknobs_llm.tools.context_aware import (
     ContextEnhancedTool,
     default_wizard_data_injector,
 )
+from dataknobs_llm.tools.observability import (
+    ExecutionHistoryQuery,
+    ExecutionStats,
+    ExecutionTracker,
+    ToolExecutionRecord,
+)
 from dataknobs_llm.tools.registry import ToolRegistry
 
 __all__ = [
+    # Core tool classes
     "Tool",
     "ToolRegistry",
     "ContextAwareTool",
@@ -29,4 +42,9 @@ __all__ = [
     "ToolExecutionContext",
     "WizardStateSnapshot",
     "default_wizard_data_injector",
+    # Observability
+    "ToolExecutionRecord",
+    "ExecutionHistoryQuery",
+    "ExecutionStats",
+    "ExecutionTracker",
 ]
