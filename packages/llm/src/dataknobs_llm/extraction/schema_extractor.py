@@ -36,12 +36,14 @@ Example:
 
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_utils.json_extractor import JSONExtractor
 
 if TYPE_CHECKING:
+    from dataknobs_llm.extraction.observability import ExtractionTracker
     from dataknobs_llm.llm.base import AsyncLLMProvider
 
 logger = logging.getLogger(__name__)
@@ -302,6 +304,7 @@ class SchemaExtractor:
         schema: dict[str, Any],
         context: dict[str, Any] | None = None,
         model: str | None = None,
+        tracker: "ExtractionTracker | None" = None,
     ) -> ExtractionResult:
         """Extract structured data from text using the schema.
 
@@ -314,6 +317,7 @@ class SchemaExtractor:
             schema: JSON Schema defining expected data structure
             context: Optional context dict (stage name, prompt, etc.)
             model: Optional model override for this extraction
+            tracker: Optional ExtractionTracker for recording extraction history
 
         Returns:
             ExtractionResult with extracted data, confidence, and errors
@@ -332,10 +336,24 @@ class SchemaExtractor:
                 context={"stage": "order_details"}
             )
             # result.data = {"size": "large", "toppings": ["pepperoni"]}
+
+            # With tracking enabled
+            from dataknobs_llm.extraction import ExtractionTracker
+            tracker = ExtractionTracker()
+            result = await extractor.extract(text, schema, tracker=tracker)
+            stats = tracker.get_stats()
             ```
         """
+        start_time = time.time()
+
         # Build extraction prompt
         prompt = self._build_prompt(text, schema, context)
+
+        # Determine model being used
+        model_used = model or getattr(self._provider, "_model", None)
+        provider_name = getattr(self._provider, "_provider_name", None) or getattr(
+            self._provider.__class__, "__name__", "unknown"
+        ).lower().replace("provider", "")
 
         # Call LLM
         config_overrides = {}
@@ -350,12 +368,27 @@ class SchemaExtractor:
             raw_response = response.content
         except Exception as e:
             logger.warning("LLM extraction failed: %s", e)
-            return ExtractionResult(
+            result = ExtractionResult(
                 data={},
                 confidence=0.0,
                 errors=[f"LLM extraction failed: {e}"],
                 raw_response="",
             )
+
+            # Record failed extraction if tracking
+            if tracker:
+                self._record_extraction(
+                    tracker=tracker,
+                    text=text,
+                    schema=schema,
+                    result=result,
+                    duration_ms=(time.time() - start_time) * 1000,
+                    model_used=model_used,
+                    provider=provider_name,
+                    context=context,
+                )
+
+            return result
 
         # Parse JSON from response
         data, parse_errors = self._parse_json(raw_response)
@@ -367,12 +400,66 @@ class SchemaExtractor:
         all_errors = parse_errors + validation_errors
         confidence = self._calculate_confidence(data, schema, all_errors)
 
-        return ExtractionResult(
+        result = ExtractionResult(
             data=data,
             confidence=confidence,
             errors=all_errors,
             raw_response=raw_response,
         )
+
+        # Record extraction if tracking
+        if tracker:
+            self._record_extraction(
+                tracker=tracker,
+                text=text,
+                schema=schema,
+                result=result,
+                duration_ms=(time.time() - start_time) * 1000,
+                model_used=model_used,
+                provider=provider_name,
+                context=context,
+            )
+
+        return result
+
+    def _record_extraction(
+        self,
+        tracker: "ExtractionTracker",
+        text: str,
+        schema: dict[str, Any],
+        result: ExtractionResult,
+        duration_ms: float,
+        model_used: str | None,
+        provider: str | None,
+        context: dict[str, Any] | None,
+    ) -> None:
+        """Record an extraction operation to the tracker.
+
+        Args:
+            tracker: ExtractionTracker to record to
+            text: Input text
+            schema: JSON Schema used
+            result: Extraction result
+            duration_ms: Duration in milliseconds
+            model_used: Model that performed extraction
+            provider: Provider type
+            context: Context dict
+        """
+        from dataknobs_llm.extraction.observability import create_extraction_record
+
+        record = create_extraction_record(
+            input_text=text,
+            extracted_data=result.data,
+            confidence=result.confidence,
+            validation_errors=result.errors,
+            duration_ms=duration_ms,
+            schema=schema,
+            model_used=model_used,
+            provider=provider,
+            context=context,
+            raw_response=result.raw_response,
+        )
+        tracker.record(record)
 
     def _build_prompt(
         self,

@@ -1,7 +1,8 @@
-"""Wizard state transition observability.
+"""Wizard state transition observability and task tracking.
 
-This module provides data structures for recording wizard state transitions,
-enabling observability, debugging, and auditing of wizard flows.
+This module provides data structures for recording wizard state transitions
+and tracking granular tasks within wizard flows, enabling observability,
+debugging, and auditing.
 
 The types here are wizard-specific extensions of the generic FSM observability
 types from dataknobs_fsm. Key differences from FSM types:
@@ -9,13 +10,14 @@ types from dataknobs_fsm. Key differences from FSM types:
 - Includes `user_input` field for capturing user responses
 - TransitionStats includes wizard-specific metrics (backtrack_count, restart_count)
 - WizardStateSnapshot provides complete wizard state capture
+- WizardTask and WizardTaskList enable granular task tracking within stages
 
 Conversion utilities are provided to convert between wizard and FSM types.
 """
 
 import time
 from dataclasses import asdict, dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from dataknobs_fsm.observability import (
     ExecutionHistoryQuery,
@@ -146,12 +148,285 @@ class TransitionStats:
         return self.backtrack_count > 0
 
 
+# =============================================================================
+# Task Tracking
+# =============================================================================
+
+# Type alias for task status
+TaskStatus = Literal["pending", "in_progress", "completed", "skipped"]
+
+# Type alias for task completion trigger
+TaskCompletionTrigger = Literal["field_extraction", "tool_result", "stage_exit", "manual"]
+
+
+@dataclass
+class WizardTask:
+    """A trackable task within the wizard flow.
+
+    Tasks provide granular progress tracking within stages. A stage may have
+    multiple tasks (e.g., collect_bot_name, collect_description), and global
+    tasks can span stages (e.g., validate_config, save_config).
+
+    Attributes:
+        id: Unique task identifier (e.g., "collect_bot_name")
+        description: Human-readable description
+        status: Current status (pending, in_progress, completed, skipped)
+        stage: Stage this task belongs to, or None for global tasks
+        required: Whether this task is required for wizard completion
+        completed_at: Timestamp when task was completed
+        depends_on: List of task IDs that must complete first
+        completed_by: What triggers task completion
+        field_name: For field_extraction: which field completes this task
+        tool_name: For tool_result: which tool completes this task
+
+    Example:
+        ```python
+        task = WizardTask(
+            id="collect_bot_name",
+            description="Collect bot name",
+            status="pending",
+            stage="configure_identity",
+            required=True,
+            completed_by="field_extraction",
+            field_name="bot_name",
+        )
+        ```
+    """
+
+    id: str
+    description: str
+    status: TaskStatus = "pending"
+    stage: str | None = None  # None = global task
+    required: bool = True
+    completed_at: float | None = None
+    depends_on: list[str] = field(default_factory=list)
+    completed_by: TaskCompletionTrigger | None = None
+    field_name: str | None = None  # For field_extraction
+    tool_name: str | None = None  # For tool_result
+
+    @property
+    def is_complete(self) -> bool:
+        """Check if task is completed."""
+        return self.status == "completed"
+
+    @property
+    def is_pending(self) -> bool:
+        """Check if task is pending."""
+        return self.status == "pending"
+
+    @property
+    def is_global(self) -> bool:
+        """Check if this is a global (stage-independent) task."""
+        return self.stage is None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert task to dictionary.
+
+        Returns:
+            Dictionary representation of the task
+        """
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "WizardTask":
+        """Create task from dictionary.
+
+        Args:
+            data: Dictionary containing task fields
+
+        Returns:
+            WizardTask instance
+        """
+        return cls(**data)
+
+
+@dataclass
+class WizardTaskList:
+    """Manages wizard tasks with dependency tracking.
+
+    Provides methods for querying, completing, and calculating progress
+    across a collection of tasks.
+
+    Attributes:
+        tasks: List of WizardTask instances
+
+    Example:
+        ```python
+        task_list = WizardTaskList(tasks=[
+            WizardTask(id="validate", description="Validate config"),
+            WizardTask(id="save", description="Save config", depends_on=["validate"]),
+        ])
+
+        # Check available tasks
+        available = task_list.get_available_tasks()  # Only "validate"
+
+        # Complete a task
+        task_list.complete_task("validate")
+
+        # Now "save" is available
+        available = task_list.get_available_tasks()  # ["validate", "save"]
+        ```
+    """
+
+    tasks: list[WizardTask] = field(default_factory=list)
+
+    def get_task(self, task_id: str) -> WizardTask | None:
+        """Get a task by ID.
+
+        Args:
+            task_id: The task ID to find
+
+        Returns:
+            WizardTask if found, None otherwise
+        """
+        for task in self.tasks:
+            if task.id == task_id:
+                return task
+        return None
+
+    def complete_task(self, task_id: str) -> bool:
+        """Mark a task as completed.
+
+        Only completes if all dependencies are met.
+
+        Args:
+            task_id: The task ID to complete
+
+        Returns:
+            True if task was completed, False otherwise
+        """
+        task = self.get_task(task_id)
+        if task and self._dependencies_met(task):
+            task.status = "completed"
+            task.completed_at = time.time()
+            return True
+        return False
+
+    def skip_task(self, task_id: str) -> bool:
+        """Mark a task as skipped.
+
+        Args:
+            task_id: The task ID to skip
+
+        Returns:
+            True if task was skipped, False otherwise
+        """
+        task = self.get_task(task_id)
+        if task:
+            task.status = "skipped"
+            return True
+        return False
+
+    def _dependencies_met(self, task: WizardTask) -> bool:
+        """Check if all dependencies are completed.
+
+        Args:
+            task: The task to check dependencies for
+
+        Returns:
+            True if all dependencies are completed or skipped
+        """
+        for dep_id in task.depends_on:
+            dep = self.get_task(dep_id)
+            if not dep or dep.status not in ("completed", "skipped"):
+                return False
+        return True
+
+    def get_pending_tasks(self) -> list[WizardTask]:
+        """Get all pending tasks.
+
+        Returns:
+            List of tasks with status "pending"
+        """
+        return [t for t in self.tasks if t.status == "pending"]
+
+    def get_completed_tasks(self) -> list[WizardTask]:
+        """Get all completed tasks.
+
+        Returns:
+            List of tasks with status "completed"
+        """
+        return [t for t in self.tasks if t.status == "completed"]
+
+    def get_available_tasks(self) -> list[WizardTask]:
+        """Get tasks that are pending and have met dependencies.
+
+        Returns:
+            List of tasks ready to be worked on
+        """
+        return [
+            t for t in self.tasks
+            if t.status == "pending" and self._dependencies_met(t)
+        ]
+
+    def get_tasks_for_stage(self, stage: str) -> list[WizardTask]:
+        """Get all tasks for a specific stage.
+
+        Args:
+            stage: Stage name to filter by
+
+        Returns:
+            List of tasks belonging to the stage
+        """
+        return [t for t in self.tasks if t.stage == stage]
+
+    def get_global_tasks(self) -> list[WizardTask]:
+        """Get all global (stage-independent) tasks.
+
+        Returns:
+            List of tasks with no stage association
+        """
+        return [t for t in self.tasks if t.stage is None]
+
+    def calculate_progress(self) -> float:
+        """Calculate progress based on required tasks.
+
+        Returns:
+            Progress as percentage (0.0 to 100.0)
+        """
+        required = [t for t in self.tasks if t.required]
+        if not required:
+            return 100.0
+        completed = sum(1 for t in required if t.status in ("completed", "skipped"))
+        return (completed / len(required)) * 100.0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert task list to dictionary.
+
+        Returns:
+            Dictionary with serialized tasks
+        """
+        return {"tasks": [t.to_dict() for t in self.tasks]}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "WizardTaskList":
+        """Create task list from dictionary.
+
+        Args:
+            data: Dictionary containing tasks list
+
+        Returns:
+            WizardTaskList instance
+        """
+        tasks = [WizardTask.from_dict(t) for t in data.get("tasks", [])]
+        return cls(tasks=tasks)
+
+    def __len__(self) -> int:
+        """Return number of tasks."""
+        return len(self.tasks)
+
+
+# =============================================================================
+# State Snapshots
+# =============================================================================
+
+
 @dataclass
 class WizardStateSnapshot:
-    """Complete snapshot of wizard state for auditing.
+    """Complete snapshot of wizard state for auditing and UI display.
 
     Provides a complete picture of wizard state at a point in time,
-    useful for debugging and audit trails.
+    useful for debugging, audit trails, and driving UI components.
 
     Attributes:
         current_stage: Current stage name
@@ -161,6 +436,17 @@ class WizardStateSnapshot:
         completed: Whether wizard is complete
         snapshot_timestamp: When this snapshot was taken
         clarification_attempts: Current clarification attempt count
+        tasks: List of all tasks (serialized)
+        pending_tasks: Count of pending tasks
+        completed_tasks: Count of completed tasks
+        total_tasks: Total number of tasks
+        available_task_ids: IDs of tasks ready to execute
+        task_progress_percent: Progress based on tasks (if tasks defined)
+        stage_index: Index of current stage
+        total_stages: Total number of stages
+        can_skip: Whether current stage can be skipped
+        can_go_back: Whether back navigation is allowed
+        suggestions: Quick-reply suggestions for current stage
     """
 
     current_stage: str
@@ -170,12 +456,25 @@ class WizardStateSnapshot:
     completed: bool = False
     snapshot_timestamp: float = field(default_factory=time.time)
     clarification_attempts: int = 0
+    # Task tracking fields
+    tasks: list[dict[str, Any]] = field(default_factory=list)
+    pending_tasks: int = 0
+    completed_tasks: int = 0
+    total_tasks: int = 0
+    available_task_ids: list[str] = field(default_factory=list)
+    task_progress_percent: float = 0.0
+    # Stage context fields
+    stage_index: int = 0
+    total_stages: int = 0
+    can_skip: bool = False
+    can_go_back: bool = True
+    suggestions: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert snapshot to dictionary.
 
         Returns:
-            Dictionary representation with serialized transitions
+            Dictionary representation with serialized transitions and tasks
         """
         return {
             "current_stage": self.current_stage,
@@ -185,6 +484,17 @@ class WizardStateSnapshot:
             "completed": self.completed,
             "snapshot_timestamp": self.snapshot_timestamp,
             "clarification_attempts": self.clarification_attempts,
+            "tasks": self.tasks,
+            "pending_tasks": self.pending_tasks,
+            "completed_tasks": self.completed_tasks,
+            "total_tasks": self.total_tasks,
+            "available_task_ids": self.available_task_ids,
+            "task_progress_percent": self.task_progress_percent,
+            "stage_index": self.stage_index,
+            "total_stages": self.total_stages,
+            "can_skip": self.can_skip,
+            "can_go_back": self.can_go_back,
+            "suggestions": self.suggestions,
         }
 
     @classmethod
@@ -208,7 +518,72 @@ class WizardStateSnapshot:
             completed=data.get("completed", False),
             snapshot_timestamp=data.get("snapshot_timestamp", time.time()),
             clarification_attempts=data.get("clarification_attempts", 0),
+            tasks=data.get("tasks", []),
+            pending_tasks=data.get("pending_tasks", 0),
+            completed_tasks=data.get("completed_tasks", 0),
+            total_tasks=data.get("total_tasks", 0),
+            available_task_ids=data.get("available_task_ids", []),
+            task_progress_percent=data.get("task_progress_percent", 0.0),
+            stage_index=data.get("stage_index", 0),
+            total_stages=data.get("total_stages", 0),
+            can_skip=data.get("can_skip", False),
+            can_go_back=data.get("can_go_back", True),
+            suggestions=data.get("suggestions", []),
         )
+
+    def get_task(self, task_id: str) -> dict[str, Any] | None:
+        """Get a specific task by ID.
+
+        Args:
+            task_id: The task ID to find
+
+        Returns:
+            Task dict if found, None otherwise
+        """
+        for task in self.tasks:
+            if task.get("id") == task_id:
+                return task
+        return None
+
+    def get_tasks_for_stage(self, stage: str) -> list[dict[str, Any]]:
+        """Get all tasks for a specific stage.
+
+        Args:
+            stage: Stage name to filter by
+
+        Returns:
+            List of task dicts belonging to the stage
+        """
+        return [t for t in self.tasks if t.get("stage") == stage]
+
+    def get_global_tasks(self) -> list[dict[str, Any]]:
+        """Get all global (stage-independent) tasks.
+
+        Returns:
+            List of task dicts with no stage association
+        """
+        return [t for t in self.tasks if t.get("stage") is None]
+
+    def is_task_available(self, task_id: str) -> bool:
+        """Check if a task is available to execute.
+
+        Args:
+            task_id: The task ID to check
+
+        Returns:
+            True if task is in available_task_ids
+        """
+        return task_id in self.available_task_ids
+
+    def get_latest_transition(self) -> dict[str, Any] | None:
+        """Get the most recent transition record.
+
+        Returns:
+            Last transition as dict, or None if no transitions
+        """
+        if self.transitions:
+            return self.transitions[-1].to_dict()
+        return None
 
 
 class TransitionTracker:
@@ -496,6 +871,11 @@ def transition_stats_to_execution_stats(
 
 # Re-export FSM types for convenience
 __all__ = [
+    # Task tracking types
+    "WizardTask",
+    "WizardTaskList",
+    "TaskStatus",
+    "TaskCompletionTrigger",
     # Wizard-specific types
     "TransitionRecord",
     "TransitionHistoryQuery",

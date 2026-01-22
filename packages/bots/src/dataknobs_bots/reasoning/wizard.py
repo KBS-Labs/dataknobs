@@ -11,7 +11,12 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .base import ReasoningStrategy
-from .observability import TransitionRecord, create_transition_record
+from .observability import (
+    TransitionRecord,
+    WizardStateSnapshot,
+    WizardTaskList,
+    create_transition_record,
+)
 from .wizard_hooks import WizardHooks
 
 if TYPE_CHECKING:
@@ -53,7 +58,7 @@ class WizardState:
     """Persistent wizard state across conversation turns.
 
     Tracks the wizard's current position, collected data,
-    navigation history, and transition audit trail.
+    navigation history, transition audit trail, and task completion.
 
     Attributes:
         current_stage: Name of the current stage
@@ -63,6 +68,7 @@ class WizardState:
         clarification_attempts: Track consecutive clarification attempts
         transitions: Audit trail of all state transitions
         stage_entry_time: Timestamp when current stage was entered
+        tasks: List of trackable tasks with completion status
     """
 
     current_stage: str
@@ -72,6 +78,7 @@ class WizardState:
     clarification_attempts: int = 0
     transitions: list[TransitionRecord] = field(default_factory=list)
     stage_entry_time: float = field(default_factory=time.time)
+    tasks: WizardTaskList = field(default_factory=WizardTaskList)
 
 
 class WizardReasoning(ReasoningStrategy):
@@ -266,6 +273,9 @@ class WizardReasoning(ReasoningStrategy):
         # Merge extracted data with wizard state
         wizard_state.data.update(extraction.data)
 
+        # Update field-extraction tasks
+        self._update_field_tasks(wizard_state, extraction.data)
+
         # Validate against stage schema
         if stage.get("schema") and self._strict_validation:
             validation_errors = self._validate_data(
@@ -285,6 +295,9 @@ class WizardReasoning(ReasoningStrategy):
             await self._hooks.trigger_exit(
                 wizard_state.current_stage, wizard_state.data
             )
+
+        # Update stage-exit tasks before leaving
+        self._update_stage_exit_tasks(wizard_state, wizard_state.current_stage)
 
         # Capture state before transition
         from_stage = wizard_state.current_stage
@@ -355,6 +368,13 @@ class WizardReasoning(ReasoningStrategy):
                 TransitionRecord.from_dict(t)
                 for t in fsm_state.get("transitions", [])
             ]
+            # Restore tasks from serialized data
+            tasks_data = fsm_state.get("tasks", {})
+            tasks = (
+                WizardTaskList.from_dict(tasks_data)
+                if tasks_data
+                else WizardTaskList()
+            )
             state = WizardState(
                 current_stage=fsm_state.get(
                     "current_stage", self._fsm.current_stage
@@ -365,17 +385,20 @@ class WizardReasoning(ReasoningStrategy):
                 clarification_attempts=fsm_state.get("clarification_attempts", 0),
                 transitions=transitions,
                 stage_entry_time=fsm_state.get("stage_entry_time", time.time()),
+                tasks=tasks,
             )
             # Restore FSM state
             self._fsm.restore(fsm_state)
             return state
 
-        # Initialize new wizard state
+        # Initialize new wizard state with tasks from config
         start_stage = self._fsm.current_stage
+        initial_tasks = self._build_initial_tasks()
         return WizardState(
             current_stage=start_stage,
             history=[start_stage],
             stage_entry_time=time.time(),
+            tasks=initial_tasks,
         )
 
     def _save_wizard_state(self, manager: Any, state: WizardState) -> None:
@@ -394,6 +417,7 @@ class WizardReasoning(ReasoningStrategy):
                 "clarification_attempts": state.clarification_attempts,
                 "transitions": [t.to_dict() for t in state.transitions],
                 "stage_entry_time": state.stage_entry_time,
+                "tasks": state.tasks.to_dict(),
             },
             "progress": self._calculate_progress(state),
         }
@@ -880,4 +904,260 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
 """
         return await manager.complete(
             system_prompt_override=manager.system_prompt + restart_context,
+        )
+
+    # =========================================================================
+    # Task Tracking Methods
+    # =========================================================================
+
+    def _build_initial_tasks(self) -> WizardTaskList:
+        """Build initial task list from wizard configuration.
+
+        Extracts task definitions from stage metadata and creates
+        a WizardTaskList with all tasks in pending status.
+
+        Returns:
+            WizardTaskList with initial tasks
+        """
+        from .observability import WizardTask
+
+        tasks: list[WizardTask] = []
+        global_tasks_added = False
+
+        # Extract tasks from each stage's metadata
+        for stage_name, stage_meta in self._fsm._stage_metadata.items():
+            # Per-stage tasks
+            stage_tasks = stage_meta.get("tasks", [])
+            for task_def in stage_tasks:
+                if task_def.get("id"):  # Only add if id is defined
+                    tasks.append(WizardTask(
+                        id=task_def.get("id"),
+                        description=task_def.get("description", task_def.get("id", "")),
+                        status="pending",
+                        stage=stage_name,
+                        required=task_def.get("required", True),
+                        depends_on=task_def.get("depends_on", []),
+                        completed_by=task_def.get("completed_by"),
+                        field_name=task_def.get("field_name"),
+                        tool_name=task_def.get("tool_name"),
+                    ))
+
+            # Global tasks (only need to add once)
+            if not global_tasks_added:
+                global_tasks = stage_meta.get("_global_tasks", [])
+                for task_def in global_tasks:
+                    if task_def.get("id"):  # Only add if id is defined
+                        tasks.append(WizardTask(
+                            id=task_def.get("id"),
+                            description=task_def.get(
+                                "description", task_def.get("id", "")
+                            ),
+                            status="pending",
+                            stage=None,  # Global task
+                            required=task_def.get("required", True),
+                            depends_on=task_def.get("depends_on", []),
+                            completed_by=task_def.get("completed_by"),
+                            field_name=task_def.get("field_name"),
+                            tool_name=task_def.get("tool_name"),
+                        ))
+                if global_tasks:
+                    global_tasks_added = True
+
+        return WizardTaskList(tasks=tasks)
+
+    def _update_field_tasks(
+        self, state: WizardState, extracted_data: dict[str, Any]
+    ) -> None:
+        """Mark field-extraction tasks as complete when fields are collected.
+
+        Args:
+            state: Current wizard state
+            extracted_data: Data that was just extracted
+        """
+        for field_name, value in extracted_data.items():
+            if value is not None and not field_name.startswith("_"):
+                for task in state.tasks.tasks:
+                    if (
+                        task.completed_by == "field_extraction"
+                        and task.field_name == field_name
+                        and task.status == "pending"
+                    ):
+                        state.tasks.complete_task(task.id)
+                        logger.debug("Task %s completed via field extraction", task.id)
+
+    def _update_tool_tasks(
+        self, state: WizardState, tool_name: str, success: bool
+    ) -> None:
+        """Mark tool-result tasks as complete when tools succeed.
+
+        Args:
+            state: Current wizard state
+            tool_name: Name of the tool that was executed
+            success: Whether the tool execution succeeded
+        """
+        if success:
+            for task in state.tasks.tasks:
+                if (
+                    task.completed_by == "tool_result"
+                    and task.tool_name == tool_name
+                    and task.status == "pending"
+                ):
+                    state.tasks.complete_task(task.id)
+                    logger.debug("Task %s completed via tool result", task.id)
+
+    def _update_stage_exit_tasks(self, state: WizardState, stage: str) -> None:
+        """Mark stage-exit tasks as complete when leaving a stage.
+
+        Args:
+            state: Current wizard state
+            stage: The stage being exited
+        """
+        for task in state.tasks.tasks:
+            if (
+                task.completed_by == "stage_exit"
+                and task.stage == stage
+                and task.status == "pending"
+            ):
+                state.tasks.complete_task(task.id)
+                logger.debug("Task %s completed via stage exit", task.id)
+
+    # =========================================================================
+    # Public State Query Methods
+    # =========================================================================
+
+    def get_state_snapshot(self, manager: Any) -> WizardStateSnapshot:
+        """Get current wizard state as a read-only snapshot.
+
+        This method provides access to wizard state without processing a message.
+        Useful for UI components that need to display current state, progress,
+        and available actions.
+
+        Args:
+            manager: ConversationManager instance
+
+        Returns:
+            WizardStateSnapshot with complete state information
+        """
+        wizard_state = self._get_wizard_state(manager)
+        stage = self._fsm.current_metadata
+
+        # Calculate stage index
+        stage_names = list(self._fsm._stage_metadata.keys())
+        try:
+            stage_index = stage_names.index(wizard_state.current_stage)
+        except ValueError:
+            stage_index = 0
+
+        # Get task info
+        task_list = wizard_state.tasks
+        available_tasks = task_list.get_available_tasks()
+
+        return WizardStateSnapshot(
+            current_stage=wizard_state.current_stage,
+            data=dict(wizard_state.data),
+            history=list(wizard_state.history),
+            transitions=list(wizard_state.transitions),
+            completed=wizard_state.completed,
+            snapshot_timestamp=time.time(),
+            clarification_attempts=wizard_state.clarification_attempts,
+            # Task info
+            tasks=[t.to_dict() for t in task_list.tasks],
+            pending_tasks=len(task_list.get_pending_tasks()),
+            completed_tasks=len(task_list.get_completed_tasks()),
+            total_tasks=len(task_list),
+            available_task_ids=[t.id for t in available_tasks],
+            task_progress_percent=task_list.calculate_progress(),
+            # Stage info
+            stage_index=stage_index,
+            total_stages=len(self._fsm._stage_metadata),
+            can_skip=self._fsm.can_skip(),
+            can_go_back=self._fsm.can_go_back() and len(wizard_state.history) > 1,
+            suggestions=stage.get("suggestions", []),
+        )
+
+    @staticmethod
+    def snapshot_from_metadata(
+        metadata: dict[str, Any],
+        stage_definitions: dict[str, Any] | None = None,
+    ) -> WizardStateSnapshot | None:
+        """Create snapshot from conversation manager metadata.
+
+        This static method is useful when you have access to conversation
+        metadata but not the WizardReasoning instance itself.
+
+        Args:
+            metadata: Conversation manager metadata dict
+            stage_definitions: Optional stage definitions for index calculation
+
+        Returns:
+            WizardStateSnapshot if wizard metadata exists, None otherwise
+
+        Example:
+            ```python
+            # From conversation metadata
+            snapshot = WizardReasoning.snapshot_from_metadata(
+                manager.metadata,
+                stage_definitions=wizard_config.get("stages"),
+            )
+            if snapshot:
+                print(f"Current stage: {snapshot.current_stage}")
+                print(f"Progress: {snapshot.task_progress_percent}%")
+            ```
+        """
+        wizard_meta = metadata.get("wizard")
+        if not wizard_meta:
+            return None
+
+        fsm_state = wizard_meta.get("fsm_state", {})
+
+        # Parse transitions
+        transitions = [
+            TransitionRecord.from_dict(t)
+            for t in fsm_state.get("transitions", [])
+        ]
+
+        # Parse tasks
+        tasks_data = fsm_state.get("tasks", {})
+        task_list = (
+            WizardTaskList.from_dict(tasks_data)
+            if tasks_data
+            else WizardTaskList()
+        )
+        available_tasks = task_list.get_available_tasks()
+
+        # Calculate stage index if definitions provided
+        stage_index = 0
+        total_stages = 0
+        current_stage = fsm_state.get("current_stage", "unknown")
+
+        if stage_definitions:
+            if isinstance(stage_definitions, dict):
+                stage_names = list(stage_definitions.keys())
+            elif isinstance(stage_definitions, list):
+                stage_names = [s.get("name", "") for s in stage_definitions]
+            else:
+                stage_names = []
+
+            total_stages = len(stage_names)
+            try:
+                stage_index = stage_names.index(current_stage)
+            except ValueError:
+                stage_index = 0
+
+        return WizardStateSnapshot(
+            current_stage=current_stage,
+            data=fsm_state.get("data", {}),
+            history=fsm_state.get("history", []),
+            transitions=transitions,
+            completed=fsm_state.get("completed", False),
+            snapshot_timestamp=time.time(),
+            clarification_attempts=fsm_state.get("clarification_attempts", 0),
+            tasks=[t.to_dict() for t in task_list.tasks],
+            pending_tasks=len(task_list.get_pending_tasks()),
+            completed_tasks=len(task_list.get_completed_tasks()),
+            total_tasks=len(task_list),
+            available_task_ids=[t.id for t in available_tasks],
+            task_progress_percent=task_list.calculate_progress(),
+            stage_index=stage_index,
+            total_stages=total_stages,
         )

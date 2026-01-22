@@ -4,6 +4,11 @@ from typing import Any
 
 from .base import ReasoningStrategy
 from .observability import (
+    # Task tracking types
+    TaskCompletionTrigger,
+    TaskStatus,
+    WizardTask,
+    WizardTaskList,
     # Wizard-specific types
     TransitionHistoryQuery,
     TransitionRecord,
@@ -40,6 +45,11 @@ __all__ = [
     "WizardConfigLoader",
     "load_wizard_config",
     "create_reasoning_from_config",
+    # Task tracking
+    "WizardTask",
+    "WizardTaskList",
+    "TaskStatus",
+    "TaskCompletionTrigger",
     # Wizard observability
     "TransitionRecord",
     "TransitionHistoryQuery",

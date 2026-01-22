@@ -302,6 +302,10 @@ class WizardConfigLoader:
             Dict mapping stage names to their metadata
         """
         metadata = {}
+
+        # Extract global tasks (defined at wizard level, not stage level)
+        global_tasks = self._extract_global_tasks(wizard_config)
+
         for stage in wizard_config.get("stages", []):
             # Extract transition conditions for observability
             transitions = []
@@ -311,6 +315,9 @@ class WizardConfigLoader:
                     "condition": transition.get("condition"),
                     "priority": transition.get("priority"),
                 })
+
+            # Extract per-stage tasks
+            stage_tasks = self._extract_stage_tasks(stage)
 
             metadata[stage["name"]] = {
                 "prompt": stage.get("prompt", ""),
@@ -324,8 +331,67 @@ class WizardConfigLoader:
                 "is_start": stage.get("is_start", False),
                 "is_end": stage.get("is_end", False),
                 "transitions": transitions,  # Include transitions for observability
+                "tasks": stage_tasks,  # Per-stage tasks
             }
+
+        # Add global tasks to the first stage's metadata
+        # The WizardReasoning can then collect them during initialization
+        if global_tasks and metadata:
+            first_stage = next(iter(metadata))
+            metadata[first_stage]["_global_tasks"] = global_tasks
+
         return metadata
+
+    def _extract_stage_tasks(self, stage: dict[str, Any]) -> list[dict[str, Any]]:
+        """Extract task definitions from a stage.
+
+        Args:
+            stage: Stage configuration dict
+
+        Returns:
+            List of task definition dicts
+        """
+        tasks = []
+        for task_def in stage.get("tasks", []):
+            tasks.append({
+                "id": task_def.get("id"),
+                "description": task_def.get("description", task_def.get("id", "")),
+                "required": task_def.get("required", True),
+                "depends_on": task_def.get("depends_on", []),
+                "completed_by": task_def.get("completed_by"),
+                "field_name": task_def.get("field_name"),
+                "tool_name": task_def.get("tool_name"),
+            })
+        return tasks
+
+    def _extract_global_tasks(
+        self, wizard_config: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        """Extract global task definitions from wizard config.
+
+        Global tasks are defined at the wizard level (not per-stage) and
+        typically represent cross-cutting concerns like preview, validate,
+        and save.
+
+        Args:
+            wizard_config: Wizard configuration dict
+
+        Returns:
+            List of global task definition dicts
+        """
+        tasks = []
+        for task_def in wizard_config.get("global_tasks", []):
+            tasks.append({
+                "id": task_def.get("id"),
+                "description": task_def.get("description", task_def.get("id", "")),
+                "required": task_def.get("required", True),
+                "depends_on": task_def.get("depends_on", []),
+                "completed_by": task_def.get("completed_by"),
+                "field_name": task_def.get("field_name"),
+                "tool_name": task_def.get("tool_name"),
+                "stage": None,  # Mark as global
+            })
+        return tasks
 
     def _register_inline_conditions(
         self, builder: FSMBuilder, wizard_config: dict[str, Any]
