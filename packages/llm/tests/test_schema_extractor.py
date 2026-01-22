@@ -408,6 +408,81 @@ class TestSchemaExtractorFromConfig:
         assert result.data == {"value": 42}
         assert result.is_confident
 
+    def test_from_env_config_is_alias_for_from_config(self) -> None:
+        """Test that from_env_config() is an alias for from_config().
+
+        WizardReasoning.from_config() uses from_env_config() to create
+        the SchemaExtractor, so this verifies the expected API.
+        """
+        config = {
+            "provider": "echo",
+            "model": "test-model",
+            "temperature": 0.1,
+        }
+
+        extractor = SchemaExtractor.from_env_config(config)
+
+        assert extractor._provider is not None
+        assert isinstance(extractor._provider, EchoProvider)
+
+
+class TestSchemaExtractorProviderCreation:
+    """Tests for provider creation via _create_provider()."""
+
+    def test_create_provider_ollama(self) -> None:
+        """Test creating Ollama provider."""
+        from dataknobs_llm.llm.providers.ollama import OllamaProvider
+
+        config = {
+            "provider": "ollama",
+            "model": "qwen3-coder",
+            "temperature": 0.0,
+        }
+
+        provider = SchemaExtractor._create_provider(config)
+
+        assert isinstance(provider, OllamaProvider)
+
+    def test_create_provider_openai(self) -> None:
+        """Test creating OpenAI provider."""
+        from dataknobs_llm.llm.providers.openai import OpenAIProvider
+
+        config = {
+            "provider": "openai",
+            "model": "gpt-4",
+            "temperature": 0.0,
+        }
+
+        provider = SchemaExtractor._create_provider(config)
+
+        assert isinstance(provider, OpenAIProvider)
+
+    def test_create_provider_anthropic(self) -> None:
+        """Test creating Anthropic provider."""
+        from dataknobs_llm.llm.providers.anthropic import AnthropicProvider
+
+        config = {
+            "provider": "anthropic",
+            "model": "claude-3-haiku-20240307",
+            "temperature": 0.0,
+        }
+
+        provider = SchemaExtractor._create_provider(config)
+
+        assert isinstance(provider, AnthropicProvider)
+
+    def test_create_provider_echo(self) -> None:
+        """Test creating Echo provider."""
+        config = {
+            "provider": "echo",
+            "model": "test",
+            "temperature": 0.0,
+        }
+
+        provider = SchemaExtractor._create_provider(config)
+
+        assert isinstance(provider, EchoProvider)
+
 
 class TestSchemaExtractorPromptBuilding:
     """Tests for extraction prompt building."""
@@ -576,3 +651,240 @@ class TestSchemaExtractorValidation:
         errors = extractor._validate_schema({"name": "Alice", "extra": "ignored"}, schema)
 
         assert errors == []
+
+
+class TestSchemaExtractorWithTracking:
+    """Tests for SchemaExtractor with extraction tracking enabled."""
+
+    @pytest.fixture
+    def echo_provider(self) -> EchoProvider:
+        """Create an EchoProvider for testing."""
+        return EchoProvider(
+            {"provider": "echo", "model": "test-model", "options": {"echo_prefix": ""}}
+        )
+
+    @pytest.fixture
+    def extractor(self, echo_provider: EchoProvider) -> SchemaExtractor:
+        """Create a SchemaExtractor with EchoProvider."""
+        return SchemaExtractor(provider=echo_provider)
+
+    @pytest.mark.asyncio
+    async def test_extract_with_tracker(
+        self, extractor: SchemaExtractor, echo_provider: EchoProvider
+    ) -> None:
+        """Test extraction with tracking enabled records the extraction."""
+        from dataknobs_llm.extraction import ExtractionTracker
+
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+        tracker = ExtractionTracker()
+
+        echo_provider.set_responses(['{"name": "Alice"}'])
+
+        result = await extractor.extract(
+            text="My name is Alice",
+            schema=schema,
+            tracker=tracker,
+        )
+
+        # Extraction should succeed
+        assert result.data == {"name": "Alice"}
+        assert result.is_confident
+
+        # Tracker should have one record
+        assert len(tracker) == 1
+        records = tracker.query()
+        assert records[0].input_text == "My name is Alice"
+        assert records[0].extracted_data == {"name": "Alice"}
+        assert records[0].success is True
+
+    @pytest.mark.asyncio
+    async def test_extract_without_tracker(
+        self, extractor: SchemaExtractor, echo_provider: EchoProvider
+    ) -> None:
+        """Test extraction without tracker still works normally."""
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+
+        echo_provider.set_responses(['{"name": "Bob"}'])
+
+        result = await extractor.extract(
+            text="My name is Bob",
+            schema=schema,
+            # No tracker parameter
+        )
+
+        assert result.data == {"name": "Bob"}
+        assert result.is_confident
+
+    @pytest.mark.asyncio
+    async def test_tracker_records_failed_extraction(
+        self, extractor: SchemaExtractor, echo_provider: EchoProvider
+    ) -> None:
+        """Test that failed extractions are recorded in tracker."""
+        from dataknobs_llm.extraction import ExtractionTracker
+
+        schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+            "required": ["name", "age"],
+        }
+        tracker = ExtractionTracker()
+
+        # Response missing required field
+        echo_provider.set_responses(['{"name": "Alice"}'])
+
+        result = await extractor.extract(
+            text="My name is Alice",
+            schema=schema,
+            tracker=tracker,
+        )
+
+        # Extraction has errors
+        assert not result.is_confident
+        assert "Missing required field: age" in result.errors
+
+        # Tracker should record the failure
+        assert len(tracker) == 1
+        records = tracker.query()
+        assert records[0].success is False
+        assert "Missing required field: age" in records[0].validation_errors
+
+    @pytest.mark.asyncio
+    async def test_tracker_records_schema_info(
+        self, extractor: SchemaExtractor, echo_provider: EchoProvider
+    ) -> None:
+        """Test that tracker records schema name and hash."""
+        from dataknobs_llm.extraction import ExtractionTracker
+
+        schema = {
+            "title": "PersonSchema",
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+        }
+        tracker = ExtractionTracker()
+
+        echo_provider.set_responses(['{"name": "Alice"}'])
+
+        await extractor.extract(
+            text="My name is Alice",
+            schema=schema,
+            tracker=tracker,
+        )
+
+        records = tracker.query()
+        assert records[0].schema_name == "PersonSchema"
+        assert records[0].schema_hash is not None
+
+    @pytest.mark.asyncio
+    async def test_tracker_records_context(
+        self, extractor: SchemaExtractor, echo_provider: EchoProvider
+    ) -> None:
+        """Test that tracker records context if provided."""
+        from dataknobs_llm.extraction import ExtractionTracker
+
+        schema = {"type": "object", "properties": {"intent": {"type": "string"}}}
+        tracker = ExtractionTracker()
+
+        echo_provider.set_responses(['{"intent": "greeting"}'])
+
+        await extractor.extract(
+            text="Hello",
+            schema=schema,
+            context={"stage": "welcome", "prompt": "What do they want?"},
+            tracker=tracker,
+        )
+
+        records = tracker.query()
+        assert records[0].context == {"stage": "welcome", "prompt": "What do they want?"}
+
+    @pytest.mark.asyncio
+    async def test_tracker_records_duration(
+        self, extractor: SchemaExtractor, echo_provider: EchoProvider
+    ) -> None:
+        """Test that tracker records extraction duration."""
+        from dataknobs_llm.extraction import ExtractionTracker
+
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+        tracker = ExtractionTracker()
+
+        echo_provider.set_responses(['{"name": "Test"}'])
+
+        await extractor.extract(
+            text="Test",
+            schema=schema,
+            tracker=tracker,
+        )
+
+        records = tracker.query()
+        # Duration should be positive (extraction takes some time)
+        assert records[0].duration_ms >= 0
+
+    @pytest.mark.asyncio
+    async def test_tracker_records_raw_response(
+        self, extractor: SchemaExtractor, echo_provider: EchoProvider
+    ) -> None:
+        """Test that tracker records raw LLM response."""
+        from dataknobs_llm.extraction import ExtractionTracker
+
+        schema = {"type": "object", "properties": {"value": {"type": "integer"}}}
+        tracker = ExtractionTracker()
+
+        echo_provider.set_responses(['{"value": 42}'])
+
+        await extractor.extract(
+            text="The answer is 42",
+            schema=schema,
+            tracker=tracker,
+        )
+
+        records = tracker.query()
+        assert records[0].raw_response == '{"value": 42}'
+
+    @pytest.mark.asyncio
+    async def test_tracker_with_multiple_extractions(
+        self, extractor: SchemaExtractor, echo_provider: EchoProvider
+    ) -> None:
+        """Test tracker accumulates multiple extractions."""
+        from dataknobs_llm.extraction import ExtractionTracker
+
+        schema = {"type": "object", "properties": {"name": {"type": "string"}}}
+        tracker = ExtractionTracker()
+
+        echo_provider.set_responses(['{"name": "Alice"}', '{"name": "Bob"}', '{"name": "Charlie"}'])
+
+        for text in ["Alice", "Bob", "Charlie"]:
+            await extractor.extract(
+                text=f"My name is {text}",
+                schema=schema,
+                tracker=tracker,
+            )
+
+        assert len(tracker) == 3
+        stats = tracker.get_stats()
+        assert stats.total_extractions == 3
+        assert stats.successful_extractions == 3
+
+    @pytest.mark.asyncio
+    async def test_tracker_stats_after_mixed_results(
+        self, extractor: SchemaExtractor, echo_provider: EchoProvider
+    ) -> None:
+        """Test tracker stats with mix of success and failure."""
+        from dataknobs_llm.extraction import ExtractionTracker
+
+        schema = {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        }
+        tracker = ExtractionTracker()
+
+        # Good response, then bad response
+        echo_provider.set_responses(['{"name": "Alice"}', '{}'])
+
+        await extractor.extract(text="Alice", schema=schema, tracker=tracker)
+        await extractor.extract(text="???", schema=schema, tracker=tracker)
+
+        stats = tracker.get_stats()
+        assert stats.total_extractions == 2
+        assert stats.successful_extractions == 1
+        assert stats.failed_extractions == 1
+        assert stats.success_rate == 0.5

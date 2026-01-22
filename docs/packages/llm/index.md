@@ -110,6 +110,15 @@ response = await llm.chat([
 
 [Learn more →](guides/performance.md)
 
+### 📊 Extraction Observability
+
+- **Extraction Tracking**: Record and query schema extraction operations
+- **Statistics**: Success rates, confidence metrics, and error analysis
+- **Schema-Based Extraction**: LLM-powered structured data extraction with JSON Schema validation
+- **Provider Integration**: Track extraction across different LLM providers and models
+
+[Learn more →](guides/extraction.md)
+
 ## Architecture
 
 ```mermaid
@@ -144,6 +153,13 @@ dataknobs_llm/
 │   ├── storage.py       # Persistence
 │   ├── middleware.py    # Middleware system
 │   └── flow/            # FSM-based flows
+├── extraction/          # Schema-based extraction
+│   ├── schema_extractor.py  # LLM-powered data extraction
+│   └── observability.py     # Extraction tracking & stats
+├── tools/               # Tool management
+│   ├── registry.py      # Tool registration & execution
+│   ├── context.py       # Wizard context injection
+│   └── observability.py # Tool execution tracking
 └── fsm_integration/     # FSM integration
     ├── functions.py     # LLM functions for FSM
     ├── resources.py     # LLM resources for FSM
@@ -160,6 +176,7 @@ dataknobs_llm/
 - [**Config Overrides**](guides/config-overrides.md) - Per-request configuration
 - [**Versioning & A/B Testing**](guides/versioning.md) - Version control and experiments
 - [**Performance & Benchmarking**](guides/performance.md) - Optimization and metrics
+- [**Schema Extraction**](guides/extraction.md) - LLM-based data extraction with observability
 
 ### API Reference
 

@@ -50,6 +50,11 @@ addopts = [
     "-v",
 ]
 asyncio_mode = "auto"
+markers = [
+    "integration: marks tests as integration tests (requires external services)",
+    "ollama: marks tests as requiring Ollama LLM server",
+    "slow: marks tests as slow running",
+]
 
 [tool.coverage.run]
 source = ["src/dataknobs_llm"]

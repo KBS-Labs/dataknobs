@@ -30,6 +30,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Union
 
+from .function_resolver import resolve_function
+
 logger = logging.getLogger(__name__)
 
 
@@ -226,21 +228,8 @@ class WizardHooks:
         if not func_ref:
             return None
 
-        # Parse module:function format
-        if ":" not in func_ref:
-            logger.warning("Invalid hook function format: %s (expected module:func)", func_ref)
-            return None
-
-        module_path, func_name = func_ref.rsplit(":", 1)
-
-        try:
-            import importlib
-
-            module = importlib.import_module(module_path)
-            return getattr(module, func_name)
-        except (ImportError, AttributeError) as e:
-            logger.warning("Failed to load hook %s: %s", func_ref, e)
-            return None
+        # Use shared function resolver
+        return resolve_function(func_ref)
 
     def on_enter(
         self, callback: StageCallback, stage: str | None = None

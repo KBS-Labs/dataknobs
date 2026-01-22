@@ -33,6 +33,15 @@ from .execution.context import ExecutionContext
 from .config.loader import ConfigLoader
 from .config.builder import FSMBuilder
 
+# Observability
+from .observability import (
+    ExecutionHistoryQuery,
+    ExecutionRecord,
+    ExecutionStats,
+    ExecutionTracker,
+    create_execution_record,
+)
+
 __all__ = [
     "__version__",
     # Core
@@ -56,4 +65,10 @@ __all__ = [
     # Config
     "ConfigLoader",
     "FSMBuilder",
+    # Observability
+    "ExecutionRecord",
+    "ExecutionHistoryQuery",
+    "ExecutionStats",
+    "ExecutionTracker",
+    "create_execution_record",
 ]

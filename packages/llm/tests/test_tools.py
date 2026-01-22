@@ -1,7 +1,10 @@
 """Tests for the tool system (Tool and ToolRegistry)."""
 
+import time
+
 import pytest
-from dataknobs_llm.tools import Tool, ToolRegistry
+
+from dataknobs_llm.tools import Tool, ToolExecutionRecord, ToolRegistry
 
 
 class CalculatorTool(Tool):
@@ -367,3 +370,293 @@ class TestToolRegistry:
         assert "ToolRegistry(2 tools:" in registry_str
         assert "calculator" in registry_str
         assert "web_search" in registry_str
+
+
+class TestToolRegistryExecutionTracking:
+    """Test execution tracking in ToolRegistry."""
+
+    def test_tracking_disabled_by_default(self):
+        """Test that tracking is disabled by default."""
+        registry = ToolRegistry()
+        assert registry.tracking_enabled is False
+
+    def test_tracking_can_be_enabled(self):
+        """Test that tracking can be enabled."""
+        registry = ToolRegistry(track_executions=True)
+        assert registry.tracking_enabled is True
+
+    def test_repr_shows_tracking(self):
+        """Test repr shows tracking status."""
+        registry = ToolRegistry()
+        assert "tracking" not in repr(registry)
+
+        registry_tracking = ToolRegistry(track_executions=True)
+        assert "tracking=True" in repr(registry_tracking)
+
+    def test_str_shows_tracking(self):
+        """Test str shows tracking status."""
+        registry = ToolRegistry(track_executions=True)
+        assert "tracking enabled" in str(registry)
+
+    @pytest.mark.asyncio
+    async def test_execute_without_tracking(self):
+        """Test that execute works without tracking enabled."""
+        registry = ToolRegistry()
+        registry.register_tool(CalculatorTool())
+
+        result = await registry.execute_tool("calculator", operation="add", a=5, b=3)
+        assert result == 8
+
+        # No history when tracking disabled
+        history = registry.get_execution_history()
+        assert history == []
+
+    @pytest.mark.asyncio
+    async def test_execute_with_tracking(self):
+        """Test that execute records history when tracking enabled."""
+        registry = ToolRegistry(track_executions=True)
+        registry.register_tool(CalculatorTool())
+
+        result = await registry.execute_tool("calculator", operation="add", a=5, b=3)
+        assert result == 8
+
+        history = registry.get_execution_history()
+        assert len(history) == 1
+
+        record = history[0]
+        assert record.tool_name == "calculator"
+        assert record.parameters == {"operation": "add", "a": 5, "b": 3}
+        assert record.result == 8
+        assert record.success is True
+        assert record.duration_ms >= 0  # May be 0 for very fast executions
+
+    @pytest.mark.asyncio
+    async def test_execute_tracking_records_failures(self):
+        """Test that failed executions are tracked."""
+        registry = ToolRegistry(track_executions=True)
+        registry.register_tool(CalculatorTool())
+
+        with pytest.raises(ValueError, match="Division by zero"):
+            await registry.execute_tool("calculator", operation="divide", a=10, b=0)
+
+        history = registry.get_execution_history()
+        assert len(history) == 1
+
+        record = history[0]
+        assert record.tool_name == "calculator"
+        assert record.success is False
+        assert "Division by zero" in record.error
+        assert record.result is None
+
+    @pytest.mark.asyncio
+    async def test_execute_tracking_sanitizes_internal_params(self):
+        """Test that internal params starting with _ are not recorded."""
+        registry = ToolRegistry(track_executions=True)
+        registry.register_tool(CalculatorTool())
+
+        # Execute with internal params (these shouldn't be recorded)
+        result = await registry.execute_tool(
+            "calculator",
+            operation="add",
+            a=5,
+            b=3,
+            _context={"internal": "data"},
+            _other="private",
+        )
+        assert result == 8
+
+        history = registry.get_execution_history()
+        assert len(history) == 1
+
+        record = history[0]
+        # Internal params should not be in recorded parameters
+        assert "_context" not in record.parameters
+        assert "_other" not in record.parameters
+        # Regular params should be recorded
+        assert record.parameters == {"operation": "add", "a": 5, "b": 3}
+
+    @pytest.mark.asyncio
+    async def test_get_execution_history_filter_by_tool(self):
+        """Test filtering execution history by tool name."""
+        registry = ToolRegistry(track_executions=True)
+        registry.register_tool(CalculatorTool())
+        registry.register_tool(WebSearchTool())
+
+        await registry.execute_tool("calculator", operation="add", a=1, b=2)
+        await registry.execute_tool("web_search", query="test")
+        await registry.execute_tool("calculator", operation="multiply", a=3, b=4)
+
+        # All history
+        all_history = registry.get_execution_history()
+        assert len(all_history) == 3
+
+        # Calculator only
+        calc_history = registry.get_execution_history(tool_name="calculator")
+        assert len(calc_history) == 2
+        assert all(r.tool_name == "calculator" for r in calc_history)
+
+        # Search only
+        search_history = registry.get_execution_history(tool_name="web_search")
+        assert len(search_history) == 1
+
+    @pytest.mark.asyncio
+    async def test_get_execution_history_filter_by_success(self):
+        """Test filtering execution history by success/failure."""
+        registry = ToolRegistry(track_executions=True)
+        registry.register_tool(CalculatorTool())
+
+        await registry.execute_tool("calculator", operation="add", a=1, b=2)
+        try:
+            await registry.execute_tool("calculator", operation="divide", a=1, b=0)
+        except ValueError:
+            pass
+        await registry.execute_tool("calculator", operation="multiply", a=3, b=4)
+
+        # All history
+        all_history = registry.get_execution_history()
+        assert len(all_history) == 3
+
+        # Success only
+        success_history = registry.get_execution_history(success_only=True)
+        assert len(success_history) == 2
+        assert all(r.success for r in success_history)
+
+        # Failed only
+        failed_history = registry.get_execution_history(failed_only=True)
+        assert len(failed_history) == 1
+        assert all(not r.success for r in failed_history)
+
+    @pytest.mark.asyncio
+    async def test_get_execution_history_filter_by_time(self):
+        """Test filtering execution history by time range."""
+        registry = ToolRegistry(track_executions=True)
+        registry.register_tool(CalculatorTool())
+
+        before = time.time()
+        await registry.execute_tool("calculator", operation="add", a=1, b=2)
+        middle = time.time()
+        await registry.execute_tool("calculator", operation="multiply", a=3, b=4)
+        after = time.time()
+
+        # Since middle
+        recent_history = registry.get_execution_history(since=middle)
+        assert len(recent_history) == 1
+        assert recent_history[0].parameters["operation"] == "multiply"
+
+        # Until middle
+        early_history = registry.get_execution_history(until=middle)
+        assert len(early_history) == 1
+        assert early_history[0].parameters["operation"] == "add"
+
+    @pytest.mark.asyncio
+    async def test_get_execution_history_with_limit(self):
+        """Test limiting execution history results."""
+        registry = ToolRegistry(track_executions=True)
+        registry.register_tool(CalculatorTool())
+
+        for i in range(10):
+            await registry.execute_tool("calculator", operation="add", a=i, b=1)
+
+        history = registry.get_execution_history(limit=3)
+        assert len(history) == 3
+
+    @pytest.mark.asyncio
+    async def test_get_execution_stats(self):
+        """Test getting execution statistics."""
+        registry = ToolRegistry(track_executions=True)
+        registry.register_tool(CalculatorTool())
+
+        await registry.execute_tool("calculator", operation="add", a=1, b=2)
+        await registry.execute_tool("calculator", operation="multiply", a=3, b=4)
+        try:
+            await registry.execute_tool("calculator", operation="divide", a=1, b=0)
+        except ValueError:
+            pass
+
+        stats = registry.get_execution_stats()
+        assert stats.total_executions == 3
+        assert stats.successful_executions == 2
+        assert stats.failed_executions == 1
+        assert stats.success_rate == pytest.approx(66.67, rel=0.01)
+
+        # Stats for specific tool
+        calc_stats = registry.get_execution_stats("calculator")
+        assert calc_stats.tool_name == "calculator"
+        assert calc_stats.total_executions == 3
+
+    @pytest.mark.asyncio
+    async def test_clear_execution_history(self):
+        """Test clearing execution history."""
+        registry = ToolRegistry(track_executions=True)
+        registry.register_tool(CalculatorTool())
+
+        await registry.execute_tool("calculator", operation="add", a=1, b=2)
+        await registry.execute_tool("calculator", operation="multiply", a=3, b=4)
+
+        assert registry.execution_history_count() == 2
+
+        registry.clear_execution_history()
+
+        assert registry.execution_history_count() == 0
+        assert registry.get_execution_history() == []
+
+    def test_clear_execution_history_no_op_when_disabled(self):
+        """Test that clear_execution_history is safe when tracking disabled."""
+        registry = ToolRegistry()
+        # Should not raise
+        registry.clear_execution_history()
+
+    def test_execution_history_count(self):
+        """Test getting execution history count."""
+        registry = ToolRegistry(track_executions=True)
+        assert registry.execution_history_count() == 0
+
+        registry_disabled = ToolRegistry()
+        assert registry_disabled.execution_history_count() == 0
+
+    @pytest.mark.asyncio
+    async def test_clone_preserves_tracking_settings(self):
+        """Test that clone preserves tracking settings."""
+        registry = ToolRegistry(track_executions=True, max_execution_history=50)
+        registry.register_tool(CalculatorTool())
+
+        await registry.execute_tool("calculator", operation="add", a=1, b=2)
+
+        cloned = registry.clone()
+
+        # Tracking settings preserved
+        assert cloned.tracking_enabled is True
+
+        # But history is not copied by default
+        assert cloned.execution_history_count() == 0
+
+    @pytest.mark.asyncio
+    async def test_clone_can_preserve_history(self):
+        """Test that clone can optionally preserve history."""
+        registry = ToolRegistry(track_executions=True)
+        registry.register_tool(CalculatorTool())
+
+        await registry.execute_tool("calculator", operation="add", a=1, b=2)
+        await registry.execute_tool("calculator", operation="multiply", a=3, b=4)
+
+        cloned = registry.clone(preserve_history=True)
+
+        # History is copied
+        assert cloned.execution_history_count() == 2
+
+    @pytest.mark.asyncio
+    async def test_max_execution_history(self):
+        """Test that max execution history is enforced."""
+        registry = ToolRegistry(track_executions=True, max_execution_history=3)
+        registry.register_tool(CalculatorTool())
+
+        for i in range(10):
+            await registry.execute_tool("calculator", operation="add", a=i, b=1)
+
+        # Should only keep last 3
+        assert registry.execution_history_count() == 3
+        history = registry.get_execution_history()
+        # Most recent should be i=9, 8, 7
+        assert history[0].parameters["a"] == 7
+        assert history[1].parameters["a"] == 8
+        assert history[2].parameters["a"] == 9

@@ -165,6 +165,7 @@ nav:
         - packages/llm/guides/versioning.md
         - packages/llm/guides/performance.md
         - packages/llm/guides/tools-and-enhancements.md
+        - packages/llm/guides/extraction.md
       - API Reference:
         - packages/llm/api/prompts.md
         - packages/llm/api/conversations.md
@@ -189,6 +190,7 @@ nav:
         - packages/bots/guides/tools.md
         - packages/bots/guides/middleware.md
         - packages/bots/guides/bot-manager.md
+        - packages/bots/guides/observability.md
         - packages/bots/guides/rag-ingestion.md
         - packages/bots/guides/rag-retrieval.md
         - packages/bots/guides/rag-query.md

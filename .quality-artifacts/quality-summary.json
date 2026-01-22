@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-01-19T21:03:46Z",
+  "timestamp": "2026-01-22T19:47:20Z",
   "overall_status": "PASS",
   "environment": "host",
   "packages": "all",
@@ -8,6 +8,11 @@
       "status": "pass",
       "exit_code": 0,
       "tool": "mkdocs"
+    },
+    "documentation_versions": {
+      "status": "pass",
+      "exit_code": 0,
+      "tool": "docs-update-versions.sh"
     },
     "style": {
       "status": "pass",

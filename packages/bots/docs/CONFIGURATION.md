@@ -869,6 +869,74 @@ stages:
 | `can_go_back` | bool | Allow back navigation (default: true) |
 | `tools` | list | Tool names available in this stage |
 | `transitions` | list | Rules for transitioning to next stage |
+| `tasks` | list | Task definitions for granular progress tracking |
+
+**Task Configuration:**
+
+Tasks enable granular progress tracking within and across wizard stages. Define per-stage tasks or global tasks that span stages.
+
+```yaml
+stages:
+  configure_identity:
+    prompt: "Let's set up your bot's identity..."
+    schema:
+      type: object
+      properties:
+        bot_name: { type: string }
+        description: { type: string }
+    # Per-stage task definitions
+    tasks:
+      - id: collect_bot_name
+        description: "Collect bot name"
+        completed_by: field_extraction
+        field_name: bot_name
+        required: true
+      - id: collect_description
+        description: "Collect bot description"
+        completed_by: field_extraction
+        field_name: description
+        required: false
+
+# Global tasks (not tied to a specific stage)
+global_tasks:
+  - id: preview_config
+    description: "Preview the configuration"
+    completed_by: tool_result
+    tool_name: preview_config
+    required: false
+  - id: validate_config
+    description: "Validate the configuration"
+    completed_by: tool_result
+    tool_name: validate_config
+    required: true
+  - id: save_config
+    description: "Save the configuration"
+    completed_by: tool_result
+    tool_name: save_config
+    required: true
+    depends_on: [validate_config]  # Must validate first
+```
+
+**Task Properties:**
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | string | Unique task identifier (required) |
+| `description` | string | Human-readable description (required) |
+| `completed_by` | string | Completion trigger: `field_extraction`, `tool_result`, `stage_exit`, `manual` |
+| `field_name` | string | For `field_extraction`: which field triggers completion |
+| `tool_name` | string | For `tool_result`: which tool triggers completion |
+| `required` | bool | Whether task is required for wizard completion (default: true) |
+| `depends_on` | list | List of task IDs that must complete first |
+
+**Task Completion Triggers:**
+| Trigger | Description |
+|---------|-------------|
+| `field_extraction` | Completed when specified field is extracted from user input |
+| `tool_result` | Completed when specified tool executes successfully |
+| `stage_exit` | Completed when user leaves the associated stage |
+| `manual` | Completed programmatically via code |
+
+For full task tracking API, see the Wizard Observability guide in the documentation.
 
 **Navigation Commands:**
 Users can navigate the wizard with natural language:

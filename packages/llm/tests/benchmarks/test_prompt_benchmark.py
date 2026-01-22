@@ -104,7 +104,10 @@ class TestPromptBenchmark:
 
     def test_performance_consistency(self, prompt_bench):
         """Test that benchmarks produce consistent results across runs."""
-        # Run same benchmark twice
+        # Warmup run to avoid cold-start overhead (imports, JIT, etc.)
+        prompt_bench.benchmark_simple_rendering()
+
+        # Run same benchmark twice for consistency check
         result1 = prompt_bench.benchmark_simple_rendering()
         result2 = prompt_bench.benchmark_simple_rendering()
 
