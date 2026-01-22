@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-01-22T19:47:20Z",
+  "timestamp": "2026-01-22T22:50:20Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.9.26 (Homebrew 2026-01-15)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/wizard-observability",
-  "git_commit": "4149428ef16f1453a930e7726ed811d138967e2c",
+  "git_commit": "5cf276c84c271a5557f9fdf38c165c9030e2eb8f",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
