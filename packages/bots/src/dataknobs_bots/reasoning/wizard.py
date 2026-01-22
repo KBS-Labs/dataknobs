@@ -6,10 +6,12 @@ and branching logic.
 """
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from .base import ReasoningStrategy
+from .observability import TransitionRecord, create_transition_record
 from .wizard_hooks import WizardHooks
 
 if TYPE_CHECKING:
@@ -51,7 +53,7 @@ class WizardState:
     """Persistent wizard state across conversation turns.
 
     Tracks the wizard's current position, collected data,
-    and navigation history.
+    navigation history, and transition audit trail.
 
     Attributes:
         current_stage: Name of the current stage
@@ -59,6 +61,8 @@ class WizardState:
         history: List of visited stage names
         completed: Whether the wizard has finished
         clarification_attempts: Track consecutive clarification attempts
+        transitions: Audit trail of all state transitions
+        stage_entry_time: Timestamp when current stage was entered
     """
 
     current_stage: str
@@ -66,6 +70,8 @@ class WizardState:
     history: list[str] = field(default_factory=list)
     completed: bool = False
     clarification_attempts: int = 0
+    transitions: list[TransitionRecord] = field(default_factory=list)
+    stage_entry_time: float = field(default_factory=time.time)
 
 
 class WizardReasoning(ReasoningStrategy):
@@ -280,9 +286,33 @@ class WizardReasoning(ReasoningStrategy):
                 wizard_state.current_stage, wizard_state.data
             )
 
+        # Capture state before transition
+        from_stage = wizard_state.current_stage
+        duration_ms = (time.time() - wizard_state.stage_entry_time) * 1000
+
         # Execute FSM transition
         step_result = self._fsm.step(wizard_state.data)
-        wizard_state.current_stage = self._fsm.current_stage
+        to_stage = self._fsm.current_stage
+
+        # Record the transition if stage changed
+        if to_stage != from_stage:
+            # Look up the condition that was evaluated for this transition
+            condition_expr = self._fsm.get_transition_condition(from_stage, to_stage)
+
+            transition = create_transition_record(
+                from_stage=from_stage,
+                to_stage=to_stage,
+                trigger="user_input",
+                duration_in_stage_ms=duration_ms,
+                data_snapshot=wizard_state.data.copy(),
+                user_input=user_message,
+                condition_evaluated=condition_expr,
+                condition_result=True if condition_expr else None,
+            )
+            wizard_state.transitions.append(transition)
+            wizard_state.stage_entry_time = time.time()
+
+        wizard_state.current_stage = to_stage
         if wizard_state.current_stage not in wizard_state.history:
             wizard_state.history.append(wizard_state.current_stage)
         wizard_state.completed = step_result.is_complete
@@ -320,6 +350,11 @@ class WizardReasoning(ReasoningStrategy):
         wizard_data = manager.metadata.get("wizard", {})
         if wizard_data.get("fsm_state"):
             fsm_state = wizard_data["fsm_state"]
+            # Restore transitions from serialized data
+            transitions = [
+                TransitionRecord.from_dict(t)
+                for t in fsm_state.get("transitions", [])
+            ]
             state = WizardState(
                 current_stage=fsm_state.get(
                     "current_stage", self._fsm.current_stage
@@ -328,6 +363,8 @@ class WizardReasoning(ReasoningStrategy):
                 history=fsm_state.get("history", []),
                 completed=fsm_state.get("completed", False),
                 clarification_attempts=fsm_state.get("clarification_attempts", 0),
+                transitions=transitions,
+                stage_entry_time=fsm_state.get("stage_entry_time", time.time()),
             )
             # Restore FSM state
             self._fsm.restore(fsm_state)
@@ -338,6 +375,7 @@ class WizardReasoning(ReasoningStrategy):
         return WizardState(
             current_stage=start_stage,
             history=[start_stage],
+            stage_entry_time=time.time(),
         )
 
     def _save_wizard_state(self, manager: Any, state: WizardState) -> None:
@@ -354,6 +392,8 @@ class WizardReasoning(ReasoningStrategy):
                 "data": state.data,
                 "completed": state.completed,
                 "clarification_attempts": state.clarification_attempts,
+                "transitions": [t.to_dict() for t in state.transitions],
+                "stage_entry_time": state.stage_entry_time,
             },
             "progress": self._calculate_progress(state),
         }
@@ -403,12 +443,26 @@ class WizardReasoning(ReasoningStrategy):
         # Back navigation
         if lower in ("back", "go back", "previous"):
             if self._fsm.can_go_back() and len(state.history) > 1:
+                from_stage = state.current_stage
+                duration_ms = (time.time() - state.stage_entry_time) * 1000
+
                 state.history.pop()
                 state.current_stage = state.history[-1]
                 self._fsm.restore(
                     {"current_stage": state.current_stage, "data": state.data}
                 )
                 state.clarification_attempts = 0
+
+                # Record the back navigation transition
+                transition = create_transition_record(
+                    from_stage=from_stage,
+                    to_stage=state.current_stage,
+                    trigger="navigation_back",
+                    duration_in_stage_ms=duration_ms,
+                    user_input=message,
+                )
+                state.transitions.append(transition)
+                state.stage_entry_time = time.time()
 
                 stage = self._fsm.current_metadata
                 return await self._generate_stage_response(
@@ -441,16 +495,35 @@ class WizardReasoning(ReasoningStrategy):
 
         # Restart
         if lower in ("restart", "start over"):
+            from_stage = state.current_stage
+            duration_ms = (time.time() - state.stage_entry_time) * 1000
+
             # Trigger restart hook if configured
             if self._hooks:
                 await self._hooks.trigger_restart()
 
             self._fsm.restart()
-            state.current_stage = self._fsm.current_stage
+            to_stage = self._fsm.current_stage
+
+            # Record the restart transition (preserving transition history)
+            transition = create_transition_record(
+                from_stage=from_stage,
+                to_stage=to_stage,
+                trigger="restart",
+                duration_in_stage_ms=duration_ms,
+                data_snapshot=state.data.copy(),
+                user_input=message,
+            )
+            # Preserve transition history but clear other state
+            previous_transitions = state.transitions + [transition]
+
+            state.current_stage = to_stage
             state.data = {}
             state.history = [state.current_stage]
             state.completed = False
             state.clarification_attempts = 0
+            state.transitions = previous_transitions
+            state.stage_entry_time = time.time()
 
             stage = self._fsm.current_metadata
             return await self._generate_stage_response(

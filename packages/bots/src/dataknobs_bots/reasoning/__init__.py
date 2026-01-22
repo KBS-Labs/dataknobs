@@ -3,6 +3,24 @@
 from typing import Any
 
 from .base import ReasoningStrategy
+from .observability import (
+    # Wizard-specific types
+    TransitionHistoryQuery,
+    TransitionRecord,
+    TransitionStats,
+    TransitionTracker,
+    WizardStateSnapshot,
+    create_transition_record,
+    # Conversion utilities
+    execution_record_to_transition_record,
+    transition_record_to_execution_record,
+    transition_stats_to_execution_stats,
+    # Re-exported FSM types
+    ExecutionHistoryQuery,
+    ExecutionRecord,
+    ExecutionStats,
+    ExecutionTracker,
+)
 from .react import ReActReasoning
 from .simple import SimpleReasoning
 from .wizard import WizardReasoning, WizardStageContext, WizardState
@@ -22,6 +40,22 @@ __all__ = [
     "WizardConfigLoader",
     "load_wizard_config",
     "create_reasoning_from_config",
+    # Wizard observability
+    "TransitionRecord",
+    "TransitionHistoryQuery",
+    "TransitionStats",
+    "TransitionTracker",
+    "WizardStateSnapshot",
+    "create_transition_record",
+    # Conversion utilities
+    "transition_record_to_execution_record",
+    "execution_record_to_transition_record",
+    "transition_stats_to_execution_stats",
+    # FSM observability (re-exported)
+    "ExecutionRecord",
+    "ExecutionHistoryQuery",
+    "ExecutionStats",
+    "ExecutionTracker",
 ]
 
 

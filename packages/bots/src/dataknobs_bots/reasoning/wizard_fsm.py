@@ -112,6 +112,27 @@ class WizardFSM:
         stage = stage or self.current_stage
         return self._stage_metadata.get(stage, {}).get("suggestions", [])
 
+    def get_transition_condition(
+        self, from_stage: str, to_stage: str
+    ) -> str | None:
+        """Get the condition expression for a transition.
+
+        Args:
+            from_stage: Source stage name
+            to_stage: Target stage name
+
+        Returns:
+            Condition expression string, or None if no condition
+        """
+        stage_meta = self._stage_metadata.get(from_stage, {})
+        transitions = stage_meta.get("transitions", [])
+
+        for transition in transitions:
+            if transition.get("target") == to_stage:
+                return transition.get("condition")
+
+        return None
+
     def can_skip(self, stage: str | None = None) -> bool:
         """Check if stage can be skipped.
 

@@ -303,6 +303,15 @@ class WizardConfigLoader:
         """
         metadata = {}
         for stage in wizard_config.get("stages", []):
+            # Extract transition conditions for observability
+            transitions = []
+            for transition in stage.get("transitions", []):
+                transitions.append({
+                    "target": transition.get("target"),
+                    "condition": transition.get("condition"),
+                    "priority": transition.get("priority"),
+                })
+
             metadata[stage["name"]] = {
                 "prompt": stage.get("prompt", ""),
                 "schema": stage.get("schema"),
@@ -314,6 +323,7 @@ class WizardConfigLoader:
                 "extraction_model": stage.get("extraction_model"),
                 "is_start": stage.get("is_start", False),
                 "is_end": stage.get("is_end", False),
+                "transitions": transitions,  # Include transitions for observability
             }
         return metadata
 
