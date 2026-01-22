@@ -15,6 +15,27 @@ dependencies = [
     "jinja2>=3.1.0",
 ]
 
+[project.optional-dependencies]
+openai = [
+    "openai>=1.0.0",
+]
+anthropic = [
+    "anthropic>=0.18.0",
+]
+ollama = [
+    "aiohttp>=3.8.0",
+]
+huggingface = [
+    "aiohttp>=3.8.0",
+]
+embeddings = [
+    "transformers>=4.30.0",
+    "torch>=2.0.0",
+]
+all = [
+    "dataknobs-llm[openai,anthropic,ollama,huggingface,embeddings]",
+]
+
 [tool.uv.sources]
 dataknobs-common = { workspace = true }
 dataknobs-config = { workspace = true }
