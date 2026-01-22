@@ -13,6 +13,7 @@ import yaml
 from dataknobs_fsm.api.advanced import AdvancedFSM
 from dataknobs_fsm.config.builder import FSMBuilder
 
+from .function_resolver import resolve_functions
 from .wizard_fsm import WizardFSM
 
 logger = logging.getLogger(__name__)
@@ -66,13 +67,14 @@ class WizardConfigLoader:
     def load(
         self,
         config_path: str | Path,
-        custom_functions: dict[str, Callable[..., Any]] | None = None,
+        custom_functions: dict[str, Callable[..., Any] | str] | None = None,
     ) -> WizardFSM:
         """Load wizard config and create WizardFSM.
 
         Args:
             config_path: Path to wizard YAML config file
-            custom_functions: Optional custom functions for transitions
+            custom_functions: Optional custom functions for transitions.
+                Values can be either callables or "module:function" strings.
 
         Returns:
             Configured WizardFSM instance
@@ -92,19 +94,34 @@ class WizardConfigLoader:
     def load_from_dict(
         self,
         wizard_config: dict[str, Any],
-        custom_functions: dict[str, Callable[..., Any]] | None = None,
+        custom_functions: dict[str, Callable[..., Any] | str] | None = None,
     ) -> WizardFSM:
         """Load wizard config from dict and create WizardFSM.
 
         Args:
             wizard_config: Wizard configuration dict
-            custom_functions: Optional custom functions for transitions
+            custom_functions: Optional custom functions for transitions.
+                Values can be either:
+                - Callable objects (used directly)
+                - String references in "module.path:function_name" format
 
         Returns:
             Configured WizardFSM instance
 
         Raises:
             ValueError: If config structure is invalid
+
+        Example:
+            ```python
+            # Custom functions can be callables or string references
+            loader.load_from_dict(
+                wizard_config,
+                custom_functions={
+                    "validate": my_validate_func,  # Callable
+                    "transform": "myapp.transforms:apply_template",  # String
+                }
+            )
+            ```
         """
         # Validate required fields
         if "stages" not in wizard_config:
@@ -122,7 +139,9 @@ class WizardConfigLoader:
         # Build FSM
         builder = FSMBuilder()
         if custom_functions:
-            for name, func in custom_functions.items():
+            # Resolve string references to callables
+            resolved_functions = resolve_functions(custom_functions)
+            for name, func in resolved_functions.items():
                 builder.register_function(name, func)
 
         # Register inline condition functions
@@ -353,13 +372,14 @@ class WizardConfigLoader:
 
 def load_wizard_config(
     config_path: str | Path,
-    custom_functions: dict[str, Callable[..., Any]] | None = None,
+    custom_functions: dict[str, Callable[..., Any] | str] | None = None,
 ) -> WizardFSM:
     """Convenience function to load wizard config.
 
     Args:
         config_path: Path to wizard YAML config file
-        custom_functions: Optional custom functions for transitions
+        custom_functions: Optional custom functions for transitions.
+            Values can be either callables or "module:function" strings.
 
     Returns:
         Configured WizardFSM instance

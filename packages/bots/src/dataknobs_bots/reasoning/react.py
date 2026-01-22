@@ -3,6 +3,8 @@
 import logging
 from typing import Any
 
+from dataknobs_llm.tools import ToolExecutionContext
+
 from .base import ReasoningStrategy
 
 logger = logging.getLogger(__name__)
@@ -158,6 +160,9 @@ class ReActReasoning(ReasoningStrategy):
                 },
             )
 
+            # Build execution context for tools that need it
+            tool_context = ToolExecutionContext.from_manager(manager)
+
             # Execute all tool calls
             for tool_call in response.tool_calls:
                 tool_trace = {
@@ -182,8 +187,12 @@ class ReActReasoning(ReasoningStrategy):
                             },
                         )
                     else:
-                        # Execute the tool
-                        result = await tool.execute(**tool_call.parameters)
+                        # Execute the tool with context injection
+                        # Context-aware tools will extract _context and use it
+                        # Regular tools will ignore _context via **kwargs
+                        result = await tool.execute(
+                            **tool_call.parameters, _context=tool_context
+                        )
                         observation = f"Tool result: {result}"
                         tool_trace["status"] = "success"
                         tool_trace["result"] = str(result)
