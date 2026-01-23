@@ -5,6 +5,39 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-01-23
+
+### dataknobs-common [1.2.1]
+
+#### Fixed
+- Tightened dependencies
+
+### dataknobs-xization [1.2.4]
+
+#### Fixed
+- Tightened dependencies
+
+### dataknobs-fsm [0.1.6]
+
+#### Added
+- Added observability functionality
+
+### dataknobs-llm [0.3.1]
+
+#### Added
+- Observability functionality
+- Context injection into tools
+
+#### Fixed
+- Fixed missing optional dependencies
+
+### dataknobs-bots [0.3.1]
+
+#### Added
+- Observability functionality
+- Custom function resolution
+
+
 ## Release - 2026-01-14
 
 ### dataknobs-bots [0.3.0]

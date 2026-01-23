@@ -5,7 +5,7 @@
       "name": "bots",
       "pypi_name": "dataknobs-bots",
       "description": "Configuration-driven AI agents with RAG, memory, and reasoning strategies",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -14,7 +14,7 @@
       "name": "common",
       "pypi_name": "dataknobs-common",
       "description": "Foundation library with exceptions, registries, serialization, and event bus",
-      "version": "1.2.0",
+      "version": "1.2.1",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -41,7 +41,7 @@
       "name": "fsm",
       "pypi_name": "dataknobs-fsm",
       "description": "Finite State Machine framework for workflows with data modes and resource management",
-      "version": "0.1.5",
+      "version": "0.1.6",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -50,7 +50,7 @@
       "name": "llm",
       "pypi_name": "dataknobs-llm",
       "description": "Unified LLM abstraction with prompt management and conversations",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -77,7 +77,7 @@
       "name": "xization",
       "pypi_name": "dataknobs-xization",
       "description": "Text normalization, tokenization, annotation, and markdown chunking library",
-      "version": "1.2.3",
+      "version": "1.2.4",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
