@@ -1,6 +1,6 @@
 [project]
 name = "dataknobs-xization"
-version = "1.2.3"
+version = "1.2.4"
 description = "Text normalization and tokenization tools"
 readme = "README.md"
 authors = [

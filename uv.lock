@@ -1360,7 +1360,7 @@ requires-dist = [
 
 [[package]]
 name = "dataknobs-bots"
-version = "0.3.0"
+version = "0.3.1"
 source = { editable = "packages/bots" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1405,7 +1405,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-common"
-version = "1.2.0"
+version = "1.2.1"
 source = { editable = "packages/common" }
 
 [package.dev-dependencies]
@@ -1596,7 +1596,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-fsm"
-version = "0.1.5"
+version = "0.1.6"
 source = { editable = "packages/fsm" }
 dependencies = [
     { name = "aiofiles" },
@@ -1705,7 +1705,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-llm"
-version = "0.3.0"
+version = "0.3.1"
 source = { editable = "packages/llm" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1918,7 +1918,7 @@ dev = [
 
 [[package]]
 name = "dataknobs-xization"
-version = "1.2.3"
+version = "1.2.4"
 source = { editable = "packages/xization" }
 dependencies = [
     { name = "dataknobs-common" },

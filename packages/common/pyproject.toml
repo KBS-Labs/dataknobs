@@ -1,6 +1,6 @@
 [project]
 name = "dataknobs-common"
-version = "1.2.0"
+version = "1.2.1"
 description = "Common utilities and base classes for dataknobs packages"
 readme = "README.md"
 authors = [

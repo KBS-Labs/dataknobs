@@ -306,12 +306,12 @@ CMD ["python", "app.py"]
 # requirements.txt
 dataknobs-config>=0.3.3
 dataknobs-data>=0.4.5
-dataknobs-fsm>=0.1.5
-dataknobs-llm>=0.3.0
-dataknobs-bots>=0.3.0
+dataknobs-fsm>=0.1.6
+dataknobs-llm>=0.3.1
+dataknobs-bots>=0.3.1
 dataknobs-structures>=1.0.5
 dataknobs-utils>=1.2.2
-dataknobs-xization>=1.2.3
+dataknobs-xization>=1.2.4
 
 # Optional dependencies
 psycopg2-binary>=2.9.0
