@@ -132,6 +132,17 @@ class WizardReasoning(ReasoningStrategy):
         self._strict_validation = strict_validation
         self._hooks = hooks
 
+    async def close(self) -> None:
+        """Close the reasoning strategy and release resources.
+
+        Closes the SchemaExtractor's LLM provider if present, releasing
+        HTTP connections. Should be called when the reasoning strategy
+        is no longer needed (typically via DynaBot.close()).
+        """
+        if self._extractor is not None and hasattr(self._extractor, "close"):
+            await self._extractor.close()
+            logger.debug("Closed WizardReasoning extractor")
+
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "WizardReasoning":
         """Create WizardReasoning from configuration dict.

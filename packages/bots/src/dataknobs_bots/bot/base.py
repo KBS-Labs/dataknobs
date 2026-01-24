@@ -759,9 +759,10 @@ class DynaBot:
         """Close the bot and clean up resources.
 
         This method closes the LLM provider, conversation storage backend,
-        and releases associated resources like HTTP connections and database
-        connections. Should be called when the bot is no longer needed,
-        especially in testing or when creating temporary bot instances.
+        reasoning strategy, and releases associated resources like HTTP
+        connections and database connections. Should be called when the bot
+        is no longer needed, especially in testing or when creating temporary
+        bot instances.
 
         Example:
             ```python
@@ -789,6 +790,10 @@ class DynaBot:
         # Close knowledge base (releases embedding provider HTTP sessions)
         if self.knowledge_base and hasattr(self.knowledge_base, 'close'):
             await self.knowledge_base.close()
+
+        # Close reasoning strategy (releases extractor's LLM provider sessions)
+        if self.reasoning_strategy and hasattr(self.reasoning_strategy, 'close'):
+            await self.reasoning_strategy.close()
 
         # Close memory store
         if self.memory and hasattr(self.memory, 'close'):
