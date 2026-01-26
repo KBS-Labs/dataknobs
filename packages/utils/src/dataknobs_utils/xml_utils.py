@@ -11,6 +11,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Generator
 from typing import Any, List, TextIO, Tuple, Union
 
+from typing_extensions import Self
+
 import bs4
 import pandas as pd
 
@@ -112,7 +114,7 @@ class XmlStream(ABC):
     def __next__(self) -> List[ET.Element]:
         return self.loop_through_elements()
 
-    def __enter__(self) -> "XmlStream":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object, **kwargs: Any) -> None:
@@ -395,7 +397,7 @@ class XMLTagStream:
         self.start_tag = f"<{tag_name}{tag_end}".encode(encoding)
         self.end_tag = f"</{tag_name}>".encode(encoding)
 
-    def __enter__(self) -> "XMLTagStream":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object, **kwargs: Any) -> None:
