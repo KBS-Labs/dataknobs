@@ -4,6 +4,8 @@ import types
 from pathlib import Path
 from typing import Any
 
+from typing_extensions import Self
+
 from dataknobs_xization import (
     ChunkQualityConfig,
     ContentTransformer,
@@ -1107,7 +1109,7 @@ class RAGKnowledgeBase:
         if hasattr(self.embedding_provider, "close"):
             await self.embedding_provider.close()
 
-    async def __aenter__(self) -> "RAGKnowledgeBase":
+    async def __aenter__(self) -> Self:
         """Async context manager entry.
 
         Returns:
