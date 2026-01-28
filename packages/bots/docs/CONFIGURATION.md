@@ -866,8 +866,9 @@ stages:
 | `suggestions` | list | Quick-reply buttons for users |
 | `help_text` | string | Additional help shown on request |
 | `can_skip` | bool | Allow users to skip this stage |
+| `skip_default` | object | Default values to apply when user skips this stage |
 | `can_go_back` | bool | Allow back navigation (default: true) |
-| `tools` | list | Tool names available in this stage |
+| `tools` | list | Tool names available in this stage (must be explicit; omitting means no tools) |
 | `transitions` | list | Rules for transitioning to next stage |
 | `tasks` | list | Task definitions for granular progress tracking |
 
@@ -942,6 +943,7 @@ For full task tracking API, see the Wizard Observability guide in the documentat
 Users can navigate the wizard with natural language:
 - "back" / "go back" / "previous" - Return to previous stage
 - "skip" / "skip this" - Skip current stage (if `can_skip: true`)
+- "use default" / "use defaults" - Skip and apply `skip_default` values (if `can_skip: true`)
 - "restart" / "start over" - Restart from beginning
 
 **Lifecycle Hooks:**
@@ -958,6 +960,64 @@ hooks:
   on_error:                    # Called on processing errors
     - "myapp.hooks:handle_error"
 ```
+
+**Tool Availability:**
+
+Tools are only available to stages that explicitly list them via the `tools` property.
+Stages without a `tools` key receive **no tools** by default. This prevents accidental
+tool calls during data collection stages that could produce blank responses.
+
+```yaml
+stages:
+  # Data collection stage - no tools available
+  - name: configure_identity
+    prompt: "What should we call your bot?"
+    schema:
+      type: object
+      properties:
+        bot_name: { type: string }
+    # Note: no 'tools' key = no tools available
+
+  # Tool-using stage - explicit tool list
+  - name: review
+    prompt: "Let's review your configuration"
+    tools: [preview_config, validate_config]  # Only these tools available
+    transitions:
+      - target: save
+```
+
+**Skipping with Defaults:**
+
+When users skip a stage, you can apply default values using `skip_default`:
+
+```yaml
+stages:
+  - name: configure_llm
+    prompt: "Which AI provider should power your bot?"
+    can_skip: true
+    skip_default:
+      llm_provider: anthropic
+      llm_model: claude-3-sonnet
+    schema:
+      type: object
+      properties:
+        llm_provider:
+          type: string
+          enum: [anthropic, openai, ollama]
+        llm_model:
+          type: string
+    transitions:
+      - target: next_stage
+        condition: "data.get('llm_provider')"
+```
+
+This gives users three paths:
+1. **Explicit choice**: User says "Use OpenAI GPT-4" → extraction captures their choice
+2. **Accept defaults**: User says "skip" or "use defaults" → `skip_default` values applied
+3. **Guided help**: User says "I'm not sure" → wizard explains options and re-prompts
+
+> **Note:** Schema `default` values are stripped before extraction to prevent the LLM from
+> auto-filling them. Use `skip_default` for user-facing defaults instead of schema defaults.
 
 ---
 

@@ -166,6 +166,7 @@ nav:
         - packages/llm/guides/performance.md
         - packages/llm/guides/tools-and-enhancements.md
         - packages/llm/guides/extraction.md
+        - packages/llm/guides/testing.md
       - API Reference:
         - packages/llm/api/prompts.md
         - packages/llm/api/conversations.md
