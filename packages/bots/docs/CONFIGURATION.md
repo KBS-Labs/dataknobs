@@ -869,6 +869,8 @@ stages:
 | `skip_default` | object | Default values to apply when user skips this stage |
 | `can_go_back` | bool | Allow back navigation (default: true) |
 | `tools` | list | Tool names available in this stage (must be explicit; omitting means no tools) |
+| `reasoning` | string | Tool reasoning mode: "single" (default) or "react" for multi-tool loops |
+| `max_iterations` | int | Max ReAct iterations for this stage (overrides wizard default) |
 | `transitions` | list | Rules for transitioning to next stage |
 | `tasks` | list | Task definitions for granular progress tracking |
 
@@ -1266,6 +1268,77 @@ for name, meta in wizard_fsm.stages.items():
 | `stage_count` | int | Total number of stages |
 | `current_stage` | string | Current stage name |
 | `current_metadata` | dict | Metadata for current stage |
+
+**ReAct-Style Tool Reasoning:**
+
+Enable multi-tool ReAct loops within wizard stages. When a stage has tools and is
+configured for ReAct reasoning, the LLM can make multiple sequential tool calls within
+a single wizard turn, reasoning about results before responding.
+
+```yaml
+# wizard.yaml
+name: configbot
+settings:
+  tool_reasoning: single       # Default for all stages: "single" or "react"
+  max_tool_iterations: 3       # Default max tool-calling iterations
+
+stages:
+  - name: review
+    prompt: "Let's review your configuration"
+    reasoning: react           # Override: use ReAct loop for this stage
+    max_iterations: 5          # Override: allow up to 5 tool calls
+    tools: [preview_config, validate_config]
+    transitions:
+      - target: save
+
+  - name: configure_llm
+    prompt: "Which LLM provider?"
+    # No reasoning specified = uses wizard-level default (single)
+    # No tools specified = no tools available
+    transitions:
+      - target: review
+```
+
+**ReAct Behavior:**
+
+With `reasoning: react`, the wizard:
+1. Calls the LLM with available tools
+2. If LLM requests a tool call, executes it
+3. Adds tool result to conversation
+4. Repeats from step 1 (up to `max_iterations`)
+5. When LLM responds without tool calls, returns that as the final response
+
+This enables complex multi-tool interactions in a single wizard turn:
+
+```
+User: "Show me the config and validate it"
+LLM calls: preview_config
+Tool returns: {preview: {...}}
+LLM calls: validate_config
+Tool returns: {valid: true, errors: []}
+LLM responds: "Here's your config preview: ... Validation passed!"
+```
+
+**Configuration Options:**
+
+| Setting | Level | Description |
+|---------|-------|-------------|
+| `tool_reasoning` | wizard settings | Default reasoning mode: "single" (one LLM call) or "react" (loop) |
+| `max_tool_iterations` | wizard settings | Default max iterations for react mode |
+| `reasoning` | stage | Per-stage override: "single" or "react" |
+| `max_iterations` | stage | Per-stage max iterations override |
+
+**When to Use ReAct:**
+
+Use `reasoning: react` for stages where:
+- Multiple tools may need to be called together
+- Tool results inform subsequent tool calls
+- You want the LLM to reason about tool outputs before responding
+
+Keep `reasoning: single` (default) for:
+- Data collection stages without tools
+- Simple single-tool stages
+- Stages where you want predictable single-call behavior
 
 ---
 
