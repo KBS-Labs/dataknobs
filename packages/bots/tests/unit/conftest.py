@@ -78,6 +78,18 @@ class WizardTestManager:
         """Add an assistant message to the conversation."""
         self.messages.append({"role": "assistant", "content": content})
 
+    async def add_message(self, content: str, role: str = "user") -> None:
+        """Add a message to the conversation (async interface for ReAct compatibility).
+
+        This method supports the interface used by ReAct-style loops where
+        tool observations are added as system messages.
+
+        Args:
+            content: Message content
+            role: Message role (user, assistant, system)
+        """
+        self.messages.append({"role": role, "content": content})
+
     def get_messages(self) -> list[dict[str, Any]]:
         """Get all messages in the conversation."""
         return self.messages

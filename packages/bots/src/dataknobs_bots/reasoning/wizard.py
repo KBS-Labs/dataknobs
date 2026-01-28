@@ -122,6 +122,8 @@ class WizardReasoning(ReasoningStrategy):
         context_template: str | None = None,
         allow_post_completion_edits: bool = False,
         section_to_stage_mapping: dict[str, str] | None = None,
+        default_tool_reasoning: str = "single",
+        default_max_iterations: int = 3,
     ):
         """Initialize WizardReasoning.
 
@@ -138,6 +140,9 @@ class WizardReasoning(ReasoningStrategy):
                 when user requests changes (default: False)
             section_to_stage_mapping: Custom mapping of section names to stage
                 names for amendment detection (optional)
+            default_tool_reasoning: Default reasoning mode for stages with tools.
+                "single" for single LLM call, "react" for ReAct-style loop.
+            default_max_iterations: Default max iterations for ReAct-style reasoning.
         """
         self._fsm = wizard_fsm
         self._extractor = extractor
@@ -147,6 +152,8 @@ class WizardReasoning(ReasoningStrategy):
         self._context_template = context_template
         self._allow_amendments = allow_post_completion_edits
         self._section_to_stage_mapping = section_to_stage_mapping or {}
+        self._default_tool_reasoning = default_tool_reasoning
+        self._default_max_iterations = default_max_iterations
 
     async def close(self) -> None:
         """Close the reasoning strategy and release resources.
@@ -226,6 +233,8 @@ class WizardReasoning(ReasoningStrategy):
         context_template = wizard_fsm.settings.get("context_template")
         allow_amendments = wizard_fsm.settings.get("allow_post_completion_edits", False)
         section_mapping = wizard_fsm.settings.get("section_to_stage_mapping", {})
+        tool_reasoning = wizard_fsm.settings.get("tool_reasoning", "single")
+        max_iterations = wizard_fsm.settings.get("max_tool_iterations", 3)
 
         return cls(
             wizard_fsm=wizard_fsm,
@@ -236,6 +245,8 @@ class WizardReasoning(ReasoningStrategy):
             context_template=context_template,
             allow_post_completion_edits=allow_amendments,
             section_to_stage_mapping=section_mapping,
+            default_tool_reasoning=tool_reasoning,
+            default_max_iterations=max_iterations,
         )
 
     async def generate(
@@ -810,11 +821,17 @@ class WizardReasoning(ReasoningStrategy):
         # Filter tools to stage-specific ones
         stage_tools = self._filter_tools_for_stage(stage, tools)
 
-        # Generate response
-        response = await manager.complete(
-            system_prompt_override=enhanced_prompt,
-            tools=stage_tools,
-        )
+        # Check if stage should use ReAct-style reasoning
+        if stage_tools and self._use_react_for_stage(stage):
+            response = await self._react_stage_response(
+                manager, enhanced_prompt, stage, state, stage_tools
+            )
+        else:
+            # Single LLM call (default behavior)
+            response = await manager.complete(
+                system_prompt_override=enhanced_prompt,
+                tools=stage_tools,
+            )
 
         # Add wizard metadata to response
         self._add_wizard_metadata(response, state, stage)
@@ -845,6 +862,176 @@ class WizardReasoning(ReasoningStrategy):
             "stage_prompt": stage.get("prompt", ""),
             "suggestions": stage.get("suggestions", []),
         }
+
+    def _use_react_for_stage(self, stage: dict[str, Any]) -> bool:
+        """Check if a stage should use ReAct-style reasoning.
+
+        A stage uses ReAct if:
+        - Stage has `reasoning: react` explicitly set, OR
+        - No explicit reasoning set and default_tool_reasoning is "react"
+
+        Args:
+            stage: Stage metadata dict
+
+        Returns:
+            True if ReAct should be used for this stage
+        """
+        stage_reasoning = stage.get("reasoning")
+        if stage_reasoning:
+            return stage_reasoning.lower() == "react"
+        return self._default_tool_reasoning.lower() == "react"
+
+    def _get_max_iterations(self, stage: dict[str, Any]) -> int:
+        """Get maximum ReAct iterations for a stage.
+
+        Args:
+            stage: Stage metadata dict
+
+        Returns:
+            Max iterations (from stage config or default)
+        """
+        return stage.get("max_iterations") or self._default_max_iterations
+
+    async def _react_stage_response(
+        self,
+        manager: Any,
+        enhanced_prompt: str,
+        stage: dict[str, Any],
+        state: WizardState,
+        tools: list[Any],
+    ) -> Any:
+        """Generate response using ReAct loop for tool-using stage.
+
+        This allows the LLM to make multiple tool calls within a single
+        wizard turn, reasoning about results before responding.
+
+        Args:
+            manager: ConversationManager instance
+            enhanced_prompt: Stage-aware system prompt
+            stage: Stage metadata dict
+            state: Current wizard state
+            tools: Available tools for this stage
+
+        Returns:
+            Final LLM response after ReAct loop completes
+        """
+        from dataknobs_llm.tools import ToolExecutionContext
+
+        max_iterations = self._get_max_iterations(stage)
+        stage_name = stage.get("name", "unknown")
+
+        logger.debug(
+            "Starting ReAct loop for stage '%s' (max_iterations=%d)",
+            stage_name,
+            max_iterations,
+        )
+
+        # Build execution context for tools that need it
+        tool_context = ToolExecutionContext.from_manager(manager)
+
+        for iteration in range(max_iterations):
+            # Make LLM call
+            response = await manager.complete(
+                system_prompt_override=enhanced_prompt,
+                tools=tools,
+            )
+
+            # Check if response has tool calls
+            tool_calls = getattr(response, "tool_calls", None) or []
+            if not tool_calls:
+                # No tool calls - this is the final response
+                logger.debug(
+                    "ReAct iteration %d/%d: No tool calls, returning response",
+                    iteration + 1,
+                    max_iterations,
+                )
+                return response
+
+            logger.debug(
+                "ReAct iteration %d/%d: Executing %d tool call(s): %s",
+                iteration + 1,
+                max_iterations,
+                len(tool_calls),
+                [tc.name for tc in tool_calls],
+            )
+
+            # Execute tool calls and add observations
+            for tool_call in tool_calls:
+                result = await self._execute_react_tool_call(
+                    tool_call, tools, state, tool_context
+                )
+
+                # Add observation to conversation for next iteration
+                observation = f"Tool result from {tool_call.name}: {result}"
+                await manager.add_message(content=observation, role="system")
+
+        # Max iterations reached - get final response without tools
+        logger.warning(
+            "ReAct max iterations (%d) reached for stage '%s'",
+            max_iterations,
+            stage_name,
+        )
+        return await manager.complete(
+            system_prompt_override=enhanced_prompt,
+            tools=None,  # Force text response
+        )
+
+    async def _execute_react_tool_call(
+        self,
+        tool_call: Any,
+        tools: list[Any],
+        state: WizardState,
+        tool_context: Any,
+    ) -> Any:
+        """Execute a single tool call within a ReAct loop.
+
+        Args:
+            tool_call: Tool call object with name and parameters
+            tools: Available tools
+            state: Wizard state (for tools that need it)
+            tool_context: ToolExecutionContext for context-aware tools
+
+        Returns:
+            Tool execution result or error dict
+        """
+        tool_name = tool_call.name
+        tool_args = getattr(tool_call, "parameters", {}) or {}
+
+        # Find the tool
+        tool = self._find_tool(tool_name, tools)
+        if tool is None:
+            error_msg = f"Tool '{tool_name}' not found"
+            logger.warning("ReAct: %s", error_msg)
+            return {"error": error_msg}
+
+        try:
+            # Execute tool with context injection
+            # Context-aware tools will extract _context and use it
+            # Regular tools will ignore _context via **kwargs
+            result = await tool.execute(**tool_args, _context=tool_context)
+
+            logger.debug("ReAct: Tool '%s' executed successfully", tool_name)
+            return result
+
+        except Exception as e:
+            error_msg = f"Tool execution failed: {e}"
+            logger.error("ReAct: Tool '%s' failed: %s", tool_name, e)
+            return {"error": error_msg}
+
+    def _find_tool(self, tool_name: str, tools: list[Any]) -> Any | None:
+        """Find a tool by name.
+
+        Args:
+            tool_name: Name of the tool to find
+            tools: List of available tools
+
+        Returns:
+            Tool instance or None if not found
+        """
+        for tool in tools:
+            if getattr(tool, "name", None) == tool_name:
+                return tool
+        return None
 
     def _build_stage_context(
         self, stage: dict[str, Any], state: WizardState

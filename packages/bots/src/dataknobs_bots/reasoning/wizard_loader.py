@@ -339,6 +339,9 @@ class WizardConfigLoader:
                 "is_end": stage.get("is_end", False),
                 "transitions": transitions,  # Include transitions for observability
                 "tasks": stage_tasks,  # Per-stage tasks
+                # ReAct-style tool reasoning settings
+                "reasoning": stage.get("reasoning"),  # "single" or "react"
+                "max_iterations": stage.get("max_iterations"),
             }
 
         # Add global tasks to the first stage's metadata
