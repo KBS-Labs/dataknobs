@@ -514,9 +514,13 @@ class WizardReasoning(ReasoningStrategy):
             )
 
         # Skip
-        if lower in ("skip", "skip this"):
+        if lower in ("skip", "skip this", "use default", "use defaults"):
             if self._fsm.can_skip():
                 state.data[f"_skipped_{state.current_stage}"] = True
+                # Apply skip_default values if configured
+                skip_default = self._fsm.current_metadata.get("skip_default")
+                if skip_default and isinstance(skip_default, dict):
+                    state.data.update(skip_default)
                 state.clarification_attempts = 0
                 return None  # Continue to normal flow, triggering transition
             return await manager.complete(
@@ -572,6 +576,10 @@ class WizardReasoning(ReasoningStrategy):
     ) -> Any:
         """Extract structured data from user message.
 
+        Schema 'default' values are stripped before extraction to prevent
+        the LLM from auto-filling them. This ensures extraction only captures
+        what the user actually said.
+
         Args:
             message: User message text
             stage: Current stage metadata
@@ -598,13 +606,16 @@ class WizardReasoning(ReasoningStrategy):
                 data={"_raw_input": message}, confidence=1.0
             )
 
+        # Strip defaults to prevent extraction LLM from auto-filling them
+        extraction_schema = self._strip_schema_defaults(schema)
+
         if self._extractor:
             # Use schema extractor
             extraction_model = stage.get("extraction_model")
             context = {"stage": stage.get("name"), "prompt": stage.get("prompt")}
             return await self._extractor.extract(
                 text=message,
-                schema=schema,
+                schema=extraction_schema,
                 context=context,
                 model=extraction_model,
             )
@@ -802,6 +813,54 @@ class WizardReasoning(ReasoningStrategy):
                 filtered.append(tool)
 
         return filtered if filtered else None
+
+    def _strip_schema_defaults(self, schema: dict[str, Any]) -> dict[str, Any]:
+        """Deep-copy schema with 'default' removed from all properties.
+
+        Schema defaults serve a different purpose (documenting valid defaults for
+        consumers) than extraction (parsing what the user actually said). The
+        extraction prompt already instructs: "If information is missing, omit
+        the field."
+
+        Args:
+            schema: JSON Schema dict with potential 'default' values
+
+        Returns:
+            Copy of schema with all 'default' keys removed from properties
+        """
+        import copy
+
+        clean = copy.deepcopy(schema)
+
+        # Handle properties at top level and nested
+        self._strip_defaults_from_properties(clean)
+
+        return clean
+
+    def _strip_defaults_from_properties(self, schema_part: dict[str, Any]) -> None:
+        """Recursively strip 'default' from properties in schema.
+
+        Handles nested schemas (objects with nested properties, items in arrays).
+
+        Args:
+            schema_part: Schema or sub-schema dict to process in place
+        """
+        # Strip from direct properties
+        for prop in schema_part.get("properties", {}).values():
+            prop.pop("default", None)
+            # Recurse into nested object properties
+            if prop.get("type") == "object":
+                self._strip_defaults_from_properties(prop)
+            # Handle array items
+            if prop.get("type") == "array" and isinstance(prop.get("items"), dict):
+                self._strip_defaults_from_properties(prop["items"])
+
+        # Handle allOf, anyOf, oneOf
+        for key in ("allOf", "anyOf", "oneOf"):
+            if key in schema_part:
+                for sub_schema in schema_part[key]:
+                    if isinstance(sub_schema, dict):
+                        self._strip_defaults_from_properties(sub_schema)
 
     def _calculate_progress(self, state: WizardState) -> float:
         """Calculate wizard completion progress (0.0 to 1.0).
