@@ -324,6 +324,7 @@ class WizardConfigLoader:
             stage_tasks = self._extract_stage_tasks(stage)
 
             metadata[stage["name"]] = {
+                "name": stage["name"],  # Include name in metadata for template access
                 "prompt": stage.get("prompt", ""),
                 "schema": stage.get("schema"),
                 "suggestions": stage.get("suggestions", []),

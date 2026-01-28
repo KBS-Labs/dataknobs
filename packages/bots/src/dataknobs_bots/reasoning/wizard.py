@@ -119,6 +119,7 @@ class WizardReasoning(ReasoningStrategy):
         strict_validation: bool = True,
         hooks: WizardHooks | None = None,
         auto_advance_filled_stages: bool = False,
+        context_template: str | None = None,
     ):
         """Initialize WizardReasoning.
 
@@ -129,12 +130,15 @@ class WizardReasoning(ReasoningStrategy):
             hooks: Optional WizardHooks for lifecycle callbacks
             auto_advance_filled_stages: Automatically skip stages where all
                 required fields are already filled (default: False)
+            context_template: Custom Jinja2 template for stage context.
+                When set, replaces the default context formatting.
         """
         self._fsm = wizard_fsm
         self._extractor = extractor
         self._strict_validation = strict_validation
         self._hooks = hooks
         self._auto_advance_filled_stages = auto_advance_filled_stages
+        self._context_template = context_template
 
     async def close(self) -> None:
         """Close the reasoning strategy and release resources.
@@ -209,8 +213,9 @@ class WizardReasoning(ReasoningStrategy):
         if hooks_config:
             hooks = WizardHooks.from_config(hooks_config)
 
-        # Get auto-advance setting from wizard FSM settings
+        # Get settings from wizard FSM
         auto_advance = wizard_fsm.settings.get("auto_advance_filled_stages", False)
+        context_template = wizard_fsm.settings.get("context_template")
 
         return cls(
             wizard_fsm=wizard_fsm,
@@ -218,6 +223,7 @@ class WizardReasoning(ReasoningStrategy):
             strict_validation=config.get("strict_validation", True),
             hooks=hooks,
             auto_advance_filled_stages=auto_advance,
+            context_template=context_template,
         )
 
     async def generate(
@@ -788,6 +794,76 @@ class WizardReasoning(ReasoningStrategy):
         self, stage: dict[str, Any], state: WizardState
     ) -> str:
         """Build context prompt for current stage.
+
+        Uses custom template if configured, otherwise falls back to
+        default hardcoded format.
+
+        Args:
+            stage: Current stage metadata
+            state: Current wizard state
+
+        Returns:
+            Context string to append to system prompt
+        """
+        if self._context_template:
+            return self._render_custom_context(stage, state)
+        return self._build_default_context(stage, state)
+
+    def _render_custom_context(
+        self, stage: dict[str, Any], state: WizardState
+    ) -> str:
+        """Render context using custom Jinja2 template.
+
+        Template variables available:
+        - stage_name: Current stage name
+        - stage_prompt: Stage's goal/prompt text
+        - help_text: Additional help text (may be empty string)
+        - suggestions: List of quick-reply suggestions
+        - collected_data: Data collected so far (no _ prefixed keys)
+        - raw_data: All wizard data including internal keys
+        - completed: Whether wizard is complete
+        - history: List of visited stage names
+        - can_skip: Whether current stage can be skipped
+        - can_go_back: Whether back navigation is allowed
+
+        Args:
+            stage: Current stage metadata
+            state: Current wizard state
+
+        Returns:
+            Rendered context string
+        """
+        from dataknobs_llm.prompts import render_template
+
+        # Filter out internal keys for display
+        collected_data = {
+            k: v for k, v in state.data.items() if not k.startswith("_")
+        }
+
+        params = {
+            "stage_name": stage.get("name", "unknown"),
+            "stage_prompt": stage.get("prompt", ""),
+            "help_text": stage.get("help_text") or "",
+            "suggestions": stage.get("suggestions", []),
+            "collected_data": collected_data,
+            "raw_data": state.data,
+            "completed": state.completed,
+            "history": state.history,
+            "can_skip": self._fsm.can_skip() if self._fsm else False,
+            "can_go_back": (
+                self._fsm.can_go_back() if self._fsm else True
+            ) and len(state.history) > 1,
+        }
+
+        return render_template(self._context_template, params)
+
+    def _build_default_context(
+        self, stage: dict[str, Any], state: WizardState
+    ) -> str:
+        """Build context using default hardcoded format.
+
+        This is the original _build_stage_context() logic, preserved for
+        backward compatibility when no custom template is configured.
 
         Args:
             stage: Current stage metadata
