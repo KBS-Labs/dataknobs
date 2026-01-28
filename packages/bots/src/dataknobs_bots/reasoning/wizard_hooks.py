@@ -228,8 +228,12 @@ class WizardHooks:
         if not func_ref:
             return None
 
-        # Use shared function resolver
-        return resolve_function(func_ref)
+        # Use shared function resolver with graceful error handling
+        try:
+            return resolve_function(func_ref)
+        except (ValueError, ImportError, AttributeError) as e:
+            logger.warning("Failed to load hook function '%s': %s", func_ref, e)
+            return None
 
     def on_enter(
         self, callback: StageCallback, stage: str | None = None

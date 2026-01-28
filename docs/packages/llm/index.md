@@ -110,6 +110,15 @@ response = await llm.chat([
 
 [Learn more →](guides/performance.md)
 
+### 🧪 Testing Utilities
+
+- **Response Builders**: Convenient functions to create test LLM responses
+- **EchoProvider**: Test LLM provider with scripted responses and pattern matching
+- **Sequence Builder**: Fluent API for building multi-turn test conversations
+- **Extraction Helpers**: Utilities for testing schema extraction flows
+
+[Learn more →](guides/testing.md)
+
 ### 📊 Extraction Observability
 
 - **Extraction Tracking**: Record and query schema extraction operations
@@ -160,6 +169,7 @@ dataknobs_llm/
 │   ├── registry.py      # Tool registration & execution
 │   ├── context.py       # Wizard context injection
 │   └── observability.py # Tool execution tracking
+├── testing.py           # Testing utilities for scripted responses
 └── fsm_integration/     # FSM integration
     ├── functions.py     # LLM functions for FSM
     ├── resources.py     # LLM resources for FSM
@@ -177,6 +187,7 @@ dataknobs_llm/
 - [**Versioning & A/B Testing**](guides/versioning.md) - Version control and experiments
 - [**Performance & Benchmarking**](guides/performance.md) - Optimization and metrics
 - [**Schema Extraction**](guides/extraction.md) - LLM-based data extraction with observability
+- [**Testing Utilities**](guides/testing.md) - Builders for scripted test responses
 
 ### API Reference
 

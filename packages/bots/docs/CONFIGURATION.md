@@ -866,8 +866,11 @@ stages:
 | `suggestions` | list | Quick-reply buttons for users |
 | `help_text` | string | Additional help shown on request |
 | `can_skip` | bool | Allow users to skip this stage |
+| `skip_default` | object | Default values to apply when user skips this stage |
 | `can_go_back` | bool | Allow back navigation (default: true) |
-| `tools` | list | Tool names available in this stage |
+| `tools` | list | Tool names available in this stage (must be explicit; omitting means no tools) |
+| `reasoning` | string | Tool reasoning mode: "single" (default) or "react" for multi-tool loops |
+| `max_iterations` | int | Max ReAct iterations for this stage (overrides wizard default) |
 | `transitions` | list | Rules for transitioning to next stage |
 | `tasks` | list | Task definitions for granular progress tracking |
 
@@ -942,6 +945,7 @@ For full task tracking API, see the Wizard Observability guide in the documentat
 Users can navigate the wizard with natural language:
 - "back" / "go back" / "previous" - Return to previous stage
 - "skip" / "skip this" - Skip current stage (if `can_skip: true`)
+- "use default" / "use defaults" - Skip and apply `skip_default` values (if `can_skip: true`)
 - "restart" / "start over" - Restart from beginning
 
 **Lifecycle Hooks:**
@@ -958,6 +962,383 @@ hooks:
   on_error:                    # Called on processing errors
     - "myapp.hooks:handle_error"
 ```
+
+**Function Reference Syntax:**
+
+Hook functions and custom transition functions are specified as string references.
+Two formats are supported:
+
+| Format | Example | Description |
+|--------|---------|-------------|
+| Colon (preferred) | `myapp.hooks:log_entry` | Explicit separator between module path and function |
+| Dot (accepted) | `myapp.hooks.log_entry` | Last segment is treated as function name |
+
+The colon format is preferred as it's unambiguous. The dot format is accepted for
+convenience but requires the function to be the final segment.
+
+**Error Messages:**
+
+Invalid function references produce helpful error messages:
+
+```
+ImportError: Cannot import module 'myapp.hooks' from reference 'myapp.hooks:missing_func':
+No module named 'myapp'. Ensure the module is installed and the path is correct.
+
+AttributeError: Function 'missing_func' not found in module 'myapp.hooks'.
+Available functions: log_entry, validate_data, submit_results
+```
+
+Hooks that fail to load are skipped with a warning, allowing the wizard to continue
+operating even if some hooks are misconfigured.
+
+**Tool Availability:**
+
+Tools are only available to stages that explicitly list them via the `tools` property.
+Stages without a `tools` key receive **no tools** by default. This prevents accidental
+tool calls during data collection stages that could produce blank responses.
+
+```yaml
+stages:
+  # Data collection stage - no tools available
+  - name: configure_identity
+    prompt: "What should we call your bot?"
+    schema:
+      type: object
+      properties:
+        bot_name: { type: string }
+    # Note: no 'tools' key = no tools available
+
+  # Tool-using stage - explicit tool list
+  - name: review
+    prompt: "Let's review your configuration"
+    tools: [preview_config, validate_config]  # Only these tools available
+    transitions:
+      - target: save
+```
+
+**Skipping with Defaults:**
+
+When users skip a stage, you can apply default values using `skip_default`:
+
+```yaml
+stages:
+  - name: configure_llm
+    prompt: "Which AI provider should power your bot?"
+    can_skip: true
+    skip_default:
+      llm_provider: anthropic
+      llm_model: claude-3-sonnet
+    schema:
+      type: object
+      properties:
+        llm_provider:
+          type: string
+          enum: [anthropic, openai, ollama]
+        llm_model:
+          type: string
+    transitions:
+      - target: next_stage
+        condition: "data.get('llm_provider')"
+```
+
+This gives users three paths:
+1. **Explicit choice**: User says "Use OpenAI GPT-4" → extraction captures their choice
+2. **Accept defaults**: User says "skip" or "use defaults" → `skip_default` values applied
+3. **Guided help**: User says "I'm not sure" → wizard explains options and re-prompts
+
+> **Note:** Schema `default` values are stripped before extraction to prevent the LLM from
+> auto-filling them. Use `skip_default` for user-facing defaults instead of schema defaults.
+
+**Auto-Advance:**
+
+When pre-populating wizard data (e.g., from templates or previous sessions), stages can
+automatically advance if all required fields are already filled. Enable globally or per-stage:
+
+```yaml
+# wizard.yaml
+name: configbot
+settings:
+  auto_advance_filled_stages: true  # Global setting
+
+stages:
+  - name: configure_identity
+    prompt: "What's your bot's name?"
+    schema:
+      type: object
+      properties:
+        bot_name: { type: string }
+        description: { type: string }
+      required: [bot_name, description]
+    # If both bot_name and description exist in wizard data,
+    # this stage will auto-advance to the next stage
+    transitions:
+      - target: configure_llm
+        condition: "data.get('bot_name')"
+
+  - name: configure_llm
+    auto_advance: true  # Per-stage override (works even if global is false)
+    prompt: "Which LLM provider?"
+    schema:
+      type: object
+      properties:
+        llm_provider: { type: string }
+      required: [llm_provider]
+    transitions:
+      - target: done
+```
+
+Auto-advance conditions:
+- Global `auto_advance_filled_stages: true` in settings, OR stage has `auto_advance: true`
+- Stage has a schema with `required` fields (or all `properties` if no `required` list)
+- All required fields have non-empty values in wizard data
+- Stage is not an end stage (`is_end: false`)
+- At least one transition condition is satisfied
+
+This enables "template-first" workflows where users select a template that pre-fills most
+fields, and the wizard skips to the first stage needing user input.
+
+**Post-Completion Amendments:**
+
+Allow users to make changes after the wizard has completed. When enabled, the wizard
+detects edit requests and re-opens at the relevant stage:
+
+```yaml
+# wizard.yaml
+name: configbot
+settings:
+  allow_post_completion_edits: true
+  section_to_stage_mapping:    # Optional: custom section-to-stage mapping
+    model: configure_llm
+    ai: configure_llm
+    bot: configure_identity
+
+stages:
+  - name: configure_llm
+    prompt: "Which LLM provider?"
+    # ...
+  - name: configure_identity
+    prompt: "What's your bot's name?"
+    # ...
+  - name: save
+    is_end: true
+    prompt: "Configuration saved!"
+```
+
+After completing the wizard, if the user says "change the LLM to ollama", the wizard:
+1. Detects the edit intent using extraction
+2. Maps "llm" to `configure_llm` stage
+3. Re-opens the wizard at that stage
+4. Normal wizard flow resumes (user makes change, wizard advances through review/save)
+
+Default section-to-stage mappings:
+| Section | Stage |
+|---------|-------|
+| llm, model, ai | configure_llm |
+| identity, name | configure_identity |
+| knowledge, kb, rag | configure_knowledge |
+| tools | configure_tools |
+| behavior | configure_behavior |
+| template | select_template |
+| config | review |
+
+Custom mappings in `section_to_stage_mapping` override defaults. Only stages that exist
+in your wizard configuration are valid targets.
+
+Requirements for amendment detection:
+- `allow_post_completion_edits: true` in settings
+- An `extraction_config` must be specified (extractor is used to detect edit intent)
+- The target stage must exist in the wizard
+
+**Context Template:**
+
+Customize how stage context is formatted in the system prompt using Jinja2 templates:
+
+```yaml
+# wizard.yaml
+name: configbot
+settings:
+  context_template: |
+    ## Wizard Stage: {{stage_name}}
+
+    **Goal**: {{stage_prompt}}
+
+    ((Additional help: {{help_text}}))
+
+    {% if collected_data %}
+    ### Already Collected (DO NOT ASK AGAIN)
+    {% for key, value in collected_data.items() %}
+    - **{{key}}**: {{value}}
+    {% endfor %}
+    {% endif %}
+
+    {% if not completed %}
+    Navigation: {% if can_skip %}Can skip{% endif %}{% if can_go_back %}, Can go back{% endif %}
+    {% endif %}
+
+    {% if suggestions %}
+    Suggestions: {{ suggestions | join(', ') }}
+    {% endif %}
+```
+
+Available template variables:
+| Variable | Type | Description |
+|----------|------|-------------|
+| `stage_name` | string | Current stage name |
+| `stage_prompt` | string | Stage's goal/prompt text |
+| `help_text` | string | Additional help text (empty string if none) |
+| `suggestions` | list | Quick-reply suggestions |
+| `collected_data` | dict | Data collected so far (excludes `_` prefixed keys) |
+| `raw_data` | dict | All wizard data including internal keys |
+| `completed` | bool | Whether wizard is complete |
+| `history` | list | List of visited stage names |
+| `can_skip` | bool | Whether current stage can be skipped |
+| `can_go_back` | bool | Whether back navigation is allowed |
+
+Special syntax:
+- `((content))` - Conditional section, removed if any variable inside is empty/falsy
+- Standard Jinja2: `{% if %}`, `{% for %}`, `{{ var | filter }}`
+
+If no `context_template` is specified, the wizard uses a default format that includes
+stage info, collected data, and navigation hints.
+
+**Wizard State API:**
+
+Access wizard state programmatically from your application code:
+
+```python
+# Get current wizard state for a conversation
+state = bot.get_wizard_state("conversation-123")
+
+if state:
+    print(f"Stage: {state['current_stage']} ({state['stage_index'] + 1}/{state['total_stages']})")
+    print(f"Progress: {state['progress'] * 100:.0f}%")
+    print(f"Collected: {state['data']}")
+
+    if state['can_skip']:
+        print("User can skip this stage")
+    if not state['completed']:
+        print(f"Suggestions: {state['suggestions']}")
+```
+
+The `get_wizard_state()` method returns a normalized dict with these fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `current_stage` | string | Name of the current stage |
+| `stage_index` | int | Zero-based index of current stage |
+| `total_stages` | int | Total number of stages in wizard |
+| `progress` | float | Completion progress (0.0 to 1.0) |
+| `completed` | bool | Whether wizard has finished |
+| `data` | dict | All collected data |
+| `can_skip` | bool | Whether current stage can be skipped |
+| `can_go_back` | bool | Whether back navigation is allowed |
+| `suggestions` | list | Quick-reply suggestions for current stage |
+| `history` | list | List of visited stage names |
+
+Returns `None` if the conversation doesn't exist or has no active wizard.
+
+**WizardFSM Introspection:**
+
+When working directly with WizardFSM instances (e.g., in custom reasoning strategies),
+you can introspect the wizard structure:
+
+```python
+from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+
+loader = WizardConfigLoader()
+wizard_fsm = loader.load("path/to/wizard.yaml")
+
+# Get all stage names in order
+print(wizard_fsm.stage_names)  # ['welcome', 'configure', 'review', 'complete']
+
+# Get total stage count
+print(wizard_fsm.stage_count)  # 4
+
+# Get full stage metadata
+for name, meta in wizard_fsm.stages.items():
+    print(f"{name}: {meta.get('prompt', 'No prompt')}")
+    if meta.get('can_skip'):
+        print(f"  - Can be skipped")
+```
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `stages` | dict | All stage metadata (returns a copy) |
+| `stage_names` | list | Ordered list of stage names |
+| `stage_count` | int | Total number of stages |
+| `current_stage` | string | Current stage name |
+| `current_metadata` | dict | Metadata for current stage |
+
+**ReAct-Style Tool Reasoning:**
+
+Enable multi-tool ReAct loops within wizard stages. When a stage has tools and is
+configured for ReAct reasoning, the LLM can make multiple sequential tool calls within
+a single wizard turn, reasoning about results before responding.
+
+```yaml
+# wizard.yaml
+name: configbot
+settings:
+  tool_reasoning: single       # Default for all stages: "single" or "react"
+  max_tool_iterations: 3       # Default max tool-calling iterations
+
+stages:
+  - name: review
+    prompt: "Let's review your configuration"
+    reasoning: react           # Override: use ReAct loop for this stage
+    max_iterations: 5          # Override: allow up to 5 tool calls
+    tools: [preview_config, validate_config]
+    transitions:
+      - target: save
+
+  - name: configure_llm
+    prompt: "Which LLM provider?"
+    # No reasoning specified = uses wizard-level default (single)
+    # No tools specified = no tools available
+    transitions:
+      - target: review
+```
+
+**ReAct Behavior:**
+
+With `reasoning: react`, the wizard:
+1. Calls the LLM with available tools
+2. If LLM requests a tool call, executes it
+3. Adds tool result to conversation
+4. Repeats from step 1 (up to `max_iterations`)
+5. When LLM responds without tool calls, returns that as the final response
+
+This enables complex multi-tool interactions in a single wizard turn:
+
+```
+User: "Show me the config and validate it"
+LLM calls: preview_config
+Tool returns: {preview: {...}}
+LLM calls: validate_config
+Tool returns: {valid: true, errors: []}
+LLM responds: "Here's your config preview: ... Validation passed!"
+```
+
+**Configuration Options:**
+
+| Setting | Level | Description |
+|---------|-------|-------------|
+| `tool_reasoning` | wizard settings | Default reasoning mode: "single" (one LLM call) or "react" (loop) |
+| `max_tool_iterations` | wizard settings | Default max iterations for react mode |
+| `reasoning` | stage | Per-stage override: "single" or "react" |
+| `max_iterations` | stage | Per-stage max iterations override |
+
+**When to Use ReAct:**
+
+Use `reasoning: react` for stages where:
+- Multiple tools may need to be called together
+- Tool results inform subsequent tool calls
+- You want the LLM to reason about tool outputs before responding
+
+Keep `reasoning: single` (default) for:
+- Data collection stages without tools
+- Simple single-tool stages
+- Stages where you want predictable single-call behavior
 
 ---
 

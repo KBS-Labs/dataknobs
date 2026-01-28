@@ -74,6 +74,7 @@ nav:
       - packages/config/environment-aware.md
       - packages/config/factory-registration.md
       - packages/config/inheritance.md
+      - packages/config/template_vars.md
       - packages/config/api.md
     - Data:
       - packages/data/index.md
@@ -166,6 +167,7 @@ nav:
         - packages/llm/guides/performance.md
         - packages/llm/guides/tools-and-enhancements.md
         - packages/llm/guides/extraction.md
+        - packages/llm/guides/testing.md
       - API Reference:
         - packages/llm/api/prompts.md
         - packages/llm/api/conversations.md

@@ -30,6 +30,15 @@ from dataknobs_llm.tools import (
     ToolRegistry,
 )
 
+# Testing utilities (for test code)
+from dataknobs_llm.testing import (
+    text_response,
+    tool_call_response,
+    multi_tool_response,
+    extraction_response,
+    ResponseSequenceBuilder,
+)
+
 __version__ = "0.3.1"
 
 __all__ = [
@@ -61,4 +70,10 @@ __all__ = [
     # Tools
     "Tool",
     "ToolRegistry",
+    # Testing utilities
+    "text_response",
+    "tool_call_response",
+    "multi_tool_response",
+    "extraction_response",
+    "ResponseSequenceBuilder",
 ]

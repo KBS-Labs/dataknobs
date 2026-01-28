@@ -189,6 +189,59 @@ async def build_and_query():
     await kb.close()
 ```
 
+## Automatic Ingestion with KnowledgeIngestionService
+
+The `KnowledgeIngestionService` provides high-level ingestion management with automatic population checks and skip-if-populated behavior.
+
+### Basic Usage
+
+```python
+from dataknobs_bots.knowledge import (
+    RAGKnowledgeBase,
+    KnowledgeIngestionService,
+)
+
+service = KnowledgeIngestionService()
+kb = await RAGKnowledgeBase.from_config(config)
+
+# Ensure populated (skips if already has documents)
+result = await service.ensure_ingested(kb, {
+    "enabled": True,
+    "documents_path": "path/to/docs",
+})
+
+if result.skipped:
+    print(f"Skipped: {result.reason}")
+else:
+    print(f"Ingested {result.total_chunks} chunks")
+```
+
+### Using with Registry Managers
+
+Use the `AutoIngestionMixin` to add auto-ingestion to bot managers:
+
+```python
+from dataknobs_bots.registry import CachingRegistryManager
+from dataknobs_bots.knowledge import AutoIngestionMixin, get_ingestion_service
+
+class MyBotManager(CachingRegistryManager[MyBot], AutoIngestionMixin):
+    def __init__(self, auto_ingest: bool = False, **kwargs):
+        super().__init__(**kwargs)
+        self._auto_ingest = auto_ingest
+        self._ingestion_service = get_ingestion_service()
+
+    async def register(self, domain_id, config, ingest=None):
+        await super().register(domain_id, config)
+        should_ingest = ingest if ingest is not None else self._auto_ingest
+        if should_ingest:
+            await self._ensure_knowledge_base_ingested(domain_id, config)
+```
+
+### Result Types
+
+- **`IngestionResult`**: Lower-level, for file-backend-to-vector-store coordination
+- **`EnsureIngestionResult`**: Higher-level, with `skipped`/`reason` for skip-if-populated semantics
+
 ## Exported Types
 
 ```python
@@ -201,6 +254,17 @@ from dataknobs_bots.knowledge import (
     FilePatternConfig,
     KnowledgeBaseConfig,
     ProcessedDocument,
+
+    # Low-level ingestion (file-backend to vector-store)
+    KnowledgeIngestionManager,
+    IngestionResult,
+
+    # High-level ingestion service
+    KnowledgeIngestionService,
+    EnsureIngestionResult,
+    get_ingestion_service,
+    ensure_knowledge_base_ingested,
+    AutoIngestionMixin,
 
     # Hybrid search types
     FusionStrategy,

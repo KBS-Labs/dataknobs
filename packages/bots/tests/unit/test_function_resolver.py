@@ -1,4 +1,10 @@
-"""Tests for function_resolver module."""
+"""Tests for function_resolver module (enhancement 2h).
+
+Tests the resolve_function and resolve_functions utilities for loading
+callables from module paths with improved error messages.
+"""
+
+import os.path
 
 import pytest
 
@@ -8,233 +14,239 @@ from dataknobs_bots.reasoning.function_resolver import (
 )
 
 
-class TestResolveFunction:
-    """Tests for resolve_function."""
+class TestResolveFunctionColonFormat:
+    """Tests for resolve_function with colon format."""
 
-    def test_resolve_builtin_function(self) -> None:
-        """Test resolving a function from a standard library module."""
-        # Resolve os.path.exists
-        func = resolve_function("os.path:exists")
-        assert func is not None
-        assert callable(func)
-
-    def test_resolve_builtin_class(self) -> None:
-        """Test resolving a class from standard library."""
-        # Resolve pathlib.Path
-        cls = resolve_function("pathlib:Path")
-        assert cls is not None
-        assert callable(cls)
-
-    def test_resolve_dataknobs_function(self) -> None:
-        """Test resolving a function from dataknobs."""
-        # Resolve a known function from the same package
-        func = resolve_function(
-            "dataknobs_bots.reasoning.function_resolver:resolve_function"
-        )
-        assert func is not None
-        assert func is resolve_function
-
-    def test_resolve_empty_string(self) -> None:
-        """Test that empty string returns None."""
-        result = resolve_function("")
-        assert result is None
-
-    def test_resolve_none(self) -> None:
-        """Test that None-ish values return None."""
-        # Empty string
-        assert resolve_function("") is None
-
-    def test_resolve_invalid_format_no_colon(self) -> None:
-        """Test that invalid format without colon returns None."""
-        result = resolve_function("os.path.exists")
-        assert result is None
-
-    def test_resolve_nonexistent_module(self) -> None:
-        """Test that nonexistent module returns None."""
-        result = resolve_function("nonexistent_module_xyz:some_func")
-        assert result is None
-
-    def test_resolve_nonexistent_function(self) -> None:
-        """Test that nonexistent function in valid module returns None."""
-        result = resolve_function("os.path:nonexistent_function_xyz")
-        assert result is None
+    def test_resolve_colon_format(self) -> None:
+        """Colon format resolves correctly."""
+        func = resolve_function("os.path:join")
+        assert func is os.path.join
 
     def test_resolve_nested_module(self) -> None:
-        """Test resolving from deeply nested module."""
-        func = resolve_function("dataknobs_bots.reasoning.wizard_loader:WizardConfigLoader")
-        assert func is not None
+        """Resolves functions from nested modules."""
+        import json
 
-    def test_resolve_with_multiple_colons_uses_last(self) -> None:
-        """Test that multiple colons splits on the last one."""
-        # This is an edge case - module:submodule:func would try to import
-        # "module:submodule" which would fail
-        result = resolve_function("invalid:module:format")
-        assert result is None
+        func = resolve_function("json:dumps")
+        assert func is json.dumps
+
+    def test_resolve_with_underscores(self) -> None:
+        """Resolves functions with underscores in names."""
+        func = resolve_function("os.path:splitext")
+        assert func is os.path.splitext
+
+
+class TestResolveFunctionDotFormat:
+    """Tests for resolve_function with dot format."""
+
+    def test_resolve_dot_format(self) -> None:
+        """Dot format resolves correctly (last segment = function)."""
+        func = resolve_function("os.path.join")
+        assert func is os.path.join
+
+    def test_resolve_dot_format_nested(self) -> None:
+        """Dot format works with deeply nested modules."""
+        import json
+
+        func = resolve_function("json.dumps")
+        assert func is json.dumps
+
+
+class TestResolveFunctionErrors:
+    """Tests for resolve_function error handling."""
+
+    def test_empty_reference_error(self) -> None:
+        """Empty reference gives helpful error."""
+        with pytest.raises(ValueError) as exc_info:
+            resolve_function("")
+
+        error_msg = str(exc_info.value)
+        assert "Empty function reference" in error_msg
+        assert "module.path:function_name" in error_msg
+
+    def test_whitespace_only_reference_error(self) -> None:
+        """Whitespace-only reference gives helpful error."""
+        with pytest.raises(ValueError) as exc_info:
+            resolve_function("   ")
+
+        assert "Empty function reference" in str(exc_info.value)
+
+    def test_no_separator_error(self) -> None:
+        """Reference without separator gives helpful error."""
+        with pytest.raises(ValueError) as exc_info:
+            resolve_function("just_a_name")
+
+        error_msg = str(exc_info.value)
+        assert "just_a_name" in error_msg  # Shows actual reference
+        assert "module.path" in error_msg  # Shows expected format
+
+    def test_invalid_colon_format_empty_function(self) -> None:
+        """Malformed colon format (empty function) gives helpful error."""
+        with pytest.raises(ValueError) as exc_info:
+            resolve_function("module:")
+
+        error_msg = str(exc_info.value)
+        assert "module:" in error_msg
+
+    def test_invalid_colon_format_empty_module(self) -> None:
+        """Malformed colon format (empty module) gives helpful error."""
+        with pytest.raises(ValueError) as exc_info:
+            resolve_function(":function")
+
+        error_msg = str(exc_info.value)
+        assert ":function" in error_msg
+
+    def test_module_not_found_error(self) -> None:
+        """Missing module gives helpful error with context."""
+        with pytest.raises(ImportError) as exc_info:
+            resolve_function("nonexistent_module_xyz_12345:func")
+
+        error_msg = str(exc_info.value)
+        assert "nonexistent_module_xyz_12345" in error_msg
+        assert "Cannot import module" in error_msg
+
+    def test_function_not_found_error(self) -> None:
+        """Missing function lists available functions."""
+        with pytest.raises(AttributeError) as exc_info:
+            resolve_function("os.path:nonexistent_func_xyz_12345")
+
+        error_msg = str(exc_info.value)
+        assert "nonexistent_func_xyz_12345" in error_msg
+        assert "not found" in error_msg
+        assert "Available functions:" in error_msg
+        # Should list some real os.path functions
+        assert "join" in error_msg or "exists" in error_msg
+
+    def test_not_callable_error(self) -> None:
+        """Non-callable attribute gives helpful error."""
+        # os.path.sep is a string, not callable
+        with pytest.raises(ValueError) as exc_info:
+            resolve_function("os.path:sep")
+
+        error_msg = str(exc_info.value)
+        assert "not callable" in error_msg
+        assert "str" in error_msg  # Shows actual type
+
+    def test_whitespace_handling(self) -> None:
+        """Whitespace in reference is stripped."""
+        func = resolve_function("  os.path:join  ")
+        assert func is os.path.join
 
 
 class TestResolveFunctions:
-    """Tests for resolve_functions."""
+    """Tests for resolve_functions utility."""
 
-    def test_resolve_empty_dict(self) -> None:
-        """Test resolving empty dict returns empty dict."""
-        result = resolve_functions({})
-        assert result == {}
-
-    def test_resolve_all_strings(self) -> None:
-        """Test resolving dict with all string references."""
+    def test_resolve_string_references(self) -> None:
+        """Resolves string references to callables."""
         refs = {
-            "path_exists": "os.path:exists",
-            "path_join": "os.path:join",
+            "join": "os.path:join",
+            "exists": "os.path:exists",
         }
+        resolved = resolve_functions(refs)
 
-        result = resolve_functions(refs)
+        assert resolved["join"] is os.path.join
+        assert resolved["exists"] is os.path.exists
 
-        assert "path_exists" in result
-        assert "path_join" in result
-        assert callable(result["path_exists"])
-        assert callable(result["path_join"])
+    def test_passthrough_callables(self) -> None:
+        """Callable values are passed through unchanged."""
 
-    def test_resolve_all_callables(self) -> None:
-        """Test resolving dict with all callable values."""
-
-        def my_func() -> str:
-            return "hello"
-
-        def my_other_func() -> int:
-            return 42
-
-        refs = {
-            "func1": my_func,
-            "func2": my_other_func,
-        }
-
-        result = resolve_functions(refs)
-
-        assert result["func1"] is my_func
-        assert result["func2"] is my_other_func
-
-    def test_resolve_mixed_strings_and_callables(self) -> None:
-        """Test resolving dict with mixed string refs and callables."""
-
-        def my_callable() -> None:
+        def my_func() -> None:
             pass
 
         refs = {
-            "builtin": "os.path:exists",
-            "custom": my_callable,
+            "my_func": my_func,
+            "join": "os.path:join",
         }
+        resolved = resolve_functions(refs)
 
-        result = resolve_functions(refs)
+        assert resolved["my_func"] is my_func
+        assert resolved["join"] is os.path.join
 
-        assert "builtin" in result
-        assert callable(result["builtin"])
-        assert result["custom"] is my_callable
-
-    def test_skips_unresolvable_strings(self) -> None:
-        """Test that unresolvable strings are skipped."""
+    def test_mixed_formats(self) -> None:
+        """Both colon and dot formats work in same dict."""
         refs = {
-            "valid": "os.path:exists",
-            "invalid": "nonexistent_module:func",
+            "colon": "os.path:join",
+            "dot": "os.path.exists",
+        }
+        resolved = resolve_functions(refs)
+
+        assert resolved["colon"] is os.path.join
+        assert resolved["dot"] is os.path.exists
+
+    def test_invalid_type_error(self) -> None:
+        """Invalid reference type raises ValueError."""
+        refs = {
+            "bad": 123,  # type: ignore[dict-item]
         }
 
-        result = resolve_functions(refs)
+        with pytest.raises(ValueError) as exc_info:
+            resolve_functions(refs)
 
-        assert "valid" in result
-        assert "invalid" not in result
+        error_msg = str(exc_info.value)
+        assert "bad" in error_msg
+        assert "int" in error_msg
 
-    def test_skips_invalid_types(self) -> None:
-        """Test that invalid types are skipped."""
-        refs: dict = {
-            "valid": "os.path:exists",
-            "number": 42,
-            "list": ["not", "callable"],
+    def test_propagates_resolution_errors(self) -> None:
+        """Resolution errors are propagated."""
+        refs = {
+            "bad": "nonexistent.module:func",
         }
 
-        result = resolve_functions(refs)
-
-        assert "valid" in result
-        assert "number" not in result
-        assert "list" not in result
-
-    def test_preserves_callable_identity(self) -> None:
-        """Test that callables are not modified."""
-
-        def original_func(x: int) -> int:
-            return x * 2
-
-        refs = {"func": original_func}
-        result = resolve_functions(refs)
-
-        # Should be the exact same function object
-        assert result["func"] is original_func
-        assert result["func"](5) == 10
+        with pytest.raises(ImportError):
+            resolve_functions(refs)
 
 
-class TestIntegrationWithWizardLoader:
+class TestWizardLoaderIntegration:
     """Integration tests with WizardConfigLoader."""
 
-    def test_loader_accepts_string_functions(self) -> None:
-        """Test that WizardConfigLoader accepts string function references."""
+    def test_wizard_loader_accepts_colon_format(self) -> None:
+        """WizardConfigLoader accepts colon-separated function references."""
         from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 
-        # Define a simple callable for testing
-        transform_called = []
+        config = {
+            "name": "test",
+            "stages": [{"name": "test", "is_start": True, "is_end": True}],
+        }
 
-        def test_transform(data: dict, context: object = None) -> dict:
-            transform_called.append(True)
-            return data
+        loader = WizardConfigLoader()
+        # Pass custom_functions with colon format
+        result = loader.load_from_dict(
+            config, custom_functions={"path_joiner": "os.path:join"}
+        )
+
+        assert result is not None
+
+    def test_wizard_loader_accepts_dot_format(self) -> None:
+        """WizardConfigLoader accepts dot-separated function references."""
+        from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 
         config = {
-            "name": "test-wizard",
-            "stages": [
-                {
-                    "name": "start",
-                    "is_start": True,
-                    "is_end": True,
-                    "prompt": "Test",
-                }
-            ],
+            "name": "test",
+            "stages": [{"name": "test", "is_start": True, "is_end": True}],
+        }
+
+        loader = WizardConfigLoader()
+        # Pass custom_functions with dot format
+        result = loader.load_from_dict(
+            config, custom_functions={"path_joiner": "os.path.join"}
+        )
+
+        assert result is not None
+
+    def test_wizard_loader_invalid_function_helpful_error(self) -> None:
+        """Invalid function reference gives helpful error."""
+        from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+
+        config = {
+            "name": "test",
+            "stages": [{"name": "test", "is_start": True, "is_end": True}],
         }
 
         loader = WizardConfigLoader()
 
-        # Test with string reference (uses a known function)
-        wizard_fsm = loader.load_from_dict(
-            config,
-            custom_functions={
-                # Use a known function that can be resolved
-                "exists": "os.path:exists",
-                # Also include a real callable
-                "transform": test_transform,
-            },
-        )
+        with pytest.raises(ImportError) as exc_info:
+            loader.load_from_dict(
+                config, custom_functions={"bad_func": "nonexistent.module:fake_function"}
+            )
 
-        assert wizard_fsm is not None
-
-    def test_loader_handles_unresolvable_gracefully(self) -> None:
-        """Test that loader handles unresolvable functions gracefully."""
-        from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
-
-        config = {
-            "name": "test-wizard",
-            "stages": [
-                {
-                    "name": "start",
-                    "is_start": True,
-                    "is_end": True,
-                    "prompt": "Test",
-                }
-            ],
-        }
-
-        loader = WizardConfigLoader()
-
-        # Should not raise, just skip the unresolvable function
-        wizard_fsm = loader.load_from_dict(
-            config,
-            custom_functions={
-                "invalid": "nonexistent_module:nonexistent_func",
-            },
-        )
-
-        assert wizard_fsm is not None
+        # Error should mention the problematic module
+        assert "nonexistent" in str(exc_info.value).lower()

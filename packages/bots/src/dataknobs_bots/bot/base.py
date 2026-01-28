@@ -755,13 +755,101 @@ class DynaBot:
         # Delete from storage
         return await self.conversation_storage.delete_conversation(conversation_id)
 
+    def get_wizard_state(self, conversation_id: str) -> dict[str, Any] | None:
+        """Get current wizard state for a conversation.
+
+        This method provides public access to wizard state without requiring
+        access to private conversation managers. It checks the in-memory
+        manager first (most current) and falls back to storage.
+
+        Args:
+            conversation_id: Conversation identifier
+
+        Returns:
+            Wizard state dict with canonical structure, or None if no wizard
+            active or conversation not found.
+
+        The returned dict follows the canonical schema:
+            {
+                "current_stage": str,
+                "stage_index": int,
+                "total_stages": int,
+                "progress": float,
+                "completed": bool,
+                "data": dict,
+                "can_skip": bool,
+                "can_go_back": bool,
+                "suggestions": list[str],
+                "history": list[str],
+            }
+
+        Example:
+            ```python
+            # Get wizard state for a conversation
+            state = bot.get_wizard_state("conv-123")
+
+            if state:
+                print(f"Current stage: {state['current_stage']}")
+                print(f"Progress: {state['progress'] * 100:.0f}%")
+                print(f"Collected data: {state['data']}")
+            ```
+        """
+        # Get from in-memory manager first (most current)
+        manager = self._conversation_managers.get(conversation_id)
+        if manager and manager.metadata:
+            wizard_meta = manager.metadata.get("wizard")
+            if wizard_meta:
+                return self._normalize_wizard_state(wizard_meta)
+
+        return None
+
+    def _normalize_wizard_state(
+        self, wizard_meta: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Normalize wizard metadata to canonical structure.
+
+        Handles both old nested format (fsm_state.current_stage) and
+        new flat format (current_stage directly).
+
+        Args:
+            wizard_meta: Raw wizard metadata from manager or storage
+
+        Returns:
+            Normalized wizard state dict
+        """
+        # Handle nested fsm_state format (legacy)
+        fsm_state = wizard_meta.get("fsm_state", {})
+
+        # Prefer direct fields, fall back to fsm_state
+        current_stage = (
+            wizard_meta.get("current_stage")
+            or wizard_meta.get("stage")  # Old response format
+            or fsm_state.get("current_stage")
+        )
+
+        return {
+            "current_stage": current_stage,
+            "stage_index": (
+                wizard_meta.get("stage_index") or fsm_state.get("stage_index", 0)
+            ),
+            "total_stages": wizard_meta.get("total_stages", 0),
+            "progress": wizard_meta.get("progress", 0.0),
+            "completed": wizard_meta.get("completed", False),
+            "data": wizard_meta.get("data") or fsm_state.get("data", {}),
+            "can_skip": wizard_meta.get("can_skip", False),
+            "can_go_back": wizard_meta.get("can_go_back", True),
+            "suggestions": wizard_meta.get("suggestions", []),
+            "history": wizard_meta.get("history") or fsm_state.get("history", []),
+        }
+
     async def close(self) -> None:
         """Close the bot and clean up resources.
 
         This method closes the LLM provider, conversation storage backend,
-        and releases associated resources like HTTP connections and database
-        connections. Should be called when the bot is no longer needed,
-        especially in testing or when creating temporary bot instances.
+        reasoning strategy, and releases associated resources like HTTP
+        connections and database connections. Should be called when the bot
+        is no longer needed, especially in testing or when creating temporary
+        bot instances.
 
         Example:
             ```python
@@ -789,6 +877,10 @@ class DynaBot:
         # Close knowledge base (releases embedding provider HTTP sessions)
         if self.knowledge_base and hasattr(self.knowledge_base, 'close'):
             await self.knowledge_base.close()
+
+        # Close reasoning strategy (releases extractor's LLM provider sessions)
+        if self.reasoning_strategy and hasattr(self.reasoning_strategy, 'close'):
+            await self.reasoning_strategy.close()
 
         # Close memory store
         if self.memory and hasattr(self.memory, 'close'):

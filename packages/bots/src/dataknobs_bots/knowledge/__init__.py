@@ -32,6 +32,13 @@ from .ingestion import (
     IngestionResult,
     KnowledgeIngestionManager,
 )
+from .service import (
+    EnsureIngestionResult,
+    KnowledgeIngestionService,
+    ensure_knowledge_base_ingested,
+    get_ingestion_service,
+)
+from .registry_mixin import AutoIngestionMixin
 
 # Re-export ingestion types for convenience
 from dataknobs_xization.ingestion import (
@@ -74,9 +81,15 @@ __all__ = [
     "InMemoryKnowledgeBackend",
     "FileKnowledgeBackend",
     "S3KnowledgeBackend",
-    # Ingestion manager
+    # Ingestion manager (file-backend to vector-store)
     "KnowledgeIngestionManager",
     "IngestionResult",
+    # High-level ingestion service
+    "KnowledgeIngestionService",
+    "EnsureIngestionResult",
+    "get_ingestion_service",
+    "ensure_knowledge_base_ingested",
+    "AutoIngestionMixin",
     # Ingestion types (from xization)
     "DirectoryProcessor",
     "FilePatternConfig",

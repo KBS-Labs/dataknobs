@@ -118,6 +118,12 @@ class WizardReasoning(ReasoningStrategy):
         extractor: Any | None = None,
         strict_validation: bool = True,
         hooks: WizardHooks | None = None,
+        auto_advance_filled_stages: bool = False,
+        context_template: str | None = None,
+        allow_post_completion_edits: bool = False,
+        section_to_stage_mapping: dict[str, str] | None = None,
+        default_tool_reasoning: str = "single",
+        default_max_iterations: int = 3,
     ):
         """Initialize WizardReasoning.
 
@@ -126,11 +132,39 @@ class WizardReasoning(ReasoningStrategy):
             extractor: Optional SchemaExtractor for data extraction
             strict_validation: Enforce schema validation (default: True)
             hooks: Optional WizardHooks for lifecycle callbacks
+            auto_advance_filled_stages: Automatically skip stages where all
+                required fields are already filled (default: False)
+            context_template: Custom Jinja2 template for stage context.
+                When set, replaces the default context formatting.
+            allow_post_completion_edits: Allow re-opening wizard after completion
+                when user requests changes (default: False)
+            section_to_stage_mapping: Custom mapping of section names to stage
+                names for amendment detection (optional)
+            default_tool_reasoning: Default reasoning mode for stages with tools.
+                "single" for single LLM call, "react" for ReAct-style loop.
+            default_max_iterations: Default max iterations for ReAct-style reasoning.
         """
         self._fsm = wizard_fsm
         self._extractor = extractor
         self._strict_validation = strict_validation
         self._hooks = hooks
+        self._auto_advance_filled_stages = auto_advance_filled_stages
+        self._context_template = context_template
+        self._allow_amendments = allow_post_completion_edits
+        self._section_to_stage_mapping = section_to_stage_mapping or {}
+        self._default_tool_reasoning = default_tool_reasoning
+        self._default_max_iterations = default_max_iterations
+
+    async def close(self) -> None:
+        """Close the reasoning strategy and release resources.
+
+        Closes the SchemaExtractor's LLM provider if present, releasing
+        HTTP connections. Should be called when the reasoning strategy
+        is no longer needed (typically via DynaBot.close()).
+        """
+        if self._extractor is not None and hasattr(self._extractor, "close"):
+            await self._extractor.close()
+            logger.debug("Closed WizardReasoning extractor")
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "WizardReasoning":
@@ -194,11 +228,25 @@ class WizardReasoning(ReasoningStrategy):
         if hooks_config:
             hooks = WizardHooks.from_config(hooks_config)
 
+        # Get settings from wizard FSM
+        auto_advance = wizard_fsm.settings.get("auto_advance_filled_stages", False)
+        context_template = wizard_fsm.settings.get("context_template")
+        allow_amendments = wizard_fsm.settings.get("allow_post_completion_edits", False)
+        section_mapping = wizard_fsm.settings.get("section_to_stage_mapping", {})
+        tool_reasoning = wizard_fsm.settings.get("tool_reasoning", "single")
+        max_iterations = wizard_fsm.settings.get("max_tool_iterations", 3)
+
         return cls(
             wizard_fsm=wizard_fsm,
             extractor=extractor,
             strict_validation=config.get("strict_validation", True),
             hooks=hooks,
+            auto_advance_filled_stages=auto_advance,
+            context_template=context_template,
+            allow_post_completion_edits=allow_amendments,
+            section_to_stage_mapping=section_mapping,
+            default_tool_reasoning=tool_reasoning,
+            default_max_iterations=max_iterations,
         )
 
     async def generate(
@@ -212,11 +260,12 @@ class WizardReasoning(ReasoningStrategy):
 
         This method:
         1. Retrieves or initializes wizard state
-        2. Checks for navigation commands (back, skip, restart)
-        3. Extracts structured data from user input
-        4. Validates extracted data against stage schema
-        5. Executes FSM transition on valid input
-        6. Generates appropriate response for current/new stage
+        2. Handles post-completion amendments (if enabled)
+        3. Checks for navigation commands (back, skip, restart)
+        4. Extracts structured data from user input
+        5. Validates extracted data against stage schema
+        6. Executes FSM transition on valid input
+        7. Generates appropriate response for current/new stage
 
         Args:
             manager: ConversationManager instance
@@ -232,6 +281,49 @@ class WizardReasoning(ReasoningStrategy):
 
         # Get user message
         user_message = self._get_last_user_message(manager)
+
+        # Handle post-completion amendments
+        if wizard_state.completed and self._allow_amendments:
+            amendment = await self._detect_amendment(user_message, wizard_state, llm)
+
+            if amendment:
+                target_stage = amendment["target_stage"]
+                from_stage = wizard_state.current_stage
+                duration_ms = (time.time() - wizard_state.stage_entry_time) * 1000
+
+                # Re-open wizard to target stage
+                wizard_state.completed = False
+                wizard_state.current_stage = target_stage
+                if target_stage not in wizard_state.history:
+                    wizard_state.history.append(target_stage)
+
+                # Restore FSM to target stage
+                self._fsm.restore({
+                    "current_stage": target_stage,
+                    "data": wizard_state.data,
+                })
+
+                # Record the amendment transition
+                transition = create_transition_record(
+                    from_stage=from_stage,
+                    to_stage=target_stage,
+                    trigger="amendment",
+                    duration_in_stage_ms=duration_ms,
+                    data_snapshot=wizard_state.data.copy(),
+                    user_input=user_message,
+                )
+                wizard_state.transitions.append(transition)
+                wizard_state.stage_entry_time = time.time()
+
+                logger.info("Amendment: re-opening wizard at %s", target_stage)
+
+                # Generate response for the re-opened stage
+                stage = self._fsm.current_metadata
+                response = await self._generate_stage_response(
+                    manager, llm, stage, wizard_state, tools
+                )
+                self._save_wizard_state(manager, wizard_state)
+                return response
 
         # Handle navigation commands
         nav_result = await self._handle_navigation(
@@ -329,6 +421,59 @@ class WizardReasoning(ReasoningStrategy):
         if wizard_state.current_stage not in wizard_state.history:
             wizard_state.history.append(wizard_state.current_stage)
         wizard_state.completed = step_result.is_complete
+
+        # Auto-advance through stages where all required fields are filled
+        new_stage = self._fsm.current_metadata
+        auto_advance_count = 0
+        max_auto_advances = 10  # Safety limit to prevent infinite loops
+
+        while (
+            auto_advance_count < max_auto_advances
+            and not wizard_state.completed
+            and self._can_auto_advance(wizard_state, new_stage)
+        ):
+            auto_advance_count += 1
+            old_stage_name = wizard_state.current_stage
+            duration_ms = (time.time() - wizard_state.stage_entry_time) * 1000
+
+            # Execute FSM transition for auto-advance
+            auto_step_result = self._fsm.step(wizard_state.data)
+            new_stage_name = self._fsm.current_stage
+
+            if new_stage_name == old_stage_name:
+                # No transition occurred, stop auto-advancing
+                break
+
+            # Record the auto-advance transition
+            condition_expr = self._fsm.get_transition_condition(
+                old_stage_name, new_stage_name
+            )
+            transition = create_transition_record(
+                from_stage=old_stage_name,
+                to_stage=new_stage_name,
+                trigger="auto_advance",
+                duration_in_stage_ms=duration_ms,
+                data_snapshot=wizard_state.data.copy(),
+                condition_evaluated=condition_expr,
+                condition_result=True if condition_expr else None,
+            )
+            wizard_state.transitions.append(transition)
+
+            # Update wizard state
+            wizard_state.current_stage = new_stage_name
+            if new_stage_name not in wizard_state.history:
+                wizard_state.history.append(new_stage_name)
+            wizard_state.completed = auto_step_result.is_complete
+            wizard_state.stage_entry_time = time.time()
+
+            logger.info(
+                "Auto-advanced from %s to %s (all required fields present)",
+                old_stage_name,
+                new_stage_name,
+            )
+
+            # Get new stage metadata for next iteration
+            new_stage = self._fsm.current_metadata
 
         # Trigger stage entry hook if configured
         if self._hooks:
@@ -503,9 +648,13 @@ class WizardReasoning(ReasoningStrategy):
             )
 
         # Skip
-        if lower in ("skip", "skip this"):
+        if lower in ("skip", "skip this", "use default", "use defaults"):
             if self._fsm.can_skip():
                 state.data[f"_skipped_{state.current_stage}"] = True
+                # Apply skip_default values if configured
+                skip_default = self._fsm.current_metadata.get("skip_default")
+                if skip_default and isinstance(skip_default, dict):
+                    state.data.update(skip_default)
                 state.clarification_attempts = 0
                 return None  # Continue to normal flow, triggering transition
             return await manager.complete(
@@ -561,6 +710,10 @@ class WizardReasoning(ReasoningStrategy):
     ) -> Any:
         """Extract structured data from user message.
 
+        Schema 'default' values are stripped before extraction to prevent
+        the LLM from auto-filling them. This ensures extraction only captures
+        what the user actually said.
+
         Args:
             message: User message text
             stage: Current stage metadata
@@ -587,13 +740,16 @@ class WizardReasoning(ReasoningStrategy):
                 data={"_raw_input": message}, confidence=1.0
             )
 
+        # Strip defaults to prevent extraction LLM from auto-filling them
+        extraction_schema = self._strip_schema_defaults(schema)
+
         if self._extractor:
             # Use schema extractor
             extraction_model = stage.get("extraction_model")
             context = {"stage": stage.get("name"), "prompt": stage.get("prompt")}
             return await self._extractor.extract(
                 text=message,
-                schema=schema,
+                schema=extraction_schema,
                 context=context,
                 model=extraction_model,
             )
@@ -665,11 +821,17 @@ class WizardReasoning(ReasoningStrategy):
         # Filter tools to stage-specific ones
         stage_tools = self._filter_tools_for_stage(stage, tools)
 
-        # Generate response
-        response = await manager.complete(
-            system_prompt_override=enhanced_prompt,
-            tools=stage_tools,
-        )
+        # Check if stage should use ReAct-style reasoning
+        if stage_tools and self._use_react_for_stage(stage):
+            response = await self._react_stage_response(
+                manager, enhanced_prompt, stage, state, stage_tools
+            )
+        else:
+            # Single LLM call (default behavior)
+            response = await manager.complete(
+                system_prompt_override=enhanced_prompt,
+                tools=stage_tools,
+            )
 
         # Add wizard metadata to response
         self._add_wizard_metadata(response, state, stage)
@@ -701,10 +863,250 @@ class WizardReasoning(ReasoningStrategy):
             "suggestions": stage.get("suggestions", []),
         }
 
+    def _use_react_for_stage(self, stage: dict[str, Any]) -> bool:
+        """Check if a stage should use ReAct-style reasoning.
+
+        A stage uses ReAct if:
+        - Stage has `reasoning: react` explicitly set, OR
+        - No explicit reasoning set and default_tool_reasoning is "react"
+
+        Args:
+            stage: Stage metadata dict
+
+        Returns:
+            True if ReAct should be used for this stage
+        """
+        stage_reasoning = stage.get("reasoning")
+        if stage_reasoning:
+            return stage_reasoning.lower() == "react"
+        return self._default_tool_reasoning.lower() == "react"
+
+    def _get_max_iterations(self, stage: dict[str, Any]) -> int:
+        """Get maximum ReAct iterations for a stage.
+
+        Args:
+            stage: Stage metadata dict
+
+        Returns:
+            Max iterations (from stage config or default)
+        """
+        return stage.get("max_iterations") or self._default_max_iterations
+
+    async def _react_stage_response(
+        self,
+        manager: Any,
+        enhanced_prompt: str,
+        stage: dict[str, Any],
+        state: WizardState,
+        tools: list[Any],
+    ) -> Any:
+        """Generate response using ReAct loop for tool-using stage.
+
+        This allows the LLM to make multiple tool calls within a single
+        wizard turn, reasoning about results before responding.
+
+        Args:
+            manager: ConversationManager instance
+            enhanced_prompt: Stage-aware system prompt
+            stage: Stage metadata dict
+            state: Current wizard state
+            tools: Available tools for this stage
+
+        Returns:
+            Final LLM response after ReAct loop completes
+        """
+        from dataknobs_llm.tools import ToolExecutionContext
+
+        max_iterations = self._get_max_iterations(stage)
+        stage_name = stage.get("name", "unknown")
+
+        logger.debug(
+            "Starting ReAct loop for stage '%s' (max_iterations=%d)",
+            stage_name,
+            max_iterations,
+        )
+
+        # Build execution context for tools that need it
+        tool_context = ToolExecutionContext.from_manager(manager)
+
+        for iteration in range(max_iterations):
+            # Make LLM call
+            response = await manager.complete(
+                system_prompt_override=enhanced_prompt,
+                tools=tools,
+            )
+
+            # Check if response has tool calls
+            tool_calls = getattr(response, "tool_calls", None) or []
+            if not tool_calls:
+                # No tool calls - this is the final response
+                logger.debug(
+                    "ReAct iteration %d/%d: No tool calls, returning response",
+                    iteration + 1,
+                    max_iterations,
+                )
+                return response
+
+            logger.debug(
+                "ReAct iteration %d/%d: Executing %d tool call(s): %s",
+                iteration + 1,
+                max_iterations,
+                len(tool_calls),
+                [tc.name for tc in tool_calls],
+            )
+
+            # Execute tool calls and add observations
+            for tool_call in tool_calls:
+                result = await self._execute_react_tool_call(
+                    tool_call, tools, state, tool_context
+                )
+
+                # Add observation to conversation for next iteration
+                observation = f"Tool result from {tool_call.name}: {result}"
+                await manager.add_message(content=observation, role="system")
+
+        # Max iterations reached - get final response without tools
+        logger.warning(
+            "ReAct max iterations (%d) reached for stage '%s'",
+            max_iterations,
+            stage_name,
+        )
+        return await manager.complete(
+            system_prompt_override=enhanced_prompt,
+            tools=None,  # Force text response
+        )
+
+    async def _execute_react_tool_call(
+        self,
+        tool_call: Any,
+        tools: list[Any],
+        state: WizardState,
+        tool_context: Any,
+    ) -> Any:
+        """Execute a single tool call within a ReAct loop.
+
+        Args:
+            tool_call: Tool call object with name and parameters
+            tools: Available tools
+            state: Wizard state (for tools that need it)
+            tool_context: ToolExecutionContext for context-aware tools
+
+        Returns:
+            Tool execution result or error dict
+        """
+        tool_name = tool_call.name
+        tool_args = getattr(tool_call, "parameters", {}) or {}
+
+        # Find the tool
+        tool = self._find_tool(tool_name, tools)
+        if tool is None:
+            error_msg = f"Tool '{tool_name}' not found"
+            logger.warning("ReAct: %s", error_msg)
+            return {"error": error_msg}
+
+        try:
+            # Execute tool with context injection
+            # Context-aware tools will extract _context and use it
+            # Regular tools will ignore _context via **kwargs
+            result = await tool.execute(**tool_args, _context=tool_context)
+
+            logger.debug("ReAct: Tool '%s' executed successfully", tool_name)
+            return result
+
+        except Exception as e:
+            error_msg = f"Tool execution failed: {e}"
+            logger.error("ReAct: Tool '%s' failed: %s", tool_name, e)
+            return {"error": error_msg}
+
+    def _find_tool(self, tool_name: str, tools: list[Any]) -> Any | None:
+        """Find a tool by name.
+
+        Args:
+            tool_name: Name of the tool to find
+            tools: List of available tools
+
+        Returns:
+            Tool instance or None if not found
+        """
+        for tool in tools:
+            if getattr(tool, "name", None) == tool_name:
+                return tool
+        return None
+
     def _build_stage_context(
         self, stage: dict[str, Any], state: WizardState
     ) -> str:
         """Build context prompt for current stage.
+
+        Uses custom template if configured, otherwise falls back to
+        default hardcoded format.
+
+        Args:
+            stage: Current stage metadata
+            state: Current wizard state
+
+        Returns:
+            Context string to append to system prompt
+        """
+        if self._context_template:
+            return self._render_custom_context(stage, state)
+        return self._build_default_context(stage, state)
+
+    def _render_custom_context(
+        self, stage: dict[str, Any], state: WizardState
+    ) -> str:
+        """Render context using custom Jinja2 template.
+
+        Template variables available:
+        - stage_name: Current stage name
+        - stage_prompt: Stage's goal/prompt text
+        - help_text: Additional help text (may be empty string)
+        - suggestions: List of quick-reply suggestions
+        - collected_data: Data collected so far (no _ prefixed keys)
+        - raw_data: All wizard data including internal keys
+        - completed: Whether wizard is complete
+        - history: List of visited stage names
+        - can_skip: Whether current stage can be skipped
+        - can_go_back: Whether back navigation is allowed
+
+        Args:
+            stage: Current stage metadata
+            state: Current wizard state
+
+        Returns:
+            Rendered context string
+        """
+        from dataknobs_llm.prompts import render_template
+
+        # Filter out internal keys for display
+        collected_data = {
+            k: v for k, v in state.data.items() if not k.startswith("_")
+        }
+
+        params = {
+            "stage_name": stage.get("name", "unknown"),
+            "stage_prompt": stage.get("prompt", ""),
+            "help_text": stage.get("help_text") or "",
+            "suggestions": stage.get("suggestions", []),
+            "collected_data": collected_data,
+            "raw_data": state.data,
+            "completed": state.completed,
+            "history": state.history,
+            "can_skip": self._fsm.can_skip() if self._fsm else False,
+            "can_go_back": (
+                self._fsm.can_go_back() if self._fsm else True
+            ) and len(state.history) > 1,
+        }
+
+        return render_template(self._context_template, params)
+
+    def _build_default_context(
+        self, stage: dict[str, Any], state: WizardState
+    ) -> str:
+        """Build context using default hardcoded format.
+
+        This is the original _build_stage_context() logic, preserved for
+        backward compatibility when no custom template is configured.
 
         Args:
             stage: Current stage metadata
@@ -725,41 +1127,61 @@ class WizardReasoning(ReasoningStrategy):
         if stage.get("suggestions"):
             lines.append(f"Suggested responses: {', '.join(stage['suggestions'])}")
 
-        if state.completed:
-            lines.append("\nThe wizard is complete. Summarize what was collected.")
-        else:
-            lines.append(
-                "\nGuide the user through this stage. Be conversational and helpful."
-            )
-
-        # Add collected data context
+        # Add collected data context PROMINENTLY before instructions
         if state.data:
             filtered_data = {
                 k: v for k, v in state.data.items() if not k.startswith("_")
             }
             if filtered_data:
-                lines.append(f"\nCollected so far: {filtered_data}")
+                lines.append("\n## ALREADY COLLECTED - DO NOT ASK AGAIN")
+                lines.append(
+                    "The following information has already been provided by the user. "
+                    "Do NOT ask for this information again:"
+                )
+                for key, value in filtered_data.items():
+                    lines.append(f"- {key}: {value}")
+                lines.append("")
+
+        if state.completed:
+            lines.append("\nThe wizard is complete. Summarize what was collected.")
+        else:
+            lines.append(
+                "\nGuide the user through this stage. Be conversational and helpful. "
+                "Focus only on gathering information that has NOT already been collected."
+            )
 
         return "\n".join(lines)
 
     def _filter_tools_for_stage(
         self, stage: dict[str, Any], tools: list[Any] | None
     ) -> list[Any] | None:
-        """Filter tools to those available in current stage.
+        """Filter tools to those available for the current stage.
 
         Args:
-            stage: Current stage metadata
-            tools: All available tools
+            stage: Stage configuration dict
+            tools: List of available tools, or None
 
         Returns:
-            Filtered list of tools or None
+            Filtered tools for this stage, or None if no tools should be available.
+
+        Tool availability rules:
+        - No tools passed in: return None (no tools available)
+        - Stage has no 'tools' key: return None (safe default - no tools)
+        - Stage has empty 'tools' list: return None (explicitly no tools)
+        - Stage has 'tools' list: return only matching tools
         """
         if not tools:
             return None
 
-        stage_tool_names = stage.get("tools", [])
+        stage_tool_names = stage.get("tools")
+
+        # Key change: no 'tools' key means no tools (safe default)
+        if stage_tool_names is None:
+            return None
+
+        # Explicit empty list means no tools
         if not stage_tool_names:
-            return tools  # No filter, allow all tools
+            return None
 
         # Filter to stage-specific tools
         filtered = []
@@ -771,6 +1193,54 @@ class WizardReasoning(ReasoningStrategy):
                 filtered.append(tool)
 
         return filtered if filtered else None
+
+    def _strip_schema_defaults(self, schema: dict[str, Any]) -> dict[str, Any]:
+        """Deep-copy schema with 'default' removed from all properties.
+
+        Schema defaults serve a different purpose (documenting valid defaults for
+        consumers) than extraction (parsing what the user actually said). The
+        extraction prompt already instructs: "If information is missing, omit
+        the field."
+
+        Args:
+            schema: JSON Schema dict with potential 'default' values
+
+        Returns:
+            Copy of schema with all 'default' keys removed from properties
+        """
+        import copy
+
+        clean = copy.deepcopy(schema)
+
+        # Handle properties at top level and nested
+        self._strip_defaults_from_properties(clean)
+
+        return clean
+
+    def _strip_defaults_from_properties(self, schema_part: dict[str, Any]) -> None:
+        """Recursively strip 'default' from properties in schema.
+
+        Handles nested schemas (objects with nested properties, items in arrays).
+
+        Args:
+            schema_part: Schema or sub-schema dict to process in place
+        """
+        # Strip from direct properties
+        for prop in schema_part.get("properties", {}).values():
+            prop.pop("default", None)
+            # Recurse into nested object properties
+            if prop.get("type") == "object":
+                self._strip_defaults_from_properties(prop)
+            # Handle array items
+            if prop.get("type") == "array" and isinstance(prop.get("items"), dict):
+                self._strip_defaults_from_properties(prop["items"])
+
+        # Handle allOf, anyOf, oneOf
+        for key in ("allOf", "anyOf", "oneOf"):
+            if key in schema_part:
+                for sub_schema in schema_part[key]:
+                    if isinstance(sub_schema, dict):
+                        self._strip_defaults_from_properties(sub_schema)
 
     def _calculate_progress(self, state: WizardState) -> float:
         """Calculate wizard completion progress (0.0 to 1.0).
@@ -788,6 +1258,216 @@ class WizardReasoning(ReasoningStrategy):
         visited = len(set(state.history))
         # Subtract 1 for end state in progress calculation
         return min(1.0, visited / max(1, total_stages - 1))
+
+    def _can_auto_advance(
+        self, wizard_state: WizardState, stage: dict[str, Any]
+    ) -> bool:
+        """Check if a stage can be auto-advanced.
+
+        A stage can be auto-advanced if:
+        1. Global auto_advance_filled_stages is enabled, OR the stage has
+           auto_advance: true in its config
+        2. The stage has a schema with required fields (or all properties
+           if no required list)
+        3. All required fields have non-empty values in wizard_state.data
+        4. The stage is not an end stage
+        5. At least one transition condition is satisfied
+
+        Args:
+            wizard_state: Current wizard state
+            stage: Stage configuration dict
+
+        Returns:
+            True if stage can be auto-advanced
+        """
+        # Check if auto-advance is enabled for this stage
+        stage_auto_advance = stage.get("auto_advance", False)
+        if not (stage_auto_advance or self._auto_advance_filled_stages):
+            return False
+
+        # Don't auto-advance end stages
+        if stage.get("is_end", False):
+            return False
+
+        # Get schema to check required fields
+        schema = stage.get("schema") or {}
+        properties = schema.get("properties", {})
+        required_fields = schema.get("required", [])
+
+        # If no required fields specified, treat all properties as required
+        if not required_fields:
+            required_fields = list(properties.keys())
+
+        # If no fields at all, can't auto-advance based on data
+        if not required_fields:
+            return False
+
+        # Check if all required fields have non-empty values
+        for field_name in required_fields:
+            if field_name not in wizard_state.data:
+                return False
+            value = wizard_state.data[field_name]
+            if value is None:
+                return False
+            # Empty strings don't count as filled
+            if isinstance(value, str) and not value.strip():
+                return False
+
+        # Check if any transition condition is satisfied
+        transitions = stage.get("transitions", [])
+        for transition in transitions:
+            condition = transition.get("condition")
+            if condition:
+                # Evaluate condition with current data
+                if self._evaluate_condition(condition, wizard_state.data):
+                    return True
+            else:
+                # Unconditional transition - can advance
+                return True
+
+        return False
+
+    def _evaluate_condition(self, condition: str, data: dict[str, Any]) -> bool:
+        """Safely evaluate a transition condition.
+
+        Uses a restricted execution environment to evaluate condition
+        expressions like "data.get('subject')" or "data.get('count', 0) > 5".
+
+        Args:
+            condition: Condition expression string
+            data: Current wizard data
+
+        Returns:
+            True if condition is satisfied, False otherwise
+        """
+        try:
+            # Wrap in return statement if not already
+            code = condition.strip()
+            if not code.startswith("return"):
+                code = f"return {code}"
+
+            # Create a function to evaluate the condition
+            # Note: 'data' must be in globals for the function to access it
+            global_vars: dict[str, Any] = {"data": data}
+            local_vars: dict[str, Any] = {}
+            exec_code = f"def _test():\n    {code}\n_result = _test()"
+            exec(exec_code, global_vars, local_vars)  # nosec B102
+            return bool(local_vars.get("_result", False))
+        except Exception as e:
+            logger.debug("Condition evaluation failed for '%s': %s", condition, e)
+            return False
+
+    # =========================================================================
+    # Post-Completion Amendment Methods
+    # =========================================================================
+
+    async def _detect_amendment(
+        self,
+        message: str,
+        state: WizardState,
+        llm: Any,
+    ) -> dict[str, Any] | None:
+        """Detect if a post-completion message requests an edit.
+
+        Uses the extractor to determine if the user wants to modify
+        something and which section/stage they want to change.
+
+        Args:
+            message: User's message
+            state: Current wizard state
+            llm: LLM for extraction (unused, extractor has its own)
+
+        Returns:
+            Dict with target_stage if amendment detected, None otherwise
+        """
+        if not self._extractor:
+            # Without extractor, can't detect amendments
+            return None
+
+        # Simple schema to detect edit intent
+        amendment_schema = {
+            "type": "object",
+            "properties": {
+                "wants_edit": {
+                    "type": "boolean",
+                    "description": (
+                        "Does the user want to change, update, or modify "
+                        "something that was already configured?"
+                    ),
+                },
+                "target_section": {
+                    "type": "string",
+                    "description": (
+                        "What section or aspect do they want to change? "
+                        "Options: llm, model, identity, name, knowledge, kb, "
+                        "tools, behavior, template, config"
+                    ),
+                },
+            },
+        }
+
+        try:
+            result = await self._extractor.extract(
+                text=message,
+                schema=amendment_schema,
+                context={"state": "completed", "prompt": "Detect edit requests"},
+            )
+
+            if result.data.get("wants_edit"):
+                target = result.data.get("target_section", "")
+                target_stage = self._map_section_to_stage(target)
+                if target_stage:
+                    return {"target_stage": target_stage}
+        except Exception as e:
+            logger.debug("Amendment detection failed: %s", e)
+
+        return None
+
+    def _map_section_to_stage(self, section: str) -> str | None:
+        """Map a section name to a wizard stage name.
+
+        First checks custom mapping from settings, then falls back to
+        built-in defaults.
+
+        Args:
+            section: Section identifier from extraction
+
+        Returns:
+            Stage name, or None if no mapping found
+        """
+        if not section:
+            return None
+
+        section_lower = section.lower().strip()
+
+        # Check custom mapping first
+        if self._section_to_stage_mapping:
+            if section_lower in self._section_to_stage_mapping:
+                return self._section_to_stage_mapping[section_lower]
+
+        # Default mappings for common wizard patterns
+        default_mapping = {
+            "llm": "configure_llm",
+            "model": "configure_llm",
+            "ai": "configure_llm",
+            "identity": "configure_identity",
+            "name": "configure_identity",
+            "knowledge": "configure_knowledge",
+            "kb": "configure_knowledge",
+            "rag": "configure_knowledge",
+            "tools": "configure_tools",
+            "behavior": "configure_behavior",
+            "template": "select_template",
+            "config": "review",
+        }
+
+        mapped_stage = default_mapping.get(section_lower)
+        if mapped_stage:
+            # Verify the stage exists in the FSM
+            if mapped_stage in self._fsm._stage_metadata:
+                return mapped_stage
+
+        return None
 
     async def _generate_validation_response(
         self,

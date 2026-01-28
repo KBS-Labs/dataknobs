@@ -613,3 +613,22 @@ class SchemaExtractor:
         confidence = (required_ratio * 0.7) + (property_ratio * 0.3)
 
         return min(1.0, confidence)
+
+    async def close(self) -> None:
+        """Close the extractor and release resources.
+
+        Closes the underlying LLM provider, releasing HTTP connections
+        and other resources. Should be called when the extractor is no
+        longer needed.
+
+        Example:
+            ```python
+            extractor = SchemaExtractor.from_config(config)
+            try:
+                result = await extractor.extract(text, schema)
+            finally:
+                await extractor.close()
+            ```
+        """
+        if self._provider and hasattr(self._provider, "close"):
+            await self._provider.close()
