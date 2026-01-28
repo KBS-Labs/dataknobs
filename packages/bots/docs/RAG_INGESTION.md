@@ -434,6 +434,10 @@ from dataknobs_bots.knowledge import (
     KnowledgeBaseConfig,
     ProcessedDocument,
 
+    # Low-level ingestion (file-backend to vector-store)
+    KnowledgeIngestionManager,
+    IngestionResult,
+
     # Hybrid search types
     FusionStrategy,
     HybridSearchConfig,
@@ -446,6 +450,114 @@ from dataknobs_bots.knowledge import (
 ```bash
 cd packages/bots
 uv run pytest tests/test_knowledge.py -v -k "load_from_directory or hybrid_query"
+```
+
+## Automatic Ingestion with KnowledgeIngestionService
+
+The `KnowledgeIngestionService` provides high-level ingestion management
+with automatic population checks and skip-if-populated behavior.
+
+### Basic Usage
+
+```python
+from dataknobs_bots.knowledge import (
+    RAGKnowledgeBase,
+    KnowledgeIngestionService,
+)
+
+# Create service
+service = KnowledgeIngestionService()
+
+# Create knowledge base
+kb = await RAGKnowledgeBase.from_config(rag_config)
+
+# Ensure populated (skips if already has documents)
+result = await service.ensure_ingested(kb, {
+    "enabled": True,
+    "documents_path": "path/to/docs",
+    "document_pattern": "**/*.md",
+})
+
+if result.skipped:
+    print(f"Skipped: {result.reason}")
+else:
+    print(f"Ingested {result.total_chunks} chunks")
+```
+
+### Convenience Function
+
+For one-off ingestion checks:
+
+```python
+from dataknobs_bots.knowledge import ensure_knowledge_base_ingested
+
+result = await ensure_knowledge_base_ingested(
+    kb,
+    {"enabled": True, "documents_path": "./docs"},
+    force=False,  # Skip if already populated
+)
+```
+
+### Using with Registry Managers
+
+Use the `AutoIngestionMixin` to add auto-ingestion to bot managers:
+
+```python
+from dataknobs_bots.registry import CachingRegistryManager, InMemoryBackend
+from dataknobs_bots.knowledge import AutoIngestionMixin, get_ingestion_service
+
+class MyBotManager(CachingRegistryManager[MyBot], AutoIngestionMixin):
+    def __init__(self, auto_ingest: bool = False, **kwargs):
+        super().__init__(**kwargs)
+        self._auto_ingest = auto_ingest
+        self._ingestion_service = get_ingestion_service()
+
+    async def register(self, domain_id: str, config: dict, ingest: bool | None = None):
+        await super().register(domain_id, config)
+
+        should_ingest = ingest if ingest is not None else self._auto_ingest
+        if should_ingest:
+            await self._ensure_knowledge_base_ingested(domain_id, config)
+```
+
+### Service Methods
+
+| Method | Description |
+|--------|-------------|
+| `check_needs_ingestion(kb, min_chunks=1)` | Returns True if KB needs ingestion |
+| `ingest_from_config(kb, config)` | Run ingestion based on config |
+| `ensure_ingested(kb, config, force=False)` | Check and ingest if needed |
+
+### Configuration Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `enabled` | bool | False | Whether KB is enabled |
+| `documents_path` | str | None | Path to documents directory |
+| `document_pattern` | str | "**/*.md" | Glob pattern for files |
+
+### Result Types
+
+There are two result types at different abstraction levels:
+
+**`IngestionResult`** (from `KnowledgeIngestionManager`):
+- Lower-level, for file-backend-to-vector-store coordination
+- Tracks `files_processed`, `files_skipped`, `chunks_created`
+- Requires `domain_id`
+
+**`EnsureIngestionResult`** (from `KnowledgeIngestionService`):
+- Higher-level, for "ensure populated" operations
+- Has `skipped` and `reason` for skip-if-populated semantics
+- Tracks `total_files`, `total_chunks`
+
+```python
+# Check result status
+if result.skipped:
+    print(f"Skipped: {result.reason}")
+elif result.success:
+    print(f"Ingested {result.total_chunks} chunks")
+else:
+    print(f"Failed: {result.error}")
 ```
 
 ## Related

@@ -1052,6 +1052,25 @@ class RAGKnowledgeBase:
             context = self.formatter.wrap_for_prompt(context)
         return context
 
+    async def count(self, filter: dict[str, Any] | None = None) -> int:
+        """Get the number of chunks in the knowledge base.
+
+        Delegates to the underlying vector store's count method.
+
+        Args:
+            filter: Optional metadata filter to count only matching chunks
+
+        Returns:
+            Number of chunks stored (optionally filtered)
+
+        Example:
+            ```python
+            total = await kb.count()
+            domain_count = await kb.count(filter={"domain_id": "my-domain"})
+            ```
+        """
+        return await self.vector_store.count(filter)
+
     async def clear(self) -> None:
         """Clear all documents from the knowledge base.
 
