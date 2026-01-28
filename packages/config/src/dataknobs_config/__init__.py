@@ -39,7 +39,7 @@ from .inheritance import (
 from .substitution import VariableSubstitution
 from .template_vars import substitute_template_vars
 
-__version__ = "0.3.3"
+__version__ = "0.3.4"
 __all__ = [
     "Config",
     "ConfigError",
