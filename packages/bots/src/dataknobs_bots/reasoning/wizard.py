@@ -764,21 +764,33 @@ class WizardReasoning(ReasoningStrategy):
     def _filter_tools_for_stage(
         self, stage: dict[str, Any], tools: list[Any] | None
     ) -> list[Any] | None:
-        """Filter tools to those available in current stage.
+        """Filter tools to those available for the current stage.
 
         Args:
-            stage: Current stage metadata
-            tools: All available tools
+            stage: Stage configuration dict
+            tools: List of available tools, or None
 
         Returns:
-            Filtered list of tools or None
+            Filtered tools for this stage, or None if no tools should be available.
+
+        Tool availability rules:
+        - No tools passed in: return None (no tools available)
+        - Stage has no 'tools' key: return None (safe default - no tools)
+        - Stage has empty 'tools' list: return None (explicitly no tools)
+        - Stage has 'tools' list: return only matching tools
         """
         if not tools:
             return None
 
-        stage_tool_names = stage.get("tools", [])
+        stage_tool_names = stage.get("tools")
+
+        # Key change: no 'tools' key means no tools (safe default)
+        if stage_tool_names is None:
+            return None
+
+        # Explicit empty list means no tools
         if not stage_tool_names:
-            return tools  # No filter, allow all tools
+            return None
 
         # Filter to stage-specific tools
         filtered = []
