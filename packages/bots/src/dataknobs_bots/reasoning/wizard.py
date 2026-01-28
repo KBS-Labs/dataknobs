@@ -118,6 +118,7 @@ class WizardReasoning(ReasoningStrategy):
         extractor: Any | None = None,
         strict_validation: bool = True,
         hooks: WizardHooks | None = None,
+        auto_advance_filled_stages: bool = False,
     ):
         """Initialize WizardReasoning.
 
@@ -126,11 +127,14 @@ class WizardReasoning(ReasoningStrategy):
             extractor: Optional SchemaExtractor for data extraction
             strict_validation: Enforce schema validation (default: True)
             hooks: Optional WizardHooks for lifecycle callbacks
+            auto_advance_filled_stages: Automatically skip stages where all
+                required fields are already filled (default: False)
         """
         self._fsm = wizard_fsm
         self._extractor = extractor
         self._strict_validation = strict_validation
         self._hooks = hooks
+        self._auto_advance_filled_stages = auto_advance_filled_stages
 
     async def close(self) -> None:
         """Close the reasoning strategy and release resources.
@@ -205,11 +209,15 @@ class WizardReasoning(ReasoningStrategy):
         if hooks_config:
             hooks = WizardHooks.from_config(hooks_config)
 
+        # Get auto-advance setting from wizard FSM settings
+        auto_advance = wizard_fsm.settings.get("auto_advance_filled_stages", False)
+
         return cls(
             wizard_fsm=wizard_fsm,
             extractor=extractor,
             strict_validation=config.get("strict_validation", True),
             hooks=hooks,
+            auto_advance_filled_stages=auto_advance,
         )
 
     async def generate(
@@ -340,6 +348,59 @@ class WizardReasoning(ReasoningStrategy):
         if wizard_state.current_stage not in wizard_state.history:
             wizard_state.history.append(wizard_state.current_stage)
         wizard_state.completed = step_result.is_complete
+
+        # Auto-advance through stages where all required fields are filled
+        new_stage = self._fsm.current_metadata
+        auto_advance_count = 0
+        max_auto_advances = 10  # Safety limit to prevent infinite loops
+
+        while (
+            auto_advance_count < max_auto_advances
+            and not wizard_state.completed
+            and self._can_auto_advance(wizard_state, new_stage)
+        ):
+            auto_advance_count += 1
+            old_stage_name = wizard_state.current_stage
+            duration_ms = (time.time() - wizard_state.stage_entry_time) * 1000
+
+            # Execute FSM transition for auto-advance
+            auto_step_result = self._fsm.step(wizard_state.data)
+            new_stage_name = self._fsm.current_stage
+
+            if new_stage_name == old_stage_name:
+                # No transition occurred, stop auto-advancing
+                break
+
+            # Record the auto-advance transition
+            condition_expr = self._fsm.get_transition_condition(
+                old_stage_name, new_stage_name
+            )
+            transition = create_transition_record(
+                from_stage=old_stage_name,
+                to_stage=new_stage_name,
+                trigger="auto_advance",
+                duration_in_stage_ms=duration_ms,
+                data_snapshot=wizard_state.data.copy(),
+                condition_evaluated=condition_expr,
+                condition_result=True if condition_expr else None,
+            )
+            wizard_state.transitions.append(transition)
+
+            # Update wizard state
+            wizard_state.current_stage = new_stage_name
+            if new_stage_name not in wizard_state.history:
+                wizard_state.history.append(new_stage_name)
+            wizard_state.completed = auto_step_result.is_complete
+            wizard_state.stage_entry_time = time.time()
+
+            logger.info(
+                "Auto-advanced from %s to %s (all required fields present)",
+                old_stage_name,
+                new_stage_name,
+            )
+
+            # Get new stage metadata for next iteration
+            new_stage = self._fsm.current_metadata
 
         # Trigger stage entry hook if configured
         if self._hooks:
@@ -878,6 +939,104 @@ class WizardReasoning(ReasoningStrategy):
         visited = len(set(state.history))
         # Subtract 1 for end state in progress calculation
         return min(1.0, visited / max(1, total_stages - 1))
+
+    def _can_auto_advance(
+        self, wizard_state: WizardState, stage: dict[str, Any]
+    ) -> bool:
+        """Check if a stage can be auto-advanced.
+
+        A stage can be auto-advanced if:
+        1. Global auto_advance_filled_stages is enabled, OR the stage has
+           auto_advance: true in its config
+        2. The stage has a schema with required fields (or all properties
+           if no required list)
+        3. All required fields have non-empty values in wizard_state.data
+        4. The stage is not an end stage
+        5. At least one transition condition is satisfied
+
+        Args:
+            wizard_state: Current wizard state
+            stage: Stage configuration dict
+
+        Returns:
+            True if stage can be auto-advanced
+        """
+        # Check if auto-advance is enabled for this stage
+        stage_auto_advance = stage.get("auto_advance", False)
+        if not (stage_auto_advance or self._auto_advance_filled_stages):
+            return False
+
+        # Don't auto-advance end stages
+        if stage.get("is_end", False):
+            return False
+
+        # Get schema to check required fields
+        schema = stage.get("schema") or {}
+        properties = schema.get("properties", {})
+        required_fields = schema.get("required", [])
+
+        # If no required fields specified, treat all properties as required
+        if not required_fields:
+            required_fields = list(properties.keys())
+
+        # If no fields at all, can't auto-advance based on data
+        if not required_fields:
+            return False
+
+        # Check if all required fields have non-empty values
+        for field_name in required_fields:
+            if field_name not in wizard_state.data:
+                return False
+            value = wizard_state.data[field_name]
+            if value is None:
+                return False
+            # Empty strings don't count as filled
+            if isinstance(value, str) and not value.strip():
+                return False
+
+        # Check if any transition condition is satisfied
+        transitions = stage.get("transitions", [])
+        for transition in transitions:
+            condition = transition.get("condition")
+            if condition:
+                # Evaluate condition with current data
+                if self._evaluate_condition(condition, wizard_state.data):
+                    return True
+            else:
+                # Unconditional transition - can advance
+                return True
+
+        return False
+
+    def _evaluate_condition(self, condition: str, data: dict[str, Any]) -> bool:
+        """Safely evaluate a transition condition.
+
+        Uses a restricted execution environment to evaluate condition
+        expressions like "data.get('subject')" or "data.get('count', 0) > 5".
+
+        Args:
+            condition: Condition expression string
+            data: Current wizard data
+
+        Returns:
+            True if condition is satisfied, False otherwise
+        """
+        try:
+            # Wrap in return statement if not already
+            code = condition.strip()
+            if not code.startswith("return"):
+                code = f"return {code}"
+
+            # Create a function to evaluate the condition
+            # Note: 'data' must be in globals for the function to access it
+            global_vars: dict[str, Any] = {"data": data}
+            local_vars: dict[str, Any] = {}
+            exec_code = f"def _test():\n    {code}\n_result = _test()"
+            exec(exec_code, global_vars, local_vars)  # nosec B102
+            return bool(local_vars.get("_result", False))
+        except Exception as e:
+            logger.debug("Condition evaluation failed for '%s': %s", condition, e)
+            return False
 
     async def _generate_validation_response(
         self,

@@ -26,6 +26,7 @@ class WizardFSM:
     Attributes:
         _fsm: Underlying AdvancedFSM instance
         _stage_metadata: Dict mapping stage names to metadata
+        _settings: Wizard-level settings (auto_advance_filled_stages, etc.)
         _context: Current execution context
     """
 
@@ -33,16 +34,28 @@ class WizardFSM:
         self,
         fsm: AdvancedFSM,
         stage_metadata: dict[str, dict[str, Any]],
+        settings: dict[str, Any] | None = None,
     ):
         """Initialize WizardFSM.
 
         Args:
             fsm: AdvancedFSM instance to wrap
             stage_metadata: Dict mapping stage names to their metadata
+            settings: Wizard-level settings dict (optional)
         """
         self._fsm = fsm
         self._stage_metadata = stage_metadata
+        self._settings = settings or {}
         self._context: ExecutionContext | None = None
+
+    @property
+    def settings(self) -> dict[str, Any]:
+        """Get wizard-level settings.
+
+        Returns:
+            Dict containing wizard settings like auto_advance_filled_stages
+        """
+        return self._settings
 
     @property
     def current_stage(self) -> str:
@@ -309,6 +322,7 @@ def create_wizard_fsm(
     fsm_config: dict[str, Any],
     stage_metadata: dict[str, dict[str, Any]],
     custom_functions: dict[str, Callable[..., Any]] | None = None,
+    settings: dict[str, Any] | None = None,
 ) -> WizardFSM:
     """Factory function to create a WizardFSM instance.
 
@@ -316,6 +330,7 @@ def create_wizard_fsm(
         fsm_config: FSM configuration dict
         stage_metadata: Stage metadata dict
         custom_functions: Optional custom functions to register
+        settings: Wizard-level settings dict (optional)
 
     Returns:
         Configured WizardFSM instance
@@ -323,4 +338,4 @@ def create_wizard_fsm(
     from dataknobs_fsm.api.advanced import create_advanced_fsm
 
     advanced_fsm = create_advanced_fsm(fsm_config, custom_functions=custom_functions)
-    return WizardFSM(advanced_fsm, stage_metadata)
+    return WizardFSM(advanced_fsm, stage_metadata, settings=settings)

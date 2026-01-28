@@ -136,6 +136,9 @@ class WizardConfigLoader:
         # Extract stage metadata
         stage_metadata = self._extract_metadata(wizard_config)
 
+        # Extract wizard-level settings
+        settings = wizard_config.get("settings", {})
+
         # Build FSM
         builder = FSMBuilder()
         if custom_functions:
@@ -150,7 +153,7 @@ class WizardConfigLoader:
         fsm = builder.build(fsm_config)
         advanced_fsm = AdvancedFSM(fsm)
 
-        return WizardFSM(advanced_fsm, stage_metadata)
+        return WizardFSM(advanced_fsm, stage_metadata, settings=settings)
 
     def _translate_to_fsm(self, wizard_config: dict[str, Any]) -> Any:
         """Translate wizard config to FSM format.
@@ -328,6 +331,7 @@ class WizardConfigLoader:
                 "can_skip": stage.get("can_skip", False),
                 "skip_default": stage.get("skip_default"),
                 "can_go_back": stage.get("can_go_back", True),
+                "auto_advance": stage.get("auto_advance", False),
                 "tools": stage.get("tools", []),
                 "extraction_model": stage.get("extraction_model"),
                 "is_start": stage.get("is_start", False),
