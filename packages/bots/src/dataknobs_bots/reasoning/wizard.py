@@ -120,6 +120,8 @@ class WizardReasoning(ReasoningStrategy):
         hooks: WizardHooks | None = None,
         auto_advance_filled_stages: bool = False,
         context_template: str | None = None,
+        allow_post_completion_edits: bool = False,
+        section_to_stage_mapping: dict[str, str] | None = None,
     ):
         """Initialize WizardReasoning.
 
@@ -132,6 +134,10 @@ class WizardReasoning(ReasoningStrategy):
                 required fields are already filled (default: False)
             context_template: Custom Jinja2 template for stage context.
                 When set, replaces the default context formatting.
+            allow_post_completion_edits: Allow re-opening wizard after completion
+                when user requests changes (default: False)
+            section_to_stage_mapping: Custom mapping of section names to stage
+                names for amendment detection (optional)
         """
         self._fsm = wizard_fsm
         self._extractor = extractor
@@ -139,6 +145,8 @@ class WizardReasoning(ReasoningStrategy):
         self._hooks = hooks
         self._auto_advance_filled_stages = auto_advance_filled_stages
         self._context_template = context_template
+        self._allow_amendments = allow_post_completion_edits
+        self._section_to_stage_mapping = section_to_stage_mapping or {}
 
     async def close(self) -> None:
         """Close the reasoning strategy and release resources.
@@ -216,6 +224,8 @@ class WizardReasoning(ReasoningStrategy):
         # Get settings from wizard FSM
         auto_advance = wizard_fsm.settings.get("auto_advance_filled_stages", False)
         context_template = wizard_fsm.settings.get("context_template")
+        allow_amendments = wizard_fsm.settings.get("allow_post_completion_edits", False)
+        section_mapping = wizard_fsm.settings.get("section_to_stage_mapping", {})
 
         return cls(
             wizard_fsm=wizard_fsm,
@@ -224,6 +234,8 @@ class WizardReasoning(ReasoningStrategy):
             hooks=hooks,
             auto_advance_filled_stages=auto_advance,
             context_template=context_template,
+            allow_post_completion_edits=allow_amendments,
+            section_to_stage_mapping=section_mapping,
         )
 
     async def generate(
@@ -237,11 +249,12 @@ class WizardReasoning(ReasoningStrategy):
 
         This method:
         1. Retrieves or initializes wizard state
-        2. Checks for navigation commands (back, skip, restart)
-        3. Extracts structured data from user input
-        4. Validates extracted data against stage schema
-        5. Executes FSM transition on valid input
-        6. Generates appropriate response for current/new stage
+        2. Handles post-completion amendments (if enabled)
+        3. Checks for navigation commands (back, skip, restart)
+        4. Extracts structured data from user input
+        5. Validates extracted data against stage schema
+        6. Executes FSM transition on valid input
+        7. Generates appropriate response for current/new stage
 
         Args:
             manager: ConversationManager instance
@@ -257,6 +270,49 @@ class WizardReasoning(ReasoningStrategy):
 
         # Get user message
         user_message = self._get_last_user_message(manager)
+
+        # Handle post-completion amendments
+        if wizard_state.completed and self._allow_amendments:
+            amendment = await self._detect_amendment(user_message, wizard_state, llm)
+
+            if amendment:
+                target_stage = amendment["target_stage"]
+                from_stage = wizard_state.current_stage
+                duration_ms = (time.time() - wizard_state.stage_entry_time) * 1000
+
+                # Re-open wizard to target stage
+                wizard_state.completed = False
+                wizard_state.current_stage = target_stage
+                if target_stage not in wizard_state.history:
+                    wizard_state.history.append(target_stage)
+
+                # Restore FSM to target stage
+                self._fsm.restore({
+                    "current_stage": target_stage,
+                    "data": wizard_state.data,
+                })
+
+                # Record the amendment transition
+                transition = create_transition_record(
+                    from_stage=from_stage,
+                    to_stage=target_stage,
+                    trigger="amendment",
+                    duration_in_stage_ms=duration_ms,
+                    data_snapshot=wizard_state.data.copy(),
+                    user_input=user_message,
+                )
+                wizard_state.transitions.append(transition)
+                wizard_state.stage_entry_time = time.time()
+
+                logger.info("Amendment: re-opening wizard at %s", target_stage)
+
+                # Generate response for the re-opened stage
+                stage = self._fsm.current_metadata
+                response = await self._generate_stage_response(
+                    manager, llm, stage, wizard_state, tools
+                )
+                self._save_wizard_state(manager, wizard_state)
+                return response
 
         # Handle navigation commands
         nav_result = await self._handle_navigation(
@@ -1113,6 +1169,118 @@ class WizardReasoning(ReasoningStrategy):
         except Exception as e:
             logger.debug("Condition evaluation failed for '%s': %s", condition, e)
             return False
+
+    # =========================================================================
+    # Post-Completion Amendment Methods
+    # =========================================================================
+
+    async def _detect_amendment(
+        self,
+        message: str,
+        state: WizardState,
+        llm: Any,
+    ) -> dict[str, Any] | None:
+        """Detect if a post-completion message requests an edit.
+
+        Uses the extractor to determine if the user wants to modify
+        something and which section/stage they want to change.
+
+        Args:
+            message: User's message
+            state: Current wizard state
+            llm: LLM for extraction (unused, extractor has its own)
+
+        Returns:
+            Dict with target_stage if amendment detected, None otherwise
+        """
+        if not self._extractor:
+            # Without extractor, can't detect amendments
+            return None
+
+        # Simple schema to detect edit intent
+        amendment_schema = {
+            "type": "object",
+            "properties": {
+                "wants_edit": {
+                    "type": "boolean",
+                    "description": (
+                        "Does the user want to change, update, or modify "
+                        "something that was already configured?"
+                    ),
+                },
+                "target_section": {
+                    "type": "string",
+                    "description": (
+                        "What section or aspect do they want to change? "
+                        "Options: llm, model, identity, name, knowledge, kb, "
+                        "tools, behavior, template, config"
+                    ),
+                },
+            },
+        }
+
+        try:
+            result = await self._extractor.extract(
+                text=message,
+                schema=amendment_schema,
+                context={"state": "completed", "prompt": "Detect edit requests"},
+            )
+
+            if result.data.get("wants_edit"):
+                target = result.data.get("target_section", "")
+                target_stage = self._map_section_to_stage(target)
+                if target_stage:
+                    return {"target_stage": target_stage}
+        except Exception as e:
+            logger.debug("Amendment detection failed: %s", e)
+
+        return None
+
+    def _map_section_to_stage(self, section: str) -> str | None:
+        """Map a section name to a wizard stage name.
+
+        First checks custom mapping from settings, then falls back to
+        built-in defaults.
+
+        Args:
+            section: Section identifier from extraction
+
+        Returns:
+            Stage name, or None if no mapping found
+        """
+        if not section:
+            return None
+
+        section_lower = section.lower().strip()
+
+        # Check custom mapping first
+        if self._section_to_stage_mapping:
+            if section_lower in self._section_to_stage_mapping:
+                return self._section_to_stage_mapping[section_lower]
+
+        # Default mappings for common wizard patterns
+        default_mapping = {
+            "llm": "configure_llm",
+            "model": "configure_llm",
+            "ai": "configure_llm",
+            "identity": "configure_identity",
+            "name": "configure_identity",
+            "knowledge": "configure_knowledge",
+            "kb": "configure_knowledge",
+            "rag": "configure_knowledge",
+            "tools": "configure_tools",
+            "behavior": "configure_behavior",
+            "template": "select_template",
+            "config": "review",
+        }
+
+        mapped_stage = default_mapping.get(section_lower)
+        if mapped_stage:
+            # Verify the stage exists in the FSM
+            if mapped_stage in self._fsm._stage_metadata:
+                return mapped_stage
+
+        return None
 
     async def _generate_validation_response(
         self,
