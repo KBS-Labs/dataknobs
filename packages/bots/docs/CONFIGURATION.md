@@ -1019,6 +1019,158 @@ This gives users three paths:
 > **Note:** Schema `default` values are stripped before extraction to prevent the LLM from
 > auto-filling them. Use `skip_default` for user-facing defaults instead of schema defaults.
 
+**Auto-Advance:**
+
+When pre-populating wizard data (e.g., from templates or previous sessions), stages can
+automatically advance if all required fields are already filled. Enable globally or per-stage:
+
+```yaml
+# wizard.yaml
+name: configbot
+settings:
+  auto_advance_filled_stages: true  # Global setting
+
+stages:
+  - name: configure_identity
+    prompt: "What's your bot's name?"
+    schema:
+      type: object
+      properties:
+        bot_name: { type: string }
+        description: { type: string }
+      required: [bot_name, description]
+    # If both bot_name and description exist in wizard data,
+    # this stage will auto-advance to the next stage
+    transitions:
+      - target: configure_llm
+        condition: "data.get('bot_name')"
+
+  - name: configure_llm
+    auto_advance: true  # Per-stage override (works even if global is false)
+    prompt: "Which LLM provider?"
+    schema:
+      type: object
+      properties:
+        llm_provider: { type: string }
+      required: [llm_provider]
+    transitions:
+      - target: done
+```
+
+Auto-advance conditions:
+- Global `auto_advance_filled_stages: true` in settings, OR stage has `auto_advance: true`
+- Stage has a schema with `required` fields (or all `properties` if no `required` list)
+- All required fields have non-empty values in wizard data
+- Stage is not an end stage (`is_end: false`)
+- At least one transition condition is satisfied
+
+This enables "template-first" workflows where users select a template that pre-fills most
+fields, and the wizard skips to the first stage needing user input.
+
+**Post-Completion Amendments:**
+
+Allow users to make changes after the wizard has completed. When enabled, the wizard
+detects edit requests and re-opens at the relevant stage:
+
+```yaml
+# wizard.yaml
+name: configbot
+settings:
+  allow_post_completion_edits: true
+  section_to_stage_mapping:    # Optional: custom section-to-stage mapping
+    model: configure_llm
+    ai: configure_llm
+    bot: configure_identity
+
+stages:
+  - name: configure_llm
+    prompt: "Which LLM provider?"
+    # ...
+  - name: configure_identity
+    prompt: "What's your bot's name?"
+    # ...
+  - name: save
+    is_end: true
+    prompt: "Configuration saved!"
+```
+
+After completing the wizard, if the user says "change the LLM to ollama", the wizard:
+1. Detects the edit intent using extraction
+2. Maps "llm" to `configure_llm` stage
+3. Re-opens the wizard at that stage
+4. Normal wizard flow resumes (user makes change, wizard advances through review/save)
+
+Default section-to-stage mappings:
+| Section | Stage |
+|---------|-------|
+| llm, model, ai | configure_llm |
+| identity, name | configure_identity |
+| knowledge, kb, rag | configure_knowledge |
+| tools | configure_tools |
+| behavior | configure_behavior |
+| template | select_template |
+| config | review |
+
+Custom mappings in `section_to_stage_mapping` override defaults. Only stages that exist
+in your wizard configuration are valid targets.
+
+Requirements for amendment detection:
+- `allow_post_completion_edits: true` in settings
+- An `extraction_config` must be specified (extractor is used to detect edit intent)
+- The target stage must exist in the wizard
+
+**Context Template:**
+
+Customize how stage context is formatted in the system prompt using Jinja2 templates:
+
+```yaml
+# wizard.yaml
+name: configbot
+settings:
+  context_template: |
+    ## Wizard Stage: {{stage_name}}
+
+    **Goal**: {{stage_prompt}}
+
+    ((Additional help: {{help_text}}))
+
+    {% if collected_data %}
+    ### Already Collected (DO NOT ASK AGAIN)
+    {% for key, value in collected_data.items() %}
+    - **{{key}}**: {{value}}
+    {% endfor %}
+    {% endif %}
+
+    {% if not completed %}
+    Navigation: {% if can_skip %}Can skip{% endif %}{% if can_go_back %}, Can go back{% endif %}
+    {% endif %}
+
+    {% if suggestions %}
+    Suggestions: {{ suggestions | join(', ') }}
+    {% endif %}
+```
+
+Available template variables:
+| Variable | Type | Description |
+|----------|------|-------------|
+| `stage_name` | string | Current stage name |
+| `stage_prompt` | string | Stage's goal/prompt text |
+| `help_text` | string | Additional help text (empty string if none) |
+| `suggestions` | list | Quick-reply suggestions |
+| `collected_data` | dict | Data collected so far (excludes `_` prefixed keys) |
+| `raw_data` | dict | All wizard data including internal keys |
+| `completed` | bool | Whether wizard is complete |
+| `history` | list | List of visited stage names |
+| `can_skip` | bool | Whether current stage can be skipped |
+| `can_go_back` | bool | Whether back navigation is allowed |
+
+Special syntax:
+- `((content))` - Conditional section, removed if any variable inside is empty/falsy
+- Standard Jinja2: `{% if %}`, `{% for %}`, `{{ var | filter }}`
+
+If no `context_template` is specified, the wizard uses a default format that includes
+stage info, collected data, and navigation hints.
+
 ---
 
 ## Tools Configuration
