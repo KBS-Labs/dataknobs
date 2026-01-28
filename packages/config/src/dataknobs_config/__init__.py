@@ -37,6 +37,7 @@ from .inheritance import (
     substitute_env_vars,
 )
 from .substitution import VariableSubstitution
+from .template_vars import substitute_template_vars
 
 __version__ = "0.3.3"
 __all__ = [
@@ -54,6 +55,8 @@ __all__ = [
     "deep_merge",
     "load_config_with_inheritance",
     "substitute_env_vars",
+    # Template variable substitution
+    "substitute_template_vars",
     # Environment-aware configuration
     "EnvironmentConfig",
     "EnvironmentConfigError",
