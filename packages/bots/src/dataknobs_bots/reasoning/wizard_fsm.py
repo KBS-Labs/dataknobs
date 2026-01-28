@@ -77,6 +77,35 @@ class WizardFSM:
         """
         return self._stage_metadata.get(self.current_stage, {})
 
+    @property
+    def stages(self) -> dict[str, dict[str, Any]]:
+        """Get all stage metadata.
+
+        Returns a copy to prevent external modification.
+
+        Returns:
+            Dict mapping stage name to stage configuration dict.
+        """
+        return dict(self._stage_metadata)
+
+    @property
+    def stage_names(self) -> list[str]:
+        """Get ordered list of stage names.
+
+        Returns:
+            List of stage names in definition order.
+        """
+        return list(self._stage_metadata.keys())
+
+    @property
+    def stage_count(self) -> int:
+        """Get total number of stages.
+
+        Returns:
+            Number of stages in the wizard.
+        """
+        return len(self._stage_metadata)
+
     def get_stage_prompt(self, stage: str | None = None) -> str:
         """Get prompt for a stage.
 
