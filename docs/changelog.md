@@ -5,6 +5,43 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-01-28
+
+### dataknobs-config [0.3.4]
+
+#### Added
+- added template variable substitution utility
+
+#### Changed
+- updated documentation
+
+### dataknobs-utils [1.2.3]
+
+#### Fixed
+- fixed ruff errors
+
+### dataknobs-llm [0.3.2]
+
+#### Added
+- added testing utilities
+- adding missing close methods
+
+### dataknobs-bots [0.4.0]
+
+#### Added
+- add ReAct reasoning to wizard reasoning
+- strip schema defaults, and add skip-default handling
+- adds for auto-ingestion
+- adding missing close methods
+
+#### Changed
+- updated documentation
+- improved hardcoded/default prompt
+
+#### Fixed
+- fixed ruff errors
+
+
 ## Release - 2026-01-23
 
 ### dataknobs-common [1.2.1]

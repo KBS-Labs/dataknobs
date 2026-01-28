@@ -12,7 +12,7 @@ from .reasoning import (
 )
 from .tools import KnowledgeSearchTool
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"
 
 __all__ = [
     # Bot
