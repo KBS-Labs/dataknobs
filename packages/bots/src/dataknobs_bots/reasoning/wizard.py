@@ -736,20 +736,28 @@ class WizardReasoning(ReasoningStrategy):
         if stage.get("suggestions"):
             lines.append(f"Suggested responses: {', '.join(stage['suggestions'])}")
 
-        if state.completed:
-            lines.append("\nThe wizard is complete. Summarize what was collected.")
-        else:
-            lines.append(
-                "\nGuide the user through this stage. Be conversational and helpful."
-            )
-
-        # Add collected data context
+        # Add collected data context PROMINENTLY before instructions
         if state.data:
             filtered_data = {
                 k: v for k, v in state.data.items() if not k.startswith("_")
             }
             if filtered_data:
-                lines.append(f"\nCollected so far: {filtered_data}")
+                lines.append("\n## ALREADY COLLECTED - DO NOT ASK AGAIN")
+                lines.append(
+                    "The following information has already been provided by the user. "
+                    "Do NOT ask for this information again:"
+                )
+                for key, value in filtered_data.items():
+                    lines.append(f"- {key}: {value}")
+                lines.append("")
+
+        if state.completed:
+            lines.append("\nThe wizard is complete. Summarize what was collected.")
+        else:
+            lines.append(
+                "\nGuide the user through this stage. Be conversational and helpful. "
+                "Focus only on gathering information that has NOT already been collected."
+            )
 
         return "\n".join(lines)
 
