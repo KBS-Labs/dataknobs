@@ -961,6 +961,34 @@ hooks:
     - "myapp.hooks:handle_error"
 ```
 
+**Function Reference Syntax:**
+
+Hook functions and custom transition functions are specified as string references.
+Two formats are supported:
+
+| Format | Example | Description |
+|--------|---------|-------------|
+| Colon (preferred) | `myapp.hooks:log_entry` | Explicit separator between module path and function |
+| Dot (accepted) | `myapp.hooks.log_entry` | Last segment is treated as function name |
+
+The colon format is preferred as it's unambiguous. The dot format is accepted for
+convenience but requires the function to be the final segment.
+
+**Error Messages:**
+
+Invalid function references produce helpful error messages:
+
+```
+ImportError: Cannot import module 'myapp.hooks' from reference 'myapp.hooks:missing_func':
+No module named 'myapp'. Ensure the module is installed and the path is correct.
+
+AttributeError: Function 'missing_func' not found in module 'myapp.hooks'.
+Available functions: log_entry, validate_data, submit_results
+```
+
+Hooks that fail to load are skipped with a warning, allowing the wizard to continue
+operating even if some hooks are misconfigured.
+
 **Tool Availability:**
 
 Tools are only available to stages that explicitly list them via the `tools` property.
@@ -1170,6 +1198,74 @@ Special syntax:
 
 If no `context_template` is specified, the wizard uses a default format that includes
 stage info, collected data, and navigation hints.
+
+**Wizard State API:**
+
+Access wizard state programmatically from your application code:
+
+```python
+# Get current wizard state for a conversation
+state = bot.get_wizard_state("conversation-123")
+
+if state:
+    print(f"Stage: {state['current_stage']} ({state['stage_index'] + 1}/{state['total_stages']})")
+    print(f"Progress: {state['progress'] * 100:.0f}%")
+    print(f"Collected: {state['data']}")
+
+    if state['can_skip']:
+        print("User can skip this stage")
+    if not state['completed']:
+        print(f"Suggestions: {state['suggestions']}")
+```
+
+The `get_wizard_state()` method returns a normalized dict with these fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `current_stage` | string | Name of the current stage |
+| `stage_index` | int | Zero-based index of current stage |
+| `total_stages` | int | Total number of stages in wizard |
+| `progress` | float | Completion progress (0.0 to 1.0) |
+| `completed` | bool | Whether wizard has finished |
+| `data` | dict | All collected data |
+| `can_skip` | bool | Whether current stage can be skipped |
+| `can_go_back` | bool | Whether back navigation is allowed |
+| `suggestions` | list | Quick-reply suggestions for current stage |
+| `history` | list | List of visited stage names |
+
+Returns `None` if the conversation doesn't exist or has no active wizard.
+
+**WizardFSM Introspection:**
+
+When working directly with WizardFSM instances (e.g., in custom reasoning strategies),
+you can introspect the wizard structure:
+
+```python
+from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+
+loader = WizardConfigLoader()
+wizard_fsm = loader.load("path/to/wizard.yaml")
+
+# Get all stage names in order
+print(wizard_fsm.stage_names)  # ['welcome', 'configure', 'review', 'complete']
+
+# Get total stage count
+print(wizard_fsm.stage_count)  # 4
+
+# Get full stage metadata
+for name, meta in wizard_fsm.stages.items():
+    print(f"{name}: {meta.get('prompt', 'No prompt')}")
+    if meta.get('can_skip'):
+        print(f"  - Can be skipped")
+```
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `stages` | dict | All stage metadata (returns a copy) |
+| `stage_names` | list | Ordered list of stage names |
+| `stage_count` | int | Total number of stages |
+| `current_stage` | string | Current stage name |
+| `current_metadata` | dict | Metadata for current stage |
 
 ---
 

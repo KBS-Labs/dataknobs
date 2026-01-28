@@ -74,6 +74,7 @@ nav:
       - packages/config/environment-aware.md
       - packages/config/factory-registration.md
       - packages/config/inheritance.md
+      - packages/config/template_vars.md
       - packages/config/api.md
     - Data:
       - packages/data/index.md
