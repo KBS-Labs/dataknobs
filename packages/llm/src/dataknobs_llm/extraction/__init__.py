@@ -15,12 +15,14 @@ from dataknobs_llm.extraction.observability import (
     create_extraction_record,
 )
 from dataknobs_llm.extraction.schema_extractor import (
+    ExtractedAssumption,
     ExtractionResult,
     SchemaExtractor,
 )
 
 __all__ = [
     # Core extraction
+    "ExtractedAssumption",
     "ExtractionResult",
     "SchemaExtractor",
     # Observability

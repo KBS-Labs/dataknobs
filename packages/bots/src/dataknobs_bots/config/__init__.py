@@ -28,6 +28,11 @@ from .resolution import (
     register_llm_factory,
     register_vector_store_factory,
 )
+from .versioning import (
+    ConfigVersion,
+    ConfigVersionManager,
+    VersionConflictError,
+)
 
 __all__ = [
     "create_bot_resolver",
@@ -36,4 +41,8 @@ __all__ = [
     "register_database_factory",
     "register_vector_store_factory",
     "register_embedding_factory",
+    # Versioning
+    "ConfigVersion",
+    "ConfigVersionManager",
+    "VersionConflictError",
 ]

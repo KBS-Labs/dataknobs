@@ -3,6 +3,7 @@
 from typing import Any
 
 from .base import ReasoningStrategy
+from .focus_guard import FocusContext, FocusEvaluation, FocusGuard
 from .observability import (
     # Task tracking types
     TaskCompletionTrigger,
@@ -28,6 +29,11 @@ from .observability import (
 )
 from .react import ReActReasoning
 from .simple import SimpleReasoning
+from .task_injection import (
+    TaskInjectionContext,
+    TaskInjectionResult,
+    TaskInjector,
+)
 from .wizard import WizardReasoning, WizardStageContext, WizardState
 from .wizard_fsm import WizardFSM
 from .wizard_hooks import WizardHooks
@@ -50,6 +56,14 @@ __all__ = [
     "WizardTaskList",
     "TaskStatus",
     "TaskCompletionTrigger",
+    # Task injection
+    "TaskInjector",
+    "TaskInjectionContext",
+    "TaskInjectionResult",
+    # Focus guard
+    "FocusGuard",
+    "FocusContext",
+    "FocusEvaluation",
     # Wizard observability
     "TransitionRecord",
     "TransitionHistoryQuery",
