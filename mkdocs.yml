@@ -196,6 +196,14 @@ nav:
         - packages/bots/guides/rag-ingestion.md
         - packages/bots/guides/rag-retrieval.md
         - packages/bots/guides/rag-query.md
+        - Artifact & Review System:
+          - packages/bots/guides/artifacts.md
+          - packages/bots/guides/reviews.md
+          - packages/bots/guides/context.md
+        - Advanced Features:
+          - packages/bots/guides/task-injection.md
+          - packages/bots/guides/focus-guards.md
+          - packages/bots/guides/config-versioning.md
       - API Reference:
         - packages/bots/api/reference.md
       - Examples:

@@ -129,6 +129,60 @@ if __name__ == "__main__":
 
 [Learn more →](guides/observability.md)
 
+### 📦 Artifact System
+
+- **Artifact Registry** - Track work products throughout conversational workflows
+- **Versioning** - Create new versions while preserving history
+- **Lifecycle Status** - Draft, pending review, approved, rejected states
+- **Definition-Driven** - Configure artifact types and behaviors in YAML
+
+[Learn more →](guides/artifacts.md)
+
+### ✅ Review System
+
+- **Persona-Based Reviews** - LLM adopts perspectives (adversarial, skeptical, etc.)
+- **Schema Validation** - JSON Schema validation for structured artifacts
+- **Custom Validators** - Register your own validation functions
+- **Built-in Personas** - Five built-in review personas for common scenarios
+
+[Learn more →](guides/reviews.md)
+
+### 🧠 Context Accumulator
+
+- **Progressive Context** - Build context throughout conversation
+- **Assumption Tracking** - Track inferred vs. confirmed information
+- **Prompt Injection** - Generate formatted context for prompts
+- **Priority Sections** - Organize context by importance
+
+[Learn more →](guides/context.md)
+
+### 🔄 Task Injection
+
+- **Event-Driven Tasks** - Add tasks dynamically based on events
+- **Artifact Events** - React to artifact creation, review completion
+- **Stage Events** - Respond to stage transitions
+- **Block Transitions** - Prevent progress until conditions are met
+
+[Learn more →](guides/task-injection.md)
+
+### 🎯 Focus Guards
+
+- **Drift Detection** - Identify when conversations go off-topic
+- **Tangent Tolerance** - Allow some flexibility before correction
+- **Keyword Detection** - Configure topic and off-topic keywords
+- **Correction Prompts** - Generate prompts to redirect conversation
+
+[Learn more →](guides/focus-guards.md)
+
+### 📋 Config Versioning
+
+- **Immutable Versions** - Track configuration changes over time
+- **Rollback** - Restore previous configurations
+- **Diff** - Compare versions to see changes
+- **Audit Trail** - Complete history with timestamps and reasons
+
+[Learn more →](guides/config-versioning.md)
+
 ### ⚙️ Per-Request Config Overrides
 
 - **Dynamic Model Selection** - Switch models per-request without creating new bots
@@ -193,6 +247,21 @@ dataknobs_bots/
 │   └── vector.py         # Vector memory
 ├── knowledge/            # RAG implementation
 │   └── rag.py           # RAGKnowledgeBase class
+├── artifacts/           # Artifact management
+│   ├── models.py       # Artifact, Review, Definition models
+│   ├── registry.py     # ArtifactRegistry
+│   └── tools.py        # Artifact management tools
+├── review/              # Review system
+│   ├── personas.py     # ReviewPersona, built-in personas
+│   ├── protocol.py     # ReviewProtocolDefinition
+│   ├── executor.py     # ReviewExecutor
+│   └── tools.py        # Review tools
+├── context/             # Context management
+│   ├── accumulator.py  # ConversationContext, Assumption
+│   └── builder.py      # ContextBuilder, ContextPersister
+├── config/              # Configuration utilities
+│   ├── resolution.py   # Resource resolution
+│   └── versioning.py   # ConfigVersionManager
 ├── reasoning/           # Reasoning strategies
 │   ├── base.py         # ReasoningStrategy interface
 │   ├── simple.py       # Simple reasoning
@@ -201,7 +270,9 @@ dataknobs_bots/
 │   ├── wizard_fsm.py   # FSM wrapper for wizards
 │   ├── wizard_loader.py # Config loader
 │   ├── wizard_hooks.py # Lifecycle hooks
-│   └── observability.py # Task tracking & state snapshots
+│   ├── observability.py # Task tracking & state snapshots
+│   ├── task_injection.py # Dynamic task injection
+│   └── focus_guard.py  # Drift detection & correction
 ├── tools/              # Built-in tools
 │   └── knowledge_search.py
 └── utils/              # Utilities
@@ -224,6 +295,18 @@ dataknobs_bots/
 - [**Tools Development**](guides/tools.md) - Creating and configuring custom tools
 - [**Wizard Observability**](guides/observability.md) - Task tracking, state snapshots, and transition auditing
 - [**Architecture**](guides/architecture.md) - System design and scaling considerations
+
+### Artifact & Review System
+
+- [**Artifact System**](guides/artifacts.md) - Track and version work products
+- [**Review System**](guides/reviews.md) - Validate artifacts with persona-based and schema reviews
+- [**Context Accumulator**](guides/context.md) - Build and manage conversation context
+
+### Advanced Features
+
+- [**Task Injection**](guides/task-injection.md) - Dynamic task creation based on events
+- [**Focus Guards**](guides/focus-guards.md) - Detect and correct conversational drift
+- [**Config Versioning**](guides/config-versioning.md) - Version control for bot configurations
 
 ### API Reference
 
@@ -365,6 +448,12 @@ MIT License - see [LICENSE](../../license.md) for details.
 
 - [x] Streaming responses
 - [x] Per-request LLM config overrides (A/B testing, dynamic model selection)
+- [x] Artifact tracking and versioning
+- [x] Review system with persona-based and schema validation
+- [x] Context accumulator with assumption tracking
+- [x] Task injection for dynamic workflows
+- [x] Focus guards for drift detection
+- [x] Configuration versioning
 - [ ] Multi-modal support (images, audio)
 - [ ] Advanced memory strategies (hybrid, hierarchical)
 - [ ] Tool marketplace
