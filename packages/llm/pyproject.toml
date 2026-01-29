@@ -1,6 +1,6 @@
 [project]
 name = "dataknobs-llm"
-version = "0.3.2"
+version = "0.3.3"
 description = "LLM utilities for DataKnobs"
 readme = "README.md"
 authors = [
