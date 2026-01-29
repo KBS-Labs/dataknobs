@@ -49,6 +49,9 @@ class ReActReasoning(ReasoningStrategy):
         max_iterations: int = 5,
         verbose: bool = False,
         store_trace: bool = False,
+        artifact_registry: Any | None = None,
+        review_executor: Any | None = None,
+        context_builder: Any | None = None,
     ):
         """Initialize ReAct reasoning strategy.
 
@@ -56,10 +59,31 @@ class ReActReasoning(ReasoningStrategy):
             max_iterations: Maximum reasoning/action iterations
             verbose: Enable debug-level logging for reasoning steps
             store_trace: Store reasoning trace in conversation metadata
+            artifact_registry: Optional ArtifactRegistry for artifact management
+            review_executor: Optional ReviewExecutor for running reviews
+            context_builder: Optional ContextBuilder for building conversation context
         """
         self.max_iterations = max_iterations
         self.verbose = verbose
         self.store_trace = store_trace
+        self._artifact_registry = artifact_registry
+        self._review_executor = review_executor
+        self._context_builder = context_builder
+
+    @property
+    def artifact_registry(self) -> Any | None:
+        """Get the artifact registry if configured."""
+        return self._artifact_registry
+
+    @property
+    def review_executor(self) -> Any | None:
+        """Get the review executor if configured."""
+        return self._review_executor
+
+    @property
+    def context_builder(self) -> Any | None:
+        """Get the context builder if configured."""
+        return self._context_builder
 
     async def generate(
         self,
@@ -162,6 +186,21 @@ class ReActReasoning(ReasoningStrategy):
 
             # Build execution context for tools that need it
             tool_context = ToolExecutionContext.from_manager(manager)
+
+            # Extend context with artifact/review infrastructure if available
+            extra_context: dict[str, Any] = {}
+            if self._artifact_registry is not None:
+                extra_context["artifact_registry"] = self._artifact_registry
+            if self._review_executor is not None:
+                extra_context["review_executor"] = self._review_executor
+            if self._context_builder is not None:
+                try:
+                    conversation_context = self._context_builder.build(manager)
+                    extra_context["conversation_context"] = conversation_context
+                except Exception as e:
+                    logger.warning("Failed to build conversation context: %s", e)
+            if extra_context:
+                tool_context = tool_context.with_extra(**extra_context)
 
             # Execute all tool calls
             for tool_call in response.tool_calls:

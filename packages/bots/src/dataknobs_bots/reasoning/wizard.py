@@ -124,6 +124,9 @@ class WizardReasoning(ReasoningStrategy):
         section_to_stage_mapping: dict[str, str] | None = None,
         default_tool_reasoning: str = "single",
         default_max_iterations: int = 3,
+        artifact_registry: Any | None = None,
+        review_executor: Any | None = None,
+        context_builder: Any | None = None,
     ):
         """Initialize WizardReasoning.
 
@@ -143,6 +146,9 @@ class WizardReasoning(ReasoningStrategy):
             default_tool_reasoning: Default reasoning mode for stages with tools.
                 "single" for single LLM call, "react" for ReAct-style loop.
             default_max_iterations: Default max iterations for ReAct-style reasoning.
+            artifact_registry: Optional ArtifactRegistry for artifact management.
+            review_executor: Optional ReviewExecutor for running reviews.
+            context_builder: Optional ContextBuilder for building conversation context.
         """
         self._fsm = wizard_fsm
         self._extractor = extractor
@@ -154,6 +160,9 @@ class WizardReasoning(ReasoningStrategy):
         self._section_to_stage_mapping = section_to_stage_mapping or {}
         self._default_tool_reasoning = default_tool_reasoning
         self._default_max_iterations = default_max_iterations
+        self._artifact_registry = artifact_registry
+        self._review_executor = review_executor
+        self._context_builder = context_builder
 
     async def close(self) -> None:
         """Close the reasoning strategy and release resources.
@@ -166,6 +175,21 @@ class WizardReasoning(ReasoningStrategy):
             await self._extractor.close()
             logger.debug("Closed WizardReasoning extractor")
 
+    @property
+    def artifact_registry(self) -> Any | None:
+        """Get the artifact registry if configured."""
+        return self._artifact_registry
+
+    @property
+    def review_executor(self) -> Any | None:
+        """Get the review executor if configured."""
+        return self._review_executor
+
+    @property
+    def context_builder(self) -> Any | None:
+        """Get the context builder if configured."""
+        return self._context_builder
+
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "WizardReasoning":
         """Create WizardReasoning from configuration dict.
@@ -176,6 +200,8 @@ class WizardReasoning(ReasoningStrategy):
                 - extraction_config: Optional extraction configuration
                 - strict_validation: Whether to enforce validation
                 - hooks: Optional hooks configuration dict
+                - artifacts: Optional artifact configuration with definitions
+                - review_protocols: Optional review protocol definitions
 
         Returns:
             Configured WizardReasoning instance
@@ -194,6 +220,18 @@ class WizardReasoning(ReasoningStrategy):
                   - function: "myapp.hooks:log_entry"
                 on_complete:
                   - "myapp.hooks:save_results"
+              artifacts:
+                definitions:
+                  assessment_questions:
+                    type: content
+                    reviews: [adversarial, skeptical]
+              review_protocols:
+                adversarial:
+                  persona: adversarial
+                  score_threshold: 0.7
+                skeptical:
+                  persona: skeptical
+                  score_threshold: 0.8
             ```
         """
         from .wizard_loader import WizardConfigLoader
@@ -236,6 +274,67 @@ class WizardReasoning(ReasoningStrategy):
         tool_reasoning = wizard_fsm.settings.get("tool_reasoning", "single")
         max_iterations = wizard_fsm.settings.get("max_tool_iterations", 3)
 
+        # Create artifact registry if artifact definitions configured
+        artifact_registry = None
+        artifacts_config = config.get("artifacts", {})
+        if artifacts_config:
+            try:
+                from ..artifacts import ArtifactDefinition, ArtifactRegistry
+
+                artifact_registry = ArtifactRegistry()
+                for def_id, def_config in artifacts_config.get("definitions", {}).items():
+                    definition = ArtifactDefinition(
+                        id=def_id,
+                        type=def_config.get("type", "content"),
+                        name=def_config.get("name"),
+                        schema=def_config.get("schema"),
+                        reviews=def_config.get("reviews", []),
+                        required_status_for_stage_completion=def_config.get(
+                            "required_status_for_stage_completion"
+                        ),
+                        auto_submit_for_review=def_config.get(
+                            "auto_submit_for_review", False
+                        ),
+                    )
+                    artifact_registry.register_definition(definition)
+                logger.info(
+                    "Created artifact registry with %d definitions",
+                    len(artifacts_config.get("definitions", {})),
+                )
+            except ImportError:
+                logger.warning(
+                    "Artifact modules not available, artifact tracking disabled"
+                )
+
+        # Create review executor if review protocols configured
+        review_executor = None
+        review_config = config.get("review_protocols", {})
+        if review_config:
+            try:
+                from ..review import ReviewExecutor, ReviewProtocolDefinition
+
+                protocols = {}
+                for proto_id, proto_config in review_config.items():
+                    protocols[proto_id] = ReviewProtocolDefinition.from_config(
+                        proto_id, proto_config
+                    )
+                review_executor = ReviewExecutor(protocols=protocols)
+                logger.info(
+                    "Created review executor with %d protocols", len(protocols)
+                )
+            except ImportError:
+                logger.warning("Review modules not available, reviews disabled")
+
+        # Create context builder if registry or executor available
+        context_builder = None
+        if artifact_registry is not None:
+            try:
+                from ..context import ContextBuilder
+
+                context_builder = ContextBuilder(artifact_registry=artifact_registry)
+            except ImportError:
+                logger.warning("Context modules not available")
+
         return cls(
             wizard_fsm=wizard_fsm,
             extractor=extractor,
@@ -247,6 +346,9 @@ class WizardReasoning(ReasoningStrategy):
             section_to_stage_mapping=section_mapping,
             default_tool_reasoning=tool_reasoning,
             default_max_iterations=max_iterations,
+            artifact_registry=artifact_registry,
+            review_executor=review_executor,
+            context_builder=context_builder,
         )
 
     async def generate(
@@ -928,6 +1030,21 @@ class WizardReasoning(ReasoningStrategy):
 
         # Build execution context for tools that need it
         tool_context = ToolExecutionContext.from_manager(manager)
+
+        # Extend context with artifact/review infrastructure if available
+        extra_context: dict[str, Any] = {}
+        if self._artifact_registry is not None:
+            extra_context["artifact_registry"] = self._artifact_registry
+        if self._review_executor is not None:
+            extra_context["review_executor"] = self._review_executor
+        if self._context_builder is not None:
+            try:
+                conversation_context = self._context_builder.build(manager)
+                extra_context["conversation_context"] = conversation_context
+            except Exception as e:
+                logger.warning("Failed to build conversation context: %s", e)
+        if extra_context:
+            tool_context = tool_context.with_extra(**extra_context)
 
         for iteration in range(max_iterations):
             # Make LLM call

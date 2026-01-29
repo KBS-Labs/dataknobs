@@ -39,6 +39,13 @@ from .models import (
     ArtifactType,
 )
 from .registry import ArtifactRegistry
+from .tools import (
+    CreateArtifactTool,
+    GetArtifactTool,
+    QueryArtifactsTool,
+    SubmitForReviewTool,
+    UpdateArtifactTool,
+)
 
 __all__ = [
     # Models
@@ -52,4 +59,10 @@ __all__ = [
     "ArtifactType",
     # Registry
     "ArtifactRegistry",
+    # Tools
+    "CreateArtifactTool",
+    "GetArtifactTool",
+    "QueryArtifactsTool",
+    "SubmitForReviewTool",
+    "UpdateArtifactTool",
 ]
