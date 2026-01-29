@@ -5,6 +5,19 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-01-29
+
+### dataknobs-llm [0.3.3]
+
+#### Added
+- added assumption tracking in SchemaExtractor
+
+### dataknobs-bots [0.4.1]
+
+#### Added
+- added artifacts, reviews, task injection, focus guards, and config versioning enhancements
+
+
 ## Release - 2026-01-28
 
 ### dataknobs-config [0.3.4]
