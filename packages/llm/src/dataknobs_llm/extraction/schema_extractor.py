@@ -533,6 +533,20 @@ class SchemaExtractor:
             assumptions=assumptions,
         )
 
+        # Log extraction result
+        duration_ms = (time.time() - start_time) * 1000
+        logger.debug(
+            "SchemaExtractor: input='%s' (len=%d), confidence=%.2f, duration=%.1fms",
+            text[:80].replace("\n", " ") + ("..." if len(text) > 80 else ""),
+            len(text),
+            confidence,
+            duration_ms,
+        )
+        if data:
+            logger.debug("SchemaExtractor: extracted data=%s", data)
+        if all_errors:
+            logger.debug("SchemaExtractor: errors=%s", all_errors)
+
         # Record extraction if tracking
         if tracker is not None:
             self._record_extraction(

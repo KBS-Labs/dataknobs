@@ -235,6 +235,7 @@ class WizardFSM:
         Returns:
             StepResult with transition details
         """
+        before_stage = self.current_stage
         if not self._context:
             self._context = self._fsm.create_context(data)
         else:
@@ -244,7 +245,44 @@ class WizardFSM:
             else:
                 self._context.data = data
 
-        return self._fsm.execute_step_sync(self._context)
+        result = self._fsm.execute_step_sync(self._context)
+        after_stage = self.current_stage
+
+        # Log transition evaluation details
+        if before_stage != after_stage:
+            # Log the condition that was evaluated
+            stage_meta = self._stage_metadata.get(before_stage, {})
+            transitions = stage_meta.get("transitions", [])
+            for trans in transitions:
+                if trans.get("target") == after_stage:
+                    condition = trans.get("condition", "unconditional")
+                    logger.debug(
+                        "WizardFSM transition: '%s' -> '%s' via condition: %s",
+                        before_stage,
+                        after_stage,
+                        condition,
+                    )
+                    break
+        else:
+            # Log why no transition occurred
+            stage_meta = self._stage_metadata.get(before_stage, {})
+            transitions = stage_meta.get("transitions", [])
+            if transitions:
+                logger.debug(
+                    "WizardFSM no transition from '%s': %d transitions defined, none matched",
+                    before_stage,
+                    len(transitions),
+                )
+                for trans in transitions:
+                    target = trans.get("target", "?")
+                    condition = trans.get("condition", "unconditional")
+                    logger.debug(
+                        "  - target='%s', condition='%s'",
+                        target,
+                        condition,
+                    )
+
+        return result
 
     def go_back(self, history: list[str]) -> bool:
         """Navigate to previous stage.

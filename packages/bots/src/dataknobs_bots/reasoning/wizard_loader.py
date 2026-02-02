@@ -437,10 +437,11 @@ class WizardConfigLoader:
                         ) -> bool:
                             try:
                                 # Simple evaluation - data is available directly
-                                local_vars: dict[str, Any] = {"data": data}
+                                # Pass data in globals so _test() can access it
+                                exec_globals: dict[str, Any] = {"data": data}
                                 exec_code = f"def _test():\n    {code}\n_result = _test()"
-                                exec(exec_code, {}, local_vars)  # nosec B102
-                                return bool(local_vars.get("_result", False))
+                                exec(exec_code, exec_globals)  # nosec B102
+                                return bool(exec_globals.get("_result", False))
                             except Exception as e:
                                 logger.warning(
                                     "Condition evaluation failed: %s", e

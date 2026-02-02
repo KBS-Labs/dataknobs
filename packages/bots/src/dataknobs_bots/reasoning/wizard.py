@@ -441,6 +441,21 @@ class WizardReasoning(ReasoningStrategy):
         # Extract structured data from user input
         extraction = await self._extract_data(user_message, stage, llm)
 
+        # Log extraction results for debugging
+        stage_name = stage.get("name", "unknown")
+        logger.debug(
+            "Extraction for stage '%s': confidence=%.2f, data_keys=%s",
+            stage_name,
+            extraction.confidence,
+            list(extraction.data.keys()) if extraction.data else [],
+        )
+        if extraction.data:
+            # Log actual extracted values (truncate long values)
+            for key, value in extraction.data.items():
+                if not key.startswith("_"):
+                    value_str = str(value)[:100]
+                    logger.debug("  Extracted %s = %r", key, value_str)
+
         # Handle low confidence extraction
         if not extraction.is_confident:
             wizard_state.clarification_attempts += 1
@@ -497,9 +512,31 @@ class WizardReasoning(ReasoningStrategy):
         from_stage = wizard_state.current_stage
         duration_ms = (time.time() - wizard_state.stage_entry_time) * 1000
 
+        # Log pre-transition state
+        logger.debug(
+            "FSM transition attempt: from_stage='%s', data_keys=%s",
+            from_stage,
+            list(wizard_state.data.keys()),
+        )
+
         # Execute FSM transition
         step_result = self._fsm.step(wizard_state.data)
         to_stage = self._fsm.current_stage
+
+        # Log transition result
+        if to_stage != from_stage:
+            logger.info(
+                "FSM transition: '%s' -> '%s' (is_complete=%s)",
+                from_stage,
+                to_stage,
+                step_result.is_complete,
+            )
+        else:
+            logger.debug(
+                "FSM no transition: stayed at '%s' (is_complete=%s)",
+                from_stage,
+                step_result.is_complete,
+            )
 
         # Record the transition if stage changed
         if to_stage != from_stage:
@@ -924,6 +961,14 @@ class WizardReasoning(ReasoningStrategy):
         stage_tools = self._filter_tools_for_stage(stage, tools)
 
         # Check if stage should use ReAct-style reasoning
+        stage_name = stage.get("name", "unknown")
+        logger.debug(
+            "Generating response for stage '%s' (tools=%s, react=%s)",
+            stage_name,
+            [getattr(t, "name", str(t)) for t in stage_tools] if stage_tools else None,
+            stage_tools and self._use_react_for_stage(stage),
+        )
+
         if stage_tools and self._use_react_for_stage(stage):
             response = await self._react_stage_response(
                 manager, enhanced_prompt, stage, state, stage_tools
@@ -933,6 +978,21 @@ class WizardReasoning(ReasoningStrategy):
             response = await manager.complete(
                 system_prompt_override=enhanced_prompt,
                 tools=stage_tools,
+            )
+
+        # Log response details
+        response_content = getattr(response, "content", str(response))
+        response_len = len(response_content) if response_content else 0
+        logger.debug(
+            "Stage '%s' response: %d chars, has_tool_calls=%s",
+            stage_name,
+            response_len,
+            bool(getattr(response, "tool_calls", None)),
+        )
+        if response_len == 0:
+            logger.warning(
+                "Empty response generated for stage '%s'",
+                stage_name,
             )
 
         # Add wizard metadata to response
