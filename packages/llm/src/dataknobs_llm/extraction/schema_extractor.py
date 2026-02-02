@@ -135,8 +135,12 @@ class ExtractionResult:
         """Check if extraction is confident enough to proceed.
 
         Returns True if confidence >= 0.8 and no errors occurred.
+
+        Note: Uses round() to handle floating point precision issues.
+        E.g., 0.7 + (1/3 * 0.3) = 0.7999999... which should be treated as 0.8.
         """
-        return self.confidence >= 0.8 and not self.errors
+        # Round to 10 decimal places to handle floating point precision
+        return round(self.confidence, 10) >= 0.8 and not self.errors
 
     @property
     def has_assumptions(self) -> bool:
@@ -146,7 +150,8 @@ class ExtractionResult:
     @property
     def unconfirmed_assumptions(self) -> list[ExtractedAssumption]:
         """Get assumptions with low confidence that may need confirmation."""
-        return [a for a in self.assumptions if a.confidence < 0.8]
+        # Round to handle floating point precision issues
+        return [a for a in self.assumptions if round(a.confidence, 10) < 0.8]
 
 
 # Default extraction prompt template
