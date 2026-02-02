@@ -127,6 +127,9 @@ class WizardReasoning(ReasoningStrategy):
         artifact_registry: Any | None = None,
         review_executor: Any | None = None,
         context_builder: Any | None = None,
+        extraction_scope: str = "wizard_session",
+        conflict_strategy: str = "latest_wins",
+        log_conflicts: bool = True,
     ):
         """Initialize WizardReasoning.
 
@@ -149,6 +152,13 @@ class WizardReasoning(ReasoningStrategy):
             artifact_registry: Optional ArtifactRegistry for artifact management.
             review_executor: Optional ReviewExecutor for running reviews.
             context_builder: Optional ContextBuilder for building conversation context.
+            extraction_scope: Scope for data extraction. "wizard_session" extracts
+                from all user messages in the wizard session (default), while
+                "current_message" only extracts from the current message.
+            conflict_strategy: Strategy for handling conflicting values when
+                the same field is extracted from multiple messages. "latest_wins"
+                (default) uses the most recent value.
+            log_conflicts: Whether to log when field values conflict (default: True).
         """
         self._fsm = wizard_fsm
         self._extractor = extractor
@@ -163,6 +173,9 @@ class WizardReasoning(ReasoningStrategy):
         self._artifact_registry = artifact_registry
         self._review_executor = review_executor
         self._context_builder = context_builder
+        self._extraction_scope = extraction_scope
+        self._conflict_strategy = conflict_strategy
+        self._log_conflicts = log_conflicts
 
     async def close(self) -> None:
         """Close the reasoning strategy and release resources.
@@ -273,6 +286,9 @@ class WizardReasoning(ReasoningStrategy):
         section_mapping = wizard_fsm.settings.get("section_to_stage_mapping", {})
         tool_reasoning = wizard_fsm.settings.get("tool_reasoning", "single")
         max_iterations = wizard_fsm.settings.get("max_tool_iterations", 3)
+        extraction_scope = wizard_fsm.settings.get("extraction_scope", "wizard_session")
+        conflict_strategy = wizard_fsm.settings.get("conflict_strategy", "latest_wins")
+        log_conflicts = wizard_fsm.settings.get("log_conflicts", True)
 
         # Create artifact registry if artifact definitions configured
         artifact_registry = None
@@ -349,6 +365,9 @@ class WizardReasoning(ReasoningStrategy):
             artifact_registry=artifact_registry,
             review_executor=review_executor,
             context_builder=context_builder,
+            extraction_scope=extraction_scope,
+            conflict_strategy=conflict_strategy,
+            log_conflicts=log_conflicts,
         )
 
     async def generate(
@@ -439,7 +458,9 @@ class WizardReasoning(ReasoningStrategy):
         stage = self._fsm.current_metadata
 
         # Extract structured data from user input
-        extraction = await self._extract_data(user_message, stage, llm)
+        extraction = await self._extract_data(
+            user_message, stage, llm, manager, wizard_state
+        )
 
         # Log extraction results for debugging
         stage_name = stage.get("name", "unknown")
@@ -845,18 +866,29 @@ class WizardReasoning(ReasoningStrategy):
         return None  # Not a navigation command
 
     async def _extract_data(
-        self, message: str, stage: dict[str, Any], llm: Any
+        self,
+        message: str,
+        stage: dict[str, Any],
+        llm: Any,
+        manager: Any | None = None,
+        wizard_state: WizardState | None = None,
     ) -> Any:
-        """Extract structured data from user message.
+        """Extract structured data from user message or wizard session.
+
+        When extraction_scope is "wizard_session", builds context from all
+        user messages in the wizard session for extraction. This allows the
+        wizard to remember information provided in earlier messages.
 
         Schema 'default' values are stripped before extraction to prevent
         the LLM from auto-filling them. This ensures extraction only captures
         what the user actually said.
 
         Args:
-            message: User message text
+            message: Current user message text
             stage: Current stage metadata
             llm: LLM provider (fallback if no extractor)
+            manager: ConversationManager for accessing message history
+            wizard_state: Current wizard state for conflict detection
 
         Returns:
             ExtractionResult with data and confidence
@@ -867,6 +899,7 @@ class WizardReasoning(ReasoningStrategy):
             data: dict[str, Any] = field(default_factory=dict)
             confidence: float = 0.0
             errors: list[str] = field(default_factory=list)
+            metadata: dict[str, Any] = field(default_factory=dict)
 
             @property
             def is_confident(self) -> bool:
@@ -879,6 +912,28 @@ class WizardReasoning(ReasoningStrategy):
                 data={"_raw_input": message}, confidence=1.0
             )
 
+        # Build extraction input based on scope
+        if (
+            self._extraction_scope == "wizard_session"
+            and manager is not None
+            and wizard_state is not None
+        ):
+            # Build context from wizard session conversation
+            wizard_context = self._build_wizard_context(manager, wizard_state)
+            if wizard_context:
+                extraction_input = (
+                    f"{wizard_context}\n\nCurrent message: {message}"
+                )
+                logger.debug(
+                    "Wizard session extraction: %d chars of context + current message",
+                    len(wizard_context),
+                )
+            else:
+                extraction_input = message
+        else:
+            # Current message only (original behavior)
+            extraction_input = message
+
         # Strip defaults to prevent extraction LLM from auto-filling them
         extraction_schema = self._strip_schema_defaults(schema)
 
@@ -886,18 +941,127 @@ class WizardReasoning(ReasoningStrategy):
             # Use schema extractor
             extraction_model = stage.get("extraction_model")
             context = {"stage": stage.get("name"), "prompt": stage.get("prompt")}
-            return await self._extractor.extract(
-                text=message,
+            result = await self._extractor.extract(
+                text=extraction_input,
                 schema=extraction_schema,
                 context=context,
                 model=extraction_model,
             )
+
+            # Detect conflicts with existing data
+            if wizard_state is not None and result.data:
+                conflicts = self._detect_conflicts(wizard_state.data, result.data)
+                if conflicts:
+                    if self._log_conflicts:
+                        for conflict in conflicts:
+                            logger.info(
+                                "Data conflict detected for field '%s': "
+                                "'%s' -> '%s' (using %s)",
+                                conflict["field"],
+                                conflict["previous"],
+                                conflict["new"],
+                                self._conflict_strategy,
+                            )
+                    # Add conflicts to result metadata for downstream use
+                    if not hasattr(result, "metadata") or result.metadata is None:
+                        result.metadata = {}
+                    result.metadata["conflicts"] = conflicts
+
+            return result
 
         # Fallback: simple heuristic extraction
         # This is very basic - the extractor should be used for real scenarios
         return SimpleExtractionResult(
             data={"_raw_input": message}, confidence=0.5
         )
+
+    def _build_wizard_context(
+        self, manager: Any, wizard_state: WizardState
+    ) -> str:
+        """Build extraction context from wizard session history.
+
+        Collects all user messages from the conversation to provide
+        full context for extraction. This allows the wizard to
+        "remember" information provided in earlier messages.
+
+        Args:
+            manager: ConversationManager instance
+            wizard_state: Current wizard state
+
+        Returns:
+            Formatted context string from previous user messages,
+            or empty string if no previous messages.
+        """
+        messages = manager.get_messages()
+
+        # Collect user messages (excluding the most recent which is current)
+        user_messages: list[str] = []
+        for msg in messages:
+            if msg.get("role") == "user":
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    user_messages.append(content)
+                elif isinstance(content, list):
+                    # Handle structured content
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            user_messages.append(part.get("text", ""))
+
+        # Exclude the last message (it's the current one we're processing)
+        previous_messages = user_messages[:-1] if len(user_messages) > 1 else []
+
+        if not previous_messages:
+            return ""
+
+        # Format as context
+        formatted = ["Previous conversation:"]
+        for i, msg in enumerate(previous_messages, 1):
+            # Truncate very long messages
+            truncated = msg[:500] + "..." if len(msg) > 500 else msg
+            formatted.append(f"  Message {i}: {truncated}")
+
+        return "\n".join(formatted)
+
+    def _detect_conflicts(
+        self,
+        existing_data: dict[str, Any],
+        new_data: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Detect conflicts between existing and newly extracted data.
+
+        A conflict occurs when a field exists in both dicts with
+        different non-None values.
+
+        Args:
+            existing_data: Data already in wizard state
+            new_data: Newly extracted data
+
+        Returns:
+            List of conflict dicts with field, previous, and new values.
+        """
+        conflicts: list[dict[str, Any]] = []
+
+        for field_name, new_value in new_data.items():
+            # Skip internal fields
+            if field_name.startswith("_"):
+                continue
+
+            # Skip if new value is None
+            if new_value is None:
+                continue
+
+            # Check if field exists with a different value
+            if field_name in existing_data:
+                existing_value = existing_data[field_name]
+                # Only count as conflict if existing is non-None and different
+                if existing_value is not None and existing_value != new_value:
+                    conflicts.append({
+                        "field": field_name,
+                        "previous": existing_value,
+                        "new": new_value,
+                    })
+
+        return conflicts
 
     def _validate_data(
         self, data: dict[str, Any], schema: dict[str, Any]
