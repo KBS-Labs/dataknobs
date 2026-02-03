@@ -5,7 +5,7 @@ import time
 from enum import Enum
 from typing import Any, Callable, Dict, List, Tuple
 
-from dataknobs_fsm.core.arc import ArcDefinition, ArcExecution
+from dataknobs_fsm.core.arc import ArcDefinition, ArcExecution, PushArc, DataIsolationMode
 from dataknobs_fsm.core.exceptions import FunctionError
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode, TransactionMode
@@ -175,6 +175,16 @@ class ExecutionEngine(BaseExecutionEngine):
                 # No valid transitions - check if this is a final state
                 if self._is_final_state(context.current_state):
                     return True, context.data
+
+                # Check if we're in a subflow at a final state - if so, pop back
+                if context.network_stack:
+                    if self._check_subflow_completion(context):
+                        # Successfully popped back to parent - continue execution
+                        logger.debug(
+                            "Subflow completed (no transitions), continuing in parent"
+                        )
+                        continue  # Re-evaluate from new state
+
                 return False, f"No valid transitions from state: {context.current_state}"
             
             # Choose transition based on strategy
@@ -191,14 +201,24 @@ class ExecutionEngine(BaseExecutionEngine):
                 context,
                 next_transition
             )
-            
+
             if not success:
                 return False, f"Transition failed: {next_transition}"
-            
+
             # Only increment if we actually transitioned
             if context.current_state != state_before:
                 transitions += 1
-        
+
+            # Check for subflow completion - if we're in a subflow and reached
+            # a final state, pop back to the parent network
+            if context.network_stack:
+                if self._check_subflow_completion(context):
+                    # Successfully popped back to parent - continue execution
+                    logger.debug(
+                        "Subflow completed, continuing in parent at state '%s'",
+                        context.current_state
+                    )
+
         return False, f"Maximum transitions ({max_transitions}) exceeded"
     
     def _execute_batch(
@@ -400,14 +420,18 @@ class ExecutionEngine(BaseExecutionEngine):
         arc: ArcDefinition
     ) -> bool:
         """Execute a single transition.
-        
+
         Args:
             context: Execution context.
             arc: Arc to execute.
-            
+
         Returns:
             True if successful.
         """
+        # Check if this is a PushArc (subflow transition)
+        if isinstance(arc, PushArc):
+            return self._execute_push_arc(context, arc)
+
         # Fire pre-transition hooks
         if self.enable_hooks:
             for hook in self._pre_transition_hooks:
@@ -491,7 +515,279 @@ class ExecutionEngine(BaseExecutionEngine):
                     return False
         
         return False
-    
+
+    def _execute_push_arc(
+        self,
+        context: ExecutionContext,
+        push_arc: PushArc,
+        max_subflow_depth: int = 10
+    ) -> bool:
+        """Execute a push arc to transition into a subflow network.
+
+        This method handles the mechanics of pushing execution to a sub-network:
+        1. Validates the target network exists
+        2. Applies data mapping from parent to child context
+        3. Pushes the network onto the context stack
+        4. Sets up execution to continue in the subflow
+
+        Args:
+            context: Execution context.
+            push_arc: PushArc definition with target network and mappings.
+            max_subflow_depth: Maximum allowed nesting depth for subflows.
+
+        Returns:
+            True if push was successful.
+        """
+        import copy
+
+        # Check depth limit to prevent infinite recursion
+        if len(context.network_stack) >= max_subflow_depth:
+            logger.error(
+                "Maximum subflow depth %d exceeded when pushing to network '%s'",
+                max_subflow_depth,
+                push_arc.target_network
+            )
+            return False
+
+        # Parse target network name (may include initial state: "network:state")
+        if ':' in push_arc.target_network:
+            network_name, initial_state = push_arc.target_network.split(':', 1)
+            initial_state = initial_state.strip()
+        else:
+            network_name = push_arc.target_network
+            initial_state = None
+
+        # Validate target network exists
+        target_network = self.fsm.networks.get(network_name)
+        if not target_network:
+            logger.error("Target network '%s' not found for PushArc", network_name)
+            return False
+
+        # Save current state resources for potential inheritance
+        parent_state_resources = getattr(context, 'current_state_resources', {})
+
+        # Fire pre-transition hooks
+        if self.enable_hooks:
+            for hook in self._pre_transition_hooks:
+                hook(context, push_arc)
+
+        # Apply data mapping (parent → child)
+        if push_arc.data_mapping:
+            mapped_data = self._apply_data_mapping(
+                context.data,
+                push_arc.data_mapping
+            )
+        else:
+            mapped_data = context.data
+
+        # Handle data isolation mode
+        if push_arc.isolation_mode == DataIsolationMode.COPY:
+            context.data = copy.deepcopy(mapped_data)
+        elif push_arc.isolation_mode == DataIsolationMode.SERIALIZE:
+            from dataknobs_fsm.utils.json_encoder import dumps, loads
+            serialized = dumps(mapped_data)
+            context.data = loads(serialized)
+        else:
+            # REFERENCE mode - use data directly
+            context.data = mapped_data
+
+        # Push the network onto the stack
+        context.push_network(network_name, push_arc.return_state)
+
+        # Store parent resources for subflow state access
+        context.parent_state_resources = parent_state_resources
+
+        # Find and enter the subflow's initial state
+        if initial_state:
+            # Use specified initial state
+            if initial_state not in target_network.states:
+                logger.error(
+                    "Initial state '%s' not found in network '%s'",
+                    initial_state,
+                    network_name
+                )
+                context.pop_network()
+                return False
+            target_state = initial_state
+        elif target_network.initial_states:
+            # Use network's default initial state
+            target_state = next(iter(target_network.initial_states))
+        else:
+            logger.error("No initial state in network '%s'", network_name)
+            context.pop_network()
+            return False
+
+        # Enter the subflow's initial state
+        if not self.enter_state(context, target_state, run_validators=True):
+            logger.error("Failed to enter subflow initial state '%s'", target_state)
+            context.pop_network()
+            return False
+
+        self._transition_count += 1
+
+        # Fire post-transition hooks
+        if self.enable_hooks:
+            for hook in self._post_transition_hooks:
+                hook(context, push_arc)
+
+        logger.debug(
+            "Pushed to subflow network '%s', state '%s'",
+            network_name,
+            target_state
+        )
+
+        return True
+
+    def _apply_data_mapping(
+        self,
+        data: Any,
+        mapping: Dict[str, str]
+    ) -> Dict[str, Any]:
+        """Apply data mapping from parent to child context.
+
+        Args:
+            data: Source data (parent context data).
+            mapping: Dict mapping parent_field -> child_field.
+
+        Returns:
+            Mapped data dictionary for child context.
+        """
+        if not mapping:
+            return data if isinstance(data, dict) else {'value': data}
+
+        mapped = {}
+        source_data = data if isinstance(data, dict) else {}
+
+        for parent_field, child_field in mapping.items():
+            if parent_field in source_data:
+                mapped[child_field] = source_data[parent_field]
+            elif hasattr(data, parent_field):
+                mapped[child_field] = getattr(data, parent_field)
+
+        return mapped
+
+    def _apply_result_mapping(
+        self,
+        data: Any,
+        mapping: Dict[str, str],
+        parent_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Apply result mapping from child to parent context.
+
+        Args:
+            data: Source data (child context result).
+            mapping: Dict mapping child_field -> parent_field.
+            parent_data: Parent context data to update.
+
+        Returns:
+            Updated parent data with mapped results.
+        """
+        if not mapping:
+            return data if isinstance(data, dict) else parent_data
+
+        result = dict(parent_data) if parent_data else {}
+        source_data = data if isinstance(data, dict) else {}
+
+        for child_field, parent_field in mapping.items():
+            if child_field in source_data:
+                result[parent_field] = source_data[child_field]
+            elif hasattr(data, child_field):
+                result[parent_field] = getattr(data, child_field)
+
+        return result
+
+    def _check_subflow_completion(
+        self,
+        context: ExecutionContext
+    ) -> bool:
+        """Check if we've completed a subflow and handle the return.
+
+        This method checks if:
+        1. We're currently in a subflow (network_stack is not empty)
+        2. The current state is a final state in the current network
+
+        If both conditions are true, it pops the subflow and returns
+        to the parent network's return state.
+
+        Args:
+            context: Execution context.
+
+        Returns:
+            True if a subflow was completed and popped.
+        """
+        # Check if we're in a subflow
+        if not context.network_stack:
+            return False
+
+        # Get current network from stack
+        current_network_name = context.network_stack[-1][0]
+        current_network = self.fsm.networks.get(current_network_name)
+
+        if not current_network:
+            logger.warning(
+                "Network '%s' from stack not found in FSM",
+                current_network_name
+            )
+            return False
+
+        # Check if current state is a final state in this network
+        if not context.current_state:
+            return False
+
+        if context.current_state not in current_network.final_states:
+            return False
+
+        # We're at a final state in a subflow - pop back to parent
+        return self._pop_subflow(context)
+
+    def _pop_subflow(
+        self,
+        context: ExecutionContext,
+        push_arc: PushArc | None = None
+    ) -> bool:
+        """Pop from a subflow back to the parent network.
+
+        Args:
+            context: Execution context.
+            push_arc: Optional PushArc that initiated this subflow (for result mapping).
+
+        Returns:
+            True if pop was successful.
+        """
+        if not context.network_stack:
+            return False
+
+        # Pop the network
+        _network_name, return_state = context.pop_network()
+
+        # Clean up parent_state_resources
+        if hasattr(context, 'parent_state_resources'):
+            delattr(context, 'parent_state_resources')
+
+        # Apply result mapping if we have the push arc
+        if push_arc and push_arc.result_mapping:
+            # Get the parent's data snapshot before subflow
+            # (this would need to be stored when pushing)
+            parent_data = getattr(context, '_parent_data_snapshot', {})
+            context.data = self._apply_result_mapping(
+                context.data,
+                push_arc.result_mapping,
+                parent_data
+            )
+
+        # Transition to return state if specified
+        if return_state:
+            if not self.enter_state(context, return_state, run_validators=True):
+                logger.error("Failed to enter return state '%s'", return_state)
+                return False
+
+        logger.debug(
+            "Popped from subflow, returned to state '%s'",
+            return_state or context.current_state
+        )
+
+        return True
+
     def _execute_pre_validators(
         self,
         context: ExecutionContext,
