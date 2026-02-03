@@ -19,6 +19,7 @@ from dataknobs_bots.reasoning.observability import (
 )
 from dataknobs_bots.reasoning.wizard import (
     SubflowContext,
+    WizardReasoning,
     WizardState,
 )
 
@@ -541,3 +542,233 @@ class TestDataMapping:
         assert result["output_list"] == [1, 2, 3]
         assert result["output_dict"] == {"nested": "value"}
         assert result["output_none"] is None
+
+
+class TestShouldPushSubflowGuard:
+    """Tests for _should_push_subflow guard against duplicate pushes.
+
+    This tests the fix for the subflow double-push bug where a subflow would
+    be pushed twice when wizard state is restored after bot recreation
+    (e.g., due to cache TTL expiration). The guard ensures we don't push
+    a subflow if we're already in one.
+    """
+
+    @pytest.fixture
+    def wizard_config_with_subflow(self) -> dict:
+        """Create a wizard config with a subflow transition."""
+        return {
+            "name": "test-wizard-subflow",
+            "version": "1.0",
+            "stages": [
+                {
+                    "name": "welcome",
+                    "is_start": True,
+                    "prompt": "Welcome!",
+                    "transitions": [{"target": "configure"}],
+                },
+                {
+                    "name": "configure",
+                    "prompt": "Configure the feature",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"enable_feature": {"type": "boolean"}},
+                    },
+                    "transitions": [
+                        {
+                            "target": "_subflow",
+                            "condition": "data.get('enable_feature') == True",
+                            "subflow": {
+                                "network": "feature_setup",
+                                "return_stage": "complete",
+                                "data_mapping": {"domain": "domain"},
+                                "result_mapping": {"result": "feature_result"},
+                            },
+                        },
+                        {"target": "complete"},
+                    ],
+                },
+                {
+                    "name": "complete",
+                    "is_end": True,
+                    "prompt": "Done!",
+                },
+            ],
+            "subflows": {
+                "feature_setup": {
+                    "stages": [
+                        {
+                            "name": "subflow_start",
+                            "is_start": True,
+                            "prompt": "Configure the feature details",
+                            "transitions": [{"target": "subflow_complete"}],
+                        },
+                        {
+                            "name": "subflow_complete",
+                            "is_end": True,
+                            "prompt": "Feature configured!",
+                        },
+                    ]
+                }
+            },
+        }
+
+    @pytest.fixture
+    def wizard_with_subflow(
+        self, wizard_config_with_subflow: dict
+    ) -> "WizardReasoning":
+        """Create a WizardReasoning instance with subflow support."""
+        from dataknobs_bots.reasoning.wizard import WizardReasoning
+        from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(wizard_config_with_subflow)
+        return WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False)
+
+    def test_returns_none_when_already_in_subflow(
+        self, wizard_with_subflow: "WizardReasoning"
+    ) -> None:
+        """Test that _should_push_subflow returns None when already in a subflow.
+
+        This is the key guard that prevents duplicate subflow pushes after
+        wizard state restoration (e.g., when bot is recreated due to cache
+        TTL expiration).
+        """
+        # Create a wizard state that is already in a subflow
+        subflow_context = SubflowContext(
+            parent_stage="configure",
+            parent_data={"enable_feature": True},
+            parent_history=["welcome", "configure"],
+            return_stage="complete",
+            result_mapping={"result": "feature_result"},
+            subflow_network="feature_setup",
+        )
+        wizard_state = WizardState(
+            current_stage="subflow_start",
+            data={"domain": "test"},
+            history=["subflow_start"],
+            subflow_stack=[subflow_context],  # Already in subflow!
+        )
+
+        # Verify the state thinks it's in a subflow
+        assert wizard_state.is_in_subflow is True
+
+        # The guard should return None - no new subflow should be pushed
+        result = wizard_with_subflow._should_push_subflow(
+            wizard_state, "user message"
+        )
+
+        assert result is None
+
+    def test_returns_config_when_not_in_subflow_and_condition_matches(
+        self, wizard_with_subflow: "WizardReasoning"
+    ) -> None:
+        """Test that _should_push_subflow returns config when conditions are met.
+
+        When not already in a subflow and the condition matches, the method
+        should return the subflow configuration.
+        """
+        # Create a wizard state at configure stage with matching condition
+        wizard_state = WizardState(
+            current_stage="configure",
+            data={"enable_feature": True},  # Matches the subflow condition
+            history=["welcome", "configure"],
+            subflow_stack=[],  # Not in a subflow
+        )
+
+        # Set up the FSM context to be at the configure stage
+        # First, trigger context creation by calling step()
+        wizard_with_subflow._fsm.step({})
+        # Then manually set the current state to configure
+        wizard_with_subflow._fsm._context.current_state = "configure"
+
+        # Verify the state is not in a subflow
+        assert wizard_state.is_in_subflow is False
+
+        # Should return the subflow config since condition matches
+        result = wizard_with_subflow._should_push_subflow(
+            wizard_state, "user message"
+        )
+
+        assert result is not None
+        assert result.get("network") == "feature_setup"
+        assert result.get("return_stage") == "complete"
+
+    def test_returns_none_when_condition_does_not_match(
+        self, wizard_with_subflow: "WizardReasoning"
+    ) -> None:
+        """Test that _should_push_subflow returns None when condition fails.
+
+        When the subflow transition condition doesn't match, the method
+        should return None even if not in a subflow.
+        """
+        # Create a wizard state with condition that doesn't match
+        wizard_state = WizardState(
+            current_stage="configure",
+            data={"enable_feature": False},  # Does NOT match subflow condition
+            history=["welcome", "configure"],
+            subflow_stack=[],
+        )
+
+        # Set up the FSM context to be at the configure stage
+        wizard_with_subflow._fsm.step({})
+        wizard_with_subflow._fsm._context.current_state = "configure"
+
+        # Verify the state is not in a subflow
+        assert wizard_state.is_in_subflow is False
+
+        # Should return None since condition doesn't match
+        result = wizard_with_subflow._should_push_subflow(
+            wizard_state, "user message"
+        )
+
+        assert result is None
+
+    def test_guard_prevents_duplicate_push_after_state_restoration(
+        self, wizard_with_subflow: "WizardReasoning"
+    ) -> None:
+        """Integration test: guard prevents double-push after bot recreation.
+
+        This simulates the scenario from the bug:
+        1. User enters subflow (wizard_state.is_in_subflow = True)
+        2. Bot is recreated (e.g., cache TTL expires)
+        3. State is restored from conversation metadata
+        4. _should_push_subflow is called again with restored state
+        5. Guard should prevent pushing the same subflow again
+        """
+        # Simulate restored state after bot recreation
+        # The subflow stack was correctly restored
+        subflow_context = SubflowContext(
+            parent_stage="configure",
+            parent_data={"enable_feature": True},
+            parent_history=["welcome", "configure"],
+            return_stage="complete",
+            result_mapping={"result": "feature_result"},
+            subflow_network="feature_setup",
+            push_timestamp=1234567890.0,  # Previous push time
+        )
+
+        # Restored wizard state - note is_in_subflow should be True
+        # because subflow_stack is not empty
+        restored_state = WizardState(
+            current_stage="subflow_start",
+            data={"domain": "test", "enable_feature": True},
+            history=["subflow_start"],
+            subflow_stack=[subflow_context],
+        )
+
+        # Verify state was restored correctly
+        assert restored_state.is_in_subflow is True
+        assert restored_state.subflow_depth == 1
+        assert restored_state.current_subflow is not None
+        assert restored_state.current_subflow.subflow_network == "feature_setup"
+
+        # Even if called again (e.g., on next message after bot recreation),
+        # the guard should prevent a duplicate push
+        result = wizard_with_subflow._should_push_subflow(
+            restored_state, "continue working"
+        )
+
+        assert result is None, (
+            "Guard failed: would have pushed duplicate subflow after "
+            "state restoration"
+        )

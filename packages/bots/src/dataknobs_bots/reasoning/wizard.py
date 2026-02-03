@@ -900,6 +900,11 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             Subflow config dict if should push, None otherwise
         """
+        # Guard: Don't push subflow if already in one
+        # This prevents duplicate pushes after state restoration
+        if wizard_state.is_in_subflow:
+            return None
+
         active_fsm = self._get_active_fsm()
         stage_meta = active_fsm.current_metadata
 
