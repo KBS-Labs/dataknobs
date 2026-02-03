@@ -71,6 +71,10 @@ class TransitionRecord:
     condition_evaluated: str | None = None
     condition_result: bool | None = None
     error: str | None = None
+    # Subflow tracking fields
+    subflow_push: str | None = None  # Network name if this transition pushes a subflow
+    subflow_pop: str | None = None  # Network name if this transition pops a subflow
+    subflow_depth: int = 0  # Depth after this transition (0 = main flow)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert record to dictionary.
@@ -739,6 +743,9 @@ def create_transition_record(
     condition_evaluated: str | None = None,
     condition_result: bool | None = None,
     error: str | None = None,
+    subflow_push: str | None = None,
+    subflow_pop: str | None = None,
+    subflow_depth: int = 0,
 ) -> TransitionRecord:
     """Factory function to create a transition record.
 
@@ -754,6 +761,9 @@ def create_transition_record(
         condition_evaluated: The condition expression that was evaluated
         condition_result: Result of the condition evaluation
         error: Error message if transition failed
+        subflow_push: Network name if this transition pushes a subflow
+        subflow_pop: Network name if this transition pops a subflow
+        subflow_depth: Depth after this transition (0 = main flow)
 
     Returns:
         TransitionRecord with current timestamp
@@ -769,6 +779,9 @@ def create_transition_record(
         condition_evaluated=condition_evaluated,
         condition_result=condition_result,
         error=error,
+        subflow_push=subflow_push,
+        subflow_pop=subflow_pop,
+        subflow_depth=subflow_depth,
     )
 
 
