@@ -844,8 +844,17 @@ class WizardReasoning(ReasoningStrategy):
         start_stage = self._fsm.current_stage
         initial_tasks = self._build_initial_tasks()
         self._active_subflow_fsm = None  # Ensure we start in main flow
+
+        # Inject wizard settings into initial data so transforms can access them.
+        # output_paths provides configurable file output locations.
+        initial_data: dict[str, Any] = {}
+        output_paths = self._fsm.settings.get("output_paths")
+        if output_paths:
+            initial_data["_output_paths"] = dict(output_paths)
+
         return WizardState(
             current_stage=start_stage,
+            data=initial_data,
             history=[start_stage],
             stage_entry_time=time.time(),
             tasks=initial_tasks,
