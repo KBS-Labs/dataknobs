@@ -302,14 +302,23 @@ class WizardConfigLoader:
                 code=condition_code,
             )
 
-        # Build transform function reference if specified
-        transform = None
+        # Build transform function reference(s) if specified
+        # Supports both single string and list of strings:
+        #   transform: apply_template          # single
+        #   transform: [apply_template, save]  # list
+        transform: FunctionReference | list[FunctionReference] | None = None
         if "transform" in transition:
-            transform_name = transition["transform"]
-            transform = FunctionReference(
-                type="registered",
-                name=transform_name,
-            )
+            raw_transform = transition["transform"]
+            if isinstance(raw_transform, list):
+                transform = [
+                    FunctionReference(type="registered", name=name)
+                    for name in raw_transform
+                ]
+            else:
+                transform = FunctionReference(
+                    type="registered",
+                    name=raw_transform,
+                )
 
         # Build arc metadata, including subflow config if present
         arc_metadata = dict(transition.get("metadata", {}))

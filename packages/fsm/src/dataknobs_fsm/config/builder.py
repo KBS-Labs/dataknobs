@@ -445,61 +445,54 @@ class FSMBuilder:
                     # Register as-is
                     self._function_manager.register_function(condition_name, condition, FunctionSource.INLINE)
 
-        # Resolve transform function
-        transform = None
-        transform_name = None
+        # Resolve transform function(s)
+        # ArcConfig.transform can be a single FunctionReference or a list
+        arc_transform: str | list[str] | None = None
         if arc_config.transform:
-            transform = self._resolve_function(arc_config.transform, ITransformFunction)
-            # Get or generate a unique name for the transform
-            transform_name = self._get_function_name(transform)
-            # Lambda functions get the unhelpful name "<lambda>" so we need to generate a unique name
-            if not transform_name or transform_name == "<lambda>":
-                # Generate a unique name based on arc endpoints and code/function id
-                if arc_config.transform.type == "inline" and arc_config.transform.code:
-                    # Use hash of code for uniqueness
-                    transform_name = f"transform_{source_state.name}_{arc_config.target}_{abs(hash(arc_config.transform.code))}"
-                else:
-                    transform_name = f"transform_{source_state.name}_{arc_config.target}_{id(transform)}"
-            # Register the function with the function manager so it gets transferred to FSM later
-            if transform_name and not self._function_manager.has_function(transform_name):
-                # Register the resolved function - we need the actual callable
-                self._function_manager.register_function(transform_name, transform, FunctionSource.INLINE)
-        
+            transform_refs = (
+                arc_config.transform
+                if isinstance(arc_config.transform, list)
+                else [arc_config.transform]
+            )
+            resolved_names: list[str] = []
+            for t_idx, t_ref in enumerate(transform_refs):
+                transform = self._resolve_function(t_ref, ITransformFunction)
+                t_name = self._get_function_name(transform)
+                if not t_name or t_name == "<lambda>":
+                    if t_ref.type == "inline" and t_ref.code:
+                        t_name = f"transform_{source_state.name}_{arc_config.target}_{t_idx}_{abs(hash(t_ref.code))}"
+                    else:
+                        t_name = f"transform_{source_state.name}_{arc_config.target}_{t_idx}_{id(transform)}"
+                if t_name and not self._function_manager.has_function(t_name):
+                    self._function_manager.register_function(t_name, transform, FunctionSource.INLINE)
+                resolved_names.append(t_name)
+
+            # Store as single string if only one, list if multiple
+            arc_transform = resolved_names[0] if len(resolved_names) == 1 else resolved_names
+
         # Create appropriate arc type
         if isinstance(arc_config, PushArcConfig):
-            # Use the names we determined above
-            pre_test_name = condition_name
-            arc_transform_name = transform_name
-            
-            # Push arc to another network
             arc = PushArc(
-                target_state=arc_config.target,  # Even push arcs have a target state
+                target_state=arc_config.target,
                 target_network=arc_config.target_network,
                 return_state=arc_config.return_state,
-                pre_test=pre_test_name,
-                transform=arc_transform_name,
+                pre_test=condition_name,
+                transform=arc_transform,
                 priority=arc_config.priority,
                 definition_order=definition_order,
                 metadata=arc_config.metadata,
             )
-            # Store resources separately if needed
             arc.required_resources = {r: r for r in arc_config.resources}
             return arc
         else:
-            # Regular arc within network
-            # Use the names we determined above
-            pre_test_name = condition_name
-            arc_transform_name = transform_name
-            
             arc = ArcDefinition(
                 target_state=arc_config.target,
-                pre_test=pre_test_name,
-                transform=arc_transform_name,
+                pre_test=condition_name,
+                transform=arc_transform,
                 priority=arc_config.priority,
                 definition_order=definition_order,
                 metadata=arc_config.metadata,
             )
-            # Store resources separately if needed
             arc.required_resources = {r: r for r in arc_config.resources}
             return arc
 
