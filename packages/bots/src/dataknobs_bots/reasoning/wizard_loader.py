@@ -378,6 +378,7 @@ class WizardConfigLoader:
 
             metadata[stage["name"]] = {
                 "name": stage["name"],  # Include name in metadata for template access
+                "label": stage.get("label", stage["name"]),
                 "prompt": stage.get("prompt", ""),
                 "schema": stage.get("schema"),
                 "suggestions": stage.get("suggestions", []),

@@ -451,6 +451,7 @@ class WizardStateSnapshot:
         can_skip: Whether current stage can be skipped
         can_go_back: Whether back navigation is allowed
         suggestions: Quick-reply suggestions for current stage
+        stages: Ordered list of stage dicts with name, label, and status
     """
 
     current_stage: str
@@ -473,6 +474,7 @@ class WizardStateSnapshot:
     can_skip: bool = False
     can_go_back: bool = True
     suggestions: list[str] = field(default_factory=list)
+    stages: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert snapshot to dictionary.
@@ -499,6 +501,7 @@ class WizardStateSnapshot:
             "can_skip": self.can_skip,
             "can_go_back": self.can_go_back,
             "suggestions": self.suggestions,
+            "stages": self.stages,
         }
 
     @classmethod
@@ -533,6 +536,7 @@ class WizardStateSnapshot:
             can_skip=data.get("can_skip", False),
             can_go_back=data.get("can_go_back", True),
             suggestions=data.get("suggestions", []),
+            stages=data.get("stages", []),
         )
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:

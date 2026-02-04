@@ -840,6 +840,7 @@ class DynaBot:
             "can_go_back": wizard_meta.get("can_go_back", True),
             "suggestions": wizard_meta.get("suggestions", []),
             "history": wizard_meta.get("history") or fsm_state.get("history", []),
+            "stages": wizard_meta.get("stages", []),
         }
 
     async def close(self) -> None:

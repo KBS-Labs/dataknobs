@@ -1623,7 +1623,49 @@ class WizardReasoning(ReasoningStrategy):
             "can_go_back": self._fsm.can_go_back() and len(state.history) > 1,
             "stage_prompt": stage.get("prompt", ""),
             "suggestions": stage.get("suggestions", []),
+            "stages": self._build_stages_roadmap(state),
         }
+
+    def _build_stages_roadmap(
+        self,
+        state: WizardState,
+    ) -> list[dict[str, str]]:
+        """Build ordered stages roadmap with labels and status.
+
+        Produces a list of stage entries for UI rendering (breadcrumb,
+        checklist, etc.). Each entry contains the stage name, a
+        human-readable label, and a status indicating whether the stage
+        has been completed, is the current stage, or is still pending.
+
+        When the wizard is inside a subflow, the parent stage remains
+        marked as ``current`` in the main roadmap.
+
+        Args:
+            state: Current wizard state
+
+        Returns:
+            List of dicts with ``name``, ``label``, and ``status`` keys.
+            Status is one of ``"completed"``, ``"current"``, or
+            ``"pending"``.
+        """
+        visited = set(state.history)
+        current = state.current_stage
+        stages: list[dict[str, str]] = []
+
+        for name, meta in self._fsm._stage_metadata.items():
+            if name == current:
+                status = "current"
+            elif name in visited:
+                status = "completed"
+            else:
+                status = "pending"
+            stages.append({
+                "name": name,
+                "label": meta.get("label", name),
+                "status": status,
+            })
+
+        return stages
 
     def _use_react_for_stage(self, stage: dict[str, Any]) -> bool:
         """Check if a stage should use ReAct-style reasoning.
@@ -2530,6 +2572,7 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
             can_skip=self._fsm.can_skip(),
             can_go_back=self._fsm.can_go_back() and len(wizard_state.history) > 1,
             suggestions=stage.get("suggestions", []),
+            stages=self._build_stages_roadmap(wizard_state),
         )
 
     @staticmethod
@@ -2601,6 +2644,40 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
             except ValueError:
                 stage_index = 0
 
+        # Build stages roadmap from definitions if available
+        stages: list[dict[str, str]] = []
+        if stage_definitions:
+            history_set = set(fsm_state.get("history", []))
+            if isinstance(stage_definitions, dict):
+                for name, meta in stage_definitions.items():
+                    label = (
+                        meta.get("label", name)
+                        if isinstance(meta, dict)
+                        else name
+                    )
+                    if name == current_stage:
+                        status = "current"
+                    elif name in history_set:
+                        status = "completed"
+                    else:
+                        status = "pending"
+                    stages.append(
+                        {"name": name, "label": label, "status": status}
+                    )
+            elif isinstance(stage_definitions, list):
+                for s in stage_definitions:
+                    name = s.get("name", "")
+                    label = s.get("label", name)
+                    if name == current_stage:
+                        status = "current"
+                    elif name in history_set:
+                        status = "completed"
+                    else:
+                        status = "pending"
+                    stages.append(
+                        {"name": name, "label": label, "status": status}
+                    )
+
         return WizardStateSnapshot(
             current_stage=current_stage,
             data=fsm_state.get("data", {}),
@@ -2617,4 +2694,5 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
             task_progress_percent=task_list.calculate_progress(),
             stage_index=stage_index,
             total_stages=total_stages,
+            stages=stages,
         )
