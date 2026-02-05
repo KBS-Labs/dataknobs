@@ -1421,9 +1421,10 @@ class WizardReasoning(ReasoningStrategy):
                 data={"_raw_input": message}, confidence=1.0
             )
 
-        # Build extraction input based on scope
+        # Build extraction input based on scope (stage override or wizard default)
+        extraction_scope = self._get_extraction_scope(stage)
         if (
-            self._extraction_scope == "wizard_session"
+            extraction_scope == "wizard_session"
             and manager is not None
             and wizard_state is not None
         ):
@@ -2041,6 +2042,19 @@ class WizardReasoning(ReasoningStrategy):
             Max iterations (from stage config or default)
         """
         return stage.get("max_iterations") or self._default_max_iterations
+
+    def _get_extraction_scope(self, stage: dict[str, Any]) -> str:
+        """Get extraction scope for a stage.
+
+        Allows per-stage override of the global extraction_scope setting.
+
+        Args:
+            stage: Stage metadata dict
+
+        Returns:
+            Extraction scope from stage config or wizard default
+        """
+        return stage.get("extraction_scope") or self._extraction_scope
 
     async def _react_stage_response(
         self,
