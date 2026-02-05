@@ -1996,8 +1996,9 @@ class WizardReasoning(ReasoningStrategy):
             lines.append("\nThe wizard is complete. Summarize what was collected.")
         else:
             lines.append(
-                "\nGuide the user through this stage. Be conversational and helpful. "
-                "Focus only on gathering information that has NOT already been collected."
+                "\nYou MUST focus on the goal above. Do NOT ask about topics "
+                "from other stages. Only gather information that has NOT "
+                "already been collected. Be conversational and helpful."
             )
 
         return "\n".join(lines)
