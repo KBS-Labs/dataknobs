@@ -860,6 +860,41 @@ class WizardReasoning(ReasoningStrategy):
             tasks=initial_tasks,
         )
 
+    def _build_wizard_metadata(self, state: WizardState) -> dict[str, Any]:
+        """Build canonical wizard metadata from current state.
+
+        Single source of truth for wizard metadata.  Used by both
+        ``_save_wizard_state`` (persistence) and ``_add_wizard_metadata``
+        (response decoration) to ensure consistency.
+
+        Args:
+            state: Current wizard state
+
+        Returns:
+            Canonical wizard metadata dict.
+        """
+        active_fsm = self._get_active_fsm()
+        stage_names = active_fsm.stage_names
+        try:
+            stage_index = stage_names.index(state.current_stage)
+        except ValueError:
+            stage_index = 0
+
+        return {
+            "current_stage": state.current_stage,
+            "stage_index": stage_index,
+            "total_stages": len(stage_names),
+            "progress": self._calculate_progress(state),
+            "completed": state.completed,
+            "data": state.data,
+            "history": state.history,
+            "can_skip": active_fsm.can_skip(),
+            "can_go_back": active_fsm.can_go_back() and len(state.history) > 1,
+            "stage_prompt": active_fsm.get_stage_prompt(),
+            "suggestions": active_fsm.get_stage_suggestions(),
+            "stages": self._build_stages_roadmap(state),
+        }
+
     def _save_wizard_state(self, manager: Any, state: WizardState) -> None:
         """Save wizard state to conversation manager.
 
@@ -867,20 +902,19 @@ class WizardReasoning(ReasoningStrategy):
             manager: ConversationManager instance
             state: WizardState to save
         """
-        manager.metadata["wizard"] = {
-            "fsm_state": {
-                "current_stage": state.current_stage,
-                "history": state.history,
-                "data": state.data,
-                "completed": state.completed,
-                "clarification_attempts": state.clarification_attempts,
-                "transitions": [t.to_dict() for t in state.transitions],
-                "stage_entry_time": state.stage_entry_time,
-                "tasks": state.tasks.to_dict(),
-                "subflow_stack": [s.to_dict() for s in state.subflow_stack],
-            },
-            "progress": self._calculate_progress(state),
+        wizard_meta = self._build_wizard_metadata(state)
+        wizard_meta["fsm_state"] = {
+            "current_stage": state.current_stage,
+            "history": state.history,
+            "data": state.data,
+            "completed": state.completed,
+            "clarification_attempts": state.clarification_attempts,
+            "transitions": [t.to_dict() for t in state.transitions],
+            "stage_entry_time": state.stage_entry_time,
+            "tasks": state.tasks.to_dict(),
+            "subflow_stack": [s.to_dict() for s in state.subflow_stack],
         }
+        manager.metadata["wizard"] = wizard_meta
 
     # =========================================================================
     # Subflow Management Methods
@@ -1608,23 +1642,20 @@ class WizardReasoning(ReasoningStrategy):
     ) -> None:
         """Add wizard metadata to response object.
 
+        Note: DynaBot.chat() only returns response content (a string),
+        so this metadata is only visible to code that accesses the raw
+        response object (e.g. middleware, tests).  For downstream
+        consumers like EduBot, wizard metadata flows through
+        ``_save_wizard_state`` → ``get_wizard_state()``.
+
         Args:
             response: LLM response object to modify
             state: Current wizard state
-            stage: Current stage metadata
+            stage: Current stage metadata (unused, kept for API compat)
         """
         if not hasattr(response, "metadata") or response.metadata is None:
             response.metadata = {}
-        response.metadata["wizard"] = {
-            "stage": state.current_stage,
-            "progress": self._calculate_progress(state),
-            "completed": state.completed,
-            "can_skip": self._fsm.can_skip(),
-            "can_go_back": self._fsm.can_go_back() and len(state.history) > 1,
-            "stage_prompt": stage.get("prompt", ""),
-            "suggestions": stage.get("suggestions", []),
-            "stages": self._build_stages_roadmap(state),
-        }
+        response.metadata["wizard"] = self._build_wizard_metadata(state)
 
     def _build_stages_roadmap(
         self,
