@@ -172,6 +172,9 @@ Extract data matching this JSON Schema:
 3. If information is missing, omit the field (don't use null unless appropriate)
 4. If you cannot extract the required information, return an empty object {{}}
 5. Do not include explanations - only return the JSON object
+6. For boolean fields, map "yes"/"no" to true/false
+7. For array fields with enum constraints, "all" means include every enum value; "none" means an empty array
+8. For array fields, always return a JSON array (e.g. ["value"]), never a bare string
 
 ## User Message
 {text}

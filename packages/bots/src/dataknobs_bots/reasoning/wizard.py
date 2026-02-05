@@ -599,6 +599,13 @@ class WizardReasoning(ReasoningStrategy):
         # Reset clarification attempts on successful extraction
         wizard_state.clarification_attempts = 0
 
+        # Normalize extracted data against schema before merging
+        schema = stage.get("schema")
+        if schema and extraction.data:
+            extraction.data = self._normalize_extracted_data(
+                extraction.data, schema
+            )
+
         # Merge extracted data with wizard state
         wizard_state.data.update(extraction.data)
 
@@ -1564,6 +1571,118 @@ class WizardReasoning(ReasoningStrategy):
                     })
 
         return conflicts
+
+    # -- Boolean truthy/falsy strings for normalization --
+    _BOOL_TRUE = frozenset({"yes", "true", "1", "y", "on", "enable", "enabled"})
+    _BOOL_FALSE = frozenset({"no", "false", "0", "n", "off", "disable", "disabled"})
+    _ALL_KEYWORDS = frozenset({"all", "everything", "all of them", "every one"})
+    _NONE_KEYWORDS = frozenset({"none", "nothing", "no tools", "empty"})
+
+    def _normalize_extracted_data(
+        self,
+        data: dict[str, Any],
+        schema: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Normalize extracted data to match schema types.
+
+        Applies deterministic, schema-driven corrections to LLM-extracted
+        data *before* it enters wizard state.  Only acts when the extracted
+        type doesn't match the declared schema type, so existing well-typed
+        extractions are passed through untouched.
+
+        Normalizations performed:
+
+        * **Boolean coercion** - string ``"yes"``/``"true"`` → ``True``, etc.
+        * **Array wrapping** - bare string for an ``array`` field → ``[value]``
+        * **Array shortcut expansion** - ``["all"]`` for ``array`` + ``items.enum``
+          → all enum values; ``["none"]`` → ``[]``
+        * **Number coercion** - string digits for ``integer``/``number`` → cast
+
+        Args:
+            data:   Extracted data dict (will be shallow-copied).
+            schema: JSON Schema for the current stage.
+
+        Returns:
+            New dict with normalized values.
+        """
+        properties = schema.get("properties", {})
+        if not properties:
+            return data
+
+        normalized = dict(data)
+
+        for field_name, value in data.items():
+            if field_name.startswith("_") or field_name not in properties:
+                continue
+
+            prop = properties[field_name]
+            declared_type = prop.get("type")
+
+            # --- Boolean coercion ---
+            if declared_type == "boolean" and isinstance(value, str):
+                lower = value.strip().lower()
+                if lower in self._BOOL_TRUE:
+                    normalized[field_name] = True
+                    logger.debug("Normalized %s: %r → True", field_name, value)
+                elif lower in self._BOOL_FALSE:
+                    normalized[field_name] = False
+                    logger.debug("Normalized %s: %r → False", field_name, value)
+
+            # --- Integer coercion ---
+            elif declared_type == "integer" and isinstance(value, str):
+                stripped = value.strip()
+                if stripped.lstrip("-").isdigit():
+                    normalized[field_name] = int(stripped)
+                    logger.debug(
+                        "Normalized %s: %r → %d", field_name, value, int(stripped)
+                    )
+
+            # --- Number (float) coercion ---
+            elif declared_type == "number" and isinstance(value, str):
+                stripped = value.strip()
+                try:
+                    normalized[field_name] = float(stripped)
+                    logger.debug(
+                        "Normalized %s: %r → %f",
+                        field_name,
+                        value,
+                        float(stripped),
+                    )
+                except ValueError:
+                    pass  # Leave as-is; validation will catch it
+
+            # --- Array handling ---
+            elif declared_type == "array":
+                items_schema = prop.get("items", {})
+                enum_values = items_schema.get("enum", [])
+
+                # Wrap bare string → list
+                if isinstance(value, str):
+                    value = [value]
+                    normalized[field_name] = value
+                    logger.debug(
+                        "Normalized %s: wrapped string → list", field_name
+                    )
+
+                # Expand "all"/"none" shortcuts when enum is defined
+                if isinstance(value, list) and enum_values:
+                    lower_items = {
+                        v.strip().lower() for v in value if isinstance(v, str)
+                    }
+                    if lower_items & self._ALL_KEYWORDS:
+                        normalized[field_name] = list(enum_values)
+                        logger.debug(
+                            "Normalized %s: 'all' → %s",
+                            field_name,
+                            enum_values,
+                        )
+                    elif lower_items & self._NONE_KEYWORDS:
+                        normalized[field_name] = []
+                        logger.debug(
+                            "Normalized %s: 'none' → []", field_name
+                        )
+
+        return normalized
 
     def _validate_data(
         self, data: dict[str, Any], schema: dict[str, Any]
