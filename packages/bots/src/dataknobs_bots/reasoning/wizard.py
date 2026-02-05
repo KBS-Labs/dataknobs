@@ -848,6 +848,9 @@ class WizardReasoning(ReasoningStrategy):
             return state
 
         # Initialize new wizard state with tasks from config
+        # Reset FSM context to ensure we start at the beginning, not at a
+        # stale stage from a previous conversation (if bot instance is cached)
+        self._fsm.restart()
         start_stage = self._fsm.current_stage
         initial_tasks = self._build_initial_tasks()
         self._active_subflow_fsm = None  # Ensure we start in main flow
