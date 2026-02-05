@@ -867,6 +867,12 @@ class WizardReasoning(ReasoningStrategy):
         ``_save_wizard_state`` (persistence) and ``_add_wizard_metadata``
         (response decoration) to ensure consistency.
 
+        When inside a subflow, ``stage_index``, ``total_stages``, and
+        ``progress_percent`` always report **main-flow** progress so
+        the UI can render an accurate overall progress indicator.  The
+        active subflow's stage is exposed separately via
+        ``subflow_stage``.
+
         Args:
             state: Current wizard state
 
@@ -874,17 +880,31 @@ class WizardReasoning(ReasoningStrategy):
             Canonical wizard metadata dict.
         """
         active_fsm = self._get_active_fsm()
-        stage_names = active_fsm.stage_names
+
+        # Always report main-flow progress for the roadmap / breadcrumb
+        main_stage_names = self._fsm.stage_names
+
+        if state.subflow_stack:
+            # During a subflow, the "effective" main-flow stage is the
+            # parent stage that pushed the subflow.
+            effective_main_stage = state.subflow_stack[-1].parent_stage
+        else:
+            effective_main_stage = state.current_stage
+
         try:
-            stage_index = stage_names.index(state.current_stage)
+            stage_index = main_stage_names.index(effective_main_stage)
         except ValueError:
             stage_index = 0
 
-        return {
+        total_stages = len(main_stage_names)
+        progress = stage_index / max(total_stages - 1, 1)
+
+        metadata: dict[str, Any] = {
             "current_stage": state.current_stage,
             "stage_index": stage_index,
-            "total_stages": len(stage_names),
-            "progress": self._calculate_progress(state),
+            "total_stages": total_stages,
+            "progress": progress,
+            "progress_percent": progress * 100,
             "completed": state.completed,
             "data": state.data,
             "history": state.history,
@@ -894,6 +914,18 @@ class WizardReasoning(ReasoningStrategy):
             "suggestions": active_fsm.get_stage_suggestions(),
             "stages": self._build_stages_roadmap(state),
         }
+
+        # Expose subflow context when active
+        if state.subflow_stack:
+            subflow_stage_meta = active_fsm.current_metadata
+            metadata["subflow_stage"] = {
+                "name": state.current_stage,
+                "label": subflow_stage_meta.get(
+                    "label", state.current_stage
+                ),
+            }
+
+        return metadata
 
     def _save_wizard_state(self, manager: Any, state: WizardState) -> None:
         """Save wizard state to conversation manager.
@@ -1577,6 +1609,17 @@ class WizardReasoning(ReasoningStrategy):
     ) -> Any:
         """Generate response appropriate for current stage.
 
+        Supports two modes:
+
+        1. **Template mode** (when stage has ``response_template``):
+           Renders the template with Jinja2 using wizard state data,
+           bypassing the LLM entirely. If the stage also has
+           ``llm_assist: true`` and the user's last message is a
+           question, the LLM is invoked with a scoped assist prompt.
+
+        2. **LLM mode** (default): Calls the LLM with stage context
+           injected into the system prompt, as before.
+
         Args:
             manager: ConversationManager instance
             llm: LLM provider
@@ -1587,6 +1630,43 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             LLM response with wizard metadata
         """
+        stage_name = stage.get("name", "unknown")
+        response_template = stage.get("response_template")
+
+        # ── Template mode ────────────────────────────────────────
+        if response_template:
+            rendered = self._render_response_template(response_template, stage, state)
+
+            # Check if user is asking a question and llm_assist is enabled
+            user_message = self._get_last_user_message(manager)
+            if stage.get("llm_assist") and user_message and self._is_help_request(user_message):
+                assist_prompt = stage.get("llm_assist_prompt") or stage.get("prompt", "")
+                scoped_prompt = (
+                    f"{manager.system_prompt}\n\n"
+                    f"The user is asking a question during the wizard. "
+                    f"Context: {assist_prompt}\n"
+                    f"Answer their question helpfully and concisely. "
+                    f"Do NOT change the topic or claim any actions."
+                )
+                logger.debug(
+                    "LLM assist for stage '%s' (user question detected)",
+                    stage_name,
+                )
+                response = await manager.complete(
+                    system_prompt_override=scoped_prompt,
+                )
+            else:
+                logger.debug(
+                    "Template response for stage '%s' (%d chars)",
+                    stage_name,
+                    len(rendered),
+                )
+                response = self._create_template_response(rendered)
+
+            self._add_wizard_metadata(response, state, stage)
+            return response
+
+        # ── LLM mode (original behavior) ─────────────────────────
         # Build stage-aware system prompt
         stage_context = self._build_stage_context(stage, state)
         enhanced_prompt = f"{manager.system_prompt}\n\n{stage_context}"
@@ -1595,7 +1675,6 @@ class WizardReasoning(ReasoningStrategy):
         stage_tools = self._filter_tools_for_stage(stage, tools)
 
         # Check if stage should use ReAct-style reasoning
-        stage_name = stage.get("name", "unknown")
         logger.debug(
             "Generating response for stage '%s' (tools=%s, react=%s)",
             stage_name,
@@ -1634,6 +1713,104 @@ class WizardReasoning(ReasoningStrategy):
 
         return response
 
+    def _render_response_template(
+        self,
+        template_str: str,
+        stage: dict[str, Any],
+        state: WizardState,
+    ) -> str:
+        """Render a stage response template with wizard state data.
+
+        Uses Jinja2 to render the template with collected wizard data
+        and stage metadata as context variables.
+
+        Args:
+            template_str: Jinja2 template string
+            stage: Current stage metadata
+            state: Current wizard state
+
+        Returns:
+            Rendered response string
+        """
+        import jinja2
+
+        env = jinja2.Environment(undefined=jinja2.Undefined)
+        template = env.from_string(template_str)
+
+        # Filter out internal keys for template access
+        collected_data = {
+            k: v for k, v in state.data.items() if not k.startswith("_")
+        }
+
+        # Build template context
+        context = {
+            # Stage metadata
+            "stage_name": stage.get("name", "unknown"),
+            "stage_label": stage.get("label", stage.get("name", "")),
+            # All collected data as top-level variables
+            **collected_data,
+            # Also available as a dict
+            "collected_data": collected_data,
+            # Wizard progress
+            "history": state.history,
+            "completed": state.completed,
+        }
+
+        return template.render(**context)
+
+    @staticmethod
+    def _create_template_response(content: str) -> Any:
+        """Create a minimal response object from template-rendered text.
+
+        The returned object is duck-type compatible with LLMResponse,
+        carrying the attributes that downstream code accesses:
+        ``content``, ``metadata``, and ``model``.
+
+        Args:
+            content: Rendered template text
+
+        Returns:
+            Response object compatible with the wizard pipeline
+        """
+        from dataclasses import dataclass as _dataclass
+        from dataclasses import field as _field
+        from datetime import datetime
+
+        @_dataclass
+        class _TemplateResponse:
+            content: str
+            model: str = "template"
+            finish_reason: str | None = "stop"
+            usage: dict[str, int] | None = None
+            tool_calls: list[Any] | None = None
+            metadata: dict[str, Any] = _field(default_factory=dict)
+            created_at: datetime = _field(default_factory=datetime.now)
+
+        return _TemplateResponse(content=content)
+
+    @staticmethod
+    def _is_help_request(message: str) -> bool:
+        """Check if a user message is a question/help request.
+
+        Used to decide whether to invoke the LLM in ``llm_assist``
+        mode for template-driven stages.
+
+        Args:
+            message: User message text
+
+        Returns:
+            True if the message appears to be a question
+        """
+        msg = message.strip().lower()
+        if msg.endswith("?"):
+            return True
+        question_starters = (
+            "what ", "which ", "how ", "why ", "should ",
+            "can ", "could ", "would ", "is ", "are ",
+            "do ", "does ", "help", "explain", "tell me",
+        )
+        return msg.startswith(question_starters)
+
     def _add_wizard_metadata(
         self,
         response: Any,
@@ -1668,8 +1845,11 @@ class WizardReasoning(ReasoningStrategy):
         human-readable label, and a status indicating whether the stage
         has been completed, is the current stage, or is still pending.
 
-        When the wizard is inside a subflow, the parent stage remains
-        marked as ``current`` in the main roadmap.
+        When the wizard is inside a subflow, the parent stage is marked
+        ``"current"`` (since its subflow is still active) and all stages
+        visited *before* the subflow push are marked ``"completed"``.
+        The subflow's own stages do NOT appear in this roadmap — they
+        are exposed via the ``subflow_stage`` key in wizard metadata.
 
         Args:
             state: Current wizard state
@@ -1679,14 +1859,28 @@ class WizardReasoning(ReasoningStrategy):
             Status is one of ``"completed"``, ``"current"``, or
             ``"pending"``.
         """
-        visited = set(state.history)
+        # During a subflow, state.history only contains subflow stages
+        # (it was reset at push time).  Use the parent's saved history
+        # to know which main-flow stages were visited.
+        if state.subflow_stack:
+            parent_ctx = state.subflow_stack[-1]
+            visited = set(parent_ctx.parent_history)
+            parent_stage = parent_ctx.parent_stage
+        else:
+            visited = set(state.history)
+            parent_stage = None
+
         current = state.current_stage
         stages: list[dict[str, str]] = []
 
         for name, meta in self._fsm._stage_metadata.items():
-            if name == current:
+            if parent_stage is not None and name == parent_stage:
+                # The parent stage is still active (subflow in progress)
                 status = "current"
-            elif name in visited:
+            elif parent_stage is None and name == current:
+                # Normal (non-subflow) flow: current stage
+                status = "current"
+            elif name in visited and name != parent_stage:
                 status = "completed"
             else:
                 status = "pending"

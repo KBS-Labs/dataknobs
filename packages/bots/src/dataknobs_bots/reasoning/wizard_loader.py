@@ -396,6 +396,10 @@ class WizardConfigLoader:
                 # ReAct-style tool reasoning settings
                 "reasoning": stage.get("reasoning"),  # "single" or "react"
                 "max_iterations": stage.get("max_iterations"),
+                # Template-driven response mode (bypasses LLM for stage prompt)
+                "response_template": stage.get("response_template"),
+                "llm_assist": stage.get("llm_assist", False),
+                "llm_assist_prompt": stage.get("llm_assist_prompt"),
             }
 
         # Add global tasks to the first stage's metadata
