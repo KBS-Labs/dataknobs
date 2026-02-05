@@ -1782,6 +1782,10 @@ class WizardReasoning(ReasoningStrategy):
                     len(rendered),
                 )
                 response = self._create_template_response(rendered)
+                # Persist template response to conversation store
+                # (manager.complete() does this automatically, but template
+                # mode bypasses the LLM so we must persist explicitly)
+                await manager.add_message(role="assistant", content=rendered)
 
             self._add_wizard_metadata(response, state, stage)
             return response
