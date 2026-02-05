@@ -1751,6 +1751,8 @@ class WizardReasoning(ReasoningStrategy):
             **collected_data,
             # Also available as a dict
             "collected_data": collected_data,
+            # Full data including internal keys (for save/review templates)
+            "all_data": dict(state.data),
             # Wizard progress
             "history": state.history,
             "completed": state.completed,
