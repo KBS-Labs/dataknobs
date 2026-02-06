@@ -134,6 +134,7 @@ nav:
       - Guides:
         - packages/fsm/guides/index.md
         - packages/fsm/guides/configuration.md
+        - packages/fsm/guides/subflows.md
         - packages/fsm/guides/data-modes.md
         - packages/fsm/guides/resources.md
         - packages/fsm/guides/streaming.md
@@ -201,6 +202,7 @@ nav:
           - packages/bots/guides/reviews.md
           - packages/bots/guides/context.md
         - Advanced Features:
+          - packages/bots/guides/wizard-subflows.md
           - packages/bots/guides/task-injection.md
           - packages/bots/guides/focus-guards.md
           - packages/bots/guides/config-versioning.md

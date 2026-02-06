@@ -432,6 +432,87 @@ stages:
 - Enable logging to debug
 - Verify schema matches expected data
 
+## Subflow Configuration
+
+Subflows let a wizard delegate to a child wizard mid-flow and return when it completes.
+Use the `_subflow` target in a transition:
+
+```yaml
+stages:
+  - name: configure
+    prompt: "Let's set up your project."
+    transitions:
+      - target: "_subflow"
+        subflow:
+          network: kb_setup        # Name of the subflow wizard
+          return_stage: review      # Stage to resume after subflow
+          data_mapping:             # Parent → child data
+            project_name: name
+          result_mapping:           # Child → parent data
+            kb_path: knowledge_base_path
+```
+
+Subflow definitions can be inline (under a top-level `subflows:` key) or loaded
+from a separate YAML file next to the main config. See the
+[Wizard Subflows Guide](../guides/wizard-subflows.md) for full details.
+
+## Template Responses
+
+Use `response_template` on a stage to render a Jinja2 template instead of calling
+the LLM. Collected wizard data is available as top-level template variables:
+
+```yaml
+stages:
+  - name: summary
+    prompt: "Here is your summary."
+    response_template: |
+      Thanks, {{ name }}! Here's what we collected:
+      - Project: {{ project_name }}
+      - Tools: {{ tools | join(', ') }}
+
+      Stage: {{ stage_name }} ({{ stage_label }})
+    transitions:
+      - target: complete
+```
+
+The template context includes `stage_name`, `stage_label`, `collected_data`,
+`history`, and `completed`. Undefined variables render as empty strings.
+
+## Stage Labels
+
+Add a `label` field to stages for human-readable display in breadcrumbs or
+progress indicators:
+
+```yaml
+stages:
+  - name: welcome
+    label: "Getting Started"
+    prompt: "Welcome!"
+  - name: configure
+    label: "Configuration"
+    prompt: "Set things up."
+```
+
+Labels appear in the stages roadmap (`WizardStateSnapshot.stages`) with each
+entry containing `name`, `label`, and `status` (`completed`, `current`, or
+`pending`).
+
+## Schema Normalization
+
+The wizard automatically normalizes extracted data to match the JSON Schema
+before storing it:
+
+- **Boolean coercion** -- `"yes"`, `"true"`, `"1"` become `True`; `"no"`,
+  `"false"`, `"0"` become `False`
+- **Integer/number coercion** -- `"42"` becomes `42` for `integer` fields;
+  `"3.14"` becomes `3.14` for `number` fields
+- **Array wrapping** -- a bare string for an `array` field is wrapped in a list
+- **Array shortcuts** -- `["all"]` expands to the full enum list;
+  `["none"]` becomes `[]`
+
+Normalization only applies to fields declared in the stage schema. Internal
+fields (prefixed with `_`) and unknown fields are left unchanged.
+
 ## What's Next?
 
 - [ReAct Agent](react-agent.md) - Tool-using agents
@@ -442,4 +523,5 @@ stages:
 
 - [User Guide](../guides/user-guide.md) - Comprehensive tutorials
 - [Configuration Reference](../guides/configuration.md#wizard-reasoning) - Wizard config options
+- [Wizard Subflows Guide](../guides/wizard-subflows.md) - Subflow configuration and data mapping
 - [Architecture](../guides/architecture.md) - System design
