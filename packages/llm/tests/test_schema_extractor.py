@@ -59,6 +59,50 @@ class TestExtractionResult:
         result_below = ExtractionResult(data={"x": 1}, confidence=0.79, errors=[])
         assert result_below.is_confident is False
 
+    def test_confidence_threshold_floating_point_precision(self) -> None:
+        """Test confidence threshold handles floating point precision edge cases.
+
+        When extracting 1 out of 3 schema properties, the confidence calculation
+        produces 0.7 + (1/3 * 0.3) = 0.7999999999999999, which should be treated
+        as meeting the 0.8 threshold.
+
+        This was a real bug that caused extraction data to not be merged into
+        wizard state because 0.7999999999999999 >= 0.8 evaluates to False.
+        """
+        # Simulate the confidence calculation for 1/3 properties extracted
+        # confidence = (required_ratio * 0.7) + (property_ratio * 0.3)
+        # With no required fields: required_ratio = 1.0
+        # With 1/3 properties: property_ratio = 1/3
+        property_ratio = 1 / 3
+        confidence = (1.0 * 0.7) + (property_ratio * 0.3)
+
+        # Verify this is the floating point edge case
+        assert confidence < 0.8, "Test setup: should be just under 0.8 due to float precision"
+        assert f"{confidence:.2f}" == "0.80", "Test setup: should display as 0.80"
+
+        # The fix ensures this is treated as confident
+        result = ExtractionResult(data={"field": "value"}, confidence=confidence, errors=[])
+        assert result.is_confident is True, (
+            f"Confidence {confidence} (displays as {confidence:.2f}) should be treated as >= 0.8"
+        )
+
+    def test_confidence_threshold_other_floating_point_cases(self) -> None:
+        """Test other floating point edge cases that could hit the 0.8 boundary."""
+        # 2/6 properties = 1/3 ratio
+        confidence_2_of_6 = (1.0 * 0.7) + ((2 / 6) * 0.3)
+        result = ExtractionResult(data={"a": 1}, confidence=confidence_2_of_6, errors=[])
+        assert result.is_confident is True
+
+        # 3/9 properties = 1/3 ratio
+        confidence_3_of_9 = (1.0 * 0.7) + ((3 / 9) * 0.3)
+        result = ExtractionResult(data={"a": 1}, confidence=confidence_3_of_9, errors=[])
+        assert result.is_confident is True
+
+        # Verify truly below threshold still fails
+        confidence_clearly_below = 0.79
+        result = ExtractionResult(data={"a": 1}, confidence=confidence_clearly_below, errors=[])
+        assert result.is_confident is False
+
 
 class TestSchemaExtractor:
     """Tests for SchemaExtractor."""
@@ -341,6 +385,51 @@ class TestSchemaExtractor:
         # Has errors so confidence is capped at 0.5
         assert result.confidence == 0.5
         assert not result.is_confident
+
+    @pytest.mark.asyncio
+    async def test_confidence_one_of_three_properties_is_confident(
+        self, extractor: SchemaExtractor, echo_provider: EchoProvider
+    ) -> None:
+        """Test that extracting 1 of 3 optional properties is confident.
+
+        This is a regression test for a floating point precision bug where
+        confidence = 0.7 + (1/3 * 0.3) = 0.7999999... would fail the >= 0.8 check.
+
+        Real-world scenario: ConfigBot's configure_knowledge stage has 3 properties
+        (kb_enabled, kb_type, kb_description) and user says "No knowledge base needed"
+        which extracts only kb_enabled=false. This should be confident.
+        """
+        schema = {
+            "type": "object",
+            "properties": {
+                "kb_enabled": {"type": "boolean"},
+                "kb_type": {"type": "string", "enum": ["document", "url"]},
+                "kb_description": {"type": "string"},
+            },
+            # No required fields - all optional
+        }
+
+        # Only one property extracted (kb_enabled)
+        echo_provider.set_responses(['{"kb_enabled": false}'])
+
+        result = await extractor.extract(
+            text="No knowledge base needed",
+            schema=schema,
+        )
+
+        # Should extract the boolean correctly
+        assert result.data == {"kb_enabled": False}
+        assert result.errors == []
+
+        # Confidence should be ~0.8 (1.0 * 0.7 + 0.333 * 0.3)
+        # Due to floating point, this is 0.7999999999999999
+        assert f"{result.confidence:.2f}" == "0.80"
+
+        # Critical: despite floating point, this should be confident
+        assert result.is_confident, (
+            f"Extraction with confidence {result.confidence} should be confident. "
+            "This is the floating point precision bug regression test."
+        )
 
 
 class TestSchemaExtractorFromConfig:

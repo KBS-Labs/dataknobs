@@ -130,6 +130,7 @@ class TestNormalizeWizardState:
             "can_go_back",
             "suggestions",
             "history",
+            "stages",
         }
         assert set(result.keys()) == expected_keys
 

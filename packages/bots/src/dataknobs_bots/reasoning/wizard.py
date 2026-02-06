@@ -5,6 +5,8 @@ guided conversational wizard flows with validation, data collection,
 and branching logic.
 """
 
+from __future__ import annotations
+
 import logging
 import time
 from dataclasses import dataclass, field
@@ -54,11 +56,74 @@ class WizardStageContext:
 
 
 @dataclass
+class SubflowContext:
+    """Context for a pushed subflow.
+
+    Stores the parent wizard state so it can be restored when the
+    subflow completes.
+
+    Attributes:
+        parent_stage: Stage name in the parent flow before push
+        parent_data: Copy of wizard data at push time
+        parent_history: Copy of stage history at push time
+        return_stage: Stage to transition to when subflow completes
+        result_mapping: Mapping of subflow field names to parent field names
+        subflow_network: Name of the subflow network being executed
+        push_timestamp: When the subflow was pushed
+    """
+
+    parent_stage: str
+    parent_data: dict[str, Any]
+    parent_history: list[str]
+    return_stage: str
+    result_mapping: dict[str, str]
+    subflow_network: str
+    push_timestamp: float = field(default_factory=time.time)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization.
+
+        Returns:
+            Dictionary representation of the subflow context
+        """
+        return {
+            "parent_stage": self.parent_stage,
+            "parent_data": self.parent_data,
+            "parent_history": self.parent_history,
+            "return_stage": self.return_stage,
+            "result_mapping": self.result_mapping,
+            "subflow_network": self.subflow_network,
+            "push_timestamp": self.push_timestamp,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SubflowContext:
+        """Create from dictionary.
+
+        Args:
+            data: Dictionary containing subflow context fields
+
+        Returns:
+            SubflowContext instance
+        """
+        return cls(
+            parent_stage=data["parent_stage"],
+            parent_data=data["parent_data"],
+            parent_history=data["parent_history"],
+            return_stage=data["return_stage"],
+            result_mapping=data.get("result_mapping", {}),
+            subflow_network=data["subflow_network"],
+            push_timestamp=data.get("push_timestamp", time.time()),
+        )
+
+
+@dataclass
 class WizardState:
     """Persistent wizard state across conversation turns.
 
     Tracks the wizard's current position, collected data,
-    navigation history, transition audit trail, and task completion.
+    navigation history, transition audit trail, task completion,
+    and subflow stack for nested wizard flows.
 
     Attributes:
         current_stage: Name of the current stage
@@ -69,6 +134,7 @@ class WizardState:
         transitions: Audit trail of all state transitions
         stage_entry_time: Timestamp when current stage was entered
         tasks: List of trackable tasks with completion status
+        subflow_stack: Stack of subflow contexts for nested flows
     """
 
     current_stage: str
@@ -79,6 +145,34 @@ class WizardState:
     transitions: list[TransitionRecord] = field(default_factory=list)
     stage_entry_time: float = field(default_factory=time.time)
     tasks: WizardTaskList = field(default_factory=WizardTaskList)
+    subflow_stack: list[SubflowContext] = field(default_factory=list)
+
+    @property
+    def is_in_subflow(self) -> bool:
+        """Check if currently executing within a subflow.
+
+        Returns:
+            True if subflow_stack is not empty
+        """
+        return len(self.subflow_stack) > 0
+
+    @property
+    def subflow_depth(self) -> int:
+        """Get current subflow nesting depth.
+
+        Returns:
+            Number of subflows on the stack (0 = main flow)
+        """
+        return len(self.subflow_stack)
+
+    @property
+    def current_subflow(self) -> SubflowContext | None:
+        """Get the current subflow context.
+
+        Returns:
+            Current SubflowContext or None if in main flow
+        """
+        return self.subflow_stack[-1] if self.subflow_stack else None
 
 
 class WizardReasoning(ReasoningStrategy):
@@ -114,7 +208,7 @@ class WizardReasoning(ReasoningStrategy):
 
     def __init__(
         self,
-        wizard_fsm: "WizardFSM",
+        wizard_fsm: WizardFSM,
         extractor: Any | None = None,
         strict_validation: bool = True,
         hooks: WizardHooks | None = None,
@@ -127,6 +221,9 @@ class WizardReasoning(ReasoningStrategy):
         artifact_registry: Any | None = None,
         review_executor: Any | None = None,
         context_builder: Any | None = None,
+        extraction_scope: str = "wizard_session",
+        conflict_strategy: str = "latest_wins",
+        log_conflicts: bool = True,
     ):
         """Initialize WizardReasoning.
 
@@ -149,6 +246,13 @@ class WizardReasoning(ReasoningStrategy):
             artifact_registry: Optional ArtifactRegistry for artifact management.
             review_executor: Optional ReviewExecutor for running reviews.
             context_builder: Optional ContextBuilder for building conversation context.
+            extraction_scope: Scope for data extraction. "wizard_session" extracts
+                from all user messages in the wizard session (default), while
+                "current_message" only extracts from the current message.
+            conflict_strategy: Strategy for handling conflicting values when
+                the same field is extracted from multiple messages. "latest_wins"
+                (default) uses the most recent value.
+            log_conflicts: Whether to log when field values conflict (default: True).
         """
         self._fsm = wizard_fsm
         self._extractor = extractor
@@ -163,6 +267,11 @@ class WizardReasoning(ReasoningStrategy):
         self._artifact_registry = artifact_registry
         self._review_executor = review_executor
         self._context_builder = context_builder
+        self._extraction_scope = extraction_scope
+        self._conflict_strategy = conflict_strategy
+        self._log_conflicts = log_conflicts
+        # Active subflow FSM (None when in main flow)
+        self._active_subflow_fsm: WizardFSM | None = None
 
     async def close(self) -> None:
         """Close the reasoning strategy and release resources.
@@ -191,7 +300,7 @@ class WizardReasoning(ReasoningStrategy):
         return self._context_builder
 
     @classmethod
-    def from_config(cls, config: dict[str, Any]) -> "WizardReasoning":
+    def from_config(cls, config: dict[str, Any]) -> WizardReasoning:
         """Create WizardReasoning from configuration dict.
 
         Args:
@@ -273,6 +382,9 @@ class WizardReasoning(ReasoningStrategy):
         section_mapping = wizard_fsm.settings.get("section_to_stage_mapping", {})
         tool_reasoning = wizard_fsm.settings.get("tool_reasoning", "single")
         max_iterations = wizard_fsm.settings.get("max_tool_iterations", 3)
+        extraction_scope = wizard_fsm.settings.get("extraction_scope", "wizard_session")
+        conflict_strategy = wizard_fsm.settings.get("conflict_strategy", "latest_wins")
+        log_conflicts = wizard_fsm.settings.get("log_conflicts", True)
 
         # Create artifact registry if artifact definitions configured
         artifact_registry = None
@@ -349,6 +461,9 @@ class WizardReasoning(ReasoningStrategy):
             artifact_registry=artifact_registry,
             review_executor=review_executor,
             context_builder=context_builder,
+            extraction_scope=extraction_scope,
+            conflict_strategy=conflict_strategy,
+            log_conflicts=log_conflicts,
         )
 
     async def generate(
@@ -400,7 +515,8 @@ class WizardReasoning(ReasoningStrategy):
                     wizard_state.history.append(target_stage)
 
                 # Restore FSM to target stage
-                self._fsm.restore({
+                active_fsm = self._get_active_fsm()
+                active_fsm.restore({
                     "current_stage": target_stage,
                     "data": wizard_state.data,
                 })
@@ -413,6 +529,7 @@ class WizardReasoning(ReasoningStrategy):
                     duration_in_stage_ms=duration_ms,
                     data_snapshot=wizard_state.data.copy(),
                     user_input=user_message,
+                    subflow_depth=wizard_state.subflow_depth,
                 )
                 wizard_state.transitions.append(transition)
                 wizard_state.stage_entry_time = time.time()
@@ -420,7 +537,7 @@ class WizardReasoning(ReasoningStrategy):
                 logger.info("Amendment: re-opening wizard at %s", target_stage)
 
                 # Generate response for the re-opened stage
-                stage = self._fsm.current_metadata
+                stage = active_fsm.current_metadata
                 response = await self._generate_stage_response(
                     manager, llm, stage, wizard_state, tools
                 )
@@ -435,11 +552,29 @@ class WizardReasoning(ReasoningStrategy):
             self._save_wizard_state(manager, wizard_state)
             return nav_result
 
-        # Get current stage context
-        stage = self._fsm.current_metadata
+        # Get current stage context from active FSM (subflow or main)
+        active_fsm = self._get_active_fsm()
+        stage = active_fsm.current_metadata
 
         # Extract structured data from user input
-        extraction = await self._extract_data(user_message, stage, llm)
+        extraction = await self._extract_data(
+            user_message, stage, llm, manager, wizard_state
+        )
+
+        # Log extraction results for debugging
+        stage_name = stage.get("name", "unknown")
+        logger.debug(
+            "Extraction for stage '%s': confidence=%.2f, data_keys=%s",
+            stage_name,
+            extraction.confidence,
+            list(extraction.data.keys()) if extraction.data else [],
+        )
+        if extraction.data:
+            # Log actual extracted values (truncate long values)
+            for key, value in extraction.data.items():
+                if not key.startswith("_"):
+                    value_str = str(value)[:100]
+                    logger.debug("  Extracted %s = %r", key, value_str)
 
         # Handle low confidence extraction
         if not extraction.is_confident:
@@ -463,6 +598,13 @@ class WizardReasoning(ReasoningStrategy):
 
         # Reset clarification attempts on successful extraction
         wizard_state.clarification_attempts = 0
+
+        # Normalize extracted data against schema before merging
+        schema = stage.get("schema")
+        if schema and extraction.data:
+            extraction.data = self._normalize_extracted_data(
+                extraction.data, schema
+            )
 
         # Merge extracted data with wizard state
         wizard_state.data.update(extraction.data)
@@ -493,18 +635,55 @@ class WizardReasoning(ReasoningStrategy):
         # Update stage-exit tasks before leaving
         self._update_stage_exit_tasks(wizard_state, wizard_state.current_stage)
 
+        # Check for subflow push BEFORE regular FSM transition
+        subflow_config = self._should_push_subflow(wizard_state, user_message)
+        if subflow_config:
+            # Push to subflow
+            if self._handle_subflow_push(wizard_state, subflow_config, user_message):
+                # Generate response for subflow's first stage
+                active_fsm = self._get_active_fsm()
+                new_stage = active_fsm.current_metadata
+                response = await self._generate_stage_response(
+                    manager, llm, new_stage, wizard_state, tools
+                )
+                self._save_wizard_state(manager, wizard_state)
+                return response
+
         # Capture state before transition
         from_stage = wizard_state.current_stage
         duration_ms = (time.time() - wizard_state.stage_entry_time) * 1000
 
-        # Execute FSM transition
-        step_result = self._fsm.step(wizard_state.data)
-        to_stage = self._fsm.current_stage
+        # Log pre-transition state
+        logger.debug(
+            "FSM transition attempt: from_stage='%s', data_keys=%s",
+            from_stage,
+            list(wizard_state.data.keys()),
+        )
+
+        # Execute FSM transition using active FSM
+        step_result = active_fsm.step(wizard_state.data)
+        to_stage = active_fsm.current_stage
+
+        # Log transition result
+        if to_stage != from_stage:
+            logger.info(
+                "FSM transition: '%s' -> '%s' (is_complete=%s, depth=%d)",
+                from_stage,
+                to_stage,
+                step_result.is_complete,
+                wizard_state.subflow_depth,
+            )
+        else:
+            logger.debug(
+                "FSM no transition: stayed at '%s' (is_complete=%s)",
+                from_stage,
+                step_result.is_complete,
+            )
 
         # Record the transition if stage changed
         if to_stage != from_stage:
             # Look up the condition that was evaluated for this transition
-            condition_expr = self._fsm.get_transition_condition(from_stage, to_stage)
+            condition_expr = active_fsm.get_transition_condition(from_stage, to_stage)
 
             transition = create_transition_record(
                 from_stage=from_stage,
@@ -515,6 +694,7 @@ class WizardReasoning(ReasoningStrategy):
                 user_input=user_message,
                 condition_evaluated=condition_expr,
                 condition_result=True if condition_expr else None,
+                subflow_depth=wizard_state.subflow_depth,
             )
             wizard_state.transitions.append(transition)
             wizard_state.stage_entry_time = time.time()
@@ -524,8 +704,16 @@ class WizardReasoning(ReasoningStrategy):
             wizard_state.history.append(wizard_state.current_stage)
         wizard_state.completed = step_result.is_complete
 
+        # Check for subflow pop (reached end state in subflow)
+        if self._should_pop_subflow(wizard_state):
+            self._handle_subflow_pop(wizard_state)
+            # Update active FSM reference after pop
+            active_fsm = self._get_active_fsm()
+            # Not completed since we returned to parent flow
+            wizard_state.completed = False
+
         # Auto-advance through stages where all required fields are filled
-        new_stage = self._fsm.current_metadata
+        new_stage = active_fsm.current_metadata
         auto_advance_count = 0
         max_auto_advances = 10  # Safety limit to prevent infinite loops
 
@@ -539,15 +727,15 @@ class WizardReasoning(ReasoningStrategy):
             duration_ms = (time.time() - wizard_state.stage_entry_time) * 1000
 
             # Execute FSM transition for auto-advance
-            auto_step_result = self._fsm.step(wizard_state.data)
-            new_stage_name = self._fsm.current_stage
+            auto_step_result = active_fsm.step(wizard_state.data)
+            new_stage_name = active_fsm.current_stage
 
             if new_stage_name == old_stage_name:
                 # No transition occurred, stop auto-advancing
                 break
 
             # Record the auto-advance transition
-            condition_expr = self._fsm.get_transition_condition(
+            condition_expr = active_fsm.get_transition_condition(
                 old_stage_name, new_stage_name
             )
             transition = create_transition_record(
@@ -558,6 +746,7 @@ class WizardReasoning(ReasoningStrategy):
                 data_snapshot=wizard_state.data.copy(),
                 condition_evaluated=condition_expr,
                 condition_result=True if condition_expr else None,
+                subflow_depth=wizard_state.subflow_depth,
             )
             wizard_state.transitions.append(transition)
 
@@ -574,8 +763,14 @@ class WizardReasoning(ReasoningStrategy):
                 new_stage_name,
             )
 
+            # Check for subflow pop during auto-advance
+            if self._should_pop_subflow(wizard_state):
+                self._handle_subflow_pop(wizard_state)
+                active_fsm = self._get_active_fsm()
+                wizard_state.completed = False
+
             # Get new stage metadata for next iteration
-            new_stage = self._fsm.current_metadata
+            new_stage = active_fsm.current_metadata
 
         # Trigger stage entry hook if configured
         if self._hooks:
@@ -588,7 +783,7 @@ class WizardReasoning(ReasoningStrategy):
             await self._hooks.trigger_complete(wizard_state.data)
 
         # Generate stage-aware response
-        new_stage = self._fsm.current_metadata
+        new_stage = active_fsm.current_metadata
         response = await self._generate_stage_response(
             manager, llm, new_stage, wizard_state, tools
         )
@@ -622,6 +817,11 @@ class WizardReasoning(ReasoningStrategy):
                 if tasks_data
                 else WizardTaskList()
             )
+            # Restore subflow stack from serialized data
+            subflow_stack = [
+                SubflowContext.from_dict(s)
+                for s in fsm_state.get("subflow_stack", [])
+            ]
             state = WizardState(
                 current_stage=fsm_state.get(
                     "current_stage", self._fsm.current_stage
@@ -633,20 +833,109 @@ class WizardReasoning(ReasoningStrategy):
                 transitions=transitions,
                 stage_entry_time=fsm_state.get("stage_entry_time", time.time()),
                 tasks=tasks,
+                subflow_stack=subflow_stack,
             )
             # Restore FSM state
             self._fsm.restore(fsm_state)
+            # Restore active subflow FSM if in subflow
+            if subflow_stack:
+                subflow_name = subflow_stack[-1].subflow_network
+                self._active_subflow_fsm = self._fsm.get_subflow(subflow_name)
+                if self._active_subflow_fsm:
+                    self._active_subflow_fsm.restore(fsm_state)
+            else:
+                self._active_subflow_fsm = None
             return state
 
         # Initialize new wizard state with tasks from config
+        # Reset FSM context to ensure we start at the beginning, not at a
+        # stale stage from a previous conversation (if bot instance is cached)
+        self._fsm.restart()
         start_stage = self._fsm.current_stage
         initial_tasks = self._build_initial_tasks()
+        self._active_subflow_fsm = None  # Ensure we start in main flow
+
+        # Inject wizard settings into initial data so transforms can access them.
+        # output_paths provides configurable file output locations.
+        initial_data: dict[str, Any] = {}
+        output_paths = self._fsm.settings.get("output_paths")
+        if output_paths:
+            initial_data["_output_paths"] = dict(output_paths)
+
         return WizardState(
             current_stage=start_stage,
+            data=initial_data,
             history=[start_stage],
             stage_entry_time=time.time(),
             tasks=initial_tasks,
         )
+
+    def _build_wizard_metadata(self, state: WizardState) -> dict[str, Any]:
+        """Build canonical wizard metadata from current state.
+
+        Single source of truth for wizard metadata.  Used by both
+        ``_save_wizard_state`` (persistence) and ``_add_wizard_metadata``
+        (response decoration) to ensure consistency.
+
+        When inside a subflow, ``stage_index``, ``total_stages``, and
+        ``progress_percent`` always report **main-flow** progress so
+        the UI can render an accurate overall progress indicator.  The
+        active subflow's stage is exposed separately via
+        ``subflow_stage``.
+
+        Args:
+            state: Current wizard state
+
+        Returns:
+            Canonical wizard metadata dict.
+        """
+        active_fsm = self._get_active_fsm()
+
+        # Always report main-flow progress for the roadmap / breadcrumb
+        main_stage_names = self._fsm.stage_names
+
+        if state.subflow_stack:
+            # During a subflow, the "effective" main-flow stage is the
+            # parent stage that pushed the subflow.
+            effective_main_stage = state.subflow_stack[-1].parent_stage
+        else:
+            effective_main_stage = state.current_stage
+
+        try:
+            stage_index = main_stage_names.index(effective_main_stage)
+        except ValueError:
+            stage_index = 0
+
+        total_stages = len(main_stage_names)
+        progress = stage_index / max(total_stages - 1, 1)
+
+        metadata: dict[str, Any] = {
+            "current_stage": state.current_stage,
+            "stage_index": stage_index,
+            "total_stages": total_stages,
+            "progress": progress,
+            "progress_percent": progress * 100,
+            "completed": state.completed,
+            "data": state.data,
+            "history": state.history,
+            "can_skip": active_fsm.can_skip(),
+            "can_go_back": active_fsm.can_go_back() and len(state.history) > 1,
+            "stage_prompt": active_fsm.get_stage_prompt(),
+            "suggestions": active_fsm.get_stage_suggestions(),
+            "stages": self._build_stages_roadmap(state),
+        }
+
+        # Expose subflow context when active
+        if state.subflow_stack:
+            subflow_stage_meta = active_fsm.current_metadata
+            metadata["subflow_stage"] = {
+                "name": state.current_stage,
+                "label": subflow_stage_meta.get(
+                    "label", state.current_stage
+                ),
+            }
+
+        return metadata
 
     def _save_wizard_state(self, manager: Any, state: WizardState) -> None:
         """Save wizard state to conversation manager.
@@ -655,19 +944,300 @@ class WizardReasoning(ReasoningStrategy):
             manager: ConversationManager instance
             state: WizardState to save
         """
-        manager.metadata["wizard"] = {
-            "fsm_state": {
-                "current_stage": state.current_stage,
-                "history": state.history,
-                "data": state.data,
-                "completed": state.completed,
-                "clarification_attempts": state.clarification_attempts,
-                "transitions": [t.to_dict() for t in state.transitions],
-                "stage_entry_time": state.stage_entry_time,
-                "tasks": state.tasks.to_dict(),
-            },
-            "progress": self._calculate_progress(state),
+        wizard_meta = self._build_wizard_metadata(state)
+        wizard_meta["fsm_state"] = {
+            "current_stage": state.current_stage,
+            "history": state.history,
+            "data": state.data,
+            "completed": state.completed,
+            "clarification_attempts": state.clarification_attempts,
+            "transitions": [t.to_dict() for t in state.transitions],
+            "stage_entry_time": state.stage_entry_time,
+            "tasks": state.tasks.to_dict(),
+            "subflow_stack": [s.to_dict() for s in state.subflow_stack],
         }
+        manager.metadata["wizard"] = wizard_meta
+
+    # =========================================================================
+    # Subflow Management Methods
+    # =========================================================================
+
+    def _get_active_fsm(self) -> WizardFSM:
+        """Get the currently active FSM (subflow or main).
+
+        Returns:
+            The active WizardFSM instance
+        """
+        return self._active_subflow_fsm if self._active_subflow_fsm else self._fsm
+
+    def _should_push_subflow(
+        self, wizard_state: WizardState, user_message: str
+    ) -> dict[str, Any] | None:
+        """Check if the current transition should push a subflow.
+
+        Examines the transitions from the current stage to see if any
+        matching transition is a subflow transition.
+
+        Args:
+            wizard_state: Current wizard state
+            user_message: User message for context
+
+        Returns:
+            Subflow config dict if should push, None otherwise
+        """
+        # Guard: Don't push subflow if already in one
+        # This prevents duplicate pushes after state restoration
+        if wizard_state.is_in_subflow:
+            return None
+
+        active_fsm = self._get_active_fsm()
+        stage_meta = active_fsm.current_metadata
+
+        # Check each transition for subflow marker
+        for transition in stage_meta.get("transitions", []):
+            if not transition.get("is_subflow_transition"):
+                continue
+
+            # Evaluate condition if present
+            condition = transition.get("condition")
+            if condition:
+                if not self._evaluate_condition(condition, wizard_state.data):
+                    continue
+
+            # This transition matches and is a subflow transition
+            return transition.get("subflow_config", {})
+
+        return None
+
+    def _handle_subflow_push(
+        self,
+        wizard_state: WizardState,
+        subflow_config: dict[str, Any],
+        user_message: str,
+    ) -> bool:
+        """Push a subflow onto the stack.
+
+        Saves parent state and switches to the subflow FSM.
+
+        Args:
+            wizard_state: Current wizard state
+            subflow_config: Subflow configuration dict
+            user_message: User message for context
+
+        Returns:
+            True if subflow was pushed successfully
+        """
+        network_name = subflow_config.get("network")
+        if not network_name:
+            logger.warning("Subflow config missing 'network' field")
+            return False
+
+        # Get the subflow FSM
+        subflow_fsm = self._fsm.get_subflow(network_name)
+        if not subflow_fsm:
+            logger.warning("Subflow '%s' not found in registry", network_name)
+            return False
+
+        # Create subflow context to save parent state
+        from_stage = wizard_state.current_stage
+        subflow_context = SubflowContext(
+            parent_stage=from_stage,
+            parent_data=dict(wizard_state.data),
+            parent_history=list(wizard_state.history),
+            return_stage=subflow_config.get("return_stage", from_stage),
+            result_mapping=subflow_config.get("result_mapping", {}),
+            subflow_network=network_name,
+        )
+
+        # Apply data mapping (parent -> subflow)
+        data_mapping = subflow_config.get("data_mapping", {})
+        subflow_data = self._apply_data_mapping(wizard_state.data, data_mapping)
+
+        # Push subflow context
+        wizard_state.subflow_stack.append(subflow_context)
+
+        # Reset subflow FSM and set initial data
+        subflow_fsm.restart()
+        subflow_fsm.restore({
+            "current_stage": subflow_fsm.current_stage,
+            "data": subflow_data,
+        })
+
+        # Switch to subflow
+        self._active_subflow_fsm = subflow_fsm
+
+        # Update wizard state for subflow
+        to_stage = subflow_fsm.current_stage
+        duration_ms = (time.time() - wizard_state.stage_entry_time) * 1000
+
+        # Record the push transition
+        transition = create_transition_record(
+            from_stage=from_stage,
+            to_stage=to_stage,
+            trigger="subflow_push",
+            duration_in_stage_ms=duration_ms,
+            data_snapshot=wizard_state.data.copy(),
+            user_input=user_message,
+            subflow_push=network_name,
+            subflow_depth=wizard_state.subflow_depth,
+        )
+        wizard_state.transitions.append(transition)
+
+        # Update wizard state
+        wizard_state.current_stage = to_stage
+        wizard_state.data = subflow_data
+        wizard_state.history = [to_stage]
+        wizard_state.stage_entry_time = time.time()
+
+        logger.info(
+            "Pushed subflow '%s': %s -> %s (depth=%d)",
+            network_name,
+            from_stage,
+            to_stage,
+            wizard_state.subflow_depth,
+        )
+
+        return True
+
+    def _handle_subflow_pop(
+        self,
+        wizard_state: WizardState,
+    ) -> bool:
+        """Pop the current subflow and return to parent.
+
+        Applies result mapping and restores parent state.
+
+        Args:
+            wizard_state: Current wizard state
+
+        Returns:
+            True if subflow was popped successfully
+        """
+        if not wizard_state.subflow_stack:
+            return False
+
+        # Pop the subflow context
+        subflow_context = wizard_state.subflow_stack.pop()
+        network_name = subflow_context.subflow_network
+        from_stage = wizard_state.current_stage
+        duration_ms = (time.time() - wizard_state.stage_entry_time) * 1000
+
+        # Apply result mapping (subflow -> parent)
+        parent_data = dict(subflow_context.parent_data)
+        result_data = self._apply_result_mapping(
+            wizard_state.data, subflow_context.result_mapping
+        )
+        parent_data.update(result_data)
+
+        # Restore parent state
+        return_stage = subflow_context.return_stage
+
+        # Record the pop transition
+        transition = create_transition_record(
+            from_stage=from_stage,
+            to_stage=return_stage,
+            trigger="subflow_pop",
+            duration_in_stage_ms=duration_ms,
+            data_snapshot=wizard_state.data.copy(),
+            subflow_pop=network_name,
+            subflow_depth=wizard_state.subflow_depth,
+        )
+        wizard_state.transitions.append(transition)
+
+        # Update wizard state
+        wizard_state.current_stage = return_stage
+        wizard_state.data = parent_data
+        wizard_state.history = subflow_context.parent_history
+        if return_stage not in wizard_state.history:
+            wizard_state.history.append(return_stage)
+        wizard_state.stage_entry_time = time.time()
+
+        # Switch back to parent FSM (or next subflow if nested)
+        if wizard_state.subflow_stack:
+            parent_subflow = wizard_state.subflow_stack[-1].subflow_network
+            self._active_subflow_fsm = self._fsm.get_subflow(parent_subflow)
+        else:
+            self._active_subflow_fsm = None
+
+        # Restore parent FSM state
+        active_fsm = self._get_active_fsm()
+        active_fsm.restore({
+            "current_stage": return_stage,
+            "data": parent_data,
+        })
+
+        logger.info(
+            "Popped subflow '%s': %s -> %s (depth=%d)",
+            network_name,
+            from_stage,
+            return_stage,
+            wizard_state.subflow_depth,
+        )
+
+        return True
+
+    def _apply_data_mapping(
+        self,
+        source_data: dict[str, Any],
+        mapping: dict[str, str],
+    ) -> dict[str, Any]:
+        """Apply data mapping from parent to subflow.
+
+        Args:
+            source_data: Source data dict (parent wizard data)
+            mapping: Dict mapping parent field names to subflow field names
+
+        Returns:
+            Mapped data dict for subflow
+        """
+        if not mapping:
+            return {}
+
+        result: dict[str, Any] = {}
+        for parent_field, subflow_field in mapping.items():
+            if parent_field in source_data:
+                result[subflow_field] = source_data[parent_field]
+
+        return result
+
+    def _apply_result_mapping(
+        self,
+        source_data: dict[str, Any],
+        mapping: dict[str, str],
+    ) -> dict[str, Any]:
+        """Apply result mapping from subflow to parent.
+
+        Args:
+            source_data: Source data dict (subflow wizard data)
+            mapping: Dict mapping subflow field names to parent field names
+
+        Returns:
+            Mapped data dict for parent
+        """
+        if not mapping:
+            return {}
+
+        result: dict[str, Any] = {}
+        for subflow_field, parent_field in mapping.items():
+            if subflow_field in source_data:
+                result[parent_field] = source_data[subflow_field]
+
+        return result
+
+    def _should_pop_subflow(self, wizard_state: WizardState) -> bool:
+        """Check if the current stage is a subflow end state.
+
+        Args:
+            wizard_state: Current wizard state
+
+        Returns:
+            True if current stage is an end stage and we're in a subflow
+        """
+        if not wizard_state.is_in_subflow:
+            return False
+
+        active_fsm = self._get_active_fsm()
+        return active_fsm.is_end_stage(wizard_state.current_stage)
 
     def _get_last_user_message(self, manager: Any) -> str:
         """Extract the last user message from conversation.
@@ -808,18 +1378,29 @@ class WizardReasoning(ReasoningStrategy):
         return None  # Not a navigation command
 
     async def _extract_data(
-        self, message: str, stage: dict[str, Any], llm: Any
+        self,
+        message: str,
+        stage: dict[str, Any],
+        llm: Any,
+        manager: Any | None = None,
+        wizard_state: WizardState | None = None,
     ) -> Any:
-        """Extract structured data from user message.
+        """Extract structured data from user message or wizard session.
+
+        When extraction_scope is "wizard_session", builds context from all
+        user messages in the wizard session for extraction. This allows the
+        wizard to remember information provided in earlier messages.
 
         Schema 'default' values are stripped before extraction to prevent
         the LLM from auto-filling them. This ensures extraction only captures
         what the user actually said.
 
         Args:
-            message: User message text
+            message: Current user message text
             stage: Current stage metadata
             llm: LLM provider (fallback if no extractor)
+            manager: ConversationManager for accessing message history
+            wizard_state: Current wizard state for conflict detection
 
         Returns:
             ExtractionResult with data and confidence
@@ -830,6 +1411,7 @@ class WizardReasoning(ReasoningStrategy):
             data: dict[str, Any] = field(default_factory=dict)
             confidence: float = 0.0
             errors: list[str] = field(default_factory=list)
+            metadata: dict[str, Any] = field(default_factory=dict)
 
             @property
             def is_confident(self) -> bool:
@@ -842,6 +1424,29 @@ class WizardReasoning(ReasoningStrategy):
                 data={"_raw_input": message}, confidence=1.0
             )
 
+        # Build extraction input based on scope (stage override or wizard default)
+        extraction_scope = self._get_extraction_scope(stage)
+        if (
+            extraction_scope == "wizard_session"
+            and manager is not None
+            and wizard_state is not None
+        ):
+            # Build context from wizard session conversation
+            wizard_context = self._build_wizard_context(manager, wizard_state)
+            if wizard_context:
+                extraction_input = (
+                    f"{wizard_context}\n\nCurrent message: {message}"
+                )
+                logger.debug(
+                    "Wizard session extraction: %d chars of context + current message",
+                    len(wizard_context),
+                )
+            else:
+                extraction_input = message
+        else:
+            # Current message only (original behavior)
+            extraction_input = message
+
         # Strip defaults to prevent extraction LLM from auto-filling them
         extraction_schema = self._strip_schema_defaults(schema)
 
@@ -849,18 +1454,239 @@ class WizardReasoning(ReasoningStrategy):
             # Use schema extractor
             extraction_model = stage.get("extraction_model")
             context = {"stage": stage.get("name"), "prompt": stage.get("prompt")}
-            return await self._extractor.extract(
-                text=message,
+            result = await self._extractor.extract(
+                text=extraction_input,
                 schema=extraction_schema,
                 context=context,
                 model=extraction_model,
             )
+
+            # Detect conflicts with existing data
+            if wizard_state is not None and result.data:
+                conflicts = self._detect_conflicts(wizard_state.data, result.data)
+                if conflicts:
+                    if self._log_conflicts:
+                        for conflict in conflicts:
+                            logger.info(
+                                "Data conflict detected for field '%s': "
+                                "'%s' -> '%s' (using %s)",
+                                conflict["field"],
+                                conflict["previous"],
+                                conflict["new"],
+                                self._conflict_strategy,
+                            )
+                    # Add conflicts to result metadata for downstream use
+                    if not hasattr(result, "metadata") or result.metadata is None:
+                        result.metadata = {}
+                    result.metadata["conflicts"] = conflicts
+
+            return result
 
         # Fallback: simple heuristic extraction
         # This is very basic - the extractor should be used for real scenarios
         return SimpleExtractionResult(
             data={"_raw_input": message}, confidence=0.5
         )
+
+    def _build_wizard_context(
+        self, manager: Any, wizard_state: WizardState
+    ) -> str:
+        """Build extraction context from wizard session history.
+
+        Collects all user messages from the conversation to provide
+        full context for extraction. This allows the wizard to
+        "remember" information provided in earlier messages.
+
+        Args:
+            manager: ConversationManager instance
+            wizard_state: Current wizard state
+
+        Returns:
+            Formatted context string from previous user messages,
+            or empty string if no previous messages.
+        """
+        messages = manager.get_messages()
+
+        # Collect user messages (excluding the most recent which is current)
+        user_messages: list[str] = []
+        for msg in messages:
+            if msg.get("role") == "user":
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    user_messages.append(content)
+                elif isinstance(content, list):
+                    # Handle structured content
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            user_messages.append(part.get("text", ""))
+
+        # Exclude the last message (it's the current one we're processing)
+        previous_messages = user_messages[:-1] if len(user_messages) > 1 else []
+
+        if not previous_messages:
+            return ""
+
+        # Format as context
+        formatted = ["Previous conversation:"]
+        for i, msg in enumerate(previous_messages, 1):
+            # Truncate very long messages
+            truncated = msg[:500] + "..." if len(msg) > 500 else msg
+            formatted.append(f"  Message {i}: {truncated}")
+
+        return "\n".join(formatted)
+
+    def _detect_conflicts(
+        self,
+        existing_data: dict[str, Any],
+        new_data: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Detect conflicts between existing and newly extracted data.
+
+        A conflict occurs when a field exists in both dicts with
+        different non-None values.
+
+        Args:
+            existing_data: Data already in wizard state
+            new_data: Newly extracted data
+
+        Returns:
+            List of conflict dicts with field, previous, and new values.
+        """
+        conflicts: list[dict[str, Any]] = []
+
+        for field_name, new_value in new_data.items():
+            # Skip internal fields
+            if field_name.startswith("_"):
+                continue
+
+            # Skip if new value is None
+            if new_value is None:
+                continue
+
+            # Check if field exists with a different value
+            if field_name in existing_data:
+                existing_value = existing_data[field_name]
+                # Only count as conflict if existing is non-None and different
+                if existing_value is not None and existing_value != new_value:
+                    conflicts.append({
+                        "field": field_name,
+                        "previous": existing_value,
+                        "new": new_value,
+                    })
+
+        return conflicts
+
+    # -- Boolean truthy/falsy strings for normalization --
+    _BOOL_TRUE = frozenset({"yes", "true", "1", "y", "on", "enable", "enabled"})
+    _BOOL_FALSE = frozenset({"no", "false", "0", "n", "off", "disable", "disabled"})
+    _ALL_KEYWORDS = frozenset({"all", "everything", "all of them", "every one"})
+    _NONE_KEYWORDS = frozenset({"none", "nothing", "no tools", "empty"})
+
+    def _normalize_extracted_data(
+        self,
+        data: dict[str, Any],
+        schema: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Normalize extracted data to match schema types.
+
+        Applies deterministic, schema-driven corrections to LLM-extracted
+        data *before* it enters wizard state.  Only acts when the extracted
+        type doesn't match the declared schema type, so existing well-typed
+        extractions are passed through untouched.
+
+        Normalizations performed:
+
+        * **Boolean coercion** - string ``"yes"``/``"true"`` → ``True``, etc.
+        * **Array wrapping** - bare string for an ``array`` field → ``[value]``
+        * **Array shortcut expansion** - ``["all"]`` for ``array`` + ``items.enum``
+          → all enum values; ``["none"]`` → ``[]``
+        * **Number coercion** - string digits for ``integer``/``number`` → cast
+
+        Args:
+            data:   Extracted data dict (will be shallow-copied).
+            schema: JSON Schema for the current stage.
+
+        Returns:
+            New dict with normalized values.
+        """
+        properties = schema.get("properties", {})
+        if not properties:
+            return data
+
+        normalized = dict(data)
+
+        for field_name, value in data.items():
+            if field_name.startswith("_") or field_name not in properties:
+                continue
+
+            prop = properties[field_name]
+            declared_type = prop.get("type")
+
+            # --- Boolean coercion ---
+            if declared_type == "boolean" and isinstance(value, str):
+                lower = value.strip().lower()
+                if lower in self._BOOL_TRUE:
+                    normalized[field_name] = True
+                    logger.debug("Normalized %s: %r → True", field_name, value)
+                elif lower in self._BOOL_FALSE:
+                    normalized[field_name] = False
+                    logger.debug("Normalized %s: %r → False", field_name, value)
+
+            # --- Integer coercion ---
+            elif declared_type == "integer" and isinstance(value, str):
+                stripped = value.strip()
+                if stripped.lstrip("-").isdigit():
+                    normalized[field_name] = int(stripped)
+                    logger.debug(
+                        "Normalized %s: %r → %d", field_name, value, int(stripped)
+                    )
+
+            # --- Number (float) coercion ---
+            elif declared_type == "number" and isinstance(value, str):
+                stripped = value.strip()
+                try:
+                    normalized[field_name] = float(stripped)
+                    logger.debug(
+                        "Normalized %s: %r → %f",
+                        field_name,
+                        value,
+                        float(stripped),
+                    )
+                except ValueError:
+                    pass  # Leave as-is; validation will catch it
+
+            # --- Array handling ---
+            elif declared_type == "array":
+                items_schema = prop.get("items", {})
+                enum_values = items_schema.get("enum", [])
+
+                # Wrap bare string → list
+                if isinstance(value, str):
+                    value = [value]
+                    normalized[field_name] = value
+                    logger.debug(
+                        "Normalized %s: wrapped string → list", field_name
+                    )
+
+                # Expand "all"/"none" shortcuts when enum is defined
+                if isinstance(value, list) and enum_values:
+                    lower_items = {
+                        v.strip().lower() for v in value if isinstance(v, str)
+                    }
+                    if lower_items & self._ALL_KEYWORDS:
+                        normalized[field_name] = list(enum_values)
+                        logger.debug(
+                            "Normalized %s: 'all' → %s",
+                            field_name,
+                            enum_values,
+                        )
+                    elif lower_items & self._NONE_KEYWORDS:
+                        normalized[field_name] = []
+                        logger.debug(
+                            "Normalized %s: 'none' → []", field_name
+                        )
+
+        return normalized
 
     def _validate_data(
         self, data: dict[str, Any], schema: dict[str, Any]
@@ -906,6 +1732,17 @@ class WizardReasoning(ReasoningStrategy):
     ) -> Any:
         """Generate response appropriate for current stage.
 
+        Supports two modes:
+
+        1. **Template mode** (when stage has ``response_template``):
+           Renders the template with Jinja2 using wizard state data,
+           bypassing the LLM entirely. If the stage also has
+           ``llm_assist: true`` and the user's last message is a
+           question, the LLM is invoked with a scoped assist prompt.
+
+        2. **LLM mode** (default): Calls the LLM with stage context
+           injected into the system prompt, as before.
+
         Args:
             manager: ConversationManager instance
             llm: LLM provider
@@ -916,6 +1753,47 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             LLM response with wizard metadata
         """
+        stage_name = stage.get("name", "unknown")
+        response_template = stage.get("response_template")
+
+        # ── Template mode ────────────────────────────────────────
+        if response_template:
+            rendered = self._render_response_template(response_template, stage, state)
+
+            # Check if user is asking a question and llm_assist is enabled
+            user_message = self._get_last_user_message(manager)
+            if stage.get("llm_assist") and user_message and self._is_help_request(user_message):
+                assist_prompt = stage.get("llm_assist_prompt") or stage.get("prompt", "")
+                scoped_prompt = (
+                    f"{manager.system_prompt}\n\n"
+                    f"The user is asking a question during the wizard. "
+                    f"Context: {assist_prompt}\n"
+                    f"Answer their question helpfully and concisely. "
+                    f"Do NOT change the topic or claim any actions."
+                )
+                logger.debug(
+                    "LLM assist for stage '%s' (user question detected)",
+                    stage_name,
+                )
+                response = await manager.complete(
+                    system_prompt_override=scoped_prompt,
+                )
+            else:
+                logger.debug(
+                    "Template response for stage '%s' (%d chars)",
+                    stage_name,
+                    len(rendered),
+                )
+                response = self._create_template_response(rendered)
+                # Persist template response to conversation store
+                # (manager.complete() does this automatically, but template
+                # mode bypasses the LLM so we must persist explicitly)
+                await manager.add_message(role="assistant", content=rendered)
+
+            self._add_wizard_metadata(response, state, stage)
+            return response
+
+        # ── LLM mode (original behavior) ─────────────────────────
         # Build stage-aware system prompt
         stage_context = self._build_stage_context(stage, state)
         enhanced_prompt = f"{manager.system_prompt}\n\n{stage_context}"
@@ -924,6 +1802,13 @@ class WizardReasoning(ReasoningStrategy):
         stage_tools = self._filter_tools_for_stage(stage, tools)
 
         # Check if stage should use ReAct-style reasoning
+        logger.debug(
+            "Generating response for stage '%s' (tools=%s, react=%s)",
+            stage_name,
+            [getattr(t, "name", str(t)) for t in stage_tools] if stage_tools else None,
+            stage_tools and self._use_react_for_stage(stage),
+        )
+
         if stage_tools and self._use_react_for_stage(stage):
             response = await self._react_stage_response(
                 manager, enhanced_prompt, stage, state, stage_tools
@@ -935,10 +1820,125 @@ class WizardReasoning(ReasoningStrategy):
                 tools=stage_tools,
             )
 
+        # Log response details
+        response_content = getattr(response, "content", str(response))
+        response_len = len(response_content) if response_content else 0
+        logger.debug(
+            "Stage '%s' response: %d chars, has_tool_calls=%s",
+            stage_name,
+            response_len,
+            bool(getattr(response, "tool_calls", None)),
+        )
+        if response_len == 0:
+            logger.warning(
+                "Empty response generated for stage '%s'",
+                stage_name,
+            )
+
         # Add wizard metadata to response
         self._add_wizard_metadata(response, state, stage)
 
         return response
+
+    def _render_response_template(
+        self,
+        template_str: str,
+        stage: dict[str, Any],
+        state: WizardState,
+    ) -> str:
+        """Render a stage response template with wizard state data.
+
+        Uses Jinja2 to render the template with collected wizard data
+        and stage metadata as context variables.
+
+        Args:
+            template_str: Jinja2 template string
+            stage: Current stage metadata
+            state: Current wizard state
+
+        Returns:
+            Rendered response string
+        """
+        import jinja2
+
+        env = jinja2.Environment(undefined=jinja2.Undefined)
+        template = env.from_string(template_str)
+
+        # Filter out internal keys for template access
+        collected_data = {
+            k: v for k, v in state.data.items() if not k.startswith("_")
+        }
+
+        # Build template context
+        context = {
+            # Stage metadata
+            "stage_name": stage.get("name", "unknown"),
+            "stage_label": stage.get("label", stage.get("name", "")),
+            # All collected data as top-level variables
+            **collected_data,
+            # Also available as a dict
+            "collected_data": collected_data,
+            # Full data including internal keys (for save/review templates)
+            "all_data": dict(state.data),
+            # Wizard progress
+            "history": state.history,
+            "completed": state.completed,
+        }
+
+        return template.render(**context)
+
+    @staticmethod
+    def _create_template_response(content: str) -> Any:
+        """Create a minimal response object from template-rendered text.
+
+        The returned object is duck-type compatible with LLMResponse,
+        carrying the attributes that downstream code accesses:
+        ``content``, ``metadata``, and ``model``.
+
+        Args:
+            content: Rendered template text
+
+        Returns:
+            Response object compatible with the wizard pipeline
+        """
+        from dataclasses import dataclass as _dataclass
+        from dataclasses import field as _field
+        from datetime import datetime
+
+        @_dataclass
+        class _TemplateResponse:
+            content: str
+            model: str = "template"
+            finish_reason: str | None = "stop"
+            usage: dict[str, int] | None = None
+            tool_calls: list[Any] | None = None
+            metadata: dict[str, Any] = _field(default_factory=dict)
+            created_at: datetime = _field(default_factory=datetime.now)
+
+        return _TemplateResponse(content=content)
+
+    @staticmethod
+    def _is_help_request(message: str) -> bool:
+        """Check if a user message is a question/help request.
+
+        Used to decide whether to invoke the LLM in ``llm_assist``
+        mode for template-driven stages.
+
+        Args:
+            message: User message text
+
+        Returns:
+            True if the message appears to be a question
+        """
+        msg = message.strip().lower()
+        if msg.endswith("?"):
+            return True
+        question_starters = (
+            "what ", "which ", "how ", "why ", "should ",
+            "can ", "could ", "would ", "is ", "are ",
+            "do ", "does ", "help", "explain", "tell me",
+        )
+        return msg.startswith(question_starters)
 
     def _add_wizard_metadata(
         self,
@@ -948,22 +1948,78 @@ class WizardReasoning(ReasoningStrategy):
     ) -> None:
         """Add wizard metadata to response object.
 
+        Note: DynaBot.chat() only returns response content (a string),
+        so this metadata is only visible to code that accesses the raw
+        response object (e.g. middleware, tests).  For downstream
+        consumers like EduBot, wizard metadata flows through
+        ``_save_wizard_state`` → ``get_wizard_state()``.
+
         Args:
             response: LLM response object to modify
             state: Current wizard state
-            stage: Current stage metadata
+            stage: Current stage metadata (unused, kept for API compat)
         """
         if not hasattr(response, "metadata") or response.metadata is None:
             response.metadata = {}
-        response.metadata["wizard"] = {
-            "stage": state.current_stage,
-            "progress": self._calculate_progress(state),
-            "completed": state.completed,
-            "can_skip": self._fsm.can_skip(),
-            "can_go_back": self._fsm.can_go_back() and len(state.history) > 1,
-            "stage_prompt": stage.get("prompt", ""),
-            "suggestions": stage.get("suggestions", []),
-        }
+        response.metadata["wizard"] = self._build_wizard_metadata(state)
+
+    def _build_stages_roadmap(
+        self,
+        state: WizardState,
+    ) -> list[dict[str, str]]:
+        """Build ordered stages roadmap with labels and status.
+
+        Produces a list of stage entries for UI rendering (breadcrumb,
+        checklist, etc.). Each entry contains the stage name, a
+        human-readable label, and a status indicating whether the stage
+        has been completed, is the current stage, or is still pending.
+
+        When the wizard is inside a subflow, the parent stage is marked
+        ``"current"`` (since its subflow is still active) and all stages
+        visited *before* the subflow push are marked ``"completed"``.
+        The subflow's own stages do NOT appear in this roadmap — they
+        are exposed via the ``subflow_stage`` key in wizard metadata.
+
+        Args:
+            state: Current wizard state
+
+        Returns:
+            List of dicts with ``name``, ``label``, and ``status`` keys.
+            Status is one of ``"completed"``, ``"current"``, or
+            ``"pending"``.
+        """
+        # During a subflow, state.history only contains subflow stages
+        # (it was reset at push time).  Use the parent's saved history
+        # to know which main-flow stages were visited.
+        if state.subflow_stack:
+            parent_ctx = state.subflow_stack[-1]
+            visited = set(parent_ctx.parent_history)
+            parent_stage = parent_ctx.parent_stage
+        else:
+            visited = set(state.history)
+            parent_stage = None
+
+        current = state.current_stage
+        stages: list[dict[str, str]] = []
+
+        for name, meta in self._fsm._stage_metadata.items():
+            if parent_stage is not None and name == parent_stage:
+                # The parent stage is still active (subflow in progress)
+                status = "current"
+            elif parent_stage is None and name == current:
+                # Normal (non-subflow) flow: current stage
+                status = "current"
+            elif name in visited and name != parent_stage:
+                status = "completed"
+            else:
+                status = "pending"
+            stages.append({
+                "name": name,
+                "label": meta.get("label", name),
+                "status": status,
+            })
+
+        return stages
 
     def _use_react_for_stage(self, stage: dict[str, Any]) -> bool:
         """Check if a stage should use ReAct-style reasoning.
@@ -993,6 +2049,19 @@ class WizardReasoning(ReasoningStrategy):
             Max iterations (from stage config or default)
         """
         return stage.get("max_iterations") or self._default_max_iterations
+
+    def _get_extraction_scope(self, stage: dict[str, Any]) -> str:
+        """Get extraction scope for a stage.
+
+        Allows per-stage override of the global extraction_scope setting.
+
+        Args:
+            stage: Stage metadata dict
+
+        Returns:
+            Extraction scope from stage config or wizard default
+        """
+        return stage.get("extraction_scope") or self._extraction_scope
 
     async def _react_stage_response(
         self,
@@ -1263,8 +2332,9 @@ class WizardReasoning(ReasoningStrategy):
             lines.append("\nThe wizard is complete. Summarize what was collected.")
         else:
             lines.append(
-                "\nGuide the user through this stage. Be conversational and helpful. "
-                "Focus only on gathering information that has NOT already been collected."
+                "\nYou MUST focus on the goal above. Do NOT ask about topics "
+                "from other stages. Only gather information that has NOT "
+                "already been collected. Be conversational and helpful."
             )
 
         return "\n".join(lines)
@@ -1870,6 +2940,7 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
             can_skip=self._fsm.can_skip(),
             can_go_back=self._fsm.can_go_back() and len(wizard_state.history) > 1,
             suggestions=stage.get("suggestions", []),
+            stages=self._build_stages_roadmap(wizard_state),
         )
 
     @staticmethod
@@ -1941,6 +3012,40 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
             except ValueError:
                 stage_index = 0
 
+        # Build stages roadmap from definitions if available
+        stages: list[dict[str, str]] = []
+        if stage_definitions:
+            history_set = set(fsm_state.get("history", []))
+            if isinstance(stage_definitions, dict):
+                for name, meta in stage_definitions.items():
+                    label = (
+                        meta.get("label", name)
+                        if isinstance(meta, dict)
+                        else name
+                    )
+                    if name == current_stage:
+                        status = "current"
+                    elif name in history_set:
+                        status = "completed"
+                    else:
+                        status = "pending"
+                    stages.append(
+                        {"name": name, "label": label, "status": status}
+                    )
+            elif isinstance(stage_definitions, list):
+                for s in stage_definitions:
+                    name = s.get("name", "")
+                    label = s.get("label", name)
+                    if name == current_stage:
+                        status = "current"
+                    elif name in history_set:
+                        status = "completed"
+                    else:
+                        status = "pending"
+                    stages.append(
+                        {"name": name, "label": label, "status": status}
+                    )
+
         return WizardStateSnapshot(
             current_stage=current_stage,
             data=fsm_state.get("data", {}),
@@ -1957,4 +3062,5 @@ Be empathetic and helpful - acknowledge that the questions might not be clear.
             task_progress_percent=task_list.calculate_progress(),
             stage_index=stage_index,
             total_stages=total_stages,
+            stages=stages,
         )

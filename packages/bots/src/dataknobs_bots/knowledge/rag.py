@@ -119,13 +119,19 @@ class RAGKnowledgeBase:
         await vector_store.initialize()
 
         # Create embedding provider
+        # Handle both nested format (from $resource resolution) and legacy flat format
+        embedding_config = config.get("embedding", {})
+        if embedding_config:
+            # New nested format: embedding.provider, embedding.model
+            provider = embedding_config.get("provider", "openai")
+            model = embedding_config.get("model", "text-embedding-ada-002")
+        else:
+            # Legacy flat format: embedding_provider, embedding_model
+            provider = config.get("embedding_provider", "openai")
+            model = config.get("embedding_model", "text-embedding-ada-002")
+
         llm_factory = LLMProviderFactory(is_async=True)
-        embedding_provider = llm_factory.create(
-            {
-                "provider": config.get("embedding_provider", "openai"),
-                "model": config.get("embedding_model", "text-embedding-ada-002"),
-            }
-        )
+        embedding_provider = llm_factory.create({"provider": provider, "model": model})
         await embedding_provider.initialize()
 
         # Create merger config if specified

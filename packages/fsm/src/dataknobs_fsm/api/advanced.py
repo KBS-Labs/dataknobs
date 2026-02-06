@@ -1013,7 +1013,11 @@ class AdvancedFSM:
                 test_func = functions.get(arc.pre_test) or self._custom_functions.get(arc.pre_test)
                 if test_func:
                     try:
-                        if test_func(context.data, context):
+                        result = test_func(context.data, context)
+                        # Handle tuple return from test functions (bool, reason)
+                        if isinstance(result, tuple):
+                            result = result[0]
+                        if result:
                             transitions.append(arc)
                     except Exception:
                         pass

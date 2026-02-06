@@ -31,7 +31,7 @@ class ArcDefinition:
 
     target_state: str
     pre_test: str | None = None
-    transform: str | None = None
+    transform: str | list[str] | None = None
     priority: int = 0  # Higher priority arcs are evaluated first
     definition_order: int = 0  # Track definition order for stable sorting
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -39,13 +39,17 @@ class ArcDefinition:
     # Resource requirements for this arc
     required_resources: Dict[str, str] = field(default_factory=dict)
     # e.g., {'database': 'main_db', 'llm': 'gpt4'}
-    
+
     def __hash__(self) -> int:
         """Make ArcDefinition hashable."""
+        transform_key = (
+            tuple(self.transform) if isinstance(self.transform, list)
+            else self.transform
+        )
         return hash((
             self.target_state,
             self.pre_test,
-            self.transform,
+            transform_key,
             self.priority
         ))
 
@@ -205,60 +209,27 @@ class ArcExecution:
             # Allocate required resources (merging with state resources)
             resources = self._allocate_resources(context, state_resources)
             
-            # Execute transform if defined
+            # Execute transform(s) if defined
             if self.arc_def.transform:
-                # Handle both FunctionRegistry and dict
-                if hasattr(self.function_registry, 'get_function'):
-                    # FunctionRegistry object
-                    transform_func = self.function_registry.get_function(self.arc_def.transform)
-                elif isinstance(self.function_registry, dict):
-                    # Plain dictionary
-                    transform_func = self.function_registry.get(self.arc_def.transform)
-                else:
-                    transform_func = None
-                
-                if transform_func is None:
-                    raise FunctionError(
-                        f"Transform function '{self.arc_def.transform}' not found",
-                        from_state=self.source_state,
-                        to_state=self.arc_def.target_state
-                    )
-                
-                # Create function context with resources
+                # Normalize to list for uniform handling
+                transform_names = (
+                    self.arc_def.transform
+                    if isinstance(self.arc_def.transform, list)
+                    else [self.arc_def.transform]
+                )
+
+                # Create function context with resources (shared across all transforms)
                 func_context = self._create_function_context(
                     context,
                     resources,
                     stream_enabled
                 )
-                
-                # Handle streaming vs non-streaming execution
-                if stream_enabled and hasattr(transform_func, 'stream_capable'):
-                    result = self._execute_streaming(
-                        transform_func,
-                        data,
-                        func_context
-                    )
-                else:
-                    # Call the transform function properly
-                    # Check if it has a transform method (wrapped function)
-                    if hasattr(transform_func, 'transform'):
-                        result = transform_func.transform(data, func_context)
-                    elif callable(transform_func):
-                        result = transform_func(data, func_context)
-                    else:
-                        raise ValueError(f"Transform {self.arc_def.transform} is not callable")
 
-                    # Handle ExecutionResult objects
-                    from dataknobs_fsm.functions.base import ExecutionResult
-                    if isinstance(result, ExecutionResult):
-                        if result.success:
-                            result = result.data
-                        else:
-                            raise FunctionError(
-                                result.error or "Transform failed",
-                                from_state=self.source_state,
-                                to_state=self.arc_def.target_state
-                            )
+                result = data
+                for transform_name in transform_names:
+                    result = self._execute_single_transform(
+                        transform_name, result, func_context, stream_enabled
+                    )
             else:
                 # No transform, pass data through
                 result = data
@@ -286,6 +257,67 @@ class ArcExecution:
             if 'resources' in locals():
                 self._release_resources(context, resources)
     
+    def _execute_single_transform(
+        self,
+        transform_name: str,
+        data: Any,
+        func_context: FunctionContext,
+        stream_enabled: bool = False,
+    ) -> Any:
+        """Execute a single transform function by name.
+
+        Args:
+            transform_name: Registered name of the transform function.
+            data: Input data to transform.
+            func_context: Function context with resources and metadata.
+            stream_enabled: Whether streaming is enabled.
+
+        Returns:
+            Transformed data.
+
+        Raises:
+            FunctionError: If the transform function is not found or fails.
+        """
+        # Look up the transform function
+        if hasattr(self.function_registry, 'get_function'):
+            transform_func = self.function_registry.get_function(transform_name)
+        elif isinstance(self.function_registry, dict):
+            transform_func = self.function_registry.get(transform_name)
+        else:
+            transform_func = None
+
+        if transform_func is None:
+            raise FunctionError(
+                f"Transform function '{transform_name}' not found",
+                from_state=self.source_state,
+                to_state=self.arc_def.target_state
+            )
+
+        # Handle streaming vs non-streaming execution
+        if stream_enabled and hasattr(transform_func, 'stream_capable'):
+            return self._execute_streaming(transform_func, data, func_context)
+
+        # Call the transform function
+        if hasattr(transform_func, 'transform'):
+            result = transform_func.transform(data, func_context)
+        elif callable(transform_func):
+            result = transform_func(data, func_context)
+        else:
+            raise ValueError(f"Transform {transform_name} is not callable")
+
+        # Handle ExecutionResult objects
+        from dataknobs_fsm.functions.base import ExecutionResult
+        if isinstance(result, ExecutionResult):
+            if result.success:
+                return result.data
+            raise FunctionError(
+                result.error or "Transform failed",
+                from_state=self.source_state,
+                to_state=self.arc_def.target_state
+            )
+
+        return result
+
     def execute_with_transaction(
         self,
         context: "ExecutionContext",
@@ -395,9 +427,16 @@ class ArcExecution:
         Returns:
             Function context.
         """
+        # Derive a representative function name for the context
+        transform = self.arc_def.transform
+        if isinstance(transform, list):
+            func_name = transform[0] if transform else self.arc_def.pre_test
+        else:
+            func_name = transform or self.arc_def.pre_test
+
         return FunctionContext(
             state_name=self.source_state,
-            function_name=self.arc_def.transform or self.arc_def.pre_test,
+            function_name=func_name,
             metadata={
                 'source_state': self.source_state,
                 'target_state': self.arc_def.target_state,

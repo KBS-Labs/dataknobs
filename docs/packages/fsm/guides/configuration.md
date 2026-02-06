@@ -258,6 +258,82 @@ etl_pipeline = {
 - [File Processing](../examples/file-processor.md) - File transformation workflows
 - [LLM Conversation](../examples/llm-conversation.md) - Conversational AI patterns
 
+## Multi-Transform Arcs
+
+The `transform` field on an arc can be a single function name or a list.
+When a list is provided, transforms are executed sequentially -- each
+transform's output becomes the next transform's input:
+
+```python
+from dataknobs_fsm.core.arc import ArcDefinition
+
+# Single transform
+arc = ArcDefinition(target_state="next", transform="validate")
+
+# Multi-transform pipeline
+arc = ArcDefinition(
+    target_state="next",
+    transform=["validate", "normalize", "enrich"],
+)
+```
+
+In YAML configuration:
+
+```yaml
+states:
+  processing:
+    arcs:
+      - target: done
+        transform:
+          - validate
+          - normalize
+          - enrich
+```
+
+All transforms in the list share a single `FunctionContext` (with the same
+resources and metadata). If any transform raises an error, the entire arc
+execution fails with a `FunctionError`.
+
+Each transform function receives `(data, func_context)` and returns the
+transformed data. If a transform returns an `ExecutionResult`, a successful
+result is unwrapped to its `.data` field and a failed result raises
+`FunctionError`.
+
+## Push Arcs
+
+Push arcs enable hierarchical FSM composition by pushing execution to a
+sub-network:
+
+```python
+from dataknobs_fsm.core.arc import PushArc, DataIsolationMode
+
+push = PushArc(
+    target_state="sub_start",
+    target_network="validation",
+    return_state="review",
+    isolation_mode=DataIsolationMode.COPY,
+    data_mapping={"order_id": "id"},       # parent → child
+    result_mapping={"is_valid": "validated"},  # child → parent
+)
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `target_network` | `str` | `""` | Name of the sub-network to push to |
+| `return_state` | `str \| None` | `None` | State to return to after sub-network completes |
+| `isolation_mode` | `DataIsolationMode` | `COPY` | How data is isolated between networks |
+| `pass_context` | `bool` | `True` | Whether to pass execution context to sub-network |
+| `data_mapping` | `dict[str, str]` | `{}` | Map parent fields to child fields |
+| `result_mapping` | `dict[str, str]` | `{}` | Map child results back to parent fields |
+
+`DataIsolationMode` options:
+
+- `COPY` -- deep copy data (safe, default)
+- `REFERENCE` -- pass by reference (fast, shared mutations)
+- `SERIALIZE` -- serialize/deserialize (maximum isolation)
+
+See the [Subflows Guide](subflows.md) for a complete walkthrough.
+
 ## API References
 
 - [SimpleFSM API](../api/simple.md) - Simple synchronous API

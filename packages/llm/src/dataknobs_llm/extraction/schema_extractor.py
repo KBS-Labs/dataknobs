@@ -135,8 +135,12 @@ class ExtractionResult:
         """Check if extraction is confident enough to proceed.
 
         Returns True if confidence >= 0.8 and no errors occurred.
+
+        Note: Uses round() to handle floating point precision issues.
+        E.g., 0.7 + (1/3 * 0.3) = 0.7999999... which should be treated as 0.8.
         """
-        return self.confidence >= 0.8 and not self.errors
+        # Round to 10 decimal places to handle floating point precision
+        return round(self.confidence, 10) >= 0.8 and not self.errors
 
     @property
     def has_assumptions(self) -> bool:
@@ -146,7 +150,8 @@ class ExtractionResult:
     @property
     def unconfirmed_assumptions(self) -> list[ExtractedAssumption]:
         """Get assumptions with low confidence that may need confirmation."""
-        return [a for a in self.assumptions if a.confidence < 0.8]
+        # Round to handle floating point precision issues
+        return [a for a in self.assumptions if round(a.confidence, 10) < 0.8]
 
 
 # Default extraction prompt template
@@ -167,6 +172,9 @@ Extract data matching this JSON Schema:
 3. If information is missing, omit the field (don't use null unless appropriate)
 4. If you cannot extract the required information, return an empty object {{}}
 5. Do not include explanations - only return the JSON object
+6. For boolean fields, map "yes"/"no" to true/false
+7. For array fields with enum constraints, "all" means include every enum value; "none" means an empty array
+8. For array fields, always return a JSON array (e.g. ["value"]), never a bare string
 
 ## User Message
 {text}
@@ -532,6 +540,20 @@ class SchemaExtractor:
             raw_response=raw_response,
             assumptions=assumptions,
         )
+
+        # Log extraction result
+        duration_ms = (time.time() - start_time) * 1000
+        logger.debug(
+            "SchemaExtractor: input='%s' (len=%d), confidence=%.2f, duration=%.1fms",
+            text[:80].replace("\n", " ") + ("..." if len(text) > 80 else ""),
+            len(text),
+            confidence,
+            duration_ms,
+        )
+        if data:
+            logger.debug("SchemaExtractor: extracted data=%s", data)
+        if all_errors:
+            logger.debug("SchemaExtractor: errors=%s", all_errors)
 
         # Record extraction if tracking
         if tracker is not None:

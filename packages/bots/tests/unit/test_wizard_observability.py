@@ -109,6 +109,56 @@ class TestTransitionRecord:
 
         assert record.error == "Validation failed"
 
+    def test_create_record_with_subflow_push(self) -> None:
+        """Record with subflow_push and subflow_depth."""
+        record = TransitionRecord(
+            from_stage="configure",
+            to_stage="sub_start",
+            timestamp=time.time(),
+            trigger="user_input",
+            subflow_push="child_flow",
+            subflow_depth=1,
+        )
+
+        assert record.subflow_push == "child_flow"
+        assert record.subflow_pop is None
+        assert record.subflow_depth == 1
+
+    def test_create_record_with_subflow_pop(self) -> None:
+        """Record with subflow_pop."""
+        record = TransitionRecord(
+            from_stage="sub_end",
+            to_stage="review",
+            timestamp=time.time(),
+            trigger="auto",
+            subflow_pop="child_flow",
+            subflow_depth=0,
+        )
+
+        assert record.subflow_pop == "child_flow"
+        assert record.subflow_push is None
+        assert record.subflow_depth == 0
+
+    def test_subflow_fields_serialization_roundtrip(self) -> None:
+        """to_dict()/from_dict() preserves subflow fields."""
+        record = TransitionRecord(
+            from_stage="configure",
+            to_stage="sub_start",
+            timestamp=1234567890.0,
+            trigger="user_input",
+            subflow_push="child_flow",
+            subflow_depth=1,
+        )
+
+        data = record.to_dict()
+        assert data["subflow_push"] == "child_flow"
+        assert data["subflow_depth"] == 1
+
+        restored = TransitionRecord.from_dict(data)
+        assert restored.subflow_push == "child_flow"
+        assert restored.subflow_pop is None
+        assert restored.subflow_depth == 1
+
     def test_to_dict(self) -> None:
         """Test converting record to dictionary."""
         timestamp = time.time()
@@ -147,6 +197,9 @@ class TestTransitionRecord:
             "condition_evaluated": "data.get('choice') == 'a'",
             "condition_result": True,
             "error": None,
+            "subflow_push": None,
+            "subflow_pop": None,
+            "subflow_depth": 0,
         }
 
         record = TransitionRecord.from_dict(data)
@@ -158,6 +211,8 @@ class TestTransitionRecord:
         assert record.user_input == "back"
         assert record.condition_evaluated == "data.get('choice') == 'a'"
         assert record.condition_result is True
+        assert record.subflow_push is None
+        assert record.subflow_depth == 0
 
 
 class TestCreateTransitionRecord:
@@ -198,6 +253,34 @@ class TestCreateTransitionRecord:
         assert record.user_input == "finish"
         assert record.condition_evaluated == "data.get('config')"
         assert record.condition_result is True
+
+    def test_create_with_subflow_push(self) -> None:
+        """Factory function with subflow_push kwarg."""
+        record = create_transition_record(
+            from_stage="configure",
+            to_stage="sub_start",
+            trigger="user_input",
+            subflow_push="child_flow",
+            subflow_depth=1,
+        )
+
+        assert record.subflow_push == "child_flow"
+        assert record.subflow_depth == 1
+        assert record.subflow_pop is None
+
+    def test_create_with_subflow_pop(self) -> None:
+        """Factory function with subflow_pop kwarg."""
+        record = create_transition_record(
+            from_stage="sub_end",
+            to_stage="review",
+            trigger="auto",
+            subflow_pop="child_flow",
+            subflow_depth=0,
+        )
+
+        assert record.subflow_pop == "child_flow"
+        assert record.subflow_depth == 0
+        assert record.subflow_push is None
 
 
 class TestTransitionHistoryQuery:
@@ -1183,6 +1266,45 @@ class TestWizardStateSnapshot:
         snapshot = WizardStateSnapshot(current_stage="welcome")
 
         assert snapshot.get_latest_transition() is None
+
+    def test_snapshot_with_stages(self) -> None:
+        """Snapshot with stages list."""
+        stages = [
+            {"name": "welcome", "label": "Welcome", "status": "completed"},
+            {"name": "configure", "label": "Config", "status": "current"},
+            {"name": "complete", "label": "Done", "status": "pending"},
+        ]
+        snapshot = WizardStateSnapshot(
+            current_stage="configure",
+            stages=stages,
+        )
+
+        assert len(snapshot.stages) == 3
+        assert snapshot.stages[0]["status"] == "completed"
+        assert snapshot.stages[1]["status"] == "current"
+        assert snapshot.stages[2]["status"] == "pending"
+
+    def test_snapshot_stages_serialization_roundtrip(self) -> None:
+        """to_dict()/from_dict() preserves stages."""
+        stages = [
+            {"name": "welcome", "label": "Welcome", "status": "completed"},
+            {"name": "configure", "label": "Config", "status": "current"},
+        ]
+        snapshot = WizardStateSnapshot(
+            current_stage="configure",
+            stages=stages,
+        )
+
+        data = snapshot.to_dict()
+        assert data["stages"] == stages
+
+        restored = WizardStateSnapshot.from_dict(data)
+        assert restored.stages == stages
+
+    def test_snapshot_stages_default_empty(self) -> None:
+        """Stages defaults to empty list."""
+        snapshot = WizardStateSnapshot(current_stage="welcome")
+        assert snapshot.stages == []
 
 
 class TestConversionUtilities:

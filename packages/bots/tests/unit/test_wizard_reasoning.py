@@ -275,10 +275,11 @@ class TestWizardReasoning:
         assert response.metadata is not None
         assert "wizard" in response.metadata
         wizard_meta = response.metadata["wizard"]
-        assert "stage" in wizard_meta
+        assert "current_stage" in wizard_meta
         assert "progress" in wizard_meta
         assert "completed" in wizard_meta
         assert "suggestions" in wizard_meta
+        assert "stages" in wizard_meta
 
     @pytest.mark.asyncio
     async def test_complete_calls_tracked(

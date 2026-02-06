@@ -476,8 +476,88 @@ TaskCompletionTrigger = Literal["field_extraction", "tool_result", "stage_exit",
 | `execution_record_to_transition_record()` | Convert FSM to wizard record |
 | `transition_stats_to_execution_stats()` | Convert wizard to FSM stats |
 
+## Subflow Tracking
+
+When a wizard pushes or pops a subflow, the transition record captures the
+subflow context so you can audit nested flows.
+
+### TransitionRecord Subflow Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `subflow_push` | `str \| None` | Network name if this transition pushes a subflow |
+| `subflow_pop` | `str \| None` | Network name if this transition pops a subflow |
+| `subflow_depth` | `int` | Nesting depth after this transition (0 = main flow) |
+
+```python
+from dataknobs_bots.reasoning.observability import create_transition_record
+
+# Record a subflow push
+record = create_transition_record(
+    from_stage="configure",
+    to_stage="sub_start",
+    trigger="user_input",
+    subflow_push="kb_setup",
+    subflow_depth=1,
+)
+
+# Record a subflow pop (return to parent)
+record = create_transition_record(
+    from_stage="sub_end",
+    to_stage="review",
+    trigger="auto",
+    subflow_pop="kb_setup",
+    subflow_depth=0,
+)
+```
+
+### WizardStateSnapshot Stages
+
+The `stages` field on `WizardStateSnapshot` provides an ordered list of stage
+entries for UI rendering (breadcrumbs, progress bars, checklists):
+
+```python
+snapshot.stages
+# [
+#     {"name": "welcome", "label": "Welcome", "status": "completed"},
+#     {"name": "configure", "label": "Configuration", "status": "current"},
+#     {"name": "review", "label": "Review", "status": "pending"},
+#     {"name": "complete", "label": "Done", "status": "pending"},
+# ]
+```
+
+Each entry has:
+
+- `name` -- stage identifier
+- `label` -- human-readable label (falls back to `name` if not configured)
+- `status` -- one of `"completed"`, `"current"`, or `"pending"`
+
+During a subflow, the parent stage that triggered it is marked `"current"` and
+all previously visited stages are `"completed"`. The subflow's own stages do
+not appear in the parent roadmap.
+
+The `stages` field round-trips through `to_dict()` / `from_dict()`.
+
+### create_transition_record Factory
+
+The `create_transition_record` factory function accepts the subflow kwargs:
+
+```python
+create_transition_record(
+    from_stage="configure",
+    to_stage="sub_start",
+    trigger="user_input",
+    subflow_push="child_flow",   # optional
+    subflow_pop=None,            # optional
+    subflow_depth=1,             # optional, default 0
+)
+```
+
+The timestamp is set automatically to `time.time()`.
+
 ## See Also
 
 - [Configuration Reference](configuration.md) - Task definition in wizard config
 - [User Guide](user-guide.md) - Wizard reasoning tutorial
+- [Wizard Subflows Guide](wizard-subflows.md) - Subflow configuration and data mapping
 - [Architecture](architecture.md) - System design overview

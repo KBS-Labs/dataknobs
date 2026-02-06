@@ -302,6 +302,14 @@ class NetworkExecutor:
         )
         logging.debug(f"Sub-network execution result: success={success}, result={result}")
 
+        # Pop the network from the stack since subflow has completed.
+        # This is needed because with isolated contexts (COPY mode), the subflow
+        # uses a separate context and can't pop from our stack.
+        # For non-isolated contexts, the subflow may have already popped via
+        # _handle_network_return, so we check before popping.
+        if context.network_stack and context.network_stack[-1][0] == network_name:
+            context.pop_network()
+
         if success:
             # Update main context with result
             context.data = result

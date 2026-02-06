@@ -112,7 +112,7 @@ class ArcConfig(BaseModel):
 
     target: str
     condition: FunctionReference | None = None
-    transform: FunctionReference | None = None
+    transform: FunctionReference | list[FunctionReference] | None = None
     resources: List[str] = Field(default_factory=list)
     priority: int = Field(default=0)
     metadata: Dict[str, Any] = Field(default_factory=dict)

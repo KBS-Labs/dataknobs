@@ -4,6 +4,8 @@ This module provides the translation layer between user-friendly wizard
 YAML configuration and the underlying FSM configuration format.
 """
 
+from __future__ import annotations
+
 import logging
 from pathlib import Path
 from typing import Any, Callable
@@ -17,6 +19,9 @@ from .function_resolver import resolve_functions
 from .wizard_fsm import WizardFSM
 
 logger = logging.getLogger(__name__)
+
+# Sentinel target for subflow transitions
+SUBFLOW_TARGET = "_subflow"
 
 
 class WizardConfigLoader:
@@ -89,12 +94,15 @@ class WizardConfigLoader:
         with open(config_path) as f:
             wizard_config = yaml.safe_load(f)
 
-        return self.load_from_dict(wizard_config, custom_functions)
+        return self.load_from_dict(
+            wizard_config, custom_functions, config_base_path=config_path.parent
+        )
 
     def load_from_dict(
         self,
         wizard_config: dict[str, Any],
         custom_functions: dict[str, Callable[..., Any] | str] | None = None,
+        config_base_path: Path | None = None,
     ) -> WizardFSM:
         """Load wizard config from dict and create WizardFSM.
 
@@ -104,6 +112,7 @@ class WizardConfigLoader:
                 Values can be either:
                 - Callable objects (used directly)
                 - String references in "module.path:function_name" format
+            config_base_path: Base path for resolving relative subflow paths
 
         Returns:
             Configured WizardFSM instance
@@ -133,7 +142,7 @@ class WizardConfigLoader:
         # Translate wizard config to FSM config
         fsm_config = self._translate_to_fsm(wizard_config)
 
-        # Extract stage metadata
+        # Extract stage metadata (includes subflow transition info)
         stage_metadata = self._extract_metadata(wizard_config)
 
         # Extract wizard-level settings
@@ -153,7 +162,14 @@ class WizardConfigLoader:
         fsm = builder.build(fsm_config)
         advanced_fsm = AdvancedFSM(fsm)
 
-        return WizardFSM(advanced_fsm, stage_metadata, settings=settings)
+        # Load subflow networks
+        subflow_registry = self._load_subflow_networks(
+            wizard_config, custom_functions, config_base_path
+        )
+
+        return WizardFSM(
+            advanced_fsm, stage_metadata, settings=settings, subflow_registry=subflow_registry
+        )
 
     def _translate_to_fsm(self, wizard_config: dict[str, Any]) -> Any:
         """Translate wizard config to FSM format.
@@ -245,6 +261,11 @@ class WizardConfigLoader:
     ) -> Any:
         """Translate wizard transition to FSM arc.
 
+        Handles both regular transitions and subflow transitions.
+        For subflow transitions (target: "_subflow"), the actual target
+        becomes a self-loop and subflow metadata is stored for handling
+        at the wizard reasoning level.
+
         Args:
             source_stage: Source stage name
             transition: Transition configuration dict
@@ -261,6 +282,12 @@ class WizardConfigLoader:
                 f"Transition in stage '{source_stage}' missing 'target'"
             )
 
+        # Handle subflow transitions specially
+        # For subflow transitions, the FSM stays at the current stage
+        # The actual subflow handling happens in WizardReasoning
+        is_subflow_transition = target == SUBFLOW_TARGET
+        actual_target = source_stage if is_subflow_transition else target
+
         # Build condition function reference if specified
         condition = None
         if "condition" in transition:
@@ -271,25 +298,46 @@ class WizardConfigLoader:
 
             condition = FunctionReference(
                 type="inline",
-                name=f"condition_{source_stage}_{target}_{idx}",
+                name=f"condition_{source_stage}_{actual_target}_{idx}",
                 code=condition_code,
             )
 
-        # Build transform function reference if specified
-        transform = None
+        # Build transform function reference(s) if specified
+        # Supports both single string and list of strings:
+        #   transform: apply_template          # single
+        #   transform: [apply_template, save]  # list
+        transform: FunctionReference | list[FunctionReference] | None = None
         if "transform" in transition:
-            transform_name = transition["transform"]
-            transform = FunctionReference(
-                type="registered",
-                name=transform_name,
-            )
+            raw_transform = transition["transform"]
+            if isinstance(raw_transform, list):
+                transform = [
+                    FunctionReference(type="registered", name=name)
+                    for name in raw_transform
+                ]
+            else:
+                transform = FunctionReference(
+                    type="registered",
+                    name=raw_transform,
+                )
+
+        # Build arc metadata, including subflow config if present
+        arc_metadata = dict(transition.get("metadata", {}))
+        if is_subflow_transition:
+            subflow_config = transition.get("subflow", {})
+            arc_metadata["is_subflow_transition"] = True
+            arc_metadata["subflow_config"] = {
+                "network": subflow_config.get("network"),
+                "return_stage": subflow_config.get("return_stage"),
+                "data_mapping": subflow_config.get("data_mapping", {}),
+                "result_mapping": subflow_config.get("result_mapping", {}),
+            }
 
         arc = ArcConfig(
-            target=target,
+            target=actual_target,
             condition=condition,
             transform=transform,
             priority=transition.get("priority", idx),
-            metadata=transition.get("metadata", {}),
+            metadata=arc_metadata,
         )
 
         return arc
@@ -314,17 +362,23 @@ class WizardConfigLoader:
             # Extract transition conditions for observability
             transitions = []
             for transition in stage.get("transitions", []):
-                transitions.append({
+                trans_meta: dict[str, Any] = {
                     "target": transition.get("target"),
                     "condition": transition.get("condition"),
                     "priority": transition.get("priority"),
-                })
+                }
+                # Include subflow config if this is a subflow transition
+                if transition.get("target") == SUBFLOW_TARGET:
+                    trans_meta["is_subflow_transition"] = True
+                    trans_meta["subflow_config"] = transition.get("subflow", {})
+                transitions.append(trans_meta)
 
             # Extract per-stage tasks
             stage_tasks = self._extract_stage_tasks(stage)
 
             metadata[stage["name"]] = {
                 "name": stage["name"],  # Include name in metadata for template access
+                "label": stage.get("label", stage["name"]),
                 "prompt": stage.get("prompt", ""),
                 "schema": stage.get("schema"),
                 "suggestions": stage.get("suggestions", []),
@@ -342,6 +396,10 @@ class WizardConfigLoader:
                 # ReAct-style tool reasoning settings
                 "reasoning": stage.get("reasoning"),  # "single" or "react"
                 "max_iterations": stage.get("max_iterations"),
+                # Template-driven response mode (bypasses LLM for stage prompt)
+                "response_template": stage.get("response_template"),
+                "llm_assist": stage.get("llm_assist", False),
+                "llm_assist_prompt": stage.get("llm_assist_prompt"),
             }
 
         # Add global tasks to the first stage's metadata
@@ -437,10 +495,11 @@ class WizardConfigLoader:
                         ) -> bool:
                             try:
                                 # Simple evaluation - data is available directly
-                                local_vars: dict[str, Any] = {"data": data}
+                                # Pass data in globals so _test() can access it
+                                exec_globals: dict[str, Any] = {"data": data}
                                 exec_code = f"def _test():\n    {code}\n_result = _test()"
-                                exec(exec_code, {}, local_vars)  # nosec B102
-                                return bool(local_vars.get("_result", False))
+                                exec(exec_code, exec_globals)  # nosec B102
+                                return bool(exec_globals.get("_result", False))
                             except Exception as e:
                                 logger.warning(
                                     "Condition evaluation failed: %s", e
@@ -454,6 +513,119 @@ class WizardConfigLoader:
                     logger.warning(
                         "Failed to register condition '%s': %s", func_name, e
                     )
+
+    def _load_subflow_networks(
+        self,
+        wizard_config: dict[str, Any],
+        custom_functions: dict[str, Callable[..., Any] | str] | None,
+        config_base_path: Path | None,
+    ) -> dict[str, WizardFSM]:
+        """Load subflow networks referenced in transitions.
+
+        Scans all transitions for subflow references and loads the
+        corresponding wizard configurations.
+
+        Args:
+            wizard_config: Main wizard configuration dict
+            custom_functions: Custom functions to pass to subflows
+            config_base_path: Base path for resolving relative paths
+
+        Returns:
+            Dict mapping subflow names to WizardFSM instances
+        """
+        subflow_registry: dict[str, WizardFSM] = {}
+
+        # Collect all referenced subflow networks
+        subflow_refs: set[str] = set()
+        for stage in wizard_config.get("stages", []):
+            for transition in stage.get("transitions", []):
+                if transition.get("target") == SUBFLOW_TARGET:
+                    subflow_config = transition.get("subflow", {})
+                    network_name = subflow_config.get("network")
+                    if network_name:
+                        subflow_refs.add(network_name)
+
+        # Also check for explicitly defined subflows in config
+        explicit_subflows = wizard_config.get("subflows", {})
+        for name in explicit_subflows:
+            subflow_refs.add(name)
+
+        if not subflow_refs:
+            return subflow_registry
+
+        # Load each referenced subflow
+        for subflow_name in subflow_refs:
+            try:
+                subflow_fsm = self._load_single_subflow(
+                    subflow_name,
+                    wizard_config,
+                    custom_functions,
+                    config_base_path,
+                )
+                if subflow_fsm:
+                    subflow_registry[subflow_name] = subflow_fsm
+                    logger.debug("Loaded subflow: %s", subflow_name)
+            except Exception as e:
+                logger.error("Failed to load subflow '%s': %s", subflow_name, e)
+                raise ValueError(f"Failed to load subflow '{subflow_name}': {e}") from e
+
+        return subflow_registry
+
+    def _load_single_subflow(
+        self,
+        subflow_name: str,
+        wizard_config: dict[str, Any],
+        custom_functions: dict[str, Callable[..., Any] | str] | None,
+        config_base_path: Path | None,
+    ) -> WizardFSM | None:
+        """Load a single subflow network.
+
+        Attempts to load the subflow from:
+        1. Explicit subflow definition in wizard_config["subflows"]
+        2. File path relative to config_base_path
+        3. File path in subflows/ subdirectory
+
+        Args:
+            subflow_name: Name of the subflow to load
+            wizard_config: Main wizard configuration dict
+            custom_functions: Custom functions to pass to subflow
+            config_base_path: Base path for resolving relative paths
+
+        Returns:
+            WizardFSM for the subflow, or None if not found
+        """
+        # Check for inline subflow definition
+        explicit_subflows = wizard_config.get("subflows", {})
+        if subflow_name in explicit_subflows:
+            subflow_config = explicit_subflows[subflow_name]
+            return self.load_from_dict(
+                subflow_config, custom_functions, config_base_path
+            )
+
+        # Try to load from file
+        if config_base_path is None:
+            logger.warning(
+                "Cannot load subflow '%s' from file: no config_base_path provided",
+                subflow_name,
+            )
+            return None
+
+        # Try direct path (subflow_name.yaml)
+        subflow_path = config_base_path / f"{subflow_name}.yaml"
+        if subflow_path.exists():
+            return self.load(str(subflow_path), custom_functions)
+
+        # Try subflows/ subdirectory
+        subflow_path = config_base_path / "subflows" / f"{subflow_name}.yaml"
+        if subflow_path.exists():
+            return self.load(str(subflow_path), custom_functions)
+
+        logger.warning(
+            "Subflow '%s' not found in config or as file at %s",
+            subflow_name,
+            config_base_path,
+        )
+        return None
 
 
 def load_wizard_config(

@@ -22,12 +22,14 @@ class WizardFSM:
     - Navigation helpers (back, skip, restart)
     - State serialization for persistence
     - Stage-specific tool and configuration access
+    - Subflow registry for nested wizard flows
 
     Attributes:
         _fsm: Underlying AdvancedFSM instance
         _stage_metadata: Dict mapping stage names to metadata
         _settings: Wizard-level settings (auto_advance_filled_stages, etc.)
         _context: Current execution context
+        _subflow_registry: Dict mapping subflow names to WizardFSM instances
     """
 
     def __init__(
@@ -35,6 +37,7 @@ class WizardFSM:
         fsm: AdvancedFSM,
         stage_metadata: dict[str, dict[str, Any]],
         settings: dict[str, Any] | None = None,
+        subflow_registry: dict[str, "WizardFSM"] | None = None,
     ):
         """Initialize WizardFSM.
 
@@ -42,11 +45,13 @@ class WizardFSM:
             fsm: AdvancedFSM instance to wrap
             stage_metadata: Dict mapping stage names to their metadata
             settings: Wizard-level settings dict (optional)
+            subflow_registry: Dict mapping subflow names to WizardFSM instances
         """
         self._fsm = fsm
         self._stage_metadata = stage_metadata
         self._settings = settings or {}
         self._context: ExecutionContext | None = None
+        self._subflow_registry: dict[str, WizardFSM] = subflow_registry or {}
 
     @property
     def settings(self) -> dict[str, Any]:
@@ -223,6 +228,50 @@ class WizardFSM:
         stage = stage or self.current_stage
         return self._stage_metadata.get(stage, {}).get("is_end", False)
 
+    # =========================================================================
+    # Subflow Registry Methods
+    # =========================================================================
+
+    def get_subflow(self, name: str) -> "WizardFSM | None":
+        """Get a subflow WizardFSM by name.
+
+        Args:
+            name: Subflow network name
+
+        Returns:
+            WizardFSM instance for the subflow, or None if not found
+        """
+        return self._subflow_registry.get(name)
+
+    def has_subflow(self, name: str) -> bool:
+        """Check if a subflow exists in the registry.
+
+        Args:
+            name: Subflow network name
+
+        Returns:
+            True if the subflow exists
+        """
+        return name in self._subflow_registry
+
+    def register_subflow(self, name: str, subflow_fsm: "WizardFSM") -> None:
+        """Register a subflow WizardFSM.
+
+        Args:
+            name: Subflow network name
+            subflow_fsm: WizardFSM instance for the subflow
+        """
+        self._subflow_registry[name] = subflow_fsm
+
+    @property
+    def subflow_names(self) -> list[str]:
+        """Get list of registered subflow names.
+
+        Returns:
+            List of subflow network names
+        """
+        return list(self._subflow_registry.keys())
+
     def step(self, data: dict[str, Any]) -> StepResult:
         """Execute one FSM step with given data.
 
@@ -235,6 +284,7 @@ class WizardFSM:
         Returns:
             StepResult with transition details
         """
+        before_stage = self.current_stage
         if not self._context:
             self._context = self._fsm.create_context(data)
         else:
@@ -244,7 +294,44 @@ class WizardFSM:
             else:
                 self._context.data = data
 
-        return self._fsm.execute_step_sync(self._context)
+        result = self._fsm.execute_step_sync(self._context)
+        after_stage = self.current_stage
+
+        # Log transition evaluation details
+        if before_stage != after_stage:
+            # Log the condition that was evaluated
+            stage_meta = self._stage_metadata.get(before_stage, {})
+            transitions = stage_meta.get("transitions", [])
+            for trans in transitions:
+                if trans.get("target") == after_stage:
+                    condition = trans.get("condition", "unconditional")
+                    logger.debug(
+                        "WizardFSM transition: '%s' -> '%s' via condition: %s",
+                        before_stage,
+                        after_stage,
+                        condition,
+                    )
+                    break
+        else:
+            # Log why no transition occurred
+            stage_meta = self._stage_metadata.get(before_stage, {})
+            transitions = stage_meta.get("transitions", [])
+            if transitions:
+                logger.debug(
+                    "WizardFSM no transition from '%s': %d transitions defined, none matched",
+                    before_stage,
+                    len(transitions),
+                )
+                for trans in transitions:
+                    target = trans.get("target", "?")
+                    condition = trans.get("condition", "unconditional")
+                    logger.debug(
+                        "  - target='%s', condition='%s'",
+                        target,
+                        condition,
+                    )
+
+        return result
 
     def go_back(self, history: list[str]) -> bool:
         """Navigate to previous stage.
@@ -352,6 +439,7 @@ def create_wizard_fsm(
     stage_metadata: dict[str, dict[str, Any]],
     custom_functions: dict[str, Callable[..., Any]] | None = None,
     settings: dict[str, Any] | None = None,
+    subflow_registry: dict[str, WizardFSM] | None = None,
 ) -> WizardFSM:
     """Factory function to create a WizardFSM instance.
 
@@ -360,6 +448,7 @@ def create_wizard_fsm(
         stage_metadata: Stage metadata dict
         custom_functions: Optional custom functions to register
         settings: Wizard-level settings dict (optional)
+        subflow_registry: Dict mapping subflow names to WizardFSM instances
 
     Returns:
         Configured WizardFSM instance
@@ -367,4 +456,6 @@ def create_wizard_fsm(
     from dataknobs_fsm.api.advanced import create_advanced_fsm
 
     advanced_fsm = create_advanced_fsm(fsm_config, custom_functions=custom_functions)
-    return WizardFSM(advanced_fsm, stage_metadata, settings=settings)
+    return WizardFSM(
+        advanced_fsm, stage_metadata, settings=settings, subflow_registry=subflow_registry
+    )

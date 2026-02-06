@@ -71,6 +71,10 @@ class TransitionRecord:
     condition_evaluated: str | None = None
     condition_result: bool | None = None
     error: str | None = None
+    # Subflow tracking fields
+    subflow_push: str | None = None  # Network name if this transition pushes a subflow
+    subflow_pop: str | None = None  # Network name if this transition pops a subflow
+    subflow_depth: int = 0  # Depth after this transition (0 = main flow)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert record to dictionary.
@@ -447,6 +451,7 @@ class WizardStateSnapshot:
         can_skip: Whether current stage can be skipped
         can_go_back: Whether back navigation is allowed
         suggestions: Quick-reply suggestions for current stage
+        stages: Ordered list of stage dicts with name, label, and status
     """
 
     current_stage: str
@@ -469,6 +474,7 @@ class WizardStateSnapshot:
     can_skip: bool = False
     can_go_back: bool = True
     suggestions: list[str] = field(default_factory=list)
+    stages: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert snapshot to dictionary.
@@ -495,6 +501,7 @@ class WizardStateSnapshot:
             "can_skip": self.can_skip,
             "can_go_back": self.can_go_back,
             "suggestions": self.suggestions,
+            "stages": self.stages,
         }
 
     @classmethod
@@ -529,6 +536,7 @@ class WizardStateSnapshot:
             can_skip=data.get("can_skip", False),
             can_go_back=data.get("can_go_back", True),
             suggestions=data.get("suggestions", []),
+            stages=data.get("stages", []),
         )
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
@@ -739,6 +747,9 @@ def create_transition_record(
     condition_evaluated: str | None = None,
     condition_result: bool | None = None,
     error: str | None = None,
+    subflow_push: str | None = None,
+    subflow_pop: str | None = None,
+    subflow_depth: int = 0,
 ) -> TransitionRecord:
     """Factory function to create a transition record.
 
@@ -754,6 +765,9 @@ def create_transition_record(
         condition_evaluated: The condition expression that was evaluated
         condition_result: Result of the condition evaluation
         error: Error message if transition failed
+        subflow_push: Network name if this transition pushes a subflow
+        subflow_pop: Network name if this transition pops a subflow
+        subflow_depth: Depth after this transition (0 = main flow)
 
     Returns:
         TransitionRecord with current timestamp
@@ -769,6 +783,9 @@ def create_transition_record(
         condition_evaluated=condition_evaluated,
         condition_result=condition_result,
         error=error,
+        subflow_push=subflow_push,
+        subflow_pop=subflow_pop,
+        subflow_depth=subflow_depth,
     )
 
 
