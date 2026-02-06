@@ -7,14 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Release - 2026-02-06
 
-### dataknobs-bots [0.5.0]
+### dataknobs-bots [0.4.2]
 
 #### Added
-- wizard subflow support: `SubflowContext`, push/pop transitions, `data_mapping` and `result_mapping` between parent and child wizards
-- templated wizard responses via Jinja2 `response_template` on stages
-- stage labels and stages roadmap (`_build_stages_roadmap`) for UI progress display
+- wizard subflow support
+- templated wizard responses
+- stage label support
 - per-stage `extraction_scope` override
-- schema-aware data normalization (`_normalize_extracted_data`): boolean, integer, number coercion and array wrapping/shortcuts
+- schema-aware data normalization
 
 #### Fixed
 - consistent wizard metadata on all response paths
@@ -22,20 +22,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - settings injection from wizard config
 - template response persistence through serialization
 
-### dataknobs-fsm [0.4.0]
+### dataknobs-fsm [0.1.7]
 
 #### Added
-- subflow engine support: `PushArc`, `DataIsolationMode`, network stack, `data_mapping` and `result_mapping`
-- multi-transform arc execution: `transform` accepts a list of function names executed sequentially
+- subflow engine support
+- multi-transform arc execution
 
 #### Fixed
 - tuple truthiness handling in condition evaluation
+- exec() scope bug
 - subflow network stack popping on completion
 
 ### dataknobs-llm [0.3.4]
 
 #### Fixed
 - floating point precision in schema extraction numeric fields
+
 
 ## Release - 2026-01-29
 
