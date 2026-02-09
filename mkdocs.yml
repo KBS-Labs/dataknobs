@@ -203,6 +203,7 @@ nav:
           - packages/bots/guides/context.md
         - Advanced Features:
           - packages/bots/guides/wizard-subflows.md
+          - packages/bots/guides/context-aware-wizards.md
           - packages/bots/guides/task-injection.md
           - packages/bots/guides/focus-guards.md
           - packages/bots/guides/config-versioning.md
