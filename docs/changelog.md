@@ -5,6 +5,24 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-02-09
+
+### dataknobs-data [0.4.6]
+
+#### Fixed
+- linting errors
+
+### dataknobs-fsm [0.1.8]
+
+#### Fixed
+- fixed faulty divergent path bug
+
+### dataknobs-bots [0.4.3]
+
+#### Added
+- lm context generation and transition data derivation features
+
+
 ## Release - 2026-02-06
 
 ### dataknobs-bots [0.4.2]

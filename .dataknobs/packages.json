@@ -5,7 +5,7 @@
       "name": "bots",
       "pypi_name": "dataknobs-bots",
       "description": "Configuration-driven AI agents with RAG, memory, and reasoning strategies",
-      "version": "0.4.2",
+      "version": "0.4.3",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -32,7 +32,7 @@
       "name": "data",
       "pypi_name": "dataknobs-data",
       "description": "Unified data abstraction layer with multiple backends",
-      "version": "0.4.5",
+      "version": "0.4.6",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -41,7 +41,7 @@
       "name": "fsm",
       "pypi_name": "dataknobs-fsm",
       "description": "Finite State Machine framework for workflows with data modes and resource management",
-      "version": "0.1.7",
+      "version": "0.1.8",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false

@@ -61,11 +61,11 @@ Dataknobs is open-source because we believe in **democratizing access to data** 
 
 | Package | Description | Version |
 |---------|-------------|---------|
-| [dataknobs-bots](packages/bots/index.md) | Configuration-driven AI agents with RAG, memory, and reasoning strategies | 0.4.2 |
+| [dataknobs-bots](packages/bots/index.md) | Configuration-driven AI agents with RAG, memory, and reasoning strategies | 0.4.3 |
 | [dataknobs-common](packages/common/index.md) | Foundation library with exceptions, registries, serialization, and event bus | 1.2.1 |
 | [dataknobs-config](packages/config/index.md) | Modular configuration system with environment variable overrides and factories | 0.3.4 |
-| [dataknobs-data](packages/data/index.md) | Unified data abstraction layer with multiple backends | 0.4.5 |
-| [dataknobs-fsm](packages/fsm/index.md) | Finite State Machine framework for workflows with data modes and resource management | 0.1.7 |
+| [dataknobs-data](packages/data/index.md) | Unified data abstraction layer with multiple backends | 0.4.6 |
+| [dataknobs-fsm](packages/fsm/index.md) | Finite State Machine framework for workflows with data modes and resource management | 0.1.8 |
 | [dataknobs-llm](packages/llm/index.md) | Unified LLM abstraction with prompt management and conversations | 0.3.4 |
 | [dataknobs-structures](packages/structures/index.md) | Core data structures for AI knowledge bases and document processing | 1.0.5 |
 | [dataknobs-utils](packages/utils/index.md) | Utilities for file I/O, JSON processing, HTTP requests, and integrations | 1.2.3 |
