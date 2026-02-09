@@ -2,10 +2,14 @@
 
 Tests the chained transform pipeline in ArcExecution where a list of
 transform functions are executed sequentially, passing data through each.
+
+Also tests that list transforms work through AdvancedFSM.execute_step_sync(),
+which was previously a divergent code path that stringified list transforms.
 """
 
 import pytest
 
+from dataknobs_fsm.api.advanced import AdvancedFSM, create_advanced_fsm
 from dataknobs_fsm.core.arc import ArcDefinition, ArcExecution
 from dataknobs_fsm.core.exceptions import FunctionError
 from dataknobs_fsm.functions.base import ExecutionResult, FunctionContext
@@ -166,3 +170,128 @@ class TestArcMultiTransform:
 
         with pytest.raises(FunctionError, match="not found"):
             arc_exec.execute(MockContext(), {"value": 5})
+
+
+class TestStepSyncMultiTransform:
+    """Tests that list transforms work through AdvancedFSM.execute_step_sync().
+
+    These exercise the _execute_arc_transform delegation to ArcExecution,
+    which previously stringified list transforms and silently skipped them.
+    """
+
+    @staticmethod
+    def _make_config(
+        arc_transform: dict | list[dict] | None = None,
+    ) -> dict:
+        """Build a minimal two-state FSM config with an arc transform.
+
+        Args:
+            arc_transform: Transform spec(s) for the start->end arc.
+
+        Returns:
+            FSM config dict ready for ``create_advanced_fsm``.
+        """
+        arc: dict = {"from": "start", "to": "end"}
+        if arc_transform is not None:
+            arc["transform"] = arc_transform
+        return {
+            "name": "test_multi",
+            "version": "1.0",
+            "main_network": "main",
+            "networks": [
+                {
+                    "name": "main",
+                    "states": [
+                        {"name": "start", "is_start": True},
+                        {"name": "end", "is_end": True},
+                    ],
+                    "arcs": [arc],
+                }
+            ],
+        }
+
+    def test_step_sync_multi_transform(self) -> None:
+        """List transforms execute sequentially through execute_step_sync."""
+
+        def add_ten(data: dict, ctx: FunctionContext) -> dict:
+            out = dict(data)
+            out["value"] = out.get("value", 0) + 10
+            return out
+
+        def double(data: dict, ctx: FunctionContext) -> dict:
+            out = dict(data)
+            out["value"] = out.get("value", 0) * 2
+            return out
+
+        config = self._make_config(
+            arc_transform=[
+                {"type": "registered", "name": "add_ten"},
+                {"type": "registered", "name": "double"},
+            ]
+        )
+        fsm = create_advanced_fsm(
+            config,
+            custom_functions={"add_ten": add_ten, "double": double},
+        )
+        context = fsm.create_context({"value": 5})
+
+        result = fsm.execute_step_sync(context)
+
+        assert result.success, f"Step failed: {result.error}"
+        assert result.to_state == "end"
+        # value=5 -> add_ten -> 15 -> double -> 30
+        assert context.data["value"] == 30
+
+    def test_step_sync_single_transform_still_works(self) -> None:
+        """Regression guard: a single string transform still works."""
+
+        def add_ten(data: dict, ctx: FunctionContext) -> dict:
+            out = dict(data)
+            out["value"] = out.get("value", 0) + 10
+            return out
+
+        config = self._make_config(
+            arc_transform={"type": "registered", "name": "add_ten"},
+        )
+        fsm = create_advanced_fsm(
+            config,
+            custom_functions={"add_ten": add_ten},
+        )
+        context = fsm.create_context({"value": 5})
+
+        result = fsm.execute_step_sync(context)
+
+        assert result.success, f"Step failed: {result.error}"
+        assert result.to_state == "end"
+        assert context.data["value"] == 15
+
+    def test_step_sync_stringified_list_compat(self) -> None:
+        """Backward compat: stringified list transforms are parsed correctly."""
+        from dataknobs_fsm.api.advanced import AdvancedFSM
+
+        parsed = AdvancedFSM._normalize_transform_names("['add_ten', 'double']")
+        assert parsed == ["add_ten", "double"]
+
+        # Single string stays as single-element list
+        parsed = AdvancedFSM._normalize_transform_names("add_ten")
+        assert parsed == ["add_ten"]
+
+        # Actual list passes through
+        parsed = AdvancedFSM._normalize_transform_names(["a", "b"])
+        assert parsed == ["a", "b"]
+
+        # None / empty
+        parsed = AdvancedFSM._normalize_transform_names(None)
+        assert parsed == []
+
+    def test_step_sync_no_transform(self) -> None:
+        """Arc with no transform passes data through unchanged."""
+        config = self._make_config(arc_transform=None)
+        fsm = create_advanced_fsm(config)
+        context = fsm.create_context({"value": 42})
+
+        result = fsm.execute_step_sync(context)
+
+        assert result.success
+        assert result.to_state == "end"
+        assert context.data["value"] == 42

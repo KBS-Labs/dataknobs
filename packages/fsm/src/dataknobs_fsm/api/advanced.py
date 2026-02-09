@@ -1027,41 +1027,83 @@ class AdvancedFSM:
 
         return transitions
 
-    def _execute_arc_transform(
-        self,
-        arc,
-        context: ExecutionContext
-    ) -> tuple[bool, Any]:
-        """Execute arc transform function (shared logic).
+    @staticmethod
+    def _normalize_transform_names(
+        transform: Any,
+    ) -> list[str]:
+        """Parse stringified list transforms for backward compat.
+
+        Handles the case where ``FSMBuilder`` previously stringified list
+        transforms (e.g. ``"['a', 'b']"``).  Returns a flat list of
+        transform name strings suitable for ``ArcDefinition.transform``.
 
         Args:
-            arc: Arc with potential transform
-            context: Execution context
+            transform: Raw transform value from an ``Arc``.
 
         Returns:
-            Tuple of (success, result_or_error)
+            List of transform name strings (may be empty).
+        """
+        if isinstance(transform, list):
+            return transform
+        if isinstance(transform, str):
+            stripped = transform.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                import ast
+
+                try:
+                    parsed = ast.literal_eval(stripped)
+                    if isinstance(parsed, list):
+                        return [str(x) for x in parsed]
+                except (ValueError, SyntaxError):
+                    pass
+            return [transform]
+        return []
+
+    def _execute_arc_transform(
+        self,
+        arc: Any,
+        context: ExecutionContext,
+    ) -> tuple[bool, Any]:
+        """Execute arc transform function by delegating to ArcExecution.
+
+        Args:
+            arc: Arc with potential transform.
+            context: Execution context.
+
+        Returns:
+            Tuple of (success, result_or_error).
         """
         if not arc.transform:
             return True, context.data
 
-        # Get function registry
-        registry = getattr(self.fsm, 'function_registry', {})
-        if hasattr(registry, 'functions'):
-            functions = registry.functions
+        from ..core.arc import ArcDefinition, ArcExecution
+
+        # Normalize transform names (handles stringified lists from old builders)
+        normalized = self._normalize_transform_names(arc.transform)
+
+        # Build ArcDefinition from network Arc
+        arc_def = ArcDefinition(
+            target_state=arc.target_state,
+            pre_test=arc.pre_test,
+            transform=normalized if len(normalized) != 1 else normalized[0],
+            metadata=getattr(arc, "metadata", {}),
+        )
+        source_state = getattr(arc, "source_state", context.current_state or "")
+
+        # Merge FSM function registry with custom functions
+        registry = getattr(self.fsm, "function_registry", {})
+        if hasattr(registry, "functions"):
+            functions = dict(registry.functions)
         else:
-            functions = registry
+            functions = dict(registry)
+        functions.update(self._custom_functions)
 
-        # Look for transform in registry or custom functions
-        transform_func = functions.get(arc.transform) or self._custom_functions.get(arc.transform)
-
-        if transform_func:
-            try:
-                result = transform_func(context.data, context)
-                return True, result
-            except Exception as e:
-                return False, str(e)
-
-        return True, context.data
+        arc_exec = ArcExecution(arc_def, source_state, functions)
+        try:
+            result = arc_exec.execute(context, context.data)
+            return True, result
+        except Exception as e:
+            return False, str(e)
 
     def _update_state_instance(
         self,

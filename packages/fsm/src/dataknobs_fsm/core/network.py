@@ -20,12 +20,16 @@ class Arc:
     source_state: str
     target_state: str
     pre_test: str | None = None
-    transform: str | None = None
+    transform: str | list[str] | None = None
     metadata: Dict[str, Any] = field(default_factory=dict)
-    
+
     def __hash__(self) -> int:
         """Make Arc hashable for use in sets."""
-        return hash((self.source_state, self.target_state, self.pre_test, self.transform))
+        transform_key = (
+            tuple(self.transform) if isinstance(self.transform, list)
+            else self.transform
+        )
+        return hash((self.source_state, self.target_state, self.pre_test, transform_key))
     
     def __eq__(self, other: object) -> bool:
         """Check equality."""
@@ -290,7 +294,7 @@ class StateNetwork:
         source_state: str,
         target_state: str,
         pre_test: str | None = None,
-        transform: str | None = None,
+        transform: str | list[str] | None = None,
         metadata: Dict[str, Any] | None = None
     ) -> Arc:
         """Add an arc between two states.

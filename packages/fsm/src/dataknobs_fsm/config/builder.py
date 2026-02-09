@@ -292,7 +292,10 @@ class FSMBuilder:
                 if arc.pre_test:
                     pre_test_name = getattr(arc.pre_test, '__name__', str(arc.pre_test))
                 if arc.transform:
-                    transform_name = getattr(arc.transform, '__name__', str(arc.transform))
+                    if isinstance(arc.transform, list):
+                        transform_name = arc.transform
+                    else:
+                        transform_name = getattr(arc.transform, '__name__', str(arc.transform))
                 
                 network.add_arc(
                     source_state=state_config.name,
