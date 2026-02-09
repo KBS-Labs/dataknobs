@@ -426,26 +426,33 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                     functions = function_registry.functions
                 else:
                     functions = function_registry
-                
-                if arc.transform in functions:
-                    transform_func = functions[arc.transform]
 
-                    # Check if it's async - check both the function and its __call__ method
+                # Normalize to list for uniform handling
+                transform_names = (
+                    arc.transform
+                    if isinstance(arc.transform, list)
+                    else [arc.transform]
+                )
+
+                for transform_name in transform_names:
+                    if transform_name not in functions:
+                        continue
+                    transform_func = functions[transform_name]
+
+                    # Check if it's async
                     is_async = asyncio.iscoroutinefunction(transform_func)
-                    if not is_async and callable(transform_func) and callable(transform_func):
-                        # Check if the __call__ method is async (for wrapped functions)
+                    if not is_async and callable(transform_func):
                         is_async = asyncio.iscoroutinefunction(transform_func.__call__)
 
                     if is_async:
                         context.data = await transform_func(context.data, context)
                     else:
-                        # Run sync function in executor
                         loop = asyncio.get_event_loop()
                         context.data = await loop.run_in_executor(
                             None,
                             transform_func,
                             context.data,
-                            context
+                            context,
                         )
             
             # Update state (history is automatically tracked by set_state)

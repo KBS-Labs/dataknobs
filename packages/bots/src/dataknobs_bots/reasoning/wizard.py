@@ -653,6 +653,11 @@ class WizardReasoning(ReasoningStrategy):
         from_stage = wizard_state.current_stage
         duration_ms = (time.time() - wizard_state.stage_entry_time) * 1000
 
+        # Apply data derivations from transition configs before evaluating
+        # conditions.  This lets transitions fill in values that enable their
+        # own conditions and subsequent auto-advance checks.
+        self._apply_transition_derivations(stage, wizard_state)
+
         # Log pre-transition state
         logger.debug(
             "FSM transition attempt: from_stage='%s', data_keys=%s",
@@ -921,7 +926,9 @@ class WizardReasoning(ReasoningStrategy):
             "can_skip": active_fsm.can_skip(),
             "can_go_back": active_fsm.can_go_back() and len(state.history) > 1,
             "stage_prompt": active_fsm.get_stage_prompt(),
-            "suggestions": active_fsm.get_stage_suggestions(),
+            "suggestions": self._render_suggestions(
+                active_fsm.get_stage_suggestions(), state
+            ),
             "stages": self._build_stages_roadmap(state),
         }
 
@@ -1261,6 +1268,32 @@ class WizardReasoning(ReasoningStrategy):
                             return part.get("text", "")
         return ""
 
+    def _get_last_bot_response(self, manager: Any) -> str:
+        """Extract the last assistant message from conversation.
+
+        Used to provide the bot's previous response as context for
+        extraction, so the extraction model can resolve references
+        like "the first suggestion" or "yes to that".
+
+        Args:
+            manager: ConversationManager instance
+
+        Returns:
+            Last assistant message text, or empty string if none found.
+        """
+        messages = manager.get_messages()
+        for msg in reversed(messages):
+            if msg.get("role") == "assistant":
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    return content
+                # Handle structured content
+                if isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            return part.get("text", "")
+        return ""
+
     async def _handle_navigation(
         self,
         message: str,
@@ -1446,6 +1479,23 @@ class WizardReasoning(ReasoningStrategy):
         else:
             # Current message only (original behavior)
             extraction_input = message
+
+        # Include the bot's last response so the extraction model can
+        # resolve references like "the first suggestion" or "yes to that".
+        if manager is not None:
+            bot_response = self._get_last_bot_response(manager)
+            if bot_response:
+                # Truncate very long responses to avoid overwhelming extraction
+                if len(bot_response) > 1500:
+                    bot_response = bot_response[:1500] + "..."
+                extraction_input = (
+                    f"Bot's previous message:\n{bot_response}\n\n"
+                    f"User's response:\n{extraction_input}"
+                )
+                logger.debug(
+                    "Included bot response (%d chars) in extraction context",
+                    len(bot_response),
+                )
 
         # Strip defaults to prevent extraction LLM from auto-filling them
         extraction_schema = self._strip_schema_defaults(schema)
@@ -1758,7 +1808,14 @@ class WizardReasoning(ReasoningStrategy):
 
         # ── Template mode ────────────────────────────────────────
         if response_template:
-            rendered = self._render_response_template(response_template, stage, state)
+            # Generate LLM context variables if configured
+            extra_context = await self._generate_context_variables(
+                stage, state, llm
+            )
+
+            rendered = self._render_response_template(
+                response_template, stage, state, extra_context=extra_context
+            )
 
             # Check if user is asking a question and llm_assist is enabled
             user_message = self._get_last_user_message(manager)
@@ -1845,16 +1902,22 @@ class WizardReasoning(ReasoningStrategy):
         template_str: str,
         stage: dict[str, Any],
         state: WizardState,
+        extra_context: dict[str, Any] | None = None,
     ) -> str:
         """Render a stage response template with wizard state data.
 
-        Uses Jinja2 to render the template with collected wizard data
-        and stage metadata as context variables.
+        Uses Jinja2 to render the template with collected wizard data,
+        stage metadata, and optional extra context variables (e.g. from
+        LLM context generation).
 
         Args:
             template_str: Jinja2 template string
             stage: Current stage metadata
             state: Current wizard state
+            extra_context: Additional variables to inject into the
+                template context (e.g. LLM-generated values). These
+                are merged after collected data, so they can override
+                data fields if names collide.
 
         Returns:
             Rendered response string
@@ -1870,7 +1933,7 @@ class WizardReasoning(ReasoningStrategy):
         }
 
         # Build template context
-        context = {
+        context: dict[str, Any] = {
             # Stage metadata
             "stage_name": stage.get("name", "unknown"),
             "stage_label": stage.get("label", stage.get("name", "")),
@@ -1885,7 +1948,148 @@ class WizardReasoning(ReasoningStrategy):
             "completed": state.completed,
         }
 
+        # Merge extra context (e.g. LLM-generated variables)
+        if extra_context:
+            context.update(extra_context)
+
         return template.render(**context)
+
+    async def _generate_context_variables(
+        self,
+        stage: dict[str, Any],
+        state: WizardState,
+        llm: Any,
+    ) -> dict[str, str]:
+        """Generate LLM-produced context variables for template rendering.
+
+        If the stage has a ``context_generation`` block, renders the prompt
+        template with current state data and calls the LLM to produce a
+        value for the named variable.
+
+        The ``context_generation`` block supports:
+        - ``prompt``: Jinja2 template string rendered with wizard state data,
+          then sent to the LLM as the user message.
+        - ``variable``: Name of the variable to inject into the template context.
+        - ``model``: LLM model or ``$resource:`` reference (optional; defaults
+          to the wizard's extraction model setting).
+        - ``fallback``: Value to use if the LLM call fails or times out.
+
+        Args:
+            stage: Current stage metadata
+            state: Current wizard state
+            llm: LLM provider instance
+
+        Returns:
+            Dict of variable_name -> generated_value (empty if no
+            context_generation defined or if generation fails with
+            no fallback).
+        """
+        context_gen = stage.get("context_generation")
+        if not context_gen:
+            return {}
+
+        prompt_template = context_gen.get("prompt")
+        variable_name = context_gen.get("variable")
+        fallback = context_gen.get("fallback", "")
+
+        if not prompt_template or not variable_name:
+            logger.warning(
+                "Stage '%s' has context_generation but missing prompt or variable",
+                stage.get("name", "unknown"),
+            )
+            return {}
+
+        # Render the prompt template with current state data
+        import jinja2
+
+        try:
+            env = jinja2.Environment(undefined=jinja2.Undefined)
+            rendered_prompt = env.from_string(prompt_template).render(
+                **{k: v for k, v in state.data.items() if not k.startswith("_")}
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to render context_generation prompt for stage '%s': %s",
+                stage.get("name", "unknown"),
+                e,
+            )
+            return {variable_name: fallback} if fallback else {}
+
+        # Call the LLM with the rendered prompt
+        try:
+            from dataknobs_llm.llm import LLMMessage
+
+            messages = [LLMMessage(role="user", content=rendered_prompt)]
+            response = await llm.complete(messages)
+            generated = response.content.strip() if response.content else ""
+
+            if not generated:
+                logger.debug(
+                    "Empty LLM response for context_generation in stage '%s', using fallback",
+                    stage.get("name", "unknown"),
+                )
+                return {variable_name: fallback}
+
+            logger.debug(
+                "Generated context variable '%s' for stage '%s' (%d chars)",
+                variable_name,
+                stage.get("name", "unknown"),
+                len(generated),
+            )
+            return {variable_name: generated}
+
+        except Exception as e:
+            logger.warning(
+                "Context generation failed for stage '%s': %s, using fallback",
+                stage.get("name", "unknown"),
+                e,
+            )
+            return {variable_name: fallback} if fallback else {}
+
+    def _render_suggestions(
+        self,
+        suggestions: list[str],
+        state: WizardState,
+    ) -> list[str]:
+        """Render suggestion strings through Jinja2 with wizard state data.
+
+        Allows suggestions to reference collected data, e.g.
+        ``"Call it '{{ subject }} Ace'"`` becomes ``"Call it 'Chemistry Ace'"``.
+
+        Plain suggestions (no ``{{ }}``) pass through unchanged for
+        efficiency.
+
+        Args:
+            suggestions: List of suggestion template strings
+            state: Current wizard state
+
+        Returns:
+            List of rendered suggestion strings
+        """
+        if not suggestions:
+            return suggestions
+
+        # Quick check: if no templates, return as-is
+        if not any("{{" in s for s in suggestions):
+            return suggestions
+
+        import jinja2
+
+        env = jinja2.Environment(undefined=jinja2.Undefined)
+        collected_data = {
+            k: v for k, v in state.data.items() if not k.startswith("_")
+        }
+
+        rendered = []
+        for suggestion in suggestions:
+            if "{{" not in suggestion:
+                rendered.append(suggestion)
+                continue
+            try:
+                rendered.append(env.from_string(suggestion).render(**collected_data))
+            except Exception:
+                rendered.append(suggestion)
+        return rendered
 
     @staticmethod
     def _create_template_response(content: str) -> Any:
@@ -2445,6 +2649,75 @@ class WizardReasoning(ReasoningStrategy):
         visited = len(set(state.history))
         # Subtract 1 for end state in progress calculation
         return min(1.0, visited / max(1, total_stages - 1))
+
+    def _apply_transition_derivations(
+        self,
+        stage: dict[str, Any],
+        state: WizardState,
+    ) -> None:
+        """Apply data derivation rules from a stage's transition configs.
+
+        Processes each transition's ``derive`` block before transition
+        conditions are evaluated.  This lets transitions fill in values
+        that enable their own conditions and downstream auto-advance.
+
+        Derivation rules are key-value pairs where:
+        - String values containing ``{{ }}`` are rendered as Jinja2
+          templates with current wizard state data.
+        - Other values (bool, int, etc.) are used as-is.
+
+        Derived values are only set for keys not already present in
+        ``state.data``, to avoid overwriting user-provided data.
+
+        Args:
+            stage: Current stage metadata (contains ``transitions`` list)
+            state: Current wizard state (data is modified in-place)
+        """
+        transitions = stage.get("transitions", [])
+        if not transitions:
+            return
+
+        import jinja2
+
+        env = jinja2.Environment(undefined=jinja2.Undefined)
+        collected_data = {
+            k: v for k, v in state.data.items() if not k.startswith("_")
+        }
+
+        for transition in transitions:
+            derive = transition.get("derive")
+            if not derive or not isinstance(derive, dict):
+                continue
+
+            for key, value in derive.items():
+                # Don't overwrite existing user-provided data
+                if key in state.data:
+                    continue
+
+                if isinstance(value, str) and "{{" in value:
+                    try:
+                        resolved = env.from_string(value).render(**collected_data)
+                        # Skip empty renders (template variable was undefined)
+                        if resolved.strip():
+                            state.data[key] = resolved.strip()
+                            logger.debug(
+                                "Derived %s = %r from transition to '%s'",
+                                key,
+                                resolved.strip(),
+                                transition.get("target", "?"),
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to derive '%s' from template: %s", key, e
+                        )
+                else:
+                    state.data[key] = value
+                    logger.debug(
+                        "Derived %s = %r (literal) from transition to '%s'",
+                        key,
+                        value,
+                        transition.get("target", "?"),
+                    )
 
     def _can_auto_advance(
         self, wizard_state: WizardState, stage: dict[str, Any]

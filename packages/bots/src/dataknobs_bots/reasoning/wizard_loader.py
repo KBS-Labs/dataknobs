@@ -366,6 +366,7 @@ class WizardConfigLoader:
                     "target": transition.get("target"),
                     "condition": transition.get("condition"),
                     "priority": transition.get("priority"),
+                    "derive": transition.get("derive"),
                 }
                 # Include subflow config if this is a subflow transition
                 if transition.get("target") == SUBFLOW_TARGET:
@@ -400,6 +401,8 @@ class WizardConfigLoader:
                 "response_template": stage.get("response_template"),
                 "llm_assist": stage.get("llm_assist", False),
                 "llm_assist_prompt": stage.get("llm_assist_prompt"),
+                # LLM-generated context variables for template rendering
+                "context_generation": stage.get("context_generation"),
             }
 
         # Add global tasks to the first stage's metadata
