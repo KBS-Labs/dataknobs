@@ -1268,6 +1268,32 @@ class WizardReasoning(ReasoningStrategy):
                             return part.get("text", "")
         return ""
 
+    def _get_last_bot_response(self, manager: Any) -> str:
+        """Extract the last assistant message from conversation.
+
+        Used to provide the bot's previous response as context for
+        extraction, so the extraction model can resolve references
+        like "the first suggestion" or "yes to that".
+
+        Args:
+            manager: ConversationManager instance
+
+        Returns:
+            Last assistant message text, or empty string if none found.
+        """
+        messages = manager.get_messages()
+        for msg in reversed(messages):
+            if msg.get("role") == "assistant":
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    return content
+                # Handle structured content
+                if isinstance(content, list):
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            return part.get("text", "")
+        return ""
+
     async def _handle_navigation(
         self,
         message: str,
@@ -1453,6 +1479,23 @@ class WizardReasoning(ReasoningStrategy):
         else:
             # Current message only (original behavior)
             extraction_input = message
+
+        # Include the bot's last response so the extraction model can
+        # resolve references like "the first suggestion" or "yes to that".
+        if manager is not None:
+            bot_response = self._get_last_bot_response(manager)
+            if bot_response:
+                # Truncate very long responses to avoid overwhelming extraction
+                if len(bot_response) > 1500:
+                    bot_response = bot_response[:1500] + "..."
+                extraction_input = (
+                    f"Bot's previous message:\n{bot_response}\n\n"
+                    f"User's response:\n{extraction_input}"
+                )
+                logger.debug(
+                    "Included bot response (%d chars) in extraction context",
+                    len(bot_response),
+                )
 
         # Strip defaults to prevent extraction LLM from auto-filling them
         extraction_schema = self._strip_schema_defaults(schema)
