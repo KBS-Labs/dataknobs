@@ -514,10 +514,9 @@ class SyncS3Database(  # type: ignore[misc]
 
             if len(batch) >= config.batch_size:
                 # Write batch with graceful fallback
-                # Use lambda wrapper for _write_batch
                 continue_processing = process_batch_with_fallback(
                     batch,
-                    lambda b: self._write_batch(b),
+                    self._write_batch,
                     self.create,
                     result,
                     config
@@ -533,7 +532,7 @@ class SyncS3Database(  # type: ignore[misc]
         if batch and not quitting:
             process_batch_with_fallback(
                 batch,
-                lambda b: self._write_batch(b),
+                self._write_batch,
                 self.create,
                 result,
                 config
