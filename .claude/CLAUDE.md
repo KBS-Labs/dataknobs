@@ -1,6 +1,6 @@
 # Dataknobs Project
 
-General-purpose library providing infrastructure, abstractions, and common functionality for Python projects. **This project IS the shared infrastructure** - enhancements here benefit all downstream projects (edubot, focusgroup, etc.).
+General-purpose library providing infrastructure, abstractions, and common functionality for Python projects. **This project IS the shared infrastructure** - enhancements here benefit all downstream projects.
 
 ## Core Mandates
 
@@ -16,7 +16,7 @@ These apply to all work in this project. See the global `~/.claude/CLAUDE.md` fo
 
 When working in dataknobs, remember:
 - **New infrastructure belongs here**, not in consuming projects
-- If a consuming project (edubot, focusgroup) needs functionality that doesn't exist, **add it to the appropriate dataknobs package**
+- If a consuming project needs functionality that doesn't exist, **add it to the appropriate dataknobs package**
 - Testing constructs (EchoProvider, memory databases, InMemoryEventBus) live here for reuse across all projects
 - Observability gaps should be filled here, not worked around downstream
 
