@@ -1,45 +1,44 @@
----
-globs:
-  - "**/*.py"
----
-
 # Dataknobs-First Development
 
 ## Before Implementing New Utilities
 
-When you need common functionality, follow this order:
+When you need common functionality, check existing dataknobs packages first.
 
-### 1. Check Dataknobs First
+### 1. Consult the Reference Table
 
-Search for existing implementations:
+See `~/.claude/rules/dataknobs-reference.md` for the complete verified lookup table of all classes, import paths, and roles. Use it to find existing constructs before writing new code.
 
-```bash
-# Search for similar functionality
-uv run grep -r "class.*Store" packages/*/src/
-uv run grep -r "def.*config" packages/*/src/
+### 2. Key Constructs by Category
 
-# Check specific packages
-ls packages/common/src/dataknobs_common/
-ls packages/utils/src/dataknobs_utils/
-ls packages/data/src/dataknobs_data/
-```
+**Database Backends** (`dataknobs_data`):
+- Base classes: `SyncDatabase`, `AsyncDatabase`
+- In-memory: `SyncMemoryDatabase`, `AsyncMemoryDatabase`
+- Production: `SyncPostgresDatabase`, `SyncSQLiteDatabase`, `SyncElasticsearchDatabase`, `SyncS3Database`, `SyncDuckDBDatabase`, `SyncFileDatabase` (+ async variants)
+- Factories: `database_factory`, `async_database_factory` (create by backend key: `"memory"`, `"sqlite"`, `"postgres"`, etc.)
 
-### 2. Common Utilities Available
+**Vector Stores** (`dataknobs_data`):
+- Base: `VectorStore`
+- Implementations: `MemoryVectorStore`, `FaissVectorStore`, `ChromaVectorStore`, `PgVectorStore`
 
-**Data Storage:**
-- `dataknobs_data.stores.InMemoryStore` - In-memory key-value
-- `dataknobs_data.stores.FileStore` - File-based persistence
-- `dataknobs_data.stores.PostgresStore` - PostgreSQL backend
+**LLM Providers** (`dataknobs_llm`):
+- Base: `AsyncLLMProvider` (`from dataknobs_llm.llm.base import AsyncLLMProvider`)
+- Implementations: `OllamaProvider`, `OpenAIProvider`, `AnthropicProvider`, `HuggingFaceProvider`, `EchoProvider`
+- Factory: `LLMProviderFactory` (create by provider key: `"ollama"`, `"openai"`, `"echo"`, etc.)
 
-**Configuration:**
-- `dataknobs_config.ConfigLoader` - Multi-format config loading
-- `dataknobs_config.EnvConfig` - Environment variable config
+**Configuration** (`dataknobs_config`):
+- `Config` - Modular config from YAML/JSON/dict with `get()`, `set()`, `build_object()`, `get_instance()`
+- `ConfigurableBase` - Base for configurable objects
+- `EnvironmentConfig` - Environment-specific bindings
+- `ConfigBindingResolver` - Resolve logical names to concrete instances
 
-**Logging:**
-- `dataknobs_common.logging` - Standardized logging setup
+**Registries** (`dataknobs_common`):
+- `Registry[T]` - Thread-safe generic registry
+- `AsyncRegistry[T]` - Async-safe variant
+- `PluginRegistry[T]` - With factory support and lazy instantiation
 
-**Validation:**
-- `dataknobs_data.validation` - Data validation framework
+**Events** (`dataknobs_common`):
+- `EventBus` protocol with `InMemoryEventBus`, PostgreSQL, and Redis backends
+- Factory: `create_event_bus("memory")`, `"postgres"`, `"redis"`
 
 ### 3. If Utility Doesn't Exist
 
@@ -49,25 +48,28 @@ Ask these questions:
 3. Should it be a new dataknobs utility?
 
 **If YES to reusability:**
-- Add to appropriate dataknobs package
-- Include tests
+- Add to the appropriate dataknobs package
+- Design abstraction first, then implementation
+- Include tests using real constructs (not mocks)
 - Update both documentation locations
 
 **If project-specific:**
 - Implement in the current project
-- Consider if patterns emerge for future extraction
+- Consider if patterns emerge for future extraction to dataknobs
 
 ### 4. Using Dataknobs in Tests
 
-Prefer real dataknobs utilities over mocks:
+Use real testing constructs, not mocks:
 
 ```python
-# PREFER: Real in-memory store
-from dataknobs_data.stores import InMemoryStore
-store = InMemoryStore()
+# GOOD: Real implementations
+from dataknobs_llm import EchoProvider
+from dataknobs_data.backends.memory import AsyncMemoryDatabase
 
-# AVOID: Mock store
-store = MagicMock(spec=DataStore)
+provider = EchoProvider()
+db = AsyncMemoryDatabase()
+
+# BAD: Mocks hide integration issues
+provider = MagicMock(spec=AsyncLLMProvider)
+db = MagicMock(spec=AsyncDatabase)
 ```
-
-This catches integration issues early and validates real behavior.

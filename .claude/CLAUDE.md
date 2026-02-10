@@ -1,92 +1,107 @@
 # Dataknobs Project
 
-General-purpose library providing boilerplate and common functionality for Python projects.
+General-purpose library providing infrastructure, abstractions, and common functionality for Python projects. **This project IS the shared infrastructure** - enhancements here benefit all downstream projects.
+
+## Core Mandates
+
+These apply to all work in this project. See the global `~/.claude/CLAUDE.md` for full details.
+
+1. **Documentation verification is mandatory** - verify every claim against actual code before finalizing
+2. **No workarounds** - fix root causes; temporary mitigations require documented plans
+3. **Abstraction-first design** - interfaces/protocols before implementations; configurable via config
+4. **Mock prohibition in tests** - use EchoProvider, SyncMemoryDatabase, etc. (see below)
+5. **Ollama-first for LLM defaults** - default to local models; commercial providers via config
+
+### This Project's Special Role
+
+When working in dataknobs, remember:
+- **New infrastructure belongs here**, not in consuming projects
+- If a consuming project needs functionality that doesn't exist, **add it to the appropriate dataknobs package**
+- Testing constructs (EchoProvider, memory databases, InMemoryEventBus) live here for reuse across all projects
+- Observability gaps should be filled here, not worked around downstream
+
+### Infrastructure Leverage Hierarchy (Within DataKnobs)
+
+1. **FIRST: Use existing code in another dataknobs package** - check before reimplementing
+2. **SECOND: Enhance an existing dataknobs package** - extend, don't duplicate
+3. **THIRD: Other reliable open-source** - only if not appropriate for dataknobs
+4. **LAST: Build from scratch** - in the most appropriate dataknobs package
 
 ## Project Structure
 
-This is a UV workspace monorepo:
+UV workspace monorepo (Python 3.10+):
 
 ```
 dataknobs/
-├── packages/           # Individual packages
-│   ├── common/        # dataknobs-common: Base utilities
-│   ├── config/        # dataknobs-config: Configuration management
-│   ├── data/          # dataknobs-data: Data stores, vector stores
-│   ├── llm/           # dataknobs-llm: LLM integrations
-│   ├── bots/          # dataknobs-bots: Bot framework
-│   ├── fsm/           # dataknobs-fsm: State machines
-│   ├── structures/    # dataknobs-structures: Data structures
-│   ├── utils/         # dataknobs-utils: General utilities
-│   └── xization/      # dataknobs-xization: NLP/annotation
+├── packages/
+│   ├── common/        # dataknobs-common: Registries, events, exceptions, serialization
+│   ├── config/        # dataknobs-config: Config management, environment bindings, factories
+│   ├── data/          # dataknobs-data: Database backends (7), vector stores, query, streaming
+│   ├── llm/           # dataknobs-llm: LLM providers, prompts, tools, RAG adapters
+│   ├── bots/          # dataknobs-bots: Configuration-driven AI agents
+│   ├── fsm/           # dataknobs-fsm: Finite state machines
+│   ├── structures/    # dataknobs-structures: Core data structures
+│   ├── utils/         # dataknobs-utils: File, JSON, HTTP, SQL utilities
+│   └── xization/      # dataknobs-xization: NLP normalization/annotation
 ├── docs/              # MkDocs documentation (site-wide)
-│   └── packages/      # Package docs for mkdocs
-└── packages/*/docs/   # Package-specific documentation
+└── .dataknobs/        # Version registry (packages.json)
 ```
+
+See `~/.claude/rules/dataknobs-reference.md` for the complete verified lookup table of all classes and import paths.
 
 ## Development Commands
 
-**Always use `bin/dk` for development tasks** - it ensures proper environment setup.
+**Always use `bin/dk` for development tasks.**
 
 ```bash
 # Quality checks
-bin/dk pr              # Full PR preparation checks
-bin/dk check           # Quick quality check (dev mode)
-bin/dk check data      # Quick check specific package
+bin/dk pr              # Full PR preparation (required before push)
+bin/dk check           # Quick quality check
+bin/dk check data      # Check specific package
 
 # Testing
 bin/dk test            # Run all tests
 bin/dk test data       # Test specific package
 bin/dk test --last     # Re-run failed tests only
-bin/dk testquick       # Fast tests without coverage
 
-# Fixing issues
+# Fixing
 bin/dk fix             # Auto-fix style issues
-bin/dk format          # Format code
-
-# Code validation (ruff + mypy)
-bin/validate.sh              # Validate all packages
-bin/validate.sh data         # Validate specific package
-bin/validate.sh -f           # Validate and auto-fix
-bin/validate.sh -f data      # Auto-fix specific package
+bin/validate.sh -f     # Validate + auto-fix all packages
+bin/validate.sh data   # Validate specific package
 
 # Documentation
-bin/dk docs            # Serve docs locally (live reload)
+bin/dk docs            # Serve docs locally
 bin/dk docs-build      # Build documentation
-bin/dk docs-check      # Check for doc issues
 
-# Services (for integration tests)
-bin/dk up              # Start dev services
-bin/dk down            # Stop dev services
-bin/dk logs            # View service logs
-
-# Diagnostics
-bin/dk diagnose        # Analyze last failure
-bin/dk coverage        # Show coverage report
-
-# Shortcuts: dk t (test), dk f (fix), dk d (diagnose), dk q (quick check)
+# Services (integration tests)
+bin/dk up / down       # Start/stop dev services (Docker)
 ```
 
 Run `bin/dk help` for full command reference.
 
-## Key Utilities Available
+## Testing Constructs (Provided by This Project)
 
-### Data Stores (dataknobs-data)
-- `InMemoryDataStore` - Testing and lightweight use
-- `FileDataStore` - File-based persistence
-- `PostgreSQLDataStore` - Production database
-- `S3DataStore` - Cloud storage
+These exist for use by dataknobs tests AND all consuming projects:
 
-### Configuration (dataknobs-config)
-- `ConfigLoader` - Load from YAML/JSON/env
-- `ConfigValidator` - Schema validation
+| Need | Construct | Package |
+|---|---|---|
+| LLM provider | `EchoProvider` - scripted responses, call history | `dataknobs-llm` |
+| LLM response fixtures | `text_response()`, `tool_call_response()`, `ResponseSequenceBuilder` | `dataknobs-llm` |
+| RAG adapter | `InMemoryAdapter`, `InMemoryAsyncAdapter` | `dataknobs-llm` |
+| Sync database | `SyncMemoryDatabase` | `dataknobs-data` |
+| Async database | `AsyncMemoryDatabase` | `dataknobs-data` |
+| Vector store | `MemoryVectorStore` | `dataknobs-data` |
+| Event bus | `InMemoryEventBus` | `dataknobs-common` |
+| Pytest markers | `@requires_ollama`, `@requires_faiss`, `@requires_redis` | `dataknobs-common` |
 
-### Common Patterns (dataknobs-common)
-- Base classes and interfaces
-- Logging utilities
-- Error handling patterns
+If a new testing construct is needed, **add it to the appropriate dataknobs package** for cross-project reuse.
 
 ## Before Adding New Functionality
 
-1. Check if similar functionality exists in one of the packages
-2. Consider whether new code belongs in dataknobs or is project-specific
-3. If adding to dataknobs, determine the appropriate package
+1. **Check if it exists** in another dataknobs package
+2. **Determine the right package** for new code (common, config, data, llm, utils, etc.)
+3. **Design the abstraction first** - protocol/interface before implementation
+4. **Provide a reasonable default implementation** (e.g., in-memory, Ollama-based)
+5. **Add tests using real constructs** from this project (not mocks)
+6. **Update documentation in BOTH locations** (package docs + MkDocs site docs)
+7. **Verify documentation** against the actual code
