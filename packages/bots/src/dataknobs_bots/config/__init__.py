@@ -1,25 +1,38 @@
 """Configuration utilities for DynaBot.
 
-This module provides utilities for resource resolution and configuration
-binding with environment-aware support.
+This module provides utilities for resource resolution, configuration
+binding, schema management, template-based building, draft management,
+and validation.
 
 Example:
     ```python
     from dataknobs_config import EnvironmentConfig
-    from dataknobs_bots.config import create_bot_resolver, BotResourceResolver
+    from dataknobs_bots.config import (
+        create_bot_resolver, BotResourceResolver,
+        DynaBotConfigBuilder, DynaBotConfigSchema,
+        ConfigValidator, ValidationResult,
+        ConfigTemplate, ConfigTemplateRegistry, TemplateVariable,
+        ConfigDraftManager, DraftMetadata,
+    )
 
-    # Low-level: Create resolver and resolve manually
-    env = EnvironmentConfig.load("production")
-    resolver = create_bot_resolver(env)
-    llm = resolver.resolve("llm_providers", "default")
+    # Build a config using the builder
+    config = (
+        DynaBotConfigBuilder()
+        .set_llm("ollama", model="llama3.2")
+        .set_conversation_storage("memory")
+        .set_system_prompt(content="You are a helpful assistant.")
+        .build()
+    )
 
-    # High-level: Use BotResourceResolver for initialized resources
-    bot_resolver = BotResourceResolver(env)
-    llm = await bot_resolver.get_llm("default")
-    db = await bot_resolver.get_database("conversations")
+    # Or use templates
+    registry = ConfigTemplateRegistry()
+    registry.load_from_directory(Path("configs/templates"))
+    config = registry.apply_template("basic_assistant", {"bot_name": "Helper"})
     ```
 """
 
+from .builder import DynaBotConfigBuilder
+from .drafts import ConfigDraftManager, DraftMetadata
 from .resolution import (
     BotResourceResolver,
     create_bot_resolver,
@@ -28,6 +41,9 @@ from .resolution import (
     register_llm_factory,
     register_vector_store_factory,
 )
+from .schema import DynaBotConfigSchema
+from .templates import ConfigTemplate, ConfigTemplateRegistry, TemplateVariable
+from .validation import ConfigValidator, ValidationResult
 from .versioning import (
     ConfigVersion,
     ConfigVersionManager,
@@ -35,6 +51,7 @@ from .versioning import (
 )
 
 __all__ = [
+    # Resolution
     "create_bot_resolver",
     "BotResourceResolver",
     "register_llm_factory",
@@ -45,4 +62,14 @@ __all__ = [
     "ConfigVersion",
     "ConfigVersionManager",
     "VersionConflictError",
+    # Config Toolkit
+    "DynaBotConfigSchema",
+    "ConfigValidator",
+    "ValidationResult",
+    "DynaBotConfigBuilder",
+    "ConfigTemplate",
+    "TemplateVariable",
+    "ConfigTemplateRegistry",
+    "ConfigDraftManager",
+    "DraftMetadata",
 ]

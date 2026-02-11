@@ -1,0 +1,58 @@
+name: basic_assistant
+description: Simple chatbot with LLM, system prompt, and conversation storage.
+version: "1.0.0"
+tags:
+  - basic
+  - assistant
+  - chatbot
+
+variables:
+  - name: bot_name
+    description: Name for this bot
+    type: string
+    required: true
+
+  - name: bot_description
+    description: Short description of what this bot does
+    type: string
+    required: false
+    default: A helpful assistant
+
+  - name: system_instructions
+    description: Custom system prompt instructions
+    type: string
+    required: false
+    default: You are a helpful, friendly assistant. Answer questions clearly and concisely.
+
+  - name: temperature
+    description: LLM sampling temperature
+    type: number
+    required: false
+    default: 0.7
+
+  - name: max_tokens
+    description: Maximum tokens in LLM response
+    type: integer
+    required: false
+    default: 1000
+
+structure:
+  bot:
+    llm:
+      $resource: default
+      type: llm_providers
+      temperature: "{{temperature}}"
+      max_tokens: "{{max_tokens}}"
+
+    conversation_storage:
+      $resource: conversations
+      type: databases
+
+    system_prompt: |
+      You are {{bot_name}}. {{bot_description}}.
+
+      {{system_instructions}}
+
+    memory:
+      type: buffer
+      max_messages: 50

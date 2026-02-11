@@ -108,6 +108,28 @@ class ToolExecutionContext:
         return cls()
 
     @classmethod
+    def from_wizard_data(
+        cls, wizard_data: dict[str, Any], **kwargs: Any
+    ) -> "ToolExecutionContext":
+        """Create context from wizard collected data for standalone tool use.
+
+        Convenience factory for calling wizard-aware tools outside the
+        DynaBot framework (tests, scripts, direct invocation).
+
+        Args:
+            wizard_data: The wizard's collected data dictionary.
+            **kwargs: Additional ToolExecutionContext fields
+                (conversation_id, user_id, etc.).
+
+        Returns:
+            ToolExecutionContext with wizard state populated.
+        """
+        return cls(
+            wizard_state=WizardStateSnapshot(collected_data=wizard_data),
+            **kwargs,
+        )
+
+    @classmethod
     def from_manager(
         cls,
         manager: Any,

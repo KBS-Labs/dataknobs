@@ -1,6 +1,17 @@
 """DataKnobs Bots - Configuration-driven AI agents."""
 
 from .bot import BotContext, BotManager, BotRegistry, DynaBot
+from .config import (
+    ConfigDraftManager,
+    ConfigTemplate,
+    ConfigTemplateRegistry,
+    ConfigValidator,
+    DraftMetadata,
+    DynaBotConfigBuilder,
+    DynaBotConfigSchema,
+    TemplateVariable,
+    ValidationResult,
+)
 from .knowledge import RAGKnowledgeBase, create_knowledge_base_from_config
 from .memory import BufferMemory, Memory, VectorMemory, create_memory_from_config
 from .middleware import CostTrackingMiddleware, LoggingMiddleware, Middleware
@@ -10,7 +21,20 @@ from .reasoning import (
     SimpleReasoning,
     create_reasoning_from_config,
 )
-from .tools import KnowledgeSearchTool
+from .tools import (
+    AddKBResourceTool,
+    CheckKnowledgeSourceTool,
+    GetTemplateDetailsTool,
+    IngestKnowledgeBaseTool,
+    KnowledgeSearchTool,
+    ListAvailableToolsTool,
+    ListKBResourcesTool,
+    ListTemplatesTool,
+    PreviewConfigTool,
+    RemoveKBResourceTool,
+    SaveConfigTool,
+    ValidateConfigTool,
+)
 
 __version__ = "0.4.3"
 
@@ -30,6 +54,29 @@ __all__ = [
     "create_knowledge_base_from_config",
     # Tools
     "KnowledgeSearchTool",
+    # Config Toolkit
+    "DynaBotConfigSchema",
+    "ConfigValidator",
+    "ValidationResult",
+    "DynaBotConfigBuilder",
+    "ConfigTemplate",
+    "TemplateVariable",
+    "ConfigTemplateRegistry",
+    "ConfigDraftManager",
+    "DraftMetadata",
+    # Config Tools
+    "ListTemplatesTool",
+    "GetTemplateDetailsTool",
+    "PreviewConfigTool",
+    "ValidateConfigTool",
+    "SaveConfigTool",
+    "ListAvailableToolsTool",
+    # KB Tools
+    "CheckKnowledgeSourceTool",
+    "ListKBResourcesTool",
+    "AddKBResourceTool",
+    "RemoveKBResourceTool",
+    "IngestKnowledgeBaseTool",
     # Reasoning
     "ReasoningStrategy",
     "SimpleReasoning",
