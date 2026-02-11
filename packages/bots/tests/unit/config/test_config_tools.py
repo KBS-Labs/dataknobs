@@ -19,6 +19,7 @@ from dataknobs_bots.config.templates import (
 from dataknobs_bots.config.validation import ConfigValidator
 from dataknobs_bots.tools.config_tools import (
     GetTemplateDetailsTool,
+    ListAvailableToolsTool,
     ListTemplatesTool,
     PreviewConfigTool,
     SaveConfigTool,
@@ -102,6 +103,25 @@ def _basic_builder_factory(wizard_data: dict[str, Any]) -> DynaBotConfigBuilder:
     )
     if "system_prompt" in wizard_data:
         builder.set_system_prompt(content=wizard_data["system_prompt"])
+    return builder
+
+
+def _portable_builder_factory(wizard_data: dict[str, Any]) -> DynaBotConfigBuilder:
+    """Builder factory that adds custom sections (for portable test)."""
+    builder = (
+        DynaBotConfigBuilder()
+        .set_llm(
+            wizard_data.get("llm_provider", "ollama"),
+            model=wizard_data.get("llm_model", "llama3.2"),
+        )
+        .set_conversation_storage(
+            wizard_data.get("storage_backend", "memory")
+        )
+    )
+    if wizard_data.get("domain_id"):
+        builder.set_custom_section("domain", {
+            "id": wizard_data["domain_id"],
+        })
     return builder
 
 
@@ -364,3 +384,110 @@ class TestSaveConfigTool:
         assert result["success"] is True
         assert result["config_name"] == "explicit-name"
         assert (tmp_path / "explicit-name.yaml").exists()
+
+    @pytest.mark.asyncio
+    async def test_save_portable(self, tmp_path: Path) -> None:
+        """Verify portable=True uses build_portable() (bot wrapper)."""
+        manager = ConfigDraftManager(output_dir=tmp_path)
+        tool = SaveConfigTool(
+            draft_manager=manager,
+            builder_factory=_portable_builder_factory,
+            portable=True,
+        )
+        context = _make_context(
+            {
+                "domain_id": "portable-bot",
+                "llm_provider": "ollama",
+                "storage_backend": "memory",
+            }
+        )
+        result = await tool.execute_with_context(context)
+        assert result["success"] is True
+
+        # Read back and verify portable format (bot wrapper + custom section)
+        saved = yaml.safe_load((tmp_path / "portable-bot.yaml").read_text())
+        assert "bot" in saved, "Portable format should have 'bot' wrapper key"
+        assert saved["bot"]["llm"]["provider"] == "ollama"
+        assert saved["domain"]["id"] == "portable-bot"
+
+    @pytest.mark.asyncio
+    async def test_save_non_portable(self, tmp_path: Path) -> None:
+        """Verify portable=False (default) uses _build_internal() (flat)."""
+        manager = ConfigDraftManager(output_dir=tmp_path)
+        tool = SaveConfigTool(
+            draft_manager=manager,
+            builder_factory=_portable_builder_factory,
+        )
+        context = _make_context(
+            {
+                "domain_id": "flat-bot",
+                "llm_provider": "ollama",
+                "storage_backend": "memory",
+            }
+        )
+        result = await tool.execute_with_context(context)
+        assert result["success"] is True
+
+        saved = yaml.safe_load((tmp_path / "flat-bot.yaml").read_text())
+        assert "bot" not in saved, "Flat format should NOT have 'bot' wrapper"
+        assert saved["llm"]["provider"] == "ollama"
+
+
+class TestListAvailableToolsTool:
+    """Tests for ListAvailableToolsTool."""
+
+    @pytest.mark.asyncio
+    async def test_list_all(self) -> None:
+        catalog = [
+            {"name": "search", "description": "Search", "category": "info"},
+            {"name": "calc", "description": "Calculator", "category": "math"},
+            {"name": "weather", "description": "Weather", "category": "info"},
+        ]
+        tool = ListAvailableToolsTool(available_tools=catalog)
+        result = await tool.execute_with_context(_make_context())
+        assert result["count"] == 3
+        assert len(result["tools"]) == 3
+        assert set(result["categories"]) == {"info", "math"}
+
+    @pytest.mark.asyncio
+    async def test_filter_by_category(self) -> None:
+        catalog = [
+            {"name": "search", "description": "Search", "category": "info"},
+            {"name": "calc", "description": "Calculator", "category": "math"},
+            {"name": "weather", "description": "Weather", "category": "info"},
+        ]
+        tool = ListAvailableToolsTool(available_tools=catalog)
+        result = await tool.execute_with_context(
+            _make_context(), category="info"
+        )
+        assert result["count"] == 2
+        names = [t["name"] for t in result["tools"]]
+        assert "search" in names
+        assert "weather" in names
+        # Categories still lists all available categories
+        assert set(result["categories"]) == {"info", "math"}
+
+    @pytest.mark.asyncio
+    async def test_filter_case_insensitive(self) -> None:
+        catalog = [
+            {"name": "search", "description": "Search", "category": "Info"},
+        ]
+        tool = ListAvailableToolsTool(available_tools=catalog)
+        result = await tool.execute_with_context(
+            _make_context(), category="info"
+        )
+        assert result["count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_empty_catalog(self) -> None:
+        tool = ListAvailableToolsTool(available_tools=[])
+        result = await tool.execute_with_context(_make_context())
+        assert result["count"] == 0
+        assert result["tools"] == []
+        assert result["categories"] == []
+
+    @pytest.mark.asyncio
+    async def test_schema(self) -> None:
+        tool = ListAvailableToolsTool(available_tools=[])
+        assert tool.schema["type"] == "object"
+        assert "category" in tool.schema["properties"]

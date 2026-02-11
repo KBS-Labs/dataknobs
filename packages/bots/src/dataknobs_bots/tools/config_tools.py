@@ -10,6 +10,7 @@ Tools:
 - PreviewConfigTool: Preview the current configuration being built
 - ValidateConfigTool: Validate the current configuration
 - SaveConfigTool: Finalize and save the configuration
+- ListAvailableToolsTool: List tools available for bot configuration
 
 Example:
     ```python
@@ -47,16 +48,39 @@ logger = logging.getLogger(__name__)
 
 
 def _get_wizard_data(context: ToolExecutionContext) -> dict[str, Any]:
-    """Extract wizard collected data from tool execution context.
+    """Extract wizard collected data from tool execution context (copy).
+
+    Returns a shallow copy of the wizard's collected data. Use this for
+    read-only access to wizard data.
 
     Args:
         context: The tool execution context.
 
     Returns:
-        The wizard's collected data dict, or empty dict if unavailable.
+        A copy of the wizard's collected data dict, or empty dict if unavailable.
     """
     if context.wizard_state and context.wizard_state.collected_data:
         return dict(context.wizard_state.collected_data)
+    return {}
+
+
+def _get_wizard_data_ref(context: ToolExecutionContext) -> dict[str, Any]:
+    """Get a mutable reference to wizard collected data.
+
+    Returns the original collected_data dict (not a copy) for tools that
+    need to mutate wizard state (e.g., KB tools that add/remove resources).
+
+    Uses ``is not None`` rather than truthiness so that an empty dict
+    (new wizard session) is still returned by reference.
+
+    Args:
+        context: The tool execution context.
+
+    Returns:
+        The wizard's collected data dict reference, or empty dict if unavailable.
+    """
+    if context.wizard_state and context.wizard_state.collected_data is not None:
+        return context.wizard_state.collected_data
     return {}
 
 
@@ -405,10 +429,15 @@ class SaveConfigTool(ContextAwareTool):
     calls a consumer-provided callback for post-save actions (e.g.,
     registering the bot with a manager).
 
+    When ``portable=True``, the builder's ``build_portable()`` method is
+    used instead of ``_build_internal()``, producing a config with a
+    ``bot`` wrapper key suitable for environment-aware deployment.
+
     Attributes:
         _draft_manager: Draft manager for file operations.
         _on_save: Optional callback invoked after successful save.
         _builder_factory: Optional factory for building config from wizard data.
+        _portable: Whether to use portable (bot-wrapped) output format.
     """
 
     def __init__(
@@ -416,6 +445,7 @@ class SaveConfigTool(ContextAwareTool):
         draft_manager: ConfigDraftManager,
         on_save: Callable[[str, dict[str, Any]], Any] | None = None,
         builder_factory: Callable[[dict[str, Any]], DynaBotConfigBuilder] | None = None,
+        portable: bool = False,
     ) -> None:
         """Initialize the tool.
 
@@ -426,6 +456,10 @@ class SaveConfigTool(ContextAwareTool):
                 like bot registration.
             builder_factory: Optional factory to build final config from
                 wizard data before saving.
+            portable: When True, use ``build_portable()`` for output
+                (wraps config under ``bot`` key with custom sections as
+                siblings). When False (default), use ``_build_internal()``
+                for flat format.
         """
         super().__init__(
             name="save_config",
@@ -437,6 +471,7 @@ class SaveConfigTool(ContextAwareTool):
         self._draft_manager = draft_manager
         self._on_save = on_save
         self._builder_factory = builder_factory
+        self._portable = portable
 
     @property
     def schema(self) -> dict[str, Any]:
@@ -489,7 +524,10 @@ class SaveConfigTool(ContextAwareTool):
         if self._builder_factory is not None:
             try:
                 builder = self._builder_factory(wizard_data)
-                config = builder._build_internal()
+                if self._portable:
+                    config = builder.build_portable()
+                else:
+                    config = builder._build_internal()
             except Exception as e:
                 return {"success": False, "error": f"Failed to build configuration: {e}"}
         else:
@@ -497,19 +535,15 @@ class SaveConfigTool(ContextAwareTool):
                 k: v for k, v in wizard_data.items() if not k.startswith("_")
             }
 
-        # Check for existing draft
+        # Check for existing draft — finalize cleans up the draft file,
+        # but we always use the freshly-built config (draft may be stale)
         draft_id = wizard_data.get("_draft_id")
         if draft_id:
             try:
-                final_config = self._draft_manager.finalize(draft_id, final_name=name)
-                # Use builder config instead of draft config
-                # (draft may be stale from earlier stages)
-                final_config = config
+                self._draft_manager.finalize(draft_id, final_name=name)
             except FileNotFoundError:
                 logger.warning("Draft %s not found, saving directly", draft_id)
-                final_config = config
-        else:
-            final_config = config
+        final_config = config
 
         # Write the final file
         output_dir = self._draft_manager.output_dir
@@ -541,6 +575,91 @@ class SaveConfigTool(ContextAwareTool):
             "config_name": name,
             "file_path": str(final_path),
             "activated": activate,
+        }
+
+
+class ListAvailableToolsTool(ContextAwareTool):
+    """Tool for listing tools available to configure for a bot.
+
+    Takes a constructor-injected catalog of available tools and lets the
+    LLM browse them, optionally filtering by category. The catalog data
+    is consumer-specific — each DynaBot consumer provides its own list.
+
+    Attributes:
+        _tools: The available tool catalog.
+    """
+
+    def __init__(self, available_tools: list[dict[str, Any]]) -> None:
+        """Initialize the tool.
+
+        Args:
+            available_tools: List of tool descriptors. Each dict should
+                have at minimum ``name`` and ``description`` keys.
+                Optional: ``category``, ``params``, ``class``.
+        """
+        super().__init__(
+            name="list_available_tools",
+            description=(
+                "List tools that can be added to the bot configuration. "
+                "Optionally filter by category."
+            ),
+        )
+        self._tools = available_tools
+
+    @property
+    def schema(self) -> dict[str, Any]:
+        """Return JSON Schema for tool parameters."""
+        return {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "description": (
+                        "Optional category to filter tools by. "
+                        "Omit to list all tools."
+                    ),
+                },
+            },
+        }
+
+    async def execute_with_context(
+        self,
+        context: ToolExecutionContext,
+        category: str | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """List available tools.
+
+        Args:
+            context: Execution context.
+            category: Optional category to filter by.
+
+        Returns:
+            Dict with matching tools, count, and available categories.
+        """
+        if category:
+            filtered = [
+                t for t in self._tools
+                if t.get("category", "").lower() == category.lower()
+            ]
+        else:
+            filtered = list(self._tools)
+
+        categories = sorted({
+            t["category"] for t in self._tools if "category" in t
+        })
+
+        logger.debug(
+            "Listed %d available tools (category=%s)",
+            len(filtered),
+            category,
+            extra={"conversation_id": context.conversation_id},
+        )
+
+        return {
+            "tools": filtered,
+            "count": len(filtered),
+            "categories": categories,
         }
 
 

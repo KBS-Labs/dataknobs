@@ -4,7 +4,7 @@ The ConfigBot toolkit provides reusable infrastructure for building wizard-drive
 
 ## Overview
 
-The toolkit provides five layers:
+The toolkit provides the following layers:
 
 | Layer | Components | Purpose |
 |-------|-----------|---------|
@@ -13,7 +13,8 @@ The toolkit provides five layers:
 | **Templates** | `ConfigTemplate`, `ConfigTemplateRegistry`, `TemplateVariable` | Template loading, variable substitution, tag-based filtering |
 | **Builder** | `DynaBotConfigBuilder` | Fluent builder for DynaBot configs |
 | **Drafts** | `ConfigDraftManager`, `DraftMetadata` | File-based draft lifecycle management |
-| **Tools** | `ListTemplatesTool`, `GetTemplateDetailsTool`, `PreviewConfigTool`, `ValidateConfigTool`, `SaveConfigTool` | LLM-callable tools for wizard flows |
+| **Tools** | `ListTemplatesTool`, `GetTemplateDetailsTool`, `PreviewConfigTool`, `ValidateConfigTool`, `SaveConfigTool`, `ListAvailableToolsTool` | LLM-callable tools for wizard flows |
+| **KB Tools** | `CheckKnowledgeSourceTool`, `ListKBResourcesTool`, `AddKBResourceTool`, `RemoveKBResourceTool`, `IngestKnowledgeBaseTool` | RAG resource management during wizard flows |
 
 ## Quick Start
 
@@ -219,7 +220,7 @@ cleaned = manager.cleanup_stale()
 
 ## Tools
 
-Five ContextAwareTool implementations for wizard-driven config flows:
+Six ContextAwareTool implementations for wizard-driven config flows:
 
 | Tool | Purpose | Key Dependency |
 |------|---------|---------------|
@@ -227,16 +228,20 @@ Five ContextAwareTool implementations for wizard-driven config flows:
 | `GetTemplateDetailsTool` | Get template details | `ConfigTemplateRegistry` |
 | `PreviewConfigTool` | Preview config being built | `builder_factory` callback |
 | `ValidateConfigTool` | Validate current config | `ConfigValidator` |
-| `SaveConfigTool` | Save/finalize config | `ConfigDraftManager` + `on_save` callback |
+| `SaveConfigTool` | Save/finalize config | `ConfigDraftManager` + `on_save` + `portable` |
+| `ListAvailableToolsTool` | List tools for bot config | `available_tools` catalog |
 
 ### Consumer Extension Points
 
 - **`builder_factory`**: `PreviewConfigTool` and `ValidateConfigTool` accept a `builder_factory: Callable[[dict], DynaBotConfigBuilder]` that encapsulates domain-specific config building logic.
 - **`on_save`**: `SaveConfigTool` accepts an `on_save: Callable[[str, dict], Any]` callback for post-save actions (e.g., registering the bot with a manager).
+- **`portable`**: `SaveConfigTool` accepts `portable: bool = False`. When `True`, uses `build_portable()` to produce configs with a `bot` wrapper key.
+- **`available_tools`**: `ListAvailableToolsTool` accepts a list of tool descriptors (consumer-specific catalog).
 
 ```python
 from dataknobs_bots.tools import (
     ListTemplatesTool, PreviewConfigTool, SaveConfigTool,
+    ListAvailableToolsTool,
 )
 
 # Consumer provides domain-specific builder factory
@@ -257,5 +262,63 @@ preview_tool = PreviewConfigTool(builder_factory=my_builder_factory)
 save_tool = SaveConfigTool(
     draft_manager=manager,
     on_save=lambda name, config: register_bot(name, config),
+    portable=True,  # Use build_portable() for bot-wrapped output
 )
+
+# Consumer provides tool catalog
+tools_tool = ListAvailableToolsTool(available_tools=[
+    {"name": "search", "description": "Web search", "category": "info"},
+    {"name": "calculator", "description": "Math operations", "category": "math"},
+])
+```
+
+## KB Tools
+
+Five ContextAwareTool implementations for managing RAG knowledge base resources during wizard flows. These tools operate on wizard collected data to track, add, remove, and ingest knowledge sources.
+
+| Tool | Purpose | Constructor Params |
+|------|---------|-------------------|
+| `CheckKnowledgeSourceTool` | Verify a knowledge source directory | (none) |
+| `ListKBResourcesTool` | List tracked KB resources | (none) |
+| `AddKBResourceTool` | Add a resource to the KB list | `knowledge_dir: Path \| None` |
+| `RemoveKBResourceTool` | Remove a resource from the KB list | (none) |
+| `IngestKnowledgeBaseTool` | Write manifest and finalize KB config | `knowledge_dir: Path \| None` |
+
+### Knowledge Directory Resolution
+
+Tools that write files (`AddKBResourceTool`, `IngestKnowledgeBaseTool`) resolve the knowledge directory from:
+
+1. **Constructor param** (`knowledge_dir`) — takes priority
+2. **Wizard data** (`_knowledge_dir` key) — fallback
+
+Consumers pass the directory at construction time (e.g., resolving from an environment variable) or let users set it during the wizard flow.
+
+### Wizard Data Keys
+
+KB tools read and write specific keys in wizard collected data:
+
+| Key | Written By | Read By | Description |
+|-----|-----------|---------|-------------|
+| `source_verified` | Check | — | Whether source directory was found |
+| `files_found` | Check | Ingest | Auto-discovered file names |
+| `_source_path_resolved` | Check | List, Ingest | Resolved source path |
+| `_kb_resources` | Check, Add, Remove | List, Add, Remove, Ingest | Resource list |
+| `kb_config` | Ingest | — | Final KB configuration for bot config |
+| `kb_resources` | Ingest | — | Finalized resource list (public key) |
+| `ingestion_complete` | Ingest | — | Whether ingestion manifest was written |
+
+### Example
+
+```python
+from pathlib import Path
+from dataknobs_bots.tools import (
+    CheckKnowledgeSourceTool, AddKBResourceTool,
+    IngestKnowledgeBaseTool,
+)
+
+knowledge_dir = Path("/data/knowledge")
+
+check_tool = CheckKnowledgeSourceTool()
+add_tool = AddKBResourceTool(knowledge_dir=knowledge_dir)
+ingest_tool = IngestKnowledgeBaseTool(knowledge_dir=knowledge_dir)
 ```

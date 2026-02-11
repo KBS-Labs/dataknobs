@@ -22,10 +22,16 @@ from .reasoning import (
     create_reasoning_from_config,
 )
 from .tools import (
+    AddKBResourceTool,
+    CheckKnowledgeSourceTool,
     GetTemplateDetailsTool,
+    IngestKnowledgeBaseTool,
     KnowledgeSearchTool,
+    ListAvailableToolsTool,
+    ListKBResourcesTool,
     ListTemplatesTool,
     PreviewConfigTool,
+    RemoveKBResourceTool,
     SaveConfigTool,
     ValidateConfigTool,
 )
@@ -64,6 +70,13 @@ __all__ = [
     "PreviewConfigTool",
     "ValidateConfigTool",
     "SaveConfigTool",
+    "ListAvailableToolsTool",
+    # KB Tools
+    "CheckKnowledgeSourceTool",
+    "ListKBResourcesTool",
+    "AddKBResourceTool",
+    "RemoveKBResourceTool",
+    "IngestKnowledgeBaseTool",
     # Reasoning
     "ReasoningStrategy",
     "SimpleReasoning",

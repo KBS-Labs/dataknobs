@@ -4,7 +4,7 @@ The ConfigBot toolkit provides reusable infrastructure for building wizard-drive
 
 ## Overview
 
-The toolkit provides five layers:
+The toolkit provides the following layers:
 
 | Layer | Components | Purpose |
 |-------|-----------|---------|
@@ -13,7 +13,8 @@ The toolkit provides five layers:
 | **Templates** | `ConfigTemplate`, `ConfigTemplateRegistry`, `TemplateVariable` | Template loading, variable substitution, tag-based filtering |
 | **Builder** | `DynaBotConfigBuilder` | Fluent builder for DynaBot configs |
 | **Drafts** | `ConfigDraftManager`, `DraftMetadata` | File-based draft lifecycle management |
-| **Tools** | `ListTemplatesTool`, `GetTemplateDetailsTool`, `PreviewConfigTool`, `ValidateConfigTool`, `SaveConfigTool` | LLM-callable tools for wizard flows |
+| **Tools** | `ListTemplatesTool`, `GetTemplateDetailsTool`, `PreviewConfigTool`, `ValidateConfigTool`, `SaveConfigTool`, `ListAvailableToolsTool` | LLM-callable tools for wizard flows |
+| **KB Tools** | `CheckKnowledgeSourceTool`, `ListKBResourcesTool`, `AddKBResourceTool`, `RemoveKBResourceTool`, `IngestKnowledgeBaseTool` | RAG resource management during wizard flows |
 
 ## Quick Start
 
@@ -133,7 +134,32 @@ Two output formats:
 
 ### Tools
 
-Five `ContextAwareTool` implementations for wizard-driven config flows. Consumer extension via `builder_factory` and `on_save` callbacks.
+Six `ContextAwareTool` implementations for wizard-driven config flows:
+
+| Tool | Purpose | Key Dependency |
+|------|---------|---------------|
+| `ListTemplatesTool` | List available templates | `ConfigTemplateRegistry` |
+| `GetTemplateDetailsTool` | Get template details | `ConfigTemplateRegistry` |
+| `PreviewConfigTool` | Preview config being built | `builder_factory` callback |
+| `ValidateConfigTool` | Validate current config | `ConfigValidator` |
+| `SaveConfigTool` | Save/finalize config | `ConfigDraftManager` + `on_save` + `portable` |
+| `ListAvailableToolsTool` | List tools for bot config | `available_tools` catalog |
+
+Consumer extension via `builder_factory`, `on_save`, `portable`, and `available_tools`.
+
+### KB Tools
+
+Five `ContextAwareTool` implementations for RAG resource management during wizard flows:
+
+| Tool | Purpose | Constructor Params |
+|------|---------|-------------------|
+| `CheckKnowledgeSourceTool` | Verify a knowledge source directory | (none) |
+| `ListKBResourcesTool` | List tracked KB resources | (none) |
+| `AddKBResourceTool` | Add a resource to the KB list | `knowledge_dir: Path \| None` |
+| `RemoveKBResourceTool` | Remove a resource from the KB list | (none) |
+| `IngestKnowledgeBaseTool` | Write manifest and finalize KB config | `knowledge_dir: Path \| None` |
+
+KB tools operate on wizard collected data to track knowledge sources, supporting both file references and inline content. The `knowledge_dir` parameter is resolved from the constructor or wizard data `_knowledge_dir` key.
 
 ## Consumer Extension Pattern
 
@@ -141,11 +167,20 @@ The toolkit uses composition, not subclassing. Consumers provide:
 
 1. **`builder_factory`** callback — builds domain-specific config from wizard data
 2. **`on_save`** callback — performs post-save actions
-3. **`register_extension()`** — adds domain-specific schema sections
-4. **`set_custom_section()`** — adds domain-specific config sections
+3. **`portable`** flag — use `build_portable()` for bot-wrapped output
+4. **`available_tools`** catalog — consumer-specific tool list
+5. **`knowledge_dir`** path — base directory for KB files
+6. **`register_extension()`** — adds domain-specific schema sections
+7. **`set_custom_section()`** — adds domain-specific config sections
 
 ```python
 # Example: EduBot setup
+from pathlib import Path
+from dataknobs_bots.tools import (
+    PreviewConfigTool, SaveConfigTool, ListAvailableToolsTool,
+    CheckKnowledgeSourceTool, AddKBResourceTool, IngestKnowledgeBaseTool,
+)
+
 schema = DynaBotConfigSchema()
 schema.register_extension("educational", edu_schema)
 
@@ -162,5 +197,13 @@ preview_tool = PreviewConfigTool(builder_factory=edu_builder_factory)
 save_tool = SaveConfigTool(
     draft_manager=manager,
     on_save=register_with_bot_manager,
+    portable=True,
 )
+tools_tool = ListAvailableToolsTool(available_tools=MY_TOOL_CATALOG)
+
+# KB tools with consumer-resolved knowledge directory
+kb_dir = Path(os.environ.get("KNOWLEDGE_DIR", "data/knowledge"))
+check_tool = CheckKnowledgeSourceTool()
+add_tool = AddKBResourceTool(knowledge_dir=kb_dir)
+ingest_tool = IngestKnowledgeBaseTool(knowledge_dir=kb_dir)
 ```
