@@ -207,6 +207,7 @@ nav:
           - packages/bots/guides/task-injection.md
           - packages/bots/guides/focus-guards.md
           - packages/bots/guides/config-versioning.md
+          - packages/bots/guides/config-toolkit.md
       - API Reference:
         - packages/bots/api/reference.md
       - Examples:
