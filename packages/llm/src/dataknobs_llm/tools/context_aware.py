@@ -107,20 +107,27 @@ class ContextAwareTool(Tool):
     async def execute(self, **kwargs: Any) -> Any:
         """Execute the tool, extracting context if provided.
 
-        This method provides backwards compatibility. When context
-        is passed via the `_context` keyword argument (by reasoning
-        strategies that support context injection), it's extracted
-        and passed to execute_with_context(). When called without
-        context, an empty context is provided.
+        Context can be provided in two ways:
 
-        Reasoning strategies inject context like this:
-            ```python
-            context = ToolExecutionContext.from_manager(manager)
-            result = await tool.execute(**params, _context=context)
-            ```
+        1. **Explicit context** (production path) — reasoning strategies
+           inject a ``_context`` keyword argument::
+
+               context = ToolExecutionContext.from_manager(manager)
+               result = await tool.execute(**params, _context=context)
+
+        2. **wizard_data shorthand** (tests / standalone) — pass
+           ``wizard_data`` directly and a context is built
+           automatically::
+
+               result = await tool.execute(
+                   wizard_data=my_data, format="summary"
+               )
+
+        When neither is provided, an empty context is created.
 
         Args:
-            **kwargs: Tool parameters, optionally including _context
+            **kwargs: Tool parameters, optionally including
+                ``_context`` or ``wizard_data``.
 
         Returns:
             Tool execution result
@@ -129,7 +136,12 @@ class ContextAwareTool(Tool):
         context = kwargs.pop("_context", None)
 
         if context is None:
-            context = ToolExecutionContext.empty()
+            # No explicit context — check for wizard_data shorthand
+            wizard_data = kwargs.pop("wizard_data", None)
+            if wizard_data is not None:
+                context = ToolExecutionContext.from_wizard_data(wizard_data)
+            else:
+                context = ToolExecutionContext.empty()
 
         return await self.execute_with_context(context, **kwargs)
 
