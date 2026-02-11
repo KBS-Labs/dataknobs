@@ -162,6 +162,15 @@ class CheckKnowledgeSourceTool(ContextAwareTool):
         if "_kb_resources" not in wizard_data:
             wizard_data["_kb_resources"] = []
 
+        # Auto-populate _kb_resources with discovered files
+        resources: list[dict[str, Any]] = wizard_data["_kb_resources"]
+        existing_paths = {r.get("path") for r in resources}
+        for fname in found_files:
+            if fname not in existing_paths:
+                resources.append(
+                    {"path": fname, "type": "file", "source": str(path / fname)}
+                )
+
         logger.debug(
             "Checked knowledge source: %s (%d files)",
             path,
@@ -270,9 +279,13 @@ class AddKBResourceTool(ContextAwareTool):
         return {
             "type": "object",
             "properties": {
-                "name": {
+                "path": {
                     "type": "string",
-                    "description": "Name/filename of the resource",
+                    "description": "File path or URL of the resource",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Optional display title for the resource",
                 },
                 "resource_type": {
                     "type": "string",
@@ -291,13 +304,14 @@ class AddKBResourceTool(ContextAwareTool):
                     "description": "Optional description of the resource",
                 },
             },
-            "required": ["name"],
+            "required": ["path"],
         }
 
     async def execute_with_context(
         self,
         context: ToolExecutionContext,
-        name: str,
+        path: str,
+        title: str = "",
         resource_type: str = "file",
         content: str | None = None,
         description: str | None = None,
@@ -307,7 +321,8 @@ class AddKBResourceTool(ContextAwareTool):
 
         Args:
             context: Execution context with wizard state.
-            name: Resource name/filename.
+            path: Resource path or filename.
+            title: Optional display title.
             resource_type: Type of resource ('file' or 'inline').
             content: Inline content (required if resource_type='inline').
             description: Optional resource description.
@@ -321,18 +336,20 @@ class AddKBResourceTool(ContextAwareTool):
         )
 
         # Check for duplicate
-        existing_names = {r["name"] for r in resources}
-        if name in existing_names:
+        existing_paths = {r["path"] for r in resources}
+        if path in existing_paths:
             return {
                 "success": False,
-                "error": f"Resource already exists: {name}",
+                "error": f"Resource already exists: {path}",
                 "existing_resources": len(resources),
             }
 
         resource: dict[str, Any] = {
-            "name": name,
+            "path": path,
             "type": resource_type,
         }
+        if title:
+            resource["title"] = title
         if description:
             resource["description"] = description
 
@@ -352,9 +369,9 @@ class AddKBResourceTool(ContextAwareTool):
             domain_id = wizard_data.get("domain_id", "default")
             target_dir = kb_dir / domain_id
             target_dir.mkdir(parents=True, exist_ok=True)
-            target_path = target_dir / name
+            target_path = target_dir / path
             target_path.write_text(content, encoding="utf-8")
-            resource["path"] = str(target_path)
+            resource["source"] = str(target_path)
             logger.debug(
                 "Wrote inline resource: %s",
                 target_path,
@@ -365,7 +382,7 @@ class AddKBResourceTool(ContextAwareTool):
 
         logger.debug(
             "Added KB resource: %s (type=%s)",
-            name,
+            path,
             resource_type,
             extra={"conversation_id": context.conversation_id},
         )
@@ -400,25 +417,25 @@ class RemoveKBResourceTool(ContextAwareTool):
         return {
             "type": "object",
             "properties": {
-                "name": {
+                "path": {
                     "type": "string",
-                    "description": "Name of the resource to remove",
+                    "description": "Path of the resource to remove",
                 },
             },
-            "required": ["name"],
+            "required": ["path"],
         }
 
     async def execute_with_context(
         self,
         context: ToolExecutionContext,
-        name: str,
+        path: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Remove a KB resource.
 
         Args:
             context: Execution context with wizard state.
-            name: Name of the resource to remove.
+            path: Path of the resource to remove.
 
         Returns:
             Dict with removal result.
@@ -427,26 +444,26 @@ class RemoveKBResourceTool(ContextAwareTool):
         resources: list[dict[str, Any]] = wizard_data.get("_kb_resources", [])
 
         original_count = len(resources)
-        updated = [r for r in resources if r["name"] != name]
+        updated = [r for r in resources if r["path"] != path]
 
         if len(updated) == original_count:
             return {
                 "success": False,
-                "error": f"Resource not found: {name}",
-                "available": [r["name"] for r in resources],
+                "error": f"Resource not found: {path}",
+                "available": [r["path"] for r in resources],
             }
 
         wizard_data["_kb_resources"] = updated
 
         logger.debug(
             "Removed KB resource: %s",
-            name,
+            path,
             extra={"conversation_id": context.conversation_id},
         )
 
         return {
             "success": True,
-            "removed": name,
+            "removed": path,
             "remaining_resources": len(updated),
         }
 
@@ -534,7 +551,7 @@ class IngestKnowledgeBaseTool(ContextAwareTool):
         # Fallback: if no explicit resources, use auto-discovered files
         if not resources and wizard_data.get("files_found"):
             resources = [
-                {"name": f, "type": "file"}
+                {"path": f, "type": "file"}
                 for f in wizard_data["files_found"]
             ]
 
@@ -572,6 +589,7 @@ class IngestKnowledgeBaseTool(ContextAwareTool):
         kb_config: dict[str, Any] = {
             "enabled": True,
             "type": "rag",
+            "documents_path": str(manifest_dir),
             "chunking": {
                 "chunk_size": chunk_size,
                 "chunk_overlap": chunk_overlap,

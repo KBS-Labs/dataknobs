@@ -65,7 +65,28 @@ class TestCheckKnowledgeSourceTool:
         # Verify wizard data was updated
         assert wizard_data["source_verified"] is True
         assert wizard_data["_source_path_resolved"] == str(tmp_path)
-        assert wizard_data["_kb_resources"] == []
+
+    @pytest.mark.asyncio
+    async def test_auto_populates_kb_resources(self, tmp_path: Path) -> None:
+        """Check auto-populates _kb_resources with discovered files."""
+        (tmp_path / "intro.md").write_text("# Intro")
+        (tmp_path / "guide.txt").write_text("Guide content")
+
+        wizard_data: dict[str, Any] = {}
+        tool = CheckKnowledgeSourceTool()
+        await tool.execute_with_context(
+            _make_context(wizard_data), source_path=str(tmp_path)
+        )
+
+        resources = wizard_data["_kb_resources"]
+        assert len(resources) == 2
+        paths = {r["path"] for r in resources}
+        assert "intro.md" in paths
+        assert "guide.txt" in paths
+        # Each entry has source and type
+        for r in resources:
+            assert r["type"] == "file"
+            assert "source" in r
 
     @pytest.mark.asyncio
     async def test_missing_directory(self) -> None:
@@ -115,9 +136,9 @@ class TestCheckKnowledgeSourceTool:
 
     @pytest.mark.asyncio
     async def test_preserves_existing_kb_resources(self, tmp_path: Path) -> None:
-        """If _kb_resources already exists, don't overwrite it."""
+        """If _kb_resources already has entries, appends new ones."""
         (tmp_path / "doc.md").write_text("content")
-        existing = [{"name": "prev.md", "type": "file"}]
+        existing = [{"path": "prev.md", "type": "file"}]
         wizard_data: dict[str, Any] = {"_kb_resources": existing}
 
         tool = CheckKnowledgeSourceTool()
@@ -125,7 +146,11 @@ class TestCheckKnowledgeSourceTool:
             _make_context(wizard_data), source_path=str(tmp_path)
         )
 
-        assert wizard_data["_kb_resources"] is existing
+        # Should have original + newly discovered
+        assert len(wizard_data["_kb_resources"]) == 2
+        paths = {r["path"] for r in wizard_data["_kb_resources"]}
+        assert "prev.md" in paths
+        assert "doc.md" in paths
 
     @pytest.mark.asyncio
     async def test_schema(self) -> None:
@@ -151,8 +176,8 @@ class TestListKBResourcesTool:
     async def test_with_resources(self) -> None:
         wizard_data: dict[str, Any] = {
             "_kb_resources": [
-                {"name": "intro.md", "type": "file"},
-                {"name": "notes.txt", "type": "inline"},
+                {"path": "intro.md", "type": "file"},
+                {"path": "notes.txt", "type": "inline"},
             ],
             "_source_path_resolved": "/data/knowledge",
         }
@@ -161,9 +186,9 @@ class TestListKBResourcesTool:
 
         assert result["count"] == 2
         assert result["source_path"] == "/data/knowledge"
-        names = [r["name"] for r in result["resources"]]
-        assert "intro.md" in names
-        assert "notes.txt" in names
+        paths = [r["path"] for r in result["resources"]]
+        assert "intro.md" in paths
+        assert "notes.txt" in paths
 
 
 class TestAddKBResourceTool:
@@ -175,24 +200,37 @@ class TestAddKBResourceTool:
         tool = AddKBResourceTool()
         result = await tool.execute_with_context(
             _make_context(wizard_data),
-            name="guide.md",
+            path="guide.md",
             resource_type="file",
             description="User guide",
         )
 
         assert result["success"] is True
         assert result["total_resources"] == 1
-        assert wizard_data["_kb_resources"][0]["name"] == "guide.md"
+        assert wizard_data["_kb_resources"][0]["path"] == "guide.md"
         assert wizard_data["_kb_resources"][0]["description"] == "User guide"
+
+    @pytest.mark.asyncio
+    async def test_add_with_title(self) -> None:
+        wizard_data: dict[str, Any] = {"_kb_resources": []}
+        tool = AddKBResourceTool()
+        result = await tool.execute_with_context(
+            _make_context(wizard_data),
+            path="guide.md",
+            title="User Guide",
+        )
+
+        assert result["success"] is True
+        assert wizard_data["_kb_resources"][0]["title"] == "User Guide"
 
     @pytest.mark.asyncio
     async def test_add_duplicate_rejected(self) -> None:
         wizard_data: dict[str, Any] = {
-            "_kb_resources": [{"name": "guide.md", "type": "file"}]
+            "_kb_resources": [{"path": "guide.md", "type": "file"}]
         }
         tool = AddKBResourceTool()
         result = await tool.execute_with_context(
-            _make_context(wizard_data), name="guide.md"
+            _make_context(wizard_data), path="guide.md"
         )
 
         assert result["success"] is False
@@ -207,7 +245,7 @@ class TestAddKBResourceTool:
         tool = AddKBResourceTool(knowledge_dir=tmp_path)
         result = await tool.execute_with_context(
             _make_context(wizard_data),
-            name="faq.md",
+            path="faq.md",
             resource_type="inline",
             content="# FAQ\n\nQ: How? A: Like this.",
         )
@@ -217,7 +255,7 @@ class TestAddKBResourceTool:
         written = tmp_path / "test-bot" / "faq.md"
         assert written.exists()
         assert "FAQ" in written.read_text()
-        assert wizard_data["_kb_resources"][0]["path"] == str(written)
+        assert wizard_data["_kb_resources"][0]["source"] == str(written)
 
     @pytest.mark.asyncio
     async def test_inline_no_content_error(self) -> None:
@@ -225,7 +263,7 @@ class TestAddKBResourceTool:
         tool = AddKBResourceTool()
         result = await tool.execute_with_context(
             _make_context(wizard_data),
-            name="empty.md",
+            path="empty.md",
             resource_type="inline",
         )
 
@@ -238,7 +276,7 @@ class TestAddKBResourceTool:
         tool = AddKBResourceTool()  # no knowledge_dir
         result = await tool.execute_with_context(
             _make_context(wizard_data),
-            name="data.md",
+            path="data.md",
             resource_type="inline",
             content="some content",
         )
@@ -251,7 +289,7 @@ class TestAddKBResourceTool:
         wizard_data: dict[str, Any] = {}
         tool = AddKBResourceTool()
         result = await tool.execute_with_context(
-            _make_context(wizard_data), name="doc.md"
+            _make_context(wizard_data), path="doc.md"
         )
 
         assert result["success"] is True
@@ -268,7 +306,7 @@ class TestAddKBResourceTool:
         tool = AddKBResourceTool()  # no constructor dir
         result = await tool.execute_with_context(
             _make_context(wizard_data),
-            name="content.md",
+            path="content.md",
             resource_type="inline",
             content="Hello",
         )
@@ -284,28 +322,28 @@ class TestRemoveKBResourceTool:
     async def test_remove_existing(self) -> None:
         wizard_data: dict[str, Any] = {
             "_kb_resources": [
-                {"name": "a.md", "type": "file"},
-                {"name": "b.md", "type": "file"},
+                {"path": "a.md", "type": "file"},
+                {"path": "b.md", "type": "file"},
             ]
         }
         tool = RemoveKBResourceTool()
         result = await tool.execute_with_context(
-            _make_context(wizard_data), name="a.md"
+            _make_context(wizard_data), path="a.md"
         )
 
         assert result["success"] is True
         assert result["remaining_resources"] == 1
         assert len(wizard_data["_kb_resources"]) == 1
-        assert wizard_data["_kb_resources"][0]["name"] == "b.md"
+        assert wizard_data["_kb_resources"][0]["path"] == "b.md"
 
     @pytest.mark.asyncio
     async def test_remove_nonexistent(self) -> None:
         wizard_data: dict[str, Any] = {
-            "_kb_resources": [{"name": "a.md", "type": "file"}]
+            "_kb_resources": [{"path": "a.md", "type": "file"}]
         }
         tool = RemoveKBResourceTool()
         result = await tool.execute_with_context(
-            _make_context(wizard_data), name="missing.md"
+            _make_context(wizard_data), path="missing.md"
         )
 
         assert result["success"] is False
@@ -317,7 +355,7 @@ class TestRemoveKBResourceTool:
         wizard_data: dict[str, Any] = {}
         tool = RemoveKBResourceTool()
         result = await tool.execute_with_context(
-            _make_context(wizard_data), name="any.md"
+            _make_context(wizard_data), path="any.md"
         )
 
         assert result["success"] is False
@@ -331,8 +369,8 @@ class TestIngestKnowledgeBaseTool:
         wizard_data: dict[str, Any] = {
             "domain_id": "test-domain",
             "_kb_resources": [
-                {"name": "intro.md", "type": "file"},
-                {"name": "guide.txt", "type": "file"},
+                {"path": "intro.md", "type": "file"},
+                {"path": "guide.txt", "type": "file"},
             ],
             "_source_path_resolved": "/data/source",
         }
@@ -359,6 +397,9 @@ class TestIngestKnowledgeBaseTool:
         # Verify wizard data updated
         assert wizard_data["ingestion_complete"] is True
         assert wizard_data["kb_config"]["enabled"] is True
+        assert wizard_data["kb_config"]["documents_path"] == str(
+            tmp_path / "test-domain"
+        )
         assert wizard_data["kb_resources"] == wizard_data["_kb_resources"]
 
     @pytest.mark.asyncio
@@ -387,7 +428,7 @@ class TestIngestKnowledgeBaseTool:
     async def test_no_knowledge_dir_error(self) -> None:
         wizard_data: dict[str, Any] = {
             "domain_id": "test",
-            "_kb_resources": [{"name": "a.md", "type": "file"}],
+            "_kb_resources": [{"path": "a.md", "type": "file"}],
         }
         tool = IngestKnowledgeBaseTool()  # no knowledge_dir
         result = await tool.execute_with_context(_make_context(wizard_data))
@@ -399,7 +440,7 @@ class TestIngestKnowledgeBaseTool:
     async def test_default_chunking_params(self, tmp_path: Path) -> None:
         wizard_data: dict[str, Any] = {
             "domain_id": "defaults",
-            "_kb_resources": [{"name": "doc.md", "type": "file"}],
+            "_kb_resources": [{"path": "doc.md", "type": "file"}],
         }
         tool = IngestKnowledgeBaseTool(knowledge_dir=tmp_path)
         result = await tool.execute_with_context(_make_context(wizard_data))
@@ -414,7 +455,7 @@ class TestIngestKnowledgeBaseTool:
         wizard_data: dict[str, Any] = {
             "domain_id": "wd-domain",
             "_knowledge_dir": str(tmp_path),
-            "_kb_resources": [{"name": "doc.md", "type": "file"}],
+            "_kb_resources": [{"path": "doc.md", "type": "file"}],
         }
         tool = IngestKnowledgeBaseTool()  # no constructor dir
         result = await tool.execute_with_context(_make_context(wizard_data))

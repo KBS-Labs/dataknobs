@@ -110,6 +110,26 @@ class ListTemplatesTool(ContextAwareTool):
         )
         self._registry = template_registry
 
+    @classmethod
+    def from_config(cls, config: dict[str, Any]) -> ListTemplatesTool:
+        """Create from YAML-compatible configuration.
+
+        Args:
+            config: Dict with ``template_dir`` key pointing to a
+                directory containing template YAML files.
+
+        Returns:
+            Configured ListTemplatesTool instance.
+        """
+        from pathlib import Path
+
+        template_dir = config.get("template_dir", "configs/templates")
+        registry = ConfigTemplateRegistry()
+        path = Path(template_dir)
+        if path.is_dir():
+            registry.load_from_directory(path)
+        return cls(template_registry=registry)
+
     @property
     def schema(self) -> dict[str, Any]:
         """Return JSON Schema for tool parameters."""
@@ -190,6 +210,26 @@ class GetTemplateDetailsTool(ContextAwareTool):
             ),
         )
         self._registry = template_registry
+
+    @classmethod
+    def from_config(cls, config: dict[str, Any]) -> GetTemplateDetailsTool:
+        """Create from YAML-compatible configuration.
+
+        Args:
+            config: Dict with ``template_dir`` key pointing to a
+                directory containing template YAML files.
+
+        Returns:
+            Configured GetTemplateDetailsTool instance.
+        """
+        from pathlib import Path
+
+        template_dir = config.get("template_dir", "configs/templates")
+        registry = ConfigTemplateRegistry()
+        path = Path(template_dir)
+        if path.is_dir():
+            registry.load_from_directory(path)
+        return cls(template_registry=registry)
 
     @property
     def schema(self) -> dict[str, Any]:
@@ -283,6 +323,24 @@ class PreviewConfigTool(ContextAwareTool):
         )
         self._builder_factory = builder_factory
 
+    @classmethod
+    def from_config(cls, config: dict[str, Any]) -> PreviewConfigTool:
+        """Create from YAML-compatible configuration.
+
+        Args:
+            config: Dict with ``builder_factory`` key — a dotted
+                import path to a callable that accepts wizard data
+                and returns a ``DynaBotConfigBuilder``.
+
+        Returns:
+            Configured PreviewConfigTool instance.
+        """
+        from .resolve import resolve_callable
+
+        factory_ref = config["builder_factory"]
+        factory = resolve_callable(factory_ref)
+        return cls(builder_factory=factory)
+
     @property
     def schema(self) -> dict[str, Any]:
         """Return JSON Schema for tool parameters."""
@@ -371,6 +429,25 @@ class ValidateConfigTool(ContextAwareTool):
         )
         self._validator = validator
         self._builder_factory = builder_factory
+
+    @classmethod
+    def from_config(cls, config: dict[str, Any]) -> ValidateConfigTool:
+        """Create from YAML-compatible configuration.
+
+        Args:
+            config: Dict with optional ``builder_factory`` key — a
+                dotted import path to a callable.
+
+        Returns:
+            Configured ValidateConfigTool instance.
+        """
+        validator = ConfigValidator()
+        factory = None
+        if "builder_factory" in config:
+            from .resolve import resolve_callable
+
+            factory = resolve_callable(config["builder_factory"])
+        return cls(validator=validator, builder_factory=factory)
 
     @property
     def schema(self) -> dict[str, Any]:
@@ -472,6 +549,43 @@ class SaveConfigTool(ContextAwareTool):
         self._on_save = on_save
         self._builder_factory = builder_factory
         self._portable = portable
+
+    @classmethod
+    def from_config(cls, config: dict[str, Any]) -> SaveConfigTool:
+        """Create from YAML-compatible configuration.
+
+        Args:
+            config: Dict with keys:
+                - ``config_dir`` (str): Output directory for configs.
+                - ``builder_factory`` (str, optional): Dotted import path.
+                - ``on_save`` (str, optional): Dotted import path.
+                - ``portable`` (bool, optional): Use portable output format.
+
+        Returns:
+            Configured SaveConfigTool instance.
+        """
+        from pathlib import Path
+
+        config_dir = config.get("config_dir", "configs")
+        manager = ConfigDraftManager(output_dir=Path(config_dir))
+
+        on_save = None
+        factory = None
+        if "on_save" in config or "builder_factory" in config:
+            from .resolve import resolve_callable
+
+            if "on_save" in config:
+                on_save = resolve_callable(config["on_save"])
+            if "builder_factory" in config:
+                factory = resolve_callable(config["builder_factory"])
+
+        portable = config.get("portable", False)
+        return cls(
+            draft_manager=manager,
+            on_save=on_save,
+            builder_factory=factory,
+            portable=portable,
+        )
 
     @property
     def schema(self) -> dict[str, Any]:

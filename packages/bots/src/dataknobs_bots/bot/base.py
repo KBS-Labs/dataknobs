@@ -1057,6 +1057,12 @@ class DynaBot:
         1. Direct class instantiation: {"class": "module.ToolClass", "params": {...}}
         2. XRef resolution: "xref:tools[tool_name]" or {"xref": "tools[tool_name]"}
 
+        For direct instantiation, if the tool class defines a
+        ``from_config(cls, config: dict)`` classmethod, it will be
+        called with ``params`` instead of ``tool_class(**params)``.
+        This allows tools to construct complex internal dependencies
+        from simple YAML-compatible parameters.
+
         Args:
             tool_config: Tool configuration (dict or string xref)
             config: Full bot configuration for xref resolution
@@ -1132,8 +1138,15 @@ class DynaBot:
                 module = importlib.import_module(module_path)
                 tool_class = getattr(module, class_name)
 
-                # Instantiate the tool
-                tool = tool_class(**params)
+                # Instantiate the tool — prefer from_config() if available,
+                # which allows tools to construct complex internal
+                # dependencies from simple YAML-compatible params.
+                if hasattr(tool_class, "from_config") and callable(
+                    tool_class.from_config
+                ):
+                    tool = tool_class.from_config(params)
+                else:
+                    tool = tool_class(**params)
 
                 # Validate it's a Tool instance
                 from dataknobs_llm.tools import Tool
