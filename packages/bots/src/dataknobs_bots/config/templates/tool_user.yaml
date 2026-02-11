@@ -1,0 +1,74 @@
+name: tool_user
+description: Bot with ReAct reasoning and tool definitions for multi-step tasks.
+version: "1.0.0"
+tags:
+  - tools
+  - react
+  - agent
+
+variables:
+  - name: bot_name
+    description: Name for this bot
+    type: string
+    required: true
+
+  - name: bot_purpose
+    description: Description of what this bot does
+    type: string
+    required: true
+
+  - name: system_instructions
+    description: Additional system prompt instructions
+    type: string
+    required: false
+    default: ""
+
+  - name: temperature
+    description: LLM sampling temperature
+    type: number
+    required: false
+    default: 0.3
+
+  - name: max_tokens
+    description: Maximum tokens in LLM response
+    type: integer
+    required: false
+    default: 2048
+
+  - name: max_iterations
+    description: Maximum ReAct iterations
+    type: integer
+    required: false
+    default: 5
+
+structure:
+  bot:
+    llm:
+      $resource: default
+      type: llm_providers
+      temperature: "{{temperature}}"
+      max_tokens: "{{max_tokens}}"
+
+    conversation_storage:
+      $resource: conversations
+      type: databases
+
+    system_prompt: |
+      You are {{bot_name}}. {{bot_purpose}}.
+
+      You have access to tools that help you complete tasks. Use them
+      when you need to look up information, perform calculations, or
+      take actions. Think step by step about what tools to use and in
+      what order.
+
+      {{system_instructions}}
+
+    memory:
+      type: buffer
+      max_messages: 50
+
+    reasoning:
+      strategy: react
+      max_iterations: "{{max_iterations}}"
+
+    tools: []

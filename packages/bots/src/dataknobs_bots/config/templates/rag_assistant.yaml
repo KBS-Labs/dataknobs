@@ -1,0 +1,98 @@
+name: rag_assistant
+description: Bot with knowledge base, vector store, and embedding configuration for RAG.
+version: "1.0.0"
+tags:
+  - rag
+  - knowledge
+  - assistant
+
+variables:
+  - name: bot_name
+    description: Name for this bot
+    type: string
+    required: true
+
+  - name: subject
+    description: Subject or domain this bot specializes in
+    type: string
+    required: true
+
+  - name: system_instructions
+    description: Additional system prompt instructions
+    type: string
+    required: false
+    default: ""
+
+  - name: temperature
+    description: LLM sampling temperature
+    type: number
+    required: false
+    default: 0.5
+
+  - name: max_tokens
+    description: Maximum tokens in LLM response
+    type: integer
+    required: false
+    default: 2048
+
+  - name: vector_store_backend
+    description: Vector store backend to use
+    type: string
+    required: false
+    default: memory
+    choices:
+      - memory
+      - faiss
+      - chroma
+      - pgvector
+
+  - name: embedding_dimensions
+    description: Embedding vector dimensions
+    type: integer
+    required: false
+    default: 384
+
+structure:
+  bot:
+    llm:
+      $resource: default
+      type: llm_providers
+      temperature: "{{temperature}}"
+      max_tokens: "{{max_tokens}}"
+
+    conversation_storage:
+      $resource: conversations
+      type: databases
+
+    system_prompt:
+      content: |
+        You are {{bot_name}}, a knowledgeable assistant specializing in {{subject}}.
+
+        When answering questions:
+        - Search the knowledge base for relevant information
+        - Cite sources when available
+        - Acknowledge when information is not available in the knowledge base
+
+        {{system_instructions}}
+      rag_configs:
+        - name: knowledge
+          adapter_type: dataknobs_backend
+          max_results: 5
+
+    memory:
+      type: buffer
+      max_messages: 50
+
+    knowledge_base:
+      enabled: true
+      type: rag
+      vector_store:
+        backend: "{{vector_store_backend}}"
+        dimensions: "{{embedding_dimensions}}"
+      embedding:
+        $resource: default
+        type: embedding_providers
+
+    tools:
+      - class: dataknobs_bots.tools.KnowledgeSearchTool
+        params: {}
