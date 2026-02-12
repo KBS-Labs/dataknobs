@@ -5,6 +5,33 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-02-11
+
+### dataknobs-common [1.3.0]
+
+#### Added
+- added standalone transition validation functionality in common for general use
+- promoted configurable retry logic utilities from fsm to common for general use
+
+### dataknobs-fsm [0.1.9]
+
+#### Fixed
+- promoted configurable retry logic utilities from fsm to common for general use
+
+### dataknobs-llm [0.3.5]
+
+#### Fixed
+- fixed to properly handle kwargs
+
+### dataknobs-bots [0.4.4]
+
+#### Added
+- configbot toolkit
+
+#### Changed
+- enhanced tool dependency resolution
+
+
 ## Release - 2026-02-09
 
 ### dataknobs-data [0.4.6]
