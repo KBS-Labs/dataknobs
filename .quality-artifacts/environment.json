@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-02-12T00:47:36Z",
+  "timestamp": "2026-02-12T01:01:38Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.10.1 (Homebrew 2026-02-10)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "main",
-  "git_commit": "cde185b496e54024a54d1cd0951c6c4994da70fe",
+  "git_branch": "sbk/general-use-promotions",
+  "git_commit": "bddc341fe744625aa7559a97362503e712141c12",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

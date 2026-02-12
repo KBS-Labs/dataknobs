@@ -168,6 +168,23 @@ class TransitionValidator:
                 allowed=allowed,
             )
 
+    def is_valid(self, current_status: str | None, target_status: str) -> bool:
+        """Check whether a transition is allowed without raising.
+
+        Args:
+            current_status: The current status. If ``None``, returns ``True``
+                (same skip behavior as :meth:`validate`).
+            target_status: The desired target status.
+
+        Returns:
+            ``True`` if the transition is allowed (or current is ``None``),
+            ``False`` otherwise.
+        """
+        if current_status is None:
+            return True
+        allowed = self._transitions.get(current_status)
+        return allowed is not None and target_status in allowed
+
     def get_reachable(self, from_status: str) -> set[str]:
         """Compute all statuses reachable from a given status (transitive closure).
 

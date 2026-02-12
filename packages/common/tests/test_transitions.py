@@ -168,6 +168,29 @@ class TestIntrospection:
 
 
 # ---------------------------------------------------------------------------
+# is_valid — boolean check
+# ---------------------------------------------------------------------------
+
+
+class TestIsValid:
+
+    def test_valid_transition_returns_true(self, order_validator):
+        assert order_validator.is_valid("draft", "submitted") is True
+
+    def test_invalid_transition_returns_false(self, order_validator):
+        assert order_validator.is_valid("draft", "approved") is False
+
+    def test_terminal_status_returns_false(self, order_validator):
+        assert order_validator.is_valid("delivered", "draft") is False
+
+    def test_unknown_current_returns_false(self, order_validator):
+        assert order_validator.is_valid("nonexistent", "draft") is False
+
+    def test_none_current_returns_true(self, order_validator):
+        assert order_validator.is_valid(None, "anything") is True
+
+
+# ---------------------------------------------------------------------------
 # get_reachable — transitive closure
 # ---------------------------------------------------------------------------
 
