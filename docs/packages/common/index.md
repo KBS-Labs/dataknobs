@@ -17,6 +17,8 @@ This package provides shared cross-cutting functionality used across all datakno
 - **Exception Framework**: Unified exception hierarchy with context support
 - **Registry Pattern**: Generic registries for managing named items
 - **Serialization Protocol**: Standard interfaces for to_dict/from_dict patterns
+- **Retry**: Configurable retry execution with multiple backoff strategies
+- **Transitions**: Stateless transition validation for declarative status graphs
 - **Event Bus**: Pub/sub event system for distributed applications
 
 These patterns were extracted from common implementations across multiple packages to reduce duplication and provide consistency.
@@ -399,6 +401,141 @@ if is_deserializable(MyClass):
     obj = deserialize(MyClass, data)
 ```
 
+### 4. Retry
+
+Configurable retry execution with multiple backoff strategies. Supports both sync and async callables, exception filtering, result-based retry, and lifecycle hooks.
+
+#### Basic Usage
+
+```python
+from dataknobs_common.retry import RetryExecutor, RetryConfig, BackoffStrategy
+
+# Configure retry behavior
+config = RetryConfig(
+    max_attempts=5,
+    initial_delay=0.5,
+    backoff_strategy=BackoffStrategy.EXPONENTIAL,
+)
+
+executor = RetryExecutor(config)
+result = await executor.execute(fetch_data, url)
+```
+
+#### Backoff Strategies
+
+Five strategies are available via the `BackoffStrategy` enum:
+
+- `FIXED` — constant delay between retries
+- `LINEAR` — delay increases linearly with each attempt
+- `EXPONENTIAL` — delay multiplied by `backoff_multiplier` each attempt
+- `JITTER` — exponential with random jitter applied
+- `DECORRELATED` — random delay between `initial_delay` and 3x previous delay
+
+#### Exception Filtering
+
+Only retry specific exception types:
+
+```python
+config = RetryConfig(
+    max_attempts=3,
+    retry_on_exceptions=[ConnectionError, TimeoutError],
+)
+executor = RetryExecutor(config)
+
+# ConnectionError and TimeoutError are retried; others propagate immediately
+result = await executor.execute(call_api, endpoint)
+```
+
+#### Result-Based Retry
+
+Retry when a result value is unsatisfactory:
+
+```python
+config = RetryConfig(
+    max_attempts=3,
+    retry_on_result=lambda r: r is None,  # Retry if result is None
+)
+executor = RetryExecutor(config)
+result = await executor.execute(poll_status, job_id)
+```
+
+#### Lifecycle Hooks
+
+```python
+config = RetryConfig(
+    on_retry=lambda attempt, exc: logger.warning("Retry %d: %s", attempt, exc),
+    on_failure=lambda exc: logger.error("All retries exhausted: %s", exc),
+)
+```
+
+**Origin:** Extracted from `dataknobs_fsm.patterns.error_recovery` (zero FSM dependency). The FSM module re-exports from common for backward compatibility.
+
+### 5. Transitions
+
+Stateless transition validation for systems that need to enforce valid status transitions without a full state machine framework. Suitable for guarding database writes, API updates, or any operation where an entity moves between named statuses.
+
+This is **not** a state machine — it does not manage state, execute actions, or track lifecycle. For full FSM capabilities, see `dataknobs_fsm`.
+
+#### Basic Usage
+
+```python
+from dataknobs_common.transitions import TransitionValidator, InvalidTransitionError
+
+RUN_STATUS = TransitionValidator(
+    "run_status",
+    {
+        "pending":   {"running", "cancelled"},
+        "running":   {"completed", "failed", "cancelled"},
+        "failed":    {"pending"},       # allow retry
+        "completed": set(),             # terminal
+        "cancelled": set(),             # terminal
+    },
+)
+
+RUN_STATUS.validate("pending", "running")       # ok
+RUN_STATUS.validate("completed", "pending")     # raises InvalidTransitionError
+RUN_STATUS.validate(None, "running")            # ok (skip when current unknown)
+```
+
+#### Boolean Check
+
+Use `is_valid()` when you want a boolean instead of an exception:
+
+```python
+if RUN_STATUS.is_valid(current_status, target_status):
+    update_status(target_status)
+```
+
+#### Graph Introspection
+
+```python
+# All statuses reachable from a starting point (transitive closure)
+reachable = RUN_STATUS.get_reachable("pending")
+# {"running", "completed", "failed", "cancelled", "pending"}
+
+# All known statuses
+RUN_STATUS.statuses
+# {"pending", "running", "completed", "failed", "cancelled"}
+
+# Full transition graph (returns a copy)
+RUN_STATUS.allowed_transitions
+```
+
+#### InvalidTransitionError
+
+Extends `OperationError` with structured context:
+
+```python
+try:
+    RUN_STATUS.validate("completed", "running")
+except InvalidTransitionError as e:
+    e.entity          # "run_status"
+    e.current_status  # "completed"
+    e.target_status   # "running"
+    e.allowed         # set() (terminal — no targets allowed)
+    e.context         # {"entity": ..., "current_status": ..., "target_status": ..., "allowed": []}
+```
+
 ## Package Integration Examples
 
 ### FSM Package (Exceptions)
@@ -524,6 +661,16 @@ All migrations achieved 100% backward compatibility:
 
 ## When to Use Common Components
 
+### FSM Package (Retry Re-export)
+
+The retry primitives were extracted from the FSM package's `error_recovery` module. The FSM module now re-exports from common for backward compatibility:
+
+```python
+# Both import paths work identically
+from dataknobs_common.retry import RetryExecutor, RetryConfig, BackoffStrategy
+from dataknobs_fsm.patterns.error_recovery import RetryExecutor, RetryConfig, BackoffStrategy
+```
+
 ### Use Registry When:
 - Managing collections of named objects
 - Need thread-safe access
@@ -542,6 +689,20 @@ All migrations achieved 100% backward compatibility:
 - Want type safety for serialization
 - Need consistent error handling
 - Working with lists of serializable objects
+
+### Use Retry When:
+- Calling external APIs or services that may fail transiently
+- Need configurable backoff strategies (exponential, jitter, etc.)
+- Want exception filtering (only retry specific exception types)
+- Need result-based retry (retry when result is unsatisfactory)
+- Want lifecycle hooks for observability (on_retry, on_failure)
+
+### Use Transitions When:
+- Guarding database status updates (e.g. order lifecycle, job states)
+- Need to validate that a status change is allowed before writing
+- Want graph introspection (reachable statuses, allowed targets)
+- Need a lightweight alternative to a full FSM
+- Do NOT need state management, actions, or lifecycle tracking
 
 ### Use Event Bus When:
 - Need decoupled communication between components

@@ -10,11 +10,15 @@ This page provides curated examples and usage patterns. The auto-generated refer
 
 ## Module Overview
 
-The `dataknobs-common` package provides three main modules:
+The `dataknobs-common` package provides these core modules:
 
 - **`dataknobs_common.exceptions`** - Exception hierarchy with context support
 - **`dataknobs_common.registry`** - Generic registry implementations
 - **`dataknobs_common.serialization`** - Serialization protocols and utilities
+- **`dataknobs_common.retry`** - Configurable retry execution with backoff strategies
+- **`dataknobs_common.transitions`** - Stateless transition validation for status graphs
+- **`dataknobs_common.events`** - Event bus for pub/sub messaging
+- **`dataknobs_common.testing`** - Test utilities, markers, and configuration factories
 
 ## Exceptions Module
 
@@ -727,6 +731,293 @@ if is_deserializable(User):
     user = deserialize(User, data)
 ```
 
+## Retry Module
+
+### `BackoffStrategy`
+
+Enum defining backoff algorithms for retry delays.
+
+```python
+class BackoffStrategy(Enum):
+    FIXED = "fixed"
+    LINEAR = "linear"
+    EXPONENTIAL = "exponential"
+    JITTER = "jitter"
+    DECORRELATED = "decorrelated"
+```
+
+**Members:**
+
+- `FIXED` — Constant delay between retries
+- `LINEAR` — Delay increases linearly (`initial_delay * attempt`)
+- `EXPONENTIAL` — Delay multiplied by `backoff_multiplier` each attempt
+- `JITTER` — Exponential backoff with random jitter (controlled by `jitter_range`)
+- `DECORRELATED` — Random delay between `initial_delay` and 3x previous delay
+
+**Example:**
+```python
+from dataknobs_common.retry import BackoffStrategy
+
+strategy = BackoffStrategy.EXPONENTIAL
+strategy = BackoffStrategy("jitter")  # From string value
+```
+
+### `RetryConfig`
+
+Dataclass configuring retry behavior.
+
+```python
+@dataclass
+class RetryConfig:
+    max_attempts: int = 3
+    initial_delay: float = 1.0
+    max_delay: float = 60.0
+    backoff_strategy: BackoffStrategy = BackoffStrategy.EXPONENTIAL
+    backoff_multiplier: float = 2.0
+    jitter_range: float = 0.1
+    retry_on_exceptions: list[type] | None = None
+    retry_on_result: Callable[[Any], bool] | None = None
+    on_retry: Callable[[int, Exception], None] | None = None
+    on_failure: Callable[[Exception], None] | None = None
+```
+
+**Fields:**
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `max_attempts` | `int` | `3` | Maximum execution attempts (including the first) |
+| `initial_delay` | `float` | `1.0` | Base delay in seconds before the first retry |
+| `max_delay` | `float` | `60.0` | Upper bound on delay in seconds |
+| `backoff_strategy` | `BackoffStrategy` | `EXPONENTIAL` | Algorithm for computing delay |
+| `backoff_multiplier` | `float` | `2.0` | Multiplier for exponential/jitter strategies |
+| `jitter_range` | `float` | `0.1` | Fractional jitter range for JITTER strategy (0.1 = +/-10%) |
+| `retry_on_exceptions` | `list[type] \| None` | `None` | Only retry these exception types; others propagate immediately |
+| `retry_on_result` | `Callable \| None` | `None` | Return `True` to trigger retry based on result value |
+| `on_retry` | `Callable \| None` | `None` | Hook called before retry sleep: `(attempt, exception)` |
+| `on_failure` | `Callable \| None` | `None` | Hook called when all attempts exhausted: `(exception)` |
+
+**Example:**
+```python
+from dataknobs_common.retry import RetryConfig, BackoffStrategy
+
+config = RetryConfig(
+    max_attempts=5,
+    initial_delay=0.5,
+    max_delay=30.0,
+    backoff_strategy=BackoffStrategy.JITTER,
+    retry_on_exceptions=[ConnectionError, TimeoutError],
+    on_retry=lambda attempt, exc: logger.warning("Retry %d: %s", attempt, exc),
+)
+```
+
+### `RetryExecutor`
+
+Executes a callable with retry logic and configurable backoff.
+
+```python
+class RetryExecutor:
+    def __init__(self, config: RetryConfig) -> None: ...
+    async def execute(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any: ...
+```
+
+**Constructor:**
+
+- `config` (`RetryConfig`): The retry configuration
+
+**Methods:**
+
+##### `async execute(func, *args, **kwargs) -> Any`
+
+Execute a callable with retry logic. Supports both sync and async callables.
+
+**Parameters:**
+
+- `func` (`Callable`): The callable to execute (sync or async)
+- `*args`: Positional arguments forwarded to func
+- `**kwargs`: Keyword arguments forwarded to func
+
+**Returns:**
+
+- The return value of `func` on a successful attempt
+
+**Raises:**
+
+- The exception from the final failed attempt, or any non-retryable exception immediately
+
+**Example:**
+```python
+from dataknobs_common.retry import RetryExecutor, RetryConfig, BackoffStrategy
+
+config = RetryConfig(
+    max_attempts=3,
+    backoff_strategy=BackoffStrategy.FIXED,
+    initial_delay=1.0,
+)
+executor = RetryExecutor(config)
+
+# Async callable
+result = await executor.execute(fetch_data, url)
+
+# Sync callable (also works from async context)
+result = await executor.execute(parse_json, raw_text)
+```
+
+---
+
+## Transitions Module
+
+### `InvalidTransitionError`
+
+Exception raised when a status transition is not allowed. Extends `OperationError`.
+
+```python
+class InvalidTransitionError(OperationError):
+    def __init__(
+        self,
+        entity: str,
+        current_status: str,
+        target_status: str,
+        allowed: set[str] | None = None,
+    ) -> None: ...
+```
+
+**Parameters:**
+
+- `entity` (`str`): Name of the entity or transition graph (e.g. `"run_status"`)
+- `current_status` (`str`): The current status being transitioned from
+- `target_status` (`str`): The target status that was rejected
+- `allowed` (`set[str] | None`): Valid targets from `current_status`, or `None` if current status is unknown
+
+**Attributes:**
+
+- `entity` (`str`): The entity name
+- `current_status` (`str`): The current status
+- `target_status` (`str`): The rejected target status
+- `allowed` (`set[str] | None`): Allowed targets, or `None` for unknown status
+- `context` (`dict`): Structured context dict with keys `entity`, `current_status`, `target_status`, `allowed` (sorted list)
+
+**Example:**
+```python
+from dataknobs_common.transitions import InvalidTransitionError
+
+try:
+    validator.validate("completed", "running")
+except InvalidTransitionError as e:
+    print(e.entity)          # "order"
+    print(e.current_status)  # "completed"
+    print(e.target_status)   # "running"
+    print(e.allowed)         # set()
+```
+
+### `TransitionValidator`
+
+Stateless validator for declarative transition graphs. Does not manage or store state — the caller owns the current status.
+
+```python
+class TransitionValidator:
+    def __init__(self, name: str, transitions: dict[str, set[str]]) -> None: ...
+```
+
+**Constructor:**
+
+- `name` (`str`): Human-readable name for the graph, used in error messages
+- `transitions` (`dict[str, set[str]]`): Mapping from each status to its allowed target statuses. Statuses with empty sets are terminal.
+
+**Properties:**
+
+##### `name -> str`
+
+The name of this transition graph.
+
+##### `allowed_transitions -> dict[str, set[str]]`
+
+Returns a copy of the full transition graph.
+
+##### `statuses -> set[str]`
+
+All known statuses (sources and targets).
+
+**Methods:**
+
+##### `validate(current_status: str | None, target_status: str) -> None`
+
+Validate a proposed transition.
+
+**Parameters:**
+
+- `current_status` (`str | None`): The current status. If `None`, validation is skipped.
+- `target_status` (`str`): The desired target status.
+
+**Raises:**
+
+- `InvalidTransitionError`: If the transition is not allowed.
+
+**Example:**
+```python
+from dataknobs_common.transitions import TransitionValidator
+
+ORDER = TransitionValidator("order", {
+    "draft":     {"submitted"},
+    "submitted": {"approved", "rejected"},
+    "approved":  {"shipped"},
+    "shipped":   {"delivered"},
+    "rejected":  set(),
+    "delivered":  set(),
+})
+
+ORDER.validate("draft", "submitted")  # ok
+ORDER.validate(None, "submitted")     # ok (skip)
+ORDER.validate("shipped", "draft")    # raises InvalidTransitionError
+```
+
+##### `is_valid(current_status: str | None, target_status: str) -> bool`
+
+Check whether a transition is allowed without raising.
+
+**Parameters:**
+
+- `current_status` (`str | None`): The current status. If `None`, returns `True`.
+- `target_status` (`str`): The desired target status.
+
+**Returns:**
+
+- `True` if the transition is allowed, `False` otherwise.
+
+**Example:**
+```python
+if ORDER.is_valid(current, target):
+    update_status(target)
+else:
+    logger.warning("Invalid transition: %s -> %s", current, target)
+```
+
+##### `get_reachable(from_status: str) -> set[str]`
+
+Compute all statuses reachable from a given status (transitive closure).
+
+**Parameters:**
+
+- `from_status` (`str`): The starting status.
+
+**Returns:**
+
+- Set of all reachable statuses via one or more transitions. Does not include `from_status` itself unless there is a cycle.
+
+**Raises:**
+
+- `InvalidTransitionError`: If `from_status` is not a known status.
+
+**Example:**
+```python
+reachable = ORDER.get_reachable("draft")
+# {"submitted", "approved", "rejected", "shipped", "delivered"}
+
+reachable = ORDER.get_reachable("delivered")
+# set() — terminal status
+```
+
+---
+
 ## Package Information
 
 ### Version
@@ -743,7 +1034,7 @@ The version string for the dataknobs-common package.
 ```python
 from dataknobs_common import __version__
 
-print(__version__)  # "1.0.1"
+print(__version__)  # "1.3.0"
 ```
 
 ## Import Patterns
@@ -781,6 +1072,19 @@ from dataknobs_common import (
     is_serializable,
     is_deserializable,
 )
+
+# Retry
+from dataknobs_common import (
+    BackoffStrategy,
+    RetryConfig,
+    RetryExecutor,
+)
+
+# Transitions
+from dataknobs_common import (
+    InvalidTransitionError,
+    TransitionValidator,
+)
 ```
 
 ### Module Imports
@@ -790,6 +1094,8 @@ from dataknobs_common import (
 from dataknobs_common import exceptions
 from dataknobs_common import registry
 from dataknobs_common import serialization
+from dataknobs_common import retry
+from dataknobs_common import transitions
 ```
 
 ## Type Annotations
@@ -1037,6 +1343,12 @@ The Common package has minimal dependencies:
 - **Standard library only**: No external dependencies
 
 ## Changelog
+
+### Version 1.3.0
+- Added `dataknobs_common.retry` module (BackoffStrategy, RetryConfig, RetryExecutor)
+- Added `dataknobs_common.transitions` module (InvalidTransitionError, TransitionValidator)
+- Retry primitives extracted from `dataknobs_fsm.patterns.error_recovery` (zero FSM dependency)
+- FSM module re-exports from common for backward compatibility
 
 ### Version 1.0.1
 - Added Registry, CachedRegistry, AsyncRegistry implementations
