@@ -5,6 +5,8 @@ This package provides shared functionality used across all dataknobs packages:
 - **Exceptions**: Unified exception hierarchy with context support
 - **Registry**: Generic registry pattern for managing named items
 - **Serialization**: Protocols and utilities for to_dict/from_dict patterns
+- **Retry**: Configurable retry execution with backoff strategies
+- **Transitions**: Stateless transition validation for status graphs
 - **Events**: Event bus abstraction for pub/sub messaging
 - **Testing**: Test utilities, markers, and configuration factories
 
@@ -47,6 +49,15 @@ from dataknobs_common.exceptions import (
     SerializationError,
     TimeoutError,
     ValidationError,
+)
+from dataknobs_common.retry import (
+    BackoffStrategy,
+    RetryConfig,
+    RetryExecutor,
+)
+from dataknobs_common.transitions import (
+    InvalidTransitionError,
+    TransitionValidator,
 )
 from dataknobs_common.registry import (
     AsyncRegistry,
@@ -104,6 +115,13 @@ __all__ = [
     "ConcurrencyError",
     "SerializationError",
     "TimeoutError",
+    # Retry
+    "BackoffStrategy",
+    "RetryConfig",
+    "RetryExecutor",
+    # Transitions
+    "InvalidTransitionError",
+    "TransitionValidator",
     # Registry
     "Registry",
     "CachedRegistry",

@@ -2,6 +2,9 @@
 
 This module provides pre-configured FSM patterns for error recovery and resilience,
 including retry strategies, circuit breakers, fallback mechanisms, and compensation.
+
+The core retry primitives (BackoffStrategy, RetryConfig, RetryExecutor) are provided
+by ``dataknobs_common.retry`` and re-exported here for backward compatibility.
 """
 
 from typing import Any, Dict, List, Callable
@@ -10,8 +13,9 @@ from enum import Enum
 import asyncio
 import time
 from datetime import datetime
-import random
 import logging
+
+from dataknobs_common.retry import BackoffStrategy, RetryConfig, RetryExecutor
 
 from ..api.simple import SimpleFSM
 from ..core.data_modes import DataHandlingMode
@@ -28,34 +32,6 @@ class RecoveryStrategy(Enum):
     DEADLINE = "deadline"  # Deadline-based timeout
     BULKHEAD = "bulkhead"  # Isolate failures
     CACHE = "cache"  # Use cached results
-
-
-class BackoffStrategy(Enum):
-    """Backoff strategies for retries."""
-    FIXED = "fixed"  # Fixed delay
-    LINEAR = "linear"  # Linear increase
-    EXPONENTIAL = "exponential"  # Exponential increase
-    JITTER = "jitter"  # Random jitter added
-    DECORRELATED = "decorrelated"  # Decorrelated jitter
-
-
-@dataclass
-class RetryConfig:
-    """Configuration for retry strategy."""
-    max_attempts: int = 3
-    initial_delay: float = 1.0  # seconds
-    max_delay: float = 60.0  # seconds
-    backoff_strategy: BackoffStrategy = BackoffStrategy.EXPONENTIAL
-    backoff_multiplier: float = 2.0
-    jitter_range: float = 0.1  # 10% jitter
-    
-    # Retry conditions
-    retry_on_exceptions: List[type] | None = None
-    retry_on_result: Callable[[Any], bool] | None = None
-    
-    # Hooks
-    on_retry: Callable[[int, Exception], None] | None = None
-    on_failure: Callable[[Exception], None] | None = None
 
 
 @dataclass
@@ -146,85 +122,6 @@ class ErrorRecoveryConfig:
     log_errors: bool = True
     metrics_enabled: bool = True
     alert_threshold: int = 10  # Errors before alerting
-
-
-class RetryExecutor:
-    """Executor for retry logic."""
-    
-    def __init__(self, config: RetryConfig):
-        self.config = config
-        
-    def _calculate_delay(self, attempt: int, previous_delay: float = None) -> float:
-        """Calculate delay for next retry."""
-        if self.config.backoff_strategy == BackoffStrategy.FIXED:
-            delay = self.config.initial_delay
-            
-        elif self.config.backoff_strategy == BackoffStrategy.LINEAR:
-            delay = self.config.initial_delay * attempt
-            
-        elif self.config.backoff_strategy == BackoffStrategy.EXPONENTIAL:
-            delay = self.config.initial_delay * (self.config.backoff_multiplier ** (attempt - 1))
-            
-        elif self.config.backoff_strategy == BackoffStrategy.JITTER:
-            base_delay = self.config.initial_delay * (self.config.backoff_multiplier ** (attempt - 1))
-            jitter = random.uniform(-self.config.jitter_range, self.config.jitter_range)
-            delay = base_delay * (1 + jitter)
-            
-        elif self.config.backoff_strategy == BackoffStrategy.DECORRELATED:
-            if previous_delay is None:
-                delay = self.config.initial_delay  # type: ignore[unreachable]
-            else:
-                delay = random.uniform(self.config.initial_delay, previous_delay * 3)
-                
-        else:
-            delay = self.config.initial_delay  # type: ignore[unreachable]
-            
-        return min(delay, self.config.max_delay)
-        
-    async def execute(self, func: Callable, *args: Any, **kwargs: Any) -> Any:
-        """Execute function with retry logic."""
-        last_exception = None
-        previous_delay = None
-        
-        for attempt in range(1, self.config.max_attempts + 1):
-            try:
-                result = await func(*args, **kwargs) if asyncio.iscoroutinefunction(func) else func(*args, **kwargs)
-                
-                # Check if should retry based on result
-                if self.config.retry_on_result and self.config.retry_on_result(result):
-                    if attempt < self.config.max_attempts:
-                        delay = self._calculate_delay(attempt, previous_delay)  # type: ignore
-                        previous_delay = delay
-                        await asyncio.sleep(delay)
-                        continue
-                        
-                return result
-                
-            except Exception as e:
-                last_exception = e
-                
-                # Check if should retry this exception
-                if self.config.retry_on_exceptions:
-                    if not any(isinstance(e, exc_type) for exc_type in self.config.retry_on_exceptions):
-                        raise
-                        
-                if attempt < self.config.max_attempts:
-                    # Calculate delay
-                    delay = self._calculate_delay(attempt, previous_delay)  # type: ignore
-                    previous_delay = delay
-                    
-                    # Call retry hook
-                    if self.config.on_retry:
-                        self.config.on_retry(attempt, e)
-                        
-                    await asyncio.sleep(delay)
-                else:
-                    # Final failure
-                    if self.config.on_failure:
-                        self.config.on_failure(e)
-                    raise
-                    
-        raise last_exception  # type: ignore
 
 
 class CircuitBreakerState(Enum):
