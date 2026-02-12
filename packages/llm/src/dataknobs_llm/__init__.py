@@ -39,7 +39,7 @@ from dataknobs_llm.testing import (
     ResponseSequenceBuilder,
 )
 
-__version__ = "0.3.4"
+__version__ = "0.3.5"
 
 __all__ = [
     # Base classes
