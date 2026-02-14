@@ -24,8 +24,6 @@ dependencies = [
     "dataknobs-common>=1.0.1",
     "dataknobs-utils>=0.1.0",
     "dataknobs-config>=0.1.0",
-    "boto3>=1.38.27",
-    "moto>=5.1.10",
     "numpy>=1.24.0",
 ]
 
@@ -91,8 +89,10 @@ dev = [
     "aioboto3>=15.0.0",
     "aiosqlite>=0.19.0",
     "asyncpg>=0.30.0",
+    "boto3>=1.26.0",
     "duckdb>=0.9.0",
     "elasticsearch[async]>=8.11.0,<9.0.0",
+    "moto>=5.1.10",
     "pytest-asyncio>=1.1.0",
     "pytest-cov>=6.2.1",
     "ruff>=0.12.8",
