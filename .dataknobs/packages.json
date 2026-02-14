@@ -5,7 +5,7 @@
       "name": "bots",
       "pypi_name": "dataknobs-bots",
       "description": "Configuration-driven AI agents with RAG, memory, and reasoning strategies",
-      "version": "0.4.4",
+      "version": "0.4.5",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -32,7 +32,7 @@
       "name": "data",
       "pypi_name": "dataknobs-data",
       "description": "Unified data abstraction layer with multiple backends",
-      "version": "0.4.6",
+      "version": "0.4.7",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -68,7 +68,7 @@
       "name": "utils",
       "pypi_name": "dataknobs-utils",
       "description": "Utilities for file I/O, JSON processing, HTTP requests, and integrations",
-      "version": "1.2.3",
+      "version": "1.2.4",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -77,7 +77,7 @@
       "name": "xization",
       "pypi_name": "dataknobs-xization",
       "description": "Text normalization, tokenization, annotation, and markdown chunking library",
-      "version": "1.2.4",
+      "version": "1.2.5",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
