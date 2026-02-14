@@ -305,13 +305,13 @@ CMD ["python", "app.py"]
 ```text
 # requirements.txt
 dataknobs-config>=0.3.4
-dataknobs-data>=0.4.6
+dataknobs-data>=0.4.7
 dataknobs-fsm>=0.1.9
 dataknobs-llm>=0.3.5
-dataknobs-bots>=0.4.4
+dataknobs-bots>=0.4.5
 dataknobs-structures>=1.0.5
-dataknobs-utils>=1.2.3
-dataknobs-xization>=1.2.4
+dataknobs-utils>=1.2.4
+dataknobs-xization>=1.2.5
 
 # Optional dependencies
 psycopg2-binary>=2.9.0
