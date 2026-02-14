@@ -11,6 +11,8 @@ These apply to all work in this project. See the global `~/.claude/CLAUDE.md` fo
 3. **Abstraction-first design** - interfaces/protocols before implementations; configurable via config
 4. **Mock prohibition in tests** - use EchoProvider, SyncMemoryDatabase, etc. (see below)
 5. **Ollama-first for LLM defaults** - default to local models; commercial providers via config
+6. **Security constraints are non-negotiable** - input validation, HTTP safety, path traversal prevention, sensitive data protection (see `rules/security.md`)
+7. **Dependency management** - permissive licenses only, selection criteria enforced, no duplication (see `rules/dependency-management.md`)
 
 ### This Project's Special Role
 
@@ -105,3 +107,17 @@ If a new testing construct is needed, **add it to the appropriate dataknobs pack
 5. **Add tests using real constructs** from this project (not mocks)
 6. **Update documentation in BOTH locations** (package docs + MkDocs site docs)
 7. **Verify documentation** against the actual code
+
+## Definition of Done
+
+Each task is complete when ALL of the following are true:
+
+1. All tasks implemented and acceptance criteria verified
+2. No new code duplicates existing functionality (reuse hierarchy followed)
+3. New code is modular, injectable, and reusable
+4. All function parameters and return types have type hints (modern syntax: `list[str]` not `List[str]`, `X | None` not `Optional[X]`)
+5. Type checker and linter pass with no errors (`bin/dk check <package>`)
+6. Tests pass using real constructs, not mocks (`bin/dk test <package>`)
+7. Security constraints satisfied (input validation, no leaked credentials, safe HTTP/file ops)
+8. No `TODO`, `FIXME`, placeholder comments, or commented-out code left behind
+9. Documentation updated in both locations and verified against code
