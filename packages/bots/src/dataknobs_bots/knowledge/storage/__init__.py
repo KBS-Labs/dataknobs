@@ -6,7 +6,7 @@ Use create_knowledge_backend() to create a backend from configuration.
 Available Backends:
     - InMemoryKnowledgeBackend: For testing (no external dependencies)
     - FileKnowledgeBackend: For local development (file system)
-    - S3KnowledgeBackend: For production (Amazon S3 or compatible)
+    - S3KnowledgeBackend: For production (Amazon S3 or compatible, requires boto3)
 
 Example:
     ```python
@@ -41,7 +41,13 @@ from .backend import KnowledgeResourceBackend
 from .file import FileKnowledgeBackend
 from .memory import InMemoryKnowledgeBackend
 from .models import IngestionStatus, KnowledgeBaseInfo, KnowledgeFile
-from .s3 import S3KnowledgeBackend
+
+
+def _get_s3_backend_class() -> type:
+    """Lazily import S3KnowledgeBackend to avoid requiring boto3 at import time."""
+    from .s3 import S3KnowledgeBackend
+
+    return S3KnowledgeBackend
 
 
 def create_knowledge_backend(
@@ -93,12 +99,20 @@ def create_knowledge_backend(
     elif backend_type_lower == "file":
         return FileKnowledgeBackend.from_config(config)
     elif backend_type_lower == "s3":
-        return S3KnowledgeBackend.from_config(config)
+        s3_cls = _get_s3_backend_class()
+        return s3_cls.from_config(config)
     else:
         raise ValueError(
             f"Unknown knowledge backend type: {backend_type}. "
             f"Available types: memory, file, s3"
         )
+
+
+def __getattr__(name: str) -> type:
+    """Lazy module-level attribute access for S3KnowledgeBackend."""
+    if name == "S3KnowledgeBackend":
+        return _get_s3_backend_class()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 __all__ = [
