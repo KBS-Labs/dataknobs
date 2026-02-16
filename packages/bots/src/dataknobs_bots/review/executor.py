@@ -26,12 +26,66 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, Callable
 
-from ..artifacts.models import Artifact, ArtifactReview
+from ..artifacts.models import Artifact
 from .personas import BUILT_IN_PERSONAS, ReviewPersona
 from .protocol import ReviewProtocolDefinition
 
 if TYPE_CHECKING:
-    from ..artifacts.models import ArtifactDefinition
+    from ..artifacts.models import ArtifactTypeDefinition as ArtifactDefinition
+
+# NOTE: ArtifactReview was removed from artifacts.models when the rubric
+# system replaced persona-based reviews. This local import keeps the
+# deprecated review package functional until it is fully removed.
+import time
+import uuid
+from dataclasses import dataclass, field
+
+
+def _generate_review_id() -> str:
+    return f"rev_{uuid.uuid4().hex[:12]}"
+
+
+@dataclass
+class ArtifactReview:
+    """Deprecated: use RubricEvaluation from dataknobs_bots.rubrics instead."""
+
+    id: str = field(default_factory=_generate_review_id)
+    artifact_id: str = ""
+    reviewer: str = ""
+    review_type: str = "persona"
+    passed: bool = False
+    score: float | None = None
+    feedback: list[str] = field(default_factory=list)
+    suggestions: list[str] = field(default_factory=list)
+    issues: list[str] = field(default_factory=list)
+    timestamp: float = field(default_factory=time.time)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id, "artifact_id": self.artifact_id,
+            "reviewer": self.reviewer, "review_type": self.review_type,
+            "passed": self.passed, "score": self.score,
+            "feedback": self.feedback, "suggestions": self.suggestions,
+            "issues": self.issues, "timestamp": self.timestamp,
+            "metadata": self.metadata,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ArtifactReview:
+        return cls(
+            id=data.get("id", _generate_review_id()),
+            artifact_id=data.get("artifact_id", ""),
+            reviewer=data.get("reviewer", ""),
+            review_type=data.get("review_type", "persona"),
+            passed=data.get("passed", False),
+            score=data.get("score"),
+            feedback=data.get("feedback", []),
+            suggestions=data.get("suggestions", []),
+            issues=data.get("issues", []),
+            timestamp=data.get("timestamp", time.time()),
+            metadata=data.get("metadata", {}),
+        )
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +321,9 @@ class ReviewExecutor:
         prompt = persona.prompt_template.format(
             artifact_type=artifact.type,
             artifact_name=artifact.name,
-            artifact_purpose=artifact.metadata.purpose or "Not specified",
+            artifact_purpose=getattr(
+                getattr(artifact, "metadata", None), "purpose", None
+            ) or "Not specified",
             artifact_content=content_str,
         )
 
@@ -480,7 +536,10 @@ class ReviewExecutor:
         # Get review protocols from artifact definition
         protocol_ids: list[str] = []
         if artifact_definition:
-            protocol_ids = artifact_definition.reviews
+            protocol_ids = getattr(
+                artifact_definition, "reviews",
+                getattr(artifact_definition, "rubrics", []),
+            )
 
         if not protocol_ids:
             logger.info("No reviews configured for artifact: %s", artifact.id)

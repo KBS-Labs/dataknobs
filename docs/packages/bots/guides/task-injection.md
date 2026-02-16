@@ -444,5 +444,5 @@ result = injector.trigger("artifact_created", context)
 ## Related Documentation
 
 - [Artifact System](artifacts.md) - Managing artifacts
-- [Review System](reviews.md) - Validating artifacts
+- [Rubric Evaluation](rubrics.md) - Evaluating artifacts with structured rubrics
 - [Wizard Observability](observability.md) - Task tracking

@@ -1,11 +1,15 @@
-"""Tests for artifact tools."""
+"""Tests for artifact tools (async registry API)."""
 
-import asyncio
-from unittest.mock import MagicMock
+from __future__ import annotations
+
+from typing import Any
 
 import pytest
 
-from dataknobs_bots.artifacts.models import Artifact
+from dataknobs_data.backends.memory import AsyncMemoryDatabase
+
+from dataknobs_bots.artifacts.models import ArtifactStatus
+from dataknobs_bots.artifacts.provenance import create_provenance
 from dataknobs_bots.artifacts.registry import ArtifactRegistry
 from dataknobs_bots.artifacts.tools import (
     CreateArtifactTool,
@@ -14,320 +18,316 @@ from dataknobs_bots.artifacts.tools import (
     SubmitForReviewTool,
     UpdateArtifactTool,
 )
-from dataknobs_llm.tools.context import ToolExecutionContext, WizardStateSnapshot
+from dataknobs_llm.tools.context import ToolExecutionContext
+
+
+# --- CreateArtifactTool Tests ---
 
 
 class TestCreateArtifactTool:
-    """Tests for CreateArtifactTool."""
-
-    def test_init(self) -> None:
-        """Test tool initialization."""
-        registry = ArtifactRegistry()
+    async def test_schema_has_required_fields(self) -> None:
+        db = AsyncMemoryDatabase()
+        registry = ArtifactRegistry(db)
         tool = CreateArtifactTool(artifact_registry=registry)
 
         assert tool.name == "create_artifact"
-        assert "Create" in tool.description or "create" in tool.description
+        assert "content" in tool.schema["required"]
+        assert "name" in tool.schema["required"]
 
-    def test_schema(self) -> None:
-        """Test tool schema."""
-        registry = ArtifactRegistry()
-        tool = CreateArtifactTool(artifact_registry=registry)
-
-        schema = tool.schema
-        assert schema["type"] == "object"
-        assert "content" in schema["properties"]
-        assert "name" in schema["properties"]
-        assert "content" in schema["required"]
-        assert "name" in schema["required"]
-
-    def test_execute_basic(self) -> None:
-        """Test basic artifact creation."""
-        registry = ArtifactRegistry()
+    async def test_creates_artifact(self) -> None:
+        db = AsyncMemoryDatabase()
+        registry = ArtifactRegistry(db)
         tool = CreateArtifactTool(artifact_registry=registry)
         context = ToolExecutionContext.empty()
 
-        result = asyncio.run(
-            tool.execute_with_context(
-                context,
-                content={"questions": ["Q1", "Q2"]},
-                name="Test Questions",
-            )
+        result = await tool.execute_with_context(
+            context,
+            content={"questions": ["Q1", "Q2"]},
+            name="Test Questions",
         )
 
         assert "artifact_id" in result
         assert result["status"] == "draft"
         assert result["name"] == "Test Questions"
 
-    def test_execute_with_wizard_context(self) -> None:
-        """Test artifact creation with wizard context."""
-        registry = ArtifactRegistry()
-        tool = CreateArtifactTool(artifact_registry=registry)
-
-        wizard_state = WizardStateSnapshot(
-            current_stage="build_questions",
-            collected_data={"subject": "math"},
-        )
-        context = ToolExecutionContext(wizard_state=wizard_state)
-
-        result = asyncio.run(
-            tool.execute_with_context(
-                context,
-                content={"questions": ["Q1"]},
-                name="Math Questions",
-            )
-        )
-
-        assert result["artifact_id"]
-        # Check artifact was created with stage
-        artifact = registry.get(result["artifact_id"])
+        artifact = await registry.get(result["artifact_id"])
         assert artifact is not None
-        assert artifact.metadata.stage == "build_questions"
+        assert artifact.content["questions"] == ["Q1", "Q2"]
 
-    def test_execute_with_definition_id(self) -> None:
-        """Test artifact creation with definition ID."""
-        registry = ArtifactRegistry()
+    async def test_creates_with_type_and_tags(self) -> None:
+        db = AsyncMemoryDatabase()
+        registry = ArtifactRegistry(db)
         tool = CreateArtifactTool(artifact_registry=registry)
         context = ToolExecutionContext.empty()
 
-        result = asyncio.run(
-            tool.execute_with_context(
-                context,
-                content={"data": "value"},
-                name="Test",
-                definition_id="test_def",
-                purpose="Testing purpose",
-            )
+        result = await tool.execute_with_context(
+            context,
+            content={"data": "value"},
+            name="Config",
+            artifact_type="config",
+            tags=["system"],
         )
 
-        artifact = registry.get(result["artifact_id"])
+        artifact = await registry.get(result["artifact_id"])
         assert artifact is not None
-        assert artifact.definition_id == "test_def"
-        assert artifact.metadata.purpose == "Testing purpose"
+        assert artifact.type == "config"
+        assert "system" in artifact.tags
+
+    async def test_includes_user_provenance(self) -> None:
+        db = AsyncMemoryDatabase()
+        registry = ArtifactRegistry(db)
+        tool = CreateArtifactTool(artifact_registry=registry)
+        context = ToolExecutionContext(user_id="alice")
+
+        result = await tool.execute_with_context(
+            context,
+            content={"data": "value"},
+            name="User Artifact",
+        )
+
+        artifact = await registry.get(result["artifact_id"])
+        assert artifact is not None
+        assert artifact.provenance.created_by == "user:alice"
+
+
+# --- UpdateArtifactTool Tests ---
 
 
 class TestUpdateArtifactTool:
-    """Tests for UpdateArtifactTool."""
-
-    def test_init(self) -> None:
-        """Test tool initialization."""
-        registry = ArtifactRegistry()
+    async def test_schema_has_required_fields(self) -> None:
+        db = AsyncMemoryDatabase()
+        registry = ArtifactRegistry(db)
         tool = UpdateArtifactTool(artifact_registry=registry)
 
         assert tool.name == "update_artifact"
+        assert "artifact_id" in tool.schema["required"]
+        assert "content" in tool.schema["required"]
 
-    def test_execute_update(self) -> None:
-        """Test artifact update."""
-        registry = ArtifactRegistry()
-        artifact = registry.create(content={"v": 1}, name="Test")
+    async def test_updates_artifact(self) -> None:
+        db = AsyncMemoryDatabase()
+        registry = ArtifactRegistry(db)
         tool = UpdateArtifactTool(artifact_registry=registry)
         context = ToolExecutionContext.empty()
 
-        result = asyncio.run(
-            tool.execute_with_context(
-                context,
-                artifact_id=artifact.id,
-                content={"v": 2},
-            )
+        # Create initial artifact
+        artifact = await registry.create(
+            artifact_type="content",
+            name="Original",
+            content={"v": 1},
         )
 
-        assert result["artifact_id"] != artifact.id  # New version
-        assert result["previous_id"] == artifact.id
-        assert result["version"] == 2
+        result = await tool.execute_with_context(
+            context,
+            artifact_id=artifact.id,
+            content={"v": 2},
+            reason="Updated content",
+        )
 
-    def test_execute_not_found(self) -> None:
-        """Test update with non-existent artifact."""
-        registry = ArtifactRegistry()
+        assert result["artifact_id"] == artifact.id
+        assert result["status"] == "draft"
+
+        updated = await registry.get(artifact.id)
+        assert updated is not None
+        assert updated.content == {"v": 2}
+        assert updated.version != "1.0.0"
+
+    async def test_update_not_found(self) -> None:
+        db = AsyncMemoryDatabase()
+        registry = ArtifactRegistry(db)
         tool = UpdateArtifactTool(artifact_registry=registry)
         context = ToolExecutionContext.empty()
 
-        result = asyncio.run(
-            tool.execute_with_context(
-                context,
-                artifact_id="nonexistent",
-                content={"v": 1},
-            )
+        result = await tool.execute_with_context(
+            context,
+            artifact_id="nonexistent",
+            content={"v": 1},
         )
 
         assert "error" in result
 
 
-class TestQueryArtifactsTool:
-    """Tests for QueryArtifactsTool."""
+# --- QueryArtifactsTool Tests ---
 
-    def test_init(self) -> None:
-        """Test tool initialization."""
-        registry = ArtifactRegistry()
+
+class TestQueryArtifactsTool:
+    async def test_schema(self) -> None:
+        db = AsyncMemoryDatabase()
+        registry = ArtifactRegistry(db)
         tool = QueryArtifactsTool(artifact_registry=registry)
 
         assert tool.name == "query_artifacts"
+        assert "status" in tool.schema["properties"]
 
-    def test_execute_no_filter(self) -> None:
-        """Test query with no filter."""
-        registry = ArtifactRegistry()
-        registry.create(content={"v": 1}, name="Test 1")
-        registry.create(content={"v": 2}, name="Test 2")
+    async def test_query_all(self) -> None:
+        db = AsyncMemoryDatabase()
+        registry = ArtifactRegistry(db)
+        await registry.create(artifact_type="content", name="A", content={"a": 1})
+        await registry.create(artifact_type="content", name="B", content={"b": 2})
+
         tool = QueryArtifactsTool(artifact_registry=registry)
         context = ToolExecutionContext.empty()
 
-        result = asyncio.run(tool.execute_with_context(context))
+        result = await tool.execute_with_context(context)
 
         assert result["count"] == 2
         assert len(result["artifacts"]) == 2
 
-    def test_execute_filter_by_status(self) -> None:
-        """Test query filtering by status."""
-        registry = ArtifactRegistry()
-        a1 = registry.create(content={"v": 1}, name="Test 1")
-        registry.create(content={"v": 2}, name="Test 2")
-        registry.submit_for_review(a1.id)
+    async def test_query_by_type(self) -> None:
+        db = AsyncMemoryDatabase()
+        registry = ArtifactRegistry(db)
+        await registry.create(artifact_type="quiz", name="Q", content={"q": 1})
+        await registry.create(artifact_type="config", name="C", content={"c": 1})
 
         tool = QueryArtifactsTool(artifact_registry=registry)
         context = ToolExecutionContext.empty()
 
-        result = asyncio.run(
-            tool.execute_with_context(context, status="pending_review")
+        result = await tool.execute_with_context(
+            context, artifact_type="quiz"
         )
 
         assert result["count"] == 1
-        assert result["artifacts"][0]["status"] == "pending_review"
+        assert result["artifacts"][0]["type"] == "quiz"
 
-    def test_execute_filter_by_stage(self) -> None:
-        """Test query filtering by stage."""
-        registry = ArtifactRegistry()
-        registry.create(content={"v": 1}, name="Test 1", stage="stage_a")
-        registry.create(content={"v": 2}, name="Test 2", stage="stage_b")
+    async def test_query_by_tags(self) -> None:
+        db = AsyncMemoryDatabase()
+        registry = ArtifactRegistry(db)
+        await registry.create(
+            artifact_type="content", name="Tagged", content={"x": 1},
+            tags=["math"],
+        )
+        await registry.create(
+            artifact_type="content", name="Untagged", content={"x": 2},
+        )
 
         tool = QueryArtifactsTool(artifact_registry=registry)
         context = ToolExecutionContext.empty()
 
-        result = asyncio.run(
-            tool.execute_with_context(context, stage="stage_a")
-        )
+        result = await tool.execute_with_context(context, tags=["math"])
 
         assert result["count"] == 1
-        assert result["artifacts"][0]["stage"] == "stage_a"
+        assert result["artifacts"][0]["name"] == "Tagged"
 
-    def test_execute_include_content(self) -> None:
-        """Test query with content included."""
-        registry = ArtifactRegistry()
-        registry.create(content={"data": "value"}, name="Test")
+    async def test_query_include_content(self) -> None:
+        db = AsyncMemoryDatabase()
+        registry = ArtifactRegistry(db)
+        await registry.create(
+            artifact_type="content", name="A", content={"data": "value"}
+        )
 
         tool = QueryArtifactsTool(artifact_registry=registry)
         context = ToolExecutionContext.empty()
 
-        result = asyncio.run(
-            tool.execute_with_context(context, include_content=True)
-        )
+        result = await tool.execute_with_context(context, include_content=True)
 
         assert "content" in result["artifacts"][0]
-        assert result["artifacts"][0]["content"] == {"data": "value"}
+        assert result["artifacts"][0]["content"]["data"] == "value"
+
+
+# --- SubmitForReviewTool Tests ---
 
 
 class TestSubmitForReviewTool:
-    """Tests for SubmitForReviewTool."""
-
-    def test_init(self) -> None:
-        """Test tool initialization."""
-        registry = ArtifactRegistry()
+    async def test_schema(self) -> None:
+        db = AsyncMemoryDatabase()
+        registry = ArtifactRegistry(db)
         tool = SubmitForReviewTool(artifact_registry=registry)
 
         assert tool.name == "submit_for_review"
+        assert "artifact_id" in tool.schema["required"]
 
-    def test_execute_submit(self) -> None:
-        """Test submitting artifact for review."""
-        registry = ArtifactRegistry()
-        artifact = registry.create(content={"v": 1}, name="Test")
-        tool = SubmitForReviewTool(artifact_registry=registry)
-        context = ToolExecutionContext.empty()
-
-        result = asyncio.run(
-            tool.execute_with_context(context, artifact_id=artifact.id)
+    async def test_submits_artifact(self) -> None:
+        db = AsyncMemoryDatabase()
+        registry = ArtifactRegistry(db)
+        artifact = await registry.create(
+            artifact_type="content", name="Test", content={"v": 1}
         )
 
-        assert result["status"] == "pending_review"
-        assert registry.get(artifact.id).status == "pending_review"
-
-    def test_execute_not_found(self) -> None:
-        """Test submit with non-existent artifact."""
-        registry = ArtifactRegistry()
         tool = SubmitForReviewTool(artifact_registry=registry)
         context = ToolExecutionContext.empty()
 
-        result = asyncio.run(
-            tool.execute_with_context(context, artifact_id="nonexistent")
+        result = await tool.execute_with_context(
+            context, artifact_id=artifact.id
+        )
+
+        assert result["artifact_id"] == artifact.id
+        assert "evaluations" in result
+
+    async def test_submit_not_found(self) -> None:
+        db = AsyncMemoryDatabase()
+        registry = ArtifactRegistry(db)
+        tool = SubmitForReviewTool(artifact_registry=registry)
+        context = ToolExecutionContext.empty()
+
+        result = await tool.execute_with_context(
+            context, artifact_id="nonexistent"
         )
 
         assert "error" in result
+
+
+# --- GetArtifactTool Tests ---
 
 
 class TestGetArtifactTool:
-    """Tests for GetArtifactTool."""
-
-    def test_init(self) -> None:
-        """Test tool initialization."""
-        registry = ArtifactRegistry()
+    async def test_schema(self) -> None:
+        db = AsyncMemoryDatabase()
+        registry = ArtifactRegistry(db)
         tool = GetArtifactTool(artifact_registry=registry)
 
         assert tool.name == "get_artifact"
+        assert "artifact_id" in tool.schema["required"]
 
-    def test_execute_get(self) -> None:
-        """Test getting an artifact."""
-        registry = ArtifactRegistry()
-        artifact = registry.create(
-            content={"data": "value"},
-            name="Test",
-            purpose="Testing",
+    async def test_gets_artifact(self) -> None:
+        db = AsyncMemoryDatabase()
+        registry = ArtifactRegistry(db)
+        artifact = await registry.create(
+            artifact_type="content",
+            name="Test Doc",
+            content={"body": "hello"},
+            tags=["doc"],
         )
+
         tool = GetArtifactTool(artifact_registry=registry)
         context = ToolExecutionContext.empty()
 
-        result = asyncio.run(
-            tool.execute_with_context(context, artifact_id=artifact.id)
+        result = await tool.execute_with_context(
+            context, artifact_id=artifact.id
         )
 
         assert result["id"] == artifact.id
-        assert result["name"] == "Test"
-        assert result["content"] == {"data": "value"}
-        assert result["metadata"]["purpose"] == "Testing"
+        assert result["name"] == "Test Doc"
+        assert result["content"]["body"] == "hello"
+        assert result["status"] == "draft"
+        assert "provenance" in result
+        assert result["tags"] == ["doc"]
 
-    def test_execute_not_found(self) -> None:
-        """Test getting non-existent artifact."""
-        registry = ArtifactRegistry()
+    async def test_get_not_found(self) -> None:
+        db = AsyncMemoryDatabase()
+        registry = ArtifactRegistry(db)
         tool = GetArtifactTool(artifact_registry=registry)
         context = ToolExecutionContext.empty()
 
-        result = asyncio.run(
-            tool.execute_with_context(context, artifact_id="nonexistent")
+        result = await tool.execute_with_context(
+            context, artifact_id="nonexistent"
         )
 
         assert "error" in result
 
-    def test_execute_with_reviews(self) -> None:
-        """Test getting artifact with reviews."""
-        from dataknobs_bots.artifacts.models import ArtifactReview
-
-        registry = ArtifactRegistry()
-        artifact = registry.create(content={"v": 1}, name="Test")
-        review = ArtifactReview(
-            artifact_id=artifact.id,
-            reviewer="adversarial",
-            passed=True,
-            score=0.85,
+    async def test_get_with_evaluations(self) -> None:
+        db = AsyncMemoryDatabase()
+        registry = ArtifactRegistry(db)
+        artifact = await registry.create(
+            artifact_type="content",
+            name="Test",
+            content={"v": 1},
         )
-        registry.add_review(artifact.id, review)
 
         tool = GetArtifactTool(artifact_registry=registry)
         context = ToolExecutionContext.empty()
 
-        result = asyncio.run(
-            tool.execute_with_context(
-                context,
-                artifact_id=artifact.id,
-                include_reviews=True,
-            )
+        result = await tool.execute_with_context(
+            context, artifact_id=artifact.id, include_evaluations=True
         )
 
-        assert "reviews" in result
-        assert len(result["reviews"]) == 1
-        assert result["reviews"][0]["passed"] is True
-        assert result["reviews"][0]["score"] == 0.85
+        assert "evaluations" in result
+        assert isinstance(result["evaluations"], list)

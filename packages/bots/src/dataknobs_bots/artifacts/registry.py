@@ -1,693 +1,471 @@
-"""Artifact registry for managing artifacts within conversations.
+"""Artifact registry for managing artifacts with async database backing.
 
 The registry provides:
-- Artifact creation with definition lookup
+- Artifact creation with provenance tracking
 - Versioning (creating new versions preserves history)
-- Status transitions
-- Querying by type, status, stage, etc.
-- Persistence to conversation metadata
-- Lifecycle hooks for artifact events
+- Status transitions enforced by TransitionValidator
+- Rubric-based evaluation via submit_for_review
+- Querying by type, status, tags
 
 Example:
-    >>> # Create registry with definitions from config
-    >>> registry = ArtifactRegistry.from_config(bot_config)
-    >>>
-    >>> # Create an artifact
-    >>> artifact = registry.create(
-    ...     definition_id="assessment_questions",
-    ...     content=questions,
-    ...     stage="build_questions",
+    >>> from dataknobs_data.backends.memory import AsyncMemoryDatabase
+    >>> db = AsyncMemoryDatabase()
+    >>> registry = ArtifactRegistry(db)
+    >>> artifact = await registry.create(
+    ...     artifact_type="content",
+    ...     name="Questions",
+    ...     content={"questions": [...]},
+    ...     provenance=create_provenance("bot:edubot", "generator"),
     ... )
-    >>>
-    >>> # Query artifacts
-    >>> pending = registry.get_pending_review()
-    >>> questions = registry.get_by_definition("assessment_questions")
-    >>>
-    >>> # Create new version
-    >>> updated = registry.update(artifact.id, new_content)
-    >>> assert updated.lineage.version == 2
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable
+from typing import Any, Callable, Awaitable
 
-from .models import (
-    Artifact,
-    ArtifactDefinition,
-    ArtifactMetadata,
-    ArtifactLineage,
-    ArtifactReview,
-    ArtifactStatus,
-    ArtifactType,
-)
+from dataknobs_data import AsyncDatabase, Filter, Operator, Query, Record
 
+from .models import Artifact, ArtifactStatus, ArtifactTypeDefinition, _generate_artifact_id, _now_iso
+from .provenance import ProvenanceRecord, RevisionRecord, create_provenance
+from .transitions import validate_transition
 
 logger = logging.getLogger(__name__)
 
 # Type alias for lifecycle hook callbacks
-LifecycleHook = Callable[..., None]
+LifecycleHook = Callable[[Artifact], Awaitable[None]]
 
 
 class ArtifactRegistry:
-    """Manages artifacts within a conversation context.
+    """Async artifact registry backed by AsyncDatabase.
 
-    The registry provides:
-    - Artifact creation with definition lookup
-    - Versioning (creating new versions preserves history)
-    - Status transitions
-    - Querying by type, status, stage, etc.
-    - Persistence to conversation metadata
+    Manages artifact lifecycle including creation, versioning, status
+    transitions, and rubric-based evaluation.
 
-    Attributes:
-        _artifacts: Dict mapping artifact ID to Artifact
-        _definitions: Dict mapping definition ID to ArtifactDefinition
-        _hooks: Lifecycle hooks for artifact events
+    Args:
+        db: The async database backend for artifact storage.
+        rubric_registry: Optional rubric registry for evaluation lookups.
+        rubric_executor: Optional rubric executor for running evaluations.
+        type_definitions: Optional mapping of type IDs to their definitions.
     """
 
     def __init__(
         self,
-        definitions: dict[str, ArtifactDefinition] | None = None,
+        db: AsyncDatabase,
+        rubric_registry: Any | None = None,
+        rubric_executor: Any | None = None,
+        type_definitions: dict[str, ArtifactTypeDefinition] | None = None,
     ) -> None:
-        """Initialize registry.
+        self._db = db
+        self._rubric_registry = rubric_registry
+        self._rubric_executor = rubric_executor
+        self._type_definitions = type_definitions or {}
+        self._on_create_hooks: list[LifecycleHook] = []
+        self._on_status_change_hooks: list[LifecycleHook] = []
+        self._on_review_complete_hooks: list[LifecycleHook] = []
 
-        Args:
-            definitions: Optional artifact definitions from config
-        """
-        self._artifacts: dict[str, Artifact] = {}
-        self._definitions = definitions or {}
-        self._hooks: dict[str, list[LifecycleHook]] = {
-            "on_create": [],
-            "on_update": [],
-            "on_status_change": [],
-            "on_review": [],
-        }
+    # --- Creation ---
 
-    @classmethod
-    def from_config(cls, config: dict[str, Any]) -> ArtifactRegistry:
-        """Create registry from bot configuration.
-
-        Args:
-            config: Bot configuration with 'artifacts.definitions' section
-
-        Returns:
-            Configured ArtifactRegistry
-        """
-        definitions: dict[str, ArtifactDefinition] = {}
-        artifacts_config = config.get("artifacts", {})
-        for def_id, def_config in artifacts_config.get("definitions", {}).items():
-            definitions[def_id] = ArtifactDefinition.from_config(def_id, def_config)
-        return cls(definitions=definitions)
-
-    # =========================================================================
-    # Definition Management
-    # =========================================================================
-
-    def register_definition(self, definition: ArtifactDefinition) -> None:
-        """Register an artifact definition at runtime.
-
-        Args:
-            definition: ArtifactDefinition to register
-        """
-        self._definitions[definition.id] = definition
-        logger.debug("Registered artifact definition: %s", definition.id)
-
-    def get_definition(self, definition_id: str) -> ArtifactDefinition | None:
-        """Get an artifact definition by ID.
-
-        Args:
-            definition_id: Definition ID to look up
-
-        Returns:
-            ArtifactDefinition if found, None otherwise
-        """
-        return self._definitions.get(definition_id)
-
-    def get_available_definitions(self) -> list[str]:
-        """Get IDs of all registered definitions."""
-        return list(self._definitions.keys())
-
-    # =========================================================================
-    # Artifact Creation
-    # =========================================================================
-
-    def create(
+    async def create(
         self,
-        content: Any,
-        definition_id: str | None = None,
-        artifact_type: ArtifactType = "content",
-        name: str = "",
-        content_type: str = "application/json",
-        stage: str | None = None,
-        task_id: str | None = None,
-        purpose: str | None = None,
-        source_ids: list[str] | None = None,
+        artifact_type: str,
+        name: str,
+        content: dict[str, Any],
+        provenance: ProvenanceRecord | None = None,
         tags: list[str] | None = None,
-        **metadata_kwargs: Any,
     ) -> Artifact:
         """Create a new artifact.
 
-        If definition_id is provided, applies definition defaults.
-
         Args:
-            content: The artifact content
-            definition_id: Optional reference to artifact definition
-            artifact_type: Artifact type (if no definition)
-            name: Human-readable name
-            content_type: MIME type
-            stage: Wizard stage creating this
-            task_id: Task creating this
-            purpose: Why this artifact exists
-            source_ids: IDs of source artifacts
-            tags: Categorization tags
-            **metadata_kwargs: Additional metadata
+            artifact_type: The type of artifact to create.
+            name: Human-readable name.
+            content: The artifact content.
+            provenance: Provenance record. If None, a minimal one is created.
+            tags: Searchable tags. Merged with type definition defaults.
 
         Returns:
-            Created Artifact
+            The created artifact.
         """
-        # Apply definition defaults
-        definition = self._definitions.get(definition_id) if definition_id else None
-        if definition:
-            artifact_type = definition.type
-            name = name or definition.name
-            tags = list(set((tags or []) + definition.tags))
+        type_def = self._type_definitions.get(artifact_type)
 
-        # Build metadata
-        final_tags = list(set(tags or []))
-        metadata = ArtifactMetadata(
-            stage=stage,
-            task_id=task_id,
-            purpose=purpose,
-            tags=final_tags,
-            custom=metadata_kwargs,
+        effective_tags = list(tags or [])
+        rubric_ids: list[str] = []
+        if type_def:
+            effective_tags = list(set(effective_tags + type_def.tags))
+            rubric_ids = list(type_def.rubrics)
+
+        effective_provenance = provenance or create_provenance(
+            created_by="system",
+            creation_method="manual",
         )
 
-        # Build lineage
-        lineage = ArtifactLineage(
-            source_ids=source_ids or [],
-            version=1,
-        )
-
-        # Create artifact
         artifact = Artifact(
+            id=_generate_artifact_id(),
             type=artifact_type,
             name=name,
             content=content,
-            content_type=content_type,
-            status="draft",
-            schema_id=definition.schema_ref if definition else None,
-            metadata=metadata,
-            lineage=lineage,
-            definition_id=definition_id,
+            provenance=effective_provenance,
+            tags=effective_tags,
+            rubric_ids=rubric_ids,
         )
 
-        self._artifacts[artifact.id] = artifact
-        self._trigger_hooks("on_create", artifact)
+        await self._store(artifact)
 
-        # Auto-submit for review if configured
-        if definition and definition.auto_submit_for_review:
-            self.submit_for_review(artifact.id)
+        for hook in self._on_create_hooks:
+            await hook(artifact)
 
         logger.info(
-            "Created artifact",
-            extra={
-                "artifact_id": artifact.id,
-                "type": artifact.type,
-                "definition_id": definition_id,
-            },
+            "Created artifact '%s' (type=%s, id=%s)",
+            name,
+            artifact_type,
+            artifact.id,
         )
 
         return artifact
 
-    # =========================================================================
-    # Artifact Updates
-    # =========================================================================
+    # --- Retrieval ---
 
-    def update(
+    async def get(self, artifact_id: str) -> Artifact | None:
+        """Retrieve an artifact by ID.
+
+        Returns the latest version of the artifact.
+        """
+        record = await self._db.read(artifact_id)
+        if record is None:
+            return None
+        return Artifact.from_dict(record.data)
+
+    async def get_version(
+        self, artifact_id: str, version: str
+    ) -> Artifact | None:
+        """Retrieve a specific version of an artifact."""
+        key = f"{artifact_id}:{version}"
+        record = await self._db.read(key)
+        if record is None:
+            return None
+        return Artifact.from_dict(record.data)
+
+    async def query(
         self,
-        artifact_id: str,
-        content: Any,
-        derived_from: str | None = None,
-    ) -> Artifact:
-        """Create a new version of an artifact.
-
-        The original artifact is marked as superseded.
-        A new artifact is created with incremented version.
+        artifact_type: str | None = None,
+        status: ArtifactStatus | None = None,
+        tags: list[str] | None = None,
+    ) -> list[Artifact]:
+        """Query artifacts by type, status, and/or tags.
 
         Args:
-            artifact_id: ID of artifact to update
-            content: New content
-            derived_from: Description of changes
+            artifact_type: Filter by artifact type.
+            status: Filter by status.
+            tags: Filter by tags (artifact must have all specified tags).
 
         Returns:
-            New Artifact (new version)
+            List of matching artifacts.
+        """
+        filters: list[Filter] = []
+        if artifact_type:
+            filters.append(Filter("type", Operator.EQ, artifact_type))
+        if status:
+            filters.append(Filter("status", Operator.EQ, status.value))
+
+        records = await self._db.search(Query(filters=filters))
+
+        artifacts: list[Artifact] = []
+        seen_ids: set[str] = set()
+        for record in records:
+            data = record.data
+            # Skip versioned records
+            version_key = data.get("_version_key", "")
+            record_key = record.storage_id or record.id
+            if version_key and record_key == version_key:
+                continue
+
+            artifact = Artifact.from_dict(data)
+
+            if tags and not all(t in artifact.tags for t in tags):
+                continue
+
+            if artifact.id not in seen_ids:
+                seen_ids.add(artifact.id)
+                artifacts.append(artifact)
+
+        return artifacts
+
+    # --- Updates ---
+
+    async def revise(
+        self,
+        artifact_id: str,
+        new_content: dict[str, Any],
+        reason: str,
+        triggered_by: str,
+    ) -> Artifact:
+        """Create a new version of an artifact with revised content.
+
+        The old version is marked as superseded. The new version inherits
+        provenance and adds a revision record.
+
+        Args:
+            artifact_id: The artifact to revise.
+            new_content: The updated content.
+            reason: Why the revision was made.
+            triggered_by: Who or what triggered the revision.
+
+        Returns:
+            The new artifact version.
 
         Raises:
-            KeyError: If artifact_id not found
+            ValueError: If the artifact is not found.
         """
-        original = self._artifacts.get(artifact_id)
-        if not original:
-            raise KeyError(f"Artifact not found: {artifact_id}")
+        current = await self.get(artifact_id)
+        if current is None:
+            raise ValueError(f"Artifact '{artifact_id}' not found")
 
-        # Mark original as superseded
-        original.status = "superseded"
+        # Bump version
+        parts = current.version.split(".")
+        parts[-1] = str(int(parts[-1]) + 1)
+        new_version = ".".join(parts)
 
-        # Create new version
-        new_artifact = Artifact(
-            type=original.type,
-            name=original.name,
-            content=content,
-            content_type=original.content_type,
-            status="draft",
-            schema_id=original.schema_id,
-            metadata=ArtifactMetadata(
-                created_by=original.metadata.created_by,
-                stage=original.metadata.stage,
-                task_id=original.metadata.task_id,
-                purpose=original.metadata.purpose,
-                tags=original.metadata.tags.copy(),
-                custom=original.metadata.custom.copy(),
-            ),
-            lineage=ArtifactLineage(
-                parent_id=original.id,
-                source_ids=original.lineage.source_ids.copy(),
-                version=original.lineage.version + 1,
-                derived_from=derived_from,
-            ),
-            definition_id=original.definition_id,
+        # Mark old version as superseded
+        await self.set_status(
+            artifact_id, ArtifactStatus.SUPERSEDED, reason="Superseded by revision"
         )
 
-        self._artifacts[new_artifact.id] = new_artifact
-        self._trigger_hooks("on_update", new_artifact, original)
+        # Create revision record
+        revision = RevisionRecord(
+            previous_version=current.version,
+            reason=reason,
+            changes_summary=f"Revised content for artifact '{current.name}'",
+            triggered_by=triggered_by,
+        )
+
+        # Build new provenance from current
+        new_provenance = ProvenanceRecord.from_dict(current.provenance.to_dict())
+        new_provenance.revision_history.append(revision)
+
+        new_artifact = Artifact(
+            id=artifact_id,
+            type=current.type,
+            name=current.name,
+            version=new_version,
+            status=ArtifactStatus.DRAFT,
+            content=new_content,
+            content_schema=current.content_schema,
+            provenance=new_provenance,
+            tags=list(current.tags),
+            rubric_ids=list(current.rubric_ids),
+        )
+
+        await self._store(new_artifact)
 
         logger.info(
-            "Updated artifact",
-            extra={
-                "artifact_id": new_artifact.id,
-                "original_id": original.id,
-                "version": new_artifact.lineage.version,
-            },
+            "Revised artifact '%s' from v%s to v%s",
+            artifact_id,
+            current.version,
+            new_version,
         )
 
         return new_artifact
 
-    # =========================================================================
-    # Status Transitions
-    # =========================================================================
-
-    def submit_for_review(self, artifact_id: str) -> Artifact:
-        """Submit artifact for review.
-
-        Args:
-            artifact_id: ID of artifact to submit
-
-        Returns:
-            Updated Artifact
-
-        Raises:
-            KeyError: If artifact_id not found
-            ValueError: If artifact not in reviewable state
-        """
-        artifact = self._artifacts.get(artifact_id)
-        if not artifact:
-            raise KeyError(f"Artifact not found: {artifact_id}")
-        if not artifact.is_reviewable:
-            raise ValueError(f"Artifact not reviewable: status={artifact.status}")
-
-        old_status = artifact.status
-        artifact.status = "pending_review"
-        self._trigger_hooks("on_status_change", artifact, old_status, "pending_review")
-
-        logger.debug(
-            "Submitted artifact for review",
-            extra={"artifact_id": artifact_id, "old_status": old_status},
-        )
-
-        return artifact
-
-    def set_status(
+    async def set_status(
         self,
         artifact_id: str,
         status: ArtifactStatus,
-    ) -> Artifact:
-        """Set artifact status directly.
-
-        Args:
-            artifact_id: ID of artifact
-            status: New status
-
-        Returns:
-            Updated Artifact
-
-        Raises:
-            KeyError: If artifact_id not found
-        """
-        artifact = self._artifacts.get(artifact_id)
-        if not artifact:
-            raise KeyError(f"Artifact not found: {artifact_id}")
-
-        old_status = artifact.status
-        artifact.status = status
-        self._trigger_hooks("on_status_change", artifact, old_status, status)
-
-        logger.debug(
-            "Changed artifact status",
-            extra={
-                "artifact_id": artifact_id,
-                "old_status": old_status,
-                "new_status": status,
-            },
-        )
-
-        return artifact
-
-    # =========================================================================
-    # Review Management
-    # =========================================================================
-
-    def add_review(
-        self,
-        artifact_id: str,
-        review: ArtifactReview,
-    ) -> Artifact:
-        """Add a review to an artifact.
-
-        Updates artifact status based on review result and definition thresholds.
-
-        Args:
-            artifact_id: ID of artifact
-            review: Review to add
-
-        Returns:
-            Updated Artifact
-
-        Raises:
-            KeyError: If artifact_id not found
-        """
-        artifact = self._artifacts.get(artifact_id)
-        if not artifact:
-            raise KeyError(f"Artifact not found: {artifact_id}")
-
-        review.artifact_id = artifact_id
-        artifact.reviews.append(review)
-        self._trigger_hooks("on_review", artifact, review)
-
-        # Check if we should update status based on definition
-        definition = (
-            self._definitions.get(artifact.definition_id)
-            if artifact.definition_id
-            else None
-        )
-        if definition:
-            self._evaluate_approval(artifact, definition)
-
-        logger.debug(
-            "Added review to artifact",
-            extra={
-                "artifact_id": artifact_id,
-                "reviewer": review.reviewer,
-                "passed": review.passed,
-            },
-        )
-
-        return artifact
-
-    def _evaluate_approval(
-        self,
-        artifact: Artifact,
-        definition: ArtifactDefinition,
+        reason: str | None = None,
     ) -> None:
-        """Evaluate if artifact should be approved based on reviews.
+        """Update an artifact's status with transition validation.
 
         Args:
-            artifact: Artifact to evaluate
-            definition: Definition with review requirements
+            artifact_id: The artifact to update.
+            status: The target status.
+            reason: Optional reason for the status change.
+
+        Raises:
+            ValueError: If the artifact is not found.
+            InvalidTransitionError: If the transition is not allowed.
         """
-        required_reviews = set(definition.reviews)
-        completed_reviews = {r.reviewer for r in artifact.reviews}
+        artifact = await self.get(artifact_id)
+        if artifact is None:
+            raise ValueError(f"Artifact '{artifact_id}' not found")
 
-        # Check if all required reviews are done
-        if not required_reviews.issubset(completed_reviews):
-            return  # Not all reviews completed yet
+        validate_transition(artifact.status, status)
 
-        # Get relevant reviews (most recent per reviewer)
-        latest_reviews: dict[str, ArtifactReview] = {}
-        for review in artifact.reviews:
-            if review.reviewer in required_reviews:
-                latest_reviews[review.reviewer] = review
+        artifact.status = status
+        artifact.updated_at = _now_iso()
+        await self._store(artifact)
 
-        # Check if all passed or meets threshold
-        if definition.require_all_reviews:
-            all_passed = all(r.passed for r in latest_reviews.values())
-            if all_passed:
-                artifact.status = "approved"
-            else:
-                artifact.status = "needs_revision"
-        else:
-            # Check average score against threshold
-            scores = [
-                r.score for r in latest_reviews.values() if r.score is not None
-            ]
-            if scores:
-                avg_score = sum(scores) / len(scores)
-                if avg_score >= definition.approval_threshold:
-                    artifact.status = "approved"
-                else:
-                    artifact.status = "needs_revision"
+        for hook in self._on_status_change_hooks:
+            await hook(artifact)
 
-    # =========================================================================
-    # Queries
-    # =========================================================================
+        logger.info(
+            "Artifact '%s' status changed to '%s'%s",
+            artifact_id,
+            status.value,
+            f" (reason: {reason})" if reason else "",
+        )
 
-    def get(self, artifact_id: str) -> Artifact | None:
-        """Get artifact by ID.
+    # --- Review Integration ---
+
+    async def submit_for_review(
+        self, artifact_id: str
+    ) -> list[dict[str, Any]]:
+        """Submit an artifact for rubric-based evaluation.
+
+        Transitions the artifact to IN_REVIEW, runs applicable rubrics,
+        then transitions to APPROVED or NEEDS_REVISION based on results.
 
         Args:
-            artifact_id: ID to look up
+            artifact_id: The artifact to evaluate.
 
         Returns:
-            Artifact if found, None otherwise
+            List of evaluation result dicts.
+
+        Raises:
+            ValueError: If the artifact is not found or review components
+                are not configured.
         """
-        return self._artifacts.get(artifact_id)
+        artifact = await self.get(artifact_id)
+        if artifact is None:
+            raise ValueError(f"Artifact '{artifact_id}' not found")
 
-    def get_by_definition(self, definition_id: str) -> list[Artifact]:
-        """Get all artifacts for a definition.
+        # Transition to pending_review then in_review
+        if artifact.status == ArtifactStatus.DRAFT:
+            await self.set_status(artifact_id, ArtifactStatus.PENDING_REVIEW)
+            artifact = await self.get(artifact_id)
+            if artifact is None:
+                raise ValueError(f"Artifact '{artifact_id}' not found after status update")
+        if artifact.status in (
+            ArtifactStatus.PENDING_REVIEW,
+            ArtifactStatus.NEEDS_REVISION,
+        ):
+            artifact = await self.get(artifact_id)
+            if artifact is None:
+                raise ValueError(f"Artifact '{artifact_id}' not found after status update")
+            if artifact.status == ArtifactStatus.PENDING_REVIEW:
+                await self.set_status(artifact_id, ArtifactStatus.IN_REVIEW)
 
-        Args:
-            definition_id: Definition ID to filter by
-
-        Returns:
-            List of matching artifacts
-        """
-        return [
-            a for a in self._artifacts.values()
-            if a.definition_id == definition_id
-        ]
-
-    def get_by_type(self, artifact_type: ArtifactType) -> list[Artifact]:
-        """Get all artifacts of a type.
-
-        Args:
-            artifact_type: Type to filter by
-
-        Returns:
-            List of matching artifacts
-        """
-        return [a for a in self._artifacts.values() if a.type == artifact_type]
-
-    def get_by_status(self, status: ArtifactStatus) -> list[Artifact]:
-        """Get all artifacts with a status.
-
-        Args:
-            status: Status to filter by
-
-        Returns:
-            List of matching artifacts
-        """
-        return [a for a in self._artifacts.values() if a.status == status]
-
-    def get_by_stage(self, stage: str) -> list[Artifact]:
-        """Get all artifacts created in a stage.
-
-        Args:
-            stage: Wizard stage to filter by
-
-        Returns:
-            List of matching artifacts
-        """
-        return [
-            a for a in self._artifacts.values()
-            if a.metadata.stage == stage
-        ]
-
-    def get_pending_review(self) -> list[Artifact]:
-        """Get artifacts pending review.
-
-        Returns:
-            List of artifacts with pending_review status
-        """
-        return self.get_by_status("pending_review")
-
-    def get_approved(self) -> list[Artifact]:
-        """Get approved artifacts.
-
-        Returns:
-            List of artifacts with approved status
-        """
-        return self.get_by_status("approved")
-
-    def get_all(self) -> list[Artifact]:
-        """Get all artifacts.
-
-        Returns:
-            List of all artifacts
-        """
-        return list(self._artifacts.values())
-
-    # =========================================================================
-    # Version Navigation
-    # =========================================================================
-
-    def get_latest_version(self, artifact_id: str) -> Artifact | None:
-        """Get the latest version of an artifact.
-
-        Follows the version chain to find the most recent.
-
-        Args:
-            artifact_id: ID of any version of the artifact
-
-        Returns:
-            Latest version artifact, or None if not found
-        """
-        artifact = self._artifacts.get(artifact_id)
-        if not artifact:
-            return None
-
-        # Find any artifact that has this as parent
-        while True:
-            child = next(
-                (a for a in self._artifacts.values()
-                 if a.lineage.parent_id == artifact.id),
-                None
+        if not self._rubric_registry or not self._rubric_executor:
+            logger.warning(
+                "Review requested for '%s' but no rubric registry/executor configured",
+                artifact_id,
             )
-            if child:
-                artifact = child
-            else:
-                return artifact
-
-    def get_version_history(self, artifact_id: str) -> list[Artifact]:
-        """Get full version history for an artifact.
-
-        Args:
-            artifact_id: ID of any version of the artifact
-
-        Returns:
-            List of all versions ordered by version number
-        """
-        artifact = self._artifacts.get(artifact_id)
-        if not artifact:
             return []
 
-        # Walk back to find root
-        root = artifact
-        while root.lineage.parent_id:
-            parent = self._artifacts.get(root.lineage.parent_id)
-            if parent:
-                root = parent
-            else:
-                break
+        # Re-read after status changes
+        artifact = await self.get(artifact_id)
+        if artifact is None:
+            raise ValueError(f"Artifact '{artifact_id}' not found after status update")
 
-        # Walk forward to collect all versions
-        history = [root]
-        current = root
-        while True:
-            child = next(
-                (a for a in self._artifacts.values()
-                 if a.lineage.parent_id == current.id),
-                None
+        evaluations: list[dict[str, Any]] = []
+        all_passed = True
+
+        for rubric_id in artifact.rubric_ids:
+            rubric = await self._rubric_registry.get(rubric_id)
+            if rubric is None:
+                logger.warning("Rubric '%s' not found, skipping", rubric_id)
+                continue
+
+            evaluation = await self._rubric_executor.evaluate(
+                rubric, artifact.content, target_id=artifact.id, target_type=artifact.type
             )
-            if child:
-                history.append(child)
-                current = child
+            evaluations.append(evaluation.to_dict())
+            artifact.evaluation_ids.append(evaluation.id)
+
+            if not evaluation.passed:
+                all_passed = False
+
+        # Update artifact with evaluation IDs
+        await self._store(artifact)
+
+        # Transition based on results
+        if evaluations:
+            if all_passed:
+                await self.set_status(artifact_id, ArtifactStatus.APPROVED)
             else:
-                break
+                await self.set_status(artifact_id, ArtifactStatus.NEEDS_REVISION)
 
-        return history
+        for hook in self._on_review_complete_hooks:
+            current = await self.get(artifact_id)
+            if current:
+                await hook(current)
 
-    # =========================================================================
-    # Lifecycle Hooks
-    # =========================================================================
+        return evaluations
 
-    def on(self, event: str, callback: LifecycleHook) -> None:
-        """Register a lifecycle hook.
+    async def get_evaluations(
+        self, artifact_id: str
+    ) -> list[dict[str, Any]]:
+        """Get evaluation results for an artifact.
 
-        Supported events:
-        - on_create: Called when artifact is created (artifact)
-        - on_update: Called when artifact is updated (new_artifact, original)
-        - on_status_change: Called on status change (artifact, old_status, new_status)
-        - on_review: Called when review is added (artifact, review)
-
-        Args:
-            event: Event name
-            callback: Callback function
-
-        Raises:
-            ValueError: If event name not recognized
+        Returns evaluation dicts stored alongside the artifact.
         """
-        if event not in self._hooks:
-            raise ValueError(f"Unknown event: {event}. Valid events: {list(self._hooks.keys())}")
-        self._hooks[event].append(callback)
+        artifact = await self.get(artifact_id)
+        if artifact is None:
+            return []
 
-    def _trigger_hooks(self, event: str, *args: Any) -> None:
-        """Trigger hooks for an event.
+        evaluations: list[dict[str, Any]] = []
+        for eval_id in artifact.evaluation_ids:
+            record = await self._db.read(f"eval:{eval_id}")
+            if record:
+                evaluations.append(record.data)
+        return evaluations
 
-        Args:
-            event: Event name
-            *args: Arguments to pass to callbacks
-        """
-        for callback in self._hooks.get(event, []):
-            try:
-                callback(*args)
-            except Exception as e:
-                logger.warning("Hook error for %s: %s", event, e)
+    # --- Lifecycle Hooks ---
 
-    # =========================================================================
-    # Serialization
-    # =========================================================================
+    def on_create(self, callback: LifecycleHook) -> None:
+        """Register a callback for artifact creation events."""
+        self._on_create_hooks.append(callback)
 
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize registry state to dictionary.
+    def on_status_change(self, callback: LifecycleHook) -> None:
+        """Register a callback for status change events."""
+        self._on_status_change_hooks.append(callback)
 
-        Returns:
-            Dictionary representation of all artifacts
-        """
-        return {
-            "artifacts": {
-                aid: a.to_dict() for aid, a in self._artifacts.items()
-            },
-        }
+    def on_review_complete(self, callback: LifecycleHook) -> None:
+        """Register a callback for review completion events."""
+        self._on_review_complete_hooks.append(callback)
+
+    # --- Configuration ---
 
     @classmethod
-    def from_dict(
+    async def from_config(
         cls,
-        data: dict[str, Any],
-        definitions: dict[str, ArtifactDefinition] | None = None,
+        config: dict[str, Any],
+        db: AsyncDatabase,
+        rubric_registry: Any | None = None,
+        rubric_executor: Any | None = None,
     ) -> ArtifactRegistry:
-        """Restore registry from dictionary.
+        """Create a registry from configuration.
+
+        The config should have an ``"artifact_types"`` key mapping type IDs
+        to their configuration dicts.
 
         Args:
-            data: Serialized registry data
-            definitions: Optional artifact definitions
+            config: Configuration dictionary.
+            db: The async database backend.
+            rubric_registry: Optional rubric registry.
+            rubric_executor: Optional rubric executor.
 
         Returns:
-            ArtifactRegistry instance
+            A configured ArtifactRegistry.
         """
-        registry = cls(definitions=definitions)
-        for aid, adata in data.get("artifacts", {}).items():
-            registry._artifacts[aid] = Artifact.from_dict(adata)
-        return registry
+        type_defs: dict[str, ArtifactTypeDefinition] = {}
+        for type_id, type_config in config.get("artifact_types", {}).items():
+            type_defs[type_id] = ArtifactTypeDefinition.from_config(
+                type_id, type_config
+            )
 
-    def clear(self) -> None:
-        """Clear all artifacts from the registry."""
-        self._artifacts.clear()
+        return cls(
+            db=db,
+            rubric_registry=rubric_registry,
+            rubric_executor=rubric_executor,
+            type_definitions=type_defs,
+        )
+
+    # --- Internal ---
+
+    async def _store(self, artifact: Artifact) -> None:
+        """Store an artifact, creating both a latest pointer and a versioned record."""
+        data = artifact.to_dict()
+        version_key = f"{artifact.id}:{artifact.version}"
+        data["_version_key"] = version_key
+
+        await self._db.upsert(artifact.id, Record(data))
+        await self._db.upsert(version_key, Record(data))

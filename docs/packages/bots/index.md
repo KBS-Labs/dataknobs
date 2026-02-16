@@ -131,21 +131,26 @@ if __name__ == "__main__":
 
 ### 📦 Artifact System
 
-- **Artifact Registry** - Track work products throughout conversational workflows
+- **Artifact Registry** - Async CRUD with provenance tracking and lifecycle hooks
 - **Versioning** - Create new versions while preserving history
-- **Lifecycle Status** - Draft, pending review, approved, rejected states
-- **Definition-Driven** - Configure artifact types and behaviors in YAML
+- **Provenance** - Full creation context: sources, tool chain, LLM invocations, revisions
+- **Lifecycle Management** - 8-state lifecycle with enforced transitions
+- **Wizard Transforms** - Pre-built transforms for create, review, revise, approve workflows
+- **LLM Tools** - 5 context-aware tools for conversational artifact management
+- **Display Helpers** - Markdown formatting for evaluations, comparisons, and provenance
+- **Assessment Sessions** - Quiz workflows with response tracking and scoring
 
 [Learn more →](guides/artifacts.md)
 
-### ✅ Review System
+### ✅ Rubric Evaluation System
 
-- **Persona-Based Reviews** - LLM adopts perspectives (adversarial, skeptical, etc.)
-- **Schema Validation** - JSON Schema validation for structured artifacts
-- **Custom Validators** - Register your own validation functions
-- **Built-in Personas** - Five built-in review personas for common scenarios
+- **Multi-Criteria Assessment** - Weighted criteria with configurable quality levels
+- **Three Scoring Methods** - Deterministic functions, JSON Schema validation, LLM classification
+- **Feedback Generation** - LLM-enhanced or deterministic evaluation summaries
+- **Rubric Registry** - Versioned rubric storage backed by AsyncDatabase
+- **Meta-Rubric** - Built-in quality validation for rubric definitions
 
-[Learn more →](guides/reviews.md)
+[Learn more →](guides/rubrics.md)
 
 ### 🧠 Context Accumulator
 
@@ -248,14 +253,20 @@ dataknobs_bots/
 ├── knowledge/            # RAG implementation
 │   └── rag.py           # RAGKnowledgeBase class
 ├── artifacts/           # Artifact management
-│   ├── models.py       # Artifact, Review, Definition models
-│   ├── registry.py     # ArtifactRegistry
-│   └── tools.py        # Artifact management tools
-├── review/              # Review system
-│   ├── personas.py     # ReviewPersona, built-in personas
-│   ├── protocol.py     # ReviewProtocolDefinition
-│   ├── executor.py     # ReviewExecutor
-│   └── tools.py        # Review tools
+│   ├── models.py       # Artifact, ArtifactStatus, ArtifactTypeDefinition
+│   ├── provenance.py   # ProvenanceRecord, SourceReference, ToolInvocation, LLMInvocation, RevisionRecord
+│   ├── registry.py     # ArtifactRegistry (async CRUD, lifecycle, review integration)
+│   ├── transitions.py  # Status transition rules (TransitionValidator)
+│   ├── transforms.py   # Wizard transforms (create, review, revise, approve, save_draft)
+│   ├── tools.py        # LLM tools (Create, Update, Query, SubmitForReview, Get)
+│   ├── display.py      # Markdown formatting (evaluation, comparison, provenance)
+│   └── assessment.py   # Assessment sessions (StudentResponse, AssessmentSession, CumulativePerformance)
+├── rubrics/             # Rubric evaluation system
+│   ├── models.py       # Rubric, RubricCriterion, RubricLevel, ScoringMethod, CriterionResult, RubricEvaluation
+│   ├── executor.py     # FunctionRegistry, RubricExecutor (deterministic, schema, LLM decode)
+│   ├── feedback.py     # Feedback generation (LLM-enhanced and deterministic)
+│   ├── registry.py     # RubricRegistry (versioned storage, target lookup)
+│   └── meta.py         # Meta-rubric (structural quality validation)
 ├── context/             # Context management
 │   ├── accumulator.py  # ConversationContext, Assumption
 │   └── builder.py      # ContextBuilder, ContextPersister
@@ -296,10 +307,10 @@ dataknobs_bots/
 - [**Wizard Observability**](guides/observability.md) - Task tracking, state snapshots, and transition auditing
 - [**Architecture**](guides/architecture.md) - System design and scaling considerations
 
-### Artifact & Review System
+### Artifact & Evaluation System
 
-- [**Artifact System**](guides/artifacts.md) - Track and version work products
-- [**Review System**](guides/reviews.md) - Validate artifacts with persona-based and schema reviews
+- [**Artifact System**](guides/artifacts.md) - Versioned artifacts with provenance, lifecycle, transforms, tools, and display helpers
+- [**Rubric Evaluation**](guides/rubrics.md) - Multi-criteria evaluation with deterministic, schema, and LLM scoring
 - [**Context Accumulator**](guides/context.md) - Build and manage conversation context
 
 ### Advanced Features
@@ -448,8 +459,9 @@ MIT License - see [LICENSE](../../license.md) for details.
 
 - [x] Streaming responses
 - [x] Per-request LLM config overrides (A/B testing, dynamic model selection)
-- [x] Artifact tracking and versioning
-- [x] Review system with persona-based and schema validation
+- [x] Artifact tracking with provenance, lifecycle management, and wizard transforms
+- [x] Rubric evaluation system with deterministic, schema, and LLM scoring
+- [x] Assessment sessions with response tracking and cumulative performance
 - [x] Context accumulator with assumption tracking
 - [x] Task injection for dynamic workflows
 - [x] Focus guards for drift detection

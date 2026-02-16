@@ -397,6 +397,6 @@ Use the context above to provide relevant responses."""
 ## Related Documentation
 
 - [Artifact System](artifacts.md) - Managing artifacts
-- [Review System](reviews.md) - Validating artifacts
+- [Rubric Evaluation](rubrics.md) - Evaluating artifacts with structured rubrics
 - [Wizard Observability](observability.md) - Tracking wizard progress
 - [Focus Guards](focus-guards.md) - Maintaining conversation focus
