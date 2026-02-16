@@ -5,6 +5,17 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-02-16
+
+### dataknobs-bots [0.4.6]
+
+#### Added
+- added a summary memory option
+- added deterministic code generators to be used (and eventually created) by bots
+- added artifact provenance and rubric evaluation
+- added rubrics extraction
+
+
 ## Release - 2026-02-14
 
 ### dataknobs-utils [1.2.4]

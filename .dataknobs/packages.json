@@ -5,7 +5,7 @@
       "name": "bots",
       "pypi_name": "dataknobs-bots",
       "description": "Configuration-driven AI agents with RAG, memory, and reasoning strategies",
-      "version": "0.4.5",
+      "version": "0.4.6",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
