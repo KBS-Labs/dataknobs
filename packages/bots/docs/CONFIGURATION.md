@@ -541,6 +541,40 @@ memory:
 - Medium conversations: `max_messages: 15-20`
 - Long conversations: `max_messages: 30-50`
 
+### Summary Memory
+
+LLM-based compression of older messages into a running summary:
+
+```yaml
+memory:
+  type: summary
+  recent_window: 10        # Number of recent messages to keep verbatim
+  summary_prompt: null     # Custom summarization prompt (optional)
+```
+
+By default, summary memory uses the bot's configured LLM for summarization.
+To use a dedicated (e.g. smaller/cheaper) model instead, add an `llm` section:
+
+```yaml
+memory:
+  type: summary
+  recent_window: 10
+  llm:
+    provider: ollama
+    model: gemma3:1b       # Lightweight model for summarization
+```
+
+**Characteristics:**
+- Long effective context window
+- Preserves key points from entire conversation
+- Trades exact recall for capacity
+- Graceful degradation if LLM fails (older messages dropped)
+
+**When to Use:**
+- Very long conversations where buffer memory would lose important context
+- When you need conversation continuity without high token costs
+- When exact verbatim recall of old messages is not required
+
 ### Vector Memory
 
 Semantic search over conversation history:
