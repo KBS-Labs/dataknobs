@@ -51,7 +51,7 @@ async def create_memory_from_config(
         }
         memory = await create_memory_from_config(config)
 
-        # Summary memory (defaults to bot's LLM)
+        # Summary memory (uses bot's LLM as fallback)
         config = {
             "type": "summary",
             "recent_window": 10,
@@ -67,7 +67,7 @@ async def create_memory_from_config(
                 "model": "gemma3:1b",
             },
         }
-        memory = await create_memory_from_config(config, llm_provider=llm)
+        memory = await create_memory_from_config(config)
         ```
     """
     memory_type = config.get("type", "buffer").lower()
