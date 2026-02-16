@@ -3,8 +3,14 @@
 import pytest
 import numpy as np
 
-from dataknobs_bots.memory import BufferMemory, VectorMemory, create_memory_from_config
+from dataknobs_bots.memory import (
+    BufferMemory,
+    SummaryMemory,
+    VectorMemory,
+    create_memory_from_config,
+)
 from dataknobs_data.vector.stores import VectorStoreFactory
+from dataknobs_llm import EchoProvider
 from dataknobs_llm.llm import LLMProviderFactory
 
 
@@ -159,6 +165,165 @@ class TestVectorMemory:
         assert isinstance(context, list)
 
 
+class TestSummaryMemory:
+    """Tests for SummaryMemory."""
+
+    @staticmethod
+    def _create_echo_provider(
+        responses: list[str] | None = None,
+    ) -> EchoProvider:
+        """Create an EchoProvider with optional scripted responses."""
+        factory = LLMProviderFactory(is_async=True)
+        provider = factory.create({"provider": "echo", "model": "test"})
+        if responses:
+            provider.set_responses(responses, cycle=True)
+        return provider
+
+    @pytest.mark.asyncio
+    async def test_add_and_get_messages_within_window(self):
+        """Messages within the window are returned verbatim."""
+        provider = self._create_echo_provider()
+        memory = SummaryMemory(llm_provider=provider, recent_window=5)
+
+        await memory.add_message("Hello", "user")
+        await memory.add_message("Hi there!", "assistant")
+
+        context = await memory.get_context("test")
+        assert len(context) == 2
+        assert context[0]["content"] == "Hello"
+        assert context[0]["role"] == "user"
+        assert context[1]["content"] == "Hi there!"
+        assert context[1]["role"] == "assistant"
+
+    @pytest.mark.asyncio
+    async def test_summarization_triggers_at_threshold(self):
+        """When messages exceed recent_window, oldest are summarized."""
+        provider = self._create_echo_provider(
+            responses=["Summary of the conversation so far."]
+        )
+        await provider.initialize()
+        memory = SummaryMemory(llm_provider=provider, recent_window=3)
+
+        # Add 4 messages (exceeds window of 3)
+        await memory.add_message("Message 1", "user")
+        await memory.add_message("Message 2", "assistant")
+        await memory.add_message("Message 3", "user")
+        await memory.add_message("Message 4", "assistant")  # Triggers summarization
+
+        context = await memory.get_context("test")
+
+        # First element should be the summary
+        assert context[0]["role"] == "system"
+        assert context[0]["metadata"]["is_summary"] is True
+        assert "Summary of the conversation" in context[0]["content"]
+
+        # Remaining should be the recent messages (window of 3)
+        recent = [m for m in context if m.get("metadata", {}).get("is_summary") is not True]
+        assert len(recent) == 3
+
+    @pytest.mark.asyncio
+    async def test_get_context_returns_summary_plus_recent(self):
+        """get_context returns [summary] + [recent_messages]."""
+        provider = self._create_echo_provider(
+            responses=["First summary", "Updated summary"]
+        )
+        await provider.initialize()
+        memory = SummaryMemory(llm_provider=provider, recent_window=2)
+
+        # Add enough to trigger summarization
+        await memory.add_message("Msg 1", "user")
+        await memory.add_message("Msg 2", "assistant")
+        await memory.add_message("Msg 3", "user")  # Triggers summarization of Msg 1
+
+        context = await memory.get_context("test")
+
+        # Should have summary + 2 recent messages
+        assert len(context) == 3
+        assert context[0]["role"] == "system"
+        assert context[1]["content"] == "Msg 2"
+        assert context[2]["content"] == "Msg 3"
+
+    @pytest.mark.asyncio
+    async def test_clear_resets_summary_and_buffer(self):
+        """Clear removes both the summary and buffered messages."""
+        provider = self._create_echo_provider(
+            responses=["A summary"]
+        )
+        await provider.initialize()
+        memory = SummaryMemory(llm_provider=provider, recent_window=2)
+
+        # Fill and trigger summarization
+        await memory.add_message("Msg 1", "user")
+        await memory.add_message("Msg 2", "assistant")
+        await memory.add_message("Msg 3", "user")
+
+        # Verify non-empty
+        context = await memory.get_context("test")
+        assert len(context) > 0
+
+        # Clear
+        await memory.clear()
+
+        # Should be empty
+        context = await memory.get_context("test")
+        assert len(context) == 0
+
+    @pytest.mark.asyncio
+    async def test_graceful_degradation_on_llm_failure(self):
+        """When the LLM fails, old messages are dropped gracefully."""
+        provider = self._create_echo_provider()
+        await provider.initialize()
+
+        # Make the provider raise on complete
+        async def fail_complete(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("LLM unavailable")
+
+        provider.complete = fail_complete  # type: ignore[assignment]
+
+        memory = SummaryMemory(llm_provider=provider, recent_window=2)
+
+        # Add 3 messages — the overflow triggers summarization which will fail
+        await memory.add_message("Msg 1", "user")
+        await memory.add_message("Msg 2", "assistant")
+        await memory.add_message("Msg 3", "user")  # Triggers failed summarization
+
+        # Should still work — old messages dropped, recent kept
+        context = await memory.get_context("test")
+        recent = [m for m in context if m.get("metadata", {}).get("is_summary") is not True]
+        assert len(recent) == 2
+        assert recent[0]["content"] == "Msg 2"
+        assert recent[1]["content"] == "Msg 3"
+
+    @pytest.mark.asyncio
+    async def test_empty_history(self):
+        """get_context on empty memory returns an empty list."""
+        provider = self._create_echo_provider()
+        memory = SummaryMemory(llm_provider=provider)
+
+        context = await memory.get_context("test")
+        assert context == []
+
+    @pytest.mark.asyncio
+    async def test_custom_summary_prompt(self):
+        """Custom summary_prompt is used for summarization."""
+        custom_prompt = (
+            "CUSTOM: Summarize.\n{existing_summary}\n{new_messages}"
+        )
+        provider = self._create_echo_provider(responses=["custom summary result"])
+        await provider.initialize()
+        memory = SummaryMemory(
+            llm_provider=provider,
+            recent_window=1,
+            summary_prompt=custom_prompt,
+        )
+
+        await memory.add_message("Msg 1", "user")
+        await memory.add_message("Msg 2", "user")  # Triggers summarization
+
+        context = await memory.get_context("test")
+        assert any("custom summary result" in m["content"] for m in context)
+
+
 class TestMemoryFactory:
     """Tests for memory factory function."""
 
@@ -184,6 +349,52 @@ class TestMemoryFactory:
 
         memory = await create_memory_from_config(config)
         assert isinstance(memory, VectorMemory)
+
+    @pytest.mark.asyncio
+    async def test_create_summary_memory(self):
+        """Test creating summary memory from config."""
+        factory = LLMProviderFactory(is_async=True)
+        provider = factory.create({"provider": "echo", "model": "test"})
+
+        config = {"type": "summary", "recent_window": 5}
+        memory = await create_memory_from_config(config, llm_provider=provider)
+        assert isinstance(memory, SummaryMemory)
+        assert memory.recent_window == 5
+
+    @pytest.mark.asyncio
+    async def test_create_summary_memory_with_dedicated_llm(self):
+        """Test creating summary memory with its own LLM config."""
+        config = {
+            "type": "summary",
+            "recent_window": 8,
+            "llm": {"provider": "echo", "model": "summary-model"},
+        }
+        # No fallback provider needed — dedicated LLM is in config
+        memory = await create_memory_from_config(config)
+        assert isinstance(memory, SummaryMemory)
+        assert memory.recent_window == 8
+
+    @pytest.mark.asyncio
+    async def test_create_summary_memory_dedicated_llm_overrides_fallback(self):
+        """Dedicated LLM config takes precedence over fallback provider."""
+        fallback = LLMProviderFactory(is_async=True).create(
+            {"provider": "echo", "model": "fallback"}
+        )
+        config = {
+            "type": "summary",
+            "llm": {"provider": "echo", "model": "dedicated"},
+        }
+        memory = await create_memory_from_config(config, llm_provider=fallback)
+        assert isinstance(memory, SummaryMemory)
+        # The provider should be the dedicated one, not the fallback
+        assert memory.llm_provider is not fallback
+
+    @pytest.mark.asyncio
+    async def test_create_summary_memory_without_any_provider_raises(self):
+        """Test that summary memory without any LLM source raises ValueError."""
+        config = {"type": "summary"}
+        with pytest.raises(ValueError, match="requires an LLM provider"):
+            await create_memory_from_config(config)
 
     @pytest.mark.asyncio
     async def test_default_type(self):
