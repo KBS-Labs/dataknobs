@@ -7,6 +7,9 @@ produced during bot workflows, including:
 - Lifecycle status management with transition enforcement
 - Rubric-based evaluation
 - Configuration-driven artifact type definitions
+- Wizard transforms for artifact lifecycle operations
+- Display helpers for rendering evaluation data
+- Assessment session tracking
 
 Example:
     >>> from dataknobs_bots.artifacts import Artifact, ArtifactStatus
@@ -23,6 +26,20 @@ Example:
     ... )
 """
 
+from .assessment import (
+    AssessmentSession,
+    CumulativePerformance,
+    StudentResponse,
+    finalize_assessment,
+    record_response,
+    start_assessment_session,
+)
+from .display import (
+    format_comparison,
+    format_criterion_detail,
+    format_evaluation_summary,
+    format_provenance_chain,
+)
 from .models import (
     Artifact,
     ArtifactStatus,
@@ -37,6 +54,14 @@ from .provenance import (
     create_provenance,
 )
 from .registry import ArtifactRegistry
+from .transforms import (
+    TransformContext,
+    approve_artifact,
+    create_artifact,
+    revise_artifact,
+    save_artifact_draft,
+    submit_for_review,
+)
 from .transitions import ARTIFACT_STATUS, validate_transition
 
 __all__ = [
@@ -56,4 +81,23 @@ __all__ = [
     # Transitions
     "ARTIFACT_STATUS",
     "validate_transition",
+    # Transforms
+    "TransformContext",
+    "approve_artifact",
+    "create_artifact",
+    "revise_artifact",
+    "save_artifact_draft",
+    "submit_for_review",
+    # Display
+    "format_comparison",
+    "format_criterion_detail",
+    "format_evaluation_summary",
+    "format_provenance_chain",
+    # Assessment
+    "AssessmentSession",
+    "CumulativePerformance",
+    "StudentResponse",
+    "finalize_assessment",
+    "record_response",
+    "start_assessment_session",
 ]
