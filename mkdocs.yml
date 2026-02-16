@@ -197,9 +197,9 @@ nav:
         - packages/bots/guides/rag-ingestion.md
         - packages/bots/guides/rag-retrieval.md
         - packages/bots/guides/rag-query.md
-        - Artifact & Review System:
+        - Artifact & Evaluation System:
           - packages/bots/guides/artifacts.md
-          - packages/bots/guides/reviews.md
+          - packages/bots/guides/rubrics.md
           - packages/bots/guides/context.md
         - Advanced Features:
           - packages/bots/guides/wizard-subflows.md
