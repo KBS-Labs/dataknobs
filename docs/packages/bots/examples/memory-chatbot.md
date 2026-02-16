@@ -108,6 +108,33 @@ Simple sliding window (used in this example):
 **Pros**: Fast, simple, predictable
 **Cons**: Limited context, doesn't prioritize important information
 
+### Summary Memory
+
+LLM-based compression of older messages:
+
+```python
+"memory": {
+    "type": "summary",
+    "recent_window": 10  # Keep last 10 messages verbatim
+}
+```
+
+**Pros**: Very long effective context, preserves key points
+**Cons**: Loses exact wording of old messages
+
+Uses the bot's LLM by default. For a dedicated summarization model:
+
+```python
+"memory": {
+    "type": "summary",
+    "recent_window": 10,
+    "llm": {
+        "provider": "ollama",
+        "model": "gemma3:1b"  # Lightweight model for summaries
+    }
+}
+```
+
 ### Vector Memory
 
 Semantic search over conversation history:
@@ -151,6 +178,15 @@ Semantic search over conversation history:
 "memory": {
     "type": "buffer",
     "max_messages": 20  # Remember more messages
+}
+```
+
+### Summary Memory
+
+```python
+"memory": {
+    "type": "summary",
+    "recent_window": 10
 }
 ```
 

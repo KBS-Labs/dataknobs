@@ -232,10 +232,12 @@ class DynaBot:
                 if tool:
                     tool_registry.register_tool(tool)
 
-        # Create memory
+        # Create memory (pass llm so summary memory can use it)
         memory = None
         if "memory" in config:
-            memory = await create_memory_from_config(config["memory"])
+            memory = await create_memory_from_config(
+                config["memory"], llm_provider=llm
+            )
 
         # Create knowledge base
         knowledge_base = None

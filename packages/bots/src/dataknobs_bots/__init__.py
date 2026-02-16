@@ -13,7 +13,7 @@ from .config import (
     ValidationResult,
 )
 from .knowledge import RAGKnowledgeBase, create_knowledge_base_from_config
-from .memory import BufferMemory, Memory, VectorMemory, create_memory_from_config
+from .memory import BufferMemory, Memory, SummaryMemory, VectorMemory, create_memory_from_config
 from .middleware import CostTrackingMiddleware, LoggingMiddleware, Middleware
 from .reasoning import (
     ReActReasoning,
@@ -47,6 +47,7 @@ __all__ = [
     # Memory
     "Memory",
     "BufferMemory",
+    "SummaryMemory",
     "VectorMemory",
     "create_memory_from_config",
     # Knowledge
