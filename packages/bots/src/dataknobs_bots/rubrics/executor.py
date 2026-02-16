@@ -1,4 +1,4 @@
-"""Rubric evaluation executor for deterministic and schema-based scoring.
+"""Rubric evaluation executor for deterministic, schema, and LLM decode scoring.
 
 This module provides the evaluation engine that applies rubrics to targets:
 - FunctionRegistry: Maps function references to callables for deterministic scoring
@@ -7,7 +7,7 @@ This module provides the evaluation engine that applies rubrics to targets:
 Scoring is dispatched by ScoringType:
 - DETERMINISTIC: Calls registered Python functions
 - SCHEMA: Validates against JSON Schema
-- LLM_DECODE: Deferred to Phase 3
+- LLM_DECODE: Narrowly-scoped LLM classification via Jinja2 decode prompts
 
 Example:
     >>> registry = FunctionRegistry()
@@ -18,17 +18,21 @@ Example:
 
 from __future__ import annotations
 
+import hashlib
 import importlib
+import json
 import logging
 from typing import Any
 
-from dataknobs_llm.llm.base import AsyncLLMProvider
+from dataknobs_llm.llm.base import AsyncLLMProvider, LLMMessage
 
+from .feedback import generate_feedback_summary
 from .models import (
     CriterionResult,
     Rubric,
     RubricCriterion,
     RubricEvaluation,
+    ScoringMethod,
     ScoringType,
     _generate_id,
     _now_iso,
@@ -103,7 +107,7 @@ class RubricExecutor:
 
     Args:
         function_registry: Registry of scoring functions for deterministic criteria.
-        llm: Optional LLM provider for llm_decode scoring (Phase 3).
+        llm: Optional LLM provider for LLM_DECODE scoring and feedback generation.
     """
 
     def __init__(
@@ -143,11 +147,8 @@ class RubricExecutor:
             rubric.criteria, criterion_results
         )
         passed = weighted_score >= rubric.pass_threshold
-        summary = self._generate_deterministic_summary(
-            rubric, criterion_results, passed
-        )
 
-        return RubricEvaluation(
+        evaluation = RubricEvaluation(
             id=_generate_id("eval"),
             rubric_id=rubric.id,
             rubric_version=rubric.version,
@@ -156,9 +157,14 @@ class RubricExecutor:
             criterion_results=criterion_results,
             weighted_score=weighted_score,
             passed=passed,
-            feedback_summary=summary,
             evaluated_at=_now_iso(),
         )
+
+        evaluation.feedback_summary = await generate_feedback_summary(
+            rubric, evaluation, self._llm
+        )
+
+        return evaluation
 
     async def _evaluate_criterion(
         self,
@@ -178,9 +184,7 @@ class RubricExecutor:
             elif scoring_type == ScoringType.SCHEMA:
                 return self._evaluate_schema(criterion, target)
             elif scoring_type == ScoringType.LLM_DECODE:
-                raise NotImplementedError(
-                    "LLM_DECODE scoring is not yet implemented (Phase 3)"
-                )
+                return await self._evaluate_llm_decode(criterion, target)
             else:
                 raise ValueError(f"Unknown scoring type: {scoring_type}")
         except Exception as e:
@@ -277,6 +281,165 @@ class RubricExecutor:
                 scoring_method_used=ScoringType.SCHEMA,
             )
 
+    async def _evaluate_llm_decode(
+        self,
+        criterion: RubricCriterion,
+        target: dict[str, Any],
+    ) -> CriterionResult:
+        """Evaluate using narrowly-scoped LLM classification.
+
+        Renders the criterion's decode prompt as a Jinja2 template with target
+        data, sends it to the LLM, and parses the response to extract a level_id.
+        """
+        if self._llm is None:
+            raise ValueError(
+                f"Criterion '{criterion.id}' requires LLM_DECODE scoring "
+                "but no LLM provider is configured"
+            )
+
+        method = criterion.scoring_method
+        if method.decode_prompt is None:
+            raise ValueError(
+                f"Criterion '{criterion.id}' has LLM_DECODE scoring "
+                "but no decode_prompt defined"
+            )
+
+        rendered_prompt = self._render_template(method.decode_prompt, target)
+        valid_level_ids = [level.id for level in criterion.levels]
+
+        system_message = self._build_decode_system_message(criterion)
+        messages = [
+            LLMMessage(role="system", content=system_message),
+            LLMMessage(role="user", content=rendered_prompt),
+        ]
+
+        prompt_hash = hashlib.sha256(rendered_prompt.encode()).hexdigest()[:16]
+
+        try:
+            response = await self._llm.complete(messages)
+            response_text = response.content.strip()
+            response_hash = hashlib.sha256(response_text.encode()).hexdigest()[:16]
+
+            llm_invocation: dict[str, Any] = {
+                "model": response.model,
+                "prompt_hash": prompt_hash,
+                "response_hash": response_hash,
+                "timestamp": _now_iso(),
+            }
+            if response.usage:
+                llm_invocation["usage"] = response.usage
+
+            level_id = self._parse_llm_level_response(
+                response_text, valid_level_ids, method
+            )
+
+        except Exception as e:
+            logger.warning(
+                "LLM decode failed for criterion '%s': %s",
+                criterion.id,
+                e,
+            )
+            return CriterionResult(
+                criterion_id=criterion.id,
+                level_id="unable_to_evaluate",
+                score=0.0,
+                notes=f"LLM decode failed: {e}",
+                scoring_method_used=ScoringType.LLM_DECODE,
+                llm_invocation={
+                    "prompt_hash": prompt_hash,
+                    "timestamp": _now_iso(),
+                    "error": str(e),
+                },
+            )
+
+        score = self._level_id_to_score(criterion, level_id)
+
+        return CriterionResult(
+            criterion_id=criterion.id,
+            level_id=level_id,
+            score=score,
+            evidence=[f"LLM response: {response_text}"],
+            scoring_method_used=ScoringType.LLM_DECODE,
+            llm_invocation=llm_invocation,
+        )
+
+    def _render_template(self, template_str: str, context: dict[str, Any]) -> str:
+        """Render a Jinja2 template string with the given context."""
+        import jinja2
+
+        template = jinja2.Template(template_str, undefined=jinja2.StrictUndefined)
+        return template.render(**context)
+
+    def _build_decode_system_message(self, criterion: RubricCriterion) -> str:
+        """Build the system message for LLM decode classification."""
+        level_descriptions = "\n".join(
+            f"- {level.id}: {level.description}"
+            for level in criterion.levels
+        )
+        valid_ids = ", ".join(f'"{level.id}"' for level in criterion.levels)
+
+        return (
+            f"You are a classification evaluator for the criterion: {criterion.name}\n"
+            f"Description: {criterion.description}\n\n"
+            f"Classify the content into exactly one of these levels:\n"
+            f"{level_descriptions}\n\n"
+            f"Respond with a JSON object containing a single field \"level_id\" "
+            f"set to one of: {valid_ids}\n"
+            f"Example: {{\"level_id\": \"{criterion.levels[0].id}\"}}\n"
+            f"Do not include any other text."
+        )
+
+    def _parse_llm_level_response(
+        self,
+        response_text: str,
+        valid_level_ids: list[str],
+        method: ScoringMethod,
+    ) -> str:
+        """Parse LLM response to extract a level_id.
+
+        Tries JSON parsing first, then falls back to matching response text
+        against known level IDs. Returns "unable_to_evaluate" if no match.
+        """
+        level_id = self._try_parse_json_level(response_text)
+        if level_id is not None and level_id in valid_level_ids:
+            if method.decode_output_schema is not None:
+                self._validate_output_schema(response_text, method.decode_output_schema)
+            return level_id
+
+        cleaned = response_text.strip().strip('"').strip("'").lower()
+        for valid_id in valid_level_ids:
+            if cleaned == valid_id.lower():
+                return valid_id
+
+        logger.warning(
+            "LLM response '%s' does not match any valid level: %s",
+            response_text[:100],
+            valid_level_ids,
+        )
+        return "unable_to_evaluate"
+
+    def _try_parse_json_level(self, text: str) -> str | None:
+        """Attempt to parse a JSON response and extract level_id."""
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict) and "level_id" in data:
+                return str(data["level_id"])
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return None
+
+    def _validate_output_schema(
+        self, response_text: str, schema: dict[str, Any]
+    ) -> None:
+        """Validate the LLM response against the decode_output_schema."""
+        import jsonschema
+
+        try:
+            data = json.loads(response_text)
+            jsonschema.validate(data, schema)
+        except (json.JSONDecodeError, jsonschema.ValidationError) as e:
+            logger.warning("LLM decode output schema validation failed: %s", e)
+
     def _level_id_to_score(
         self, criterion: RubricCriterion, level_id: str
     ) -> float:
@@ -319,27 +482,3 @@ class RubricExecutor:
 
         return weighted_sum / total_weight
 
-    def _generate_deterministic_summary(
-        self,
-        rubric: Rubric,
-        results: list[CriterionResult],
-        passed: bool,
-    ) -> str:
-        """Generate a template-based feedback summary.
-
-        This deterministic summary is used in Phases 1-2. Phase 3 adds
-        LLM-enhanced summaries.
-        """
-        status = "PASSED" if passed else "FAILED"
-        lines = [f"Evaluation {status} for rubric '{rubric.name}'."]
-
-        result_by_id = {r.criterion_id: r for r in results}
-        for criterion in rubric.criteria:
-            result = result_by_id.get(criterion.id)
-            if result is not None:
-                lines.append(
-                    f"- {criterion.name}: {result.level_id} "
-                    f"(score: {result.score:.2f})"
-                )
-
-        return "\n".join(lines)

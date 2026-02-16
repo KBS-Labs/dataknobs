@@ -262,6 +262,8 @@ class CriterionResult:
         evidence: Supporting evidence for the assigned level.
         notes: Additional context or explanation.
         scoring_method_used: Which scoring approach was used.
+        llm_invocation: For LLM_DECODE scoring, records call details
+            (model, prompt_hash, response_hash, timestamp) for auditability.
     """
 
     criterion_id: str
@@ -270,10 +272,11 @@ class CriterionResult:
     evidence: list[str] = field(default_factory=list)
     notes: str = ""
     scoring_method_used: ScoringType = ScoringType.DETERMINISTIC
+    llm_invocation: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a dictionary."""
-        return {
+        result: dict[str, Any] = {
             "criterion_id": self.criterion_id,
             "level_id": self.level_id,
             "score": self.score,
@@ -281,6 +284,9 @@ class CriterionResult:
             "notes": self.notes,
             "scoring_method_used": self.scoring_method_used.value,
         }
+        if self.llm_invocation is not None:
+            result["llm_invocation"] = self.llm_invocation
+        return result
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> CriterionResult:
@@ -294,6 +300,7 @@ class CriterionResult:
             scoring_method_used=ScoringType(data.get(
                 "scoring_method_used", "deterministic"
             )),
+            llm_invocation=data.get("llm_invocation"),
         )
 
 

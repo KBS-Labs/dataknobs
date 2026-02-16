@@ -380,7 +380,7 @@ class TestRubricExecutorSchema:
 
 
 class TestRubricExecutorLLMDecode:
-    async def test_llm_decode_not_implemented(self) -> None:
+    async def test_llm_decode_no_provider_gives_error(self) -> None:
         criterion = RubricCriterion(
             id="c1",
             name="LLM Check",
@@ -395,7 +395,7 @@ class TestRubricExecutorLLMDecode:
         evaluation = await executor.evaluate(rubric, {})
 
         assert evaluation.criterion_results[0].level_id == "error"
-        assert "not yet implemented" in evaluation.criterion_results[0].notes
+        assert "no LLM provider" in evaluation.criterion_results[0].notes
 
 
 class TestRubricExecutorSummary:
