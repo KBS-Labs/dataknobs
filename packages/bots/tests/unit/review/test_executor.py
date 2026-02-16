@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from dataknobs_bots.artifacts.models import Artifact, ArtifactDefinition, ArtifactMetadata
+from dataknobs_bots.artifacts.models import Artifact, ArtifactTypeDefinition
 from dataknobs_bots.review.executor import ReviewExecutor
 from dataknobs_bots.review.personas import ReviewPersona
 from dataknobs_bots.review.protocol import ReviewProtocolDefinition
@@ -319,7 +319,6 @@ class TestReviewExecutorPersonaReview:
         artifact = Artifact(
             content={"data": "test"},
             name="Test Artifact",
-            metadata=ArtifactMetadata(purpose="Testing"),
         )
 
         review = await executor.run_review(artifact, "persona_test")
@@ -409,9 +408,9 @@ class TestReviewExecutorArtifactReviews:
         executor.register_function("review2", validator2)
 
         artifact = Artifact(content={"data": "test"}, name="Test")
-        definition = ArtifactDefinition(
+        definition = ArtifactTypeDefinition(
             id="test_def",
-            reviews=["review1", "review2"],
+            rubrics=["review1", "review2"],
         )
 
         reviews = await executor.run_artifact_reviews(artifact, definition)
@@ -424,7 +423,7 @@ class TestReviewExecutorArtifactReviews:
         """Test running reviews when none are configured."""
         executor = ReviewExecutor()
         artifact = Artifact(content={"data": "test"}, name="Test")
-        definition = ArtifactDefinition(id="test_def", reviews=[])
+        definition = ArtifactTypeDefinition(id="test_def")
 
         reviews = await executor.run_artifact_reviews(artifact, definition)
 
@@ -435,9 +434,9 @@ class TestReviewExecutorArtifactReviews:
         """Test running reviews when protocol is missing."""
         executor = ReviewExecutor()
         artifact = Artifact(content={"data": "test"}, name="Test")
-        definition = ArtifactDefinition(
+        definition = ArtifactTypeDefinition(
             id="test_def",
-            reviews=["nonexistent_protocol"],
+            rubrics=["nonexistent_protocol"],
         )
 
         # Should not raise, just skip missing protocol
