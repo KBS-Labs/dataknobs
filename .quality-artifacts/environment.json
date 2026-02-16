@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-02-16T15:13:41Z",
+  "timestamp": "2026-02-16T21:54:58Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.10.2 (Homebrew 2026-02-10)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "update-dependencies",
-  "git_commit": "ce595a52e66f43bd4b9a7141d2503ec4894bb014",
+  "git_branch": "sbk/artifacts-and-critics",
+  "git_commit": "45519fcac3d221af7e209e90f8b341d1ac1e747e",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
