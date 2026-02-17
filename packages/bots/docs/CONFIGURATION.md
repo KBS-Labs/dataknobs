@@ -905,6 +905,8 @@ stages:
 | `tools` | list | Tool names available in this stage (must be explicit; omitting means no tools) |
 | `reasoning` | string | Tool reasoning mode: "single" (default) or "react" for multi-tool loops |
 | `max_iterations` | int | Max ReAct iterations for this stage (overrides wizard default) |
+| `mode` | string | Stage mode: "conversation" for free-form chat (default: structured) |
+| `intent_detection` | object | Intent detection configuration for triggering transitions from natural language |
 | `transitions` | list | Rules for transitioning to next stage |
 | `tasks` | list | Task definitions for granular progress tracking |
 
@@ -1268,6 +1270,7 @@ The `get_wizard_state()` method returns a normalized dict with these fields:
 | `can_go_back` | bool | Whether back navigation is allowed |
 | `suggestions` | list | Quick-reply suggestions for current stage |
 | `history` | list | List of visited stage names |
+| `stage_mode` | string | Current stage's mode: "conversation" or "structured" |
 
 Returns `None` if the conversation doesn't exist or has no active wizard.
 
@@ -1302,6 +1305,179 @@ for name, meta in wizard_fsm.stages.items():
 | `stage_count` | int | Total number of stages |
 | `current_stage` | string | Current stage name |
 | `current_metadata` | dict | Metadata for current stage |
+
+**Conversation Stages:**
+
+Stages can be configured with `mode: conversation` to act as free-form chat rather than
+structured data collection. This enables a "unified wizard paradigm" where all bots use
+`strategy: wizard`, with conversation stages for open-ended interaction and structured
+stages for data collection.
+
+```yaml
+stages:
+  - name: tutoring
+    is_start: true
+    mode: conversation
+    prompt: |
+      You are a Socratic tutor for {{subject}}. Engage in helpful
+      educational conversation. Guide the student through concepts.
+    suggestions:
+      - "Quiz me on this topic"
+      - "Explain a concept"
+    intent_detection:
+      method: keyword
+      intents:
+        - id: start_quiz
+          keywords: ["quiz", "test me", "assessment"]
+          description: "Student wants to take a quiz"
+    transitions:
+      - target: quiz_start
+        condition: "data.get('_intent') == 'start_quiz'"
+
+  - name: quiz_start
+    prompt: "Let's start a quiz! Answer the following question."
+    schema:
+      type: object
+      properties:
+        answer: { type: string }
+    transitions:
+      - target: quiz_results
+        condition: "data.get('answer')"
+```
+
+When `mode: conversation` is set on a stage:
+
+1. **Extraction is skipped** -- The user is conversing, not filling a form. No structured
+   data extraction runs, even if a schema is present.
+2. **Response is generated via LLM** -- The stage prompt becomes part of the system prompt
+   context, and `manager.complete()` generates a response directly.
+3. **No clarification loop** -- Clarification attempts are never incremented. The user
+   isn't failing to provide data; they're having a conversation.
+4. **Transitions evaluate normally** -- Transition conditions are checked each turn. Use
+   intent detection (below) to trigger transitions from natural language.
+
+Stages without a `mode` key default to `"structured"` (the original wizard behavior).
+
+**Intent Detection:**
+
+Intent detection classifies user messages into named intents, enabling natural-language
+transition triggers. Configure it on any stage (conversation or structured):
+
+```yaml
+intent_detection:
+  method: keyword              # keyword | llm
+  intents:
+    - id: start_quiz
+      keywords: ["quiz", "test me", "assessment", "practice questions"]
+      description: "Student wants to take a quiz"
+    - id: need_help
+      keywords: ["help", "explain", "confused", "don't understand"]
+      description: "Student needs help with a concept"
+```
+
+The detected intent is stored in `wizard_state.data["_intent"]` before transition
+conditions are evaluated, so conditions can reference it:
+
+```yaml
+transitions:
+  - target: quiz_start
+    condition: "data.get('_intent') == 'start_quiz'"
+```
+
+**Detection Methods:**
+
+| Method | Description | When to Use |
+|--------|-------------|-------------|
+| `keyword` | Fast substring matching against configured keywords. First match wins. No LLM call. | Simple triggers with known vocabulary |
+| `llm` | Lightweight LLM classification. Builds a prompt listing intents and asks the LLM to pick one. | Nuanced intent detection where keywords are insufficient |
+
+**Intent lifecycle:**
+- `_intent` is cleared at the start of each detection call
+- If no intent matches, `_intent` is not present in wizard data
+- `_intent` is not persisted across turns (cleared and re-detected each time)
+
+**Intent Detection on Structured Stages:**
+
+When `intent_detection` is configured on a structured stage (not `mode: conversation`),
+intent detection runs after extraction but before the clarification check. If an intent
+is detected, the clarification/validation path is skipped and the transition fires. This
+enables "detour" patterns where the user can interrupt structured data collection:
+
+```yaml
+stages:
+  - name: collect_preferences
+    prompt: "Tell me about your preferences."
+    schema:
+      type: object
+      properties:
+        subject: { type: string }
+        grade_level: { type: string }
+    intent_detection:
+      method: keyword
+      intents:
+        - id: need_help
+          keywords: ["help", "confused", "wait", "hold on"]
+    transitions:
+      - target: help_conversation
+        condition: "data.get('_intent') == 'need_help'"
+        priority: 0
+      - target: next_stage
+        condition: "data.get('subject') and data.get('grade_level')"
+        priority: 1
+
+  - name: help_conversation
+    mode: conversation
+    prompt: "How can I help? When you're ready, say 'continue'."
+    intent_detection:
+      method: keyword
+      intents:
+        - id: resume
+          keywords: ["continue", "let's go", "back to setup", "ready"]
+    transitions:
+      - target: collect_preferences
+        condition: "data.get('_intent') == 'resume'"
+```
+
+**How round-trips work:** `wizard_state.data` persists across stage transitions. When the
+user detours from a structured stage to a conversation stage and back, previously extracted
+fields remain in the data dict. The structured stage resumes where it left off, prompting
+only for remaining missing fields.
+
+**`_message` in Transition Conditions:**
+
+The raw user message is available as `data.get('_message')` within transition condition
+expressions. This enables keyword-based transitions without intent detection:
+
+```yaml
+transitions:
+  - target: quiz_start
+    condition: "'quiz' in data.get('_message', '').lower()"
+```
+
+`_message` is injected before transition evaluation and cleaned up afterward -- it is
+not persisted in wizard state data.
+
+**UI Rendering with `stage_mode`:**
+
+The wizard metadata includes a `stage_mode` field indicating how the current stage should
+be rendered:
+
+| `stage_mode` Value | UI Guidance |
+|--------------------|-------------|
+| `"conversation"` | Render as normal chat with optional action buttons |
+| `"structured"` | Render with wizard chrome (progress breadcrumb, structured content) |
+
+Access via `get_wizard_state()`:
+
+```python
+state = bot.get_wizard_state("conversation-123")
+if state and state["stage_mode"] == "conversation":
+    # Render as normal chat UI
+    pass
+else:
+    # Render with wizard progress indicators
+    pass
+```
 
 **ReAct-Style Tool Reasoning:**
 
