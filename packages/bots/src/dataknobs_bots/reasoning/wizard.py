@@ -224,6 +224,7 @@ class WizardReasoning(ReasoningStrategy):
         extraction_scope: str = "wizard_session",
         conflict_strategy: str = "latest_wins",
         log_conflicts: bool = True,
+        initial_data: dict[str, Any] | None = None,
     ):
         """Initialize WizardReasoning.
 
@@ -253,6 +254,10 @@ class WizardReasoning(ReasoningStrategy):
                 the same field is extracted from multiple messages. "latest_wins"
                 (default) uses the most recent value.
             log_conflicts: Whether to log when field values conflict (default: True).
+            initial_data: Optional dict of data to inject into the wizard state
+                when a new conversation starts. Useful for passing configuration
+                values (e.g., quiz_bank_ids) from the bot config into the wizard
+                data dict where transforms can access them.
         """
         self._fsm = wizard_fsm
         self._extractor = extractor
@@ -270,6 +275,7 @@ class WizardReasoning(ReasoningStrategy):
         self._extraction_scope = extraction_scope
         self._conflict_strategy = conflict_strategy
         self._log_conflicts = log_conflicts
+        self._initial_data: dict[str, Any] = initial_data or {}
         # Active subflow FSM (None when in main flow)
         self._active_subflow_fsm: WizardFSM | None = None
 
@@ -464,6 +470,7 @@ class WizardReasoning(ReasoningStrategy):
             extraction_scope=extraction_scope,
             conflict_strategy=conflict_strategy,
             log_conflicts=log_conflicts,
+            initial_data=config.get("initial_data"),
         )
 
     async def generate(
@@ -887,9 +894,12 @@ class WizardReasoning(ReasoningStrategy):
         initial_tasks = self._build_initial_tasks()
         self._active_subflow_fsm = None  # Ensure we start in main flow
 
+        # Inject initial data from reasoning config (e.g., quiz_bank_ids).
+        # These are set at bot creation time and available to all transforms.
+        initial_data: dict[str, Any] = dict(self._initial_data)
+
         # Inject wizard settings into initial data so transforms can access them.
         # output_paths provides configurable file output locations.
-        initial_data: dict[str, Any] = {}
         output_paths = self._fsm.settings.get("output_paths")
         if output_paths:
             initial_data["_output_paths"] = dict(output_paths)
