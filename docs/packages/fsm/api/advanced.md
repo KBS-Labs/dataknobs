@@ -81,10 +81,13 @@ print(f"Complete: {result.is_complete}")
 # Create async context
 async with advanced_fsm.execution_context(data, initial_state='start') as context:
     # Execute single step
-    new_state = await advanced_fsm.step(context, arc_name=None)
+    result = await advanced_fsm.step(context, arc_name=None)
 
-    if new_state:
-        print(f"Transitioned to: {new_state.definition.name}")
+    # Check result (returns StepResult, same as execute_step_sync)
+    print(f"Transition: {result.from_state} -> {result.to_state}")
+    print(f"Success: {result.success}")
+    print(f"At breakpoint: {result.at_breakpoint}")
+    print(f"Complete: {result.is_complete}")
 ```
 
 ### StepResult Object
@@ -128,37 +131,68 @@ breakpoints = advanced_fsm.breakpoints  # Returns set of state names
 ### Running to Breakpoint
 
 ```python
-# Synchronous execution
+# Synchronous execution (returns StateInstance | None)
 context = advanced_fsm.create_context(data)
 state = advanced_fsm.run_until_breakpoint_sync(context, max_steps=1000)
+if state:
+    print(f"Stopped at: {state.definition.name}")
 
-# Asynchronous execution
+# Asynchronous execution (returns StepResult | None)
 async with advanced_fsm.execution_context(data) as context:
-    state = await advanced_fsm.run_until_breakpoint(context, max_steps=1000)
+    result = await advanced_fsm.run_until_breakpoint(context, max_steps=1000)
+    if result and result.at_breakpoint:
+        print(f"Stopped at breakpoint: {result.to_state}")
 ```
 
 ## Execution Hooks
 
-Monitor execution events with hooks:
+There are two hook systems: **AdvancedFSM-level hooks** for state enter/exit events, and
+**engine-level hooks** for transition events (pre-transition, post-transition, error).
+
+### AdvancedFSM State Hooks
+
+Monitor state enter/exit events via `ExecutionHook`:
 
 ```python
 from dataknobs_fsm import ExecutionHook
 
-# Define hooks
 hooks = ExecutionHook(
     on_state_enter=lambda state: print(f"Entering: {state}"),
     on_state_exit=lambda state: print(f"Exiting: {state}"),
-    on_arc_execute=lambda arc: print(f"Executing arc: {arc}"),
-    on_error=lambda error: print(f"Error: {error}"),
-    on_resource_acquire=lambda res: print(f"Acquired: {res}"),
-    on_resource_release=lambda res: print(f"Released: {res}"),
-    on_transaction_begin=lambda: print("Transaction started"),
-    on_transaction_commit=lambda: print("Transaction committed"),
-    on_transaction_rollback=lambda: print("Transaction rolled back")
+    on_error=lambda error: print(f"Error: {error}")
 )
 
-# Set hooks
 advanced_fsm.set_hooks(hooks)
+```
+
+### Engine-Level Transition Hooks
+
+Monitor individual transitions via the execution engines. Both `ExecutionEngine` and
+`AsyncExecutionEngine` support pre-transition, post-transition, and error hooks.
+Hooks can be sync or async functions (async hooks are automatically awaited):
+
+```python
+from dataknobs_fsm.execution.async_engine import AsyncExecutionEngine
+
+engine = AsyncExecutionEngine(fsm, enable_hooks=True)
+
+# Pre-transition: called before each transition with (context, arc)
+engine.add_pre_transition_hook(lambda ctx, arc: print(f"About to transition via {arc}"))
+
+# Post-transition: called after each successful transition with (context, arc)
+engine.add_post_transition_hook(lambda ctx, arc: print(f"Transitioned via {arc}"))
+
+# Error: called on transition failure with (context, arc, exception)
+engine.add_error_hook(lambda ctx, arc, exc: print(f"Error: {exc}"))
+
+# Async hooks are also supported
+async def async_pre_hook(context, arc):
+    await log_transition(arc)
+
+engine.add_pre_transition_hook(async_pre_hook)
+
+# Disable all hooks
+engine = AsyncExecutionEngine(fsm, enable_hooks=False)
 ```
 
 ## Tracing
@@ -238,14 +272,8 @@ Track execution history for audit and analysis:
 ### Enable History
 
 ```python
-from dataknobs_fsm.storage.memory import InMemoryStorage
-
-# Enable history with storage
-storage = InMemoryStorage()
-advanced_fsm.enable_history(
-    storage=storage,
-    max_depth=100  # Maximum history steps
-)
+# Enable history tracking (storage backend is optional)
+advanced_fsm.enable_history(max_depth=100)
 
 # Check if enabled
 if advanced_fsm.history_enabled:
@@ -486,7 +514,7 @@ from dataknobs_fsm.execution.engine import TraversalStrategy
 
 # Set execution strategy
 advanced_fsm.set_execution_strategy(TraversalStrategy.DEPTH_FIRST)
-# Options: DEPTH_FIRST, BREADTH_FIRST, PRIORITY_BASED, etc.
+# Options: DEPTH_FIRST, BREADTH_FIRST, RESOURCE_OPTIMIZED, STREAM_OPTIMIZED
 ```
 
 ## Data Handlers
@@ -494,12 +522,23 @@ advanced_fsm.set_execution_strategy(TraversalStrategy.DEPTH_FIRST)
 Configure custom data handlers:
 
 ```python
-from dataknobs_fsm.core.data_modes import DataHandler
+from dataknobs_fsm.core.data_modes import DataHandler, DataHandlingMode
 
 class CustomDataHandler(DataHandler):
-    def handle(self, data):
-        # Custom data handling
-        return processed_data
+    def __init__(self):
+        super().__init__(DataHandlingMode.COPY)
+
+    def on_entry(self, data):
+        # Handle data when entering a state
+        return dict(data) if isinstance(data, dict) else data
+
+    def on_modification(self, data):
+        # Handle data modification within a state
+        return dict(data) if isinstance(data, dict) else data
+
+    def on_exit(self, data):
+        # Handle data when exiting a state
+        return data
 
 handler = CustomDataHandler()
 advanced_fsm.set_data_handler(handler)
@@ -566,16 +605,18 @@ async def debug_workflow():
                 print("No more transitions")
                 break
 
-            # Execute step
-            new_state = await fsm.step(context)
+            # Execute step (returns StepResult)
+            result = await fsm.step(context)
 
-            if not new_state:
+            print(f"  {result.from_state} -> {result.to_state}")
+
+            if not result.success or result.is_complete or result.transition == "none":
                 print("Execution complete")
                 break
 
             # Check if at breakpoint
-            if state_name in fsm.breakpoints:
-                print(f"Breakpoint hit at {state_name}")
+            if result.at_breakpoint:
+                print(f"Breakpoint hit at {result.to_state}")
                 # Could add interactive debugging here
 
     # Get history
@@ -600,7 +641,9 @@ Always ensure proper cleanup:
 ```python
 async with advanced_fsm.execution_context(data) as context:
     # Resources automatically cleaned up
-    await advanced_fsm.step(context)
+    result = await advanced_fsm.step(context)
+    if not result.success:
+        print(f"Step failed: {result.error}")
 ```
 
 ### 2. Error Handling
@@ -651,9 +694,9 @@ for entry in trace:
 |--------|-------------|---------|
 | `create_context(data, data_mode, initial_state)` | Create execution context | ExecutionContext |
 | `execute_step_sync(context, arc_name)` | Execute single step (sync) | StepResult |
-| `step(context, arc_name)` | Execute single step (async) | StateInstance |
-| `run_until_breakpoint(context, max_steps)` | Run to breakpoint (async) | StateInstance |
-| `run_until_breakpoint_sync(context, max_steps)` | Run to breakpoint (sync) | StateInstance |
+| `step(context, arc_name)` | Execute single step (async) | StepResult |
+| `run_until_breakpoint(context, max_steps)` | Run to breakpoint (async) | StepResult \| None |
+| `run_until_breakpoint_sync(context, max_steps)` | Run to breakpoint (sync) | StateInstance \| None |
 | `trace_execution(data, initial_state)` | Trace execution (async) | List[Dict] |
 | `trace_execution_sync(data, initial_state, max_steps)` | Trace execution (sync) | List[Dict] |
 | `profile_execution(data, initial_state)` | Profile execution (async) | Dict |
@@ -677,7 +720,7 @@ for entry in trace:
 |--------|-------------|---------|
 | `start(data, initial_state)` | Start debug session | None |
 | `step()` | Execute single step | StepResult |
-| `continue_to_breakpoint()` | Continue to breakpoint | StateInstance |
+| `continue_to_breakpoint()` | Continue to breakpoint | StateInstance \| None |
 | `inspect(path)` | Inspect data at path | Any |
 | `watch(name, path)` | Add watch expression | None |
 | `unwatch(name)` | Remove watch | None |
