@@ -380,8 +380,8 @@ class AdvancedFSM:
         """
         self.fsm = fsm
         self.execution_mode = execution_mode
-        self._engine = ExecutionEngine(fsm)
-        self._async_engine = AsyncExecutionEngine(fsm)
+        self._engine = ExecutionEngine(fsm, custom_functions=custom_functions)
+        self._async_engine = AsyncExecutionEngine(fsm, custom_functions=custom_functions)
         self._resource_manager = ResourceManager()
         self._transaction_manager = None
         self._history = None
@@ -567,9 +567,15 @@ class AdvancedFSM:
 
         # Register custom functions if any
         if self._custom_functions:
-            if not hasattr(self.fsm, 'function_registry'):
+            registry = getattr(self.fsm, 'function_registry', None)
+            if registry is None:
                 self.fsm.function_registry = {}
-            self.fsm.function_registry.update(self._custom_functions)
+                registry = self.fsm.function_registry
+            for name, func in self._custom_functions.items():
+                if hasattr(registry, 'register'):
+                    registry.register(name, func)
+                elif isinstance(registry, dict):
+                    registry[name] = func
 
         return context
 
@@ -629,61 +635,28 @@ class AdvancedFSM:
         self,
         context: ExecutionContext,
         arc_name: str | None = None
-    ) -> StateInstance | None:
+    ) -> StepResult:
         """Execute a single transition step.
+
+        .. versionchanged::
+            Return type changed from ``StateInstance | None`` to ``StepResult``.
+            Use ``result.success`` and ``result.transition != "none"`` instead
+            of checking ``None``.
 
         Args:
             context: Execution context
             arc_name: Optional specific arc to follow
 
         Returns:
-            New state instance or None if no transition
+            StepResult with transition details
         """
-        # Store the current state before the transition
-        state_before = context.current_state
-
-        # Use the async execution engine to execute one step
-        # This ensures consistent execution logic across all FSM types
-        _success, _result = await self._async_engine.execute(
-            context=context,
-            data=None,  # Don't override context data
-            max_transitions=1,  # Execute exactly one transition
-            arc_name=arc_name  # Pass arc_name for filtering
-        )
-
-        # Check if we actually transitioned to a new state
-        if context.current_state != state_before and context.current_state is not None:
-            # Update state instance using shared helper
-            self._update_state_instance(context, context.current_state)
-            new_state = context.current_state_instance
-
-            # Track in history using shared helper
-            if context.current_state is not None:
-                self._record_history_step(context.current_state, arc_name, context)
-
-            # Add to trace using shared helper (we need to adjust the helper slightly)
-            if self.execution_mode == ExecutionMode.TRACE:
-                self._trace_buffer.append({
-                    'from': state_before,
-                    'to': context.current_state,
-                    'arc': arc_name or 'transition',
-                    'data': context.data
-                })
-
-            # Call state enter hook (async version)
-            if self._hooks.on_state_enter:
-                await self._hooks.on_state_enter(new_state)
-
-            return new_state
-
-        # No transition occurred
-        return None
+        return await self.execute_step_async(context, arc_name)
 
     async def run_until_breakpoint(
         self,
         context: ExecutionContext,
         max_steps: int = 1000
-    ) -> StateInstance | None:
+    ) -> StepResult | None:
         """Run execution until a breakpoint is hit.
 
         Args:
@@ -691,22 +664,32 @@ class AdvancedFSM:
             max_steps: Maximum steps to execute (safety limit)
 
         Returns:
-            State instance where execution stopped
+            StepResult where execution stopped, or None if no steps taken
         """
+        last_result: StepResult | None = None
         for _ in range(max_steps):
-            # Check if current state is a breakpoint
+            # Check if current state is a breakpoint before stepping
             if context.current_state in self._breakpoints:
-                return context.current_state_instance
+                return StepResult(
+                    from_state=context.current_state or "unknown",
+                    to_state=context.current_state or "unknown",
+                    transition="none",
+                    data_after=context.get_data_snapshot(),
+                    success=True,
+                    at_breakpoint=True,
+                    is_complete=self._is_at_end_state(context),
+                )
 
             # Step to next state
-            new_state = await self.step(context)
+            result = await self.step(context)
+            last_result = result
 
             # Check if we reached an end state or no transition occurred
-            if not new_state or self._is_at_end_state(context):
-                return context.current_state_instance
+            if not result.success or result.is_complete or result.transition == "none":
+                return result
 
         # Hit max steps limit
-        return context.current_state_instance
+        return last_result
 
     async def trace_execution(
         self,
@@ -714,11 +697,11 @@ class AdvancedFSM:
         initial_state: str | None = None
     ) -> list[dict[str, Any]]:
         """Execute with full tracing enabled.
-        
+
         Args:
             data: Input data
             initial_state: Optional starting state
-            
+
         Returns:
             List of trace entries
         """
@@ -728,8 +711,8 @@ class AdvancedFSM:
         async with self.execution_context(data, initial_state=initial_state) as context:
             # Run to completion
             while True:
-                new_state = await self.step(context)
-                if not new_state or new_state.definition.is_end:
+                result = await self.step(context)
+                if not result.success or result.is_complete or result.transition == "none":
                     break
 
         return self._trace_buffer
@@ -740,16 +723,14 @@ class AdvancedFSM:
         initial_state: str | None = None
     ) -> dict[str, Any]:
         """Execute with performance profiling.
-        
+
         Args:
             data: Input data
             initial_state: Optional starting state
-            
+
         Returns:
             Profiling data
         """
-        import time
-
         self.execution_mode = ExecutionMode.PROFILE
         self._profile_data.clear()
 
@@ -758,18 +739,14 @@ class AdvancedFSM:
             transitions = 0
 
             # Track per-state timing
-            state_times = {}
+            state_times: dict[str, list[float]] = {}
             state_start = time.time()
 
             while True:
-                # Get current state name
-                if isinstance(context.current_state, str):
-                    current_state_name = context.current_state
-                else:
-                    current_state_name = context.current_state if context.current_state else "unknown"
+                current_state_name = context.current_state or "unknown"
 
                 # Step
-                new_state = await self.step(context)
+                result = await self.step(context)
 
                 # Record state timing
                 state_duration = time.time() - state_start
@@ -777,7 +754,7 @@ class AdvancedFSM:
                     state_times[current_state_name] = []
                 state_times[current_state_name].append(state_duration)
 
-                if not new_state or (hasattr(new_state, 'definition') and new_state.definition.is_end):
+                if not result.success or result.is_complete or result.transition == "none":
                     break
 
                 transitions += 1

@@ -1,10 +1,14 @@
 """Asynchronous execution engine for FSM processing."""
 
 import asyncio
+import inspect
+import logging
 import time
+from collections.abc import Callable
 from typing import Any, Dict, List, Tuple
 
 from dataknobs_fsm.core.arc import ArcDefinition
+from dataknobs_fsm.core.exceptions import FunctionError
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.modes import ProcessingMode
 from dataknobs_fsm.core.network import StateNetwork
@@ -18,6 +22,8 @@ from dataknobs_fsm.execution.common import (
 from dataknobs_fsm.execution.base_engine import BaseExecutionEngine
 from dataknobs_fsm.functions.base import FunctionContext
 from dataknobs_fsm.core.data_wrapper import ensure_dict
+
+logger = logging.getLogger(__name__)
 
 
 class AsyncExecutionEngine(BaseExecutionEngine):
@@ -34,7 +40,11 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         self,
         fsm: FSM,
         strategy: TraversalStrategy = TraversalStrategy.DEPTH_FIRST,
-        selection_mode: TransitionSelectionMode = TransitionSelectionMode.HYBRID
+        selection_mode: TransitionSelectionMode = TransitionSelectionMode.HYBRID,
+        max_retries: int = 3,
+        retry_delay: float = 1.0,
+        enable_hooks: bool = True,
+        custom_functions: dict[str, Callable] | None = None,
     ):
         """Initialize async execution engine.
 
@@ -42,10 +52,75 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             fsm: FSM to execute.
             strategy: Traversal strategy for execution.
             selection_mode: Transition selection mode (strategy, scoring, or hybrid).
+            max_retries: Maximum retry attempts for recoverable failures.
+            retry_delay: Delay between retries in seconds.
+            enable_hooks: Enable execution hooks.
+            custom_functions: Optional custom functions to merge with FSM registry.
         """
-        # Initialize base class (no max_retries/retry_delay needed for async)
-        super().__init__(fsm, strategy, selection_mode, max_retries=3, retry_delay=1.0)
+        super().__init__(fsm, strategy, selection_mode, max_retries, retry_delay)
+        self.enable_hooks = enable_hooks
+        self._pre_transition_hooks: list[Callable] = []
+        self._post_transition_hooks: list[Callable] = []
+        self._error_hooks: list[Callable] = []
+        self._custom_functions: dict[str, Callable] = custom_functions or {}
     
+    async def _fire_hooks(self, hooks: list[Callable], *args: Any) -> None:
+        """Fire a list of hooks, awaiting async hooks.
+
+        Hooks must not break execution; exceptions are silently ignored.
+
+        Args:
+            hooks: List of hook callables.
+            *args: Arguments to pass to each hook.
+        """
+        if not self.enable_hooks:
+            return
+        for hook in hooks:
+            try:
+                result = hook(*args)
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                pass  # Hooks must not break execution
+
+    def _get_merged_functions(self) -> dict[str, Any]:
+        """Return FSM function registry merged with custom functions.
+
+        Returns:
+            Dictionary of all available functions.
+        """
+        function_registry = getattr(self.fsm, 'function_registry', {})
+        if hasattr(function_registry, 'functions'):
+            functions = dict(function_registry.functions)
+        else:
+            functions = dict(function_registry)
+        functions.update(self._custom_functions)
+        return functions
+
+    def add_pre_transition_hook(self, hook: Callable) -> None:
+        """Add a pre-transition hook.
+
+        Args:
+            hook: Hook function to add.
+        """
+        self._pre_transition_hooks.append(hook)
+
+    def add_post_transition_hook(self, hook: Callable) -> None:
+        """Add a post-transition hook.
+
+        Args:
+            hook: Hook function to add.
+        """
+        self._post_transition_hooks.append(hook)
+
+    def add_error_hook(self, hook: Callable) -> None:
+        """Add an error hook.
+
+        Args:
+            hook: Hook function to add.
+        """
+        self._error_hooks.append(hook)
+
     async def execute(
         self,
         context: ExecutionContext,
@@ -152,9 +227,8 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             
             if not success:
                 return False, f"Transition failed: {next_transition}"
-            
+
             transitions += 1
-            self._transition_count += 1
         
         return False, f"Maximum transitions ({max_transitions}) exceeded"
     
@@ -352,14 +426,9 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         """
         if not arc.pre_test:
             return True
-        
-        # Get the function registry
-        function_registry = getattr(self.fsm, 'function_registry', {})
-        if hasattr(function_registry, 'functions'):
-            functions = function_registry.functions
-        else:
-            functions = function_registry
-        
+
+        functions = self._get_merged_functions()
+
         if arc.pre_test not in functions:
             return False
         
@@ -410,61 +479,94 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         context: ExecutionContext
     ) -> bool:
         """Execute a state transition asynchronously.
-        
+
+        Mirrors the sync engine's retry/error categorization and hook firing.
+
         Args:
             arc: Arc to execute.
             context: Execution context.
-            
+
         Returns:
             True if successful.
         """
-        try:
-            # Execute arc transform if defined
-            if arc.transform:
-                function_registry = getattr(self.fsm, 'function_registry', {})
-                if hasattr(function_registry, 'functions'):
-                    functions = function_registry.functions
+        # Fire pre-transition hooks
+        await self._fire_hooks(self._pre_transition_hooks, context, arc)
+
+        retry_count = 0
+        while retry_count <= self.max_retries:
+            try:
+                # Execute arc transform if defined
+                if arc.transform:
+                    functions = self._get_merged_functions()
+
+                    # Normalize to list for uniform handling
+                    transform_names = (
+                        arc.transform
+                        if isinstance(arc.transform, list)
+                        else [arc.transform]
+                    )
+
+                    for transform_name in transform_names:
+                        if transform_name not in functions:
+                            continue
+                        transform_func = functions[transform_name]
+
+                        # Check if it's async
+                        is_async = asyncio.iscoroutinefunction(transform_func)
+                        if not is_async and callable(transform_func):
+                            is_async = asyncio.iscoroutinefunction(
+                                transform_func.__call__
+                            )
+
+                        if is_async:
+                            context.data = await transform_func(
+                                context.data, context
+                            )
+                        else:
+                            loop = asyncio.get_event_loop()
+                            context.data = await loop.run_in_executor(
+                                None,
+                                transform_func,
+                                context.data,
+                                context,
+                            )
+
+                # Update state (history is automatically tracked by set_state)
+                context.set_state(arc.target_state)
+
+                # Execute state transforms when entering the new state
+                await self._execute_state_transforms(context)
+
+                self._transition_count += 1
+
+                # Fire post-transition hooks
+                await self._fire_hooks(self._post_transition_hooks, context, arc)
+
+                return True
+
+            except (TypeError, AttributeError, ValueError, SyntaxError) as e:
+                # Deterministic errors - don't retry
+                self._error_count += 1
+                await self._fire_hooks(self._error_hooks, context, arc, e)
+                return False
+
+            except FunctionError as e:
+                # Function failure - don't retry
+                self._error_count += 1
+                await self._fire_hooks(self._error_hooks, context, arc, e)
+                return False
+
+            except Exception as e:
+                # Potentially recoverable - retry with backoff
+                self._error_count += 1
+                await self._fire_hooks(self._error_hooks, context, arc, e)
+                retry_count += 1
+                if retry_count <= self.max_retries:
+                    await asyncio.sleep(self.retry_delay * retry_count)
                 else:
-                    functions = function_registry
+                    return False
 
-                # Normalize to list for uniform handling
-                transform_names = (
-                    arc.transform
-                    if isinstance(arc.transform, list)
-                    else [arc.transform]
-                )
-
-                for transform_name in transform_names:
-                    if transform_name not in functions:
-                        continue
-                    transform_func = functions[transform_name]
-
-                    # Check if it's async
-                    is_async = asyncio.iscoroutinefunction(transform_func)
-                    if not is_async and callable(transform_func):
-                        is_async = asyncio.iscoroutinefunction(transform_func.__call__)
-
-                    if is_async:
-                        context.data = await transform_func(context.data, context)
-                    else:
-                        loop = asyncio.get_event_loop()
-                        context.data = await loop.run_in_executor(
-                            None,
-                            transform_func,
-                            context.data,
-                            context,
-                        )
-            
-            # Update state (history is automatically tracked by set_state)
-            context.set_state(arc.target_state)
-
-            # Execute state transforms when entering the new state
-            await self._execute_state_transforms(context)
-
-            return True
-            
-        except Exception:
-            return False
+        return False
     
     async def _execute_state_transforms(
         self,
@@ -517,8 +619,6 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                     pass
 
         # Execute transform functions using base class helpers
-        import logging
-        logger = logging.getLogger(__name__)
         if transform_functions:
             logger.debug(f"Executing {len(transform_functions)} transform functions for state {state_name}")
         for transform_func in transform_functions:
@@ -645,7 +745,7 @@ class AsyncExecutionEngine(BaseExecutionEngine):
     
     def get_statistics(self) -> Dict[str, Any]:
         """Get execution statistics.
-        
+
         Returns:
             Dictionary of statistics.
         """
@@ -657,5 +757,6 @@ class AsyncExecutionEngine(BaseExecutionEngine):
             'average_execution_time': (
                 self._total_execution_time / self._execution_count
                 if self._execution_count > 0 else 0.0
-            )
+            ),
+            'hooks_enabled': self.enable_hooks,
         }
