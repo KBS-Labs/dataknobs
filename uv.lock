@@ -1382,7 +1382,7 @@ requires-dist = [
 
 [[package]]
 name = "dataknobs-bots"
-version = "0.4.6"
+version = "0.4.7"
 source = { editable = "packages/bots" }
 dependencies = [
     { name = "dataknobs-common" },
