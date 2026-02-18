@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-02-17T23:50:18Z",
+  "timestamp": "2026-02-18T18:26:25Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.10.2 (Homebrew 2026-02-10)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/unified-wizard-paradigm",
-  "git_commit": "a22f48043b9fe0aa2d2f693347cbfad5201f3628",
+  "git_branch": "sbk/async-fsm",
+  "git_commit": "1fbcb89e4a8e004183beecded794f90463843b5b",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
