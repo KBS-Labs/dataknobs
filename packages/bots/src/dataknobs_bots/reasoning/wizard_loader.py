@@ -250,6 +250,8 @@ class WizardConfigLoader:
                 "skip_default": stage.get("skip_default"),
                 "can_go_back": stage.get("can_go_back", True),
                 "tools": stage.get("tools", []),
+                "mode": stage.get("mode"),
+                "intent_detection": stage.get("intent_detection"),
             },
             data_schema=stage.get("schema"),
         )
@@ -403,6 +405,9 @@ class WizardConfigLoader:
                 "llm_assist_prompt": stage.get("llm_assist_prompt"),
                 # LLM-generated context variables for template rendering
                 "context_generation": stage.get("context_generation"),
+                # Conversation stage paradigm
+                "mode": stage.get("mode"),
+                "intent_detection": stage.get("intent_detection"),
             }
 
         # Add global tasks to the first stage's metadata

@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-02-16T23:35:11Z",
+  "timestamp": "2026-02-17T23:50:18Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.10.2 (Homebrew 2026-02-10)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/add-summary-memory",
-  "git_commit": "2b032cac12e3c1241aa09a69c8af15f08ccdef41",
+  "git_branch": "sbk/unified-wizard-paradigm",
+  "git_commit": "a22f48043b9fe0aa2d2f693347cbfad5201f3628",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

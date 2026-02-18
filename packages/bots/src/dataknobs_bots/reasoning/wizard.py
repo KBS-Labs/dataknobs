@@ -224,6 +224,7 @@ class WizardReasoning(ReasoningStrategy):
         extraction_scope: str = "wizard_session",
         conflict_strategy: str = "latest_wins",
         log_conflicts: bool = True,
+        initial_data: dict[str, Any] | None = None,
     ):
         """Initialize WizardReasoning.
 
@@ -253,6 +254,10 @@ class WizardReasoning(ReasoningStrategy):
                 the same field is extracted from multiple messages. "latest_wins"
                 (default) uses the most recent value.
             log_conflicts: Whether to log when field values conflict (default: True).
+            initial_data: Optional dict of data to inject into the wizard state
+                when a new conversation starts. Useful for passing configuration
+                values (e.g., quiz_bank_ids) from the bot config into the wizard
+                data dict where transforms can access them.
         """
         self._fsm = wizard_fsm
         self._extractor = extractor
@@ -270,6 +275,7 @@ class WizardReasoning(ReasoningStrategy):
         self._extraction_scope = extraction_scope
         self._conflict_strategy = conflict_strategy
         self._log_conflicts = log_conflicts
+        self._initial_data: dict[str, Any] = initial_data or {}
         # Active subflow FSM (None when in main flow)
         self._active_subflow_fsm: WizardFSM | None = None
 
@@ -464,6 +470,7 @@ class WizardReasoning(ReasoningStrategy):
             extraction_scope=extraction_scope,
             conflict_strategy=conflict_strategy,
             log_conflicts=log_conflicts,
+            initial_data=config.get("initial_data"),
         )
 
     async def generate(
@@ -555,76 +562,100 @@ class WizardReasoning(ReasoningStrategy):
         # Get current stage context from active FSM (subflow or main)
         active_fsm = self._get_active_fsm()
         stage = active_fsm.current_metadata
+        is_conversation = stage.get("mode") == "conversation"
 
-        # Extract structured data from user input
-        extraction = await self._extract_data(
-            user_message, stage, llm, manager, wizard_state
-        )
+        if is_conversation:
+            # Conversation mode: skip extraction, run intent detection
+            stage_name = stage.get("name", "unknown")
+            logger.debug(
+                "Conversation mode for stage '%s': skipping extraction",
+                stage_name,
+            )
+            await self._detect_intent(user_message, stage, wizard_state, llm)
+        else:
+            # Structured mode: extract data and validate
 
-        # Log extraction results for debugging
-        stage_name = stage.get("name", "unknown")
-        logger.debug(
-            "Extraction for stage '%s': confidence=%.2f, data_keys=%s",
-            stage_name,
-            extraction.confidence,
-            list(extraction.data.keys()) if extraction.data else [],
-        )
-        if extraction.data:
-            # Log actual extracted values (truncate long values)
-            for key, value in extraction.data.items():
-                if not key.startswith("_"):
-                    value_str = str(value)[:100]
-                    logger.debug("  Extracted %s = %r", key, value_str)
-
-        # Handle low confidence extraction
-        if not extraction.is_confident:
-            wizard_state.clarification_attempts += 1
-            # Save state (including incremented clarification_attempts)
-            self._save_wizard_state(manager, wizard_state)
-
-            # After 3 failed attempts, offer restart option
-            if wizard_state.clarification_attempts >= 3:
-                response = await self._generate_restart_offer(
-                    manager, llm, stage, extraction.errors
-                )
-            else:
-                response = await self._generate_clarification_response(
-                    manager, llm, stage, extraction.errors
-                )
-
-            # Add wizard metadata to clarification response
-            self._add_wizard_metadata(response, wizard_state, stage)
-            return response
-
-        # Reset clarification attempts on successful extraction
-        wizard_state.clarification_attempts = 0
-
-        # Normalize extracted data against schema before merging
-        schema = stage.get("schema")
-        if schema and extraction.data:
-            extraction.data = self._normalize_extracted_data(
-                extraction.data, schema
+            # Extract structured data from user input
+            extraction = await self._extract_data(
+                user_message, stage, llm, manager, wizard_state
             )
 
-        # Merge extracted data with wizard state
-        wizard_state.data.update(extraction.data)
-
-        # Update field-extraction tasks
-        self._update_field_tasks(wizard_state, extraction.data)
-
-        # Validate against stage schema
-        if stage.get("schema") and self._strict_validation:
-            validation_errors = self._validate_data(
-                wizard_state.data, stage["schema"]
+            # Log extraction results for debugging
+            stage_name = stage.get("name", "unknown")
+            logger.debug(
+                "Extraction for stage '%s': confidence=%.2f, data_keys=%s",
+                stage_name,
+                extraction.confidence,
+                list(extraction.data.keys()) if extraction.data else [],
             )
-            if validation_errors:
-                # Save state before returning validation error
-                self._save_wizard_state(manager, wizard_state)
-                response = await self._generate_validation_response(
-                    manager, llm, stage, validation_errors
+            if extraction.data:
+                # Log actual extracted values (truncate long values)
+                for key, value in extraction.data.items():
+                    if not key.startswith("_"):
+                        value_str = str(value)[:100]
+                        logger.debug("  Extracted %s = %r", key, value_str)
+
+            # Run intent detection on structured stages IF configured.
+            # This runs before the confidence check so that detour intents
+            # (e.g. "help", "confused") can trigger transitions even when
+            # extraction fails.
+            if stage.get("intent_detection"):
+                await self._detect_intent(
+                    user_message, stage, wizard_state, llm
                 )
-                self._add_wizard_metadata(response, wizard_state, stage)
-                return response
+
+            # If an intent was detected, skip clarification/validation and
+            # proceed to transition evaluation so the detour can fire.
+            if "_intent" not in wizard_state.data:
+                # Handle low confidence extraction
+                if not extraction.is_confident:
+                    wizard_state.clarification_attempts += 1
+                    # Save state (including incremented clarification_attempts)
+                    self._save_wizard_state(manager, wizard_state)
+
+                    # After 3 failed attempts, offer restart option
+                    if wizard_state.clarification_attempts >= 3:
+                        response = await self._generate_restart_offer(
+                            manager, llm, stage, extraction.errors
+                        )
+                    else:
+                        response = await self._generate_clarification_response(
+                            manager, llm, stage, extraction.errors
+                        )
+
+                    # Add wizard metadata to clarification response
+                    self._add_wizard_metadata(response, wizard_state, stage)
+                    return response
+
+                # Reset clarification attempts on successful extraction
+                wizard_state.clarification_attempts = 0
+
+                # Normalize extracted data against schema before merging
+                schema = stage.get("schema")
+                if schema and extraction.data:
+                    extraction.data = self._normalize_extracted_data(
+                        extraction.data, schema
+                    )
+
+                # Merge extracted data with wizard state
+                wizard_state.data.update(extraction.data)
+
+                # Update field-extraction tasks
+                self._update_field_tasks(wizard_state, extraction.data)
+
+                # Validate against stage schema
+                if stage.get("schema") and self._strict_validation:
+                    validation_errors = self._validate_data(
+                        wizard_state.data, stage["schema"]
+                    )
+                    if validation_errors:
+                        # Save state before returning validation error
+                        self._save_wizard_state(manager, wizard_state)
+                        response = await self._generate_validation_response(
+                            manager, llm, stage, validation_errors
+                        )
+                        self._add_wizard_metadata(response, wizard_state, stage)
+                        return response
 
         # Trigger stage exit hook if configured
         if self._hooks:
@@ -665,8 +696,11 @@ class WizardReasoning(ReasoningStrategy):
             list(wizard_state.data.keys()),
         )
 
+        # Inject raw message for condition evaluation (prefixed with _ per convention)
+        wizard_state.data["_message"] = user_message
         # Execute FSM transition using active FSM
         step_result = active_fsm.step(wizard_state.data)
+        wizard_state.data.pop("_message", None)
         to_stage = active_fsm.current_stage
 
         # Log transition result
@@ -860,9 +894,12 @@ class WizardReasoning(ReasoningStrategy):
         initial_tasks = self._build_initial_tasks()
         self._active_subflow_fsm = None  # Ensure we start in main flow
 
+        # Inject initial data from reasoning config (e.g., quiz_bank_ids).
+        # These are set at bot creation time and available to all transforms.
+        initial_data: dict[str, Any] = dict(self._initial_data)
+
         # Inject wizard settings into initial data so transforms can access them.
         # output_paths provides configurable file output locations.
-        initial_data: dict[str, Any] = {}
         output_paths = self._fsm.settings.get("output_paths")
         if output_paths:
             initial_data["_output_paths"] = dict(output_paths)
@@ -930,6 +967,7 @@ class WizardReasoning(ReasoningStrategy):
                 active_fsm.get_stage_suggestions(), state
             ),
             "stages": self._build_stages_roadmap(state),
+            "stage_mode": active_fsm.current_metadata.get("mode") or "structured",
         }
 
         # Expose subflow context when active
@@ -1409,6 +1447,75 @@ class WizardReasoning(ReasoningStrategy):
             )
 
         return None  # Not a navigation command
+
+    async def _detect_intent(
+        self,
+        message: str,
+        stage: dict[str, Any],
+        state: WizardState,
+        llm: Any,
+    ) -> None:
+        """Detect user intent and store in wizard state data.
+
+        Examines the stage's ``intent_detection`` configuration and
+        classifies the user message into one of the configured intents.
+        The result is stored in ``state.data["_intent"]`` for use in
+        transition conditions.
+
+        Supports two detection methods:
+
+        - **keyword**: Fast substring matching against configured keywords.
+          First matching intent wins.
+        - **llm**: Lightweight LLM classification.  Builds a prompt listing
+          intents and their descriptions, asks the LLM to pick one.
+
+        Args:
+            message: Raw user message text
+            stage: Current stage metadata (must contain ``intent_detection``)
+            state: Current wizard state (``_intent`` is set here)
+            llm: LLM provider instance (used only for ``method: llm``)
+        """
+        state.data.pop("_intent", None)
+
+        intent_config = stage.get("intent_detection")
+        if not intent_config:
+            return
+
+        method = intent_config.get("method", "keyword")
+        intents = intent_config.get("intents", [])
+
+        if method == "keyword":
+            lower_msg = message.lower()
+            for intent in intents:
+                if any(kw in lower_msg for kw in intent.get("keywords", [])):
+                    state.data["_intent"] = intent["id"]
+                    logger.debug("Keyword intent detected: %s", intent["id"])
+                    return
+
+        elif method == "llm":
+            intent_list = "\n".join(
+                f"- {i['id']}: {i.get('description', '')}" for i in intents
+            )
+            prompt = (
+                f"Classify the user's intent from this message:\n"
+                f'"{message}"\n\n'
+                f"Possible intents:\n{intent_list}\n\n"
+                f"Return ONLY the intent ID, or 'none' if no intent matches."
+            )
+            try:
+                from dataknobs_llm import LLMMessage
+
+                response = await llm.complete(
+                    messages=[LLMMessage(role="user", content=prompt)],
+                )
+                if response and response.content:
+                    intent_id = response.content.strip().lower()
+                    valid_ids = {i["id"] for i in intents}
+                    if intent_id in valid_ids:
+                        state.data["_intent"] = intent_id
+                        logger.debug("LLM intent detected: %s", intent_id)
+            except Exception:
+                logger.warning("LLM intent detection failed", exc_info=True)
 
     async def _extract_data(
         self,
