@@ -52,7 +52,8 @@ class ExecutionEngine(BaseExecutionEngine):
         max_retries: int = 3,
         retry_delay: float = 1.0,
         enable_hooks: bool = True,
-        selection_mode: TransitionSelectionMode = TransitionSelectionMode.HYBRID
+        selection_mode: TransitionSelectionMode = TransitionSelectionMode.HYBRID,
+        custom_functions: dict[str, Callable] | None = None,
     ):
         """Initialize execution engine.
 
@@ -63,13 +64,15 @@ class ExecutionEngine(BaseExecutionEngine):
             retry_delay: Delay between retries in seconds.
             enable_hooks: Enable execution hooks.
             selection_mode: Transition selection mode (strategy, scoring, or hybrid).
+            custom_functions: Optional custom functions to merge with FSM registry.
         """
         # Initialize base class
         super().__init__(fsm, strategy, selection_mode, max_retries, retry_delay)
 
         self.enable_hooks = enable_hooks
+        self._custom_functions: dict[str, Callable] = custom_functions or {}
 
-        # Hooks (specific to sync engine)
+        # Hooks
         self._pre_transition_hooks: List[Callable] = []
         self._post_transition_hooks: List[Callable] = []
         self._error_hooks: List[Callable] = []
@@ -445,11 +448,19 @@ class ExecutionEngine(BaseExecutionEngine):
                     # Skip processing for None data
                     return False
                 
+                # Build merged function registry
+                function_registry = getattr(self.fsm, 'function_registry', {})
+                if hasattr(function_registry, 'functions'):
+                    functions = dict(function_registry.functions)
+                else:
+                    functions = dict(function_registry)
+                functions.update(self._custom_functions)
+
                 # Create arc execution (pass current state as source)
                 arc_exec = ArcExecution(
                     arc,
                     source_state=context.current_state or "",
-                    function_registry=self.fsm.function_registry
+                    function_registry=functions
                 )
                 
                 # Execute with resource context

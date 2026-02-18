@@ -155,40 +155,43 @@ print(result)  # {"final_state": "end", "data": {"required_field": "value", "inp
 ### Using AdvancedFSM API
 
 ```python
-from dataknobs_fsm import AdvancedFSM
-from dataknobs_fsm.api.advanced import ExecutionMode, ExecutionHook
-
-class LoggingHook(ExecutionHook):
-    """Custom execution hook for logging."""
-
-    def on_state_enter(self, state, data):
-        print(f"Entering state: {state.name}")
-
-    def on_state_exit(self, state, data):
-        print(f"Exiting state: {state.name}")
-
-    def on_error(self, error, state):
-        print(f"Error in state {state.name}: {error}")
-
-# Create advanced FSM with debugging features
-fsm = AdvancedFSM(
-    config="fsm_config.yaml",
-    execution_mode=ExecutionMode.DEBUG,
-    hooks=[LoggingHook()]
+import asyncio
+from dataknobs_fsm.api.advanced import (
+    create_advanced_fsm, ExecutionMode, ExecutionHook
 )
 
-# Step-by-step execution
-for step in fsm.step_through({"input": "data"}):
-    print(f"Current state: {step.current_state}")
-    print(f"Data: {step.data}")
-    if step.can_continue:
-        # Optionally modify data or add breakpoints
-        continue
+# Set up execution hooks for monitoring
+hooks = ExecutionHook(
+    on_state_enter=lambda state: print(f"Entering: {state}"),
+    on_state_exit=lambda state: print(f"Exiting: {state}"),
+    on_error=lambda error: print(f"Error: {error}")
+)
 
-# Or run with profiling
-result, profile = fsm.run_with_profile({"input": "data"})
-print(f"Execution time: {profile.total_time}s")
-print(f"States visited: {profile.states_visited}")
+# Create FSM via factory (accepts config dict, YAML path, or FSM instance)
+fsm = create_advanced_fsm(
+    "fsm_config.yaml",
+    execution_mode=ExecutionMode.STEP_BY_STEP
+)
+fsm.set_hooks(hooks)
+
+async def run_workflow():
+    test_data = {"input": "data"}
+
+    # Step-by-step execution (step() returns StepResult)
+    async with fsm.execution_context(test_data) as context:
+        while True:
+            result = await fsm.step(context)
+            print(f"  {result.from_state} -> {result.to_state}")
+
+            if not result.success or result.is_complete or result.transition == "none":
+                break
+
+    # Or run with profiling
+    profile = await fsm.profile_execution(test_data)
+    print(f"Execution time: {profile['total_time']:.4f}s")
+    print(f"Transitions: {profile['transitions']}")
+
+asyncio.run(run_workflow())
 ```
 
 ### Using Configuration
@@ -250,8 +253,8 @@ resources:
 ```python
 from dataknobs_fsm.api.simple import SimpleFSM
 
-fsm = SimpleFSM.from_config("fsm_config.yaml")
-result = fsm.run({"user_id": "123", "data": "input"})
+fsm = SimpleFSM("fsm_config.yaml")
+result = fsm.process({"user_id": "123", "data": "input"})
 ```
 
 ## Architecture

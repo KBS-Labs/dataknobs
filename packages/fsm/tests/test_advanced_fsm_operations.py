@@ -364,7 +364,7 @@ class TestAdvancedFSMOperations:
         assert len(trace) > 0
         
         # Check that trace contains the expected path
-        trace_path = [f"{t['from']} → {t['to']}" for t in trace]
+        trace_path = [f"{t.get('from', t.get('from_state'))} → {t.get('to', t.get('to_state'))}" for t in trace]
         expected_transitions = [
             "start → initialize",
             "initialize → validate",
@@ -433,7 +433,7 @@ class TestAdvancedFSMOperations:
         trace = await fsm.trace_execution(test_data)
         
         # Verify it goes to validation_failed
-        trace_path = [f"{t['from']} → {t['to']}" for t in trace]
+        trace_path = [f"{t.get('from', t.get('from_state'))} → {t.get('to', t.get('to_state'))}" for t in trace]
         
         # Should go through initialize and validate, then to validation_failed
         assert any("validate → validation_failed" in path for path in trace_path)
@@ -481,5 +481,5 @@ class TestAdvancedFSMOperations:
         
         # All should complete successfully
         for trace in [create_trace, update_trace, delete_trace]:
-            trace_path = [f"{t['from']} → {t['to']}" for t in trace]
+            trace_path = [f"{t.get('from', t.get('from_state'))} → {t.get('to', t.get('to_state'))}" for t in trace]
             assert any("finalize → success" in path for path in trace_path)

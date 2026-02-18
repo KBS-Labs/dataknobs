@@ -333,6 +333,65 @@ class WizardFSM:
 
         return result
 
+    async def step_async(self, data: dict[str, Any]) -> StepResult:
+        """Execute one FSM step asynchronously with given data.
+
+        Mirrors step() but uses execute_step_async so that async
+        pre-tests, transforms, and hooks are properly awaited.
+
+        Args:
+            data: Data dict for transition evaluation
+
+        Returns:
+            StepResult with transition details
+        """
+        before_stage = self.current_stage
+        if not self._context:
+            self._context = self._fsm.create_context(data)
+        else:
+            # Update context data
+            if isinstance(self._context.data, dict):
+                self._context.data.update(data)
+            else:
+                self._context.data = data
+
+        result = await self._fsm.execute_step_async(self._context)
+        after_stage = self.current_stage
+
+        # Log transition evaluation details
+        if before_stage != after_stage:
+            stage_meta = self._stage_metadata.get(before_stage, {})
+            transitions = stage_meta.get("transitions", [])
+            for trans in transitions:
+                if trans.get("target") == after_stage:
+                    condition = trans.get("condition", "unconditional")
+                    logger.debug(
+                        "WizardFSM transition: '%s' -> '%s' via condition: %s",
+                        before_stage,
+                        after_stage,
+                        condition,
+                    )
+                    break
+        else:
+            stage_meta = self._stage_metadata.get(before_stage, {})
+            transitions = stage_meta.get("transitions", [])
+            if transitions:
+                logger.debug(
+                    "WizardFSM no transition from '%s': %d transitions defined, none matched",
+                    before_stage,
+                    len(transitions),
+                )
+                for trans in transitions:
+                    target = trans.get("target", "?")
+                    condition = trans.get("condition", "unconditional")
+                    logger.debug(
+                        "  - target='%s', condition='%s'",
+                        target,
+                        condition,
+                    )
+
+        return result
+
     def go_back(self, history: list[str]) -> bool:
         """Navigate to previous stage.
 

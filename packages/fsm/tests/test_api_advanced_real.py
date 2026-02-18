@@ -5,7 +5,7 @@ import asyncio
 from typing import Dict, Any
 from unittest.mock import AsyncMock
 
-from dataknobs_fsm.api.advanced import AdvancedFSM, ExecutionMode, ExecutionHook
+from dataknobs_fsm.api.advanced import AdvancedFSM, ExecutionMode, ExecutionHook, StepResult
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.execution.engine import TraversalStrategy
@@ -316,13 +316,16 @@ class TestAdvancedFSMStepExecution:
             # Initial state should be 'start'
             assert context.current_state == 'start'
             assert context.current_state_instance.definition.name == 'start'
-            
+
             # Execute one step
-            new_state = await advanced_fsm.step(context)
-            
+            result = await advanced_fsm.step(context)
+
+            # Should return StepResult
+            assert isinstance(result, StepResult)
+
             # Should transition to 'middle'
-            if new_state is not None:
-                assert new_state.definition.name == 'middle'
+            if result.success and result.transition != "none":
+                assert result.to_state == 'middle'
                 assert context.current_state == 'middle'
     
     @pytest.mark.asyncio
@@ -330,18 +333,18 @@ class TestAdvancedFSMStepExecution:
         """Test executing multiple steps to completion."""
         async with advanced_fsm.execution_context({'test': 'data'}) as context:
             states_visited = [context.current_state_instance.definition.name]
-            
+
             # Execute steps until no more transitions
             while True:
-                new_state = await advanced_fsm.step(context)
-                if new_state is None:
+                result = await advanced_fsm.step(context)
+                if result.transition == "none" or not result.success:
                     break
-                states_visited.append(new_state.definition.name)
-                
+                states_visited.append(result.to_state)
+
                 # Safety check to prevent infinite loops
                 if len(states_visited) > 10:
                     break
-            
+
             # Should have visited start -> middle -> end
             assert 'start' in states_visited
             assert states_visited[-1] == 'end' or len(states_visited) > 1
@@ -350,41 +353,41 @@ class TestAdvancedFSMStepExecution:
     async def test_step_with_specific_arc(self, complex_fsm):
         """Test step execution with specific arc selection."""
         advanced_fsm = AdvancedFSM(complex_fsm)
-        
+
         # Use valid data that will pass validation
         async with advanced_fsm.execution_context({'value': 10}) as context:
             # Should start at 'validate' state
             assert context.current_state == 'validate'
             assert context.current_state_instance.definition.name == 'validate'
-            
+
             # Execute validation step (should set 'valid' to true)
-            new_state = await advanced_fsm.step(context)
-            
-            if new_state is not None:
+            result = await advanced_fsm.step(context)
+
+            if result.success and result.transition != "none":
                 # After validation, should be able to take 'valid' arc
-                next_state = await advanced_fsm.step(context, arc_name='valid')
-                
-                if next_state is not None:
-                    assert next_state.definition.name == 'process'
+                next_result = await advanced_fsm.step(context, arc_name='valid')
+
+                if next_result.success and next_result.transition != "none":
+                    assert next_result.to_state == 'process'
     
     @pytest.mark.asyncio
     async def test_step_with_tracing(self, advanced_fsm):
         """Test step execution with tracing enabled."""
         advanced_fsm.execution_mode = ExecutionMode.TRACE
-        
+
         async with advanced_fsm.execution_context({'test': 'data'}) as context:
             # Execute a few steps
             await advanced_fsm.step(context)
             await advanced_fsm.step(context)
-            
+
             # Trace buffer should have entries
             assert len(advanced_fsm._trace_buffer) >= 0
-            
+
             # Each trace entry should have required fields
             for trace in advanced_fsm._trace_buffer:
-                assert 'from' in trace
-                assert 'to' in trace
-                assert 'arc' in trace
+                assert 'from_state' in trace
+                assert 'to_state' in trace
+                assert 'transition' in trace
                 assert 'data' in trace
 
 
@@ -452,23 +455,23 @@ class TestAdvancedFSMComplexWorkflows:
     async def test_workflow_with_loops(self, complex_fsm):
         """Test workflow that can loop (review -> process -> review)."""
         advanced_fsm = AdvancedFSM(complex_fsm)
-        
+
         async with advanced_fsm.execution_context({'value': 10}) as context:
             states_visited = []
             max_steps = 10  # Prevent infinite loops
-            
+
             for _ in range(max_steps):
                 current_name = context.current_state
                 states_visited.append(current_name)
-                
+
                 # Stop if we reach an end state
                 if current_name in ['complete', 'error']:
                     break
-                
-                new_state = await advanced_fsm.step(context)
-                if new_state is None:
+
+                result = await advanced_fsm.step(context)
+                if result.transition == "none" or not result.success:
                     break
-            
+
             # Should have executed some workflow
             assert len(states_visited) > 0
             assert states_visited[0] == 'validate'
@@ -478,15 +481,16 @@ class TestAdvancedFSMComplexWorkflows:
         """Test execution that stops at breakpoints."""
         # Set a breakpoint
         advanced_fsm.add_breakpoint('middle')
-        
+
         async with advanced_fsm.execution_context({'test': 'data'}) as context:
             # Run until breakpoint
-            if hasattr(advanced_fsm, 'run_until_breakpoint'):
-                final_state = await advanced_fsm.run_until_breakpoint(context)
-                
-                # Should stop at the breakpoint
-                if final_state is not None:
-                    assert final_state.definition.name == 'middle'
+            result = await advanced_fsm.run_until_breakpoint(context)
+
+            # Should stop at the breakpoint
+            if result is not None:
+                assert isinstance(result, StepResult)
+                # Either we hit the breakpoint or reached it during stepping
+                assert result.at_breakpoint or result.to_state == 'middle'
 
 
 class TestAdvancedFSMIntegration:
@@ -549,13 +553,13 @@ class TestAdvancedFSMIntegration:
             # Execute until completion
             steps = 0
             while steps < 5:  # Safety limit
-                new_state = await advanced_fsm.step(context)
-                if new_state is None:
+                result = await advanced_fsm.step(context)
+                if result.transition == "none" or not result.success:
                     break
                 steps += 1
-                
+
                 # Stop if we reach end state
-                if context.current_state == 'end':
+                if result.is_complete or context.current_state == 'end':
                     break
         
         # Verify monitoring captured execution

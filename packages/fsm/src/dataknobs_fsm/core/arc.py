@@ -1,5 +1,6 @@
 """Arc implementation for FSM state transitions."""
 
+import inspect
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
@@ -304,6 +305,207 @@ class ArcExecution:
             result = transform_func(data, func_context)
         else:
             raise ValueError(f"Transform {transform_name} is not callable")
+
+        # Handle ExecutionResult objects
+        from dataknobs_fsm.functions.base import ExecutionResult
+        if isinstance(result, ExecutionResult):
+            if result.success:
+                return result.data
+            raise FunctionError(
+                result.error or "Transform failed",
+                from_state=self.source_state,
+                to_state=self.arc_def.target_state
+            )
+
+        return result
+
+    async def can_execute_async(
+        self,
+        context: "ExecutionContext",
+        data: Any = None
+    ) -> bool:
+        """Check if arc can be executed, awaiting async pre-tests.
+
+        Mirrors can_execute() but awaits the result if the pre-test
+        function is a coroutine.
+
+        Args:
+            context: Execution context.
+            data: Current data.
+
+        Returns:
+            True if arc can be executed.
+        """
+        if not self.arc_def.pre_test:
+            return True
+
+        # Handle both FunctionRegistry and dict for pre-test function lookup
+        if hasattr(self.function_registry, 'get_function'):
+            pre_test_func = self.function_registry.get_function(self.arc_def.pre_test)
+        elif isinstance(self.function_registry, dict):
+            pre_test_func = self.function_registry.get(self.arc_def.pre_test)
+        else:
+            pre_test_func = None
+
+        if pre_test_func is None:
+            raise FunctionError(
+                f"Pre-test function '{self.arc_def.pre_test}' not found",
+                from_state=self.source_state,
+                to_state=self.arc_def.target_state
+            )
+
+        try:
+            # Create function context with resources
+            func_context = self._create_function_context(context)
+
+            # Execute pre-test
+            result = pre_test_func(data, func_context)
+            if inspect.isawaitable(result):
+                result = await result
+
+            # Handle tuple return from InterfaceWrapper (returns (result, error))
+            if isinstance(result, tuple) and len(result) == 2:
+                return bool(result[0])
+            return bool(result)
+
+        except Exception as e:
+            raise FunctionError(
+                f"Pre-test execution failed: {e}",
+                from_state=self.source_state,
+                to_state=self.arc_def.target_state
+            ) from e
+
+    async def execute_async(
+        self,
+        context: "ExecutionContext",
+        data: Any = None,
+        stream_enabled: bool = False
+    ) -> Any:
+        """Execute the arc transition, awaiting async transforms.
+
+        Mirrors execute() but uses _execute_single_transform_async
+        so that async transform functions are properly awaited.
+
+        Args:
+            context: Execution context.
+            data: Current data.
+            stream_enabled: Whether streaming is enabled.
+
+        Returns:
+            Transformed data.
+        """
+        import time
+        start_time = time.time()
+
+        try:
+            # Get state resources from context if available
+            state_resources = getattr(context, 'current_state_resources', None)
+
+            # Allocate required resources (merging with state resources)
+            resources = self._allocate_resources(context, state_resources)
+
+            # Execute transform(s) if defined
+            if self.arc_def.transform:
+                # Normalize to list for uniform handling
+                transform_names = (
+                    self.arc_def.transform
+                    if isinstance(self.arc_def.transform, list)
+                    else [self.arc_def.transform]
+                )
+
+                # Create function context with resources (shared across all transforms)
+                func_context = self._create_function_context(
+                    context,
+                    resources,
+                    stream_enabled
+                )
+
+                result = data
+                for transform_name in transform_names:
+                    result = await self._execute_single_transform_async(
+                        transform_name, result, func_context, stream_enabled
+                    )
+            else:
+                # No transform, pass data through
+                result = data
+
+            # Update statistics
+            self.execution_count += 1
+            self.success_count += 1
+
+            return result
+
+        except Exception as e:
+            self.execution_count += 1
+            self.failure_count += 1
+
+            raise FunctionError(
+                f"Arc execution failed: {e}",
+                from_state=self.source_state,
+                to_state=self.arc_def.target_state
+            ) from e
+        finally:
+            elapsed = time.time() - start_time
+            self.total_execution_time += elapsed
+
+            # Release resources
+            if 'resources' in locals():
+                self._release_resources(context, resources)
+
+    async def _execute_single_transform_async(
+        self,
+        transform_name: str,
+        data: Any,
+        func_context: FunctionContext,
+        stream_enabled: bool = False,
+    ) -> Any:
+        """Execute a single transform function, awaiting if async.
+
+        Mirrors _execute_single_transform() but awaits the result
+        when the transform function returns a coroutine.
+
+        Args:
+            transform_name: Registered name of the transform function.
+            data: Input data to transform.
+            func_context: Function context with resources and metadata.
+            stream_enabled: Whether streaming is enabled.
+
+        Returns:
+            Transformed data.
+
+        Raises:
+            FunctionError: If the transform function is not found or fails.
+        """
+        # Look up the transform function
+        if hasattr(self.function_registry, 'get_function'):
+            transform_func = self.function_registry.get_function(transform_name)
+        elif isinstance(self.function_registry, dict):
+            transform_func = self.function_registry.get(transform_name)
+        else:
+            transform_func = None
+
+        if transform_func is None:
+            raise FunctionError(
+                f"Transform function '{transform_name}' not found",
+                from_state=self.source_state,
+                to_state=self.arc_def.target_state
+            )
+
+        # Handle streaming vs non-streaming execution
+        if stream_enabled and hasattr(transform_func, 'stream_capable'):
+            return self._execute_streaming(transform_func, data, func_context)
+
+        # Call the transform function
+        if hasattr(transform_func, 'transform'):
+            result = transform_func.transform(data, func_context)
+        elif callable(transform_func):
+            result = transform_func(data, func_context)
+        else:
+            raise ValueError(f"Transform {transform_name} is not callable")
+
+        # Await if the result is a coroutine
+        if inspect.isawaitable(result):
+            result = await result
 
         # Handle ExecutionResult objects
         from dataknobs_fsm.functions.base import ExecutionResult

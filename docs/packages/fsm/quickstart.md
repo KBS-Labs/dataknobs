@@ -327,8 +327,9 @@ for result in results:
 Implement error handling with the AdvancedFSM:
 
 ```python
-from dataknobs_fsm import AdvancedFSM, ExecutionMode
+import asyncio
 import random
+from dataknobs_fsm.api.advanced import create_advanced_fsm, ExecutionMode
 
 def risky_operation(state):
     """Operation that might fail."""
@@ -372,17 +373,20 @@ config = {
     ]
 }
 
-# Create FSM with error handling
-fsm = AdvancedFSM(
+# Create FSM with error handling using factory function
+fsm = create_advanced_fsm(
     config,
-    execution_mode=ExecutionMode.DEBUG,
-    custom_functions={"risky_operation": risky_operation}
+    custom_functions={"risky_operation": risky_operation},
+    execution_mode=ExecutionMode.DEBUG
 )
 
-# Run with automatic error recovery
-result = fsm.run({"input": "data"})
-print(f"Success after retries: {result['success']}")
-print(f"Final data: {result['data']}")
+# Execute and check result
+async def run_error_handling():
+    trace = await fsm.trace_execution({"input": "data"})
+    for entry in trace:
+        print(f"  {entry.get('from_state')} -> {entry.get('to_state')}")
+
+asyncio.run(run_error_handling())
 ```
 
 ## Advanced Features with AdvancedFSM
@@ -390,35 +394,40 @@ print(f"Final data: {result['data']}")
 For debugging and step-by-step execution:
 
 ```python
-from dataknobs_fsm import AdvancedFSM, ExecutionMode, ExecutionHook
+import asyncio
+from dataknobs_fsm.api.advanced import create_advanced_fsm, ExecutionMode, ExecutionHook
 
-class DebugHook(ExecutionHook):
-    """Custom hook for debugging."""
-
-    def on_state_enter(self, state, data):
-        print(f"→ Entering: {state.name}")
-        print(f"  Data: {data}")
-
-    def on_state_exit(self, state, data):
-        print(f"← Exiting: {state.name}")
-
-# Create FSM with debugging
-fsm = AdvancedFSM(
-    "workflow.yaml",
-    execution_mode=ExecutionMode.STEP_BY_STEP,
-    hooks=[DebugHook()]
+# Set up hooks for monitoring state transitions
+hooks = ExecutionHook(
+    on_state_enter=lambda state: print(f"-> Entering: {state}"),
+    on_state_exit=lambda state: print(f"<- Exiting: {state}")
 )
 
-# Step through execution
-for step in fsm.step_through({"input": "data"}):
-    print(f"\nCurrent State: {step.current_state}")
-    if input("Continue? (y/n): ").lower() != 'y':
-        break
+# Create FSM via factory (accepts config dict, YAML path, or FSM instance)
+fsm = create_advanced_fsm(
+    "workflow.yaml",
+    execution_mode=ExecutionMode.STEP_BY_STEP
+)
+fsm.set_hooks(hooks)
 
-# Or run with profiling
-result, profile = fsm.run_with_profile({"input": "data"})
-print(f"\nExecution took {profile.total_time:.2f}s")
-print(f"States visited: {profile.states_visited}")
+async def debug_workflow():
+    test_data = {"input": "data"}
+
+    # Step-by-step execution (step() returns StepResult)
+    async with fsm.execution_context(test_data) as context:
+        while True:
+            result = await fsm.step(context)
+            print(f"  {result.from_state} -> {result.to_state}")
+
+            if not result.success or result.is_complete or result.transition == "none":
+                break
+
+    # Or run with profiling
+    profile = await fsm.profile_execution(test_data)
+    print(f"\nExecution took {profile['total_time']:.4f}s")
+    print(f"Transitions: {profile['transitions']}")
+
+asyncio.run(debug_workflow())
 ```
 
 ## Next Steps
