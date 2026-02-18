@@ -698,8 +698,8 @@ class WizardReasoning(ReasoningStrategy):
 
         # Inject raw message for condition evaluation (prefixed with _ per convention)
         wizard_state.data["_message"] = user_message
-        # Execute FSM transition using active FSM
-        step_result = active_fsm.step(wizard_state.data)
+        # Execute FSM transition using active FSM (async to support async transforms)
+        step_result = await active_fsm.step_async(wizard_state.data)
         wizard_state.data.pop("_message", None)
         to_stage = active_fsm.current_stage
 
@@ -765,8 +765,8 @@ class WizardReasoning(ReasoningStrategy):
             old_stage_name = wizard_state.current_stage
             duration_ms = (time.time() - wizard_state.stage_entry_time) * 1000
 
-            # Execute FSM transition for auto-advance
-            auto_step_result = active_fsm.step(wizard_state.data)
+            # Execute FSM transition for auto-advance (async to support async transforms)
+            auto_step_result = await active_fsm.step_async(wizard_state.data)
             new_stage_name = active_fsm.current_stage
 
             if new_stage_name == old_stage_name:
