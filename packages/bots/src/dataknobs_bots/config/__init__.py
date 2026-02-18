@@ -33,6 +33,12 @@ Example:
 
 from .builder import DynaBotConfigBuilder
 from .drafts import ConfigDraftManager, DraftMetadata
+from .wizard_builder import (
+    StageConfig,
+    TransitionConfig,
+    WizardConfig,
+    WizardConfigBuilder,
+)
 from .resolution import (
     BotResourceResolver,
     create_bot_resolver,
@@ -72,4 +78,9 @@ __all__ = [
     "ConfigTemplateRegistry",
     "ConfigDraftManager",
     "DraftMetadata",
+    # Wizard config builder
+    "WizardConfigBuilder",
+    "WizardConfig",
+    "StageConfig",
+    "TransitionConfig",
 ]

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import copy
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from typing_extensions import Self
 
@@ -33,6 +33,9 @@ import yaml
 from .schema import DynaBotConfigSchema
 from .templates import ConfigTemplate
 from .validation import ConfigValidator, ValidationResult
+
+if TYPE_CHECKING:
+    from .wizard_builder import WizardConfig
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +191,36 @@ class DynaBotConfigBuilder:
         reasoning_config.update(kwargs)
         self._config["reasoning"] = reasoning_config
         return self
+
+    def set_reasoning_wizard(
+        self,
+        wizard_config: str | WizardConfig,
+        **kwargs: Any,
+    ) -> Self:
+        """Set wizard reasoning with a config path or WizardConfig object.
+
+        When ``wizard_config`` is a ``WizardConfig`` object, the caller
+        is responsible for writing it to disk via ``wizard_config.to_file()``
+        before the bot loads.
+
+        Args:
+            wizard_config: Path to a wizard YAML file, or a
+                ``WizardConfig`` object (whose ``name`` is used as the
+                config path identifier).
+            **kwargs: Additional reasoning settings
+                (extraction_config, etc.).
+
+        Returns:
+            self for method chaining.
+        """
+        config_path = (
+            wizard_config
+            if isinstance(wizard_config, str)
+            else wizard_config.name
+        )
+        return self.set_reasoning(
+            "wizard", wizard_config=config_path, **kwargs
+        )
 
     def set_system_prompt(
         self,
