@@ -33,6 +33,7 @@ Example:
 
 from .builder import DynaBotConfigBuilder
 from .drafts import ConfigDraftManager, DraftMetadata
+from .tool_catalog import ToolCatalog, ToolEntry, create_default_catalog, default_catalog
 from .wizard_builder import (
     StageConfig,
     TransitionConfig,
@@ -83,4 +84,9 @@ __all__ = [
     "WizardConfig",
     "StageConfig",
     "TransitionConfig",
+    # Tool catalog
+    "ToolCatalog",
+    "ToolEntry",
+    "create_default_catalog",
+    "default_catalog",
 ]

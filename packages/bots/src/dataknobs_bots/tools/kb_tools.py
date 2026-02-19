@@ -80,6 +80,18 @@ class CheckKnowledgeSourceTool(ContextAwareTool):
     - ``_kb_resources``: list[dict] — initialized if not present
     """
 
+    @classmethod
+    def catalog_metadata(cls) -> dict[str, Any]:
+        """Return catalog metadata for this tool class."""
+        return {
+            "name": "check_knowledge_source",
+            "description": (
+                "Check if a knowledge source directory exists and "
+                "contains usable files."
+            ),
+            "tags": ("configbot", "kb"),
+        }
+
     def __init__(self) -> None:
         """Initialize the tool."""
         super().__init__(
@@ -194,6 +206,18 @@ class ListKBResourcesTool(ContextAwareTool):
     to show what resources have been added so far.
     """
 
+    @classmethod
+    def catalog_metadata(cls) -> dict[str, Any]:
+        """Return catalog metadata for this tool class."""
+        return {
+            "name": "list_kb_resources",
+            "description": (
+                "List the knowledge base resources added to the "
+                "current bot configuration."
+            ),
+            "tags": ("configbot", "kb"),
+        }
+
     def __init__(self) -> None:
         """Initialize the tool."""
         super().__init__(
@@ -255,6 +279,17 @@ class AddKBResourceTool(ContextAwareTool):
     Attributes:
         _knowledge_dir: Optional base directory for writing inline content.
     """
+
+    @classmethod
+    def catalog_metadata(cls) -> dict[str, Any]:
+        """Return catalog metadata for this tool class."""
+        return {
+            "name": "add_kb_resource",
+            "description": (
+                "Add a resource to the bot's knowledge base."
+            ),
+            "tags": ("configbot", "kb"),
+        }
 
     def __init__(self, knowledge_dir: Path | None = None) -> None:
         """Initialize the tool.
@@ -401,6 +436,18 @@ class RemoveKBResourceTool(ContextAwareTool):
     - ``_kb_resources``: list[dict] — resource list (remove by name)
     """
 
+    @classmethod
+    def catalog_metadata(cls) -> dict[str, Any]:
+        """Return catalog metadata for this tool class."""
+        return {
+            "name": "remove_kb_resource",
+            "description": (
+                "Remove a resource from the bot's knowledge base "
+                "resource list."
+            ),
+            "tags": ("configbot", "kb"),
+        }
+
     def __init__(self) -> None:
         """Initialize the tool."""
         super().__init__(
@@ -489,6 +536,17 @@ class IngestKnowledgeBaseTool(ContextAwareTool):
     Attributes:
         _knowledge_dir: Optional base directory for knowledge files.
     """
+
+    @classmethod
+    def catalog_metadata(cls) -> dict[str, Any]:
+        """Return catalog metadata for this tool class."""
+        return {
+            "name": "ingest_knowledge_base",
+            "description": (
+                "Finalize and ingest the knowledge base resources."
+            ),
+            "tags": ("configbot", "kb"),
+        }
 
     def __init__(self, knowledge_dir: Path | None = None) -> None:
         """Initialize the tool.

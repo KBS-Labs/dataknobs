@@ -35,6 +35,18 @@ class KnowledgeSearchTool(ContextAwareTool):
         ```
     """
 
+    @classmethod
+    def catalog_metadata(cls) -> dict[str, Any]:
+        """Return catalog metadata for this tool class."""
+        return {
+            "name": "knowledge_search",
+            "description": (
+                "Search the knowledge base for relevant information."
+            ),
+            "tags": ("general", "rag"),
+            "requires": ("knowledge_base",),
+        }
+
     def __init__(self, knowledge_base: Any, name: str = "knowledge_search"):
         """Initialize knowledge search tool.
 
