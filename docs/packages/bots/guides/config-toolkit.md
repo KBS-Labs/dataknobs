@@ -13,6 +13,7 @@ The toolkit provides the following layers:
 | **Templates** | `ConfigTemplate`, `ConfigTemplateRegistry`, `TemplateVariable` | Template loading, variable substitution, tag-based filtering |
 | **Builder** | `DynaBotConfigBuilder` | Fluent builder for DynaBot configs |
 | **Drafts** | `ConfigDraftManager`, `DraftMetadata` | File-based draft lifecycle management |
+| **Tool Catalog** | `ToolCatalog`, `ToolEntry`, `CatalogDescribable` | Tool name → class path registry with metadata, tags, and dependency tracking |
 | **Tools** | `ListTemplatesTool`, `GetTemplateDetailsTool`, `PreviewConfigTool`, `ValidateConfigTool`, `SaveConfigTool`, `ListAvailableToolsTool` | LLM-callable tools for wizard flows |
 | **KB Tools** | `CheckKnowledgeSourceTool`, `ListKBResourcesTool`, `AddKBResourceTool`, `RemoveKBResourceTool`, `IngestKnowledgeBaseTool` | RAG resource management during wizard flows |
 
@@ -132,6 +133,41 @@ Two output formats:
 
 `ConfigDraftManager` provides file-based draft persistence for interactive config creation with automatic cleanup of stale drafts.
 
+### Tool Catalog
+
+`ToolCatalog` maps tool names to fully-qualified class paths and default configuration. Built on `Registry[ToolEntry]` for thread safety, metrics, and consistent error handling.
+
+The `default_catalog` singleton is pre-populated with all 12 built-in tools. Use `create_default_catalog()` for an extensible copy.
+
+```python
+from dataknobs_bots.config import (
+    DynaBotConfigBuilder, default_catalog, create_default_catalog,
+)
+
+# Add tools to builder by name
+builder = DynaBotConfigBuilder()
+builder.add_tool_by_name(default_catalog, "knowledge_search", k=10)
+builder.add_tools_by_name(default_catalog, ["list_templates", "preview_config"])
+
+# Extend with custom tools
+catalog = create_default_catalog()
+catalog.register_tool(
+    name="calculator",
+    class_path="myapp.tools.CalculatorTool",
+    description="Perform math calculations.",
+    tags=("educational",),
+)
+
+# Generate bot config entries
+config = catalog.to_bot_config("knowledge_search", k=10)
+# {"class": "dataknobs_bots.tools.knowledge_search.KnowledgeSearchTool",
+#  "params": {"k": 10}}
+```
+
+Tool classes can self-describe via `catalog_metadata()` classmethod (the `CatalogDescribable` protocol). `WizardConfigBuilder` validates stage tool names against the catalog when one is provided via `set_tool_catalog()`.
+
+The `default_catalog` contains all 12 built-in tools with tag-based filtering, dependency validation, serialization, and self-describing tool support via `catalog_metadata()`.
+
 ### Tools
 
 Six `ContextAwareTool` implementations for wizard-driven config flows:
@@ -169,9 +205,10 @@ The toolkit uses composition, not subclassing. Consumers provide:
 2. **`on_save`** callback — performs post-save actions
 3. **`portable`** flag — use `build_portable()` for bot-wrapped output
 4. **`available_tools`** catalog — consumer-specific tool list
-5. **`knowledge_dir`** path — base directory for KB files
-6. **`register_extension()`** — adds domain-specific schema sections
-7. **`set_custom_section()`** — adds domain-specific config sections
+5. **`ToolCatalog`** — tool name → class path registry, extensible via `create_default_catalog()`
+6. **`knowledge_dir`** path — base directory for KB files
+7. **`register_extension()`** — adds domain-specific schema sections
+8. **`set_custom_section()`** — adds domain-specific config sections
 
 ```python
 # Example: EduBot setup
