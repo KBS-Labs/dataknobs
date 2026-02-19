@@ -10,7 +10,11 @@ from .config import (
     DynaBotConfigBuilder,
     DynaBotConfigSchema,
     TemplateVariable,
+    ToolCatalog,
+    ToolEntry,
     ValidationResult,
+    create_default_catalog,
+    default_catalog,
 )
 from .knowledge import RAGKnowledgeBase, create_knowledge_base_from_config
 from .memory import BufferMemory, Memory, SummaryMemory, VectorMemory, create_memory_from_config
@@ -65,6 +69,11 @@ __all__ = [
     "ConfigTemplateRegistry",
     "ConfigDraftManager",
     "DraftMetadata",
+    # Tool catalog
+    "ToolCatalog",
+    "ToolEntry",
+    "create_default_catalog",
+    "default_catalog",
     # Config Tools
     "ListTemplatesTool",
     "GetTemplateDetailsTool",

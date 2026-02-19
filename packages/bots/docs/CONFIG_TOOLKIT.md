@@ -13,6 +13,7 @@ The toolkit provides the following layers:
 | **Templates** | `ConfigTemplate`, `ConfigTemplateRegistry`, `TemplateVariable` | Template loading, variable substitution, tag-based filtering |
 | **Builder** | `DynaBotConfigBuilder` | Fluent builder for DynaBot configs |
 | **Drafts** | `ConfigDraftManager`, `DraftMetadata` | File-based draft lifecycle management |
+| **Tool Catalog** | `ToolCatalog`, `ToolEntry`, `CatalogDescribable` | Tool name → class path registry with metadata, tags, and dependency tracking |
 | **Tools** | `ListTemplatesTool`, `GetTemplateDetailsTool`, `PreviewConfigTool`, `ValidateConfigTool`, `SaveConfigTool`, `ListAvailableToolsTool` | LLM-callable tools for wizard flows |
 | **KB Tools** | `CheckKnowledgeSourceTool`, `ListKBResourcesTool`, `AddKBResourceTool`, `RemoveKBResourceTool`, `IngestKnowledgeBaseTool` | RAG resource management during wizard flows |
 
@@ -67,6 +68,23 @@ flat = builder.build()
 # Portable format with bot wrapper
 portable = builder.build_portable()
 # {"bot": {"llm": {"$resource": "default", ...}}, "domain": {"id": "my-bot"}}
+```
+
+### Adding Tools by Name
+
+```python
+from dataknobs_bots.config import DynaBotConfigBuilder, default_catalog
+
+config = (
+    DynaBotConfigBuilder()
+    .set_llm("ollama", model="llama3.2")
+    .set_conversation_storage("memory")
+    .set_reasoning("react")
+    .add_tool_by_name(default_catalog, "knowledge_search", k=10)
+    .build()
+)
+# tool entry: {"class": "dataknobs_bots.tools.knowledge_search.KnowledgeSearchTool",
+#              "params": {"k": 10}}
 ```
 
 ## Schema
@@ -216,6 +234,147 @@ final = manager.finalize(draft_id, final_name="my-bot")
 
 # Cleanup stale drafts
 cleaned = manager.cleanup_stale()
+```
+
+## Tool Catalog
+
+`ToolCatalog` maps tool names to fully-qualified class paths and default configuration. It serves as a single source of truth for tools available to config builders and wizard flows.
+
+Built on `Registry[ToolEntry]` from `dataknobs-common` for thread safety, metrics, and consistent error handling.
+
+### Built-in Tools
+
+The `default_catalog` singleton is pre-populated with all 12 built-in tools:
+
+| Name | Class | Tags | Requires |
+|------|-------|------|----------|
+| `knowledge_search` | `KnowledgeSearchTool` | general, rag | knowledge_base |
+| `list_templates` | `ListTemplatesTool` | configbot | template_registry |
+| `get_template_details` | `GetTemplateDetailsTool` | configbot | template_registry |
+| `preview_config` | `PreviewConfigTool` | configbot | builder_factory |
+| `validate_config` | `ValidateConfigTool` | configbot | validator |
+| `save_config` | `SaveConfigTool` | configbot | draft_manager |
+| `list_available_tools` | `ListAvailableToolsTool` | configbot | — |
+| `check_knowledge_source` | `CheckKnowledgeSourceTool` | configbot, kb | — |
+| `list_kb_resources` | `ListKBResourcesTool` | configbot, kb | — |
+| `add_kb_resource` | `AddKBResourceTool` | configbot, kb | — |
+| `remove_kb_resource` | `RemoveKBResourceTool` | configbot, kb | — |
+| `ingest_knowledge_base` | `IngestKnowledgeBaseTool` | configbot, kb | — |
+
+### Usage with Builders
+
+```python
+from dataknobs_bots.config import DynaBotConfigBuilder, default_catalog
+
+# Single tool by name
+builder = DynaBotConfigBuilder()
+builder.add_tool_by_name(default_catalog, "knowledge_search", k=10)
+
+# Multiple tools by name with per-tool overrides
+builder.add_tools_by_name(
+    default_catalog,
+    ["list_templates", "preview_config"],
+    overrides={"list_templates": {"template_dir": "custom/templates"}},
+)
+```
+
+### Extending the Catalog
+
+Use `create_default_catalog()` for a fresh copy that can be extended without affecting the singleton:
+
+```python
+from dataknobs_bots.config import create_default_catalog
+
+catalog = create_default_catalog()
+catalog.register_tool(
+    name="calculator",
+    class_path="myapp.tools.CalculatorTool",
+    description="Perform math calculations.",
+    tags=("educational",),
+)
+```
+
+### Self-Describing Tools
+
+Tool classes can declare their own catalog metadata via the `CatalogDescribable` protocol:
+
+```python
+from dataknobs_llm.tools import ContextAwareTool
+
+class MyTool(ContextAwareTool):
+    @classmethod
+    def catalog_metadata(cls) -> dict[str, Any]:
+        return {
+            "name": "my_tool",
+            "description": "Does something useful.",
+            "tags": ("general",),
+            "requires": ("knowledge_base",),
+        }
+    # ... rest of tool implementation
+
+# Register from the class — class_path is computed automatically
+catalog.register_from_class(MyTool)
+```
+
+### Config Generation
+
+```python
+# Single tool config dict
+config = catalog.to_bot_config("knowledge_search", k=10)
+# {"class": "dataknobs_bots.tools.knowledge_search.KnowledgeSearchTool",
+#  "params": {"k": 10}}
+
+# Multiple tool configs
+configs = catalog.to_bot_configs(
+    ["knowledge_search", "list_templates"],
+    overrides={"knowledge_search": {"k": 5}},
+)
+```
+
+### Dependency Validation
+
+```python
+# Check that tool requirements are satisfied by a config
+warnings = catalog.check_requirements(
+    ["knowledge_search", "list_templates"],
+    {"knowledge_base": {...}, "template_registry": {...}},
+)
+# warnings is empty — both requirements met
+```
+
+### Wizard Builder Integration
+
+When a `ToolCatalog` is provided to `WizardConfigBuilder`, stage tool names are validated against the catalog during `validate()`:
+
+```python
+from dataknobs_bots.config.wizard_builder import WizardConfigBuilder
+from dataknobs_bots.config import default_catalog
+
+builder = (
+    WizardConfigBuilder("my-wizard")
+    .set_tool_catalog(default_catalog)
+    .add_conversation_stage(
+        name="search",
+        tools=["knowledge_search", "nonexistent_tool"],
+    )
+)
+
+result = builder.validate()
+# Error: Stage 'search' references unknown tool 'nonexistent_tool'
+#        (not in the tool catalog)
+```
+
+### Serialization
+
+Catalogs serialize to/from dicts (suitable for YAML storage):
+
+```python
+# Serialize
+data = catalog.to_dict()
+# {"tools": [{"name": "knowledge_search", "class_path": "...", ...}, ...]}
+
+# Deserialize
+restored = ToolCatalog.from_dict(data)
 ```
 
 ## Tools

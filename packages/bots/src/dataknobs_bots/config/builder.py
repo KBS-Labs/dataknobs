@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import copy
 import logging
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 from typing_extensions import Self
@@ -35,6 +36,7 @@ from .templates import ConfigTemplate
 from .validation import ConfigValidator, ValidationResult
 
 if TYPE_CHECKING:
+    from .tool_catalog import ToolCatalog
     from .wizard_builder import WizardConfig
 
 logger = logging.getLogger(__name__)
@@ -282,6 +284,54 @@ class DynaBotConfigBuilder:
         if params:
             tool_entry["params"] = dict(params)
         tools.append(tool_entry)
+        return self
+
+    def add_tool_by_name(
+        self,
+        catalog: ToolCatalog,
+        name: str,
+        **param_overrides: Any,
+    ) -> Self:
+        """Add a tool to the config by looking up its catalog entry.
+
+        Resolves the tool name to a class path via the catalog and adds
+        it with default params (overridable).
+
+        Args:
+            catalog: Tool catalog for name resolution.
+            name: Tool name to look up.
+            **param_overrides: Override default params.
+
+        Returns:
+            self for method chaining.
+
+        Raises:
+            NotFoundError: If tool name is not in the catalog.
+        """
+        config = catalog.to_bot_config(name, **param_overrides)
+        tools = self._config.setdefault("tools", [])
+        tools.append(config)
+        return self
+
+    def add_tools_by_name(
+        self,
+        catalog: ToolCatalog,
+        names: Sequence[str],
+        overrides: dict[str, dict[str, Any]] | None = None,
+    ) -> Self:
+        """Add multiple tools by name from the catalog.
+
+        Args:
+            catalog: Tool catalog for name resolution.
+            names: Tool names to add.
+            overrides: Per-tool param overrides keyed by tool name.
+
+        Returns:
+            self for method chaining.
+        """
+        configs = catalog.to_bot_configs(names, overrides)
+        tools = self._config.setdefault("tools", [])
+        tools.extend(configs)
         return self
 
     def add_middleware(self, middleware_class: str, **params: Any) -> Self:

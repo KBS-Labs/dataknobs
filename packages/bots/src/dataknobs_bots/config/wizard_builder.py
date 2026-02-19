@@ -38,12 +38,15 @@ import logging
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 from typing_extensions import Self
 
 from .validation import ValidationResult
+
+if TYPE_CHECKING:
+    from .tool_catalog import ToolCatalog
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +280,7 @@ class WizardConfigBuilder:
         self._pending_transitions: list[tuple[str, TransitionConfig]] = []
         self._pending_intents: list[tuple[str, IntentDetectionConfig]] = []
         self._global_tasks: list[dict[str, Any]] = []
+        self._tool_catalog: ToolCatalog | None = None
 
     # -- Metadata --
 
@@ -318,6 +322,21 @@ class WizardConfigBuilder:
             self for method chaining.
         """
         self._settings.update(kwargs)
+        return self
+
+    def set_tool_catalog(self, catalog: ToolCatalog) -> Self:
+        """Set a tool catalog for validation of stage tool references.
+
+        When set, ``build()`` validates that all tool names referenced in
+        stages exist in the catalog.
+
+        Args:
+            catalog: Tool catalog for name validation.
+
+        Returns:
+            self for method chaining.
+        """
+        self._tool_catalog = catalog
         return self
 
     # -- Stage addition --
@@ -894,6 +913,18 @@ class WizardConfigBuilder:
                             f"from the start stage"
                         )
                     )
+
+        # Catalog validation: check stage tool names exist in catalog
+        if self._tool_catalog is not None:
+            for stage in stages:
+                for tool_name in stage.tools:
+                    if not self._tool_catalog.has(tool_name):
+                        result = result.merge(
+                            ValidationResult.error(
+                                f"Stage '{stage.name}' references unknown "
+                                f"tool: '{tool_name}'"
+                            )
+                        )
 
         return result
 

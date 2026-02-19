@@ -94,6 +94,19 @@ class ListTemplatesTool(ContextAwareTool):
         _registry: Template registry to query.
     """
 
+    @classmethod
+    def catalog_metadata(cls) -> dict[str, Any]:
+        """Return catalog metadata for this tool class."""
+        return {
+            "name": "list_templates",
+            "description": (
+                "List available bot configuration templates."
+            ),
+            "tags": ("configbot",),
+            "requires": ("template_registry",),
+            "default_params": {"template_dir": "configs/templates"},
+        }
+
     def __init__(self, template_registry: ConfigTemplateRegistry) -> None:
         """Initialize the tool.
 
@@ -195,6 +208,20 @@ class GetTemplateDetailsTool(ContextAwareTool):
     Attributes:
         _registry: Template registry to query.
     """
+
+    @classmethod
+    def catalog_metadata(cls) -> dict[str, Any]:
+        """Return catalog metadata for this tool class."""
+        return {
+            "name": "get_template_details",
+            "description": (
+                "Get detailed information about a specific "
+                "configuration template."
+            ),
+            "tags": ("configbot",),
+            "requires": ("template_registry",),
+            "default_params": {"template_dir": "configs/templates"},
+        }
 
     def __init__(self, template_registry: ConfigTemplateRegistry) -> None:
         """Initialize the tool.
@@ -302,6 +329,19 @@ class PreviewConfigTool(ContextAwareTool):
             from wizard data.
     """
 
+    @classmethod
+    def catalog_metadata(cls) -> dict[str, Any]:
+        """Return catalog metadata for this tool class."""
+        return {
+            "name": "preview_config",
+            "description": (
+                "Preview the bot configuration being built from "
+                "the current wizard data."
+            ),
+            "tags": ("configbot",),
+            "requires": ("builder_factory",),
+        }
+
     def __init__(
         self,
         builder_factory: Callable[[dict[str, Any]], DynaBotConfigBuilder],
@@ -405,6 +445,18 @@ class ValidateConfigTool(ContextAwareTool):
         _validator: ConfigValidator instance.
         _builder_factory: Optional factory for building config from wizard data.
     """
+
+    @classmethod
+    def catalog_metadata(cls) -> dict[str, Any]:
+        """Return catalog metadata for this tool class."""
+        return {
+            "name": "validate_config",
+            "description": (
+                "Validate the bot configuration being built."
+            ),
+            "tags": ("configbot",),
+            "requires": ("validator",),
+        }
 
     def __init__(
         self,
@@ -516,6 +568,18 @@ class SaveConfigTool(ContextAwareTool):
         _builder_factory: Optional factory for building config from wizard data.
         _portable: Whether to use portable (bot-wrapped) output format.
     """
+
+    @classmethod
+    def catalog_metadata(cls) -> dict[str, Any]:
+        """Return catalog metadata for this tool class."""
+        return {
+            "name": "save_config",
+            "description": (
+                "Save and finalize the bot configuration."
+            ),
+            "tags": ("configbot",),
+            "requires": ("draft_manager",),
+        }
 
     def __init__(
         self,
@@ -702,6 +766,17 @@ class ListAvailableToolsTool(ContextAwareTool):
     Attributes:
         _tools: The available tool catalog.
     """
+
+    @classmethod
+    def catalog_metadata(cls) -> dict[str, Any]:
+        """Return catalog metadata for this tool class."""
+        return {
+            "name": "list_available_tools",
+            "description": (
+                "List tools that can be added to the bot configuration."
+            ),
+            "tags": ("configbot",),
+        }
 
     def __init__(self, available_tools: list[dict[str, Any]]) -> None:
         """Initialize the tool.
