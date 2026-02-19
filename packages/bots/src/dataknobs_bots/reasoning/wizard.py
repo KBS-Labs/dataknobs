@@ -2182,7 +2182,7 @@ class WizardReasoning(ReasoningStrategy):
             return suggestions
 
         # Quick check: if no templates, return as-is
-        if not any("{{" in s for s in suggestions):
+        if not any("{%" in s or "{{" in s for s in suggestions):
             return suggestions
 
         import jinja2
@@ -2194,7 +2194,7 @@ class WizardReasoning(ReasoningStrategy):
 
         rendered = []
         for suggestion in suggestions:
-            if "{{" not in suggestion:
+            if "{%" not in suggestion and "{{" not in suggestion:
                 rendered.append(suggestion)
                 continue
             try:
