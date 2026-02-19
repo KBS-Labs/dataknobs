@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-02-19T00:39:59Z",
+  "timestamp": "2026-02-19T16:21:08Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.10.2 (Homebrew 2026-02-10)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/tool-catalog",
-  "git_commit": "da0f378a84ea05c59f5fbf9e17df4560274d34c6",
+  "git_branch": "sbk/inline-wizard-config-support",
+  "git_commit": "3b844adb72b16aa0c4211d4a8f548ec6ae681768",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }

@@ -196,25 +196,34 @@ class DynaBotConfigBuilder:
 
     def set_reasoning_wizard(
         self,
-        wizard_config: str | WizardConfig,
+        wizard_config: str | dict[str, Any] | WizardConfig,
         **kwargs: Any,
     ) -> Self:
-        """Set wizard reasoning with a config path or WizardConfig object.
+        """Set wizard reasoning with a config path, inline dict, or WizardConfig.
 
         When ``wizard_config`` is a ``WizardConfig`` object, the caller
         is responsible for writing it to disk via ``wizard_config.to_file()``
         before the bot loads.
 
+        When ``wizard_config`` is a ``dict``, it is stored inline in the
+        reasoning config and loaded via
+        ``WizardConfigLoader.load_from_dict()`` at bot startup.
+
         Args:
-            wizard_config: Path to a wizard YAML file, or a
-                ``WizardConfig`` object (whose ``name`` is used as the
-                config path identifier).
+            wizard_config: Path to a wizard YAML file, an inline dict
+                (compatible with ``WizardConfigLoader.load_from_dict()``),
+                or a ``WizardConfig`` object (whose ``name`` is used as
+                the config path identifier).
             **kwargs: Additional reasoning settings
                 (extraction_config, etc.).
 
         Returns:
             self for method chaining.
         """
+        if isinstance(wizard_config, dict):
+            return self.set_reasoning(
+                "wizard", wizard_config=wizard_config, **kwargs
+            )
         config_path = (
             wizard_config
             if isinstance(wizard_config, str)

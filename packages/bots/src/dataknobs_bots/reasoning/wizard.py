@@ -311,7 +311,9 @@ class WizardReasoning(ReasoningStrategy):
 
         Args:
             config: Configuration dict with:
-                - wizard_config: Path to wizard YAML config
+                - wizard_config: Path to wizard YAML config file, or an
+                  inline dict (compatible with
+                  ``WizardConfigLoader.load_from_dict()``)
                 - extraction_config: Optional extraction configuration
                 - strict_validation: Whether to enforce validation
                 - hooks: Optional hooks configuration dict
@@ -351,15 +353,18 @@ class WizardReasoning(ReasoningStrategy):
         """
         from .wizard_loader import WizardConfigLoader
 
-        wizard_config_path = config.get("wizard_config")
-        if not wizard_config_path:
-            raise ValueError("wizard_config path is required")
+        wizard_config_value = config.get("wizard_config")
+        if not wizard_config_value:
+            raise ValueError("wizard_config is required")
 
-        # Load wizard FSM
+        # Load wizard FSM — supports both file paths and inline dicts
         loader = WizardConfigLoader()
-        wizard_fsm = loader.load(
-            wizard_config_path, config.get("custom_functions", {})
-        )
+        custom_fns = config.get("custom_functions", {})
+
+        if isinstance(wizard_config_value, dict):
+            wizard_fsm = loader.load_from_dict(wizard_config_value, custom_fns)
+        else:
+            wizard_fsm = loader.load(wizard_config_value, custom_fns)
 
         # Create extractor if extraction_config specified
         extractor = None
