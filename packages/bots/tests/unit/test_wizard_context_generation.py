@@ -349,6 +349,64 @@ class TestRenderSuggestions:
         # _internal should render as empty
         assert result == ["Math ()"]
 
+    def test_block_tag_if_else_rendered(
+        self, wizard_reasoning: WizardReasoning
+    ) -> None:
+        """Suggestions using {% if %} block tags are rendered correctly."""
+        state = WizardState(
+            current_stage="welcome",
+            data={"topic": "algebra"},
+        )
+        suggestions = [
+            "{% if topic %}Change difficulty to hard{% else %}Make a hard quiz about algebra{% endif %}",
+        ]
+
+        result = wizard_reasoning._render_suggestions(suggestions, state)
+        assert result == ["Change difficulty to hard"]
+
+    def test_block_tag_if_else_falsy_branch(
+        self, wizard_reasoning: WizardReasoning
+    ) -> None:
+        """{% if %} with missing variable takes the else branch."""
+        state = WizardState(current_stage="welcome", data={})
+        suggestions = [
+            "{% if topic %}Change difficulty{% else %}Make a quiz about algebra{% endif %}",
+        ]
+
+        result = wizard_reasoning._render_suggestions(suggestions, state)
+        assert result == ["Make a quiz about algebra"]
+
+    def test_block_tag_mixed_with_variable(
+        self, wizard_reasoning: WizardReasoning
+    ) -> None:
+        """Suggestions combining {% if %} and {{ }} render correctly."""
+        state = WizardState(
+            current_stage="welcome",
+            data={"topic": "chemistry", "difficulty": "easy"},
+        )
+        suggestions = [
+            "{% if topic %}{{ difficulty }} {{ topic }} quiz{% else %}Create a quiz{% endif %}",
+        ]
+
+        result = wizard_reasoning._render_suggestions(suggestions, state)
+        assert result == ["easy chemistry quiz"]
+
+    def test_block_tag_only_no_variables(
+        self, wizard_reasoning: WizardReasoning
+    ) -> None:
+        """Suggestions with only block tags (no {{ }}) are still rendered."""
+        state = WizardState(
+            current_stage="welcome",
+            data={"topic": "biology"},
+        )
+        suggestions = [
+            "Plain suggestion",
+            "{% if topic %}Edit topic{% else %}Set topic{% endif %}",
+        ]
+
+        result = wizard_reasoning._render_suggestions(suggestions, state)
+        assert result == ["Plain suggestion", "Edit topic"]
+
 
 # =========================================================================
 # Tests for _apply_transition_derivations
