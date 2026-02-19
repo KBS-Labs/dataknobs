@@ -450,7 +450,7 @@ class TestWizardReasoningFromConfig:
 
     def test_from_config_missing_path(self) -> None:
         """Test error when wizard_config path is missing."""
-        with pytest.raises(ValueError, match="wizard_config path is required"):
+        with pytest.raises(ValueError, match="wizard_config is required"):
             WizardReasoning.from_config({})
 
 
