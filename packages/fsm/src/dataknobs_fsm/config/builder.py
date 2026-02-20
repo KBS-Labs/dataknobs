@@ -22,7 +22,7 @@ from dataknobs_fsm.config.schema import (
     ResourceType,
     StateConfig,
 )
-from dataknobs_fsm.core.arc import ArcDefinition, PushArc
+from dataknobs_fsm.core.arc import ArcDefinition, PushArc, TransformSpec
 from dataknobs_fsm.core.data_modes import DataHandler, DataHandlingMode, get_data_handler
 from dataknobs_fsm.core.network import StateNetwork
 from dataknobs_fsm.core.state import StateDefinition, StateType
@@ -450,14 +450,14 @@ class FSMBuilder:
 
         # Resolve transform function(s)
         # ArcConfig.transform can be a single FunctionReference or a list
-        arc_transform: str | list[str] | None = None
+        arc_transform: str | TransformSpec | list[str | TransformSpec] | None = None
         if arc_config.transform:
             transform_refs = (
                 arc_config.transform
                 if isinstance(arc_config.transform, list)
                 else [arc_config.transform]
             )
-            resolved_names: list[str] = []
+            resolved_specs: list[str | TransformSpec] = []
             for t_idx, t_ref in enumerate(transform_refs):
                 transform = self._resolve_function(t_ref, ITransformFunction)
                 t_name = self._get_function_name(transform)
@@ -468,10 +468,14 @@ class FSMBuilder:
                         t_name = f"transform_{source_state.name}_{arc_config.target}_{t_idx}_{id(transform)}"
                 if t_name and not self._function_manager.has_function(t_name):
                     self._function_manager.register_function(t_name, transform, FunctionSource.INLINE)
-                resolved_names.append(t_name)
+                # Preserve params from FunctionReference as TransformSpec
+                if t_ref.params:
+                    resolved_specs.append(TransformSpec(name=t_name, params=t_ref.params))
+                else:
+                    resolved_specs.append(t_name)
 
-            # Store as single string if only one, list if multiple
-            arc_transform = resolved_names[0] if len(resolved_names) == 1 else resolved_names
+            # Store as single item if only one, list if multiple
+            arc_transform = resolved_specs[0] if len(resolved_specs) == 1 else resolved_specs
 
         # Create appropriate arc type
         if isinstance(arc_config, PushArcConfig):

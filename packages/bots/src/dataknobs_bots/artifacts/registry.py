@@ -150,24 +150,30 @@ class ArtifactRegistry:
         artifact_type: str | None = None,
         status: ArtifactStatus | None = None,
         tags: list[str] | None = None,
+        filters: list[Filter] | None = None,
     ) -> list[Artifact]:
-        """Query artifacts by type, status, and/or tags.
+        """Query artifacts by type, status, tags, and/or arbitrary filters.
 
         Args:
             artifact_type: Filter by artifact type.
             status: Filter by status.
             tags: Filter by tags (artifact must have all specified tags).
+            filters: Additional filters on any field, including nested content
+                fields via dot notation
+                (e.g., ``Filter("content.corpus_id", Operator.EQ, "abc")``).
 
         Returns:
             List of matching artifacts.
         """
-        filters: list[Filter] = []
+        all_filters: list[Filter] = []
         if artifact_type:
-            filters.append(Filter("type", Operator.EQ, artifact_type))
+            all_filters.append(Filter("type", Operator.EQ, artifact_type))
         if status:
-            filters.append(Filter("status", Operator.EQ, status.value))
+            all_filters.append(Filter("status", Operator.EQ, status.value))
+        if filters:
+            all_filters.extend(filters)
 
-        records = await self._db.search(Query(filters=filters))
+        records = await self._db.search(Query(filters=all_filters))
 
         artifacts: list[Artifact] = []
         seen_ids: set[str] = set()

@@ -6,7 +6,7 @@ This module provides:
 
 Example:
     >>> builder = ContextBuilder(artifact_registry=registry)
-    >>> context = builder.build(manager)
+    >>> context = await builder.build(manager)
     >>> prompt_context = context.to_prompt_injection(max_tokens=2000)
 """
 
@@ -37,7 +37,7 @@ class ContextBuilder:
         ...     artifact_registry=registry,
         ...     tool_registry=tool_registry,
         ... )
-        >>> context = builder.build(manager)
+        >>> context = await builder.build(manager)
         >>> prompt_context = context.to_prompt_injection(max_tokens=2000)
     """
 
@@ -55,7 +55,7 @@ class ContextBuilder:
         self._artifact_registry = artifact_registry
         self._tool_registry = tool_registry
 
-    def build(self, manager: Any) -> ConversationContext:
+    async def build(self, manager: Any) -> ConversationContext:
         """Build context from conversation manager.
 
         Args:
@@ -70,24 +70,15 @@ class ContextBuilder:
             conversation_id=getattr(manager, "conversation_id", None),
         )
 
-        # Extract wizard state
         self._extract_wizard_state(context, metadata)
-
-        # Extract artifacts
-        self._extract_artifacts(context, metadata)
-
-        # Extract assumptions
+        await self._extract_artifacts(context, metadata)
         self._extract_assumptions(context, metadata)
-
-        # Extract tool history
         self._extract_tool_history(context, metadata)
-
-        # Extract transitions
         self._extract_transitions(context, metadata)
 
         return context
 
-    def build_from_metadata(
+    async def build_from_metadata(
         self,
         metadata: dict[str, Any],
         conversation_id: str | None = None,
@@ -106,7 +97,7 @@ class ContextBuilder:
         context = ConversationContext(conversation_id=conversation_id)
 
         self._extract_wizard_state(context, metadata)
-        self._extract_artifacts(context, metadata)
+        await self._extract_artifacts(context, metadata)
         self._extract_assumptions(context, metadata)
         self._extract_tool_history(context, metadata)
         self._extract_transitions(context, metadata)
@@ -135,7 +126,7 @@ class ContextBuilder:
         tasks_data = fsm_state.get("tasks", {})
         context.wizard_tasks = tasks_data.get("tasks", [])
 
-    def _extract_artifacts(
+    async def _extract_artifacts(
         self,
         context: ConversationContext,
         metadata: dict[str, Any],
@@ -146,13 +137,10 @@ class ContextBuilder:
             context: Context to populate
             metadata: Conversation metadata
         """
-        # Try registry first
         if self._artifact_registry:
-            context.artifacts = [
-                a.to_dict() for a in self._artifact_registry._artifacts.values()
-            ]
+            all_artifacts = await self._artifact_registry.query()
+            context.artifacts = [a.to_dict() for a in all_artifacts]
         else:
-            # Fall back to metadata
             context.artifacts = metadata.get("artifacts", [])
 
     def _extract_assumptions(

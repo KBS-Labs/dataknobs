@@ -23,6 +23,19 @@ class DataIsolationMode(Enum):
 
 
 @dataclass
+class TransformSpec:
+    """A transform function name with optional parameters.
+
+    When transforms are specified with per-invocation configuration
+    (e.g., via ``FunctionReference.params`` in FSM config), the params
+    are carried here and passed as ``**kwargs`` to the transform function.
+    """
+
+    name: str
+    params: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class ArcDefinition:
     """Definition of an arc between states.
 
@@ -32,7 +45,7 @@ class ArcDefinition:
 
     target_state: str
     pre_test: str | None = None
-    transform: str | list[str] | None = None
+    transform: str | TransformSpec | list[str | TransformSpec] | None = None
     priority: int = 0  # Higher priority arcs are evaluated first
     definition_order: int = 0  # Track definition order for stable sorting
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -43,10 +56,15 @@ class ArcDefinition:
 
     def __hash__(self) -> int:
         """Make ArcDefinition hashable."""
-        transform_key = (
-            tuple(self.transform) if isinstance(self.transform, list)
-            else self.transform
-        )
+        if isinstance(self.transform, list):
+            transform_key = tuple(
+                t.name if isinstance(t, TransformSpec) else t
+                for t in self.transform
+            )
+        elif isinstance(self.transform, TransformSpec):
+            transform_key = self.transform.name
+        else:
+            transform_key = self.transform
         return hash((
             self.target_state,
             self.pre_test,
@@ -213,7 +231,7 @@ class ArcExecution:
             # Execute transform(s) if defined
             if self.arc_def.transform:
                 # Normalize to list for uniform handling
-                transform_names = (
+                transform_refs = (
                     self.arc_def.transform
                     if isinstance(self.arc_def.transform, list)
                     else [self.arc_def.transform]
@@ -227,9 +245,11 @@ class ArcExecution:
                 )
 
                 result = data
-                for transform_name in transform_names:
+                for transform_ref in transform_refs:
+                    name = transform_ref.name if isinstance(transform_ref, TransformSpec) else transform_ref
                     result = self._execute_single_transform(
-                        transform_name, result, func_context, stream_enabled
+                        name, result, func_context, stream_enabled,
+                        transform_ref=transform_ref,
                     )
             else:
                 # No transform, pass data through
@@ -240,11 +260,11 @@ class ArcExecution:
             self.success_count += 1
 
             return result
-            
+
         except Exception as e:
             self.execution_count += 1
             self.failure_count += 1
-            
+
             raise FunctionError(
                 f"Arc execution failed: {e}",
                 from_state=self.source_state,
@@ -253,17 +273,18 @@ class ArcExecution:
         finally:
             elapsed = time.time() - start_time
             self.total_execution_time += elapsed
-            
+
             # Release resources
             if 'resources' in locals():
                 self._release_resources(context, resources)
-    
+
     def _execute_single_transform(
         self,
         transform_name: str,
         data: Any,
         func_context: FunctionContext,
         stream_enabled: bool = False,
+        transform_ref: str | TransformSpec | None = None,
     ) -> Any:
         """Execute a single transform function by name.
 
@@ -294,15 +315,18 @@ class ArcExecution:
                 to_state=self.arc_def.target_state
             )
 
+        # Resolve params from TransformSpec if present
+        params = transform_ref.params if isinstance(transform_ref, TransformSpec) and transform_ref.params else {}
+
         # Handle streaming vs non-streaming execution
         if stream_enabled and hasattr(transform_func, 'stream_capable'):
             return self._execute_streaming(transform_func, data, func_context)
 
-        # Call the transform function
+        # Call the transform function, passing params as kwargs if present
         if hasattr(transform_func, 'transform'):
-            result = transform_func.transform(data, func_context)
+            result = transform_func.transform(data, func_context, **params) if params else transform_func.transform(data, func_context)
         elif callable(transform_func):
-            result = transform_func(data, func_context)
+            result = transform_func(data, func_context, **params) if params else transform_func(data, func_context)
         else:
             raise ValueError(f"Transform {transform_name} is not callable")
 
@@ -407,7 +431,7 @@ class ArcExecution:
             # Execute transform(s) if defined
             if self.arc_def.transform:
                 # Normalize to list for uniform handling
-                transform_names = (
+                transform_refs = (
                     self.arc_def.transform
                     if isinstance(self.arc_def.transform, list)
                     else [self.arc_def.transform]
@@ -421,9 +445,11 @@ class ArcExecution:
                 )
 
                 result = data
-                for transform_name in transform_names:
+                for transform_ref in transform_refs:
+                    name = transform_ref.name if isinstance(transform_ref, TransformSpec) else transform_ref
                     result = await self._execute_single_transform_async(
-                        transform_name, result, func_context, stream_enabled
+                        name, result, func_context, stream_enabled,
+                        transform_ref=transform_ref,
                     )
             else:
                 # No transform, pass data through
@@ -458,6 +484,7 @@ class ArcExecution:
         data: Any,
         func_context: FunctionContext,
         stream_enabled: bool = False,
+        transform_ref: str | TransformSpec | None = None,
     ) -> Any:
         """Execute a single transform function, awaiting if async.
 
@@ -491,15 +518,18 @@ class ArcExecution:
                 to_state=self.arc_def.target_state
             )
 
+        # Resolve params from TransformSpec if present
+        params = transform_ref.params if isinstance(transform_ref, TransformSpec) and transform_ref.params else {}
+
         # Handle streaming vs non-streaming execution
         if stream_enabled and hasattr(transform_func, 'stream_capable'):
             return self._execute_streaming(transform_func, data, func_context)
 
-        # Call the transform function
+        # Call the transform function, passing params as kwargs if present
         if hasattr(transform_func, 'transform'):
-            result = transform_func.transform(data, func_context)
+            result = transform_func.transform(data, func_context, **params) if params else transform_func.transform(data, func_context)
         elif callable(transform_func):
-            result = transform_func(data, func_context)
+            result = transform_func(data, func_context, **params) if params else transform_func(data, func_context)
         else:
             raise ValueError(f"Transform {transform_name} is not callable")
 

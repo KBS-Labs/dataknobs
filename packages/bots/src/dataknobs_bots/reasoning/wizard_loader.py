@@ -305,17 +305,44 @@ class WizardConfigLoader:
             )
 
         # Build transform function reference(s) if specified
-        # Supports both single string and list of strings:
-        #   transform: apply_template          # single
-        #   transform: [apply_template, save]  # list
+        # Supports strings, dicts with config, and lists of either:
+        #   transform: apply_template                         # single string
+        #   transform: [apply_template, save]                 # list of strings
+        #   transform: {name: create_corpus, config: {...}}   # single with config
+        #   transform:                                        # list with config
+        #     - apply_template
+        #     - name: create_corpus
+        #       config: {corpus_type: quiz_bank}
         transform: FunctionReference | list[FunctionReference] | None = None
         if "transform" in transition:
             raw_transform = transition["transform"]
             if isinstance(raw_transform, list):
-                transform = [
-                    FunctionReference(type="registered", name=name)
-                    for name in raw_transform
-                ]
+                transform = []
+                for item in raw_transform:
+                    if isinstance(item, dict):
+                        params = {}
+                        item_config = item.get("config")
+                        if item_config:
+                            params["config"] = item_config
+                        transform.append(FunctionReference(
+                            type="registered",
+                            name=item["name"],
+                            params=params,
+                        ))
+                    else:
+                        transform.append(
+                            FunctionReference(type="registered", name=item)
+                        )
+            elif isinstance(raw_transform, dict):
+                params = {}
+                raw_config = raw_transform.get("config")
+                if raw_config:
+                    params["config"] = raw_config
+                transform = FunctionReference(
+                    type="registered",
+                    name=raw_transform["name"],
+                    params=params,
+                )
             else:
                 transform = FunctionReference(
                     type="registered",

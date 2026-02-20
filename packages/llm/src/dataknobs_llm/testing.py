@@ -23,9 +23,19 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from .llm.base import LLMResponse, ToolCall
+from .llm.providers.echo import ErrorResponse
 
 if TYPE_CHECKING:
     from .llm.providers.echo import EchoProvider
+
+__all__ = [
+    "ErrorResponse",
+    "ResponseSequenceBuilder",
+    "extraction_response",
+    "multi_tool_response",
+    "text_response",
+    "tool_call_response",
+]
 
 
 def text_response(

@@ -4,7 +4,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from dataknobs_bots.artifacts.models import Artifact
 from dataknobs_bots.artifacts.registry import ArtifactRegistry
 from dataknobs_bots.context.builder import ContextBuilder, ContextPersister
 
@@ -18,12 +17,13 @@ class TestContextBuilderBasic:
         assert builder._artifact_registry is None
         assert builder._tool_registry is None
 
-    @pytest.mark.skip(
-        reason="ArtifactRegistry now requires AsyncDatabase (Phase 5 update)"
-    )
-    def test_init_with_registries(self) -> None:
+    @pytest.mark.asyncio
+    async def test_init_with_registries(self) -> None:
         """Test initialization with registries."""
-        artifact_registry = ArtifactRegistry()
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
+
+        db = AsyncMemoryDatabase()
+        artifact_registry = ArtifactRegistry(db=db)
         builder = ContextBuilder(artifact_registry=artifact_registry)
         assert builder._artifact_registry == artifact_registry
 
@@ -31,21 +31,23 @@ class TestContextBuilderBasic:
 class TestContextBuilderBuild:
     """Tests for building context from manager."""
 
-    def test_build_empty_manager(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_empty_manager(self) -> None:
         """Test building context from empty manager."""
         builder = ContextBuilder()
         manager = MagicMock()
         manager.metadata = {}
         manager.conversation_id = "conv_123"
 
-        context = builder.build(manager)
+        context = await builder.build(manager)
 
         assert context.conversation_id == "conv_123"
         assert context.wizard_stage is None
         assert context.artifacts == []
         assert context.assumptions == []
 
-    def test_build_with_wizard_state(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_with_wizard_state(self) -> None:
         """Test building context with wizard state."""
         builder = ContextBuilder()
         manager = MagicMock()
@@ -68,7 +70,7 @@ class TestContextBuilderBuild:
             }
         }
 
-        context = builder.build(manager)
+        context = await builder.build(manager)
 
         assert context.wizard_stage == "collect_info"
         assert context.wizard_data == {"name": "test"}
@@ -76,25 +78,27 @@ class TestContextBuilderBuild:
         assert len(context.wizard_tasks) == 1
         assert len(context.transitions) == 1
 
-    @pytest.mark.skip(
-        reason="ArtifactRegistry now requires AsyncDatabase (Phase 5 update)"
-    )
-    def test_build_with_artifact_registry(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_with_artifact_registry(self) -> None:
         """Test building context with artifact registry."""
-        artifact_registry = ArtifactRegistry()
-        artifact_registry.create(content={"v": 1}, name="Test 1")
-        artifact_registry.create(content={"v": 2}, name="Test 2")
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
 
-        builder = ContextBuilder(artifact_registry=artifact_registry)
+        db = AsyncMemoryDatabase()
+        registry = ArtifactRegistry(db=db)
+        await registry.create("content", "Test 1", {"v": 1})
+        await registry.create("content", "Test 2", {"v": 2})
+
+        builder = ContextBuilder(artifact_registry=registry)
         manager = MagicMock()
         manager.metadata = {}
         manager.conversation_id = "conv_123"
 
-        context = builder.build(manager)
+        context = await builder.build(manager)
 
         assert len(context.artifacts) == 2
 
-    def test_build_with_artifacts_in_metadata(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_with_artifacts_in_metadata(self) -> None:
         """Test building context with artifacts in metadata (no registry)."""
         builder = ContextBuilder()
         manager = MagicMock()
@@ -105,12 +109,13 @@ class TestContextBuilderBuild:
             ]
         }
 
-        context = builder.build(manager)
+        context = await builder.build(manager)
 
         assert len(context.artifacts) == 1
         assert context.artifacts[0]["id"] == "a1"
 
-    def test_build_with_assumptions(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_with_assumptions(self) -> None:
         """Test building context with assumptions from metadata."""
         builder = ContextBuilder()
         manager = MagicMock()
@@ -128,13 +133,14 @@ class TestContextBuilderBuild:
             }
         }
 
-        context = builder.build(manager)
+        context = await builder.build(manager)
 
         assert len(context.assumptions) == 1
         assert context.assumptions[0].content == "Test assumption"
         assert context.assumptions[0].confidence == 0.7
 
-    def test_build_with_tool_history(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_with_tool_history(self) -> None:
         """Test building context with tool history from metadata."""
         builder = ContextBuilder()
         manager = MagicMock()
@@ -145,7 +151,7 @@ class TestContextBuilderBuild:
             ]
         }
 
-        context = builder.build(manager)
+        context = await builder.build(manager)
 
         assert len(context.tool_history) == 1
         assert context.tool_history[0]["tool_name"] == "search"
@@ -154,7 +160,8 @@ class TestContextBuilderBuild:
 class TestContextBuilderFromMetadata:
     """Tests for building context from metadata dict directly."""
 
-    def test_build_from_metadata(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_from_metadata(self) -> None:
         """Test building context directly from metadata."""
         builder = ContextBuilder()
         metadata = {
@@ -172,7 +179,7 @@ class TestContextBuilderFromMetadata:
             },
         }
 
-        context = builder.build_from_metadata(metadata, conversation_id="conv_123")
+        context = await builder.build_from_metadata(metadata, conversation_id="conv_123")
 
         assert context.conversation_id == "conv_123"
         assert context.wizard_stage == "review"
@@ -246,7 +253,8 @@ class TestContextPersister:
 class TestContextBuilderToolRegistry:
     """Tests for tool registry integration."""
 
-    def test_build_with_tool_registry(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_with_tool_registry(self) -> None:
         """Test building context with tool registry."""
         # Create mock tool registry
         tool_registry = MagicMock()
@@ -262,13 +270,14 @@ class TestContextBuilderToolRegistry:
         manager.conversation_id = "conv_123"
         manager.metadata = {}
 
-        context = builder.build(manager)
+        context = await builder.build(manager)
 
         assert len(context.tool_history) == 1
         assert context.tool_history[0]["tool_name"] == "search"
         assert context.tool_history[0]["success"] is True
 
-    def test_build_with_tool_registry_error(self) -> None:
+    @pytest.mark.asyncio
+    async def test_build_with_tool_registry_error(self) -> None:
         """Test building context when tool registry throws error."""
         # Create mock tool registry that throws
         tool_registry = MagicMock()
@@ -282,7 +291,7 @@ class TestContextBuilderToolRegistry:
         }
 
         # Should fall back to metadata
-        context = builder.build(manager)
+        context = await builder.build(manager)
 
         assert len(context.tool_history) == 1
         assert context.tool_history[0]["tool_name"] == "fallback"
