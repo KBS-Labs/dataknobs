@@ -126,6 +126,11 @@ class DedupChecker:
         self._vector_store = vector_store
         self._embedding_fn = embedding_fn
 
+    @property
+    def config(self) -> DedupConfig:
+        """The dedup configuration."""
+        return self._config
+
     def compute_hash(self, content: dict[str, Any]) -> str:
         """Compute a deterministic content hash from configured fields.
 

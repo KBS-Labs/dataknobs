@@ -20,6 +20,7 @@ Example:
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -109,13 +110,17 @@ class ArtifactCorpus:
         Returns:
             A new ArtifactCorpus instance.
         """
+        content: dict[str, Any] = {
+            "item_type": config.item_type,
+            "metadata": config.metadata,
+        }
+        if dedup_checker is not None:
+            content["dedup_config"] = dataclasses.asdict(dedup_checker.config)
+
         corpus_artifact = await registry.create(
             artifact_type=config.corpus_type,
             name=config.name,
-            content={
-                "item_type": config.item_type,
-                "metadata": config.metadata,
-            },
+            content=content,
             tags=["corpus"],
         )
         logger.info(
@@ -139,6 +144,14 @@ class ArtifactCorpus:
     ) -> ArtifactCorpus:
         """Load an existing corpus by its artifact ID.
 
+        Reconstructs the dedup checker from stored configuration if the
+        corpus was created with one. Existing items are re-registered so
+        hash-based dedup works across session reloads.
+
+        Note: Semantic dedup (vector store + embedding function) is not
+        restored because those require runtime infrastructure that cannot
+        be serialized. Only hash-based exact matching is restored.
+
         Args:
             registry: The artifact registry.
             corpus_id: The ID of the corpus artifact to load.
@@ -153,18 +166,52 @@ class ArtifactCorpus:
         if corpus_artifact is None:
             raise ValueError(f"Corpus '{corpus_id}' not found")
 
-        content = corpus_artifact.content
+        artifact_content = corpus_artifact.content
         config = CorpusConfig(
             corpus_type=corpus_artifact.type,
-            item_type=content.get("item_type", ""),
+            item_type=artifact_content.get("item_type", ""),
             name=corpus_artifact.name,
-            metadata=content.get("metadata", {}),
+            metadata=artifact_content.get("metadata", {}),
         )
-        return cls(
+
+        # Reconstruct dedup checker from stored config
+        dedup_checker = None
+        dedup_config_dict = artifact_content.get("dedup_config")
+        if dedup_config_dict:
+            from dataknobs_data.backends.memory import AsyncMemoryDatabase
+            from dataknobs_data.dedup import DedupChecker, DedupConfig
+
+            dedup_cfg = DedupConfig(**dedup_config_dict)
+            dedup_checker = DedupChecker(
+                db=AsyncMemoryDatabase(), config=dedup_cfg
+            )
+
+        instance = cls(
             registry=registry,
             corpus_artifact=corpus_artifact,
             config=config,
+            dedup_checker=dedup_checker,
         )
+
+        # Re-register existing items so dedup catches prior content
+        if dedup_checker is not None:
+            items = await instance.get_items()
+            for item in items:
+                # Strip corpus_id added by add_item() to match original content
+                original_content = {
+                    k: v
+                    for k, v in item.content.items()
+                    if k != "corpus_id"
+                }
+                await dedup_checker.register(original_content, item.id)
+            if items:
+                logger.info(
+                    "Restored dedup state for corpus '%s': re-registered %d items",
+                    corpus_id,
+                    len(items),
+                )
+
+        return instance
 
     @property
     def id(self) -> str:

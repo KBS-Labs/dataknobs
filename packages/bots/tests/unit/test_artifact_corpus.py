@@ -157,6 +157,66 @@ async def test_load_existing(registry: ArtifactRegistry, config: CorpusConfig) -
 
 
 @pytest.mark.asyncio
+async def test_load_restores_dedup(registry: ArtifactRegistry) -> None:
+    """Loading a corpus with dedup config restores hash-based dedup."""
+    dedup_db = AsyncMemoryDatabase()
+    dedup_checker = DedupChecker(
+        db=dedup_db,
+        config=DedupConfig(hash_fields=["stem"]),
+    )
+    config = CorpusConfig(
+        corpus_type="quiz_bank",
+        item_type="quiz_question",
+        name="Dedup Quiz",
+    )
+    corpus = await ArtifactCorpus.create(registry, config, dedup_checker=dedup_checker)
+
+    # Add items before "reload"
+    await corpus.add_item(content={"stem": "What is 2+2?"})
+    await corpus.add_item(content={"stem": "What is 3+3?"})
+    corpus_id = corpus.id
+
+    # Simulate session reload — load from scratch
+    loaded = await ArtifactCorpus.load(registry, corpus_id)
+
+    # check_dedup finds existing items as duplicates
+    result = await loaded.check_dedup({"stem": "What is 2+2?"})
+    assert result is not None
+    assert result.is_exact_duplicate is True
+
+    # add_item also detects the duplicate
+    a_dup, result_dup = await loaded.add_item(content={"stem": "What is 3+3?"})
+    assert result_dup is not None
+    assert result_dup.is_exact_duplicate is True
+
+    # New content is accepted
+    a_new, result_new = await loaded.add_item(content={"stem": "What is 4+4?"})
+    assert result_new is not None
+    assert result_new.is_exact_duplicate is False
+
+    # Total: 2 original + 1 new = 3
+    assert await loaded.count() == 3
+
+
+@pytest.mark.asyncio
+async def test_load_without_dedup_config(
+    registry: ArtifactRegistry, config: CorpusConfig
+) -> None:
+    """Loading a corpus created without dedup has no dedup checker."""
+    corpus = await ArtifactCorpus.create(registry, config)
+    await corpus.add_item(content={"stem": "Q1"})
+
+    loaded = await ArtifactCorpus.load(registry, corpus.id)
+
+    # No dedup checker — check_dedup returns None
+    assert await loaded.check_dedup({"stem": "Q1"}) is None
+
+    # add_item works without dedup
+    _, dedup_result = await loaded.add_item(content={"stem": "Q1"})
+    assert dedup_result is None
+
+
+@pytest.mark.asyncio
 async def test_add_with_dedup(registry: ArtifactRegistry) -> None:
     """Dedup checker prevents adding exact duplicates."""
     dedup_db = AsyncMemoryDatabase()
