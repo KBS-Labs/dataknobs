@@ -278,6 +278,120 @@ class WizardReasoning(ReasoningStrategy):
         self._initial_data: dict[str, Any] = initial_data or {}
         # Active subflow FSM (None when in main flow)
         self._active_subflow_fsm: WizardFSM | None = None
+        # LLM provider set by generate() for transform context access
+        self._current_llm: Any = None
+
+        # Bridge FSM custom functions so they receive a TransformContext
+        # instead of a raw FunctionContext.  This lets transforms that
+        # need artifact_registry, rubric_executor, etc. work seamlessly.
+        self._wrap_custom_functions(wizard_fsm)
+
+    def _wrap_custom_functions(self, wizard_fsm: WizardFSM) -> None:
+        """Wrap FSM custom functions to inject TransformContext.
+
+        The FSM calls transform functions with ``(data, FunctionContext)``,
+        but artifact-aware transforms expect ``(data, TransformContext)``.
+        This method wraps each custom function so that the FSM's
+        ``FunctionContext`` is translated into a ``TransformContext``
+        carrying the artifact registry, review executor, and other
+        services stored on this WizardReasoning instance.
+
+        Args:
+            wizard_fsm: The WizardFSM whose custom functions to wrap.
+        """
+        # Functions are registered on the core FSM's function_registry
+        # (via FSMBuilder.register_function in WizardConfigLoader), not
+        # on AdvancedFSM._custom_functions.  The AdvancedFSM merges both
+        # registries in _execute_arc_transform_async, with _custom_functions
+        # taking precedence.  We wrap the core registry functions and put
+        # them into _custom_functions so the wrapped versions are used.
+        advanced_fsm = wizard_fsm._fsm
+        core_fsm = advanced_fsm.fsm
+        registry = getattr(core_fsm, "function_registry", {})
+
+        # Extract the raw function dict from the registry
+        if hasattr(registry, "functions"):
+            raw_fns: dict[str, Any] = dict(registry.functions)
+        elif isinstance(registry, dict):
+            raw_fns = dict(registry)
+        else:
+            raw_fns = {}
+
+        if not raw_fns:
+            return
+
+        try:
+            from ..artifacts import transforms as _transforms_mod
+        except ImportError:
+            # Artifact modules not available — wrapping not needed
+            return
+        del _transforms_mod
+
+        wrapped: dict[str, Any] = {}
+        for name, func in raw_fns.items():
+            wrapped[name] = self._make_context_wrapper(func)
+
+        # Store wrapped functions in AdvancedFSM._custom_functions which
+        # overrides the core registry in _execute_arc_transform_async
+        advanced_fsm._custom_functions = wrapped
+
+        logger.debug(
+            "Wrapped %d custom functions with TransformContext bridge",
+            len(wrapped),
+        )
+
+    def _make_context_wrapper(
+        self, func: Any
+    ) -> Any:
+        """Create a wrapper that injects TransformContext for a transform.
+
+        Wizard transforms follow an in-place mutation convention: they
+        modify ``data`` and return ``None``.  The FSM pipeline, however,
+        chains transforms by passing each return value as the next
+        transform's ``data``.  The wrapper preserves the original ``data``
+        dict when the transform returns ``None``.
+
+        Args:
+            func: The original transform callable.
+
+        Returns:
+            Wrapped callable with same signature as FSM expects.
+        """
+        import asyncio
+        import inspect
+
+        from ..artifacts.transforms import TransformContext
+
+        async def _async_wrapper(
+            data: dict[str, Any], _func_context: Any = None, **kwargs: Any
+        ) -> Any:
+            transform_ctx = TransformContext(
+                artifact_registry=self._artifact_registry,
+                rubric_executor=self._review_executor,
+                config={"llm": self._current_llm} if self._current_llm else {},
+            )
+            result = func(data, transform_ctx, **kwargs)
+            if inspect.isawaitable(result):
+                result = await result
+            # Transforms that mutate data in-place return None;
+            # preserve the data dict for the next transform in the chain.
+            return result if result is not None else data
+
+        def _sync_wrapper(
+            data: dict[str, Any], _func_context: Any = None, **kwargs: Any
+        ) -> Any:
+            transform_ctx = TransformContext(
+                artifact_registry=self._artifact_registry,
+                rubric_executor=self._review_executor,
+                config={"llm": self._current_llm} if self._current_llm else {},
+            )
+            result = func(data, transform_ctx, **kwargs)
+            return result if result is not None else data
+
+        # Preserve async nature of the original function
+        if asyncio.iscoroutinefunction(func):
+            return _async_wrapper
+        return _sync_wrapper
 
     async def close(self) -> None:
         """Close the reasoning strategy and release resources.
@@ -505,6 +619,9 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             LLM response object with wizard metadata
         """
+        # Store LLM reference so transform context wrappers can access it
+        self._current_llm = llm
+
         # Get or restore wizard state
         wizard_state = self._get_wizard_state(manager)
 
@@ -612,27 +729,38 @@ class WizardReasoning(ReasoningStrategy):
             # If an intent was detected, skip clarification/validation and
             # proceed to transition evaluation so the detour can fire.
             if "_intent" not in wizard_state.data:
-                # Handle low confidence extraction
+                # Handle low confidence: check if required fields can be
+                # satisfied from existing state + this extraction.
                 if not extraction.is_confident:
-                    wizard_state.clarification_attempts += 1
-                    # Save state (including incremented clarification_attempts)
-                    self._save_wizard_state(manager, wizard_state)
+                    schema = stage.get("schema", {})
+                    required_fields = schema.get("required", [])
+                    can_satisfy = all(
+                        wizard_state.data.get(f) is not None
+                        or extraction.data.get(f) is not None
+                        for f in required_fields
+                    )
 
-                    # After 3 failed attempts, offer restart option
-                    if wizard_state.clarification_attempts >= 3:
-                        response = await self._generate_restart_offer(
-                            manager, llm, stage, extraction.errors
+                    if not can_satisfy:
+                        wizard_state.clarification_attempts += 1
+                        self._save_wizard_state(manager, wizard_state)
+
+                        if wizard_state.clarification_attempts >= 3:
+                            response = await self._generate_restart_offer(
+                                manager, llm, stage, extraction.errors
+                            )
+                        else:
+                            response = (
+                                await self._generate_clarification_response(
+                                    manager, llm, stage, extraction.errors
+                                )
+                            )
+
+                        self._add_wizard_metadata(
+                            response, wizard_state, stage
                         )
-                    else:
-                        response = await self._generate_clarification_response(
-                            manager, llm, stage, extraction.errors
-                        )
+                        return response
 
-                    # Add wizard metadata to clarification response
-                    self._add_wizard_metadata(response, wizard_state, stage)
-                    return response
-
-                # Reset clarification attempts on successful extraction
+                # Reset clarification attempts on viable extraction
                 wizard_state.clarification_attempts = 0
 
                 # Normalize extracted data against schema before merging
@@ -642,11 +770,52 @@ class WizardReasoning(ReasoningStrategy):
                         extraction.data, schema
                     )
 
-                # Merge extracted data with wizard state
-                wizard_state.data.update(extraction.data)
+                # Merge extracted data, tracking which keys are new or
+                # changed so we can decide whether to show a confirmation
+                # template before allowing a transition.
+                new_data_keys: set[str] = set()
+                for k, v in extraction.data.items():
+                    if v is not None:
+                        if (
+                            k not in wizard_state.data
+                            or wizard_state.data[k] != v
+                        ):
+                            new_data_keys.add(k)
+                            wizard_state.data[k] = v
+                    elif k not in wizard_state.data:
+                        wizard_state.data[k] = v
 
                 # Update field-extraction tasks
                 self._update_field_tasks(wizard_state, extraction.data)
+
+                # When meaningful new data was extracted at a stage with a
+                # response_template that the user hasn't seen yet, render
+                # it as a confirmation before evaluating transitions.
+                #
+                # Stages whose template has already been shown (e.g.
+                # generate_questions rendered when the wizard transitioned
+                # here) skip this — the user's response is an action
+                # (e.g. "review") and should trigger a transition.
+                render_counts = wizard_state.data.setdefault(
+                    "_stage_render_counts", {}
+                )
+                if (
+                    new_data_keys
+                    and stage.get("response_template")
+                    and render_counts.get(stage_name, 0) == 0
+                ):
+                    render_counts[stage_name] = 1
+                    logger.debug(
+                        "New data extracted (%s) at stage '%s' with "
+                        "unseen template — rendering confirmation",
+                        new_data_keys,
+                        stage_name,
+                    )
+                    response = await self._generate_stage_response(
+                        manager, llm, stage, wizard_state, tools
+                    )
+                    self._save_wizard_state(manager, wizard_state)
+                    return response
 
                 # Validate against stage schema
                 if stage.get("schema") and self._strict_validation:
@@ -717,6 +886,19 @@ class WizardReasoning(ReasoningStrategy):
                 step_result.is_complete,
                 wizard_state.subflow_depth,
             )
+        elif not step_result.success:
+            # A transition condition matched but the transform failed.
+            # Log the error prominently so it's visible in server logs.
+            # Don't return early — fall through to normal stage response
+            # generation (template rendering) so the user sees their
+            # collected data.  Store the error in wizard state so the UI
+            # can surface it via metadata.
+            logger.warning(
+                "FSM transition transform failed at '%s': %s",
+                from_stage,
+                step_result.error,
+            )
+            wizard_state.data["_transform_error"] = step_result.error
         else:
             logger.debug(
                 "FSM no transition: stayed at '%s' (is_complete=%s)",
@@ -831,6 +1013,17 @@ class WizardReasoning(ReasoningStrategy):
         response = await self._generate_stage_response(
             manager, llm, new_stage, wizard_state, tools
         )
+
+        # Mark this stage's template as rendered so subsequent messages
+        # at this stage don't trigger the first-render confirmation logic.
+        stage_rendered_name = new_stage.get("name", "")
+        if stage_rendered_name and new_stage.get("response_template"):
+            render_counts = wizard_state.data.setdefault(
+                "_stage_render_counts", {}
+            )
+            render_counts[stage_rendered_name] = (
+                render_counts.get(stage_rendered_name, 0) + 1
+            )
 
         # Save wizard state
         self._save_wizard_state(manager, wizard_state)
@@ -2039,21 +2232,25 @@ class WizardReasoning(ReasoningStrategy):
         env = jinja2.Environment(undefined=jinja2.Undefined)
         template = env.from_string(template_str)
 
-        # Filter out internal keys for template access
+        # Non-internal keys for backward-compatible "collected_data" dict
         collected_data = {
             k: v for k, v in state.data.items() if not k.startswith("_")
         }
 
-        # Build template context
+        # Build template context — ALL state data is available as
+        # top-level variables so templates can reference both user-facing
+        # fields (topic, difficulty) and transform outputs (_questions,
+        # _bank_questions).  Transient internal keys like _message and
+        # _intent are cleaned up before template rendering.
         context: dict[str, Any] = {
             # Stage metadata
             "stage_name": stage.get("name", "unknown"),
             "stage_label": stage.get("label", stage.get("name", "")),
-            # All collected data as top-level variables
-            **collected_data,
-            # Also available as a dict
+            # All data as top-level variables (including _-prefixed)
+            **state.data,
+            # Filtered dict (backward compatibility)
             "collected_data": collected_data,
-            # Full data including internal keys (for save/review templates)
+            # Full data dict reference
             "all_data": dict(state.data),
             # Wizard progress
             "history": state.history,
@@ -3072,6 +3269,44 @@ The user's input for this stage needs clarification:
 
 Please kindly ask the user to provide the missing or corrected information.
 Be specific about what's needed but remain friendly and helpful.
+"""
+        return await manager.complete(
+            system_prompt_override=manager.system_prompt + error_context,
+        )
+
+    async def _generate_transform_error_response(
+        self,
+        manager: Any,
+        llm: Any,
+        stage: dict[str, Any],
+        error: str,
+    ) -> Any:
+        """Generate response when a transition transform fails.
+
+        This surfaces transform errors to the user instead of silently
+        re-rendering the current stage, which would appear as the wizard
+        being "stuck".
+
+        Args:
+            manager: ConversationManager instance
+            llm: LLM provider
+            stage: Current stage metadata
+            error: Error message from the failed transform
+
+        Returns:
+            LLM response explaining the error and offering retry
+        """
+        stage_name = stage.get("name", "unknown")
+        error_context = f"""
+## Processing Error
+
+An error occurred while processing the transition from the "{stage_name}" stage:
+
+**Error**: {error}
+
+Please apologize for the issue and let the user know they can try again.
+If the error suggests a configuration or system issue, suggest they contact support.
+Be concise and helpful.
 """
         return await manager.complete(
             system_prompt_override=manager.system_prompt + error_context,
