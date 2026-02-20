@@ -136,6 +136,47 @@ class TestWizardConfigLoader:
         assert wizard_fsm is not None
 
 
+class TestConfirmOnNewDataLoader:
+    """Tests for confirm_on_new_data flag in stage metadata loading."""
+
+    def test_confirm_on_new_data_defaults_false(
+        self, simple_wizard_config: dict
+    ) -> None:
+        """confirm_on_new_data defaults to False when not set."""
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(simple_wizard_config)
+
+        welcome_meta = wizard_fsm._stage_metadata.get("welcome", {})
+        assert welcome_meta.get("confirm_on_new_data") is False
+
+    def test_confirm_on_new_data_loaded_when_set(self) -> None:
+        """confirm_on_new_data is loaded from config when set to true."""
+        config: dict = {
+            "name": "test-wizard",
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "is_end": True,
+                    "prompt": "Go",
+                    "confirm_on_new_data": True,
+                    "response_template": "Summary: {{ topic }}",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "topic": {"type": "string"},
+                        },
+                    },
+                }
+            ],
+        }
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(config)
+
+        meta = wizard_fsm._stage_metadata.get("start", {})
+        assert meta.get("confirm_on_new_data") is True
+
+
 class TestWizardFSMOperations:
     """Tests for WizardFSM operations."""
 

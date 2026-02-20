@@ -884,28 +884,85 @@ class WizardReasoning(ReasoningStrategy):
                 # Update field-extraction tasks
                 self._update_field_tasks(wizard_state, extraction.data)
 
+                # Apply schema defaults for properties the user didn't
+                # mention.  This ensures template conditions (e.g.
+                # ``{% if difficulty %}``) evaluate True when defaults
+                # exist in the schema definition.
+                default_keys = self._apply_schema_defaults(
+                    wizard_state, stage
+                )
+                if default_keys:
+                    new_data_keys |= default_keys
+
                 # When meaningful new data was extracted at a stage with a
-                # response_template that the user hasn't seen yet, render
-                # it as a confirmation before evaluating transitions.
+                # response_template, decide whether to render a
+                # confirmation before evaluating transitions.
                 #
-                # Stages whose template has already been shown (e.g.
-                # generate_questions rendered when the wizard transitioned
-                # here) skip this — the user's response is an action
-                # (e.g. "review") and should trigger a transition.
+                # Two modes:
+                # 1. First-render (render_counts == 0): always confirm
+                #    when new data exists.
+                # 2. confirm_on_new_data: re-confirm whenever schema
+                #    property values changed since the last render
+                #    (catches "change difficulty to hard" after the
+                #    initial summary was shown).
+                #
+                # Stages whose template has already been shown AND
+                # that lack confirm_on_new_data skip this — the
+                # user's response is an action (e.g. "review") and
+                # should trigger a transition.
                 render_counts = wizard_state.data.setdefault(
                     "_stage_render_counts", {}
                 )
-                if (
-                    new_data_keys
-                    and stage.get("response_template")
-                    and render_counts.get(stage_name, 0) == 0
-                ):
-                    render_counts[stage_name] = 1
+                should_confirm = False
+                if new_data_keys and stage.get("response_template"):
+                    if render_counts.get(stage_name, 0) == 0:
+                        should_confirm = True  # First render — always
+                    elif stage.get("confirm_on_new_data"):
+                        # Re-confirm when schema property values changed
+                        snapshots = wizard_state.data.setdefault(
+                            "_stage_rendered_snapshot", {}
+                        )
+                        schema_props = set(
+                            stage.get("schema", {})
+                            .get("properties", {})
+                            .keys()
+                        )
+                        data = wizard_state.data
+                        current_snapshot = {
+                            k: data[k]
+                            for k in schema_props
+                            if k in data and data[k] is not None
+                        }
+                        prior_snapshot = snapshots.get(stage_name, {})
+                        if current_snapshot != prior_snapshot:
+                            should_confirm = True
+
+                if should_confirm:
+                    render_counts[stage_name] = (
+                        render_counts.get(stage_name, 0) + 1
+                    )
+                    # Save snapshot for confirm_on_new_data comparison
+                    if stage.get("confirm_on_new_data"):
+                        snapshots = wizard_state.data.setdefault(
+                            "_stage_rendered_snapshot", {}
+                        )
+                        schema_props = set(
+                            stage.get("schema", {})
+                            .get("properties", {})
+                            .keys()
+                        )
+                        data = wizard_state.data
+                        snapshots[stage_name] = {
+                            k: data[k]
+                            for k in schema_props
+                            if k in data and data[k] is not None
+                        }
                     logger.debug(
-                        "New data extracted (%s) at stage '%s' with "
-                        "unseen template — rendering confirmation",
+                        "New data extracted (%s) at stage '%s' — "
+                        "rendering confirmation (render #%d)",
                         new_data_keys,
                         stage_name,
+                        render_counts[stage_name],
                     )
                     response = await self._generate_stage_response(
                         manager, llm, stage, wizard_state, tools
@@ -3051,6 +3108,48 @@ class WizardReasoning(ReasoningStrategy):
                 for sub_schema in schema_part[key]:
                     if isinstance(sub_schema, dict):
                         self._strip_defaults_from_properties(sub_schema)
+
+    def _apply_schema_defaults(
+        self, wizard_state: WizardState, stage: dict[str, Any]
+    ) -> set[str]:
+        """Apply schema defaults to wizard data for unset properties.
+
+        After extraction, defaults defined in the stage schema (e.g.
+        ``"default": "medium"``) are applied to any property that was
+        not explicitly set by the user.  This ensures template conditions
+        like ``{% if difficulty %}`` evaluate True even when the user
+        didn't mention a value.
+
+        Only top-level properties are considered — nested object/array
+        defaults are not auto-applied (they would require recursive
+        merging that is unlikely to match user intent).
+
+        Args:
+            wizard_state: Current wizard state whose ``data`` may be
+                updated in place.
+            stage: Stage metadata dict containing ``schema``.
+
+        Returns:
+            Set of property names whose defaults were applied.
+        """
+        schema = stage.get("schema")
+        if not schema:
+            return set()
+
+        applied: set[str] = set()
+        for prop_name, prop_def in schema.get("properties", {}).items():
+            if "default" not in prop_def:
+                continue
+            current = wizard_state.data.get(prop_name)
+            if current is None:
+                wizard_state.data[prop_name] = prop_def["default"]
+                applied.add(prop_name)
+                logger.debug(
+                    "Applied schema default for '%s': %r",
+                    prop_name,
+                    prop_def["default"],
+                )
+        return applied
 
     def _calculate_progress(self, state: WizardState) -> float:
         """Calculate wizard completion progress (0.0 to 1.0).
