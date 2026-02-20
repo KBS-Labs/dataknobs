@@ -7,6 +7,7 @@ and branching logic.
 
 from __future__ import annotations
 
+import copy
 import logging
 import time
 from dataclasses import dataclass, field
@@ -1072,8 +1073,8 @@ class WizardReasoning(ReasoningStrategy):
                 current_stage=fsm_state.get(
                     "current_stage", self._fsm.current_stage
                 ),
-                data=fsm_state.get("data", {}),
-                history=fsm_state.get("history", []),
+                data=copy.deepcopy(fsm_state.get("data", {})),
+                history=list(fsm_state.get("history", [])),
                 completed=fsm_state.get("completed", False),
                 clarification_attempts=fsm_state.get("clarification_attempts", 0),
                 transitions=transitions,
@@ -1203,7 +1204,9 @@ class WizardReasoning(ReasoningStrategy):
             "data": sanitize_for_json(state.data),
             "completed": state.completed,
             "clarification_attempts": state.clarification_attempts,
-            "transitions": [t.to_dict() for t in state.transitions],
+            "transitions": [
+                sanitize_for_json(t.to_dict()) for t in state.transitions
+            ],
             "stage_entry_time": state.stage_entry_time,
             "tasks": state.tasks.to_dict(),
             "subflow_stack": [s.to_dict() for s in state.subflow_stack],

@@ -243,3 +243,105 @@ class TestWizardStateSerialization:
         assert parsed["parent_data"]["_corpus_id"] == "corpus-math"
         assert "_corpus" not in parsed["parent_data"]
         assert parsed["parent_data"]["_bank_questions"] == [{"id": "q1"}]
+
+
+class TestWizardStateSharedReference:
+    """Tests for the shared reference bug between wizard_state.data and metadata.
+
+    Root cause: _get_wizard_state returns data as a reference to the dict
+    stored in manager.metadata["wizard"]["fsm_state"]["data"]. When transforms
+    modify wizard_state.data (e.g. adding _corpus), they contaminate
+    manager.metadata, causing json.dumps to fail on the next _save_state().
+    """
+
+    def test_get_wizard_state_data_is_decoupled_from_metadata(self) -> None:
+        """Modifying wizard_state.data after _get_wizard_state must NOT
+        modify manager.metadata.
+
+        This is the root cause of the serialization crash: _get_wizard_state
+        uses a reference to the same dict stored in metadata. When transforms
+        add _corpus to wizard_state.data, it appears in metadata too.
+        """
+        reasoning, manager = _make_wizard_and_manager()
+
+        # Initial save with clean data
+        state = reasoning._get_wizard_state(manager)
+        state.data["topic"] = "English grammar"
+        reasoning._save_wizard_state(manager, state)
+
+        # Load state back — this is where the shared reference is created
+        loaded_state = reasoning._get_wizard_state(manager)
+
+        # Simulate what transforms do: add non-serializable object
+        loaded_state.data["_corpus"] = NonSerializableObject("live corpus")
+        loaded_state.data["_new_key"] = "injected"
+
+        # The metadata must NOT be contaminated
+        fsm_data = manager.metadata["wizard"]["fsm_state"]["data"]
+        assert "_corpus" not in fsm_data, (
+            "Non-serializable object leaked from wizard_state.data "
+            "into manager.metadata via shared reference"
+        )
+        assert "_new_key" not in fsm_data, (
+            "New key leaked from wizard_state.data into manager.metadata"
+        )
+
+    def test_mutating_data_after_load_does_not_crash_json_dumps(self) -> None:
+        """Load state → add non-serializable to data → json.dumps(metadata) → no crash.
+
+        This reproduces the exact crash from the api-log: after transforms
+        add _corpus to wizard_state.data, the next json.dumps(metadata) fails
+        because the shared reference puts the ArtifactCorpus in metadata.
+        """
+        reasoning, manager = _make_wizard_and_manager()
+
+        # Save clean state
+        state = reasoning._get_wizard_state(manager)
+        state.data["topic"] = "English grammar"
+        reasoning._save_wizard_state(manager, state)
+
+        # Reload state (creates the shared reference)
+        reloaded = reasoning._get_wizard_state(manager)
+
+        # Simulate transform adding non-serializable object
+        reloaded.data["_corpus"] = NonSerializableObject("ArtifactCorpus")
+        reloaded.data["_corpus_id"] = "corpus-abc"
+
+        # json.dumps on metadata must succeed (the key assertion)
+        json_str = json.dumps(manager.metadata)
+        parsed = json.loads(json_str)
+        assert "wizard" in parsed
+
+    def test_transition_data_snapshot_is_serializable(self) -> None:
+        """Transition records with non-serializable data in snapshot must
+        not crash json.dumps after _save_wizard_state."""
+        from dataknobs_bots.reasoning.observability import create_transition_record
+
+        reasoning, manager = _make_wizard_and_manager()
+
+        state = reasoning._get_wizard_state(manager)
+        state.data["topic"] = "Physics"
+        state.data["_corpus"] = NonSerializableObject("live corpus")
+        state.data["_corpus_id"] = "corpus-phys"
+
+        # Create transition with data snapshot containing non-serializable
+        transition = create_transition_record(
+            from_stage="define_topic",
+            to_stage="preview_question",
+            trigger="user_input",
+            data_snapshot=state.data.copy(),
+        )
+        state.transitions.append(transition)
+
+        # Save must sanitize transitions too
+        reasoning._save_wizard_state(manager, state)
+
+        # json.dumps on full metadata must succeed
+        json_str = json.dumps(manager.metadata)
+        parsed = json.loads(json_str)
+        transitions = parsed["wizard"]["fsm_state"]["transitions"]
+        assert len(transitions) == 1
+        snapshot = transitions[0]["data_snapshot"]
+        assert snapshot["topic"] == "Physics"
+        assert snapshot["_corpus_id"] == "corpus-phys"
+        assert "_corpus" not in snapshot
