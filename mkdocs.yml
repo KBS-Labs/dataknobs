@@ -96,6 +96,7 @@ nav:
         - packages/data/async-pooling-quickstart.md
         - packages/data/async-pooling.md
         - packages/data/hybrid-search.md
+        - packages/data/dedup.md
         - packages/data/performance-tuning.md
         - packages/data/migration.md
         - packages/data/validation.md
@@ -169,6 +170,7 @@ nav:
         - packages/llm/guides/tools-and-enhancements.md
         - packages/llm/guides/extraction.md
         - packages/llm/guides/testing.md
+        - packages/llm/guides/parallel-execution.md
       - API Reference:
         - packages/llm/api/prompts.md
         - packages/llm/api/conversations.md
@@ -199,6 +201,7 @@ nav:
         - packages/bots/guides/rag-query.md
         - Artifact & Evaluation System:
           - packages/bots/guides/artifacts.md
+          - packages/bots/guides/artifact-corpus.md
           - packages/bots/guides/rubrics.md
           - packages/bots/guides/context.md
         - Advanced Features:

@@ -497,6 +497,15 @@ registry.on_status_change(on_status_changed)
 registry.on_review_complete(on_review_done)
 ```
 
+## Corpus Collections
+
+For managing collections of related artifacts (e.g., a quiz bank of questions), see [Artifact Corpus](artifact-corpus.md). The `ArtifactCorpus` class provides:
+
+- Corpus-level add/query/count/remove operations
+- Optional dedup integration via `DedupChecker`
+- Session reload via `load()` with automatic dedup state restoration
+- Corpus-aware wizard transforms (`create_corpus`, `add_to_corpus`, `finalize_corpus`)
+
 ## Wizard Transforms
 
 Pre-built async transform functions for integrating artifact lifecycle operations into wizard workflows. Each transform operates on a wizard data dict and uses a `TransformContext`.
@@ -616,6 +625,67 @@ await save_artifact_draft(data, context, config={
     "content_fields": ["objectives", "activities", "assessment"],
 })
 ```
+
+### create_corpus
+
+Creates a new `ArtifactCorpus` and stores references in wizard data. Sets `data["_corpus_id"]`, `data["_corpus"]`, and `data["_corpus_item_count"]`.
+
+```python
+from dataknobs_bots.artifacts import create_corpus
+
+await create_corpus(data, context, config={
+    "corpus_type": "quiz_bank",
+    "item_type": "quiz_question",
+    "name_field": "topic",
+    "dedup": {"hash_fields": ["stem"]},
+})
+```
+
+| Config Key | Type | Default | Description |
+|------------|------|---------|-------------|
+| `corpus_type` | `str` | `"corpus"` | Artifact type for the corpus |
+| `item_type` | `str` | `"item"` | Artifact type for items |
+| `name_template` | `str` | — | Jinja2 template for corpus name |
+| `name_field` | `str` | `"name"` | Key in `data` to use as name |
+| `dedup` | `dict` | — | DedupConfig settings: `hash_fields`, `hash_algorithm`, `semantic_check`, `similarity_threshold` |
+
+### add_to_corpus
+
+Adds content from wizard data to the corpus. Sets `data["_last_added_artifact_id"]`, `data["_corpus_item_count"]`, and `data["_dedup_result"]`.
+
+```python
+from dataknobs_bots.artifacts import add_to_corpus
+
+data["_current_item"] = {"stem": "What is 2+2?", "answer": "4"}
+await add_to_corpus(data, context, config={
+    "content_key": "_current_item",
+    "tags": ["math"],
+})
+```
+
+| Config Key | Type | Default | Description |
+|------------|------|---------|-------------|
+| `content_key` | `str` | `"_current_item"` | Key in `data` holding content dict |
+| `corpus_key` | `str` | `"_corpus"` | Key in `data` holding the corpus instance |
+| `tags` | `list[str]` | `[]` | Additional tags for the item |
+
+If `_corpus` is missing (e.g., after session reload), the transform reconstructs it from `_corpus_id` via `ArtifactCorpus.load()`.
+
+### finalize_corpus
+
+Finalizes the corpus and stores `data["_corpus_summary"]`.
+
+```python
+from dataknobs_bots.artifacts import finalize_corpus
+
+await finalize_corpus(data, context)
+```
+
+| Config Key | Type | Default | Description |
+|------------|------|---------|-------------|
+| `corpus_key` | `str` | `"_corpus"` | Key in `data` holding the corpus instance |
+
+See [Artifact Corpus](artifact-corpus.md) for full corpus documentation and examples.
 
 ## LLM Tools
 
@@ -905,5 +975,6 @@ Marks the session as completed, calculates the score from correct responses, and
 
 ## Related Documentation
 
+- [Artifact Corpus](artifact-corpus.md) — Managing collections of related artifacts with dedup
 - [Rubric Evaluation System](rubrics.md) — Evaluating artifacts with structured rubrics
 - [Context Accumulator](context.md) — Building context from artifacts
