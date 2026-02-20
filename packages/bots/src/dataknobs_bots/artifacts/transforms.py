@@ -27,6 +27,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from .corpus import ArtifactCorpus, CorpusConfig
 from .models import ArtifactStatus
 from .provenance import create_provenance
 
@@ -321,6 +322,194 @@ async def save_artifact_draft(
     else:
         # Create new draft
         await create_artifact(data, context, config)
+
+
+async def create_corpus(
+    data: dict[str, Any],
+    context: TransformContext,
+    config: dict[str, Any] | None = None,
+) -> None:
+    """Create a new ArtifactCorpus and store its ID in wizard data.
+
+    Config keys:
+        corpus_type (str): Artifact type for the corpus (default: "corpus").
+        item_type (str): Artifact type for items (default: "item").
+        name_template (str): Jinja2 template for corpus name.
+        name_field (str): Key in ``data`` to use as name (default: "name").
+        rubric_ids (list[str]): Rubrics to apply to items (default: []).
+        auto_review (bool): Auto-evaluate items on add (default: False).
+        dedup (dict): DedupConfig settings (optional). Keys:
+            hash_fields, hash_algorithm, semantic_check, similarity_threshold.
+
+    Args:
+        data: Wizard data dictionary (modified in place).
+        context: Transform context with artifact registry.
+        config: Transform-specific configuration.
+
+    Raises:
+        ValueError: If artifact_registry is not configured.
+    """
+    if context.artifact_registry is None:
+        raise ValueError("create_corpus requires artifact_registry in context")
+
+    cfg = config or {}
+    name = _resolve_name(data, cfg)
+    corpus_type = cfg.get("corpus_type", "corpus")
+    item_type = cfg.get("item_type", "item")
+
+    # Build dedup checker if configured
+    dedup_checker = None
+    dedup_config_dict = cfg.get("dedup")
+    if dedup_config_dict:
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
+        from dataknobs_data.dedup import DedupChecker, DedupConfig
+
+        dedup_cfg = DedupConfig(
+            hash_fields=dedup_config_dict.get("hash_fields", ["content"]),
+            hash_algorithm=dedup_config_dict.get("hash_algorithm", "md5"),
+            semantic_check=dedup_config_dict.get("semantic_check", False),
+            similarity_threshold=dedup_config_dict.get(
+                "similarity_threshold", 0.92
+            ),
+        )
+        dedup_db = AsyncMemoryDatabase()
+        dedup_checker = DedupChecker(db=dedup_db, config=dedup_cfg)
+
+    corpus_config = CorpusConfig(
+        corpus_type=corpus_type,
+        item_type=item_type,
+        name=name,
+        rubric_ids=cfg.get("rubric_ids", []),
+        auto_review=cfg.get("auto_review", False),
+    )
+
+    corpus = await ArtifactCorpus.create(
+        registry=context.artifact_registry,
+        config=corpus_config,
+        dedup_checker=dedup_checker,
+    )
+
+    data["_corpus_id"] = corpus.id
+    data["_corpus"] = corpus
+    data["_corpus_item_count"] = 0
+    logger.info(
+        "Transform create_corpus: created '%s' (id=%s, type=%s)",
+        name,
+        corpus.id,
+        corpus_type,
+    )
+
+
+async def add_to_corpus(
+    data: dict[str, Any],
+    context: TransformContext,
+    config: dict[str, Any] | None = None,
+) -> None:
+    """Add content from wizard data to the corpus.
+
+    Config keys:
+        content_key (str): Key in ``data`` holding the content dict to add
+            (default: "_current_item").
+        corpus_key (str): Key in ``data`` holding the ArtifactCorpus instance
+            (default: "_corpus").
+        tags (list[str]): Additional tags for the item (default: []).
+
+    Args:
+        data: Wizard data dictionary (modified in place).
+        context: Transform context with artifact registry.
+        config: Transform-specific configuration.
+
+    Raises:
+        ValueError: If no corpus or content is found in data.
+    """
+    cfg = config or {}
+    content_key = cfg.get("content_key", "_current_item")
+    corpus_key = cfg.get("corpus_key", "_corpus")
+    extra_tags = cfg.get("tags", [])
+
+    corpus: ArtifactCorpus | None = data.get(corpus_key)
+    if corpus is None:
+        corpus_id = data.get("_corpus_id")
+        if corpus_id and context.artifact_registry:
+            corpus = await ArtifactCorpus.load(
+                registry=context.artifact_registry,
+                corpus_id=corpus_id,
+            )
+            data[corpus_key] = corpus
+        else:
+            raise ValueError(
+                f"No corpus found at data['{corpus_key}'] "
+                "and no _corpus_id to load from"
+            )
+
+    content = data.get(content_key)
+    if content is None:
+        raise ValueError(f"No content found at data['{content_key}']")
+
+    artifact, dedup_result = await corpus.add_item(
+        content=content,
+        tags=extra_tags,
+    )
+
+    data["_last_added_artifact_id"] = artifact.id
+    data["_corpus_item_count"] = await corpus.count()
+    if dedup_result:
+        data["_dedup_result"] = {
+            "is_exact_duplicate": dedup_result.is_exact_duplicate,
+            "recommendation": dedup_result.recommendation,
+            "exact_match_id": dedup_result.exact_match_id,
+            "similar_count": len(dedup_result.similar_items),
+        }
+    else:
+        data["_dedup_result"] = None
+
+    logger.info(
+        "Transform add_to_corpus: added artifact '%s' to corpus '%s' (count=%d)",
+        artifact.id,
+        corpus.id,
+        data["_corpus_item_count"],
+    )
+
+
+async def finalize_corpus(
+    data: dict[str, Any],
+    context: TransformContext,
+    config: dict[str, Any] | None = None,
+) -> None:
+    """Finalize the corpus, approving the parent artifact.
+
+    Config keys:
+        corpus_key (str): Key in ``data`` holding the ArtifactCorpus instance
+            (default: "_corpus").
+
+    Args:
+        data: Wizard data dictionary (modified in place).
+        context: Transform context with artifact registry.
+        config: Transform-specific configuration.
+
+    Raises:
+        ValueError: If no corpus is found in data.
+    """
+    cfg = config or {}
+    corpus_key = cfg.get("corpus_key", "_corpus")
+
+    corpus: ArtifactCorpus | None = data.get(corpus_key)
+    if corpus is None:
+        corpus_id = data.get("_corpus_id")
+        if corpus_id and context.artifact_registry:
+            corpus = await ArtifactCorpus.load(
+                registry=context.artifact_registry,
+                corpus_id=corpus_id,
+            )
+        else:
+            raise ValueError("No corpus found to finalize")
+
+    await corpus.finalize()
+    data["_corpus_summary"] = await corpus.get_summary()
+    logger.info(
+        "Transform finalize_corpus: finalized corpus '%s'",
+        corpus.id,
+    )
 
 
 def _resolve_name(data: dict[str, Any], config: dict[str, Any]) -> str:

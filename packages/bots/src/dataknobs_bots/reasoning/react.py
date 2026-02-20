@@ -195,7 +195,7 @@ class ReActReasoning(ReasoningStrategy):
                 extra_context["review_executor"] = self._review_executor
             if self._context_builder is not None:
                 try:
-                    conversation_context = self._context_builder.build(manager)
+                    conversation_context = await self._context_builder.build(manager)
                     extra_context["conversation_context"] = conversation_context
                 except Exception as e:
                     logger.warning("Failed to build conversation context: %s", e)

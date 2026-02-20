@@ -19,6 +19,25 @@ if TYPE_CHECKING:
 ResponseFunction = Callable[[List[LLMMessage]], Union[str, LLMResponse]]
 
 
+class ErrorResponse:
+    """Marker for a queued error in EchoProvider's response sequence.
+
+    When EchoProvider encounters an ErrorResponse in its queue, it raises
+    the contained exception instead of returning an LLMResponse.
+
+    Usage:
+        provider = EchoProvider(config)
+        provider.set_responses([
+            text_response("ok"),
+            ErrorResponse(RuntimeError("provider unavailable")),
+            text_response("recovered"),
+        ])
+    """
+
+    def __init__(self, exception: Exception) -> None:
+        self.exception = exception
+
+
 class EchoProvider(AsyncLLMProvider):
     """Echo provider for testing and debugging.
 
@@ -86,9 +105,13 @@ class EchoProvider(AsyncLLMProvider):
         self.stream_delay = llm_config.options.get('stream_delay', 0.0)  # seconds per char
 
         # Scripted response state
-        self._response_queue: List[Union[str, LLMResponse]] = list(responses or [])
+        self._response_queue: List[Union[str, LLMResponse, ErrorResponse]] = list(
+            responses or []
+        )
         self._response_fn: ResponseFunction | None = response_fn
-        self._pattern_responses: List[tuple[re.Pattern[str], Union[str, LLMResponse]]] = []
+        self._pattern_responses: List[
+            tuple[re.Pattern[str], Union[str, LLMResponse, ErrorResponse]]
+        ] = []
         self._call_history: List[Dict[str, Any]] = []
         self._cycle_responses: bool = llm_config.options.get('cycle_responses', False)
 
@@ -98,7 +121,7 @@ class EchoProvider(AsyncLLMProvider):
 
     def set_responses(
         self,
-        responses: List[Union[str, LLMResponse]],
+        responses: List[Union[str, LLMResponse, ErrorResponse]],
         cycle: bool = False,
     ) -> "EchoProvider":
         """Set queue of responses to return in order.
@@ -114,7 +137,9 @@ class EchoProvider(AsyncLLMProvider):
         self._cycle_responses = cycle
         return self
 
-    def add_response(self, response: Union[str, LLMResponse]) -> "EchoProvider":
+    def add_response(
+        self, response: Union[str, LLMResponse, ErrorResponse]
+    ) -> "EchoProvider":
         """Add a single response to the queue.
 
         Args:
@@ -147,7 +172,7 @@ class EchoProvider(AsyncLLMProvider):
     def add_pattern_response(
         self,
         pattern: str,
-        response: Union[str, LLMResponse],
+        response: Union[str, LLMResponse, ErrorResponse],
         flags: int = re.IGNORECASE,
     ) -> "EchoProvider":
         """Add pattern-matched response.
@@ -264,12 +289,16 @@ class EchoProvider(AsyncLLMProvider):
         # Try response function first
         if self._response_fn:
             result = self._response_fn(messages)
+            if isinstance(result, ErrorResponse):
+                raise result.exception
             return self._to_response(result, messages, runtime_config)
 
         # Try pattern matching
         user_content = self._get_user_content(messages)
         for pattern, response in self._pattern_responses:
             if pattern.search(user_content):
+                if isinstance(response, ErrorResponse):
+                    raise response.exception
                 return self._to_response(response, messages, runtime_config)
 
         # Try response queue
@@ -281,6 +310,8 @@ class EchoProvider(AsyncLLMProvider):
             else:
                 # Consume: pop from front
                 response = self._response_queue.pop(0)
+            if isinstance(response, ErrorResponse):
+                raise response.exception
             return self._to_response(response, messages, runtime_config)
 
         # No scripted response
@@ -437,7 +468,18 @@ class EchoProvider(AsyncLLMProvider):
             messages = [LLMMessage(role='user', content=messages)]
 
         # Try scripted response first
-        response = self._resolve_response(messages, runtime_config)
+        try:
+            response = self._resolve_response(messages, runtime_config)
+        except Exception:
+            # Record the failed call before re-raising
+            self._call_history.append({
+                'messages': messages,
+                'response': None,
+                'config_overrides': config_overrides,
+                'kwargs': kwargs,
+                'error': True,
+            })
+            raise
 
         if response is None:
             # Fall back to default echo behavior

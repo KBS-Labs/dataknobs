@@ -516,27 +516,34 @@ class WizardReasoning(ReasoningStrategy):
         artifacts_config = config.get("artifacts", {})
         if artifacts_config:
             try:
-                from ..artifacts import ArtifactDefinition, ArtifactRegistry
+                from ..artifacts import ArtifactRegistry, ArtifactTypeDefinition
+                from dataknobs_data.backends.memory import AsyncMemoryDatabase
 
-                artifact_registry = ArtifactRegistry()
-                for def_id, def_config in artifacts_config.get("definitions", {}).items():
-                    definition = ArtifactDefinition(
-                        id=def_id,
-                        type=def_config.get("type", "content"),
-                        name=def_config.get("name"),
-                        schema=def_config.get("schema"),
-                        reviews=def_config.get("reviews", []),
-                        required_status_for_stage_completion=def_config.get(
-                            "required_status_for_stage_completion"
-                        ),
-                        auto_submit_for_review=def_config.get(
-                            "auto_submit_for_review", False
-                        ),
+                # Build type definitions from config
+                type_definitions: dict[str, ArtifactTypeDefinition] = {}
+                for def_id, def_config in artifacts_config.get(
+                    "definitions", {}
+                ).items():
+                    type_definitions[def_id] = ArtifactTypeDefinition.from_config(
+                        def_id, def_config
                     )
-                    artifact_registry.register_definition(definition)
+
+                # Create database backend (default: in-memory for conversation scope)
+                db_backend = artifacts_config.get("backend", "memory")
+                if db_backend == "memory":
+                    artifact_db = AsyncMemoryDatabase()
+                else:
+                    from dataknobs_data import async_database_factory
+
+                    artifact_db = async_database_factory.create(backend=db_backend)
+
+                artifact_registry = ArtifactRegistry(
+                    db=artifact_db,
+                    type_definitions=type_definitions,
+                )
                 logger.info(
-                    "Created artifact registry with %d definitions",
-                    len(artifacts_config.get("definitions", {})),
+                    "Created artifact registry with %d type definitions",
+                    len(type_definitions),
                 )
             except ImportError:
                 logger.warning(
@@ -2621,7 +2628,7 @@ class WizardReasoning(ReasoningStrategy):
             extra_context["review_executor"] = self._review_executor
         if self._context_builder is not None:
             try:
-                conversation_context = self._context_builder.build(manager)
+                conversation_context = await self._context_builder.build(manager)
                 extra_context["conversation_context"] = conversation_context
             except Exception as e:
                 logger.warning("Failed to build conversation context: %s", e)

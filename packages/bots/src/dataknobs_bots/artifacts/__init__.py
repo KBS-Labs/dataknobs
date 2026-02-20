@@ -26,6 +26,7 @@ Example:
     ... )
 """
 
+from .corpus import ArtifactCorpus, CorpusConfig
 from .assessment import (
     AssessmentSession,
     CumulativePerformance,
@@ -56,8 +57,11 @@ from .provenance import (
 from .registry import ArtifactRegistry
 from .transforms import (
     TransformContext,
+    add_to_corpus,
     approve_artifact,
     create_artifact,
+    create_corpus,
+    finalize_corpus,
     revise_artifact,
     save_artifact_draft,
     submit_for_review,
@@ -65,6 +69,9 @@ from .transforms import (
 from .transitions import ARTIFACT_STATUS, validate_transition
 
 __all__ = [
+    # Corpus
+    "ArtifactCorpus",
+    "CorpusConfig",
     # Models
     "Artifact",
     "ArtifactStatus",
@@ -83,8 +90,11 @@ __all__ = [
     "validate_transition",
     # Transforms
     "TransformContext",
+    "add_to_corpus",
     "approve_artifact",
     "create_artifact",
+    "create_corpus",
+    "finalize_corpus",
     "revise_artifact",
     "save_artifact_draft",
     "submit_for_review",

@@ -5,6 +5,7 @@ from dataknobs_fsm.core.arc import (
     ArcExecution,
     DataIsolationMode,
     PushArc,
+    TransformSpec,
 )
 from dataknobs_fsm.core.fsm import FSM
 from dataknobs_fsm.core.network import (
@@ -29,4 +30,5 @@ __all__ = [
     "PushArc",
     "ArcExecution",
     "DataIsolationMode",
+    "TransformSpec",
 ]

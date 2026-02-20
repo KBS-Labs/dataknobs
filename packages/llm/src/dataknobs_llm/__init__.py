@@ -30,8 +30,17 @@ from dataknobs_llm.tools import (
     ToolRegistry,
 )
 
+# Execution utilities
+from dataknobs_llm.execution.parallel import (
+    DeterministicTask,
+    LLMTask,
+    ParallelLLMExecutor,
+    TaskResult,
+)
+
 # Testing utilities (for test code)
 from dataknobs_llm.testing import (
+    ErrorResponse,
     text_response,
     tool_call_response,
     multi_tool_response,
@@ -70,7 +79,13 @@ __all__ = [
     # Tools
     "Tool",
     "ToolRegistry",
+    # Execution
+    "ParallelLLMExecutor",
+    "LLMTask",
+    "DeterministicTask",
+    "TaskResult",
     # Testing utilities
+    "ErrorResponse",
     "text_response",
     "tool_call_response",
     "multi_tool_response",
