@@ -295,6 +295,14 @@ class WizardFSM:
                 self._context.data = data
 
         result = self._fsm.execute_step_sync(self._context)
+
+        # Sync transform mutations back to caller's data dict.
+        # Transforms modify context.data in place; without this sync,
+        # the caller won't see new keys set by transforms (e.g.
+        # _questions, _artifact_id).
+        if isinstance(self._context.data, dict):
+            data.update(self._context.data)
+
         after_stage = self.current_stage
 
         # Log transition evaluation details
@@ -356,6 +364,14 @@ class WizardFSM:
                 self._context.data = data
 
         result = await self._fsm.execute_step_async(self._context)
+
+        # Sync transform mutations back to caller's data dict.
+        # Transforms modify context.data in place; without this sync,
+        # the caller won't see new keys set by transforms (e.g.
+        # _questions, _artifact_id).
+        if isinstance(self._context.data, dict):
+            data.update(self._context.data)
+
         after_stage = self.current_stage
 
         # Log transition evaluation details
