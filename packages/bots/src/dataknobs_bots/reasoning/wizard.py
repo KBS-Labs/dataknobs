@@ -29,6 +29,49 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Framework-level keys that are always transient (non-persistent).
+# These are either non-serializable runtime objects or ephemeral per-step
+# data that should never reach persistent storage.
+DEFAULT_EPHEMERAL_KEYS: frozenset[str] = frozenset({
+    "_corpus",              # Live ArtifactCorpus (non-serializable)
+    "_message",             # Per-step raw user message (already popped)
+    "_intent",              # Per-step intent detection result
+    "_transform_error",     # Per-step error (may be Exception)
+})
+
+
+def _is_json_safe(value: Any) -> bool:
+    """Check whether a value is JSON-serializable using isinstance checks.
+
+    This is a lightweight alternative to ``json.dumps`` — it recurses into
+    dicts, lists, and dataclasses but does not attempt actual serialization.
+    Dataclasses are accepted because ``sanitize_for_json`` converts them to
+    dicts via ``dataclasses.asdict``.
+
+    Args:
+        value: Value to check.
+
+    Returns:
+        True if the value is composed entirely of JSON-safe types
+        (including dataclasses with JSON-safe fields).
+    """
+    import dataclasses
+
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return True
+    if isinstance(value, dict):
+        return all(
+            isinstance(k, str) and _is_json_safe(v) for k, v in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return all(_is_json_safe(item) for item in value)
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return all(
+            _is_json_safe(getattr(value, f.name))
+            for f in dataclasses.fields(value)
+        )
+    return False
+
 
 @dataclass
 class WizardStageContext:
@@ -130,7 +173,12 @@ class WizardState:
 
     Attributes:
         current_stage: Name of the current stage
-        data: Collected data from all stages
+        data: Persistent collected data from all stages
+        transient: Ephemeral per-step data that is NOT persisted (e.g.
+            live objects like ArtifactCorpus, per-step error messages).
+            Merged into the working dict before FSM execution so
+            templates and conditions see all keys, but stripped before
+            saving to storage.
         history: List of visited stage names
         completed: Whether the wizard has finished
         clarification_attempts: Track consecutive clarification attempts
@@ -142,6 +190,7 @@ class WizardState:
 
     current_stage: str
     data: dict[str, Any] = field(default_factory=dict)
+    transient: dict[str, Any] = field(default_factory=dict)
     history: list[str] = field(default_factory=list)
     completed: bool = False
     clarification_attempts: int = 0
@@ -284,6 +333,12 @@ class WizardReasoning(ReasoningStrategy):
         # LLM provider set by generate() for transform context access
         self._current_llm: Any = None
 
+        # Merge framework-level ephemeral keys with config-declared ones
+        config_ephemeral = wizard_fsm.settings.get("ephemeral_keys", [])
+        self._ephemeral_keys: frozenset[str] = (
+            DEFAULT_EPHEMERAL_KEYS | frozenset(config_ephemeral)
+        )
+
         # Bridge FSM custom functions so they receive a TransformContext
         # instead of a raw FunctionContext.  This lets transforms that
         # need artifact_registry, rubric_executor, etc. work seamlessly.
@@ -406,6 +461,37 @@ class WizardReasoning(ReasoningStrategy):
         if self._extractor is not None and hasattr(self._extractor, "close"):
             await self._extractor.close()
             logger.debug("Closed WizardReasoning extractor")
+
+    def _partition_data(
+        self, data: dict[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Partition a flat working dict into persistent and transient parts.
+
+        Keys in ``self._ephemeral_keys`` are routed to transient.  Keys not
+        in the ephemeral set but failing the ``_is_json_safe`` check are
+        also routed to transient as a safety net (and logged as warnings).
+
+        Args:
+            data: Flat working dict containing all wizard state keys.
+
+        Returns:
+            ``(persistent, transient)`` tuple of dicts.
+        """
+        persistent: dict[str, Any] = {}
+        transient: dict[str, Any] = {}
+        for key, value in data.items():
+            if key in self._ephemeral_keys:
+                transient[key] = value
+            elif not _is_json_safe(value):
+                logger.warning(
+                    "Non-serializable key '%s' (type=%s) moved to transient",
+                    key,
+                    type(value).__name__,
+                )
+                transient[key] = value
+            else:
+                persistent[key] = value
+        return persistent, transient
 
     @property
     def artifact_registry(self) -> Any | None:
@@ -1166,7 +1252,7 @@ class WizardReasoning(ReasoningStrategy):
             "progress": progress,
             "progress_percent": progress * 100,
             "completed": state.completed,
-            "data": sanitize_for_json(state.data),
+            "data": sanitize_for_json({**state.data, **state.transient}),
             "history": state.history,
             "can_skip": active_fsm.can_skip(),
             "can_go_back": active_fsm.can_go_back() and len(state.history) > 1,
@@ -1193,11 +1279,21 @@ class WizardReasoning(ReasoningStrategy):
     def _save_wizard_state(self, manager: Any, state: WizardState) -> None:
         """Save wizard state to conversation manager.
 
+        Partitions ``state.data`` into persistent and transient parts before
+        persisting.  Only persistent data is written to ``fsm_state``.
+        ``_build_wizard_metadata`` is called *before* partition so the response
+        metadata (sent to the UI) still contains all keys.
+
         Args:
             manager: ConversationManager instance
             state: WizardState to save
         """
+        # Build metadata BEFORE partition so UI sees all keys (incl. transient)
         wizard_meta = self._build_wizard_metadata(state)
+
+        # Partition: separate ephemeral/non-serializable keys from persistent
+        state.data, state.transient = self._partition_data(state.data)
+
         wizard_meta["fsm_state"] = {
             "current_stage": state.current_stage,
             "history": state.history,
@@ -2252,18 +2348,20 @@ class WizardReasoning(ReasoningStrategy):
         # Build template context — ALL state data is available as
         # top-level variables so templates can reference both user-facing
         # fields (topic, difficulty) and transform outputs (_questions,
-        # _bank_questions).  Transient internal keys like _message and
-        # _intent are cleaned up before template rendering.
+        # _bank_questions).  Both persistent (state.data) and transient
+        # (state.transient) keys are included so templates see everything
+        # even after partition.
+        all_data = {**state.data, **state.transient}
         context: dict[str, Any] = {
             # Stage metadata
             "stage_name": stage.get("name", "unknown"),
             "stage_label": stage.get("label", stage.get("name", "")),
             # All data as top-level variables (including _-prefixed)
-            **state.data,
+            **all_data,
             # Filtered dict (backward compatibility)
             "collected_data": collected_data,
             # Full data dict reference
-            "all_data": dict(state.data),
+            "all_data": all_data,
             # Wizard progress
             "history": state.history,
             "completed": state.completed,

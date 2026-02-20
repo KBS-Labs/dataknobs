@@ -3,6 +3,10 @@
 Tests the complete save → storage → load roundtrip using real
 DataknobsConversationStorage with AsyncMemoryDatabase, ensuring that
 non-serializable objects in wizard state.data do not crash the pipeline.
+
+Also tests the transient/persistent partition system: ephemeral keys
+are excluded from persisted state, while persistent keys survive
+the full save → storage → load roundtrip.
 """
 
 from __future__ import annotations
@@ -322,3 +326,104 @@ class TestWizardPersistence:
         conv_id = conversation_manager.state.conversation_id
         loaded = await conversation_storage.load_conversation(conv_id)
         assert loaded is not None
+
+
+class TestEphemeralKeyRoundtrip:
+    """Tests that ephemeral keys are excluded and persistent keys survive roundtrip."""
+
+    @pytest.mark.asyncio
+    async def test_roundtrip_excludes_ephemeral_keys(
+        self,
+        conversation_manager: ConversationManager,
+        conversation_storage: DataknobsConversationStorage,
+    ) -> None:
+        """Save → storage → load: ephemeral keys not in loaded state."""
+        config = {
+            "name": "ephemeral-test",
+            "version": "1.0",
+            "settings": {
+                "ephemeral_keys": ["_dedup_result", "_review_summary"],
+            },
+            "stages": [
+                {
+                    "name": "collect",
+                    "is_start": True,
+                    "prompt": "Details",
+                    "transitions": [{"target": "done"}],
+                },
+                {"name": "done", "is_end": True, "prompt": "Complete"},
+            ],
+        }
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict(config)
+        reasoning = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
+
+        # Set up state with both persistent and ephemeral keys
+        state = reasoning._get_wizard_state(conversation_manager)
+        state.data["topic"] = "Biology"
+        state.data["_corpus_id"] = "corpus-bio"
+        state.data["_corpus"] = NonSerializableObject("live corpus")
+        state.data["_dedup_result"] = {"is_duplicate": False}
+        state.data["_review_summary"] = "All looks good"
+        state.data["_transform_error"] = "LLM timeout"
+        state.data["_bank_questions"] = [{"id": "q1"}]
+
+        # Save → persist
+        reasoning._save_wizard_state(conversation_manager, state)
+        await conversation_storage.save_conversation(conversation_manager.state)
+
+        # Load from storage
+        conv_id = conversation_manager.state.conversation_id
+        loaded_conv = await conversation_storage.load_conversation(conv_id)
+        assert loaded_conv is not None
+
+        # Verify ephemeral keys are gone
+        fsm_data = loaded_conv.metadata["wizard"]["fsm_state"]["data"]
+        assert "_corpus" not in fsm_data
+        assert "_dedup_result" not in fsm_data
+        assert "_review_summary" not in fsm_data
+        assert "_transform_error" not in fsm_data
+
+        # Verify persistent keys survived
+        assert fsm_data["topic"] == "Biology"
+        assert fsm_data["_corpus_id"] == "corpus-bio"
+        assert fsm_data["_bank_questions"] == [{"id": "q1"}]
+
+    @pytest.mark.asyncio
+    async def test_roundtrip_preserves_persistent_keys(
+        self,
+        conversation_manager: ConversationManager,
+        conversation_storage: DataknobsConversationStorage,
+    ) -> None:
+        """Save → storage → load: persistent _-prefixed keys survive."""
+        config = _make_wizard_config()
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict(config)
+        reasoning = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
+
+        state = reasoning._get_wizard_state(conversation_manager)
+        state.data["topic"] = "Chemistry"
+        state.data["difficulty"] = "hard"
+        state.data["_corpus_id"] = "corpus-chem"
+        state.data["_artifact_id"] = "art-123"
+        state.data["_bank_questions"] = [{"id": "q1"}, {"id": "q2"}]
+        state.data["_bank_question_ids"] = ["art-1", "art-2"]
+        state.data["_bank_difficulty_counts"] = {"easy": 1, "medium": 1}
+        state.data["_target_count"] = 10
+
+        # Save → persist → load
+        reasoning._save_wizard_state(conversation_manager, state)
+        await conversation_storage.save_conversation(conversation_manager.state)
+        conv_id = conversation_manager.state.conversation_id
+        loaded_conv = await conversation_storage.load_conversation(conv_id)
+        assert loaded_conv is not None
+
+        fsm_data = loaded_conv.metadata["wizard"]["fsm_state"]["data"]
+        assert fsm_data["topic"] == "Chemistry"
+        assert fsm_data["difficulty"] == "hard"
+        assert fsm_data["_corpus_id"] == "corpus-chem"
+        assert fsm_data["_artifact_id"] == "art-123"
+        assert fsm_data["_bank_questions"] == [{"id": "q1"}, {"id": "q2"}]
+        assert fsm_data["_bank_question_ids"] == ["art-1", "art-2"]
+        assert fsm_data["_bank_difficulty_counts"] == {"easy": 1, "medium": 1}
+        assert fsm_data["_target_count"] == 10
