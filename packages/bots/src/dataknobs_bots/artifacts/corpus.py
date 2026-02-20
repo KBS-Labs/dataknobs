@@ -236,6 +236,25 @@ class ArtifactCorpus:
         )
         return artifact, dedup_result
 
+    async def check_dedup(
+        self,
+        content: dict[str, Any],
+    ) -> DedupResult | None:
+        """Check content for duplicates without adding it to the corpus.
+
+        Useful for pre-screening content before showing it to the user.
+        Returns ``None`` if no dedup checker is configured.
+
+        Args:
+            content: The content dictionary to check.
+
+        Returns:
+            DedupResult with match information, or None if dedup is not configured.
+        """
+        if self._dedup_checker is None:
+            return None
+        return await self._dedup_checker.check(content)
+
     async def get_items(
         self,
         status: ArtifactStatus | None = None,

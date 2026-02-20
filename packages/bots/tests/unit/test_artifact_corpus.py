@@ -187,6 +187,53 @@ async def test_add_with_dedup(registry: ArtifactRegistry) -> None:
 
 
 @pytest.mark.asyncio
+async def test_check_dedup(registry: ArtifactRegistry) -> None:
+    """check_dedup pre-screens content without adding it."""
+    dedup_db = AsyncMemoryDatabase()
+    dedup_checker = DedupChecker(
+        db=dedup_db,
+        config=DedupConfig(hash_fields=["stem"]),
+    )
+    config = CorpusConfig(
+        corpus_type="quiz_bank",
+        item_type="quiz_question",
+        name="Dedup Quiz",
+    )
+    corpus = await ArtifactCorpus.create(registry, config, dedup_checker=dedup_checker)
+
+    # Pre-screen before any items — should be unique
+    result = await corpus.check_dedup({"stem": "What is 2+2?"})
+    assert result is not None
+    assert result.is_exact_duplicate is False
+
+    # Add the item
+    await corpus.add_item(content={"stem": "What is 2+2?"})
+
+    # Pre-screen same content — should detect duplicate
+    result2 = await corpus.check_dedup({"stem": "What is 2+2?"})
+    assert result2 is not None
+    assert result2.is_exact_duplicate is True
+
+    # Pre-screen different content — should be unique
+    result3 = await corpus.check_dedup({"stem": "What is 3+3?"})
+    assert result3 is not None
+    assert result3.is_exact_duplicate is False
+
+    # No item was added by check_dedup
+    assert await corpus.count() == 1
+
+
+@pytest.mark.asyncio
+async def test_check_dedup_no_checker(
+    registry: ArtifactRegistry, config: CorpusConfig
+) -> None:
+    """check_dedup returns None when no dedup checker is configured."""
+    corpus = await ArtifactCorpus.create(registry, config)
+    result = await corpus.check_dedup({"stem": "anything"})
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_remove_item(registry: ArtifactRegistry, config: CorpusConfig) -> None:
     """Removing an item archives it."""
     corpus = await ArtifactCorpus.create(registry, config)
