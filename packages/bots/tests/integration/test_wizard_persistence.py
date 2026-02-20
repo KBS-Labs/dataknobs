@@ -265,3 +265,60 @@ class TestWizardPersistence:
         conv_id = conversation_manager.state.conversation_id
         loaded = await conversation_storage.load_conversation(conv_id)
         assert loaded is not None
+
+    @pytest.mark.asyncio
+    async def test_fsm_restore_does_not_contaminate_metadata(
+        self,
+        conversation_manager: ConversationManager,
+        conversation_storage: DataknobsConversationStorage,
+    ) -> None:
+        """Reproduces the exact crash path through WizardFSM.restore().
+
+        The crash sequence is:
+        1. _save_wizard_state writes clean data to metadata
+        2. _get_wizard_state calls fsm.restore(fsm_state) which used to
+           create context.data as a reference to metadata["wizard"]["fsm_state"]["data"]
+        3. step_async() transforms mutate context.data, contaminating metadata
+        4. manager.add_message() → _save_state() → json.dumps(metadata) → CRASH
+
+        The fix: WizardFSM.restore() now deep-copies data.
+        """
+        config = _make_wizard_config()
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict(config)
+        reasoning = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
+
+        # Step 1: Save clean wizard state
+        state = reasoning._get_wizard_state(conversation_manager)
+        state.data["topic"] = "English grammar"
+        reasoning._save_wizard_state(conversation_manager, state)
+        await conversation_storage.save_conversation(conversation_manager.state)
+
+        # Step 2: Reload — this calls fsm.restore() which used to create
+        # a shared reference between context.data and metadata
+        reloaded = reasoning._get_wizard_state(conversation_manager)
+
+        # Step 3: Simulate transform mutation (what step_async does internally)
+        # This writes to wizard_state.data AND (via the old bug) to context.data
+        reloaded.data["_corpus"] = NonSerializableObject("ArtifactCorpus")
+        reloaded.data["_corpus_id"] = "corpus-abc"
+        reloaded.data["_bank_questions"] = [{"id": "q1"}]
+
+        # Step 4: Verify metadata is NOT contaminated
+        meta_data = conversation_manager.metadata["wizard"]["fsm_state"]["data"]
+        assert "_corpus" not in meta_data, (
+            "FSM restore() shared reference: non-serializable object leaked "
+            "from wizard_state.data into metadata"
+        )
+
+        # Step 5: json.dumps must succeed
+        json.dumps(conversation_manager.state.to_dict())
+
+        # Step 6: add_message must not crash
+        await conversation_manager.add_message(
+            role="assistant",
+            content="Here is your first question...",
+        )
+        conv_id = conversation_manager.state.conversation_id
+        loaded = await conversation_storage.load_conversation(conv_id)
+        assert loaded is not None

@@ -5,6 +5,7 @@ wizard-specific conveniences like stage metadata access, navigation
 helpers, and serialization for persistence.
 """
 
+import copy
 import logging
 from typing import Any, Callable
 
@@ -457,11 +458,17 @@ class WizardFSM:
     def restore(self, state: dict[str, Any]) -> None:
         """Restore wizard from serialized state.
 
+        Deep-copies `data` to break any shared reference with the
+        caller (e.g. ``manager.metadata``).  Without this, transforms
+        that mutate ``context.data`` during ``step_async`` would
+        contaminate the metadata dict, causing ``json.dumps(metadata)``
+        to crash on non-serializable objects.
+
         Args:
             state: Previously serialized state dict
         """
         current_stage = state.get("current_stage")
-        data = state.get("data", {})
+        data = copy.deepcopy(state.get("data", {}))
 
         if current_stage:
             # Create new context with restored state

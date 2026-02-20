@@ -245,13 +245,107 @@ class TestWizardStateSerialization:
         assert parsed["parent_data"]["_bank_questions"] == [{"id": "q1"}]
 
 
+class TestWizardFSMRestoreDecoupling:
+    """Tests for the WizardFSM.restore() shared reference fix.
+
+    Root cause: WizardFSM.restore() extracted data from the input state dict
+    without copying, so context.data was a direct reference to
+    manager.metadata["wizard"]["fsm_state"]["data"]. When step_async()
+    transforms mutated context.data (e.g. adding _corpus), they contaminated
+    the metadata dict, causing json.dumps(metadata) to crash.
+
+    Fix: restore() now deep-copies data before creating the execution context.
+    """
+
+    def test_restore_decouples_context_data_from_input_state(self) -> None:
+        """After restore(), mutating context.data must NOT modify the
+        original state dict that was passed to restore().
+
+        This is the FSM-level root cause: restore() used a direct reference
+        to state["data"], so any mutation to context.data (by transforms)
+        wrote through to the caller's dict (manager.metadata).
+        """
+        from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+
+        config = {
+            "name": "test-wizard",
+            "version": "1.0",
+            "stages": [
+                {
+                    "name": "welcome",
+                    "is_start": True,
+                    "prompt": "Hello",
+                    "transitions": [{"target": "done"}],
+                },
+                {"name": "done", "is_end": True, "prompt": "Done"},
+            ],
+        }
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict(config)
+
+        # Simulate metadata with persisted wizard state
+        original_data = {"topic": "English grammar", "_corpus_id": "corpus-abc"}
+        state = {
+            "current_stage": "welcome",
+            "data": original_data,
+        }
+
+        fsm.restore(state)
+
+        # Mutate context.data (simulating what transforms do)
+        fsm._context.data["_corpus"] = NonSerializableObject("live corpus")
+        fsm._context.data["_injected_key"] = "transform output"
+
+        # Original dict must NOT be contaminated
+        assert "_corpus" not in original_data, (
+            "restore() created a shared reference: context.data mutation "
+            "leaked into the original state dict"
+        )
+        assert "_injected_key" not in original_data
+
+    def test_restore_preserves_original_data_values(self) -> None:
+        """restore() deep-copies data, so context.data has the correct
+        values but is independent of the original."""
+        from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+
+        config = {
+            "name": "test-wizard",
+            "version": "1.0",
+            "stages": [
+                {
+                    "name": "welcome",
+                    "is_start": True,
+                    "prompt": "Hello",
+                    "transitions": [{"target": "done"}],
+                },
+                {"name": "done", "is_end": True, "prompt": "Done"},
+            ],
+        }
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict(config)
+
+        original_data = {
+            "topic": "English grammar",
+            "nested": {"key": "value", "list": [1, 2, 3]},
+        }
+        fsm.restore({"current_stage": "welcome", "data": original_data})
+
+        # Values are preserved
+        assert fsm._context.data["topic"] == "English grammar"
+        assert fsm._context.data["nested"]["key"] == "value"
+        assert fsm._context.data["nested"]["list"] == [1, 2, 3]
+
+        # But deeply independent — mutating nested structures doesn't leak
+        fsm._context.data["nested"]["key"] = "mutated"
+        assert original_data["nested"]["key"] == "value"
+
+
 class TestWizardStateSharedReference:
     """Tests for the shared reference bug between wizard_state.data and metadata.
 
-    Root cause: _get_wizard_state returns data as a reference to the dict
-    stored in manager.metadata["wizard"]["fsm_state"]["data"]. When transforms
-    modify wizard_state.data (e.g. adding _corpus), they contaminate
-    manager.metadata, causing json.dumps to fail on the next _save_state().
+    These test the full pipeline through _get_wizard_state (which calls
+    WizardFSM.restore internally), verifying that the combined deepcopy
+    in both _get_wizard_state and restore() fully breaks the reference chain.
     """
 
     def test_get_wizard_state_data_is_decoupled_from_metadata(self) -> None:
