@@ -12,6 +12,8 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from dataknobs_common.serialization import sanitize_for_json
+
 from .base import ReasoningStrategy
 from .observability import (
     TransitionRecord,
@@ -88,7 +90,7 @@ class SubflowContext:
         """
         return {
             "parent_stage": self.parent_stage,
-            "parent_data": self.parent_data,
+            "parent_data": sanitize_for_json(self.parent_data),
             "parent_history": self.parent_history,
             "return_stage": self.return_stage,
             "result_mapping": self.result_mapping,
@@ -1163,7 +1165,7 @@ class WizardReasoning(ReasoningStrategy):
             "progress": progress,
             "progress_percent": progress * 100,
             "completed": state.completed,
-            "data": state.data,
+            "data": sanitize_for_json(state.data),
             "history": state.history,
             "can_skip": active_fsm.can_skip(),
             "can_go_back": active_fsm.can_go_back() and len(state.history) > 1,
@@ -1198,7 +1200,7 @@ class WizardReasoning(ReasoningStrategy):
         wizard_meta["fsm_state"] = {
             "current_stage": state.current_stage,
             "history": state.history,
-            "data": state.data,
+            "data": sanitize_for_json(state.data),
             "completed": state.completed,
             "clarification_attempts": state.clarification_attempts,
             "transitions": [t.to_dict() for t in state.transitions],

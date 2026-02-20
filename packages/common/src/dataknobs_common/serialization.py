@@ -39,9 +39,13 @@ Example:
     ```
 """
 
+import dataclasses
+import logging
 from typing import Any, Dict, Protocol, Type, TypeVar, runtime_checkable
 
 from dataknobs_common.exceptions import SerializationError
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
@@ -300,8 +304,79 @@ def is_deserializable(cls: Type) -> bool:
     return hasattr(cls, "from_dict")
 
 
+def sanitize_for_json(value: Any) -> Any:
+    """Recursively ensure a value is JSON-serializable.
+
+    Converts known structured types (dataclasses, Serializable objects) to
+    dicts and drops anything that cannot be represented in JSON. Designed
+    for wizard state data that may contain a mix of serializable primitives,
+    dataclass instances, Serializable objects, and live runtime objects.
+
+    Conversion rules (in order):
+    - ``None``, ``bool``, ``int``, ``float``, ``str`` → pass through
+    - ``dict`` → recurse on values; drop entries whose values are not convertible
+    - ``list`` / ``tuple`` → recurse on elements; filter out non-convertible items
+    - dataclass instance → ``dataclasses.asdict()``
+    - Object with ``to_dict()`` → call ``to_dict()``
+    - Anything else → dropped (logged at debug level)
+
+    Args:
+        value: Any Python value to sanitize.
+
+    Returns:
+        A JSON-safe version of *value*.
+    """
+    # JSON primitives
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+
+    # Dicts: recurse on values
+    if isinstance(value, dict):
+        result = {}
+        for k, v in value.items():
+            sanitized = sanitize_for_json(v)
+            if sanitized is not _SENTINEL:
+                result[k] = sanitized
+        return result
+
+    # Lists/tuples: recurse on elements, filter non-convertible
+    if isinstance(value, (list, tuple)):
+        items = []
+        for item in value:
+            sanitized = sanitize_for_json(item)
+            if sanitized is not _SENTINEL:
+                items.append(sanitized)
+        return items
+
+    # Dataclass instances → asdict
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return dataclasses.asdict(value)
+
+    # Serializable protocol (has to_dict)
+    if hasattr(value, "to_dict") and callable(value.to_dict):
+        try:
+            result = value.to_dict()
+            if isinstance(result, dict):
+                return sanitize_for_json(result)
+        except Exception:
+            logger.debug(
+                "to_dict() failed for %s, dropping", type(value).__name__
+            )
+
+    # Not convertible
+    logger.debug(
+        "Dropping non-serializable value of type %s", type(value).__name__
+    )
+    return _SENTINEL
+
+
+# Internal sentinel to distinguish "value was dropped" from "value is None"
+_SENTINEL = object()
+
+
 __all__ = [
     "Serializable",
+    "sanitize_for_json",
     "serialize",
     "deserialize",
     "serialize_list",

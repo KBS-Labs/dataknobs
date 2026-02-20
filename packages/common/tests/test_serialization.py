@@ -1,6 +1,7 @@
 """Tests for the serialization protocol and utilities."""
 
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 
 import pytest
 
@@ -11,6 +12,7 @@ from dataknobs_common.serialization import (
     deserialize_list,
     is_deserializable,
     is_serializable,
+    sanitize_for_json,
     serialize,
     serialize_list,
 )
@@ -486,3 +488,148 @@ class TestCustomSerializable:
         assert restored.name == "Homer"
         assert restored.address.street == "123 Main St"
         assert restored.address.city == "Springfield"
+
+
+class TestSanitizeForJson:
+    """Tests for sanitize_for_json utility.
+
+    This function recursively ensures that a value is JSON-serializable,
+    converting dataclasses and Serializable objects while dropping
+    anything that cannot be represented in JSON.
+    """
+
+    def test_sanitize_preserves_json_primitives(self) -> None:
+        """str, int, float, bool, None pass through unchanged."""
+        assert sanitize_for_json("hello") == "hello"
+        assert sanitize_for_json(42) == 42
+        assert sanitize_for_json(3.14) == 3.14
+        assert sanitize_for_json(True) is True
+        assert sanitize_for_json(False) is False
+        assert sanitize_for_json(None) is None
+
+    def test_sanitize_preserves_nested_dicts_and_lists(self) -> None:
+        """Recursive dict/list structures preserved."""
+        data = {
+            "name": "test",
+            "items": [1, 2, {"nested": True}],
+            "config": {"a": "b", "c": [3, 4]},
+        }
+        result = sanitize_for_json(data)
+        assert result == data
+
+    def test_sanitize_drops_non_serializable_objects(self) -> None:
+        """Arbitrary objects stripped from dict; serializable siblings kept."""
+
+        class OpaqueObject:
+            pass
+
+        data = {
+            "name": "test",
+            "_live_object": OpaqueObject(),
+            "count": 5,
+        }
+        result = sanitize_for_json(data)
+        assert result == {"name": "test", "count": 5}
+        assert "_live_object" not in result
+
+    def test_sanitize_converts_dataclass_to_dict(self) -> None:
+        """Dataclass instances converted via dataclasses.asdict()."""
+
+        @dataclass
+        class DedupResult:
+            is_exact_duplicate: bool
+            exact_match_id: str | None = None
+            similar_items: list[str] = field(default_factory=list)
+            recommendation: str = "unique"
+            content_hash: str = ""
+
+        dedup = DedupResult(
+            is_exact_duplicate=False,
+            content_hash="abc123",
+        )
+        data = {"_dedup_result": dedup, "topic": "math"}
+        result = sanitize_for_json(data)
+
+        assert result["topic"] == "math"
+        assert isinstance(result["_dedup_result"], dict)
+        assert result["_dedup_result"]["is_exact_duplicate"] is False
+        assert result["_dedup_result"]["content_hash"] == "abc123"
+        assert result["_dedup_result"]["recommendation"] == "unique"
+
+    def test_sanitize_converts_serializable_via_to_dict(self) -> None:
+        """Object with to_dict() converted to dict."""
+        user = User("Alice", "alice@example.com")
+        data = {"user": user, "active": True}
+        result = sanitize_for_json(data)
+
+        assert result["active"] is True
+        assert isinstance(result["user"], dict)
+        assert result["user"] == {"name": "Alice", "email": "alice@example.com"}
+
+    def test_sanitize_handles_non_serializable_in_list(self) -> None:
+        """Non-serializable items filtered from lists."""
+
+        class OpaqueObject:
+            pass
+
+        data = {"items": [1, "two", OpaqueObject(), 4]}
+        result = sanitize_for_json(data)
+        assert result["items"] == [1, "two", 4]
+
+    def test_sanitize_preserves_underscore_prefixed_keys(self) -> None:
+        """Keys like _corpus_id, _bank_questions, _count are kept."""
+        data = {
+            "_corpus_id": "corpus-abc",
+            "_bank_questions": [{"id": "q1"}, {"id": "q2"}],
+            "_count": 10,
+            "_target_count": 50,
+            "topic": "English grammar",
+        }
+        result = sanitize_for_json(data)
+        assert result == data
+
+    def test_sanitize_output_is_json_dumps_safe(self) -> None:
+        """json.dumps(result) succeeds on mixed input including non-serializable."""
+
+        class OpaqueObject:
+            pass
+
+        @dataclass
+        class SimpleData:
+            value: int
+            label: str
+
+        data = {
+            "name": "test",
+            "_live": OpaqueObject(),
+            "_data": SimpleData(value=1, label="x"),
+            "items": [1, OpaqueObject(), "three"],
+            "nested": {"a": 1, "b": OpaqueObject()},
+        }
+        result = sanitize_for_json(data)
+        # Must not raise
+        json_str = json.dumps(result)
+        assert isinstance(json_str, str)
+
+        # Verify round-trip
+        parsed = json.loads(json_str)
+        assert parsed["name"] == "test"
+        assert parsed["_data"] == {"value": 1, "label": "x"}
+        assert parsed["items"] == [1, "three"]
+        assert parsed["nested"] == {"a": 1}
+
+    def test_sanitize_preserves_none_values(self) -> None:
+        """None values are JSON-valid and preserved."""
+        data = {
+            "_dedup_result": None,
+            "_corpus_id": None,
+            "name": "test",
+        }
+        result = sanitize_for_json(data)
+        assert result["_dedup_result"] is None
+        assert result["_corpus_id"] is None
+        assert result["name"] == "test"
+
+    def test_sanitize_empty_dict(self) -> None:
+        """{} -> {}."""
+        assert sanitize_for_json({}) == {}
