@@ -1,7 +1,7 @@
-"""Tests for stripping schema defaults from extraction.
+"""Tests for schema default stripping and application.
 
-Tests for the _strip_schema_defaults method in WizardReasoning,
-ensuring defaults are removed before passing schemas to the extraction LLM.
+Tests for _strip_schema_defaults (removing defaults before extraction) and
+_apply_schema_defaults (applying defaults to wizard state after extraction).
 """
 
 from dataclasses import dataclass, field
@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from dataknobs_bots.reasoning.wizard import WizardReasoning
+from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 
 
@@ -450,3 +450,150 @@ class TestSchemaDefaultsIntegration:
 
         assert result.data == {"_raw_input": "hello"}
         assert result.confidence == 1.0
+
+
+class TestApplySchemaDefaults:
+    """Tests for _apply_schema_defaults method."""
+
+    def test_applies_missing_defaults(
+        self, wizard_reasoning: WizardReasoning
+    ) -> None:
+        """Defaults are applied for properties not in wizard data."""
+        state = WizardState(
+            current_stage="start",
+            data={"topic": "biology"},
+        )
+        stage: dict[str, Any] = {
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string"},
+                    "difficulty": {"type": "string", "default": "medium"},
+                    "question_type": {
+                        "type": "string",
+                        "default": "multiple_choice",
+                    },
+                },
+            }
+        }
+
+        applied = wizard_reasoning._apply_schema_defaults(state, stage)
+
+        assert applied == {"difficulty", "question_type"}
+        assert state.data["difficulty"] == "medium"
+        assert state.data["question_type"] == "multiple_choice"
+        # Existing value untouched
+        assert state.data["topic"] == "biology"
+
+    def test_does_not_overwrite_existing_values(
+        self, wizard_reasoning: WizardReasoning
+    ) -> None:
+        """Existing non-None values are preserved."""
+        state = WizardState(
+            current_stage="start",
+            data={"difficulty": "hard"},
+        )
+        stage: dict[str, Any] = {
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "difficulty": {"type": "string", "default": "medium"},
+                },
+            }
+        }
+
+        applied = wizard_reasoning._apply_schema_defaults(state, stage)
+
+        assert applied == set()
+        assert state.data["difficulty"] == "hard"
+
+    def test_applies_default_when_value_is_none(
+        self, wizard_reasoning: WizardReasoning
+    ) -> None:
+        """Default is applied when value is explicitly None."""
+        state = WizardState(
+            current_stage="start",
+            data={"difficulty": None},
+        )
+        stage: dict[str, Any] = {
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "difficulty": {"type": "string", "default": "medium"},
+                },
+            }
+        }
+
+        applied = wizard_reasoning._apply_schema_defaults(state, stage)
+
+        assert applied == {"difficulty"}
+        assert state.data["difficulty"] == "medium"
+
+    def test_no_schema_returns_empty(
+        self, wizard_reasoning: WizardReasoning
+    ) -> None:
+        """Stage without schema returns empty set."""
+        state = WizardState(current_stage="start", data={})
+        stage: dict[str, Any] = {}
+
+        applied = wizard_reasoning._apply_schema_defaults(state, stage)
+
+        assert applied == set()
+
+    def test_no_defaults_in_schema(
+        self, wizard_reasoning: WizardReasoning
+    ) -> None:
+        """Schema without any defaults returns empty set."""
+        state = WizardState(current_stage="start", data={})
+        stage: dict[str, Any] = {
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string"},
+                },
+            }
+        }
+
+        applied = wizard_reasoning._apply_schema_defaults(state, stage)
+
+        assert applied == set()
+
+    def test_boolean_default_false(
+        self, wizard_reasoning: WizardReasoning
+    ) -> None:
+        """Boolean false default is applied (not treated as missing)."""
+        state = WizardState(current_stage="start", data={})
+        stage: dict[str, Any] = {
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "enabled": {"type": "boolean", "default": False},
+                },
+            }
+        }
+
+        applied = wizard_reasoning._apply_schema_defaults(state, stage)
+
+        assert applied == {"enabled"}
+        assert state.data["enabled"] is False
+
+    def test_integer_default_zero(
+        self, wizard_reasoning: WizardReasoning
+    ) -> None:
+        """Integer zero default is applied (not treated as missing)."""
+        state = WizardState(current_stage="start", data={})
+        stage: dict[str, Any] = {
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "count": {"type": "integer", "default": 0},
+                },
+            }
+        }
+
+        applied = wizard_reasoning._apply_schema_defaults(state, stage)
+
+        # 0 is falsy but not None — should still be applied since
+        # the key is not in data at all
+        assert applied == {"count"}
+        assert state.data["count"] == 0

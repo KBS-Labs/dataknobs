@@ -1082,8 +1082,39 @@ This gives users three paths:
 2. **Accept defaults**: User says "skip" or "use defaults" → `skip_default` values applied
 3. **Guided help**: User says "I'm not sure" → wizard explains options and re-prompts
 
-> **Note:** Schema `default` values are stripped before extraction to prevent the LLM from
-> auto-filling them. Use `skip_default` for user-facing defaults instead of schema defaults.
+> **Note:** Schema `default` values are stripped before extraction so the LLM only extracts
+> what the user actually said. After extraction, defaults are **applied back** to wizard data
+> for any property that was not set — this ensures template conditions like
+> `{% if difficulty %}` evaluate True when the schema defines `default: medium`.
+>
+> Use `skip_default` for stage-level defaults (applied when the user skips the entire stage).
+> Use schema `default` for property-level defaults (applied when the user doesn't mention a
+> specific field).
+
+**Confirmation on New Data:**
+
+Stages with `response_template` automatically show a confirmation summary when new data is
+first extracted. By default, this confirmation fires only once (the first render). To
+re-confirm whenever schema property values change (e.g., the user says "change difficulty to
+hard" after the initial summary), add `confirm_on_new_data: true`:
+
+```yaml
+stages:
+  - name: define_topic
+    confirm_on_new_data: true
+    response_template: |
+      - **Topic:** {{ topic }}
+      - **Difficulty:** {{ difficulty }}
+    schema:
+      type: object
+      properties:
+        topic: { type: string }
+        difficulty: { type: string, default: medium }
+```
+
+With `confirm_on_new_data`, the engine tracks a snapshot of schema property values at each
+render. When the user provides updated values, the snapshot differs and a re-render is
+triggered — letting the user verify the changes before proceeding.
 
 **Auto-Advance:**
 
@@ -1132,6 +1163,35 @@ Auto-advance conditions:
 
 This enables "template-first" workflows where users select a template that pre-fills most
 fields, and the wizard skips to the first stage needing user input.
+
+**Ephemeral Keys (Transient/Persistent Partition):**
+
+Wizard data is partitioned into **persistent** keys (saved to storage) and **transient**
+keys (available during the current request only, never persisted). This prevents
+non-serializable runtime objects and per-step ephemeral data from contaminating storage.
+
+Framework-level keys that are always transient:
+- `_corpus` — live ArtifactCorpus object (non-serializable)
+- `_message` — per-step raw user message
+- `_intent` — per-step intent detection result
+- `_transform_error` — per-step transform error
+
+Declare additional domain-specific ephemeral keys in `settings.ephemeral_keys`:
+
+```yaml
+settings:
+  ephemeral_keys:
+    - _dedup_result        # Per-question dedup output
+    - _review_summary      # Pre-finalization display data
+    - _batch_passed_count  # Per-batch counter (recomputed each step)
+```
+
+Transforms continue writing to the flat `data` dict as before — the partition is
+transparent. At save time, ephemeral keys are separated into `WizardState.transient`
+(available to templates and UI metadata) while only persistent keys reach storage.
+
+As a safety net, any value that fails a JSON-serializability check is automatically
+moved to transient (with a warning log), even if not declared in `ephemeral_keys`.
 
 **Post-Completion Amendments:**
 
@@ -1223,7 +1283,7 @@ Available template variables:
 | `stage_prompt` | string | Stage's goal/prompt text |
 | `help_text` | string | Additional help text (empty string if none) |
 | `suggestions` | list | Quick-reply suggestions |
-| `collected_data` | dict | Data collected so far (excludes `_` prefixed keys) |
+| `collected_data` | dict | User-facing data (excludes `_` prefixed keys) |
 | `raw_data` | dict | All wizard data including internal keys |
 | `completed` | bool | Whether wizard is complete |
 | `history` | list | List of visited stage names |
@@ -1265,7 +1325,7 @@ The `get_wizard_state()` method returns a normalized dict with these fields:
 | `total_stages` | int | Total number of stages in wizard |
 | `progress` | float | Completion progress (0.0 to 1.0) |
 | `completed` | bool | Whether wizard has finished |
-| `data` | dict | All collected data |
+| `data` | dict | All data (persistent + transient, sanitized for JSON) |
 | `can_skip` | bool | Whether current stage can be skipped |
 | `can_go_back` | bool | Whether back navigation is allowed |
 | `suggestions` | list | Quick-reply suggestions for current stage |

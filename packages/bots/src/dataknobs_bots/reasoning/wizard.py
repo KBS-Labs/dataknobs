@@ -7,10 +7,13 @@ and branching logic.
 
 from __future__ import annotations
 
+import copy
 import logging
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+
+from dataknobs_common.serialization import sanitize_for_json
 
 from .base import ReasoningStrategy
 from .observability import (
@@ -25,6 +28,49 @@ if TYPE_CHECKING:
     from .wizard_fsm import WizardFSM
 
 logger = logging.getLogger(__name__)
+
+# Framework-level keys that are always transient (non-persistent).
+# These are either non-serializable runtime objects or ephemeral per-step
+# data that should never reach persistent storage.
+DEFAULT_EPHEMERAL_KEYS: frozenset[str] = frozenset({
+    "_corpus",              # Live ArtifactCorpus (non-serializable)
+    "_message",             # Per-step raw user message (already popped)
+    "_intent",              # Per-step intent detection result
+    "_transform_error",     # Per-step error (may be Exception)
+})
+
+
+def _is_json_safe(value: Any) -> bool:
+    """Check whether a value is JSON-serializable using isinstance checks.
+
+    This is a lightweight alternative to ``json.dumps`` — it recurses into
+    dicts, lists, and dataclasses but does not attempt actual serialization.
+    Dataclasses are accepted because ``sanitize_for_json`` converts them to
+    dicts via ``dataclasses.asdict``.
+
+    Args:
+        value: Value to check.
+
+    Returns:
+        True if the value is composed entirely of JSON-safe types
+        (including dataclasses with JSON-safe fields).
+    """
+    import dataclasses
+
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return True
+    if isinstance(value, dict):
+        return all(
+            isinstance(k, str) and _is_json_safe(v) for k, v in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return all(_is_json_safe(item) for item in value)
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return all(
+            _is_json_safe(getattr(value, f.name))
+            for f in dataclasses.fields(value)
+        )
+    return False
 
 
 @dataclass
@@ -88,7 +134,7 @@ class SubflowContext:
         """
         return {
             "parent_stage": self.parent_stage,
-            "parent_data": self.parent_data,
+            "parent_data": sanitize_for_json(self.parent_data),
             "parent_history": self.parent_history,
             "return_stage": self.return_stage,
             "result_mapping": self.result_mapping,
@@ -127,7 +173,12 @@ class WizardState:
 
     Attributes:
         current_stage: Name of the current stage
-        data: Collected data from all stages
+        data: Persistent collected data from all stages
+        transient: Ephemeral per-step data that is NOT persisted (e.g.
+            live objects like ArtifactCorpus, per-step error messages).
+            Merged into the working dict before FSM execution so
+            templates and conditions see all keys, but stripped before
+            saving to storage.
         history: List of visited stage names
         completed: Whether the wizard has finished
         clarification_attempts: Track consecutive clarification attempts
@@ -139,6 +190,7 @@ class WizardState:
 
     current_stage: str
     data: dict[str, Any] = field(default_factory=dict)
+    transient: dict[str, Any] = field(default_factory=dict)
     history: list[str] = field(default_factory=list)
     completed: bool = False
     clarification_attempts: int = 0
@@ -281,6 +333,12 @@ class WizardReasoning(ReasoningStrategy):
         # LLM provider set by generate() for transform context access
         self._current_llm: Any = None
 
+        # Merge framework-level ephemeral keys with config-declared ones
+        config_ephemeral = wizard_fsm.settings.get("ephemeral_keys", [])
+        self._ephemeral_keys: frozenset[str] = (
+            DEFAULT_EPHEMERAL_KEYS | frozenset(config_ephemeral)
+        )
+
         # Bridge FSM custom functions so they receive a TransformContext
         # instead of a raw FunctionContext.  This lets transforms that
         # need artifact_registry, rubric_executor, etc. work seamlessly.
@@ -403,6 +461,37 @@ class WizardReasoning(ReasoningStrategy):
         if self._extractor is not None and hasattr(self._extractor, "close"):
             await self._extractor.close()
             logger.debug("Closed WizardReasoning extractor")
+
+    def _partition_data(
+        self, data: dict[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Partition a flat working dict into persistent and transient parts.
+
+        Keys in ``self._ephemeral_keys`` are routed to transient.  Keys not
+        in the ephemeral set but failing the ``_is_json_safe`` check are
+        also routed to transient as a safety net (and logged as warnings).
+
+        Args:
+            data: Flat working dict containing all wizard state keys.
+
+        Returns:
+            ``(persistent, transient)`` tuple of dicts.
+        """
+        persistent: dict[str, Any] = {}
+        transient: dict[str, Any] = {}
+        for key, value in data.items():
+            if key in self._ephemeral_keys:
+                transient[key] = value
+            elif not _is_json_safe(value):
+                logger.warning(
+                    "Non-serializable key '%s' (type=%s) moved to transient",
+                    key,
+                    type(value).__name__,
+                )
+                transient[key] = value
+            else:
+                persistent[key] = value
+        return persistent, transient
 
     @property
     def artifact_registry(self) -> Any | None:
@@ -795,28 +884,85 @@ class WizardReasoning(ReasoningStrategy):
                 # Update field-extraction tasks
                 self._update_field_tasks(wizard_state, extraction.data)
 
+                # Apply schema defaults for properties the user didn't
+                # mention.  This ensures template conditions (e.g.
+                # ``{% if difficulty %}``) evaluate True when defaults
+                # exist in the schema definition.
+                default_keys = self._apply_schema_defaults(
+                    wizard_state, stage
+                )
+                if default_keys:
+                    new_data_keys |= default_keys
+
                 # When meaningful new data was extracted at a stage with a
-                # response_template that the user hasn't seen yet, render
-                # it as a confirmation before evaluating transitions.
+                # response_template, decide whether to render a
+                # confirmation before evaluating transitions.
                 #
-                # Stages whose template has already been shown (e.g.
-                # generate_questions rendered when the wizard transitioned
-                # here) skip this — the user's response is an action
-                # (e.g. "review") and should trigger a transition.
+                # Two modes:
+                # 1. First-render (render_counts == 0): always confirm
+                #    when new data exists.
+                # 2. confirm_on_new_data: re-confirm whenever schema
+                #    property values changed since the last render
+                #    (catches "change difficulty to hard" after the
+                #    initial summary was shown).
+                #
+                # Stages whose template has already been shown AND
+                # that lack confirm_on_new_data skip this — the
+                # user's response is an action (e.g. "review") and
+                # should trigger a transition.
                 render_counts = wizard_state.data.setdefault(
                     "_stage_render_counts", {}
                 )
-                if (
-                    new_data_keys
-                    and stage.get("response_template")
-                    and render_counts.get(stage_name, 0) == 0
-                ):
-                    render_counts[stage_name] = 1
+                should_confirm = False
+                if new_data_keys and stage.get("response_template"):
+                    if render_counts.get(stage_name, 0) == 0:
+                        should_confirm = True  # First render — always
+                    elif stage.get("confirm_on_new_data"):
+                        # Re-confirm when schema property values changed
+                        snapshots = wizard_state.data.setdefault(
+                            "_stage_rendered_snapshot", {}
+                        )
+                        schema_props = set(
+                            stage.get("schema", {})
+                            .get("properties", {})
+                            .keys()
+                        )
+                        data = wizard_state.data
+                        current_snapshot = {
+                            k: data[k]
+                            for k in schema_props
+                            if k in data and data[k] is not None
+                        }
+                        prior_snapshot = snapshots.get(stage_name, {})
+                        if current_snapshot != prior_snapshot:
+                            should_confirm = True
+
+                if should_confirm:
+                    render_counts[stage_name] = (
+                        render_counts.get(stage_name, 0) + 1
+                    )
+                    # Save snapshot for confirm_on_new_data comparison
+                    if stage.get("confirm_on_new_data"):
+                        snapshots = wizard_state.data.setdefault(
+                            "_stage_rendered_snapshot", {}
+                        )
+                        schema_props = set(
+                            stage.get("schema", {})
+                            .get("properties", {})
+                            .keys()
+                        )
+                        data = wizard_state.data
+                        snapshots[stage_name] = {
+                            k: data[k]
+                            for k in schema_props
+                            if k in data and data[k] is not None
+                        }
                     logger.debug(
-                        "New data extracted (%s) at stage '%s' with "
-                        "unseen template — rendering confirmation",
+                        "New data extracted (%s) at stage '%s' — "
+                        "rendering confirmation (render #%d)",
                         new_data_keys,
                         stage_name,
+                        render_counts[stage_name],
                     )
                     response = await self._generate_stage_response(
                         manager, llm, stage, wizard_state, tools
@@ -1070,8 +1216,8 @@ class WizardReasoning(ReasoningStrategy):
                 current_stage=fsm_state.get(
                     "current_stage", self._fsm.current_stage
                 ),
-                data=fsm_state.get("data", {}),
-                history=fsm_state.get("history", []),
+                data=copy.deepcopy(fsm_state.get("data", {})),
+                history=list(fsm_state.get("history", [])),
                 completed=fsm_state.get("completed", False),
                 clarification_attempts=fsm_state.get("clarification_attempts", 0),
                 transitions=transitions,
@@ -1163,7 +1309,7 @@ class WizardReasoning(ReasoningStrategy):
             "progress": progress,
             "progress_percent": progress * 100,
             "completed": state.completed,
-            "data": state.data,
+            "data": sanitize_for_json({**state.data, **state.transient}),
             "history": state.history,
             "can_skip": active_fsm.can_skip(),
             "can_go_back": active_fsm.can_go_back() and len(state.history) > 1,
@@ -1190,18 +1336,30 @@ class WizardReasoning(ReasoningStrategy):
     def _save_wizard_state(self, manager: Any, state: WizardState) -> None:
         """Save wizard state to conversation manager.
 
+        Partitions ``state.data`` into persistent and transient parts before
+        persisting.  Only persistent data is written to ``fsm_state``.
+        ``_build_wizard_metadata`` is called *before* partition so the response
+        metadata (sent to the UI) still contains all keys.
+
         Args:
             manager: ConversationManager instance
             state: WizardState to save
         """
+        # Build metadata BEFORE partition so UI sees all keys (incl. transient)
         wizard_meta = self._build_wizard_metadata(state)
+
+        # Partition: separate ephemeral/non-serializable keys from persistent
+        state.data, state.transient = self._partition_data(state.data)
+
         wizard_meta["fsm_state"] = {
             "current_stage": state.current_stage,
             "history": state.history,
-            "data": state.data,
+            "data": sanitize_for_json(state.data),
             "completed": state.completed,
             "clarification_attempts": state.clarification_attempts,
-            "transitions": [t.to_dict() for t in state.transitions],
+            "transitions": [
+                sanitize_for_json(t.to_dict()) for t in state.transitions
+            ],
             "stage_entry_time": state.stage_entry_time,
             "tasks": state.tasks.to_dict(),
             "subflow_stack": [s.to_dict() for s in state.subflow_stack],
@@ -2247,18 +2405,20 @@ class WizardReasoning(ReasoningStrategy):
         # Build template context — ALL state data is available as
         # top-level variables so templates can reference both user-facing
         # fields (topic, difficulty) and transform outputs (_questions,
-        # _bank_questions).  Transient internal keys like _message and
-        # _intent are cleaned up before template rendering.
+        # _bank_questions).  Both persistent (state.data) and transient
+        # (state.transient) keys are included so templates see everything
+        # even after partition.
+        all_data = {**state.data, **state.transient}
         context: dict[str, Any] = {
             # Stage metadata
             "stage_name": stage.get("name", "unknown"),
             "stage_label": stage.get("label", stage.get("name", "")),
             # All data as top-level variables (including _-prefixed)
-            **state.data,
+            **all_data,
             # Filtered dict (backward compatibility)
             "collected_data": collected_data,
             # Full data dict reference
-            "all_data": dict(state.data),
+            "all_data": all_data,
             # Wizard progress
             "history": state.history,
             "completed": state.completed,
@@ -2948,6 +3108,48 @@ class WizardReasoning(ReasoningStrategy):
                 for sub_schema in schema_part[key]:
                     if isinstance(sub_schema, dict):
                         self._strip_defaults_from_properties(sub_schema)
+
+    def _apply_schema_defaults(
+        self, wizard_state: WizardState, stage: dict[str, Any]
+    ) -> set[str]:
+        """Apply schema defaults to wizard data for unset properties.
+
+        After extraction, defaults defined in the stage schema (e.g.
+        ``"default": "medium"``) are applied to any property that was
+        not explicitly set by the user.  This ensures template conditions
+        like ``{% if difficulty %}`` evaluate True even when the user
+        didn't mention a value.
+
+        Only top-level properties are considered — nested object/array
+        defaults are not auto-applied (they would require recursive
+        merging that is unlikely to match user intent).
+
+        Args:
+            wizard_state: Current wizard state whose ``data`` may be
+                updated in place.
+            stage: Stage metadata dict containing ``schema``.
+
+        Returns:
+            Set of property names whose defaults were applied.
+        """
+        schema = stage.get("schema")
+        if not schema:
+            return set()
+
+        applied: set[str] = set()
+        for prop_name, prop_def in schema.get("properties", {}).items():
+            if "default" not in prop_def:
+                continue
+            current = wizard_state.data.get(prop_name)
+            if current is None:
+                wizard_state.data[prop_name] = prop_def["default"]
+                applied.add(prop_name)
+                logger.debug(
+                    "Applied schema default for '%s': %r",
+                    prop_name,
+                    prop_def["default"],
+                )
+        return applied
 
     def _calculate_progress(self, state: WizardState) -> float:
         """Calculate wizard completion progress (0.0 to 1.0).

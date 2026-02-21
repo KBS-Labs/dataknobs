@@ -121,7 +121,16 @@ builder.set_settings(
 )
 ```
 
-Settings are passed through to the wizard runtime. Common keys include `tool_reasoning`, `max_tool_iterations`, `auto_advance_filled_stages`, `extraction_scope`, `conflict_strategy`, and `timeout_seconds`.
+Settings are passed through to the wizard runtime. Common keys include `tool_reasoning`, `max_tool_iterations`, `auto_advance_filled_stages`, `extraction_scope`, `conflict_strategy`, `timeout_seconds`, and `ephemeral_keys`.
+
+Use `ephemeral_keys` to declare data keys that should not be persisted to storage
+(e.g., per-step display data, intermediate computation results):
+
+```python
+builder.set_settings(
+    ephemeral_keys=["_dedup_result", "_review_summary", "_batch_passed_count"],
+)
+```
 
 ### Stage Methods
 
@@ -432,6 +441,7 @@ All fields available on `StageConfig`:
 | `skip_default` | `Any` | `None` | Default value if skipped |
 | `can_go_back` | `bool` | `True` | Whether the user can go back |
 | `auto_advance` | `bool` | `False` | Auto-advance when data is collected |
+| `confirm_on_new_data` | `bool` | `False` | Re-render confirmation when schema values change |
 | `label` | `str \| None` | `None` | Display label |
 | `suggestions` | `tuple[str, ...]` | `()` | Quick-reply suggestions |
 | `help_text` | `str \| None` | `None` | Help message |

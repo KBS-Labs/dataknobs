@@ -417,6 +417,7 @@ class WizardConfigLoader:
                 "skip_default": stage.get("skip_default"),
                 "can_go_back": stage.get("can_go_back", True),
                 "auto_advance": stage.get("auto_advance", False),
+                "confirm_on_new_data": stage.get("confirm_on_new_data", False),
                 "tools": stage.get("tools", []),
                 "extraction_model": stage.get("extraction_model"),
                 "is_start": stage.get("is_start", False),

@@ -125,6 +125,7 @@ class StageConfig:
     skip_default: Any = None
     can_go_back: bool = True
     auto_advance: bool = False
+    confirm_on_new_data: bool = False
     # Display
     label: str | None = None
     suggestions: tuple[str, ...] = ()
@@ -164,6 +165,8 @@ class StageConfig:
             d["can_go_back"] = False
         if self.auto_advance:
             d["auto_advance"] = True
+        if self.confirm_on_new_data:
+            d["confirm_on_new_data"] = True
         if self.label is not None:
             d["label"] = self.label
         if self.suggestions:
