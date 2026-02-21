@@ -66,6 +66,7 @@ nav:
     - Common:
       - packages/common/index.md
       - packages/common/events.md
+      - packages/common/ratelimit.md
       - packages/common/api.md
     - Config:
       - packages/config/index.md
