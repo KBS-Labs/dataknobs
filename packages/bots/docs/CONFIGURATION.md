@@ -1082,8 +1082,39 @@ This gives users three paths:
 2. **Accept defaults**: User says "skip" or "use defaults" → `skip_default` values applied
 3. **Guided help**: User says "I'm not sure" → wizard explains options and re-prompts
 
-> **Note:** Schema `default` values are stripped before extraction to prevent the LLM from
-> auto-filling them. Use `skip_default` for user-facing defaults instead of schema defaults.
+> **Note:** Schema `default` values are stripped before extraction so the LLM only extracts
+> what the user actually said. After extraction, defaults are **applied back** to wizard data
+> for any property that was not set — this ensures template conditions like
+> `{% if difficulty %}` evaluate True when the schema defines `default: medium`.
+>
+> Use `skip_default` for stage-level defaults (applied when the user skips the entire stage).
+> Use schema `default` for property-level defaults (applied when the user doesn't mention a
+> specific field).
+
+**Confirmation on New Data:**
+
+Stages with `response_template` automatically show a confirmation summary when new data is
+first extracted. By default, this confirmation fires only once (the first render). To
+re-confirm whenever schema property values change (e.g., the user says "change difficulty to
+hard" after the initial summary), add `confirm_on_new_data: true`:
+
+```yaml
+stages:
+  - name: define_topic
+    confirm_on_new_data: true
+    response_template: |
+      - **Topic:** {{ topic }}
+      - **Difficulty:** {{ difficulty }}
+    schema:
+      type: object
+      properties:
+        topic: { type: string }
+        difficulty: { type: string, default: medium }
+```
+
+With `confirm_on_new_data`, the engine tracks a snapshot of schema property values at each
+render. When the user provides updated values, the snapshot differs and a re-render is
+triggered — letting the user verify the changes before proceeding.
 
 **Auto-Advance:**
 

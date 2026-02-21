@@ -441,6 +441,7 @@ All fields available on `StageConfig`:
 | `skip_default` | `Any` | `None` | Default value if skipped |
 | `can_go_back` | `bool` | `True` | Whether the user can go back |
 | `auto_advance` | `bool` | `False` | Auto-advance when data is collected |
+| `confirm_on_new_data` | `bool` | `False` | Re-render confirmation when schema values change |
 | `label` | `str \| None` | `None` | Display label |
 | `suggestions` | `tuple[str, ...]` | `()` | Quick-reply suggestions |
 | `help_text` | `str \| None` | `None` | Help message |
