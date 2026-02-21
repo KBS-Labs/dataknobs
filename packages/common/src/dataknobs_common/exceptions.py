@@ -274,6 +274,45 @@ class TimeoutError(DataknobsError):
     pass
 
 
+class RateLimitError(OperationError):
+    """Raised when a rate limit is exceeded.
+
+    Use this exception when an operation cannot proceed because a rate limit
+    has been reached. Includes an optional ``retry_after`` hint indicating
+    how many seconds the caller should wait before retrying.
+
+    Attributes:
+        retry_after: Optional number of seconds to wait before retrying.
+
+    Example:
+        ```python
+        raise RateLimitError(
+            "API rate limit exceeded",
+            retry_after=2.5,
+            context={"category": "api_write", "limit": 10, "interval": 60}
+        )
+        ```
+    """
+
+    def __init__(
+        self,
+        message: str = "Rate limit exceeded",
+        retry_after: float | None = None,
+        context: Dict[str, Any] | None = None,
+        details: Dict[str, Any] | None = None,
+    ) -> None:
+        """Initialize the rate limit error.
+
+        Args:
+            message: Error message.
+            retry_after: Optional seconds to wait before retrying.
+            context: Optional context dictionary.
+            details: Optional details dictionary (merged with context).
+        """
+        super().__init__(message, context=context, details=details)
+        self.retry_after = retry_after
+
+
 __all__ = [
     "DataknobsError",
     "ValidationError",
@@ -284,4 +323,5 @@ __all__ = [
     "ConcurrencyError",
     "SerializationError",
     "TimeoutError",
+    "RateLimitError",
 ]

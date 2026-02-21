@@ -496,7 +496,7 @@ class IResource(ABC):
 - **DatabaseResource**: Pooled database connections with transaction support
 - **FileSystemResource**: File system access with temporary file management
 - **HTTPServiceResource**: HTTP clients with connection pooling and retry logic
-- **LLMResource**: LLM provider access with rate limiting and fallbacks
+- **LLMResource / AsyncLLMResource**: LLM provider access with rate limiting (via `InMemoryRateLimiter` from `dataknobs-common`) and fallbacks. `AsyncLLMResource` adds async `generate()` and `embed()` methods. Located in `dataknobs_llm.fsm_integration`.
 - **VectorStoreResource**: Vector database connections for embeddings
 - **Memory Buffers**: Managed memory allocation with limits
 
@@ -1534,10 +1534,12 @@ states:
 #### Resource Abstraction
 ```python
 # Complex service interaction hidden behind resource interface
-class LLMResource(IResource):
-    async def call(self, prompt: str) -> str:
-        # All complexity (retry, rate limiting, etc.) here
-        return await self._client.generate(prompt)
+# Use AsyncLLMResource from dataknobs_llm.fsm_integration for async workflows
+from dataknobs_llm.fsm_integration import AsyncLLMResource
+
+resource = AsyncLLMResource("llm", provider="ollama", model="llama3.2")
+result = await resource.generate(prompt="What is Python?")
+# Rate limiting, provider lifecycle, session management all handled internally
 ```
 
 #### Composable Transforms

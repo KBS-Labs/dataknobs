@@ -181,15 +181,40 @@ chain_flow = create_chain_workflow(
 Use LLM resources in FSM configurations:
 
 ```python
-from dataknobs_llm.fsm_integration import LLMResource, LLMProvider
+from dataknobs_llm.fsm_integration import AsyncLLMResource, LLMResource, LLMProvider
 
-# Create LLM resource for FSM
-resource = LLMResource(
-    provider=LLMProvider.OPENAI,
-    model_name="gpt-4",
-    temperature=0.7
+# Async LLM resource — preferred for async workflows
+resource = AsyncLLMResource(
+    "llm",
+    provider="ollama",
+    model="llama3.2",
+    requests_per_minute=30,  # optional rate limiting via InMemoryRateLimiter
 )
+
+# Generate completion
+result = await resource.generate(prompt="What is Python?")
+print(result["choices"][0]["text"])
+
+# Generate embeddings
+embeddings = await resource.embed("Hello world")
+
+# Clean up
+await resource.aclose()
 ```
+
+`AsyncLLMResource` extends `LLMResource` with async `generate()` and `embed()` methods, lazy provider initialization, and integrated rate limiting via `InMemoryRateLimiter` from `dataknobs-common`. It accepts any provider string that `create_llm_provider()` supports (e.g. `"ollama"`, `"openai"`, `"echo"` for testing).
+
+For testing, inject an `EchoProvider` directly:
+
+```python
+from dataknobs_llm import EchoProvider
+from dataknobs_llm.llm import LLMConfig
+
+echo = EchoProvider(LLMConfig(provider="echo", model="echo-test"))
+resource = AsyncLLMResource("test-llm", async_provider=echo)
+```
+
+The sync `LLMResource` remains available for backward compatibility.
 
 ### Choosing Between Conversation Flows and FSM Integration
 
@@ -259,7 +284,7 @@ dataknobs_llm/
 │       └── conditions.py  # Transition conditions
 └── fsm_integration/       # FSM integration (migrated from dataknobs-fsm)
     ├── workflows.py       # RAG, chain-of-thought, agent patterns
-    ├── resources.py       # LLM resources for FSM
+    ├── resources.py       # LLMResource, AsyncLLMResource (async with rate limiting)
     └── functions.py       # LLM function library
 ```
 
@@ -275,8 +300,10 @@ from dataknobs_fsm.patterns.llm_workflow import RAGWorkflow
 
 **New imports** (from dataknobs-llm):
 ```python
-from dataknobs_llm.llm import LLMProvider, LLMConfig
-from dataknobs_llm.fsm_integration import LLMWorkflow, create_rag_workflow
+from dataknobs_llm.llm import LLMConfig
+from dataknobs_llm.fsm_integration import (
+    LLMWorkflow, AsyncLLMResource, LLMProvider, create_rag_workflow,
+)
 ```
 
 ## Documentation

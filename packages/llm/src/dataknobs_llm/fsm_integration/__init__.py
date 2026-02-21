@@ -12,6 +12,7 @@ For LLM workflow patterns using FSM, see:
 
 For FSM resource management, see:
 - resources.LLMResource
+- resources.AsyncLLMResource
 
 For FSM function library, see:
 - functions.PromptBuilder
@@ -40,6 +41,7 @@ from .resources import (
     LLMProvider,
     LLMSession,
     LLMResource,
+    AsyncLLMResource,
 )
 
 from .functions import (
@@ -73,6 +75,7 @@ __all__ = [
     'LLMProvider',
     'LLMSession',
     'LLMResource',
+    'AsyncLLMResource',
     # Functions
     'PromptBuilder',
     'LLMCaller',

@@ -4,19 +4,26 @@ Note: This module was migrated from dataknobs_fsm.resources.llm to
 consolidate all LLM functionality in the dataknobs-llm package.
 """
 
+from __future__ import annotations
+
 import json
+import logging
 import os
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field as dataclass_field
 from typing import Any, Dict, List, Union, cast
 from enum import Enum
 
+from dataknobs_common.ratelimit import InMemoryRateLimiter, RateLimit, RateLimiterConfig
 from dataknobs_fsm.functions.base import ResourceError
 from dataknobs_fsm.resources.base import (
     BaseResourceProvider,
     ResourceHealth,
     ResourceStatus,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class LLMProvider(Enum):
@@ -58,38 +65,6 @@ class LLMSession:
     
     # Provider-specific settings
     provider_config: Dict[str, Any] = dataclass_field(default_factory=dict)
-    
-    def check_rate_limits(self, estimated_tokens: int = 0) -> bool:
-        """Check if request would exceed rate limits.
-        
-        Args:
-            estimated_tokens: Estimated tokens for the request.
-            
-        Returns:
-            True if request can proceed, False if rate limited.
-        """
-        # Local providers don't have rate limits
-        if self.provider in [LLMProvider.OLLAMA, LLMProvider.HUGGINGFACE]:
-            return True
-        
-        current_time = time.time()
-        window_elapsed = current_time - self.window_start
-        
-        # Reset window if a minute has passed
-        if window_elapsed >= 60:
-            self.request_count = 0
-            self.token_count = 0
-            self.window_start = current_time
-            return True
-        
-        # Check limits
-        if self.request_count >= self.requests_per_minute:
-            return False
-        
-        if self.token_count + estimated_tokens > self.tokens_per_minute:
-            return False
-        
-        return True
     
     def record_usage(self, prompt_tokens: int, completion_tokens: int) -> None:
         """Record token usage.
@@ -827,3 +802,250 @@ class LLMResource(BaseResourceProvider):
             }
         
         return stats
+
+
+class AsyncLLMResource(LLMResource):
+    """Async LLM resource with native async providers and rate limiting.
+
+    Extends LLMResource with:
+    - async ``generate()`` — the method ``LLMCaller.transform()`` expects
+    - async ``embed()`` — the method ``EmbeddingGenerator.transform()`` expects
+    - ``InMemoryRateLimiter`` integration for request rate limiting
+    - Persistent async provider (created once, reused across calls)
+
+    Usage::
+
+        resource = AsyncLLMResource("llm", provider="ollama", model="llama3.2")
+        await resource.ainitialize()
+        response = await resource.generate(prompt="Hello")
+        await resource.aclose()
+    """
+
+    def __init__(
+        self,
+        name: str,
+        provider: Union[str, LLMProvider] = "ollama",
+        model: str = "llama3.2",
+        api_key: str | None = None,
+        endpoint: str | None = None,
+        async_provider: Any | None = None,
+        **config: Any,
+    ) -> None:
+        """Initialize async LLM resource.
+
+        Skips the blocking ``_initialize_client()`` from ``LLMResource`` — use
+        ``ainitialize()`` instead to set up the async provider, or pass a
+        pre-built provider via ``async_provider``.
+
+        Args:
+            name: Resource name.
+            provider: LLM provider name. Accepts any string that
+                ``create_llm_provider()`` supports (e.g. ``"ollama"``,
+                ``"openai"``, ``"echo"``), or an ``LLMProvider`` enum value.
+            model: Model name/identifier.
+            api_key: API key for commercial providers.
+            endpoint: Custom endpoint URL.
+            async_provider: Pre-built ``AsyncLLMProvider`` instance. When
+                provided, ``ainitialize()`` is skipped and this provider is
+                used directly. Useful for testing (with ``EchoProvider``) or
+                when the caller manages provider lifecycle externally.
+            **config: Additional configuration (``requests_per_minute``, etc).
+        """
+        # Call BaseResourceProvider directly (skip LLMResource._initialize_client)
+        BaseResourceProvider.__init__(self, name, config)
+
+        # Preserve the raw provider string for create_llm_provider().
+        # The FSM LLMProvider enum is a subset of what the factory supports
+        # (e.g. "echo" is valid for the factory but not in the enum).
+        if isinstance(provider, str):
+            self._provider_name = provider.lower()
+            try:
+                self.provider = LLMProvider(self._provider_name)
+            except ValueError:
+                self.provider = LLMProvider.CUSTOM
+        else:
+            self.provider = provider
+            self._provider_name = provider.value
+
+        self.model = model
+        self.api_key = api_key
+        self.endpoint = endpoint or self._get_default_endpoint()
+        self._client = None
+        self._sessions: dict[int, LLMSession] = {}
+        self.status = ResourceStatus.IDLE
+
+        # Async provider — either injected or lazy-initialized via ainitialize
+        self._async_provider: Any = async_provider
+
+        # Rate limiter from config
+        rpm = config.get("requests_per_minute", 0)
+        if rpm and rpm > 0:
+            limiter_config = RateLimiterConfig(
+                default_rates=[RateLimit(limit=rpm, interval=60)],
+            )
+            self._rate_limiter: InMemoryRateLimiter | None = InMemoryRateLimiter(limiter_config)
+        else:
+            self._rate_limiter = None
+
+    async def ainitialize(self) -> None:
+        """Create and initialize the async LLM provider.
+
+        Uses the raw provider string (not the enum value) so that any
+        provider supported by ``create_llm_provider()`` works — including
+        ``"echo"`` for testing.
+        """
+        from dataknobs_llm.llm.base import LLMConfig as ProviderLLMConfig
+        from dataknobs_llm.llm.providers import create_llm_provider
+
+        provider_config = ProviderLLMConfig(
+            provider=self._provider_name,
+            model=self.model,
+            api_key=self.api_key,
+            api_base=self.endpoint,
+        )
+        self._async_provider = create_llm_provider(provider_config, is_async=True)
+        await self._async_provider.initialize()
+        logger.info(
+            "AsyncLLMResource initialized",
+            extra={"provider": self._provider_name, "model": self.model},
+        )
+
+    async def _get_provider(self) -> Any:
+        """Get or lazily initialize the async provider.
+
+        Returns:
+            The initialized ``AsyncLLMProvider``.
+        """
+        if self._async_provider is None:
+            await self.ainitialize()
+        return self._async_provider
+
+    async def generate(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        model: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> dict[str, Any] | AsyncIterator[Any]:
+        """Generate a completion asynchronously.
+
+        This is the method ``LLMCaller.transform()`` expects via
+        ``await resource.generate()``.
+
+        Args:
+            prompt: Input prompt text.
+            system_prompt: Optional system prompt.
+            model: Override model for this request.
+            temperature: Override temperature.
+            max_tokens: Override max tokens.
+            stream: If True, return an async iterator of streaming chunks.
+            **kwargs: Additional provider-specific parameters.
+
+        Returns:
+            Completion response dict (or async iterator when streaming).
+        """
+        from dataknobs_llm.llm.base import LLMMessage
+
+        session = self.acquire()
+        try:
+            # Rate limit check
+            if self._rate_limiter is not None:
+                await self._rate_limiter.acquire(self.provider.value)
+
+            llm_provider = await self._get_provider()
+
+            # Build messages
+            messages: list[LLMMessage] = []
+            if system_prompt:
+                messages.append(LLMMessage(role="system", content=system_prompt))
+            messages.append(LLMMessage(role="user", content=prompt))
+
+            # Config overrides
+            overrides: dict[str, Any] = {}
+            if model:
+                overrides["model"] = model
+            if temperature is not None:
+                overrides["temperature"] = temperature
+            if max_tokens is not None:
+                overrides["max_tokens"] = max_tokens
+
+            if stream:
+                return llm_provider.stream_complete(
+                    messages, config_overrides=overrides or None
+                )
+
+            response = await llm_provider.complete(
+                messages, config_overrides=overrides or None
+            )
+
+            # Record usage on session
+            if response.usage:
+                session.record_usage(
+                    response.usage.get("prompt_tokens", 0),
+                    response.usage.get("completion_tokens", 0),
+                )
+
+            return {
+                "choices": [{
+                    "text": response.content,
+                    "index": 0,
+                    "finish_reason": response.finish_reason or "stop",
+                }],
+                "model": response.model,
+                "usage": response.usage,
+            }
+        finally:
+            self.release(session)
+
+    async def embed(  # type: ignore[override]
+        self,
+        text: Union[str, List[str]],
+        session: LLMSession | None = None,
+        **kwargs: Any,
+    ) -> list[list[float]]:
+        """Generate embeddings asynchronously.
+
+        Overrides the sync ``LLMResource.embed()`` with an async
+        implementation using the async provider.
+
+        Args:
+            text: Text or list of texts to embed.
+            session: Optional session to use.
+            **kwargs: Additional parameters.
+
+        Returns:
+            List of embedding vectors.
+        """
+        if session is None:
+            session = self.acquire()
+            should_release = True
+        else:
+            should_release = False
+
+        try:
+            if self._rate_limiter is not None:
+                await self._rate_limiter.acquire(self.provider.value)
+
+            llm_provider = await self._get_provider()
+            result = await llm_provider.embed(text, **kwargs)
+
+            # Normalize to list of lists
+            if isinstance(text, str):
+                if isinstance(result, list) and result and isinstance(result[0], float):
+                    return [result]
+                return cast("list[list[float]]", result)
+            return cast("list[list[float]]", result)
+        finally:
+            if should_release:
+                self.release(session)
+
+    async def aclose(self) -> None:
+        """Close async provider and rate limiter resources."""
+        if self._async_provider is not None:
+            await self._async_provider.close()
+            self._async_provider = None
+        if self._rate_limiter is not None:
+            await self._rate_limiter.close()

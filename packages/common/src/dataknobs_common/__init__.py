@@ -45,10 +45,19 @@ from dataknobs_common.exceptions import (
     DataknobsError,
     NotFoundError,
     OperationError,
+    RateLimitError,
     ResourceError,
     SerializationError,
     TimeoutError,
     ValidationError,
+)
+from dataknobs_common.ratelimit import (
+    InMemoryRateLimiter,
+    RateLimit,
+    RateLimiter,
+    RateLimiterConfig,
+    RateLimitStatus,
+    create_rate_limiter,
 )
 from dataknobs_common.retry import (
     BackoffStrategy,
@@ -115,6 +124,14 @@ __all__ = [
     "ConcurrencyError",
     "SerializationError",
     "TimeoutError",
+    "RateLimitError",
+    # Rate Limiting
+    "RateLimiter",
+    "create_rate_limiter",
+    "RateLimit",
+    "RateLimiterConfig",
+    "RateLimitStatus",
+    "InMemoryRateLimiter",
     # Retry
     "BackoffStrategy",
     "RetryConfig",

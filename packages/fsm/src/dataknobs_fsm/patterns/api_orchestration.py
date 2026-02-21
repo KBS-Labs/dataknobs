@@ -8,7 +8,9 @@ from typing import Any, Dict, List, Union, Callable
 from dataclasses import dataclass
 from enum import Enum
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
+
+from dataknobs_common.ratelimit import InMemoryRateLimiter, RateLimit, RateLimiterConfig
 
 from ..api.simple import SimpleFSM
 from ..core.data_modes import DataHandlingMode
@@ -84,46 +86,6 @@ class APIOrchestrationConfig:
     metrics_enabled: bool = True
     log_requests: bool = False
     log_responses: bool = False
-
-
-class RateLimiter:
-    """Rate limiter for API calls."""
-    
-    def __init__(self, rate_limit: int, window: int = 60):
-        """Initialize rate limiter.
-        
-        Args:
-            rate_limit: Maximum requests per window
-            window: Time window in seconds
-        """
-        self.rate_limit = rate_limit
-        self.window = window
-        self.requests = []
-        self._lock = asyncio.Lock()
-        
-    async def acquire(self) -> None:
-        """Acquire permission to make a request."""
-        while True:
-            async with self._lock:
-                now = datetime.now()
-                cutoff = now - timedelta(seconds=self.window)
-                
-                # Remove old requests
-                self.requests = [t for t in self.requests if t > cutoff]
-                
-                # Check if we can make a request
-                if len(self.requests) < self.rate_limit:
-                    # Record this request and return
-                    self.requests.append(now)
-                    return
-                    
-                # Calculate wait time
-                oldest = self.requests[0]
-                wait_time = (oldest + timedelta(seconds=self.window) - now).total_seconds()
-                
-            # Wait outside the lock
-            if wait_time > 0:
-                await asyncio.sleep(min(wait_time, 0.1))  # Sleep in small increments
 
 
 class CircuitBreaker:
@@ -205,26 +167,33 @@ class APIOrchestrator:
         self.config = config
         self._fsm = self._build_fsm()
         self._providers = {}
-        self._rate_limiters = {}
         self._circuit_breakers = {}
         self._cache = {}
         self._metrics = IOMetrics() if config.metrics_enabled else None
-        
-        # Initialize rate limiters
-        if config.global_rate_limit:
-            self._global_rate_limiter = RateLimiter(
-                config.global_rate_limit,
-                config.rate_limit_window
-            )
-        else:
-            self._global_rate_limiter = None
-            
-        for endpoint in config.endpoints:
-            if endpoint.rate_limit:
-                self._rate_limiters[endpoint.name] = RateLimiter(
-                    endpoint.rate_limit,
-                    config.rate_limit_window
+
+        # Initialize rate limiter (single instance handles global + per-endpoint)
+        if config.global_rate_limit or any(ep.rate_limit for ep in config.endpoints):
+            categories: dict[str, list[RateLimit]] = {}
+            for endpoint in config.endpoints:
+                if endpoint.rate_limit:
+                    categories[endpoint.name] = [
+                        RateLimit(limit=endpoint.rate_limit, interval=config.rate_limit_window)
+                    ]
+
+            default_rates = [
+                RateLimit(
+                    limit=config.global_rate_limit or 10_000,
+                    interval=config.rate_limit_window,
                 )
+            ]
+
+            limiter_config = RateLimiterConfig(
+                default_rates=default_rates,
+                categories=categories,
+            )
+            self._rate_limiter: InMemoryRateLimiter | None = InMemoryRateLimiter(limiter_config)
+        else:
+            self._rate_limiter = None
                 
         # Initialize circuit breakers
         for endpoint in config.endpoints:
@@ -407,12 +376,9 @@ class APIOrchestrator:
         Returns:
             API response
         """
-        # Apply rate limiting
-        if self._global_rate_limiter:
-            await self._global_rate_limiter.acquire()
-            
-        if endpoint.name in self._rate_limiters:
-            await self._rate_limiters[endpoint.name].acquire()
+        # Apply rate limiting (category-aware: per-endpoint or global fallback)
+        if self._rate_limiter is not None:
+            await self._rate_limiter.acquire(endpoint.name)
             
         # Check cache
         if self.config.cache_ttl and self.config.cache_key_generator:

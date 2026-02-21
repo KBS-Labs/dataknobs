@@ -563,32 +563,25 @@ middleware = [LoggingMiddleware(logger)] if env == "prod" else []
 ### Implement Custom Middleware for Business Logic
 
 **Example - Rate limiting**:
+
+Use the built-in `RateLimitMiddleware` which delegates to `InMemoryRateLimiter` from `dataknobs-common`:
+
 ```python
-class RateLimitMiddleware(ConversationMiddleware):
-    def __init__(self, max_requests_per_minute=10):
-        self.max_requests = max_requests_per_minute
-        self.requests = {}  # user_id -> [(timestamp, count)]
+from dataknobs_llm.conversations import RateLimitMiddleware
 
-    async def process_request(self, messages, state):
-        user_id = state.metadata.get("user_id")
+rate_limiter = RateLimitMiddleware(
+    max_requests=10,
+    window_seconds=60,
+    scope="conversation",  # or "client" for per-client limiting
+)
 
-        if self._is_rate_limited(user_id):
-            raise ValueError("Rate limit exceeded")
-
-        self._record_request(user_id)
-        return messages
-
-    async def process_response(self, response, state):
-        return response
-
-    def _is_rate_limited(self, user_id):
-        # Implementation...
-        pass
-
-    def _record_request(self, user_id):
-        # Implementation...
-        pass
+manager = ConversationManager(
+    llm=provider,
+    middleware=[rate_limiter],
+)
 ```
+
+When the limit is exceeded, `RateLimitError` is raised with a `retry_after` attribute indicating when to retry. See the [Rate Limiting guide](../../packages/common/ratelimit.md) for the underlying `InMemoryRateLimiter` API.
 
 **Example - Token counting**:
 ```python
@@ -1083,44 +1076,35 @@ class TokenMonitoringMiddleware(ConversationMiddleware):
 
 ### Implement Rate Limiting
 
-**Pattern**:
+Use `InMemoryRateLimiter` from `dataknobs-common` instead of building custom rate limiters:
+
 ```python
-from collections import defaultdict
-from datetime import datetime, timedelta
+from dataknobs_common.ratelimit import (
+    InMemoryRateLimiter, RateLimit, RateLimiterConfig,
+)
+from dataknobs_common.exceptions import RateLimitError
 
-class RateLimiter:
-    def __init__(self, max_requests=100, window_minutes=1):
-        self.max_requests = max_requests
-        self.window = timedelta(minutes=window_minutes)
-        self.requests = defaultdict(list)  # user_id -> [timestamps]
+# Configure per-category rates
+config = RateLimiterConfig(
+    default_rates=[RateLimit(limit=100, interval=60)],
+    categories={
+        "premium_user": [RateLimit(limit=200, interval=60)],
+    },
+)
+limiter = InMemoryRateLimiter(config)
 
-    def is_allowed(self, user_id):
-        now = datetime.now()
-        cutoff = now - self.window
-
-        # Clean old requests
-        self.requests[user_id] = [
-            ts for ts in self.requests[user_id]
-            if ts > cutoff
-        ]
-
-        # Check limit
-        if len(self.requests[user_id]) >= self.max_requests:
-            return False
-
-        # Record request
-        self.requests[user_id].append(now)
-        return True
-
-# Usage
-rate_limiter = RateLimiter(max_requests=10, window_minutes=1)
-
-async def handle_request(user_id, message):
-    if not rate_limiter.is_allowed(user_id):
-        raise ValueError("Rate limit exceeded")
-
+# Usage — non-blocking check
+async def handle_request(user_id: str, message: str):
+    category = get_user_tier(user_id)  # e.g. "premium_user" or "default"
+    if not await limiter.try_acquire(category):
+        status = await limiter.get_status(category)
+        raise RateLimitError(
+            "Rate limit exceeded", retry_after=status.reset_after,
+        )
     # Process request...
 ```
+
+For conversation middleware, use the built-in `RateLimitMiddleware` (see Middleware section above) which wraps `InMemoryRateLimiter` with conversation-aware scoping.
 
 ### Secure API Keys
 
