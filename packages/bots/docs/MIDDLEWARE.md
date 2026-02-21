@@ -247,38 +247,35 @@ class MyMiddleware(Middleware):
 
 ### Example: Rate Limiting Middleware
 
+Use `InMemoryRateLimiter` from `dataknobs-common` for the rate limiting backend:
+
 ```python
-import asyncio
-from collections import defaultdict
-from datetime import datetime, timedelta
+from dataknobs_common.ratelimit import (
+    InMemoryRateLimiter, RateLimit, RateLimiterConfig,
+)
+from dataknobs_common.exceptions import RateLimitError
 from dataknobs_bots.middleware import Middleware
 from dataknobs_bots import BotContext
 
 
 class RateLimitMiddleware(Middleware):
-    """Rate limiting middleware."""
+    """Rate limiting middleware backed by InMemoryRateLimiter."""
 
     def __init__(self, max_requests: int = 10, window_seconds: int = 60):
         self.max_requests = max_requests
-        self.window = timedelta(seconds=window_seconds)
-        self.requests: dict[str, list[datetime]] = defaultdict(list)
+        config = RateLimiterConfig(
+            default_rates=[RateLimit(limit=max_requests, interval=window_seconds)],
+        )
+        self._limiter = InMemoryRateLimiter(config)
 
     async def before_message(self, message: str, context: BotContext) -> None:
         client_id = context.client_id
-        now = datetime.now()
-
-        # Clean old requests
-        cutoff = now - self.window
-        self.requests[client_id] = [
-            ts for ts in self.requests[client_id] if ts > cutoff
-        ]
-
-        # Check rate limit
-        if len(self.requests[client_id]) >= self.max_requests:
-            raise Exception(f"Rate limit exceeded for {client_id}")
-
-        # Record request
-        self.requests[client_id].append(now)
+        if not await self._limiter.try_acquire(client_id):
+            status = await self._limiter.get_status(client_id)
+            raise RateLimitError(
+                f"Rate limit exceeded for {client_id}",
+                retry_after=status.reset_after,
+            )
 
     async def after_message(
         self, response: str, context: BotContext, **kwargs
@@ -295,6 +292,8 @@ class RateLimitMiddleware(Middleware):
     ) -> None:
         pass
 ```
+
+See the [Rate Limiting guide](../../packages/common/ratelimit.md) for the full `InMemoryRateLimiter` API, including per-category rates, weighted operations, and distributed backends.
 
 ### Example: Metrics Middleware
 

@@ -213,19 +213,30 @@ endpoint = APIEndpoint(
 
 ### Custom Rate Limiter
 
-```python
-from dataknobs_fsm.patterns.api_orchestration import RateLimiter
+Rate limiting in `APIOrchestrator` is backed by `InMemoryRateLimiter` from `dataknobs-common`. You can use the same infrastructure directly:
 
-# Create custom rate limiter
-limiter = RateLimiter(rate_limit=100, window=60)
+```python
+from dataknobs_common.ratelimit import (
+    InMemoryRateLimiter, RateLimit, RateLimiterConfig,
+)
+
+# Create rate limiter with per-category rates
+config = RateLimiterConfig(
+    default_rates=[RateLimit(limit=100, interval=60)],
+    categories={
+        "limited_api": [RateLimit(limit=10, interval=60)],
+    },
+)
+limiter = InMemoryRateLimiter(config)
 
 # Use in async context
-async def make_request():
-    await limiter.acquire()  # Wait for permission
-    # Make API call
+async def make_request(endpoint_name: str):
+    await limiter.acquire(endpoint_name)  # Wait for capacity
     response = await http_client.get(url)
     return response
 ```
+
+See the [Rate Limiting guide](../../common/ratelimit.md) for the full `InMemoryRateLimiter` API, including weighted operations, status checks, and distributed backends.
 
 ## Circuit Breaker
 

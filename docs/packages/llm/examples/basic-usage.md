@@ -283,7 +283,8 @@ try:
     response = llm.complete("What is Python?")
     print(response.content)
 except RateLimitError as e:
-    print(f"Rate limit exceeded. Please wait and try again. {e}")
+    # RateLimitError includes a retry_after attribute (seconds to wait)
+    print(f"Rate limit exceeded. Retry after {e.retry_after}s. {e}")
 except InvalidRequestError as e:
     print(f"Invalid request: {e}")
 except LLMError as e:
@@ -299,9 +300,10 @@ def complete_with_retry(llm, prompt, max_retries=3):
     for attempt in range(max_retries):
         try:
             return llm.complete(prompt)
-        except RateLimitError:
+        except RateLimitError as e:
             if attempt < max_retries - 1:
-                wait_time = 2 ** attempt  # Exponential backoff
+                # Use retry_after from the error if available
+                wait_time = e.retry_after if e.retry_after else 2 ** attempt
                 print(f"Rate limited. Waiting {wait_time}s...")
                 time.sleep(wait_time)
             else:

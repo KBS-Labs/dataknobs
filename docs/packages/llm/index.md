@@ -172,7 +172,7 @@ dataknobs_llm/
 ├── testing.py           # Testing utilities for scripted responses
 └── fsm_integration/     # FSM integration
     ├── functions.py     # LLM functions for FSM
-    ├── resources.py     # LLM resources for FSM
+    ├── resources.py     # LLMResource, AsyncLLMResource (async with rate limiting)
     └── workflows.py     # Pre-built workflow patterns
 ```
 

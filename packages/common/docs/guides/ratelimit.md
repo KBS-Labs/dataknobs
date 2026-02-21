@@ -396,6 +396,18 @@ class RateLimitError(OperationError):
     """
 ```
 
+## Usage Across DataKnobs
+
+The rate limiter is the shared infrastructure for rate limiting across the DataKnobs ecosystem. The following packages use `InMemoryRateLimiter` as their rate limiting backend:
+
+| Package | Component | How It Uses Rate Limiting |
+|---------|-----------|--------------------------|
+| `dataknobs-fsm` | `APIOrchestrator` | Per-endpoint and global rate limiting for API orchestration. Categories map to endpoint names. |
+| `dataknobs-llm` | `RateLimitMiddleware` | Conversation middleware that limits requests per conversation or per client. |
+| `dataknobs-llm` | `AsyncLLMResource` | Optional per-resource rate limiting for LLM provider calls (configured via `requests_per_minute`). |
+
+This consolidation ensures consistent rate limiting behavior, a single API to learn, and easy backend swapping (e.g., switch from in-memory to Redis for production) across all components.
+
 ## Module Exports
 
 ```python

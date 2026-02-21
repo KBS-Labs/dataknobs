@@ -12,6 +12,7 @@ For LLM workflow patterns using FSM, see:
 
 For FSM resource management, see:
 - resources.LLMResource
+- resources.AsyncLLMResource
 
 For FSM function library, see:
 - functions.PromptBuilder
