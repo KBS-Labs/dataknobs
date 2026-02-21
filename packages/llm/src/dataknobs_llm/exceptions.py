@@ -9,19 +9,22 @@ from dataknobs_common import (
     OperationError,
     ResourceError,
 )
+from dataknobs_common.exceptions import RateLimitError
 
 # Create LLMError as alias to DataknobsError for backward compatibility
 LLMError = DataknobsError
 
+__all__ = [
+    "LLMError",
+    "RateLimitError",
+    "SchemaVersionError",
+    "StorageError",
+    "VersioningError",
+]
+
 
 class VersioningError(OperationError):
     """Base exception for versioning-related errors."""
-
-    pass
-
-
-class RateLimitError(OperationError):
-    """Exception raised when rate limit is exceeded."""
 
     pass
 

@@ -40,6 +40,7 @@ from .resources import (
     LLMProvider,
     LLMSession,
     LLMResource,
+    AsyncLLMResource,
 )
 
 from .functions import (
@@ -73,6 +74,7 @@ __all__ = [
     'LLMProvider',
     'LLMSession',
     'LLMResource',
+    'AsyncLLMResource',
     # Functions
     'PromptBuilder',
     'LLMCaller',

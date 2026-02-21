@@ -9,12 +9,15 @@ from dataknobs_llm.conversations import (
     ContentFilterMiddleware,
     ValidationMiddleware,
     MetadataMiddleware,
+    RateLimitMiddleware,
     DataknobsConversationStorage,
 )
 from dataknobs_llm.llm import LLMConfig, EchoProvider, LLMMessage, LLMResponse
 from dataknobs_llm.prompts import AsyncPromptBuilder, FileSystemPromptLibrary
-from dataknobs_llm.conversations.storage import ConversationState
+from dataknobs_llm.conversations.storage import ConversationState, ConversationNode
+from dataknobs_common.exceptions import RateLimitError
 from dataknobs_data.backends.memory import AsyncMemoryDatabase
+from dataknobs_structures.tree import Tree
 from pathlib import Path
 import tempfile
 from typing import List
@@ -491,3 +494,287 @@ class TestCustomMiddleware:
 
         # EchoProvider will echo the modified message
         assert "[PREFIXED]" in response.content
+
+
+def _make_conversation_state(
+    conversation_id: str = "conv-123",
+    metadata: dict | None = None,
+) -> ConversationState:
+    """Create a minimal ConversationState for unit tests."""
+    root_node = ConversationNode(
+        message=LLMMessage(role="system", content="You are helpful"),
+        node_id="",
+    )
+    tree = Tree(root_node)
+    return ConversationState(
+        conversation_id=conversation_id,
+        message_tree=tree,
+        current_node_id="",
+        metadata=metadata or {},
+    )
+
+
+class TestRateLimitMiddleware:
+    """Test RateLimitMiddleware backed by InMemoryRateLimiter."""
+
+    @pytest.mark.asyncio
+    async def test_requests_within_limit_pass(self):
+        """Test that requests within the rate limit are allowed."""
+        middleware = RateLimitMiddleware(max_requests=5, window_seconds=60)
+        state = _make_conversation_state()
+        messages = [LLMMessage(role="user", content="Hello")]
+
+        # Should not raise for requests within limit
+        for _ in range(5):
+            result = await middleware.process_request(messages, state)
+            assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_exceeding_limit_raises_rate_limit_error(self):
+        """Test that exceeding the rate limit raises RateLimitError."""
+        middleware = RateLimitMiddleware(max_requests=3, window_seconds=60)
+        state = _make_conversation_state()
+        messages = [LLMMessage(role="user", content="Hello")]
+
+        # Use up the limit
+        for _ in range(3):
+            await middleware.process_request(messages, state)
+
+        # 4th request should raise
+        with pytest.raises(RateLimitError, match="Rate limit exceeded"):
+            await middleware.process_request(messages, state)
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_error_has_retry_after(self):
+        """Test that RateLimitError includes retry_after from common package."""
+        middleware = RateLimitMiddleware(max_requests=1, window_seconds=60)
+        state = _make_conversation_state()
+        messages = [LLMMessage(role="user", content="Hello")]
+
+        await middleware.process_request(messages, state)
+
+        with pytest.raises(RateLimitError) as exc_info:
+            await middleware.process_request(messages, state)
+
+        # The common RateLimitError should have retry_after set
+        assert exc_info.value.retry_after is not None
+        assert exc_info.value.retry_after > 0
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_updates_state_metadata_on_exceed(self):
+        """Test that state metadata is updated when rate limit is exceeded."""
+        middleware = RateLimitMiddleware(max_requests=1, window_seconds=60)
+        state = _make_conversation_state()
+        messages = [LLMMessage(role="user", content="Hello")]
+
+        await middleware.process_request(messages, state)
+
+        with pytest.raises(RateLimitError):
+            await middleware.process_request(messages, state)
+
+        assert state.metadata["rate_limit_exceeded"] is True
+        assert state.metadata["rate_limit_max"] == 1
+        assert state.metadata["rate_limit_window"] == 60
+
+    @pytest.mark.asyncio
+    async def test_message_metadata_includes_rate_limit_info(self):
+        """Test that messages get rate limit count metadata."""
+        middleware = RateLimitMiddleware(max_requests=10, window_seconds=60)
+        state = _make_conversation_state()
+        messages = [LLMMessage(role="user", content="Hello")]
+
+        result = await middleware.process_request(messages, state)
+
+        assert result[0].metadata is not None
+        assert result[0].metadata["rate_limit_count"] == 1
+        assert result[0].metadata["rate_limit_max"] == 10
+
+    @pytest.mark.asyncio
+    async def test_response_metadata_includes_rate_limit_info(self):
+        """Test that responses get rate limit metadata."""
+        middleware = RateLimitMiddleware(max_requests=10, window_seconds=60)
+        state = _make_conversation_state()
+        messages = [LLMMessage(role="user", content="Hello")]
+
+        # Make a request first to record in the limiter
+        await middleware.process_request(messages, state)
+
+        # Process response
+        response = LLMResponse(content="Test response", model="test")
+        result = await middleware.process_response(response, state)
+
+        assert result.metadata is not None
+        assert result.metadata["rate_limit_count"] == 1
+        assert result.metadata["rate_limit_max"] == 10
+        assert result.metadata["rate_limit_remaining"] == 9
+
+    @pytest.mark.asyncio
+    async def test_conversation_scope_isolates_by_conversation_id(self):
+        """Test that conversation scope rate limits per conversation."""
+        middleware = RateLimitMiddleware(
+            max_requests=2, window_seconds=60, scope="conversation"
+        )
+        state_a = _make_conversation_state(conversation_id="conv-a")
+        state_b = _make_conversation_state(conversation_id="conv-b")
+        messages = [LLMMessage(role="user", content="Hello")]
+
+        # Use up conv-a's limit
+        await middleware.process_request(messages, state_a)
+        await middleware.process_request(messages, state_a)
+
+        # conv-a should be rate limited
+        with pytest.raises(RateLimitError):
+            await middleware.process_request(messages, state_a)
+
+        # conv-b should still work
+        result = await middleware.process_request(messages, state_b)
+        assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_client_id_scope(self):
+        """Test that client_id scope rate limits by client_id from metadata."""
+        middleware = RateLimitMiddleware(
+            max_requests=2, window_seconds=60, scope="client_id"
+        )
+        state_same_client = _make_conversation_state(
+            conversation_id="conv-1",
+            metadata={"client_id": "client-x"},
+        )
+        state_same_client_2 = _make_conversation_state(
+            conversation_id="conv-2",
+            metadata={"client_id": "client-x"},
+        )
+        state_diff_client = _make_conversation_state(
+            conversation_id="conv-3",
+            metadata={"client_id": "client-y"},
+        )
+        messages = [LLMMessage(role="user", content="Hello")]
+
+        # Use up client-x's limit across different conversations
+        await middleware.process_request(messages, state_same_client)
+        await middleware.process_request(messages, state_same_client_2)
+
+        # Same client, different conversation — should be rate limited
+        with pytest.raises(RateLimitError):
+            await middleware.process_request(messages, state_same_client)
+
+        # Different client — should work
+        result = await middleware.process_request(messages, state_diff_client)
+        assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_custom_key_function(self):
+        """Test rate limiting with custom key extraction function."""
+        def user_key(state: ConversationState) -> str:
+            return state.metadata.get("user_id", "anonymous")
+
+        middleware = RateLimitMiddleware(
+            max_requests=2, window_seconds=60, key_fn=user_key
+        )
+        state = _make_conversation_state(metadata={"user_id": "alice"})
+        messages = [LLMMessage(role="user", content="Hello")]
+
+        await middleware.process_request(messages, state)
+        await middleware.process_request(messages, state)
+
+        with pytest.raises(RateLimitError):
+            await middleware.process_request(messages, state)
+
+        # Different user should be fine
+        state_bob = _make_conversation_state(metadata={"user_id": "bob"})
+        result = await middleware.process_request(messages, state_bob)
+        assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_get_rate_limit_status(self):
+        """Test get_rate_limit_status returns correct status dict."""
+        middleware = RateLimitMiddleware(max_requests=10, window_seconds=60)
+        state = _make_conversation_state()
+        messages = [LLMMessage(role="user", content="Hello")]
+
+        # Make 3 requests
+        for _ in range(3):
+            await middleware.process_request(messages, state)
+
+        status = await middleware.get_rate_limit_status("conv-123")
+
+        assert status["current_count"] == 3
+        assert status["max_requests"] == 10
+        assert status["remaining"] == 7
+        assert status["window_seconds"] == 60
+        assert "next_reset" in status
+
+    @pytest.mark.asyncio
+    async def test_reset_specific_key(self):
+        """Test resetting rate limit for a specific key."""
+        middleware = RateLimitMiddleware(max_requests=2, window_seconds=60)
+        state = _make_conversation_state()
+        messages = [LLMMessage(role="user", content="Hello")]
+
+        # Use up the limit
+        await middleware.process_request(messages, state)
+        await middleware.process_request(messages, state)
+
+        # Should be limited
+        with pytest.raises(RateLimitError):
+            await middleware.process_request(messages, state)
+
+        # Reset this key
+        await middleware.reset("conv-123")
+
+        # Should work again
+        result = await middleware.process_request(messages, state)
+        assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_reset_all_keys(self):
+        """Test resetting all rate limit keys."""
+        middleware = RateLimitMiddleware(max_requests=1, window_seconds=60)
+        state_a = _make_conversation_state(conversation_id="conv-a")
+        state_b = _make_conversation_state(conversation_id="conv-b")
+        messages = [LLMMessage(role="user", content="Hello")]
+
+        # Use up limits for both
+        await middleware.process_request(messages, state_a)
+        await middleware.process_request(messages, state_b)
+
+        # Both should be limited
+        with pytest.raises(RateLimitError):
+            await middleware.process_request(messages, state_a)
+        with pytest.raises(RateLimitError):
+            await middleware.process_request(messages, state_b)
+
+        # Reset all
+        await middleware.reset()
+
+        # Both should work again
+        await middleware.process_request(messages, state_a)
+        await middleware.process_request(messages, state_b)
+
+    @pytest.mark.asyncio
+    async def test_integration_with_conversation_manager(self, test_components):
+        """Test RateLimitMiddleware works through ConversationManager."""
+        middleware = RateLimitMiddleware(max_requests=2, window_seconds=60)
+
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            middleware=[middleware],
+        )
+
+        # First two requests should work
+        await manager.add_message(role="user", content="First")
+        response1 = await manager.complete()
+        assert response1 is not None
+        assert response1.metadata.get("rate_limit_count") == 1
+
+        await manager.add_message(role="user", content="Second")
+        response2 = await manager.complete()
+        assert response2 is not None
+        assert response2.metadata.get("rate_limit_count") == 2
+
+        # Third request should fail
+        await manager.add_message(role="user", content="Third")
+        with pytest.raises(RateLimitError):
+            await manager.complete()
