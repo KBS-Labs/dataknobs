@@ -5,6 +5,57 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-02-21
+
+### dataknobs-bots [0.4.8]
+
+#### Added
+- enhanced artifact registry to support content field filtering
+- conversational intent detection for wizard state transition
+- an artifact corpus abstraction
+- wizard transform helpers for corpus operations
+- a generic rate limiter
+
+#### Fixed
+- fixed serialization bugs
+- fixed async deficiencies
+- fixed wizard initialization from config
+- fixed wizard state tracking and flow
+
+### dataknobs-common [1.3.1]
+
+#### Added
+- a generic rate limiter
+
+#### Fixed
+- fixed serialization bugs
+
+### dataknobs-data [0.4.8]
+
+#### Added
+- a dedup checker utility
+
+### dataknobs-fsm [0.1.10]
+
+#### Changed
+- updated documentation
+- miscellaneous fixes and small enhancements
+
+#### Fixed
+- refactored to leverage the common package's generic rate limiter
+- fix to pass function reference params to transform functions
+
+### dataknobs-llm [0.3.6]
+
+#### Added
+- a parallel llm executor
+
+#### Fixed
+- fixed disconnected rate limit checking
+- refactored to leverage the common package's generic rate limiter
+- fixed incomplete async fsm integration layer
+
+
 ## Release - 2026-02-17
 
 ### dataknobs-bots [0.4.7]
