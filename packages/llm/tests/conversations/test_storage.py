@@ -782,6 +782,59 @@ class TestDataknobsConversationStorage:
         conversations = await storage.list_conversations(limit=3)
         assert len(conversations) == 3
 
+    async def test_list_conversations_with_sort_by(self):
+        """Test listing conversations with sort_by and sort_order."""
+        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_llm.conversations import DataknobsConversationStorage
+
+        backend = AsyncMemoryDatabase()
+        storage = DataknobsConversationStorage(backend)
+
+        # Create conversations with different metadata timestamps
+        for i in range(3):
+            root_node = ConversationNode(
+                message=LLMMessage(role="system", content=f"System {i}"),
+                node_id=""
+            )
+            tree = Tree(root_node)
+            state = ConversationState(
+                conversation_id=f"conv-sort-{i}",
+                message_tree=tree,
+                metadata={"updated_at": f"2026-01-0{i + 1}T00:00:00"}
+            )
+            await storage.save_conversation(state)
+
+        # List with sort_by (descending)
+        conversations = await storage.list_conversations(
+            sort_by="metadata.updated_at", sort_order="desc"
+        )
+        assert len(conversations) == 3
+
+    async def test_list_conversations_sort_by_none_backward_compatible(self):
+        """Test that sort_by=None preserves backward-compatible behavior."""
+        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_llm.conversations import DataknobsConversationStorage
+
+        backend = AsyncMemoryDatabase()
+        storage = DataknobsConversationStorage(backend)
+
+        # Create conversations
+        for i in range(3):
+            root_node = ConversationNode(
+                message=LLMMessage(role="system", content=f"System {i}"),
+                node_id=""
+            )
+            tree = Tree(root_node)
+            state = ConversationState(
+                conversation_id=f"conv-nosort-{i}",
+                message_tree=tree,
+            )
+            await storage.save_conversation(state)
+
+        # Default call (no sort_by) should still work
+        conversations = await storage.list_conversations()
+        assert len(conversations) == 3
+
     async def test_load_nonexistent_conversation(self):
         """Test loading a conversation that doesn't exist."""
         from dataknobs_data.backends import AsyncMemoryDatabase
