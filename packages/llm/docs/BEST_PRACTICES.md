@@ -494,7 +494,11 @@ async def cleanup_old_conversations(storage, days=30):
     """Delete conversations older than specified days."""
     cutoff = datetime.now() - timedelta(days=days)
 
-    conversations = await storage.list_conversations(limit=1000)
+    conversations = await storage.list_conversations(
+        sort_by="updated_at",
+        sort_order="asc",
+        limit=1000,
+    )
 
     for conv in conversations:
         if conv.updated_at < cutoff:
