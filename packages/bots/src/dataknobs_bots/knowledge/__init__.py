@@ -26,7 +26,6 @@ from .storage import (
     KnowledgeBaseInfo,
     KnowledgeFile,
     KnowledgeResourceBackend,
-    S3KnowledgeBackend,
 )
 from .ingestion import (
     IngestionResult,
@@ -100,6 +99,19 @@ __all__ = [
     "HybridSearchConfig",
     "HybridSearchResult",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy module-level attribute access for S3KnowledgeBackend.
+
+    Avoids requiring boto3 at import time — only loaded when S3KnowledgeBackend
+    is actually accessed.
+    """
+    if name == "S3KnowledgeBackend":
+        from .storage import S3KnowledgeBackend
+
+        return S3KnowledgeBackend
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 async def create_knowledge_base_from_config(config: dict[str, Any]) -> RAGKnowledgeBase:

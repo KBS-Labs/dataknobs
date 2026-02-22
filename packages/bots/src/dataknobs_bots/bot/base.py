@@ -21,6 +21,47 @@ if TYPE_CHECKING:
     from dataknobs_config import EnvironmentAwareConfig, EnvironmentConfig
 
 
+def normalize_wizard_state(wizard_meta: dict[str, Any]) -> dict[str, Any]:
+    """Normalize wizard metadata to canonical structure.
+
+    Handles both old nested format (fsm_state.current_stage) and
+    new flat format (current_stage directly).
+
+    Args:
+        wizard_meta: Raw wizard metadata from manager or storage
+
+    Returns:
+        Normalized wizard state dict with canonical fields:
+        current_stage, stage_index, total_stages, progress, completed,
+        data, can_skip, can_go_back, suggestions, history, stages.
+    """
+    # Handle nested fsm_state format (legacy)
+    fsm_state = wizard_meta.get("fsm_state", {})
+
+    # Prefer direct fields, fall back to fsm_state
+    current_stage = (
+        wizard_meta.get("current_stage")
+        or wizard_meta.get("stage")  # Old response format
+        or fsm_state.get("current_stage")
+    )
+
+    return {
+        "current_stage": current_stage,
+        "stage_index": (
+            wizard_meta.get("stage_index") or fsm_state.get("stage_index", 0)
+        ),
+        "total_stages": wizard_meta.get("total_stages", 0),
+        "progress": wizard_meta.get("progress", 0.0),
+        "completed": wizard_meta.get("completed", False),
+        "data": wizard_meta.get("data") or fsm_state.get("data", {}),
+        "can_skip": wizard_meta.get("can_skip", False),
+        "can_go_back": wizard_meta.get("can_go_back", True),
+        "suggestions": wizard_meta.get("suggestions", []),
+        "history": wizard_meta.get("history") or fsm_state.get("history", []),
+        "stages": wizard_meta.get("stages", []),
+    }
+
+
 class DynaBot:
     """Configuration-driven chatbot leveraging the DataKnobs ecosystem.
 
@@ -757,12 +798,12 @@ class DynaBot:
         # Delete from storage
         return await self.conversation_storage.delete_conversation(conversation_id)
 
-    def get_wizard_state(self, conversation_id: str) -> dict[str, Any] | None:
+    async def get_wizard_state(self, conversation_id: str) -> dict[str, Any] | None:
         """Get current wizard state for a conversation.
 
         This method provides public access to wizard state without requiring
         access to private conversation managers. It checks the in-memory
-        manager first (most current) and falls back to storage.
+        manager first (most current) and falls back to persisted storage.
 
         Args:
             conversation_id: Conversation identifier
@@ -788,7 +829,7 @@ class DynaBot:
         Example:
             ```python
             # Get wizard state for a conversation
-            state = bot.get_wizard_state("conv-123")
+            state = await bot.get_wizard_state("conv-123")
 
             if state:
                 print(f"Current stage: {state['current_stage']}")
@@ -796,10 +837,17 @@ class DynaBot:
                 print(f"Collected data: {state['data']}")
             ```
         """
-        # Get from in-memory manager first (most current)
+        # Fast path: in-memory cache
         manager = self._conversation_managers.get(conversation_id)
         if manager and manager.metadata:
             wizard_meta = manager.metadata.get("wizard")
+            if wizard_meta:
+                return self._normalize_wizard_state(wizard_meta)
+
+        # Slow path: fall back to persisted storage
+        state = await self.conversation_storage.load_conversation(conversation_id)
+        if state and state.metadata:
+            wizard_meta = state.metadata.get("wizard")
             if wizard_meta:
                 return self._normalize_wizard_state(wizard_meta)
 
@@ -810,40 +858,9 @@ class DynaBot:
     ) -> dict[str, Any]:
         """Normalize wizard metadata to canonical structure.
 
-        Handles both old nested format (fsm_state.current_stage) and
-        new flat format (current_stage directly).
-
-        Args:
-            wizard_meta: Raw wizard metadata from manager or storage
-
-        Returns:
-            Normalized wizard state dict
+        Delegates to the module-level ``normalize_wizard_state()`` function.
         """
-        # Handle nested fsm_state format (legacy)
-        fsm_state = wizard_meta.get("fsm_state", {})
-
-        # Prefer direct fields, fall back to fsm_state
-        current_stage = (
-            wizard_meta.get("current_stage")
-            or wizard_meta.get("stage")  # Old response format
-            or fsm_state.get("current_stage")
-        )
-
-        return {
-            "current_stage": current_stage,
-            "stage_index": (
-                wizard_meta.get("stage_index") or fsm_state.get("stage_index", 0)
-            ),
-            "total_stages": wizard_meta.get("total_stages", 0),
-            "progress": wizard_meta.get("progress", 0.0),
-            "completed": wizard_meta.get("completed", False),
-            "data": wizard_meta.get("data") or fsm_state.get("data", {}),
-            "can_skip": wizard_meta.get("can_skip", False),
-            "can_go_back": wizard_meta.get("can_go_back", True),
-            "suggestions": wizard_meta.get("suggestions", []),
-            "history": wizard_meta.get("history") or fsm_state.get("history", []),
-            "stages": wizard_meta.get("stages", []),
-        }
+        return normalize_wizard_state(wizard_meta)
 
     async def close(self) -> None:
         """Close the bot and clean up resources.

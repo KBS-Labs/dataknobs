@@ -612,14 +612,18 @@ class ConversationStorage(ABC):
         self,
         filter_metadata: Dict[str, Any] | None = None,
         limit: int = 100,
-        offset: int = 0
+        offset: int = 0,
+        sort_by: str | None = None,
+        sort_order: str = "desc",
     ) -> List[ConversationState]:
-        """List conversations with optional filtering.
+        """List conversations with optional filtering and sorting.
 
         Args:
             filter_metadata: Optional metadata filters
             limit: Maximum number of results
             offset: Offset for pagination
+            sort_by: Field name to sort by (e.g. "updated_at", "created_at")
+            sort_order: Sort direction, "asc" or "desc" (default: "desc")
 
         Returns:
             List of conversation states
@@ -830,7 +834,9 @@ class DataknobsConversationStorage(ConversationStorage):
         self,
         filter_metadata: Dict[str, Any] | None = None,
         limit: int = 100,
-        offset: int = 0
+        offset: int = 0,
+        sort_by: str | None = None,
+        sort_order: str = "desc",
     ) -> List[ConversationState]:
         """List conversations from backend."""
         try:
@@ -851,6 +857,9 @@ class DataknobsConversationStorage(ConversationStorage):
                 for key, value in filter_metadata.items():
                     # Add filter for metadata.key = value
                     query.filter(f"metadata.{key}", "=", value)
+
+            if sort_by:
+                query.sort_by(sort_by, sort_order)
 
             # Search with query
             results = await self.backend.search(query)

@@ -670,10 +670,18 @@ storage = DataknobsConversationStorage(
 # List all conversations
 conversations = await storage.list_conversations(limit=10)
 
+# List most recently updated conversations
+conversations = await storage.list_conversations(
+    sort_by="updated_at",
+    sort_order="desc",
+    limit=10,
+)
+
 # Filter by metadata
 customer_convs = await storage.list_conversations(
     filter_metadata={"customer_id": "12345"},
-    limit=50
+    sort_by="updated_at",
+    limit=50,
 )
 
 # Load specific conversation

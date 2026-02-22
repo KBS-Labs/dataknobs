@@ -1303,7 +1303,7 @@ Access wizard state programmatically from your application code:
 
 ```python
 # Get current wizard state for a conversation
-state = bot.get_wizard_state("conversation-123")
+state = await bot.get_wizard_state("conversation-123")
 
 if state:
     print(f"Stage: {state['current_stage']} ({state['stage_index'] + 1}/{state['total_stages']})")
@@ -1530,7 +1530,7 @@ be rendered:
 Access via `get_wizard_state()`:
 
 ```python
-state = bot.get_wizard_state("conversation-123")
+state = await bot.get_wizard_state("conversation-123")
 if state and state["stage_mode"] == "conversation":
     # Render as normal chat UI
     pass
