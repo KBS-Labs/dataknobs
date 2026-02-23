@@ -320,16 +320,16 @@ main() {
         # Documentation
         docs|doc|serve)
             run_command "Serving documentation (live reload)" \
-                env PYTHONWARNINGS="ignore::DeprecationWarning:asttokens" uv run mkdocs serve
+                env NO_MKDOCS_2_WARNING=1 uv run mkdocs serve
             ;;
         docs-build|build-docs|docbuild)
             run_command "Building documentation" \
-                env PYTHONWARNINGS="ignore::DeprecationWarning:asttokens" uv run mkdocs build
+                env NO_MKDOCS_2_WARNING=1 uv run mkdocs build
             echo -e "${GREEN}✓${NC} Documentation built in site/ directory"
             ;;
         docs-check|doccheck|check-docs)
             echo -e "${BLUE}Checking documentation...${NC}"
-            if env PYTHONWARNINGS="ignore::DeprecationWarning:asttokens" uv run mkdocs build --strict 2>&1 | grep -E "WARNING|ERROR"; then
+            if env NO_MKDOCS_2_WARNING=1 uv run mkdocs build --strict 2>&1 | grep -E "WARNING|ERROR"; then
                 echo -e "${YELLOW}⚠${NC} Documentation has warnings or errors"
                 echo -e "Run ${CYAN}dk docs${NC} to see them in context"
             else

@@ -284,6 +284,7 @@ nav:
     - Integration Testing & CI: development/integration-testing-ci.md
     - Documentation Guide: development/documentation-guide.md
     - CI/CD: development/ci-cd.md
+    - Dependency Updates: development/dependency-updates.md
     - Release Process: development/release-process.md
     - Architecture: development/architecture.md
     - Deprecation Timeline: DEPRECATION_TIMELINE.md

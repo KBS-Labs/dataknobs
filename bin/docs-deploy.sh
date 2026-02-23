@@ -67,8 +67,7 @@ fi
 
 # Build documentation first
 echo -e "\n${CYAN}Building documentation...${NC}"
-# Suppress DeprecationWarning from asttokens (incompatible with astroid 4.x)
-PYTHONWARNINGS="ignore::DeprecationWarning:asttokens" mkdocs build --strict
+NO_MKDOCS_2_WARNING=1 mkdocs build --strict
 
 if [ ! -d "site" ]; then
     echo -e "${RED}❌ Documentation build failed!${NC}"
@@ -91,8 +90,7 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     echo -e "${CYAN}Deploying...${NC}"
 
     # Deploy with mkdocs
-    # Suppress DeprecationWarning from asttokens (incompatible with astroid 4.x)
-    PYTHONWARNINGS="ignore::DeprecationWarning:asttokens" mkdocs gh-deploy --force --clean --verbose
+    NO_MKDOCS_2_WARNING=1 mkdocs gh-deploy --force --clean --verbose
     
     echo -e "\n${GREEN}✅ Documentation deployed successfully!${NC}"
     echo ""
