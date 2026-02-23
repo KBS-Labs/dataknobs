@@ -370,11 +370,108 @@ class TestBotRegistry:
         assert len(registry._cache) == 2
 
         # Clear cache
-        registry.clear_cache()
+        await registry.clear_cache()
         assert len(registry._cache) == 0
 
         # Registrations should still exist
         assert await registry.count() == 2
+
+    @pytest.mark.asyncio
+    async def test_close_closes_cached_bots(self, registry):
+        """Test that close() closes all cached bot instances."""
+        await registry.register(
+            "client-1",
+            {
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+            },
+        )
+        await registry.register(
+            "client-2",
+            {
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+            },
+        )
+
+        bot1 = await registry.get_bot("client-1")
+        bot2 = await registry.get_bot("client-2")
+
+        # Bots should be initialized
+        assert bot1.llm._is_initialized is True
+        assert bot2.llm._is_initialized is True
+
+        await registry.close()
+
+        # Bots should have been closed
+        assert bot1.llm._is_initialized is False
+        assert bot2.llm._is_initialized is False
+
+    @pytest.mark.asyncio
+    async def test_eviction_closes_bots(self):
+        """Test that cache eviction closes evicted bot instances."""
+        registry = InMemoryBotRegistry(
+            max_cache_size=2,
+            validate_on_register=False,
+        )
+        await registry.initialize()
+
+        try:
+            # Register 4 bots
+            for i in range(4):
+                await registry.register(
+                    f"client-{i}",
+                    {
+                        "llm": {"provider": "echo", "model": "test"},
+                        "conversation_storage": {"backend": "memory"},
+                    },
+                )
+
+            # Cache first 2 bots
+            bot0 = await registry.get_bot("client-0")
+            bot1 = await registry.get_bot("client-1")
+
+            assert bot0.llm._is_initialized is True
+            assert bot1.llm._is_initialized is True
+
+            # Loading a 3rd bot should trigger eviction of the oldest
+            await registry.get_bot("client-2")
+
+            # At least one of the earlier bots should have been evicted and closed
+            evicted = [
+                b for b in [bot0, bot1] if b.llm._is_initialized is False
+            ]
+            assert len(evicted) > 0, "Expected at least one evicted bot to be closed"
+        finally:
+            await registry.close()
+
+    @pytest.mark.asyncio
+    async def test_reregister_closes_old_bot(self, registry):
+        """Test that re-registering a bot closes the old cached instance."""
+        await registry.register(
+            "client-1",
+            {
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+            },
+        )
+
+        # Get and cache the bot
+        old_bot = await registry.get_bot("client-1")
+        assert old_bot.llm._is_initialized is True
+
+        # Re-register with new config — should close old bot
+        await registry.register(
+            "client-1",
+            {
+                "llm": {"provider": "echo", "model": "test"},
+                "conversation_storage": {"backend": "memory"},
+                "memory": {"type": "buffer", "max_messages": 10},
+            },
+        )
+
+        # Old bot should have been closed
+        assert old_bot.llm._is_initialized is False
 
     @pytest.mark.asyncio
     async def test_cache_eviction(self):

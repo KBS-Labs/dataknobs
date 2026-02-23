@@ -199,9 +199,11 @@ class BotRegistry:
     async def close(self) -> None:
         """Close the registry and backend.
 
-        Clears the bot cache and closes the storage backend.
+        Closes all cached bot instances and the storage backend.
         """
         async with self._lock:
+            for bot_id, (bot, _) in self._cache.items():
+                await self._close_bot(bot_id, bot)
             self._cache.clear()
         await self._backend.close()
         self._initialized = False
@@ -266,7 +268,8 @@ class BotRegistry:
         # Invalidate cache for this bot
         async with self._lock:
             if bot_id in self._cache:
-                del self._cache[bot_id]
+                old_bot, _ = self._cache.pop(bot_id)
+                await self._close_bot(bot_id, old_bot)
                 logger.debug(f"Invalidated cache for bot: {bot_id}")
 
         logger.info(f"Registered bot: {bot_id}")
@@ -311,6 +314,11 @@ class BotRegistry:
                     logger.debug(f"Returning cached bot: {bot_id}")
                     return bot
 
+            # Close stale/replaced bot if present
+            if bot_id in self._cache:
+                old_bot, _ = self._cache.pop(bot_id)
+                await self._close_bot(bot_id, old_bot)
+
             # Load configuration from backend
             config = await self._backend.get_config(bot_id)
             if config is None:
@@ -338,7 +346,7 @@ class BotRegistry:
 
             # Evict old entries if cache is full
             if len(self._cache) > self._max_cache_size:
-                self._evict_oldest()
+                await self._evict_oldest()
 
             return bot
 
@@ -379,7 +387,8 @@ class BotRegistry:
         # Remove from cache
         async with self._lock:
             if bot_id in self._cache:
-                del self._cache[bot_id]
+                old_bot, _ = self._cache.pop(bot_id)
+                await self._close_bot(bot_id, old_bot)
 
         result = await self._backend.unregister(bot_id)
         if result:
@@ -398,7 +407,8 @@ class BotRegistry:
         # Remove from cache
         async with self._lock:
             if bot_id in self._cache:
-                del self._cache[bot_id]
+                old_bot, _ = self._cache.pop(bot_id)
+                await self._close_bot(bot_id, old_bot)
 
         result = await self._backend.deactivate(bot_id)
         if result:
@@ -440,27 +450,39 @@ class BotRegistry:
         """
         return list(self._cache.keys())
 
-    def clear_cache(self) -> None:
+    async def clear_cache(self) -> None:
         """Clear all cached bot instances.
 
+        Closes each bot before removing it from cache.
         Does not affect stored registrations.
         """
-        self._cache.clear()
+        async with self._lock:
+            for bot_id, (bot, _) in self._cache.items():
+                await self._close_bot(bot_id, bot)
+            self._cache.clear()
         logger.debug("Cleared bot cache")
 
-    def _evict_oldest(self) -> None:
+    async def _evict_oldest(self) -> None:
         """Evict oldest cache entries when cache is full.
 
-        Removes 10% of the oldest entries to make room for new ones.
+        Closes and removes 10% of the oldest entries to make room for new ones.
         """
         # Sort by timestamp (oldest first)
         sorted_items = sorted(self._cache.items(), key=lambda x: x[1][1])
 
         # Remove oldest 10%
         num_to_remove = max(1, len(sorted_items) // 10)
-        for bot_id, _ in sorted_items[:num_to_remove]:
+        for bot_id, (bot, _) in sorted_items[:num_to_remove]:
+            await self._close_bot(bot_id, bot)
             del self._cache[bot_id]
         logger.debug(f"Evicted {num_to_remove} bots from cache")
+
+    async def _close_bot(self, bot_id: str, bot: DynaBot) -> None:
+        """Close a single bot instance, logging errors without raising."""
+        try:
+            await bot.close()
+        except Exception:
+            logger.exception("Failed to close bot: %s", bot_id)
 
     # Legacy compatibility methods
 
@@ -573,8 +595,8 @@ class InMemoryBotRegistry(BotRegistry):
     async def clear(self) -> None:
         """Clear all registrations and cached bots.
 
-        Convenience method for test cleanup that clears both the
-        backend storage and the bot instance cache.
+        Closes each bot instance before clearing the cache and backend.
+        Convenience method for test cleanup.
 
         Example:
             ```python
@@ -583,8 +605,11 @@ class InMemoryBotRegistry(BotRegistry):
             assert await registry.count() == 0
             ```
         """
+        async with self._lock:
+            for bot_id, (bot, _) in self._cache.items():
+                await self._close_bot(bot_id, bot)
+            self._cache.clear()
         await self._backend.clear()
-        self._cache.clear()
         logger.debug("Cleared all registrations and cache")
 
     def __repr__(self) -> str:
