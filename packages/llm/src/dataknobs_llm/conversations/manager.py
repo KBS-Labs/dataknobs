@@ -468,28 +468,27 @@ class ConversationManager:
             if self.cache_rag_results and result.rag_metadata:
                 rag_metadata_to_store = result.rag_metadata
 
-        elif content and include_rag and rag_configs:
-            # Render inline content with RAG enhancement
+        elif content and not prompt_name and role in ("system", "user"):
+            # Render inline content through the prompt builder so that
+            # template variables (e.g. {{current_date}}) are always resolved,
+            # and RAG enhancement is applied when rag_configs are present.
             params = params or {}
             if role == "system":
                 result = await self.prompt_builder.render_inline_system_prompt(
                     content,
                     params=params,
                     rag_configs=rag_configs,
-                    include_rag=True,
+                    include_rag=include_rag and bool(rag_configs),
                     return_rag_metadata=self.cache_rag_results,
                 )
-            elif role == "user":
+            else:
                 result = await self.prompt_builder.render_inline_user_prompt(
                     content,
                     params=params,
                     rag_configs=rag_configs,
-                    include_rag=True,
+                    include_rag=include_rag and bool(rag_configs),
                     return_rag_metadata=self.cache_rag_results,
                 )
-            else:
-                # For assistant role, just use content as-is
-                result = None
 
             if result:
                 content = result.content

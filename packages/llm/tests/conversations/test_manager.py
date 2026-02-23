@@ -1,5 +1,6 @@
 """Test ConversationManager functionality."""
 
+import re
 import pytest
 from pathlib import Path
 import tempfile
@@ -450,4 +451,48 @@ class TestConversationManager:
 
         with pytest.raises(ValueError, match="Either content or prompt_name"):
             await manager.add_message(role="user")
+
+    @pytest.mark.asyncio
+    async def test_inline_content_renders_template_variables(self, test_components):
+        """Test that inline content with template variables is rendered.
+
+        Inline system prompts containing {{current_date}} etc. must go
+        through the TemplateRenderer even when no rag_configs are present.
+        """
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+        )
+
+        await manager.add_message(
+            role="system",
+            content="Today is {{current_date}}. You are helpful.",
+        )
+
+        history = await manager.get_history()
+        assert len(history) == 1
+        system_msg = history[0].content
+        # Template variable should be replaced with an actual date
+        assert "{{current_date}}" not in system_msg
+        assert re.search(r"\d{4}-\d{2}-\d{2}", system_msg)
+
+    @pytest.mark.asyncio
+    async def test_inline_user_content_renders_template_variables(self, test_components):
+        """Test that inline user content with template variables is rendered."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+        )
+
+        await manager.add_message(
+            role="user",
+            content="What day of the week is {{current_date}}?",
+        )
+
+        history = await manager.get_history()
+        user_msg = history[0].content
+        assert "{{current_date}}" not in user_msg
+        assert re.search(r"\d{4}-\d{2}-\d{2}", user_msg)
 

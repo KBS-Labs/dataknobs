@@ -630,6 +630,38 @@ class ConversationStorage(ABC):
         """
         pass
 
+    @abstractmethod
+    async def search_conversations(
+        self,
+        content_contains: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        filter_metadata: Dict[str, Any] | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        sort_by: str = "updated_at",
+        sort_order: str = "desc",
+    ) -> List[ConversationState]:
+        """Search conversations with content, time range, and metadata filters.
+
+        Args:
+            content_contains: Case-insensitive substring to search for in
+                message content across the conversation tree.
+            created_after: Only include conversations created at or after this
+                time.
+            created_before: Only include conversations created at or before
+                this time.
+            filter_metadata: Key-value metadata filters (exact match).
+            limit: Maximum number of results.
+            offset: Number of results to skip (for pagination).
+            sort_by: Field name to sort by (default: "updated_at").
+            sort_order: Sort direction, "asc" or "desc" (default: "desc").
+
+        Returns:
+            List of matching conversation states.
+        """
+        pass
+
 
 class DataknobsConversationStorage(ConversationStorage):
     """Conversation storage using dataknobs_data backends.
@@ -869,3 +901,90 @@ class DataknobsConversationStorage(ConversationStorage):
 
         except Exception as e:
             raise StorageError(f"Failed to list conversations: {e}") from e
+
+    async def search_conversations(
+        self,
+        content_contains: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        filter_metadata: Dict[str, Any] | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        sort_by: str = "updated_at",
+        sort_order: str = "desc",
+    ) -> List[ConversationState]:
+        """Search conversations with content, time range, and metadata filters."""
+        try:
+            try:
+                from dataknobs_data.query import Query
+            except ImportError:
+                raise StorageError(
+                    "dataknobs_data package not available. "
+                    "Install it to use DataknobsConversationStorage."
+                ) from None
+
+            # Build query with time range and metadata filters
+            # Fetch a larger set when content filtering will be applied
+            # post-query, since content filtering reduces the result count.
+            fetch_limit = limit + offset if content_contains is None else 0
+            query = Query()
+            if fetch_limit:
+                query.limit(fetch_limit)
+
+            if created_after:
+                query.filter("created_at", ">=", created_after.isoformat())
+            if created_before:
+                query.filter("created_at", "<=", created_before.isoformat())
+
+            if filter_metadata:
+                for key, value in filter_metadata.items():
+                    query.filter(f"metadata.{key}", "=", value)
+
+            query.sort_by(sort_by, sort_order)
+
+            results = await self.backend.search(query)
+            states = [self._record_to_state(record) for record in results]
+
+            # Post-query content filtering: walk each conversation's message
+            # tree and check if any message content matches.
+            if content_contains:
+                needle = content_contains.lower()
+                filtered: List[ConversationState] = []
+                for state in states:
+                    if self._conversation_contains_text(state, needle):
+                        filtered.append(state)
+                states = filtered
+
+            # Apply offset/limit after content filtering
+            if content_contains:
+                states = states[offset:offset + limit]
+
+            return states
+
+        except StorageError:
+            raise
+        except Exception as e:
+            raise StorageError(f"Failed to search conversations: {e}") from e
+
+    @staticmethod
+    def _conversation_contains_text(
+        state: ConversationState, needle: str
+    ) -> bool:
+        """Check if any message in the conversation tree contains the text.
+
+        Args:
+            state: Conversation state with message tree.
+            needle: Lowercase search string to look for.
+
+        Returns:
+            True if any message content contains the needle.
+        """
+        all_nodes = state.message_tree.find_nodes(
+            lambda n: True, traversal="bfs"  # noqa: ARG005
+        )
+        for tree_node in all_nodes:
+            if isinstance(tree_node.data, ConversationNode):
+                content = tree_node.data.message.content
+                if content and needle in content.lower():
+                    return True
+        return False

@@ -845,3 +845,225 @@ class TestDataknobsConversationStorage:
 
         loaded = await storage.load_conversation("nonexistent")
         assert loaded is None
+
+    async def test_search_by_content(self):
+        """Test searching conversations by message content."""
+        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_llm.conversations import DataknobsConversationStorage
+
+        backend = AsyncMemoryDatabase()
+        storage = DataknobsConversationStorage(backend)
+
+        # Conversation with "python" in content
+        root1 = ConversationNode(
+            message=LLMMessage(role="system", content="System"), node_id=""
+        )
+        tree1 = Tree(root1)
+        user1 = ConversationNode(
+            message=LLMMessage(role="user", content="Tell me about Python"),
+            node_id="0",
+        )
+        tree1.add_child(Tree(user1))
+        state1 = ConversationState(
+            conversation_id="conv-python",
+            message_tree=tree1,
+            current_node_id="0",
+            metadata={"bot_id": "test"},
+        )
+        await storage.save_conversation(state1)
+
+        # Conversation without "python"
+        root2 = ConversationNode(
+            message=LLMMessage(role="system", content="System"), node_id=""
+        )
+        tree2 = Tree(root2)
+        user2 = ConversationNode(
+            message=LLMMessage(role="user", content="Tell me about JavaScript"),
+            node_id="0",
+        )
+        tree2.add_child(Tree(user2))
+        state2 = ConversationState(
+            conversation_id="conv-js",
+            message_tree=tree2,
+            current_node_id="0",
+            metadata={"bot_id": "test"},
+        )
+        await storage.save_conversation(state2)
+
+        # Search for "python" (case-insensitive)
+        results = await storage.search_conversations(content_contains="python")
+        assert len(results) == 1
+        assert results[0].conversation_id == "conv-python"
+
+        # Search for "PYTHON" (case-insensitive)
+        results = await storage.search_conversations(content_contains="PYTHON")
+        assert len(results) == 1
+
+        # Search for "tell me" should match both
+        results = await storage.search_conversations(content_contains="tell me")
+        assert len(results) == 2
+
+    async def test_search_by_time_range(self):
+        """Test searching conversations by created_after and created_before."""
+        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_llm.conversations import DataknobsConversationStorage
+
+        backend = AsyncMemoryDatabase()
+        storage = DataknobsConversationStorage(backend)
+
+        # Create conversations at different times
+        for i, date_str in enumerate([
+            "2026-01-01T00:00:00",
+            "2026-02-01T00:00:00",
+            "2026-03-01T00:00:00",
+        ]):
+            root = ConversationNode(
+                message=LLMMessage(role="system", content="System"), node_id=""
+            )
+            tree = Tree(root)
+            dt = datetime.fromisoformat(date_str)
+            state = ConversationState(
+                conversation_id=f"conv-time-{i}",
+                message_tree=tree,
+                created_at=dt,
+                updated_at=dt,
+            )
+            await storage.save_conversation(state)
+
+        # Search after Feb 1
+        after = datetime.fromisoformat("2026-02-01T00:00:00")
+        results = await storage.search_conversations(created_after=after)
+        assert len(results) >= 2  # Feb and Mar
+
+        # Search before Feb 1
+        before = datetime.fromisoformat("2026-01-31T23:59:59")
+        results = await storage.search_conversations(created_before=before)
+        assert len(results) >= 1  # Jan
+
+        # Search with both bounds
+        results = await storage.search_conversations(
+            created_after=datetime.fromisoformat("2026-01-15T00:00:00"),
+            created_before=datetime.fromisoformat("2026-02-15T00:00:00"),
+        )
+        assert len(results) >= 1  # Feb only
+
+    async def test_search_by_metadata(self):
+        """Test searching conversations by metadata filters."""
+        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_llm.conversations import DataknobsConversationStorage
+
+        backend = AsyncMemoryDatabase()
+        storage = DataknobsConversationStorage(backend)
+
+        for bot_id in ["bot-a", "bot-a", "bot-b"]:
+            root = ConversationNode(
+                message=LLMMessage(role="system", content="System"), node_id=""
+            )
+            tree = Tree(root)
+            state = ConversationState(
+                conversation_id=f"conv-meta-{bot_id}-{id(root)}",
+                message_tree=tree,
+                metadata={"bot_id": bot_id, "model": "llama3.2"},
+            )
+            await storage.save_conversation(state)
+
+        results = await storage.search_conversations(
+            filter_metadata={"bot_id": "bot-a"}
+        )
+        assert len(results) == 2
+
+        results = await storage.search_conversations(
+            filter_metadata={"bot_id": "bot-b"}
+        )
+        assert len(results) == 1
+
+    async def test_search_combined_filters(self):
+        """Test searching with content + metadata filters combined."""
+        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_llm.conversations import DataknobsConversationStorage
+
+        backend = AsyncMemoryDatabase()
+        storage = DataknobsConversationStorage(backend)
+
+        # Conv 1: bot-a, mentions "weather"
+        root1 = ConversationNode(
+            message=LLMMessage(role="system", content="System"), node_id=""
+        )
+        tree1 = Tree(root1)
+        tree1.add_child(Tree(ConversationNode(
+            message=LLMMessage(role="user", content="What is the weather?"),
+            node_id="0",
+        )))
+        await storage.save_conversation(ConversationState(
+            conversation_id="conv-combined-1",
+            message_tree=tree1,
+            metadata={"bot_id": "bot-a"},
+        ))
+
+        # Conv 2: bot-b, mentions "weather"
+        root2 = ConversationNode(
+            message=LLMMessage(role="system", content="System"), node_id=""
+        )
+        tree2 = Tree(root2)
+        tree2.add_child(Tree(ConversationNode(
+            message=LLMMessage(role="user", content="Weather forecast please"),
+            node_id="0",
+        )))
+        await storage.save_conversation(ConversationState(
+            conversation_id="conv-combined-2",
+            message_tree=tree2,
+            metadata={"bot_id": "bot-b"},
+        ))
+
+        # Conv 3: bot-a, no "weather"
+        root3 = ConversationNode(
+            message=LLMMessage(role="system", content="System"), node_id=""
+        )
+        tree3 = Tree(root3)
+        tree3.add_child(Tree(ConversationNode(
+            message=LLMMessage(role="user", content="Hello there"),
+            node_id="0",
+        )))
+        await storage.save_conversation(ConversationState(
+            conversation_id="conv-combined-3",
+            message_tree=tree3,
+            metadata={"bot_id": "bot-a"},
+        ))
+
+        # Search: content "weather" + bot-a
+        results = await storage.search_conversations(
+            content_contains="weather",
+            filter_metadata={"bot_id": "bot-a"},
+        )
+        assert len(results) == 1
+        assert results[0].conversation_id == "conv-combined-1"
+
+    async def test_search_empty_results(self):
+        """Test search returning no results."""
+        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_llm.conversations import DataknobsConversationStorage
+
+        backend = AsyncMemoryDatabase()
+        storage = DataknobsConversationStorage(backend)
+
+        # Create one conversation
+        root = ConversationNode(
+            message=LLMMessage(role="system", content="System"), node_id=""
+        )
+        tree = Tree(root)
+        await storage.save_conversation(ConversationState(
+            conversation_id="conv-only",
+            message_tree=tree,
+        ))
+
+        # Search for non-existent content
+        results = await storage.search_conversations(
+            content_contains="nonexistent-content-xyz"
+        )
+        assert len(results) == 0
+
+        # Search with non-matching metadata
+        results = await storage.search_conversations(
+            filter_metadata={"bot_id": "no-such-bot"}
+        )
+        assert len(results) == 0
