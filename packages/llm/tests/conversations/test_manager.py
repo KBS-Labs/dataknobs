@@ -496,3 +496,62 @@ class TestConversationManager:
         assert "{{current_date}}" not in user_msg
         assert re.search(r"\d{4}-\d{2}-\d{2}", user_msg)
 
+    @pytest.mark.asyncio
+    async def test_node_metadata_includes_provider(self, test_components):
+        """Test that assistant node metadata includes provider from LLM config."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+        )
+        await manager.add_message(role="user", content="Hello")
+        await manager.complete()
+
+        current_node = manager.state.get_current_node()
+        assert current_node.data.metadata["provider"] == "echo"
+        assert current_node.data.metadata["model"] == "echo-model"
+
+    @pytest.mark.asyncio
+    async def test_node_metadata_includes_tool_calls(self, test_components):
+        """Test that assistant node metadata captures tool calls when present."""
+        from dataknobs_llm.testing import tool_call_response
+
+        # Set up EchoProvider with a tool call response
+        llm = test_components["llm"]
+        response_with_tools = tool_call_response(
+            tool_name="calculator",
+            arguments={"expression": "2+2"},
+            tool_id="call_123",
+        )
+        llm.set_responses([response_with_tools])
+
+        manager = await ConversationManager.create(
+            llm=llm,
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+        )
+        await manager.add_message(role="user", content="Calculate 2+2")
+        await manager.complete()
+
+        current_node = manager.state.get_current_node()
+        assert "tool_calls" in current_node.data.metadata
+        tool_calls = current_node.data.metadata["tool_calls"]
+        assert len(tool_calls) == 1
+        assert tool_calls[0]["name"] == "calculator"
+        assert tool_calls[0]["parameters"] == {"expression": "2+2"}
+        assert tool_calls[0]["id"] == "call_123"
+
+    @pytest.mark.asyncio
+    async def test_node_metadata_omits_tool_calls_when_none(self, test_components):
+        """Test that tool_calls is not in metadata for normal responses."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+        )
+        await manager.add_message(role="user", content="Hello")
+        await manager.complete()
+
+        current_node = manager.state.get_current_node()
+        assert "tool_calls" not in current_node.data.metadata
+

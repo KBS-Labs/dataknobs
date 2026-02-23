@@ -662,8 +662,16 @@ class ConversationManager:
         assistant_metadata.update({
             "usage": response.usage,
             "model": response.model,
+            "provider": self.llm.config.provider,
             "finish_reason": response.finish_reason,
         })
+
+        # Capture tool calls if present
+        if response.tool_calls:
+            assistant_metadata["tool_calls"] = [
+                {"name": tc.name, "parameters": tc.parameters, "id": tc.id}
+                for tc in response.tool_calls
+            ]
 
         # Track config overrides if they were applied
         if llm_config_overrides:
@@ -803,8 +811,16 @@ class ConversationManager:
         assistant_metadata.update({
             "usage": response.usage,
             "model": response.model,
+            "provider": self.llm.config.provider,
             "finish_reason": response.finish_reason,
         })
+
+        # Capture tool calls if present
+        if response.tool_calls:
+            assistant_metadata["tool_calls"] = [
+                {"name": tc.name, "parameters": tc.parameters, "id": tc.id}
+                for tc in response.tool_calls
+            ]
 
         # Track config overrides if they were applied
         if llm_config_overrides:

@@ -984,6 +984,9 @@ class DynaBot:
             metadata = {
                 "client_id": context.client_id,
                 "user_id": context.user_id,
+                "model": self.llm.config.model,
+                "provider": self.llm.config.provider,
+                "tools": self.tool_registry.get_tool_names(),
                 **context.session_metadata,
             }
 
