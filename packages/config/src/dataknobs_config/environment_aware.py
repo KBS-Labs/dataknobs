@@ -313,17 +313,40 @@ class EnvironmentAwareConfig:
                 resource_name = config["$resource"]
                 resource_type = config.get("type", "default")
 
-                # Get defaults from the reference (exclude markers)
+                # Get defaults from the reference (exclude markers and metadata)
                 defaults = {
                     k: v
                     for k, v in config.items()
-                    if k not in ("$resource", "type")
+                    if k not in ("$resource", "type", "$requires")
                 }
+                requires = config.get("$requires", [])
 
                 try:
                     resolved = self._environment.get_resource(
                         resource_type, resource_name, defaults
                     )
+
+                    # Validate $requires against capabilities metadata
+                    if requires and isinstance(resolved, dict):
+                        declared = resolved.get("capabilities")
+                        if declared is not None:
+                            missing = set(requires) - set(declared)
+                            if missing:
+                                from dataknobs_config.exceptions import (
+                                    ConfigError,
+                                )
+
+                                raise ConfigError(
+                                    f"Resource '{resource_name}' missing "
+                                    f"required capabilities: {sorted(missing)}. "
+                                    f"Declared: {declared}"
+                                )
+
+                    # Strip capabilities metadata from resolved config
+                    # (it's validation metadata, not a provider parameter)
+                    if isinstance(resolved, dict):
+                        resolved.pop("capabilities", None)
+
                     # Recursively resolve any nested references in the resolved config
                     return self._resolve_resource_refs(resolved)
                 except KeyError:

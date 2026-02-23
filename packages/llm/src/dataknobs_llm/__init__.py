@@ -38,6 +38,9 @@ from dataknobs_llm.execution.parallel import (
     TaskResult,
 )
 
+# Exceptions
+from dataknobs_llm.exceptions import ToolsNotSupportedError
+
 # Testing utilities (for test code)
 from dataknobs_llm.testing import (
     ErrorResponse,
@@ -84,6 +87,8 @@ __all__ = [
     "LLMTask",
     "DeterministicTask",
     "TaskResult",
+    # Exceptions
+    "ToolsNotSupportedError",
     # Testing utilities
     "ErrorResponse",
     "text_response",

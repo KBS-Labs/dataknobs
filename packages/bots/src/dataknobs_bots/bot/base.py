@@ -223,6 +223,26 @@ class DynaBot:
         llm = factory.create(llm_config)
         await llm.initialize()
 
+        # Validate capability requirements (Layer 2 — startup check)
+        from .validation import infer_capability_requirements
+
+        requirements = infer_capability_requirements(config)
+        if requirements:
+            capabilities = llm.get_capabilities()
+            capability_values = {cap.value for cap in capabilities}
+            missing = [r for r in requirements if r not in capability_values]
+            if missing:
+                from dataknobs_common.exceptions import ConfigurationError
+
+                model_name = llm_config.get("model", "unknown")
+                raise ConfigurationError(
+                    f"Bot requires capabilities {missing} but model "
+                    f"'{model_name}' provides "
+                    f"{sorted(capability_values)}. "
+                    f"Use a model that supports {missing} or "
+                    f"update the environment resource configuration."
+                )
+
         # Create conversation storage
         storage_config = config["conversation_storage"].copy()
 

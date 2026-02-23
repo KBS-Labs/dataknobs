@@ -430,7 +430,12 @@ class OllamaProvider(AsyncLLMProvider):
         ]
 
         # Most recent Ollama models support function calling
-        if any(model in self.config.model.lower() for model in ['llama3', 'mistral', 'mixtral', 'qwen']):
+        tool_capable_models = [
+            'llama3', 'mistral', 'mixtral', 'qwen',
+            'command-r', 'phi3', 'phi4', 'nemotron',
+            'firefunction', 'hermes',
+        ]
+        if any(model in self.config.model.lower() for model in tool_capable_models):
             capabilities.append(ModelCapability.FUNCTION_CALLING)
 
         if 'llava' in self.config.model.lower():
@@ -504,22 +509,17 @@ class OllamaProvider(AsyncLLMProvider):
                 import logging
                 logger = logging.getLogger(__name__)
 
-                # Handle tools not supported - retry without tools
+                # Handle tools not supported — raise explicit error
                 if response.status == 400 and "does not support tools" in error_text:
+                    from ...exceptions import ToolsNotSupportedError
                     model_name = runtime_config.model
-                    logger.warning(
-                        f"Model '{model_name}' does not support tools. "
-                        f"Continuing without tool support. "
-                        f"For tool support, use: llama3.1:8b, llama3.2:3b, mistral:7b, or qwen2.5:7b"
+                    raise ToolsNotSupportedError(
+                        model=model_name,
+                        suggestion=(
+                            "For tool support, use: llama3.1:8b, qwen3:8b, "
+                            "mistral:7b, or command-r:latest"
+                        ),
                     )
-                    # Retry without tools
-                    payload.pop('tools', None)
-                    async with self._session.post(f"{self.base_url}/api/chat", json=payload) as retry_response:
-                        if retry_response.status != 200:
-                            retry_error = await retry_response.text()
-                            logger.error(f"Ollama API error on retry (status {retry_response.status}): {retry_error}")
-                            retry_response.raise_for_status()
-                        data = await retry_response.json()
                 else:
                     logger.error(f"Ollama API error (status {response.status}): {error_text}")
                     logger.error(f"Request payload: {json.dumps(payload, indent=2)}")

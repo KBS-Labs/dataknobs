@@ -250,6 +250,16 @@ class BotRegistry:
         if self._validate_on_register and not skip_validation:
             validate_portability(config)
 
+        # Validate capability requirements if environment is available
+        if self._validate_on_register and self._environment and not skip_validation:
+            from .validation import validate_bot_capabilities
+
+            # Extract the bot section if config_key is set
+            bot_section = config.get(self._config_key, config) if self._config_key else config
+            cap_warnings = validate_bot_capabilities(bot_section, self._environment)
+            for warning in cap_warnings:
+                logger.warning("Bot %s: %s", bot_id, warning)
+
         # Store in backend
         registration = await self._backend.register(bot_id, config, status)
 

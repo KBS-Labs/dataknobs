@@ -3,6 +3,8 @@
 import logging
 from typing import Any
 
+from dataknobs_llm.exceptions import ToolsNotSupportedError
+from dataknobs_llm.llm.base import LLMResponse
 from dataknobs_llm.tools import ToolExecutionContext
 
 from .base import ReasoningStrategy
@@ -151,7 +153,25 @@ class ReActReasoning(ReasoningStrategy):
             )
 
             # Generate response with tools
-            response = await manager.complete(tools=tools, **kwargs)
+            try:
+                response = await manager.complete(tools=tools, **kwargs)
+            except ToolsNotSupportedError as e:
+                logger.error(
+                    "ReAct: Model '%s' does not support tools — "
+                    "returning graceful response to user",
+                    e.model,
+                    extra={"conversation_id": manager.conversation_id},
+                )
+                return LLMResponse(
+                    content=(
+                        "I'm configured to use tools for this task, but my "
+                        "current language model doesn't support tool calling. "
+                        "Please contact the administrator to update the model "
+                        "configuration."
+                    ),
+                    model=e.model,
+                    finish_reason="error",
+                )
 
             # Check if we have tool calls
             if not hasattr(response, "tool_calls") or not response.tool_calls:

@@ -154,6 +154,12 @@ class ModelCapability(Enum):
     STREAMING = "streaming"
 
 
+# String-to-enum mapping for config-driven capability references.
+CAPABILITY_NAMES: dict[str, ModelCapability] = {
+    cap.value: cap for cap in ModelCapability
+}
+
+
 @dataclass
 class ToolCall:
     """Represents a tool call from the LLM.

@@ -19,6 +19,7 @@ __all__ = [
     "RateLimitError",
     "SchemaVersionError",
     "StorageError",
+    "ToolsNotSupportedError",
     "VersioningError",
 ]
 
@@ -39,3 +40,15 @@ class SchemaVersionError(OperationError):
     """Exception raised for schema version incompatibilities."""
 
     pass
+
+
+class ToolsNotSupportedError(OperationError):
+    """Model does not support tool/function calling."""
+
+    def __init__(self, model: str, suggestion: str = "") -> None:
+        self.model = model
+        self.suggestion = suggestion
+        msg = f"Model '{model}' does not support tools."
+        if suggestion:
+            msg = f"{msg} {suggestion}"
+        super().__init__(msg)
