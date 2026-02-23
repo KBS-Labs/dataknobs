@@ -109,6 +109,10 @@ ${BOLD}${BLUE}Detailed Commands:${NC}
     cleanall         Deep clean (includes .venv)
     reset            Reset to clean state
     
+  ${BOLD}Dependencies:${NC}
+    deps [ref]       Show dependency changes vs a git ref (default: main)
+    deps --staged    Show dependency changes staged for commit
+
   ${BOLD}Release Management:${NC}
     release          Interactive release process
     release-check    Check what changed since last release
@@ -392,6 +396,12 @@ main() {
                 uv sync --all-packages
             ;;
             
+        # Dependencies
+        deps|dep|dep-diff)
+            run_command "Comparing uv.lock dependencies" \
+                python3 "$SCRIPT_DIR/dep-diff.py" "$@"
+            ;;
+
         # Release Management
         release)
             run_command "Interactive release process" \
