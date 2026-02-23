@@ -123,6 +123,18 @@ dk logs            # Show all service logs
 dk logs postgres   # Show specific service logs
 ```
 
+### Dependencies
+
+Compare dependency versions across branches:
+
+```bash
+dk deps            # Show dependency changes vs main
+dk deps <ref>      # Compare vs any git ref (branch, tag, commit)
+dk deps --staged   # Compare staged uv.lock vs HEAD
+```
+
+See [Dependency Updates](dependency-updates.md) for the full update and review workflow.
+
 ### Cleanup
 
 Clean artifacts and reset state:

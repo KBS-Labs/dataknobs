@@ -18,8 +18,7 @@ rm -rf site/
 
 # Build documentation
 echo "Building documentation..."
-# Suppress DeprecationWarning from asttokens (incompatible with astroid 4.x)
-PYTHONWARNINGS="ignore::DeprecationWarning:asttokens" mkdocs build --strict
+NO_MKDOCS_2_WARNING=1 mkdocs build --strict
 
 # Check if build was successful
 if [ -d "site" ]; then

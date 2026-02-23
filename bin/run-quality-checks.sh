@@ -389,7 +389,7 @@ fi
 # Build documentation (PR mode only)
 if [ "$PR_MODE" = "yes" ]; then
     print_status "Building documentation (checking for errors)..."
-    if env PYTHONWARNINGS="ignore::DeprecationWarning:asttokens" uv run mkdocs build --strict > "$ARTIFACTS_DIR/docs-build.log" 2>&1; then
+    if env NO_MKDOCS_2_WARNING=1 uv run mkdocs build --strict > "$ARTIFACTS_DIR/docs-build.log" 2>&1; then
         print_success "Documentation builds without errors or warnings"
     else
         DOCS_STATUS=$?

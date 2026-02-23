@@ -109,6 +109,10 @@ ${BOLD}${BLUE}Detailed Commands:${NC}
     cleanall         Deep clean (includes .venv)
     reset            Reset to clean state
     
+  ${BOLD}Dependencies:${NC}
+    deps [ref]       Show dependency changes vs a git ref (default: main)
+    deps --staged    Show dependency changes staged for commit
+
   ${BOLD}Release Management:${NC}
     release          Interactive release process
     release-check    Check what changed since last release
@@ -316,16 +320,16 @@ main() {
         # Documentation
         docs|doc|serve)
             run_command "Serving documentation (live reload)" \
-                env PYTHONWARNINGS="ignore::DeprecationWarning:asttokens" uv run mkdocs serve
+                env NO_MKDOCS_2_WARNING=1 uv run mkdocs serve
             ;;
         docs-build|build-docs|docbuild)
             run_command "Building documentation" \
-                env PYTHONWARNINGS="ignore::DeprecationWarning:asttokens" uv run mkdocs build
+                env NO_MKDOCS_2_WARNING=1 uv run mkdocs build
             echo -e "${GREEN}✓${NC} Documentation built in site/ directory"
             ;;
         docs-check|doccheck|check-docs)
             echo -e "${BLUE}Checking documentation...${NC}"
-            if env PYTHONWARNINGS="ignore::DeprecationWarning:asttokens" uv run mkdocs build --strict 2>&1 | grep -E "WARNING|ERROR"; then
+            if env NO_MKDOCS_2_WARNING=1 uv run mkdocs build --strict 2>&1 | grep -E "WARNING|ERROR"; then
                 echo -e "${YELLOW}⚠${NC} Documentation has warnings or errors"
                 echo -e "Run ${CYAN}dk docs${NC} to see them in context"
             else
@@ -392,6 +396,12 @@ main() {
                 uv sync --all-packages
             ;;
             
+        # Dependencies
+        deps|dep|dep-diff)
+            run_command "Comparing uv.lock dependencies" \
+                python3 "$SCRIPT_DIR/dep-diff.py" "$@"
+            ;;
+
         # Release Management
         release)
             run_command "Interactive release process" \

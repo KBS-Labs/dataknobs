@@ -71,7 +71,8 @@ If you're new to Dataknobs development:
 
 ### Operations
 - **[CI/CD Pipeline](ci-cd.md)** - Continuous integration and deployment processes
-- **[Release Process](release-process.md)** - 📦 **Streamlined release workflow** with automated tools and comprehensive FAQ
+- **[Dependency Updates](dependency-updates.md)** - Automated weekly updates and the review process
+- **[Release Process](release-process.md)** - Streamlined release workflow with automated tools and comprehensive FAQ
 
 ## Project Structure
 

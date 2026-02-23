@@ -163,6 +163,8 @@ jobs:
     
     - name: Build documentation
       run: mkdocs build --strict
+      env:
+        NO_MKDOCS_2_WARNING: "1"
     
     - name: Upload documentation artifacts
       if: always()
