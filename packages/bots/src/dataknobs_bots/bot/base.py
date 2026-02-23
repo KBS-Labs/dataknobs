@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from typing_extensions import Self
 
+from dataknobs_llm import LLMStreamResponse
 from dataknobs_llm.conversations import ConversationManager, DataknobsConversationStorage
 from dataknobs_llm.llm import AsyncLLMProvider
 from dataknobs_llm.prompts import AsyncPromptBuilder
@@ -526,7 +527,6 @@ class DynaBot:
         context: BotContext,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        stream: bool = False,
         rag_query: str | None = None,
         llm_config_overrides: dict[str, Any] | None = None,
         **kwargs: Any,
@@ -538,7 +538,6 @@ class DynaBot:
             context: Bot execution context
             temperature: Optional temperature override
             max_tokens: Optional max tokens override
-            stream: Whether to stream the response
             rag_query: Optional explicit query for knowledge base retrieval.
                       If provided, this is used instead of the message for RAG.
                       Useful when the message contains literal text to analyze
@@ -634,11 +633,12 @@ class DynaBot:
         rag_query: str | None = None,
         llm_config_overrides: dict[str, Any] | None = None,
         **kwargs: Any,
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[LLMStreamResponse, None]:
         """Stream chat response token by token.
 
-        Similar to chat() but yields response chunks as they are generated,
-        providing better UX for interactive applications.
+        Similar to chat() but yields ``LLMStreamResponse`` objects as they are
+        generated, providing both the text delta and rich metadata (usage,
+        finish_reason, is_final) for each chunk.
 
         Args:
             message: User message to process
@@ -653,7 +653,8 @@ class DynaBot:
             **kwargs: Additional arguments passed to LLM
 
         Yields:
-            Response text chunks as strings
+            LLMStreamResponse objects with ``.delta`` (text), ``.is_final``,
+            ``.usage``, and ``.finish_reason`` attributes.
 
         Example:
             ```python
@@ -665,13 +666,13 @@ class DynaBot:
 
             # Stream and display in real-time
             async for chunk in bot.stream_chat("Explain quantum computing", context):
-                print(chunk, end="", flush=True)
+                print(chunk.delta, end="", flush=True)
             print()  # Newline after streaming
 
             # Accumulate response
             full_response = ""
             async for chunk in bot.stream_chat("Hello!", context):
-                full_response += chunk
+                full_response += chunk.delta
 
             # With LLM config overrides
             async for chunk in bot.stream_chat(
@@ -679,7 +680,7 @@ class DynaBot:
                 context,
                 llm_config_overrides={"model": "gpt-4-turbo"}
             ):
-                print(chunk, end="", flush=True)
+                print(chunk.delta, end="", flush=True)
             ```
 
         Note:
@@ -716,7 +717,7 @@ class DynaBot:
                 **kwargs,
             ):
                 full_response_chunks.append(chunk.delta)
-                yield chunk.delta
+                yield chunk
         except Exception as e:
             streaming_error = e
             # Call on_error middleware
