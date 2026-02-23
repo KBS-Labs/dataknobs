@@ -80,6 +80,32 @@ database:
   pool_size: 10  # Merged with resolved config
 ```
 
+### 3. Capability Requirements
+
+Resource references can declare required capabilities using `$requires`:
+
+```yaml
+llm:
+  $resource: default
+  type: llm_providers
+  $requires: [function_calling]   # Validated against resource capabilities
+```
+
+If the resolved resource declares `capabilities` metadata, the system validates that all requirements are met. Missing capabilities raise a `ConfigError` at resolution time.
+
+Environment configs declare resource capabilities as metadata:
+
+```yaml
+resources:
+  llm_providers:
+    default:
+      provider: ollama
+      model: qwen3:8b
+      capabilities: [chat, function_calling, streaming]
+```
+
+The `capabilities` field is stripped during resolution — it's validation metadata, not a provider parameter. The `$requires` field is also stripped and not passed through.
+
 ### 3. Environment Detection
 
 The system automatically detects the current environment via:
@@ -153,6 +179,7 @@ resources:
       provider: openai
       model: gpt-4
       api_key: ${OPENAI_API_KEY}
+      capabilities: [chat, function_calling, streaming]
 ```
 
 ### EnvironmentAwareConfig
@@ -190,7 +217,8 @@ bot:
   llm:
     $resource: default
     type: llm_providers
-    temperature: 0.7  # Merged into resolved config
+    $requires: [function_calling]  # Optional: require specific capabilities
+    temperature: 0.7               # Merged into resolved config
 
   conversation_storage:
     $resource: conversations
@@ -414,21 +442,23 @@ resources:
 
 ### 4. Separate Behavior from Infrastructure
 
-Put behavioral settings in app configs, infrastructure in environment configs:
+Put behavioral settings and capability requirements in app configs, infrastructure and capability metadata in environment configs:
 
 ```yaml
 # App config (portable)
 llm:
   $resource: default
   type: llm_providers
-  temperature: 0.7     # Behavioral
-  max_tokens: 2000     # Behavioral
+  $requires: [function_calling]  # What the app needs
+  temperature: 0.7               # Behavioral
+  max_tokens: 2000               # Behavioral
 
 # Environment config (per-environment)
 llm_providers:
   default:
-    provider: openai   # Infrastructure
-    api_key: ${KEY}    # Infrastructure
+    provider: openai              # Infrastructure
+    api_key: ${KEY}               # Infrastructure
+    capabilities: [chat, function_calling, streaming]  # What it provides
 ```
 
 ## API Reference

@@ -141,6 +141,7 @@ export DATAKNOBS_ENVIRONMENT=production
 llm:
   $resource: default        # Logical resource name
   type: llm_providers       # Resource type
+  $requires: [function_calling]  # Required capabilities (optional)
   temperature: 0.7          # Merged into resolved config
 ```
 
@@ -153,9 +154,43 @@ llm:
 | `vector_stores` | Vector store backends (memory, FAISS, pgvector) |
 | `embedding_providers` | Embedding providers |
 
+### Capability Requirements (`$requires`)
+
+Bot configs can declare required capabilities using `$requires`:
+
+```yaml
+llm:
+  $resource: default
+  type: llm_providers
+  $requires: [function_calling]
+```
+
+If the resolved resource declares `capabilities` metadata, the system validates that all requirements are met. Missing capabilities raise a `ConfigError` at resolution time.
+
+Requirements are also **inferred** from bot structure — for example, a bot with `reasoning.strategy: react` and `tools` automatically requires `function_calling`. Explicit `$requires` is additive.
+
+### Capability Metadata on Resources
+
+Environment configs can declare what capabilities each resource provides:
+
+```yaml
+resources:
+  llm_providers:
+    default:
+      provider: ollama
+      model: qwen3:8b
+      capabilities: [chat, function_calling, streaming]
+    fast:
+      provider: ollama
+      model: gemma3:4b
+      capabilities: [chat, streaming]
+```
+
+The `capabilities` field is stripped during resolution — it's validation metadata, not passed to the provider constructor.
+
 ### Config Merging
 
-Additional fields in a resource reference are merged with the resolved config:
+Additional fields in a resource reference (except `$resource`, `type`, and `$requires`) are merged with the resolved config:
 
 ```yaml
 # In bot config
@@ -274,11 +309,13 @@ resources:
       api_key: ${OPENAI_API_KEY}
       temperature: 0.7
       max_tokens: 2000
+      capabilities: [chat, function_calling, streaming]
 
     fast:
       provider: openai
       model: gpt-3.5-turbo
       api_key: ${OPENAI_API_KEY}
+      capabilities: [chat, streaming]
 
   databases:
     default:
