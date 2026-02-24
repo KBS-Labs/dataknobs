@@ -172,6 +172,111 @@ class TestReasoningFactory:
         assert strategy._strict_validation is True
 
 
+class TestReActDuplicateDetection:
+    """Tests for ReAct duplicate tool call detection."""
+
+    @staticmethod
+    def _make_calculator_tool() -> "Tool":
+        """Create a simple calculator tool for testing."""
+        from typing import Any
+        from dataknobs_llm.tools import Tool
+
+        class CalculatorTool(Tool):
+            def __init__(self) -> None:
+                super().__init__(
+                    name="calculator",
+                    description="Performs arithmetic",
+                )
+
+            @property
+            def schema(self) -> dict[str, Any]:
+                return {
+                    "type": "object",
+                    "properties": {
+                        "expression": {"type": "string"},
+                    },
+                }
+
+            async def execute(self, **kwargs: Any) -> str:
+                return "42"
+
+        return CalculatorTool()
+
+    @pytest.mark.asyncio
+    async def test_duplicate_tool_calls_break_loop(self):
+        """Test that repeated identical tool calls break the ReAct loop early."""
+        from dataknobs_llm.testing import text_response, tool_call_response
+
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "reasoning": {
+                "strategy": "react",
+                "max_iterations": 5,
+                "store_trace": True,
+            },
+        }
+
+        bot = await DynaBot.from_config(config)
+        bot.tool_registry.register_tool(self._make_calculator_tool())
+        context = BotContext(
+            conversation_id="conv-react-dup", client_id="test-client"
+        )
+
+        # Script the echo provider: return the same tool call twice,
+        # then a final text response (for the post-loop completion)
+        bot.llm.set_responses([
+            tool_call_response("calculator", {"expression": "247 * 39"}),
+            tool_call_response("calculator", {"expression": "247 * 39"}),
+            text_response("The answer is 9633"),
+        ])
+
+        response = await bot.chat("What is 247 * 39?", context)
+        assert response is not None
+        assert "9633" in response
+
+        # The loop should have broken after detecting duplicates at iteration 2,
+        # NOT run all 5 iterations. Verify via call count:
+        # 1st tool_call_response + 2nd tool_call_response (duplicate detected)
+        # + final text_response = 3 calls total
+        assert bot.llm.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_different_tool_calls_do_not_trigger_detection(self):
+        """Test that different tool calls across iterations proceed normally."""
+        from dataknobs_llm.testing import text_response, tool_call_response
+
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "reasoning": {
+                "strategy": "react",
+                "max_iterations": 5,
+            },
+        }
+
+        bot = await DynaBot.from_config(config)
+        bot.tool_registry.register_tool(self._make_calculator_tool())
+        context = BotContext(
+            conversation_id="conv-react-diff", client_id="test-client"
+        )
+
+        # Script different tool calls each iteration, then a final text response
+        bot.llm.set_responses([
+            tool_call_response("calculator", {"expression": "247 * 39"}),
+            tool_call_response("calculator", {"expression": "9633 / 3"}),
+            text_response("The final answer is 3211"),
+        ])
+
+        response = await bot.chat("Calculate 247*39 then divide by 3", context)
+        assert response is not None
+        assert "3211" in response
+
+        # Both tool calls executed + final response = 3 calls
+        # (no early break due to different parameters)
+        assert bot.llm.call_count == 3
+
+
 class TestReasoningIntegration:
     """Integration tests for reasoning with bots."""
 

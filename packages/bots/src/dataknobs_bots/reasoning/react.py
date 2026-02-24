@@ -1,5 +1,6 @@
 """ReAct (Reasoning + Acting) reasoning strategy."""
 
+import json
 import logging
 from typing import Any
 
@@ -135,6 +136,9 @@ class ReActReasoning(ReasoningStrategy):
             },
         )
 
+        # Track previous iteration's tool calls for duplicate detection
+        prev_tool_calls: list[tuple[str, str]] | None = None
+
         # ReAct loop
         for iteration in range(self.max_iterations):
             iteration_trace = {
@@ -203,6 +207,32 @@ class ReActReasoning(ReasoningStrategy):
                     "tools": [tc.name for tc in response.tool_calls],
                 },
             )
+
+            # Duplicate detection: compare (name, sorted params JSON)
+            # with previous iteration to avoid infinite loops
+            current_calls = [
+                (tc.name, json.dumps(tc.parameters, sort_keys=True))
+                for tc in response.tool_calls
+            ]
+
+            if prev_tool_calls is not None and current_calls == prev_tool_calls:
+                logger.warning(
+                    "ReAct: Duplicate tool calls detected, breaking loop",
+                    extra={
+                        "conversation_id": manager.conversation_id,
+                        "iteration": iteration + 1,
+                        "duplicate_calls": [tc.name for tc in response.tool_calls],
+                    },
+                )
+
+                if trace is not None:
+                    iteration_trace["status"] = "duplicate_tool_calls_detected"
+                    trace.append(iteration_trace)
+                    await self._store_trace(manager, trace)
+
+                break
+
+            prev_tool_calls = current_calls
 
             # Build execution context for tools that need it
             tool_context = ToolExecutionContext.from_manager(manager)
