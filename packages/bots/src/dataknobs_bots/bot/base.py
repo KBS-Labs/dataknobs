@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from types import TracebackType
@@ -15,11 +16,13 @@ from dataknobs_llm.llm import AsyncLLMProvider
 from dataknobs_llm.prompts import AsyncPromptBuilder
 from dataknobs_llm.tools import ToolRegistry
 
-from .context import BotContext
 from ..memory.base import Memory
+from .context import BotContext
 
 if TYPE_CHECKING:
     from dataknobs_config import EnvironmentAwareConfig, EnvironmentConfig
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_wizard_state(wizard_meta: dict[str, Any]) -> dict[str, Any]:
@@ -216,6 +219,7 @@ class DynaBot:
         from dataknobs_llm.llm import LLMProviderFactory
         from dataknobs_llm.prompts import AsyncPromptBuilder
         from dataknobs_llm.prompts.implementations import CompositePromptLibrary
+
         from ..memory import create_memory_from_config
 
         # Create LLM provider
@@ -305,8 +309,9 @@ class DynaBot:
         knowledge_base = None
         kb_config = config.get("knowledge_base", {})
         if kb_config.get("enabled"):
-            from ..knowledge import create_knowledge_base_from_config
             import logging
+
+            from ..knowledge import create_knowledge_base_from_config
             logger = logging.getLogger(__name__)
             logger.info(f"Initializing knowledge base with config: {kb_config.get('type', 'unknown')}")
             knowledge_base = await create_knowledge_base_from_config(kb_config)
@@ -907,25 +912,40 @@ class DynaBot:
         """
         # Close LLM provider
         if self.llm and hasattr(self.llm, 'close'):
-            await self.llm.close()
+            try:
+                await self.llm.close()
+            except Exception:
+                logger.exception("Error closing LLM provider")
 
         # Close conversation storage backend
         if self.conversation_storage and hasattr(self.conversation_storage, 'backend'):
             backend = self.conversation_storage.backend
             if backend and hasattr(backend, 'close'):
-                await backend.close()
+                try:
+                    await backend.close()
+                except Exception:
+                    logger.exception("Error closing conversation storage backend")
 
         # Close knowledge base (releases embedding provider HTTP sessions)
         if self.knowledge_base and hasattr(self.knowledge_base, 'close'):
-            await self.knowledge_base.close()
+            try:
+                await self.knowledge_base.close()
+            except Exception:
+                logger.exception("Error closing knowledge base")
 
         # Close reasoning strategy (releases extractor's LLM provider sessions)
         if self.reasoning_strategy and hasattr(self.reasoning_strategy, 'close'):
-            await self.reasoning_strategy.close()
+            try:
+                await self.reasoning_strategy.close()
+            except Exception:
+                logger.exception("Error closing reasoning strategy")
 
         # Close memory store
         if self.memory and hasattr(self.memory, 'close'):
-            await self.memory.close()
+            try:
+                await self.memory.close()
+            except Exception:
+                logger.exception("Error closing memory store")
 
     async def __aenter__(self) -> Self:
         """Async context manager entry.
@@ -977,9 +997,10 @@ class DynaBot:
             )
         except Exception:
             # Create new conversation with specified conversation_id
+            from dataknobs_structures.tree import Tree
+
             from dataknobs_llm.conversations import ConversationNode, ConversationState
             from dataknobs_llm.llm.base import LLMMessage
-            from dataknobs_structures.tree import Tree
 
             metadata = {
                 "client_id": context.client_id,

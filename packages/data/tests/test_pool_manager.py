@@ -270,6 +270,56 @@ class TestConnectionPoolManager:
         assert info["config_12345_loop_67890"]["config_hash"] == 12345
 
 
+class TestCleanupOnExit:
+    """Test _cleanup_on_exit behavior."""
+
+    def test_cleanup_no_pools(self):
+        """No-op when pool dict is empty."""
+        manager = ConnectionPoolManager[MockPool]()
+        assert manager.get_pool_count() == 0
+        # Should return immediately without error
+        manager._cleanup_on_exit()
+
+    def test_cleanup_with_running_loop_clears(self):
+        """When a running loop exists, clears pool references and warns."""
+
+        async def _run():
+            manager = ConnectionPoolManager[MockPool]()
+            config = MockPoolConfig(host="localhost", port=5432)
+
+            async def create_pool(cfg):
+                return MockPool()
+
+            await manager.get_pool(config, create_pool)
+            assert manager.get_pool_count() == 1
+
+            # Called from inside a running loop — should clear, not hang
+            manager._cleanup_on_exit()
+            assert manager.get_pool_count() == 0
+
+        asyncio.run(_run())
+
+    def test_cleanup_without_loop(self):
+        """When no running loop exists, creates temp loop and closes pools."""
+        manager = ConnectionPoolManager[MockPool]()
+
+        pool = MockPool()
+        pool.close = AsyncMock()
+
+        # Manually inject a pool entry so we don't need an async context
+        config = MockPoolConfig(host="localhost", port=5432)
+        loop_id = id(asyncio.new_event_loop())
+        config_hash = hash(config.to_hash_key())
+        manager._pools[(config_hash, loop_id)] = pool
+
+        assert manager.get_pool_count() == 1
+
+        # No running loop — should create temp loop and call close_all
+        manager._cleanup_on_exit()
+        assert manager.get_pool_count() == 0
+        pool.close.assert_called_once()
+
+
 class TestAsyncpgHelpers:
     """Test asyncpg helper functions."""
     
