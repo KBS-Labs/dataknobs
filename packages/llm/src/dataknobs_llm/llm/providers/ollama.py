@@ -357,8 +357,10 @@ class OllamaProvider(AsyncLLMProvider):
         """Initialize Ollama client."""
         try:
             import aiohttp
+            connector = aiohttp.TCPConnector(force_close=True)
             self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=self.config.timeout or 30.0)
+                connector=connector,
+                timeout=aiohttp.ClientTimeout(total=self.config.timeout or 30.0),
             )
 
             # Test connection and verify model availability
