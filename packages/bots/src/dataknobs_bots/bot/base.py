@@ -215,18 +215,39 @@ class DynaBot:
             bot = await DynaBot.from_config(config)
             ```
         """
-        from dataknobs_data.factory import AsyncDatabaseFactory
         from dataknobs_llm.llm import LLMProviderFactory
-        from dataknobs_llm.prompts import AsyncPromptBuilder
-        from dataknobs_llm.prompts.implementations import CompositePromptLibrary
-
-        from ..memory import create_memory_from_config
 
         # Create LLM provider
         llm_config = config["llm"]
         factory = LLMProviderFactory(is_async=True)
         llm = factory.create(llm_config)
         await llm.initialize()
+
+        # Everything below can fail; ensure the provider is closed on error
+        # so we don't leak aiohttp sessions or other resources.
+        try:
+            return await cls._build_from_config(config, llm, llm_config)
+        except Exception:
+            await llm.close()
+            raise
+
+    @classmethod
+    async def _build_from_config(
+        cls,
+        config: dict[str, Any],
+        llm: Any,
+        llm_config: dict[str, Any],
+    ) -> DynaBot:
+        """Build a DynaBot after the LLM provider is initialized.
+
+        Separated from from_config() so the caller can guarantee cleanup
+        of the LLM provider if anything here raises.
+        """
+        from dataknobs_data.factory import AsyncDatabaseFactory
+        from dataknobs_llm.prompts import AsyncPromptBuilder
+        from dataknobs_llm.prompts.implementations import CompositePromptLibrary
+
+        from ..memory import create_memory_from_config
 
         # Validate capability requirements (Layer 2 — startup check)
         from .validation import infer_capability_requirements
