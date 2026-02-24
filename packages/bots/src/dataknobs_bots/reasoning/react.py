@@ -329,19 +329,21 @@ class ReActReasoning(ReasoningStrategy):
                 iteration_trace["status"] = "continued"
                 trace.append(iteration_trace)
 
-        # Max iterations reached, generate final response without tools
-        logger.log(
-            log_level,
-            "ReAct: Max iterations reached, generating final response",
-            extra={
-                "conversation_id": manager.conversation_id,
-                "iterations_used": self.max_iterations,
-            },
-        )
+        else:
+            # for-else: only reached when the loop exhausts all iterations
+            # without a break (i.e. not triggered by duplicate detection)
+            logger.log(
+                log_level,
+                "ReAct: Max iterations reached, generating final response",
+                extra={
+                    "conversation_id": manager.conversation_id,
+                    "iterations_used": self.max_iterations,
+                },
+            )
 
-        if trace is not None:
-            trace.append({"status": "max_iterations_reached"})
-            await self._store_trace(manager, trace)
+            if trace is not None:
+                trace.append({"status": "max_iterations_reached"})
+                await self._store_trace(manager, trace)
 
         return await manager.complete(**kwargs)
 
@@ -353,16 +355,13 @@ class ReActReasoning(ReasoningStrategy):
             trace: Reasoning trace data
         """
         try:
-            # Get existing metadata
-            metadata = manager.conversation.metadata or {}
+            # Update in-memory metadata on the manager
+            manager.update_metadata({"reasoning_trace": trace})
 
-            # Add trace to metadata
-            metadata["reasoning_trace"] = trace
-
-            # Update conversation metadata
+            # Persist to storage
             await manager.storage.update_metadata(
                 conversation_id=manager.conversation_id,
-                metadata=metadata,
+                metadata=manager.metadata,
             )
 
             logger.debug(

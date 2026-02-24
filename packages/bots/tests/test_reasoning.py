@@ -172,8 +172,15 @@ class TestReasoningFactory:
         assert strategy._strict_validation is True
 
 
-class TestReActDuplicateDetection:
-    """Tests for ReAct duplicate tool call detection."""
+class TestReActLoopBehavior:
+    """Tests for ReAct loop exit paths and trace storage.
+
+    The ReAct loop has four exit paths, each producing distinct trace statuses:
+    1. No tool calls    → "completed" (returns directly)
+    2. Duplicate calls  → "duplicate_tool_calls_detected" (breaks loop)
+    3. Max iterations   → "max_iterations_reached" (loop exhausted)
+    4. Normal progress  → "continued" per iteration, "completed" on final
+    """
 
     @staticmethod
     def _make_calculator_tool() -> "Tool":
@@ -202,9 +209,59 @@ class TestReActDuplicateDetection:
 
         return CalculatorTool()
 
+    @staticmethod
+    async def _get_trace(bot: "DynaBot", conversation_id: str) -> list[dict]:
+        """Retrieve the stored reasoning trace from conversation metadata."""
+        conv = await bot.get_conversation(conversation_id)
+        assert conv is not None, "Conversation not found"
+        assert conv.metadata is not None, "Conversation metadata is empty"
+        trace = conv.metadata.get("reasoning_trace")
+        assert trace is not None, "reasoning_trace not in metadata"
+        return trace
+
+    # -- Exit path 1: No tool calls → "completed" ---
+
+    @pytest.mark.asyncio
+    async def test_no_tool_calls_trace_shows_completed(self):
+        """When the LLM returns no tool calls, trace has a single 'completed' step."""
+        from dataknobs_llm.testing import text_response
+
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "reasoning": {
+                "strategy": "react",
+                "max_iterations": 5,
+                "store_trace": True,
+            },
+        }
+
+        bot = await DynaBot.from_config(config)
+        bot.tool_registry.register_tool(self._make_calculator_tool())
+        context = BotContext(
+            conversation_id="conv-completed", client_id="test-client"
+        )
+
+        # LLM responds with text only (no tool calls) on the first iteration
+        bot.llm.set_responses([text_response("The answer is 42")])
+
+        response = await bot.chat("What is the answer?", context)
+        assert "42" in response
+
+        # Only 1 LLM call needed (no tool loop)
+        assert bot.llm.call_count == 1
+
+        trace = await self._get_trace(bot, "conv-completed")
+        assert len(trace) == 1
+        assert trace[0]["status"] == "completed"
+        assert trace[0]["iteration"] == 1
+        assert trace[0]["tool_calls"] == []
+
+    # -- Exit path 2: Duplicate tool calls → "duplicate_tool_calls_detected" ---
+
     @pytest.mark.asyncio
     async def test_duplicate_tool_calls_break_loop(self):
-        """Test that repeated identical tool calls break the ReAct loop early."""
+        """Repeated identical tool calls break the loop early."""
         from dataknobs_llm.testing import text_response, tool_call_response
 
         config = {
@@ -223,8 +280,7 @@ class TestReActDuplicateDetection:
             conversation_id="conv-react-dup", client_id="test-client"
         )
 
-        # Script the echo provider: return the same tool call twice,
-        # then a final text response (for the post-loop completion)
+        # Same tool call twice, then a final text response (post-loop)
         bot.llm.set_responses([
             tool_call_response("calculator", {"expression": "247 * 39"}),
             tool_call_response("calculator", {"expression": "247 * 39"}),
@@ -235,15 +291,162 @@ class TestReActDuplicateDetection:
         assert response is not None
         assert "9633" in response
 
-        # The loop should have broken after detecting duplicates at iteration 2,
-        # NOT run all 5 iterations. Verify via call count:
-        # 1st tool_call_response + 2nd tool_call_response (duplicate detected)
-        # + final text_response = 3 calls total
+        # 1st tool call + 2nd (duplicate detected) + final text = 3 calls
         assert bot.llm.call_count == 3
 
     @pytest.mark.asyncio
+    async def test_duplicate_detection_trace_status(self):
+        """Duplicate detection sets 'duplicate_tool_calls_detected', not 'max_iterations_reached'."""
+        from dataknobs_llm.testing import text_response, tool_call_response
+
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "reasoning": {
+                "strategy": "react",
+                "max_iterations": 5,
+                "store_trace": True,
+            },
+        }
+
+        bot = await DynaBot.from_config(config)
+        bot.tool_registry.register_tool(self._make_calculator_tool())
+        context = BotContext(
+            conversation_id="conv-dup-trace", client_id="test-client"
+        )
+
+        bot.llm.set_responses([
+            tool_call_response("calculator", {"expression": "2+2"}),
+            tool_call_response("calculator", {"expression": "2+2"}),
+            text_response("4"),
+        ])
+
+        await bot.chat("What is 2+2?", context)
+
+        trace = await self._get_trace(bot, "conv-dup-trace")
+
+        # Iteration 1: tool executed normally → "continued"
+        # Iteration 2: duplicate detected → "duplicate_tool_calls_detected"
+        assert len(trace) == 2
+        assert trace[0]["status"] == "continued"
+        assert trace[0]["iteration"] == 1
+        assert len(trace[0]["tool_calls"]) == 1
+        assert trace[0]["tool_calls"][0]["name"] == "calculator"
+        assert trace[0]["tool_calls"][0]["status"] == "success"
+
+        assert trace[1]["status"] == "duplicate_tool_calls_detected"
+        assert trace[1]["iteration"] == 2
+        # No tool_calls executed on the duplicate iteration (break before execution)
+        assert trace[1]["tool_calls"] == []
+
+        # Crucially, "max_iterations_reached" must NOT appear anywhere
+        all_statuses = [step.get("status") for step in trace]
+        assert "max_iterations_reached" not in all_statuses
+
+    # -- Exit path 3: Max iterations exhausted → "max_iterations_reached" ---
+
+    @pytest.mark.asyncio
+    async def test_max_iterations_trace_status(self):
+        """When loop exhausts all iterations, trace ends with 'max_iterations_reached'."""
+        from dataknobs_llm.testing import text_response, tool_call_response
+
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "reasoning": {
+                "strategy": "react",
+                "max_iterations": 2,
+                "store_trace": True,
+            },
+        }
+
+        bot = await DynaBot.from_config(config)
+        bot.tool_registry.register_tool(self._make_calculator_tool())
+        context = BotContext(
+            conversation_id="conv-max-iter", client_id="test-client"
+        )
+
+        # Different tool calls each iteration so duplicate detection doesn't fire,
+        # exhausting max_iterations=2, then a final text response (post-loop)
+        bot.llm.set_responses([
+            tool_call_response("calculator", {"expression": "1+1"}),
+            tool_call_response("calculator", {"expression": "2+2"}),
+            text_response("Done"),
+        ])
+
+        response = await bot.chat("Keep calculating", context)
+        assert response is not None
+
+        # 2 tool iterations + 1 final completion = 3 calls
+        assert bot.llm.call_count == 3
+
+        trace = await self._get_trace(bot, "conv-max-iter")
+
+        # 2 "continued" iterations + 1 "max_iterations_reached" sentinel
+        assert len(trace) == 3
+        assert trace[0]["status"] == "continued"
+        assert trace[0]["iteration"] == 1
+        assert trace[1]["status"] == "continued"
+        assert trace[1]["iteration"] == 2
+        assert trace[2] == {"status": "max_iterations_reached"}
+
+        # "duplicate_tool_calls_detected" must NOT appear
+        all_statuses = [step.get("status") for step in trace]
+        assert "duplicate_tool_calls_detected" not in all_statuses
+
+    # -- Exit path 4: Normal multi-step then completion ---
+
+    @pytest.mark.asyncio
+    async def test_normal_completion_after_tool_calls(self):
+        """Normal flow: tool iterations followed by text response → 'completed'."""
+        from dataknobs_llm.testing import text_response, tool_call_response
+
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "reasoning": {
+                "strategy": "react",
+                "max_iterations": 5,
+                "store_trace": True,
+            },
+        }
+
+        bot = await DynaBot.from_config(config)
+        bot.tool_registry.register_tool(self._make_calculator_tool())
+        context = BotContext(
+            conversation_id="conv-normal", client_id="test-client"
+        )
+
+        # Two different tool calls, then LLM returns text (no tools) → completed
+        bot.llm.set_responses([
+            tool_call_response("calculator", {"expression": "10 * 5"}),
+            tool_call_response("calculator", {"expression": "50 / 2"}),
+            text_response("The final answer is 25"),
+        ])
+
+        response = await bot.chat("Calculate 10*5 then halve it", context)
+        assert "25" in response
+        assert bot.llm.call_count == 3
+
+        trace = await self._get_trace(bot, "conv-normal")
+
+        # 2 "continued" iterations + 1 "completed" (when LLM returned text)
+        assert len(trace) == 3
+        assert trace[0]["status"] == "continued"
+        assert trace[0]["iteration"] == 1
+        assert len(trace[0]["tool_calls"]) == 1
+        assert trace[1]["status"] == "continued"
+        assert trace[1]["iteration"] == 2
+        assert len(trace[1]["tool_calls"]) == 1
+        assert trace[2]["status"] == "completed"
+        assert trace[2]["iteration"] == 3
+        assert trace[2]["tool_calls"] == []
+
+    # -- Duplicate detection does not fire on different calls ---
+
+    @pytest.mark.asyncio
     async def test_different_tool_calls_do_not_trigger_detection(self):
-        """Test that different tool calls across iterations proceed normally."""
+        """Different tool calls across iterations proceed without early break."""
         from dataknobs_llm.testing import text_response, tool_call_response
 
         config = {
@@ -261,7 +464,7 @@ class TestReActDuplicateDetection:
             conversation_id="conv-react-diff", client_id="test-client"
         )
 
-        # Script different tool calls each iteration, then a final text response
+        # Different tool calls each iteration, then a final text response
         bot.llm.set_responses([
             tool_call_response("calculator", {"expression": "247 * 39"}),
             tool_call_response("calculator", {"expression": "9633 / 3"}),
@@ -273,8 +476,46 @@ class TestReActDuplicateDetection:
         assert "3211" in response
 
         # Both tool calls executed + final response = 3 calls
-        # (no early break due to different parameters)
         assert bot.llm.call_count == 3
+
+    # -- Trace tool call details ---
+
+    @pytest.mark.asyncio
+    async def test_trace_records_tool_call_details(self):
+        """Trace entries include tool name, parameters, status, and result."""
+        from dataknobs_llm.testing import text_response, tool_call_response
+
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "reasoning": {
+                "strategy": "react",
+                "max_iterations": 5,
+                "store_trace": True,
+            },
+        }
+
+        bot = await DynaBot.from_config(config)
+        bot.tool_registry.register_tool(self._make_calculator_tool())
+        context = BotContext(
+            conversation_id="conv-tool-details", client_id="test-client"
+        )
+
+        bot.llm.set_responses([
+            tool_call_response("calculator", {"expression": "7 * 6"}),
+            text_response("42"),
+        ])
+
+        await bot.chat("What is 7*6?", context)
+
+        trace = await self._get_trace(bot, "conv-tool-details")
+        assert len(trace) == 2  # 1 continued + 1 completed
+
+        tool_entry = trace[0]["tool_calls"][0]
+        assert tool_entry["name"] == "calculator"
+        assert tool_entry["parameters"] == {"expression": "7 * 6"}
+        assert tool_entry["status"] == "success"
+        assert tool_entry["result"] == "42"  # CalculatorTool always returns "42"
 
 
 class TestReasoningIntegration:
@@ -351,13 +592,15 @@ class TestReasoningIntegration:
 
     @pytest.mark.asyncio
     async def test_react_with_store_trace(self):
-        """Test ReAct with store_trace enabled."""
+        """Test ReAct with store_trace writes trace to conversation metadata."""
+        from dataknobs_llm.testing import text_response, tool_call_response
+
         config = {
             "llm": {"provider": "echo", "model": "test"},
             "conversation_storage": {"backend": "memory"},
             "reasoning": {
                 "strategy": "react",
-                "max_iterations": 2,
+                "max_iterations": 5,
                 "store_trace": True,
             },
         }
@@ -367,16 +610,44 @@ class TestReasoningIntegration:
         assert isinstance(bot.reasoning_strategy, ReActReasoning)
         assert bot.reasoning_strategy.store_trace is True
 
+        # Register a tool so the ReAct loop actually runs
+        from dataknobs_llm.tools import Tool
+        from typing import Any
+
+        class EchoTool(Tool):
+            def __init__(self) -> None:
+                super().__init__(name="echo", description="Echoes input")
+
+            @property
+            def schema(self) -> dict[str, Any]:
+                return {"type": "object", "properties": {"text": {"type": "string"}}}
+
+            async def execute(self, **kwargs: Any) -> str:
+                return kwargs.get("text", "")
+
+        bot.tool_registry.register_tool(EchoTool())
+
         context = BotContext(
             conversation_id="conv-react-trace", client_id="test-client"
         )
 
-        # Generate response (will have no tools, so will complete immediately)
+        # One tool call then completion
+        bot.llm.set_responses([
+            tool_call_response("echo", {"text": "hello"}),
+            text_response("Done"),
+        ])
+
         response = await bot.chat("Test message", context)
         assert response is not None
 
-        # Note: The trace would be stored in conversation metadata
-        # In a real scenario with tools, we would verify the trace structure
+        # Verify trace was stored in conversation metadata
+        conv = await bot.get_conversation("conv-react-trace")
+        assert conv is not None
+        trace = conv.metadata.get("reasoning_trace")
+        assert trace is not None
+        assert len(trace) == 2  # 1 continued + 1 completed
+        assert trace[0]["status"] == "continued"
+        assert trace[1]["status"] == "completed"
 
     @pytest.mark.asyncio
     async def test_react_verbose_mode(self):
