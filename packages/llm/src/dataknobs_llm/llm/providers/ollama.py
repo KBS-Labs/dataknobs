@@ -421,9 +421,13 @@ class OllamaProvider(AsyncLLMProvider):
         return False
 
     def get_capabilities(self) -> List[ModelCapability]:
-        """Get Ollama model capabilities."""
-        # Capabilities depend on the specific model
-        capabilities = [
+        """Get Ollama model capabilities.
+
+        If ``config.capabilities`` is set, those values are used instead of
+        the auto-detected list below.
+        """
+        # Auto-detect capabilities based on model name
+        detected = [
             ModelCapability.TEXT_GENERATION,
             ModelCapability.CHAT,
             ModelCapability.STREAMING
@@ -436,15 +440,15 @@ class OllamaProvider(AsyncLLMProvider):
             'firefunction', 'hermes',
         ]
         if any(model in self.config.model.lower() for model in tool_capable_models):
-            capabilities.append(ModelCapability.FUNCTION_CALLING)
+            detected.append(ModelCapability.FUNCTION_CALLING)
 
         if 'llava' in self.config.model.lower():
-            capabilities.append(ModelCapability.VISION)
+            detected.append(ModelCapability.VISION)
 
         if 'codellama' in self.config.model.lower() or 'codegemma' in self.config.model.lower():
-            capabilities.append(ModelCapability.CODE)
+            detected.append(ModelCapability.CODE)
 
-        return capabilities
+        return self._resolve_capabilities(detected)
 
     async def complete(
         self,

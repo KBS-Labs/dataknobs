@@ -55,6 +55,7 @@ See Also:
     - dataknobs_llm.prompts: Prompt rendering and RAG integration
 """
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
@@ -67,6 +68,8 @@ from datetime import datetime
 # Import prompt builder types - clean one-way dependency (llm depends on prompts)
 from dataknobs_llm.prompts import AsyncPromptBuilder, PromptBuilder
 from dataknobs_config.config import Config
+
+logger = logging.getLogger(__name__)
 
 
 class CompletionMode(Enum):
@@ -476,6 +479,11 @@ class LLMConfig:
     # Provider-specific options
     options: Dict[str, Any] = field(default_factory=dict)
 
+    # Capability overrides — when set, these override the provider's
+    # auto-detected capabilities.  Accepts string values matching
+    # ModelCapability enum names (e.g. "json_mode", "function_calling").
+    capabilities: List[str] | None = None
+
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> "LLMConfig":
         """Create LLMConfig from a dictionary.
@@ -679,8 +687,34 @@ class LLMProvider(ABC):
 
     @abstractmethod
     def get_capabilities(self) -> List[ModelCapability]:
-        """Get model capabilities."""
+        """Get model capabilities.
+
+        If ``config.capabilities`` is set, those values override the
+        provider's auto-detected capabilities.  Subclasses should call
+        :meth:`_resolve_capabilities` with their detected list to
+        honour this override.
+        """
         pass
+
+    def _resolve_capabilities(
+        self, detected: List[ModelCapability]
+    ) -> List[ModelCapability]:
+        """Return config-declared capabilities if set, else *detected*.
+
+        Providers should call this at the end of their
+        ``get_capabilities()`` implementation so that environment configs
+        can override auto-detected capabilities.
+        """
+        if self.config.capabilities is not None:
+            resolved: list[ModelCapability] = []
+            for name in self.config.capabilities:
+                cap = CAPABILITY_NAMES.get(name)
+                if cap is not None:
+                    resolved.append(cap)
+                else:
+                    logger.warning("Unknown capability name in config: %s", name)
+            return resolved
+        return detected
 
     @property
     def is_initialized(self) -> bool:
