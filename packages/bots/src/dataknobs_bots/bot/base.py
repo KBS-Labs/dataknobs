@@ -996,12 +996,6 @@ class DynaBot:
                 storage=self.conversation_storage,
             )
         except Exception:
-            # Create new conversation with specified conversation_id
-            from dataknobs_structures.tree import Tree
-
-            from dataknobs_llm.conversations import ConversationNode, ConversationState
-            from dataknobs_llm.llm.base import LLMMessage
-
             metadata = {
                 "client_id": context.client_id,
                 "user_id": context.user_id,
@@ -1011,39 +1005,20 @@ class DynaBot:
                 **context.session_metadata,
             }
 
-            # Create initial state with specified conversation_id
-            # Start with empty root node (will be replaced by system prompt if provided)
-            root_message = LLMMessage(role="system", content="")
-            root_node = ConversationNode(
-                message=root_message,
-                node_id="",
-            )
-            tree = Tree(root_node)
-            state = ConversationState(
-                conversation_id=conv_id,  # Use the conversation_id from context
-                message_tree=tree,
-                current_node_id="",
-                metadata=metadata,
-            )
-
-            # Create manager with pre-initialized state
             manager = ConversationManager(
                 llm=self.llm,
                 prompt_builder=self.prompt_builder,
                 storage=self.conversation_storage,
-                state=state,
+                conversation_id=conv_id,
                 metadata=metadata,
             )
 
-            # Add system prompt if specified (either as template name or inline content)
             if self.system_prompt_name:
-                # Use template name - will be rendered by prompt builder
                 await manager.add_message(
                     prompt_name=self.system_prompt_name,
                     role="system",
                 )
             elif self.system_prompt_content:
-                # Use inline content - pass RAG configs if available
                 await manager.add_message(
                     content=self.system_prompt_content,
                     role="system",

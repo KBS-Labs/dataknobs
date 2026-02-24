@@ -555,3 +555,110 @@ class TestConversationManager:
         current_node = manager.state.get_current_node()
         assert "tool_calls" not in current_node.data.metadata
 
+
+class TestConversationIdParameter:
+    """Test the conversation_id parameter on ConversationManager."""
+
+    @pytest.mark.asyncio
+    async def test_conversation_id_property_before_first_message(self, test_components):
+        """conversation_id property returns pre-set ID before any messages."""
+        manager = ConversationManager(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            conversation_id="custom-id-123",
+        )
+        assert manager.conversation_id == "custom-id-123"
+
+    @pytest.mark.asyncio
+    async def test_conversation_id_used_in_state(self, test_components):
+        """Pre-set conversation_id is used when state is initialized."""
+        manager = ConversationManager(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            conversation_id="custom-id-456",
+        )
+        await manager.add_message(role="system", content="You are helpful")
+
+        assert manager.conversation_id == "custom-id-456"
+        assert manager.state.conversation_id == "custom-id-456"
+
+    @pytest.mark.asyncio
+    async def test_conversation_id_root_has_real_content(self, test_components):
+        """Root node has real content, not a phantom empty message."""
+        manager = ConversationManager(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            conversation_id="no-phantom",
+        )
+        await manager.add_message(role="system", content="You are helpful")
+
+        history = await manager.get_history()
+        assert len(history) == 1
+        assert history[0].role == "system"
+        assert history[0].content == "You are helpful"
+
+    @pytest.mark.asyncio
+    async def test_create_with_conversation_id(self, test_components):
+        """ConversationManager.create() passes through conversation_id."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            system_prompt_name="helpful",
+            conversation_id="create-id-789",
+        )
+
+        assert manager.conversation_id == "create-id-789"
+        history = await manager.get_history()
+        assert len(history) == 1
+        assert history[0].role == "system"
+        assert history[0].content == "You are a helpful assistant"
+
+    @pytest.mark.asyncio
+    async def test_default_generates_uuid(self, test_components):
+        """Without conversation_id, a UUID is auto-generated."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            system_prompt_name="helpful",
+        )
+
+        conv_id = manager.conversation_id
+        assert conv_id is not None
+        # Verify it looks like a UUID (8-4-4-4-12 hex pattern)
+        assert len(conv_id) == 36
+        assert conv_id.count("-") == 4
+
+    @pytest.mark.asyncio
+    async def test_round_trip_with_custom_id(self, test_components):
+        """Create with custom ID, persist, resume — ID and messages intact."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            system_prompt_name="helpful",
+            conversation_id="round-trip-id",
+        )
+        await manager.add_message(role="user", content="Hello")
+        await manager.complete()
+
+        # Resume
+        manager2 = await ConversationManager.resume(
+            conversation_id="round-trip-id",
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+        )
+
+        assert manager2.conversation_id == "round-trip-id"
+        history = await manager2.get_history()
+        assert len(history) == 3  # system, user, assistant
+        assert history[0].role == "system"
+        assert history[0].content == "You are a helpful assistant"
+        assert history[1].role == "user"
+        assert history[1].content == "Hello"
+

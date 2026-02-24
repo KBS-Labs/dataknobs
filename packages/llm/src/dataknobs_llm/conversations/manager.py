@@ -204,6 +204,7 @@ class ConversationManager:
         middleware: List[ConversationMiddleware] | None = None,
         cache_rag_results: bool = False,
         reuse_rag_on_branch: bool = False,
+        conversation_id: str | None = None,
     ):
         """Initialize conversation manager.
 
@@ -221,6 +222,9 @@ class ConversationManager:
                              for debugging and transparency
             reuse_rag_on_branch: If True, reuse cached RAG results when
                                possible (useful for testing/branching)
+            conversation_id: Optional conversation ID to use when creating
+                           the first message. If not provided, a UUID is
+                           generated automatically.
         """
         self.llm = llm
         self.prompt_builder = prompt_builder
@@ -230,6 +234,7 @@ class ConversationManager:
         self.middleware = middleware or []
         self.cache_rag_results = cache_rag_results
         self.reuse_rag_on_branch = reuse_rag_on_branch
+        self._conversation_id = conversation_id
 
     @classmethod
     async def create(
@@ -243,6 +248,7 @@ class ConversationManager:
         middleware: List[ConversationMiddleware] | None = None,
         cache_rag_results: bool = False,
         reuse_rag_on_branch: bool = False,
+        conversation_id: str | None = None,
     ) -> "ConversationManager":
         """Create a new conversation.
 
@@ -256,6 +262,8 @@ class ConversationManager:
             middleware: Optional list of middleware to execute
             cache_rag_results: If True, store RAG metadata in node metadata
             reuse_rag_on_branch: If True, reuse cached RAG results when possible
+            conversation_id: Optional conversation ID. If not provided, a UUID
+                           is generated when the first message is added.
 
         Returns:
             Initialized ConversationManager
@@ -277,6 +285,7 @@ class ConversationManager:
             middleware=middleware,
             cache_rag_results=cache_rag_results,
             reuse_rag_on_branch=reuse_rag_on_branch,
+            conversation_id=conversation_id,
         )
 
         # Initialize with system prompt if provided
@@ -505,7 +514,7 @@ class ConversationManager:
 
         # Initialize state if this is the first message
         if self.state is None:
-            conversation_id = str(uuid.uuid4())
+            conversation_id = self._conversation_id or str(uuid.uuid4())
             root_node = ConversationNode(
                 message=message,
                 node_id="",
@@ -1248,7 +1257,9 @@ class ConversationManager:
     @property
     def conversation_id(self) -> str | None:
         """Get conversation ID."""
-        return self.state.conversation_id if self.state else None
+        if self.state:
+            return self.state.conversation_id
+        return self._conversation_id
 
     @property
     def current_node_id(self) -> str | None:
