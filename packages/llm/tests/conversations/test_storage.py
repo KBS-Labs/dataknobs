@@ -10,6 +10,7 @@ from dataknobs_llm.conversations import (
     calculate_node_id,
     get_node_by_id,
     get_messages_for_llm,
+    get_nodes_for_path,
 )
 
 
@@ -221,6 +222,90 @@ class TestNodeIdentification:
         assert messages[1].role == "user"
         assert messages[1].content == "Question 1"
 
+    def test_get_nodes_for_path(self):
+        """Test extracting ConversationNode path."""
+        root_node = ConversationNode(
+            message=LLMMessage(role="system", content="You are helpful"),
+            node_id=""
+        )
+        root = Tree(root_node)
+
+        user_node = ConversationNode(
+            message=LLMMessage(role="user", content="Hello"),
+            node_id="0",
+            prompt_name="greeting",
+        )
+        user_tree = root.add_child(Tree(user_node))
+
+        assistant_node = ConversationNode(
+            message=LLMMessage(role="assistant", content="Hi there!"),
+            node_id="0.0",
+            metadata={"model": "test"},
+        )
+        user_tree.add_child(Tree(assistant_node))
+
+        nodes = get_nodes_for_path(root, "0.0")
+
+        assert len(nodes) == 3
+        # Returns ConversationNode objects, not LLMMessage
+        assert all(isinstance(n, ConversationNode) for n in nodes)
+        # Timestamps are non-null datetime instances
+        assert all(isinstance(n.timestamp, datetime) for n in nodes)
+        # Node IDs preserved
+        assert nodes[0].node_id == ""
+        assert nodes[1].node_id == "0"
+        assert nodes[2].node_id == "0.0"
+        # Message data accessible
+        assert nodes[0].message.role == "system"
+        assert nodes[1].message.role == "user"
+        assert nodes[2].message.role == "assistant"
+        # Metadata preserved
+        assert nodes[1].prompt_name == "greeting"
+        assert nodes[2].metadata == {"model": "test"}
+
+    def test_get_nodes_for_path_invalid(self):
+        """Test get_nodes_for_path with invalid node ID."""
+        root = Tree(ConversationNode(
+            message=LLMMessage(role="system", content="System"),
+            node_id=""
+        ))
+        assert get_nodes_for_path(root, "99") == []
+
+    def test_get_nodes_for_path_with_branching(self):
+        """Test get_nodes_for_path follows correct branch."""
+        root_node = ConversationNode(
+            message=LLMMessage(role="system", content="System"),
+            node_id=""
+        )
+        root = Tree(root_node)
+
+        user_node = ConversationNode(
+            message=LLMMessage(role="user", content="Hello"),
+            node_id="0"
+        )
+        user_tree = root.add_child(Tree(user_node))
+
+        # Two branches
+        branch_a = ConversationNode(
+            message=LLMMessage(role="assistant", content="Response A"),
+            node_id="0.0",
+            branch_name="variant-a",
+        )
+        user_tree.add_child(Tree(branch_a))
+
+        branch_b = ConversationNode(
+            message=LLMMessage(role="assistant", content="Response B"),
+            node_id="0.1",
+            branch_name="variant-b",
+        )
+        user_tree.add_child(Tree(branch_b))
+
+        # Path to branch B
+        nodes = get_nodes_for_path(root, "0.1")
+        assert len(nodes) == 3
+        assert nodes[2].message.content == "Response B"
+        assert nodes[2].branch_name == "variant-b"
+
 
 class TestConversationState:
     """Tests for ConversationState."""
@@ -294,6 +379,35 @@ class TestConversationState:
         assert len(messages) == 2
         assert messages[0].role == "system"
         assert messages[1].role == "user"
+
+    def test_get_current_nodes(self):
+        """Test getting ConversationNode objects for current position."""
+        root_node = ConversationNode(
+            message=LLMMessage(role="system", content="System"),
+            node_id=""
+        )
+        tree = Tree(root_node)
+
+        user_node = ConversationNode(
+            message=LLMMessage(role="user", content="Hello"),
+            node_id="0"
+        )
+        tree.add_child(Tree(user_node))
+
+        state = ConversationState(
+            conversation_id="conv-nodes",
+            message_tree=tree,
+            current_node_id="0"
+        )
+
+        nodes = state.get_current_nodes()
+        assert len(nodes) == 2
+        assert all(isinstance(n, ConversationNode) for n in nodes)
+        assert all(isinstance(n.timestamp, datetime) for n in nodes)
+        assert nodes[0].message.role == "system"
+        assert nodes[0].node_id == ""
+        assert nodes[1].message.role == "user"
+        assert nodes[1].node_id == "0"
 
     def test_state_serialization_simple(self):
         """Test serializing simple state."""

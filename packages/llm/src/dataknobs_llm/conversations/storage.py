@@ -310,6 +310,38 @@ def get_messages_for_llm(tree: Tree, node_id: str) -> List[LLMMessage]:
     return messages
 
 
+def get_nodes_for_path(tree: Tree, node_id: str) -> List["ConversationNode"]:
+    """Get ConversationNode objects from root to specified node.
+
+    Like get_messages_for_llm(), but returns full ConversationNode objects
+    instead of just LLMMessage. Use this when you need timestamps, node_ids,
+    prompt_names, branch_names, or per-node metadata.
+
+    Args:
+        tree: Root of conversation tree
+        node_id: ID of current position
+
+    Returns:
+        List of ConversationNode objects from root to current node
+
+    Example:
+        >>> nodes = get_nodes_for_path(tree, "0.1.2")
+        >>> for node in nodes:
+        ...     print(node.node_id, node.timestamp, node.message.role)
+    """
+    tree_node = get_node_by_id(tree, node_id)
+    if tree_node is None:
+        return []
+
+    path = tree_node.get_path()
+
+    return [
+        n.data
+        for n in path
+        if isinstance(n.data, ConversationNode)
+    ]
+
+
 @dataclass
 class ConversationState:
     """State of a conversation with tree-based branching support.
@@ -363,6 +395,14 @@ class ConversationState:
     def get_current_messages(self) -> List[LLMMessage]:
         """Get messages from root to current position (for LLM)."""
         return get_messages_for_llm(self.message_tree, self.current_node_id)
+
+    def get_current_nodes(self) -> List["ConversationNode"]:
+        """Get ConversationNode objects from root to current position.
+
+        Like get_current_messages(), but returns full ConversationNode objects
+        including timestamps, node_ids, and metadata.
+        """
+        return get_nodes_for_path(self.message_tree, self.current_node_id)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert state to dictionary for storage.
