@@ -78,7 +78,12 @@ class WizardTestManager:
         """Add an assistant message to the conversation."""
         self.messages.append({"role": "assistant", "content": content})
 
-    async def add_message(self, content: str, role: str = "user") -> None:
+    async def add_message(
+        self,
+        content: str,
+        role: str = "user",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
         """Add a message to the conversation (async interface for ReAct compatibility).
 
         This method supports the interface used by ReAct-style loops where
@@ -87,8 +92,12 @@ class WizardTestManager:
         Args:
             content: Message content
             role: Message role (user, assistant, system)
+            metadata: Optional metadata for the message
         """
-        self.messages.append({"role": role, "content": content})
+        msg: dict[str, Any] = {"role": role, "content": content}
+        if metadata:
+            msg["metadata"] = metadata
+        self.messages.append(msg)
 
     def get_messages(self) -> list[dict[str, Any]]:
         """Get all messages in the conversation."""

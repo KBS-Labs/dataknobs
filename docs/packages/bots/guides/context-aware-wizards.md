@@ -41,6 +41,23 @@ Context-aware wizards solve this with four complementary features:
 
 The template remains the structural backbone — the LLM only fills in contextual "flavor" variables. If the LLM fails, a fallback value is used and the wizard continues without interruption.
 
+## Response Mode Hierarchy
+
+Wizard stages support several response modes. Choose the **simplest mode** that meets the stage's needs:
+
+| Priority | Mode | Config Fields | Use When |
+|----------|------|---------------|----------|
+| 1 (default) | **Template-only** | `response_template` + `schema` | Data collection — most stages |
+| 2 | **Template + context** | `response_template` + `context_generation` | Dynamic flavor (personalized remarks, creative content) |
+| 3 | **Template + LLM assist** | `response_template` + `llm_assist: true` | User may ask help questions during a stage |
+| 4 | **LLM-driven** | `prompt` only (no template) | Open-ended conversation stages (`mode: conversation`) |
+
+**Template-first is strongly recommended.** LLM-driven data-collection stages are unreliable — the LLM may ignore stage instructions, ask for different fields, or hallucinate data. The `response_template` produces consistent, deterministic output while the `schema` handles extraction.
+
+The loader will warn if a non-end, non-conversation stage has no `schema` and no `response_template`.
+
+---
+
 ## Context Generation
 
 ### Configuration

@@ -52,6 +52,40 @@ graph TD
     K --> A
 ```
 
+## Template-Driven vs LLM-Driven
+
+Wizard stages support two response modes. **Template-driven is strongly recommended** for data-collection stages:
+
+| Mode | Config Fields | Behavior | Recommended For |
+|------|---------------|----------|-----------------|
+| **Template-driven** | `response_template` + `schema` | Deterministic output, structured extraction | Data-collection stages |
+| **Template + context** | `response_template` + `context_generation` | Template structure with LLM flavor | Summaries, personalized output |
+| **LLM-driven** | `prompt` only | LLM generates the full response | Open-ended conversation stages |
+
+**Why template-first?** LLM-driven wizard stages are unreliable — the LLM may ignore stage instructions, ask for different fields, or hallucinate data. Template-driven stages produce consistent, predictable output while the schema handles extraction.
+
+```yaml
+# GOOD: Template-driven (deterministic)
+- name: ask_name
+  prompt: "Ask for the user's name."
+  response_template: "What is your name?"
+  schema:
+    type: object
+    properties:
+      user_name: { type: string }
+    required: [user_name]
+  transitions:
+    - target: next_stage
+      condition: "data.get('user_name')"
+
+# AVOID: Pure LLM-driven (unpredictable)
+- name: ask_name
+  prompt: "Ask the user for their name."
+  transitions:
+    - target: next_stage
+      condition: "data.get('user_name')"
+```
+
 ## Wizard Configuration
 
 Create a wizard configuration file (`wizard.yaml`):
@@ -66,6 +100,8 @@ stages:
   - name: welcome
     is_start: true
     prompt: "Welcome! What type of bot would you like to create?"
+    response_template: >
+      Welcome! What type of bot would you like to create?
     schema:
       type: object
       properties:
@@ -82,6 +118,8 @@ stages:
 
   - name: name_bot
     prompt: "Great choice! What would you like to name your bot?"
+    response_template: >
+      Great choice! What would you like to name your {{ bot_type }} bot?
     help_text: "Choose a name between 3-20 characters."
     schema:
       type: object
@@ -96,7 +134,9 @@ stages:
         condition: "data.get('bot_name')"
 
   - name: personality
-    prompt: "What personality should {{bot_name}} have?"
+    prompt: "What personality should the bot have?"
+    response_template: >
+      What personality should {{ bot_name }} have?
     can_skip: true
     schema:
       type: object
@@ -113,11 +153,12 @@ stages:
 
   - name: complete
     is_end: true
-    prompt: |
+    prompt: "Bot configuration summary."
+    response_template: |
       Excellent! Here's your bot configuration:
-      - Name: {{bot_name}}
-      - Type: {{bot_type}}
-      - Personality: {{personality}}
+      - Name: {{ bot_name }}
+      - Type: {{ bot_type }}
+      - Personality: {{ personality }}
 
       Your bot is ready to use!
 ```
@@ -380,11 +421,12 @@ stages:
 
 ### Stage Design
 
-1. **Clear Prompts** - Make each stage's purpose obvious
-2. **Helpful Suggestions** - Provide quick-reply options
-3. **Validation** - Use schemas to ensure data quality
-4. **Skip Options** - Allow skipping optional stages
-5. **Help Text** - Provide additional guidance
+1. **Template-first** - Use `response_template` for deterministic output on data-collection stages
+2. **Schema on every collection stage** - Define `schema` for structured extraction
+3. **Helpful Suggestions** - Provide quick-reply options
+4. **Valid Python conditions** - Use `data.get('field')` syntax, not English
+5. **Skip Options** - Allow skipping optional stages
+6. **Help Text** - Provide additional guidance
 
 ### Wizard Structure
 

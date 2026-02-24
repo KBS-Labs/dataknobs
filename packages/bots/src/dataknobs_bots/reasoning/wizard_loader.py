@@ -7,8 +7,10 @@ YAML configuration and the underlying FSM configuration format.
 from __future__ import annotations
 
 import logging
+import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import yaml
 
@@ -22,6 +24,33 @@ logger = logging.getLogger(__name__)
 
 # Sentinel target for subflow transitions
 SUBFLOW_TARGET = "_subflow"
+
+# Known stage fields recognized by the wizard config loader
+KNOWN_STAGE_FIELDS: frozenset[str] = frozenset({
+    "name", "label", "is_start", "is_end",
+    "prompt", "response_template", "llm_assist", "llm_assist_prompt",
+    "schema", "suggestions", "help_text",
+    "can_skip", "skip_default", "can_go_back", "auto_advance",
+    "confirm_on_new_data",
+    "transitions", "tools",
+    "reasoning", "max_iterations", "extraction_model",
+    "context_generation", "mode", "intent_detection",
+    "tasks",
+})
+
+# Patterns that suggest a condition is natural language rather than Python
+_ENGLISH_CONDITION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bis\s+provided\b", re.IGNORECASE),
+    re.compile(r"\bis\s+not\s+empty\b", re.IGNORECASE),
+    re.compile(r"\bhas\s+been\s+(set|given|entered)\b", re.IGNORECASE),
+    re.compile(r"\bwas\s+(set|given|entered)\b", re.IGNORECASE),
+)
+
+# Pattern for Python str.format()-style placeholders (e.g. {name})
+# that should be Jinja2 ({{ name }})
+_PYTHON_FORMAT_PATTERN: re.Pattern[str] = re.compile(
+    r"(?<!\{)\{(\w+)\}(?!\})"
+)
 
 
 class WizardConfigLoader:
@@ -139,6 +168,9 @@ class WizardConfigLoader:
         if not wizard_config["stages"]:
             raise ValueError("Wizard config must have at least one stage")
 
+        # Warn about common config issues
+        self._validate_config(wizard_config)
+
         # Translate wizard config to FSM config
         fsm_config = self._translate_to_fsm(wizard_config)
 
@@ -170,6 +202,82 @@ class WizardConfigLoader:
         return WizardFSM(
             advanced_fsm, stage_metadata, settings=settings, subflow_registry=subflow_registry
         )
+
+    def _validate_config(self, wizard_config: dict[str, Any]) -> None:
+        """Validate wizard config and warn about common issues.
+
+        Checks for:
+        1. Unrecognized stage fields (e.g. ``extracts``)
+        2. Non-end stages with no ``schema`` and no ``response_template``
+           (pure LLM-driven — unreliable for data collection)
+        3. Conditions that look like English rather than Python
+        4. Template syntax using Python str.format() instead of Jinja2
+
+        All issues are logged as warnings, not errors — the config will
+        still load.
+
+        Args:
+            wizard_config: Wizard configuration dict
+        """
+        for stage in wizard_config.get("stages", []):
+            stage_name = stage.get("name", "<unnamed>")
+
+            # 1. Unrecognized fields
+            for key in stage:
+                if key not in KNOWN_STAGE_FIELDS:
+                    logger.warning(
+                        "Stage '%s': unrecognized field '%s' "
+                        "(will be ignored). Known fields: %s",
+                        stage_name,
+                        key,
+                        ", ".join(sorted(KNOWN_STAGE_FIELDS)),
+                    )
+
+            # 2. No schema + no response_template on non-end stages
+            if (
+                not stage.get("is_end")
+                and not stage.get("schema")
+                and not stage.get("response_template")
+                and stage.get("mode") != "conversation"
+            ):
+                logger.warning(
+                    "Stage '%s': no 'schema' and no 'response_template'. "
+                    "Pure LLM-driven stages are unreliable for data "
+                    "collection. Consider adding a schema for extraction "
+                    "and/or a response_template for deterministic output.",
+                    stage_name,
+                )
+
+            # 3. English-language conditions
+            for transition in stage.get("transitions", []):
+                condition = transition.get("condition", "")
+                if condition:
+                    for pattern in _ENGLISH_CONDITION_PATTERNS:
+                        if pattern.search(condition):
+                            logger.warning(
+                                "Stage '%s': condition '%s' appears to be "
+                                "natural language, not Python. Conditions "
+                                "are evaluated as Python code. "
+                                "Try: data.get('%s')",
+                                stage_name,
+                                condition,
+                                condition.split()[0],
+                            )
+                            break
+
+            # 4. Python str.format() syntax in templates and prompts
+            for field_name in ("response_template", "prompt"):
+                text = stage.get(field_name, "")
+                if text and _PYTHON_FORMAT_PATTERN.search(text):
+                    matches = _PYTHON_FORMAT_PATTERN.findall(text)
+                    logger.warning(
+                        "Stage '%s': %s uses Python format syntax "
+                        "{%s} — did you mean Jinja2 {{ %s }}?",
+                        stage_name,
+                        field_name,
+                        matches[0],
+                        matches[0],
+                    )
 
     def _translate_to_fsm(self, wizard_config: dict[str, Any]) -> Any:
         """Translate wizard config to FSM format.
@@ -525,7 +633,9 @@ class WizardConfigLoader:
                 # Create the function
                 try:
                     # Create a function that evaluates the condition
-                    def make_condition(code: str) -> Callable[[Any, Any], bool]:
+                    def make_condition(
+                        code: str, name: str
+                    ) -> Callable[[Any, Any], bool]:
                         def condition_func(
                             data: dict[str, Any], context: Any = None
                         ) -> bool:
@@ -535,16 +645,32 @@ class WizardConfigLoader:
                                 exec_globals: dict[str, Any] = {"data": data}
                                 exec_code = f"def _test():\n    {code}\n_result = _test()"
                                 exec(exec_code, exec_globals)  # nosec B102
-                                return bool(exec_globals.get("_result", False))
+                                result = bool(exec_globals.get("_result", False))
+                                logger.debug(
+                                    "Condition '%s': code=%r, result=%s, "
+                                    "data_keys=%s",
+                                    name,
+                                    code,
+                                    result,
+                                    list(data.keys()),
+                                )
+                                return result
                             except Exception as e:
                                 logger.warning(
-                                    "Condition evaluation failed: %s", e
+                                    "Condition '%s' evaluation failed: %s "
+                                    "(code=%r, data_keys=%s)",
+                                    name,
+                                    e,
+                                    code,
+                                    list(data.keys()),
                                 )
                                 return False
 
                         return condition_func
 
-                    builder.register_function(func_name, make_condition(condition_code))
+                    builder.register_function(
+                        func_name, make_condition(condition_code, func_name)
+                    )
                 except Exception as e:
                     logger.warning(
                         "Failed to register condition '%s': %s", func_name, e

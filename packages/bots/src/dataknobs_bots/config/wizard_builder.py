@@ -35,6 +35,7 @@ Example:
 from __future__ import annotations
 
 import logging
+import re
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -914,6 +915,36 @@ class WizardConfigBuilder:
                         ValidationResult.warning(
                             f"Stage '{stage.name}' is not reachable "
                             f"from the start stage"
+                        )
+                    )
+
+        # Warnings: pure LLM-driven data-collection stages
+        for stage in stages:
+            if (
+                not stage.is_end
+                and stage.mode != "conversation"
+                and not stage.schema
+                and not stage.response_template
+            ):
+                result = result.merge(
+                    ValidationResult.warning(
+                        f"Stage '{stage.name}' has no schema and no "
+                        f"response_template — pure LLM-driven stages "
+                        f"are unreliable for data collection"
+                    )
+                )
+
+        # Warnings: Python str.format() in templates (should be Jinja2)
+        _fmt_re = re.compile(r"(?<!\{)\{(\w+)\}(?!\})")
+        for stage in stages:
+            if stage.response_template:
+                match = _fmt_re.search(stage.response_template)
+                if match:
+                    result = result.merge(
+                        ValidationResult.warning(
+                            f"Stage '{stage.name}' response_template uses "
+                            f"Python format syntax {{{match.group(1)}}} — "
+                            f"did you mean Jinja2 {{{{ {match.group(1)} }}}}?"
                         )
                     )
 

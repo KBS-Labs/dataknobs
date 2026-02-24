@@ -180,9 +180,9 @@ builder.add_structured_stage(
     skip_default="Anonymous",
     reasoning="react",
     max_iterations=5,
-    response_template="Got it, {name}!",
+    response_template="Got it, {{ name }}!",
     help_text="Enter your first and last name.",
-    context_generation={"variables": {"greeting": "Generate a greeting for {name}"}},
+    context_generation={"variables": {"greeting": "Generate a greeting for {{ name }}"}},
 )
 ```
 
