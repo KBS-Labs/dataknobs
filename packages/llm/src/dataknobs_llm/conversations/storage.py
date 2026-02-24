@@ -662,6 +662,37 @@ class ConversationStorage(ABC):
         """
         pass
 
+    @abstractmethod
+    async def delete_conversations(
+        self,
+        content_contains: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        filter_metadata: Dict[str, Any] | None = None,
+    ) -> List[str]:
+        """Delete conversations matching the given filters.
+
+        At least one filter parameter must be provided as a safety guard
+        to prevent accidental deletion of all conversations.
+
+        Args:
+            content_contains: Case-insensitive substring to match in
+                message content across the conversation tree.
+            created_after: Only delete conversations created at or after
+                this time.
+            created_before: Only delete conversations created at or before
+                this time.
+            filter_metadata: Key-value metadata filters (exact match).
+
+        Returns:
+            List of deleted conversation IDs.
+
+        Raises:
+            ValueError: If no filter parameters are provided.
+            StorageError: On storage failures.
+        """
+        pass
+
 
 class DataknobsConversationStorage(ConversationStorage):
     """Conversation storage using dataknobs_data backends.
@@ -828,6 +859,67 @@ class DataknobsConversationStorage(ConversationStorage):
             return await self.backend.delete(conversation_id)
         except Exception as e:
             raise StorageError(f"Failed to delete conversation: {e}") from e
+
+    async def delete_conversations(
+        self,
+        content_contains: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        filter_metadata: Dict[str, Any] | None = None,
+    ) -> List[str]:
+        """Delete conversations matching the given filters."""
+        if not any([content_contains, created_after, created_before, filter_metadata]):
+            raise ValueError(
+                "At least one filter parameter must be provided "
+                "to prevent accidental deletion of all conversations."
+            )
+
+        try:
+            try:
+                from dataknobs_data.query import Query
+            except ImportError:
+                raise StorageError(
+                    "dataknobs_data package not available. "
+                    "Install it to use DataknobsConversationStorage."
+                ) from None
+
+            # Build query with time range and metadata filters (no limit).
+            query = Query()
+
+            if created_after:
+                query.filter("created_at", ">=", created_after.isoformat())
+            if created_before:
+                query.filter("created_at", "<=", created_before.isoformat())
+
+            if filter_metadata:
+                for key, value in filter_metadata.items():
+                    query.filter(f"metadata.{key}", "=", value)
+
+            results = await self.backend.search(query)
+            states = [self._record_to_state(record) for record in results]
+
+            # Post-query content filtering
+            if content_contains:
+                needle = content_contains.lower()
+                states = [
+                    s for s in states
+                    if self._conversation_contains_text(s, needle)
+                ]
+
+            # Delete each matching conversation
+            deleted_ids: List[str] = []
+            for state in states:
+                await self.backend.delete(state.conversation_id)
+                deleted_ids.append(state.conversation_id)
+
+            return deleted_ids
+
+        except ValueError:
+            raise
+        except StorageError:
+            raise
+        except Exception as e:
+            raise StorageError(f"Failed to delete conversations: {e}") from e
 
     async def update_metadata(
         self,

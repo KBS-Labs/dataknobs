@@ -1067,3 +1067,186 @@ class TestDataknobsConversationStorage:
             filter_metadata={"bot_id": "no-such-bot"}
         )
         assert len(results) == 0
+
+    async def test_delete_conversations_by_metadata(self):
+        """Test deleting conversations matching metadata filter."""
+        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_llm.conversations import DataknobsConversationStorage
+
+        backend = AsyncMemoryDatabase()
+        storage = DataknobsConversationStorage(backend)
+
+        # Create 3 conversations: 2 for bot-a, 1 for bot-b
+        for i, bot_id in enumerate(["bot-a", "bot-a", "bot-b"]):
+            root = ConversationNode(
+                message=LLMMessage(role="system", content="System"), node_id=""
+            )
+            tree = Tree(root)
+            await storage.save_conversation(ConversationState(
+                conversation_id=f"conv-del-meta-{i}",
+                message_tree=tree,
+                metadata={"bot_id": bot_id},
+            ))
+
+        # Delete bot-a conversations
+        deleted = await storage.delete_conversations(
+            filter_metadata={"bot_id": "bot-a"}
+        )
+        assert len(deleted) == 2
+        assert set(deleted) == {"conv-del-meta-0", "conv-del-meta-1"}
+
+        # Verify bot-b conversation still exists
+        remaining = await storage.list_conversations()
+        assert len(remaining) == 1
+        assert remaining[0].conversation_id == "conv-del-meta-2"
+
+    async def test_delete_conversations_by_content(self):
+        """Test deleting conversations containing specific text."""
+        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_llm.conversations import DataknobsConversationStorage
+
+        backend = AsyncMemoryDatabase()
+        storage = DataknobsConversationStorage(backend)
+
+        # Conversation with "python" in content
+        root1 = ConversationNode(
+            message=LLMMessage(role="system", content="System"), node_id=""
+        )
+        tree1 = Tree(root1)
+        tree1.add_child(Tree(ConversationNode(
+            message=LLMMessage(role="user", content="Tell me about Python"),
+            node_id="0",
+        )))
+        await storage.save_conversation(ConversationState(
+            conversation_id="conv-del-python",
+            message_tree=tree1,
+        ))
+
+        # Conversation without "python"
+        root2 = ConversationNode(
+            message=LLMMessage(role="system", content="System"), node_id=""
+        )
+        tree2 = Tree(root2)
+        tree2.add_child(Tree(ConversationNode(
+            message=LLMMessage(role="user", content="Tell me about JavaScript"),
+            node_id="0",
+        )))
+        await storage.save_conversation(ConversationState(
+            conversation_id="conv-del-js",
+            message_tree=tree2,
+        ))
+
+        # Delete conversations containing "python"
+        deleted = await storage.delete_conversations(content_contains="python")
+        assert deleted == ["conv-del-python"]
+
+        # Verify JS conversation still exists
+        remaining = await storage.list_conversations()
+        assert len(remaining) == 1
+        assert remaining[0].conversation_id == "conv-del-js"
+
+    async def test_delete_conversations_combined_filters(self):
+        """Test deleting with content + metadata filters applied together."""
+        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_llm.conversations import DataknobsConversationStorage
+
+        backend = AsyncMemoryDatabase()
+        storage = DataknobsConversationStorage(backend)
+
+        # Conv 1: bot-a, mentions "weather"
+        root1 = ConversationNode(
+            message=LLMMessage(role="system", content="System"), node_id=""
+        )
+        tree1 = Tree(root1)
+        tree1.add_child(Tree(ConversationNode(
+            message=LLMMessage(role="user", content="What is the weather?"),
+            node_id="0",
+        )))
+        await storage.save_conversation(ConversationState(
+            conversation_id="conv-del-comb-1",
+            message_tree=tree1,
+            metadata={"bot_id": "bot-a"},
+        ))
+
+        # Conv 2: bot-b, mentions "weather"
+        root2 = ConversationNode(
+            message=LLMMessage(role="system", content="System"), node_id=""
+        )
+        tree2 = Tree(root2)
+        tree2.add_child(Tree(ConversationNode(
+            message=LLMMessage(role="user", content="Weather forecast please"),
+            node_id="0",
+        )))
+        await storage.save_conversation(ConversationState(
+            conversation_id="conv-del-comb-2",
+            message_tree=tree2,
+            metadata={"bot_id": "bot-b"},
+        ))
+
+        # Conv 3: bot-a, no "weather"
+        root3 = ConversationNode(
+            message=LLMMessage(role="system", content="System"), node_id=""
+        )
+        tree3 = Tree(root3)
+        tree3.add_child(Tree(ConversationNode(
+            message=LLMMessage(role="user", content="Hello there"),
+            node_id="0",
+        )))
+        await storage.save_conversation(ConversationState(
+            conversation_id="conv-del-comb-3",
+            message_tree=tree3,
+            metadata={"bot_id": "bot-a"},
+        ))
+
+        # Delete: content "weather" + bot-a => only conv-del-comb-1
+        deleted = await storage.delete_conversations(
+            content_contains="weather",
+            filter_metadata={"bot_id": "bot-a"},
+        )
+        assert deleted == ["conv-del-comb-1"]
+
+        # Verify the other two still exist
+        remaining = await storage.list_conversations()
+        assert len(remaining) == 2
+        remaining_ids = {c.conversation_id for c in remaining}
+        assert remaining_ids == {"conv-del-comb-2", "conv-del-comb-3"}
+
+    async def test_delete_conversations_no_matches(self):
+        """Test delete with no matching conversations returns empty list."""
+        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_llm.conversations import DataknobsConversationStorage
+
+        backend = AsyncMemoryDatabase()
+        storage = DataknobsConversationStorage(backend)
+
+        # Create a conversation
+        root = ConversationNode(
+            message=LLMMessage(role="system", content="System"), node_id=""
+        )
+        tree = Tree(root)
+        await storage.save_conversation(ConversationState(
+            conversation_id="conv-del-nomatch",
+            message_tree=tree,
+            metadata={"bot_id": "bot-a"},
+        ))
+
+        # Delete with non-matching filter
+        deleted = await storage.delete_conversations(
+            filter_metadata={"bot_id": "no-such-bot"}
+        )
+        assert deleted == []
+
+        # Original conversation untouched
+        loaded = await storage.load_conversation("conv-del-nomatch")
+        assert loaded is not None
+
+    async def test_delete_conversations_requires_filter(self):
+        """Test that ValueError is raised when no filters provided."""
+        from dataknobs_data.backends import AsyncMemoryDatabase
+        from dataknobs_llm.conversations import DataknobsConversationStorage
+
+        backend = AsyncMemoryDatabase()
+        storage = DataknobsConversationStorage(backend)
+
+        with pytest.raises(ValueError, match="At least one filter"):
+            await storage.delete_conversations()
