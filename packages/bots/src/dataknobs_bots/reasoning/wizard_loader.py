@@ -35,7 +35,7 @@ KNOWN_STAGE_FIELDS: frozenset[str] = frozenset({
     "transitions", "tools",
     "reasoning", "max_iterations", "extraction_model",
     "context_generation", "mode", "intent_detection",
-    "tasks",
+    "tasks", "navigation",
 })
 
 # Patterns that suggest a condition is natural language rather than Python
@@ -360,6 +360,7 @@ class WizardConfigLoader:
                 "tools": stage.get("tools", []),
                 "mode": stage.get("mode"),
                 "intent_detection": stage.get("intent_detection"),
+                "navigation": stage.get("navigation"),
             },
             data_schema=stage.get("schema"),
         )
@@ -544,6 +545,8 @@ class WizardConfigLoader:
                 # Conversation stage paradigm
                 "mode": stage.get("mode"),
                 "intent_detection": stage.get("intent_detection"),
+                # Per-stage navigation keyword overrides
+                "navigation": stage.get("navigation"),
             }
 
         # Add global tasks to the first stage's metadata

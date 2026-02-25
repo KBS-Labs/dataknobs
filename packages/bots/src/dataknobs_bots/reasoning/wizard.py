@@ -259,6 +259,97 @@ class WizardState:
         return self.data.get("_stage_rendered_snapshot", {}).get(stage_name, {})
 
 
+# ---------------------------------------------------------------------------
+# Navigation keyword configuration
+# ---------------------------------------------------------------------------
+
+DEFAULT_BACK_KEYWORDS: tuple[str, ...] = ("back", "go back", "previous")
+DEFAULT_SKIP_KEYWORDS: tuple[str, ...] = ("skip", "skip this", "use default", "use defaults")
+DEFAULT_RESTART_KEYWORDS: tuple[str, ...] = ("restart", "start over")
+
+
+@dataclass(frozen=True)
+class NavigationCommandConfig:
+    """Configuration for a single navigation command.
+
+    Attributes:
+        keywords: Tuple of keyword strings that trigger this command.
+            All keywords are stored in lowercase.
+        enabled: Whether this command is active. When ``False``, the
+            command is disabled regardless of keywords.
+    """
+
+    keywords: tuple[str, ...]
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
+class NavigationConfig:
+    """Configuration for wizard navigation commands (back, skip, restart).
+
+    Wizard authors can customize navigation keywords at the wizard level
+    (via ``settings.navigation``) and override them per-stage. When no
+    configuration is provided, the hardcoded defaults are used, preserving
+    backward compatibility.
+
+    Attributes:
+        back: Configuration for the back/previous navigation command.
+        skip: Configuration for the skip/use-default command.
+        restart: Configuration for the restart/start-over command.
+    """
+
+    back: NavigationCommandConfig
+    skip: NavigationCommandConfig
+    restart: NavigationCommandConfig
+
+    @classmethod
+    def defaults(cls) -> NavigationConfig:
+        """Create a ``NavigationConfig`` with the default keywords."""
+        return cls(
+            back=NavigationCommandConfig(keywords=DEFAULT_BACK_KEYWORDS),
+            skip=NavigationCommandConfig(keywords=DEFAULT_SKIP_KEYWORDS),
+            restart=NavigationCommandConfig(keywords=DEFAULT_RESTART_KEYWORDS),
+        )
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> NavigationConfig:
+        """Build a ``NavigationConfig`` from a settings dict.
+
+        Missing commands fall back to defaults. Keywords are normalised
+        to lowercase.
+
+        Args:
+            data: Dict with optional ``back``, ``skip``, ``restart`` keys.
+                Each value is a dict with optional ``keywords`` (list of
+                strings) and ``enabled`` (bool) keys.
+
+        Returns:
+            A new ``NavigationConfig`` instance.
+        """
+        if not data:
+            return cls.defaults()
+
+        def _build_command(
+            raw: dict[str, Any] | None,
+            default_keywords: tuple[str, ...],
+        ) -> NavigationCommandConfig:
+            if raw is None:
+                return NavigationCommandConfig(keywords=default_keywords)
+            keywords = raw.get("keywords")
+            if keywords is not None:
+                keywords = tuple(k.lower() for k in keywords)
+            else:
+                keywords = default_keywords
+            enabled = raw.get("enabled", True)
+            return NavigationCommandConfig(keywords=keywords, enabled=enabled)
+
+        return cls(
+            back=_build_command(data.get("back"), DEFAULT_BACK_KEYWORDS),
+            skip=_build_command(data.get("skip"), DEFAULT_SKIP_KEYWORDS),
+            restart=_build_command(data.get("restart"), DEFAULT_RESTART_KEYWORDS),
+        )
+
+
 class WizardReasoning(ReasoningStrategy):
     """FSM-backed reasoning strategy for guided conversational flows.
 
@@ -369,6 +460,12 @@ class WizardReasoning(ReasoningStrategy):
         config_ephemeral = wizard_fsm.settings.get("ephemeral_keys", [])
         self._ephemeral_keys: frozenset[str] = (
             DEFAULT_EPHEMERAL_KEYS | frozenset(config_ephemeral)
+        )
+
+        # Build navigation keyword config from wizard-level settings
+        nav_settings = wizard_fsm.settings.get("navigation", {})
+        self._navigation_config: NavigationConfig = NavigationConfig.from_dict(
+            nav_settings or {}
         )
 
         # Bridge FSM custom functions so they receive a TransformContext
@@ -1776,6 +1873,52 @@ class WizardReasoning(ReasoningStrategy):
                             return part.get("text", "")
         return ""
 
+    def _resolve_navigation_config(self, stage_name: str) -> NavigationConfig:
+        """Resolve the effective navigation config for a stage.
+
+        Per-stage overrides use **replace** semantics: if a stage specifies
+        keywords for a command, those fully replace the wizard-level keywords
+        for that command.  Commands not mentioned in the stage override
+        inherit from the wizard-level config.
+
+        Args:
+            stage_name: Current stage name.
+
+        Returns:
+            Resolved ``NavigationConfig`` for the given stage.
+        """
+        stage_meta = self._fsm._stage_metadata.get(stage_name, {})
+        stage_nav = stage_meta.get("navigation")
+        if not stage_nav:
+            return self._navigation_config
+
+        # Merge: per-command, stage overrides wizard-level
+        def _merge_command(
+            base: NavigationCommandConfig,
+            override_raw: dict[str, Any] | None,
+        ) -> NavigationCommandConfig:
+            if override_raw is None:
+                return base
+            keywords = override_raw.get("keywords")
+            if keywords is not None:
+                keywords = tuple(k.lower() for k in keywords)
+            else:
+                keywords = base.keywords
+            enabled = override_raw.get("enabled", base.enabled)
+            return NavigationCommandConfig(keywords=keywords, enabled=enabled)
+
+        return NavigationConfig(
+            back=_merge_command(
+                self._navigation_config.back, stage_nav.get("back")
+            ),
+            skip=_merge_command(
+                self._navigation_config.skip, stage_nav.get("skip")
+            ),
+            restart=_merge_command(
+                self._navigation_config.restart, stage_nav.get("restart")
+            ),
+        )
+
     async def _handle_navigation(
         self,
         message: str,
@@ -1784,6 +1927,10 @@ class WizardReasoning(ReasoningStrategy):
         llm: Any,
     ) -> Any | None:
         """Handle navigation commands (back, skip, restart).
+
+        Resolves the effective navigation config for the current stage,
+        matches the user message against configured keywords, and
+        dispatches to the appropriate action method.
 
         Args:
             message: User message text
@@ -1795,114 +1942,170 @@ class WizardReasoning(ReasoningStrategy):
             Response if navigation handled, None otherwise
         """
         lower = message.lower().strip()
+        nav = self._resolve_navigation_config(state.current_stage)
 
-        # Back navigation
-        if lower in ("back", "go back", "previous"):
-            if self._fsm.can_go_back() and len(state.history) > 1:
-                from_stage = state.current_stage
-                duration_ms = (time.time() - state.stage_entry_time) * 1000
+        if nav.back.enabled and lower in nav.back.keywords:
+            return await self._execute_back(message, state, manager, llm)
 
-                state.history.pop()
-                state.current_stage = state.history[-1]
-                self._fsm.restore(
-                    {"current_stage": state.current_stage, "data": state.data}
-                )
-                state.clarification_attempts = 0
+        if nav.skip.enabled and lower in nav.skip.keywords:
+            return await self._execute_skip(state, manager)
 
-                # Record the back navigation transition
-                transition = create_transition_record(
-                    from_stage=from_stage,
-                    to_stage=state.current_stage,
-                    trigger="navigation_back",
-                    duration_in_stage_ms=duration_ms,
-                    user_input=message,
-                )
-                state.transitions.append(transition)
-                state.stage_entry_time = time.time()
+        if nav.restart.enabled and lower in nav.restart.keywords:
+            return await self._execute_restart(message, state, manager, llm)
 
-                stage = self._fsm.current_metadata
-                response = await self._generate_stage_response(
-                    manager, llm, stage, state, None
-                )
-                # Record render so next input doesn't trigger first-render
-                # confirmation.
-                if stage.get("response_template"):
-                    state.increment_render_count(
-                        stage.get("name", "unknown")
-                    )
-                return response
-            # Can't go back - inform user
-            return await manager.complete(
-                system_prompt_override=(
-                    manager.system_prompt
-                    + "\n\nThe user asked to go back but we're at the beginning. "
-                    "Kindly explain we can't go back further and continue with "
-                    "the current step."
-                ),
-            )
+        return None  # Not a navigation command
 
-        # Skip
-        if lower in ("skip", "skip this", "use default", "use defaults"):
-            if self._fsm.can_skip():
-                state.data[f"_skipped_{state.current_stage}"] = True
-                # Apply skip_default values if configured
-                skip_default = self._fsm.current_metadata.get("skip_default")
-                if skip_default and isinstance(skip_default, dict):
-                    state.data.update(skip_default)
-                state.clarification_attempts = 0
-                return None  # Continue to normal flow, triggering transition
-            return await manager.complete(
-                system_prompt_override=(
-                    manager.system_prompt
-                    + "\n\nThe user asked to skip this step but it's required. "
-                    "Kindly explain the step cannot be skipped and ask for the "
-                    "information needed."
-                ),
-            )
+    async def _execute_back(
+        self,
+        message: str,
+        state: WizardState,
+        manager: Any,
+        llm: Any,
+    ) -> Any:
+        """Execute back navigation.
 
-        # Restart
-        if lower in ("restart", "start over"):
+        Args:
+            message: Original user message
+            state: Current wizard state
+            manager: ConversationManager instance
+            llm: LLM provider
+
+        Returns:
+            Response for the previous stage, or an explanation if
+            back navigation is not possible.
+        """
+        if self._fsm.can_go_back() and len(state.history) > 1:
             from_stage = state.current_stage
             duration_ms = (time.time() - state.stage_entry_time) * 1000
 
-            # Trigger restart hook if configured
-            if self._hooks:
-                await self._hooks.trigger_restart()
+            state.history.pop()
+            state.current_stage = state.history[-1]
+            self._fsm.restore(
+                {"current_stage": state.current_stage, "data": state.data}
+            )
+            state.clarification_attempts = 0
 
-            self._fsm.restart()
-            to_stage = self._fsm.current_stage
-
-            # Record the restart transition (preserving transition history)
+            # Record the back navigation transition
             transition = create_transition_record(
                 from_stage=from_stage,
-                to_stage=to_stage,
-                trigger="restart",
+                to_stage=state.current_stage,
+                trigger="navigation_back",
                 duration_in_stage_ms=duration_ms,
-                data_snapshot=state.data.copy(),
                 user_input=message,
             )
-            # Preserve transition history but clear other state
-            previous_transitions = state.transitions + [transition]
-
-            state.current_stage = to_stage
-            state.data = {}
-            state.history = [state.current_stage]
-            state.completed = False
-            state.clarification_attempts = 0
-            state.transitions = previous_transitions
+            state.transitions.append(transition)
             state.stage_entry_time = time.time()
 
             stage = self._fsm.current_metadata
             response = await self._generate_stage_response(
                 manager, llm, stage, state, None
             )
-            # Record that the start stage template has been rendered so
-            # the next user message doesn't trigger first-render confirmation.
+            # Record render so next input doesn't trigger first-render
+            # confirmation.
             if stage.get("response_template"):
-                state.increment_render_count(stage.get("name", "unknown"))
+                state.increment_render_count(
+                    stage.get("name", "unknown")
+                )
             return response
+        # Can't go back - inform user
+        return await manager.complete(
+            system_prompt_override=(
+                manager.system_prompt
+                + "\n\nThe user asked to go back but we're at the beginning. "
+                "Kindly explain we can't go back further and continue with "
+                "the current step."
+            ),
+        )
 
-        return None  # Not a navigation command
+    async def _execute_skip(
+        self,
+        state: WizardState,
+        manager: Any,
+    ) -> Any | None:
+        """Execute skip navigation.
+
+        Args:
+            state: Current wizard state
+            manager: ConversationManager instance
+
+        Returns:
+            ``None`` on success (falls through to transition evaluation),
+            or an explanation response if skip is not allowed.
+        """
+        if self._fsm.can_skip():
+            state.data[f"_skipped_{state.current_stage}"] = True
+            # Apply skip_default values if configured
+            skip_default = self._fsm.current_metadata.get("skip_default")
+            if skip_default and isinstance(skip_default, dict):
+                state.data.update(skip_default)
+            state.clarification_attempts = 0
+            return None  # Continue to normal flow, triggering transition
+        return await manager.complete(
+            system_prompt_override=(
+                manager.system_prompt
+                + "\n\nThe user asked to skip this step but it's required. "
+                "Kindly explain the step cannot be skipped and ask for the "
+                "information needed."
+            ),
+        )
+
+    async def _execute_restart(
+        self,
+        message: str,
+        state: WizardState,
+        manager: Any,
+        llm: Any,
+    ) -> Any:
+        """Execute restart navigation.
+
+        Args:
+            message: Original user message
+            state: Current wizard state
+            manager: ConversationManager instance
+            llm: LLM provider
+
+        Returns:
+            Response for the restarted first stage.
+        """
+        from_stage = state.current_stage
+        duration_ms = (time.time() - state.stage_entry_time) * 1000
+
+        # Trigger restart hook if configured
+        if self._hooks:
+            await self._hooks.trigger_restart()
+
+        self._fsm.restart()
+        to_stage = self._fsm.current_stage
+
+        # Record the restart transition (preserving transition history)
+        transition = create_transition_record(
+            from_stage=from_stage,
+            to_stage=to_stage,
+            trigger="restart",
+            duration_in_stage_ms=duration_ms,
+            data_snapshot=state.data.copy(),
+            user_input=message,
+        )
+        # Preserve transition history but clear other state
+        previous_transitions = state.transitions + [transition]
+
+        state.current_stage = to_stage
+        state.data = {}
+        state.history = [state.current_stage]
+        state.completed = False
+        state.clarification_attempts = 0
+        state.transitions = previous_transitions
+        state.stage_entry_time = time.time()
+
+        stage = self._fsm.current_metadata
+        response = await self._generate_stage_response(
+            manager, llm, stage, state, None
+        )
+        # Record that the start stage template has been rendered so
+        # the next user message doesn't trigger first-render confirmation.
+        if stage.get("response_template"):
+            state.increment_render_count(stage.get("name", "unknown"))
+        return response
 
     async def _detect_intent(
         self,

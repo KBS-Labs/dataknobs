@@ -150,6 +150,8 @@ class StageConfig:
     intent_detection: IntentDetectionConfig | None = None
     # Tasks
     tasks: tuple[dict[str, Any], ...] = ()
+    # Per-stage navigation keyword overrides
+    navigation: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dict compatible with WizardConfigLoader."""
@@ -200,6 +202,8 @@ class StageConfig:
             d["intent_detection"] = self.intent_detection.to_dict()
         if self.tasks:
             d["tasks"] = [dict(t) for t in self.tasks]
+        if self.navigation is not None:
+            d["navigation"] = self.navigation
         return d
 
 
@@ -326,6 +330,20 @@ class WizardConfigBuilder:
             self for method chaining.
         """
         self._settings.update(kwargs)
+        return self
+
+    def set_navigation(self, navigation: dict[str, Any]) -> Self:
+        """Set wizard-level navigation keyword configuration.
+
+        Args:
+            navigation: Dict with optional ``back``, ``skip``, ``restart``
+                keys.  Each value is a dict with optional ``keywords``
+                (list of strings) and ``enabled`` (bool) keys.
+
+        Returns:
+            self for method chaining.
+        """
+        self._settings["navigation"] = navigation
         return self
 
     def set_tool_catalog(self, catalog: ToolCatalog) -> Self:
@@ -782,6 +800,7 @@ class WizardConfigBuilder:
                     mode=stage.mode,
                     intent_detection=new_intent,
                     tasks=stage.tasks,
+                    navigation=stage.navigation,
                 )
             assembled.append(stage)
 
@@ -1041,4 +1060,5 @@ def _stage_from_dict(d: dict[str, Any]) -> StageConfig:
         mode=d.get("mode"),
         intent_detection=intent_detection,
         tasks=tuple(d.get("tasks", [])),
+        navigation=d.get("navigation"),
     )
