@@ -226,6 +226,38 @@ class WizardState:
         """
         return self.subflow_stack[-1] if self.subflow_stack else None
 
+    # -- Render count helpers -------------------------------------------------
+    # Centralise stage render-count management so every code path (greet,
+    # generate, restart, back) uses the same logic — eliminating the class
+    # of bug where a caller forgets to increment after rendering.
+
+    def increment_render_count(self, stage_name: str) -> int:
+        """Increment and return the render count for a stage."""
+        counts: dict[str, int] = self.data.setdefault(
+            "_stage_render_counts", {}
+        )
+        counts[stage_name] = counts.get(stage_name, 0) + 1
+        return counts[stage_name]
+
+    def get_render_count(self, stage_name: str) -> int:
+        """Get the current render count for a stage."""
+        return self.data.get("_stage_render_counts", {}).get(stage_name, 0)
+
+    def save_stage_snapshot(self, stage_name: str, schema_props: set[str]) -> None:
+        """Save current schema property values for confirm_on_new_data comparison."""
+        snapshots: dict[str, dict[str, Any]] = self.data.setdefault(
+            "_stage_rendered_snapshot", {}
+        )
+        snapshots[stage_name] = {
+            k: self.data[k]
+            for k in schema_props
+            if k in self.data and self.data[k] is not None
+        }
+
+    def get_stage_snapshot(self, stage_name: str) -> dict[str, Any]:
+        """Get saved schema snapshot for a stage."""
+        return self.data.get("_stage_rendered_snapshot", {}).get(stage_name, {})
+
 
 class WizardReasoning(ReasoningStrategy):
     """FSM-backed reasoning strategy for guided conversational flows.
@@ -735,11 +767,7 @@ class WizardReasoning(ReasoningStrategy):
         # generate() does not re-render it as a "first confirmation" when
         # the user's first message arrives with extracted data.
         if stage.get("response_template"):
-            stage_name = stage.get("name", "unknown")
-            render_counts = wizard_state.data.setdefault(
-                "_stage_render_counts", {}
-            )
-            render_counts[stage_name] = render_counts.get(stage_name, 0) + 1
+            wizard_state.increment_render_count(stage.get("name", "unknown"))
 
         # Persist wizard state
         self._save_wizard_state(manager, wizard_state)
@@ -978,59 +1006,49 @@ class WizardReasoning(ReasoningStrategy):
                 # that lack confirm_on_new_data skip this — the
                 # user's response is an action (e.g. "review") and
                 # should trigger a transition.
-                render_counts = wizard_state.data.setdefault(
-                    "_stage_render_counts", {}
-                )
                 should_confirm = False
                 if new_data_keys and stage.get("response_template"):
-                    if render_counts.get(stage_name, 0) == 0:
+                    if wizard_state.get_render_count(stage_name) == 0:
                         should_confirm = True  # First render — always
                     elif stage.get("confirm_on_new_data"):
                         # Re-confirm when schema property values changed
-                        snapshots = wizard_state.data.setdefault(
-                            "_stage_rendered_snapshot", {}
-                        )
                         schema_props = set(
                             stage.get("schema", {})
                             .get("properties", {})
                             .keys()
                         )
-                        data = wizard_state.data
                         current_snapshot = {
-                            k: data[k]
+                            k: wizard_state.data[k]
                             for k in schema_props
-                            if k in data and data[k] is not None
+                            if k in wizard_state.data
+                            and wizard_state.data[k] is not None
                         }
-                        prior_snapshot = snapshots.get(stage_name, {})
+                        prior_snapshot = wizard_state.get_stage_snapshot(
+                            stage_name
+                        )
                         if current_snapshot != prior_snapshot:
                             should_confirm = True
 
                 if should_confirm:
-                    render_counts[stage_name] = (
-                        render_counts.get(stage_name, 0) + 1
+                    render_count = wizard_state.increment_render_count(
+                        stage_name
                     )
                     # Save snapshot for confirm_on_new_data comparison
                     if stage.get("confirm_on_new_data"):
-                        snapshots = wizard_state.data.setdefault(
-                            "_stage_rendered_snapshot", {}
-                        )
                         schema_props = set(
                             stage.get("schema", {})
                             .get("properties", {})
                             .keys()
                         )
-                        data = wizard_state.data
-                        snapshots[stage_name] = {
-                            k: data[k]
-                            for k in schema_props
-                            if k in data and data[k] is not None
-                        }
+                        wizard_state.save_stage_snapshot(
+                            stage_name, schema_props
+                        )
                     logger.debug(
                         "New data extracted (%s) at stage '%s' — "
                         "rendering confirmation (render #%d)",
                         new_data_keys,
                         stage_name,
-                        render_counts[stage_name],
+                        render_count,
                     )
                     response = await self._generate_stage_response(
                         manager, llm, stage, wizard_state, tools
@@ -1239,12 +1257,7 @@ class WizardReasoning(ReasoningStrategy):
         # at this stage don't trigger the first-render confirmation logic.
         stage_rendered_name = new_stage.get("name", "")
         if stage_rendered_name and new_stage.get("response_template"):
-            render_counts = wizard_state.data.setdefault(
-                "_stage_render_counts", {}
-            )
-            render_counts[stage_rendered_name] = (
-                render_counts.get(stage_rendered_name, 0) + 1
-            )
+            wizard_state.increment_render_count(stage_rendered_name)
 
         # Save wizard state
         self._save_wizard_state(manager, wizard_state)
@@ -1808,9 +1821,16 @@ class WizardReasoning(ReasoningStrategy):
                 state.stage_entry_time = time.time()
 
                 stage = self._fsm.current_metadata
-                return await self._generate_stage_response(
+                response = await self._generate_stage_response(
                     manager, llm, stage, state, None
                 )
+                # Record render so next input doesn't trigger first-render
+                # confirmation.
+                if stage.get("response_template"):
+                    state.increment_render_count(
+                        stage.get("name", "unknown")
+                    )
+                return response
             # Can't go back - inform user
             return await manager.complete(
                 system_prompt_override=(
@@ -1873,9 +1893,14 @@ class WizardReasoning(ReasoningStrategy):
             state.stage_entry_time = time.time()
 
             stage = self._fsm.current_metadata
-            return await self._generate_stage_response(
+            response = await self._generate_stage_response(
                 manager, llm, stage, state, None
             )
+            # Record that the start stage template has been rendered so
+            # the next user message doesn't trigger first-render confirmation.
+            if stage.get("response_template"):
+                state.increment_render_count(stage.get("name", "unknown"))
+            return response
 
         return None  # Not a navigation command
 
