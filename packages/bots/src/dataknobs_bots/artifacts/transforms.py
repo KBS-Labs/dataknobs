@@ -59,6 +59,7 @@ class TransformContext:
     config: dict[str, Any] = field(default_factory=dict)
     user_id: str | None = None
     session_id: str | None = None
+    banks: dict[str, Any] = field(default_factory=dict)
 
 
 async def create_artifact(

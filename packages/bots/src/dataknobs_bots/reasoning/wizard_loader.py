@@ -36,6 +36,7 @@ KNOWN_STAGE_FIELDS: frozenset[str] = frozenset({
     "reasoning", "max_iterations", "extraction_model",
     "context_generation", "mode", "intent_detection",
     "tasks", "navigation",
+    "collection_mode", "collection_config",
 })
 
 # Patterns that suggest a condition is natural language rather than Python
@@ -51,6 +52,17 @@ _ENGLISH_CONDITION_PATTERNS: tuple[re.Pattern[str], ...] = (
 _PYTHON_FORMAT_PATTERN: re.Pattern[str] = re.compile(
     r"(?<!\{)\{(\w+)\}(?!\})"
 )
+
+
+def _null_bank(name: str) -> Any:
+    """Fallback bank accessor when no banks are configured.
+
+    Returns an ``EmptyBankProxy`` for any bank name so that condition
+    expressions like ``bank('x').count() > 0`` evaluate safely.
+    """
+    from ..memory.bank import EmptyBankProxy
+
+    return EmptyBankProxy(name)
 
 
 class WizardConfigLoader:
@@ -645,7 +657,12 @@ class WizardConfigLoader:
                             try:
                                 # Simple evaluation - data is available directly
                                 # Pass data in globals so _test() can access it
-                                exec_globals: dict[str, Any] = {"data": data}
+                                exec_globals: dict[str, Any] = {
+                                    "data": data,
+                                    "bank": data.get(
+                                        "_bank_fn", _null_bank
+                                    ),
+                                }
                                 exec_code = f"def _test():\n    {code}\n_result = _test()"
                                 exec(exec_code, exec_globals)  # nosec B102
                                 result = bool(exec_globals.get("_result", False))

@@ -37,6 +37,7 @@ DEFAULT_EPHEMERAL_KEYS: frozenset[str] = frozenset({
     "_message",             # Per-step raw user message (already popped)
     "_intent",              # Per-step intent detection result
     "_transform_error",     # Per-step error (may be Exception)
+    "_bank_fn",             # Per-step bank accessor (non-serializable callable)
 })
 
 
@@ -462,6 +463,13 @@ class WizardReasoning(ReasoningStrategy):
             DEFAULT_EPHEMERAL_KEYS | frozenset(config_ephemeral)
         )
 
+        # Initialise MemoryBank instances from wizard-level ``banks`` config
+        self._bank_configs: dict[str, dict[str, Any]] = dict(
+            wizard_fsm.settings.get("banks", {})
+        )
+        self._banks: dict[str, Any] = {}
+        self._init_banks()
+
         # Build navigation keyword config from wizard-level settings
         nav_settings = wizard_fsm.settings.get("navigation", {})
         self._navigation_config: NavigationConfig = NavigationConfig.from_dict(
@@ -556,6 +564,7 @@ class WizardReasoning(ReasoningStrategy):
                 artifact_registry=self._artifact_registry,
                 rubric_executor=self._review_executor,
                 config={"llm": self._current_llm} if self._current_llm else {},
+                banks=self._banks,
             )
             result = func(data, transform_ctx, **kwargs)
             if inspect.isawaitable(result):
@@ -571,6 +580,7 @@ class WizardReasoning(ReasoningStrategy):
                 artifact_registry=self._artifact_registry,
                 rubric_executor=self._review_executor,
                 config={"llm": self._current_llm} if self._current_llm else {},
+                banks=self._banks,
             )
             result = func(data, transform_ctx, **kwargs)
             return result if result is not None else data
@@ -579,6 +589,157 @@ class WizardReasoning(ReasoningStrategy):
         if asyncio.iscoroutinefunction(func):
             return _async_wrapper
         return _sync_wrapper
+
+    # -----------------------------------------------------------------
+    # MemoryBank management
+    # -----------------------------------------------------------------
+
+    def _init_banks(self) -> None:
+        """Create ``MemoryBank`` instances from wizard ``banks`` config."""
+        if not self._bank_configs:
+            return
+        from dataknobs_data.backends.memory import SyncMemoryDatabase
+
+        from ..memory.bank import MemoryBank
+
+        for name, cfg in self._bank_configs.items():
+            self._banks[name] = MemoryBank(
+                name=name,
+                schema=cfg.get("schema", {}),
+                db=SyncMemoryDatabase(),
+                max_records=cfg.get("max_records"),
+                duplicate_strategy=cfg.get(
+                    "duplicate_detection", {}
+                ).get("strategy", "allow"),
+                match_fields=cfg.get(
+                    "duplicate_detection", {}
+                ).get("match_fields"),
+            )
+        logger.debug("Initialised %d memory banks: %s",
+                      len(self._banks), list(self._banks))
+
+    def _restore_banks(self, banks_data: dict[str, Any]) -> None:
+        """Restore ``MemoryBank`` instances from persisted data.
+
+        Banks that exist in the persisted data are deserialized.  Banks
+        declared in config but not yet persisted are freshly initialised.
+        """
+        from ..memory.bank import MemoryBank
+
+        for name, bank_dict in banks_data.items():
+            self._banks[name] = MemoryBank.from_dict(bank_dict)
+        # Ensure any newly-configured banks that weren't persisted yet
+        # are also initialised.
+        for name in self._bank_configs:
+            if name not in self._banks:
+                self._init_banks()
+                break
+        if banks_data:
+            logger.debug(
+                "Restored %d memory banks from persisted data",
+                len(banks_data),
+            )
+
+    def _make_bank_accessor(self) -> Any:
+        """Return a callable ``bank(name) -> MemoryBank | EmptyBankProxy``."""
+        from ..memory.bank import EmptyBankProxy
+
+        banks = self._banks
+
+        def _bank(name: str) -> Any:
+            return banks.get(name, EmptyBankProxy(name))
+
+        return _bank
+
+    # -----------------------------------------------------------------
+    # Collection mode helpers
+    # -----------------------------------------------------------------
+
+    async def _handle_collection_mode(
+        self,
+        user_message: str,
+        extracted_data: dict[str, Any],
+        stage: dict[str, Any],
+        state: WizardState,
+        manager: Any,
+        llm: Any,
+        tools: Any,
+    ) -> Any | None:
+        """Handle a collection-mode stage after extraction.
+
+        If the user signalled "done", sets ``_collection_done`` in state
+        data and returns ``None`` to let normal transition evaluation
+        proceed.  Otherwise, adds extracted data to the target bank,
+        clears schema fields for the next record, renders the stage
+        response, saves state, and returns the response.
+
+        Returns:
+            A response object if the stage should loop, or ``None``
+            if the collection is done and transition evaluation should
+            continue.
+        """
+        col_config = stage.get("collection_config", {})
+        bank_name = col_config.get("bank_name", "")
+        done_keywords = col_config.get("done_keywords", [])
+
+        # Check for done signal
+        if self._is_done_signal(user_message, done_keywords):
+            state.data["_collection_done"] = True
+            logger.debug(
+                "Collection done signal at stage '%s'",
+                stage.get("name"),
+            )
+            return None  # Fall through to transition evaluation
+
+        # Add extracted data to the bank
+        bank_accessor = self._make_bank_accessor()
+        bank = bank_accessor(bank_name)
+
+        # Filter to only schema-defined fields
+        schema_props = set(
+            stage.get("schema", {}).get("properties", {}).keys()
+        )
+        record_data = {
+            k: v for k, v in extracted_data.items()
+            if k in schema_props and v is not None
+        }
+
+        if record_data:
+            try:
+                bank.add(record_data, source_stage=stage.get("name", ""))
+                logger.debug(
+                    "Added record to bank '%s' (count=%d)",
+                    bank_name,
+                    bank.count(),
+                )
+            except ValueError as e:
+                logger.warning(
+                    "Failed to add record to bank '%s': %s",
+                    bank_name,
+                    e,
+                )
+
+        # Clear schema fields from state.data so the next extraction
+        # starts fresh (don't keep the previous record's values).
+        for field_name in schema_props:
+            state.data.pop(field_name, None)
+
+        # Render the stage response
+        response = await self._generate_stage_response(
+            manager, llm, stage, state, tools,
+        )
+        self._save_wizard_state(manager, state)
+        return response
+
+    @staticmethod
+    def _is_done_signal(message: str, done_keywords: list[str]) -> bool:
+        """Check whether a user message matches a collection done keyword."""
+        if not done_keywords:
+            return False
+        normalised = message.strip().lower()
+        return any(
+            normalised == kw.strip().lower() for kw in done_keywords
+        )
 
     async def close(self) -> None:
         """Close the reasoning strategy and release resources.
@@ -1087,6 +1248,23 @@ class WizardReasoning(ReasoningStrategy):
                 if default_keys:
                     new_data_keys |= default_keys
 
+                # ── Collection mode handling ──
+                # When a stage is in "collection" mode, extracted data
+                # is added to a MemoryBank rather than triggering a
+                # transition.  The stage loops until a done signal.
+                if stage.get("collection_mode") == "collection":
+                    col_response = await self._handle_collection_mode(
+                        user_message,
+                        extraction.data,
+                        stage,
+                        wizard_state,
+                        manager,
+                        llm,
+                        tools,
+                    )
+                    if col_response is not None:
+                        return col_response
+
                 # When meaningful new data was extracted at a stage with a
                 # response_template, decide whether to render a
                 # confirmation before evaluating transitions.
@@ -1208,9 +1386,12 @@ class WizardReasoning(ReasoningStrategy):
 
         # Inject raw message for condition evaluation (prefixed with _ per convention)
         wizard_state.data["_message"] = user_message
+        # Inject bank accessor for condition evaluation
+        wizard_state.data["_bank_fn"] = self._make_bank_accessor()
         # Execute FSM transition using active FSM (async to support async transforms)
         step_result = await active_fsm.step_async(wizard_state.data)
         wizard_state.data.pop("_message", None)
+        wizard_state.data.pop("_bank_fn", None)
         to_stage = active_fsm.current_stage
 
         # Log transition result
@@ -1413,6 +1594,9 @@ class WizardReasoning(ReasoningStrategy):
                     self._active_subflow_fsm.restore(fsm_state)
             else:
                 self._active_subflow_fsm = None
+
+            # Restore MemoryBank instances from persisted data
+            self._restore_banks(wizard_data.get("banks", {}))
             return state
 
         # Initialize new wizard state with tasks from config
@@ -1542,6 +1726,11 @@ class WizardReasoning(ReasoningStrategy):
             "tasks": state.tasks.to_dict(),
             "subflow_stack": [s.to_dict() for s in state.subflow_stack],
         }
+        # Persist MemoryBank data alongside FSM state
+        if self._banks:
+            wizard_meta["banks"] = {
+                name: bank.to_dict() for name, bank in self._banks.items()
+            }
         manager.metadata["wizard"] = wizard_meta
 
     # =========================================================================
@@ -2096,6 +2285,10 @@ class WizardReasoning(ReasoningStrategy):
         state.clarification_attempts = 0
         state.transitions = previous_transitions
         state.stage_entry_time = time.time()
+
+        # Clear all memory banks on restart (clean slate)
+        for bank in self._banks.values():
+            bank.clear()
 
         stage = self._fsm.current_metadata
         response = await self._generate_stage_response(
@@ -2753,6 +2946,8 @@ class WizardReasoning(ReasoningStrategy):
             # Wizard progress
             "history": state.history,
             "completed": state.completed,
+            # MemoryBank accessor for template expressions
+            "bank": self._make_bank_accessor(),
         }
 
         # Merge extra context (e.g. LLM-generated variables)
@@ -3669,7 +3864,10 @@ class WizardReasoning(ReasoningStrategy):
 
             # Create a function to evaluate the condition
             # Note: 'data' must be in globals for the function to access it
-            global_vars: dict[str, Any] = {"data": data}
+            global_vars: dict[str, Any] = {
+                "data": data,
+                "bank": self._make_bank_accessor(),
+            }
             local_vars: dict[str, Any] = {}
             exec_code = f"def _test():\n    {code}\n_result = _test()"
             exec(exec_code, global_vars, local_vars)  # nosec B102
