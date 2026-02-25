@@ -731,6 +731,16 @@ class WizardReasoning(ReasoningStrategy):
             manager, llm, stage, wizard_state, tools=[],
         )
 
+        # Record that the start stage template has been rendered so that
+        # generate() does not re-render it as a "first confirmation" when
+        # the user's first message arrives with extracted data.
+        if stage.get("response_template"):
+            stage_name = stage.get("name", "unknown")
+            render_counts = wizard_state.data.setdefault(
+                "_stage_render_counts", {}
+            )
+            render_counts[stage_name] = render_counts.get(stage_name, 0) + 1
+
         # Persist wizard state
         self._save_wizard_state(manager, wizard_state)
 
@@ -2358,6 +2368,10 @@ class WizardReasoning(ReasoningStrategy):
         stage_name = stage.get("name", "unknown")
         response_template = stage.get("response_template")
 
+        # Build wizard metadata snapshot once — passed to whichever call
+        # creates the conversation node so every path persists it.
+        wizard_snapshot = {"wizard": self._build_wizard_metadata(state)}
+
         # ── Template mode ────────────────────────────────────────
         if response_template:
             # Generate LLM context variables if configured
@@ -2386,6 +2400,7 @@ class WizardReasoning(ReasoningStrategy):
                 )
                 response = await manager.complete(
                     system_prompt_override=scoped_prompt,
+                    metadata=wizard_snapshot,
                 )
             else:
                 logger.debug(
@@ -2397,13 +2412,10 @@ class WizardReasoning(ReasoningStrategy):
                 # Persist template response to conversation store
                 # (manager.complete() does this automatically, but template
                 # mode bypasses the LLM so we must persist explicitly)
-                # Include wizard state snapshot so each message in the
-                # conversation log carries the wizard state at generation time.
-                wizard_snapshot = self._build_wizard_metadata(state)
                 await manager.add_message(
                     role="assistant",
                     content=rendered,
-                    metadata={"wizard": wizard_snapshot},
+                    metadata=wizard_snapshot,
                 )
 
             self._add_wizard_metadata(response, state, stage)
@@ -2427,13 +2439,15 @@ class WizardReasoning(ReasoningStrategy):
 
         if stage_tools and self._use_react_for_stage(stage):
             response = await self._react_stage_response(
-                manager, enhanced_prompt, stage, state, stage_tools
+                manager, enhanced_prompt, stage, state, stage_tools,
+                metadata=wizard_snapshot,
             )
         else:
             # Single LLM call (default behavior)
             response = await manager.complete(
                 system_prompt_override=enhanced_prompt,
                 tools=stage_tools,
+                metadata=wizard_snapshot,
             )
 
         # Log response details
@@ -2847,6 +2861,7 @@ class WizardReasoning(ReasoningStrategy):
         stage: dict[str, Any],
         state: WizardState,
         tools: list[Any],
+        metadata: dict[str, Any] | None = None,
     ) -> Any:
         """Generate response using ReAct loop for tool-using stage.
 
@@ -2859,6 +2874,7 @@ class WizardReasoning(ReasoningStrategy):
             stage: Stage metadata dict
             state: Current wizard state
             tools: Available tools for this stage
+            metadata: Optional metadata to persist on conversation nodes
 
         Returns:
             Final LLM response after ReAct loop completes
@@ -2897,6 +2913,7 @@ class WizardReasoning(ReasoningStrategy):
             response = await manager.complete(
                 system_prompt_override=enhanced_prompt,
                 tools=tools,
+                metadata=metadata,
             )
 
             # Check if response has tool calls
@@ -2937,6 +2954,7 @@ class WizardReasoning(ReasoningStrategy):
         return await manager.complete(
             system_prompt_override=enhanced_prompt,
             tools=None,  # Force text response
+            metadata=metadata,
         )
 
     async def _execute_react_tool_call(
