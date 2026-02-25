@@ -80,6 +80,30 @@ class ReasoningStrategy(ABC):
         - ReAct: Reason and act in a loop with tools
     """
 
+    async def greet(
+        self,
+        manager: ReasoningManagerProtocol,
+        llm: Any,
+        **kwargs: Any,
+    ) -> Any | None:
+        """Generate an initial bot greeting before the user speaks.
+
+        Override in strategies that support bot-initiated greetings (e.g.
+        wizard flows with a ``response_template`` on the start stage).
+
+        The default implementation returns ``None``, indicating the strategy
+        does not support greetings.
+
+        Args:
+            manager: ConversationManager or compatible manager instance
+            llm: LLM provider instance
+            **kwargs: Additional generation parameters
+
+        Returns:
+            LLM response object if a greeting was generated, or None
+        """
+        return None
+
     @abstractmethod
     async def generate(
         self,

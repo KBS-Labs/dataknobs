@@ -650,6 +650,64 @@ class DynaBot:
 
         return response_content
 
+    async def greet(self, context: BotContext) -> str | None:
+        """Generate a bot-initiated greeting before the user speaks.
+
+        Delegates to the reasoning strategy's ``greet()`` method. Returns
+        ``None`` if the bot has no reasoning strategy or the strategy does
+        not support greetings (e.g. non-wizard strategies).
+
+        No user message is added to conversation history — the greeting
+        is a bot-initiated assistant message only.
+
+        Args:
+            context: Bot execution context
+
+        Returns:
+            Greeting string, or None if the bot does not support greetings
+
+        Example:
+            ```python
+            context = BotContext(conversation_id="conv-123", client_id="harness")
+            greeting = await bot.greet(context)
+            if greeting:
+                print(f"Bot says: {greeting}")
+            ```
+        """
+        if not self.reasoning_strategy:
+            return None
+
+        # Apply middleware (before) with empty message for context
+        for mw in self.middleware:
+            if hasattr(mw, "before_message"):
+                await mw.before_message("", context)
+
+        # Get or create conversation manager
+        manager = await self._get_or_create_conversation(context)
+
+        # Delegate to reasoning strategy
+        response = await self.reasoning_strategy.greet(
+            manager=manager,
+            llm=self.llm,
+        )
+
+        if response is None:
+            return None
+
+        # Extract response content
+        response_content = response.content if hasattr(response, "content") else str(response)
+
+        # Update memory with assistant greeting (no user message)
+        if self.memory:
+            await self.memory.add_message(response_content, role="assistant")
+
+        # Apply middleware (after)
+        for mw in self.middleware:
+            if hasattr(mw, "after_message"):
+                await mw.after_message(response, context)
+
+        return response_content
+
     async def stream_chat(
         self,
         message: str,

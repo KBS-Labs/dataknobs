@@ -688,6 +688,54 @@ class WizardReasoning(ReasoningStrategy):
             initial_data=config.get("initial_data"),
         )
 
+    async def greet(
+        self,
+        manager: Any,
+        llm: Any,
+        **kwargs: Any,
+    ) -> Any | None:
+        """Generate a bot-initiated greeting from the wizard's start stage.
+
+        Initializes wizard state (restarting the FSM to the start stage) and
+        generates a response using the start stage's ``response_template`` or
+        LLM prompt — exactly as ``generate()`` would, but without a user
+        message.
+
+        This enables wizard scenarios to begin with the bot greeting the user
+        (e.g. "Welcome! What is your name?") so the user's first turn answers
+        the wizard's question rather than sending a throwaway message.
+
+        Args:
+            manager: ConversationManager or compatible manager instance
+            llm: LLM provider instance
+            **kwargs: Additional generation parameters
+
+        Returns:
+            LLM response object with wizard metadata
+        """
+        # Store LLM reference so transform context wrappers can access it
+        self._current_llm = llm
+
+        # Initialize fresh wizard state (restarts FSM to start stage)
+        wizard_state = self._get_wizard_state(manager)
+
+        logger.info(
+            "Wizard greet: stage='%s', history=%s",
+            wizard_state.current_stage,
+            wizard_state.history,
+        )
+
+        # Get start stage metadata and generate the response
+        stage = self._get_active_fsm().current_metadata
+        response = await self._generate_stage_response(
+            manager, llm, stage, wizard_state, tools=[],
+        )
+
+        # Persist wizard state
+        self._save_wizard_state(manager, wizard_state)
+
+        return response
+
     async def generate(
         self,
         manager: Any,
