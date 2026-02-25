@@ -1,14 +1,20 @@
 """Test configuration and fixtures for wizard reasoning tests."""
 
+import tempfile
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
-from dataknobs_llm.llm import LLMMessage, LLMResponse
+from dataknobs_data.backends.memory import AsyncMemoryDatabase
+from dataknobs_llm.conversations import ConversationManager, DataknobsConversationStorage
+from dataknobs_llm.llm import LLMConfig, LLMMessage, LLMResponse
 from dataknobs_llm.llm.providers.echo import EchoProvider
+from dataknobs_llm.prompts import AsyncPromptBuilder, FileSystemPromptLibrary
 
 
 @dataclass
@@ -80,21 +86,24 @@ class WizardTestManager:
 
     async def add_message(
         self,
-        content: str,
         role: str = "user",
+        content: str | None = None,
+        *,
         metadata: dict[str, Any] | None = None,
+        **kwargs: Any,
     ) -> None:
-        """Add a message to the conversation (async interface for ReAct compatibility).
+        """Add a message to the conversation.
 
-        This method supports the interface used by ReAct-style loops where
-        tool observations are added as system messages.
+        Signature matches ReasoningManagerProtocol and ConversationManager
+        (role-first). All callers use keyword arguments.
 
         Args:
-            content: Message content
             role: Message role (user, assistant, system)
-            metadata: Optional metadata for the message
+            content: Message content
+            metadata: Optional per-message metadata
+            **kwargs: Additional parameters (ignored, for protocol compat)
         """
-        msg: dict[str, Any] = {"role": role, "content": content}
+        msg: dict[str, Any] = {"role": role, "content": content or ""}
         if metadata:
             msg["metadata"] = metadata
         self.messages.append(msg)
@@ -252,3 +261,51 @@ def test_manager_with_state(simple_wizard_config: dict[str, Any]) -> WizardTestM
             }
         }
     )
+
+
+def _create_minimal_prompts(prompt_dir: Path) -> None:
+    """Create minimal prompt files for ConversationManager tests."""
+    system_dir = prompt_dir / "system"
+    system_dir.mkdir(parents=True, exist_ok=True)
+    (system_dir / "assistant.yaml").write_text(
+        yaml.dump({"template": "You are a helpful assistant"})
+    )
+
+
+@pytest.fixture
+async def real_conversation_manager():
+    """Create a real ConversationManager backed by EchoProvider.
+
+    This fixture provides a production-equivalent manager for tests that
+    need to verify the full call chain (reasoning → manager → provider).
+    The EchoProvider allows scripted responses while exercising the real
+    ConversationManager code paths including system_prompt_override and
+    tools handling.
+
+    Yields:
+        dict with 'manager' (ConversationManager) and 'provider' (EchoProvider)
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prompt_dir = Path(tmpdir) / "prompts"
+        _create_minimal_prompts(prompt_dir)
+
+        config = LLMConfig(
+            provider="echo",
+            model="echo-test",
+            options={"echo_prefix": ""},
+        )
+        provider = EchoProvider(config)
+        library = FileSystemPromptLibrary(prompt_dir)
+        builder = AsyncPromptBuilder(library=library)
+        storage = DataknobsConversationStorage(AsyncMemoryDatabase())
+
+        manager = await ConversationManager.create(
+            llm=provider,
+            prompt_builder=builder,
+            storage=storage,
+            system_prompt_name="assistant",
+        )
+
+        yield {"manager": manager, "provider": provider}
+
+        await provider.close()
