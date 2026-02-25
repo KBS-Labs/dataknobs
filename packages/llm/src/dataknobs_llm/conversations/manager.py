@@ -82,6 +82,7 @@ See Also:
     - AsyncPromptBuilder: Prompt rendering with RAG integration
 """
 
+import logging
 import uuid
 from typing import List, Dict, Any, AsyncIterator
 from datetime import datetime
@@ -98,6 +99,8 @@ from dataknobs_llm.conversations.storage import (
     calculate_node_id,
     get_node_by_id,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ConversationManager:
@@ -567,18 +570,21 @@ class ConversationManager:
         branch_name: str | None = None,
         metadata: Dict[str, Any] | None = None,
         llm_config_overrides: Dict[str, Any] | None = None,
+        system_prompt_override: str | None = None,
+        tools: list[Any] | None = None,
         **llm_kwargs: Any,
     ) -> LLMResponse:
         """Get LLM completion and add as child of current node.
 
         This method:
         1. Gets conversation history from root to current node
-        2. Executes middleware (pre-LLM)
-        3. Calls LLM with history
-        4. Executes middleware (post-LLM)
-        5. Adds assistant response as child of current node
-        6. Updates current position to new node
-        7. Persists to storage
+        2. Optionally overrides the system prompt for this call only
+        3. Executes middleware (pre-LLM)
+        4. Calls LLM with history (and tools if provided)
+        5. Executes middleware (post-LLM)
+        6. Adds assistant response as child of current node
+        7. Updates current position to new node
+        8. Persists to storage
 
         Args:
             branch_name: Optional human-readable label for this branch
@@ -586,6 +592,13 @@ class ConversationManager:
             llm_config_overrides: Optional dict to override LLM config fields
                 for this request only. Supported fields: model, temperature,
                 max_tokens, top_p, stop_sequences, seed.
+            system_prompt_override: Optional system prompt to use for this
+                completion only. Replaces the first system message in the
+                message list without mutating the conversation tree. Used by
+                reasoning strategies to inject stage-specific context.
+            tools: Optional list of tools available for this completion.
+                Forwarded to the LLM provider's complete() method for
+                consistent tool handling across all providers.
             **llm_kwargs: Additional arguments for LLM.complete()
 
         Returns:
@@ -611,6 +624,14 @@ class ConversationManager:
             result = await manager.complete(
                 llm_config_overrides={"model": "gpt-4-turbo", "temperature": 0.9}
             )
+
+            # With system prompt override (used by reasoning strategies)
+            result = await manager.complete(
+                system_prompt_override="You are a wizard assistant at step 2..."
+            )
+
+            # With tools
+            result = await manager.complete(tools=[search_tool, calc_tool])
             ```
 
         Note:
@@ -641,6 +662,22 @@ class ConversationManager:
         # Get messages from root to current position
         messages = self.state.get_current_messages()
 
+        # Apply system prompt override if provided (copy, don't mutate tree)
+        if system_prompt_override is not None:
+            messages = list(messages)  # shallow copy
+            if messages and messages[0].role == "system":
+                messages[0] = LLMMessage(
+                    role="system", content=system_prompt_override
+                )
+            else:
+                messages.insert(
+                    0, LLMMessage(role="system", content=system_prompt_override)
+                )
+            logger.debug(
+                "System prompt overridden for this completion (%d chars)",
+                len(system_prompt_override),
+            )
+
         # Execute middleware (pre-LLM) in forward order
         for mw in self.middleware:
             messages = await mw.process_request(messages, self.state)
@@ -649,6 +686,7 @@ class ConversationManager:
         response = await self.llm.complete(
             messages,
             config_overrides=llm_config_overrides,
+            tools=tools,
             **llm_kwargs
         )
 
@@ -719,6 +757,8 @@ class ConversationManager:
         branch_name: str | None = None,
         metadata: Dict[str, Any] | None = None,
         llm_config_overrides: Dict[str, Any] | None = None,
+        system_prompt_override: str | None = None,
+        tools: list[Any] | None = None,
         **llm_kwargs,
     ) -> AsyncIterator[LLMStreamResponse]:
         r"""Stream LLM completion and add as child of current node.
@@ -733,6 +773,10 @@ class ConversationManager:
             llm_config_overrides: Optional dict to override LLM config fields
                 for this request only. Supported fields: model, temperature,
                 max_tokens, top_p, stop_sequences, seed.
+            system_prompt_override: Optional system prompt to use for this
+                completion only. Replaces the first system message in the
+                message list without mutating the conversation tree.
+            tools: Optional list of tools available for this completion.
             **llm_kwargs: Additional arguments for LLM.stream_complete()
 
         Yields:
@@ -780,6 +824,22 @@ class ConversationManager:
 
         # Get messages
         messages = self.state.get_current_messages()
+
+        # Apply system prompt override if provided (copy, don't mutate tree)
+        if system_prompt_override is not None:
+            messages = list(messages)
+            if messages and messages[0].role == "system":
+                messages[0] = LLMMessage(
+                    role="system", content=system_prompt_override
+                )
+            else:
+                messages.insert(
+                    0, LLMMessage(role="system", content=system_prompt_override)
+                )
+            logger.debug(
+                "System prompt overridden for this stream completion (%d chars)",
+                len(system_prompt_override),
+            )
 
         # Execute middleware (pre-LLM) in forward order
         for mw in self.middleware:
@@ -1521,6 +1581,4 @@ class ConversationManager:
                     metadata['cumulative_cost_usd'] = cumulative
         except Exception as e:
             # Don't fail the conversation if cost calculation fails
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.warning(f"Failed to calculate cost: {e}")
+            logger.warning("Failed to calculate cost: %s", e)

@@ -59,6 +59,7 @@ See Also:
 
 import os
 import json
+import warnings
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
@@ -252,6 +253,7 @@ class AnthropicProvider(AsyncLLMProvider):
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
         **kwargs: Any
     ) -> LLMResponse:
         """Generate completion.
@@ -260,6 +262,7 @@ class AnthropicProvider(AsyncLLMProvider):
             messages: Input messages or prompt
             config_overrides: Optional dict to override config fields (model,
                 temperature, max_tokens, top_p, stop_sequences, seed)
+            tools: Optional list of Tool objects for function calling
             **kwargs: Additional provider-specific parameters
         """
         if not self._is_initialized:
@@ -283,15 +286,29 @@ class AnthropicProvider(AsyncLLMProvider):
                     prompt += f"\n\nAssistant: {msg.content}"
             prompt += "\n\nAssistant:"
 
+        # Build API call kwargs
+        api_kwargs: Dict[str, Any] = {
+            "model": runtime_config.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": runtime_config.max_tokens or 1024,
+            "temperature": runtime_config.temperature,
+            "top_p": runtime_config.top_p,
+            "stop_sequences": runtime_config.stop_sequences,
+        }
+
+        # Handle tools if provided
+        if tools:
+            anthropic_tools = []
+            for tool in tools:
+                anthropic_tools.append({
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": tool.schema if hasattr(tool, "schema") else {},
+                })
+            api_kwargs["tools"] = anthropic_tools
+
         # Make API call
-        response = await self._client.messages.create(
-            model=runtime_config.model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=runtime_config.max_tokens or 1024,
-            temperature=runtime_config.temperature,
-            top_p=runtime_config.top_p,
-            stop_sequences=runtime_config.stop_sequences
-        )
+        response = await self._client.messages.create(**api_kwargs)
 
         return LLMResponse(
             content=response.content[0].text,
@@ -367,6 +384,7 @@ class AnthropicProvider(AsyncLLMProvider):
         **kwargs
     ) -> LLMResponse:
         """Execute function calling with native Anthropic tools API (Claude 3+)."""
+        warnings.warn("function_call() is deprecated, use complete(tools=...) instead", DeprecationWarning, stacklevel=2)
         if not self._is_initialized:
             await self.initialize()
 

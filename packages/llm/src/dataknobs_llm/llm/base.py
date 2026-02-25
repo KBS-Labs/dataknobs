@@ -983,6 +983,7 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
         **kwargs
     ) -> LLMResponse:
         """Generate completion asynchronously.
@@ -997,6 +998,11 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
             config_overrides: Optional dict to override config fields for this
                 request only. Supported fields: model, temperature, max_tokens,
                 top_p, stop_sequences, seed. The original config is not modified.
+            tools: Optional list of Tool objects available for this completion.
+                Each tool should have ``name``, ``description``, and ``schema``
+                attributes. When provided, the LLM may return tool calls in the
+                response. Providers that do not support tools will raise
+                ``ToolsNotSupportedError``.
             **kwargs: Additional provider-specific parameters. Common options:
                 - temperature (float): Sampling temperature (0.0-2.0)
                 - max_tokens (int): Maximum tokens to generate
@@ -1343,6 +1349,12 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
     ) -> LLMResponse:
         """Execute function calling asynchronously.
 
+        .. deprecated::
+            Use ``complete(tools=...)`` instead. The ``function_call()`` method
+            will be removed in a future major version. All providers now support
+            the ``tools`` parameter on ``complete()`` for consistent tool
+            handling.
+
         Enables the LLM to call external functions/tools. The model decides
         which function to call based on the conversation context, and returns
         the function name and arguments in a structured format.
@@ -1476,6 +1488,7 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
         **kwargs
     ) -> LLMResponse:
         """Generate completion synchronously.
@@ -1485,6 +1498,7 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
             config_overrides: Optional dict to override config fields for this
                 request only. Supported fields: model, temperature, max_tokens,
                 top_p, stop_sequences, seed. The original config is not modified.
+            tools: Optional list of Tool objects available for this completion.
             **kwargs: Additional parameters
 
         Returns:

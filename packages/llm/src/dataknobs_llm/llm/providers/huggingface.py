@@ -1,6 +1,7 @@
 """HuggingFace Inference API provider implementation."""
 
 import os
+import warnings
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
@@ -71,6 +72,7 @@ class HuggingFaceProvider(AsyncLLMProvider):
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
         **kwargs: Any
     ) -> LLMResponse:
         """Generate completion.
@@ -79,8 +81,17 @@ class HuggingFaceProvider(AsyncLLMProvider):
             messages: Input messages or prompt
             config_overrides: Optional dict to override config fields (model,
                 temperature, max_tokens, top_p, stop_sequences, seed)
+            tools: Optional list of Tool objects (not supported — raises
+                ToolsNotSupportedError if provided)
             **kwargs: Additional provider-specific parameters
         """
+        if tools:
+            from ...exceptions import ToolsNotSupportedError
+            raise ToolsNotSupportedError(
+                model=self.config.model,
+                suggestion="HuggingFace Inference API does not support tool calling.",
+            )
+
         if not self._is_initialized:
             await self.initialize()
 
@@ -174,6 +185,7 @@ class HuggingFaceProvider(AsyncLLMProvider):
         **kwargs
     ) -> LLMResponse:
         """HuggingFace doesn't have native function calling."""
+        warnings.warn("function_call() is deprecated, use complete(tools=...) instead", DeprecationWarning, stacklevel=2)
         raise NotImplementedError("Function calling not supported for HuggingFace models")
 
     def _build_prompt(self, messages: List[LLMMessage]) -> str:

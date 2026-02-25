@@ -88,6 +88,7 @@ See Also:
 
 import os
 import json
+import warnings
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
@@ -456,6 +457,7 @@ class OllamaProvider(AsyncLLMProvider):
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
         **kwargs: Any
     ) -> LLMResponse:
         """Generate completion using Ollama chat endpoint.
@@ -464,6 +466,7 @@ class OllamaProvider(AsyncLLMProvider):
             messages: Input messages or prompt
             config_overrides: Optional dict to override config fields (model,
                 temperature, max_tokens, top_p, stop_sequences, seed)
+            tools: Optional list of Tool objects for function calling
             **kwargs: Additional provider-specific parameters
         """
         if not self._is_initialized:
@@ -496,7 +499,6 @@ class OllamaProvider(AsyncLLMProvider):
             payload['format'] = 'json'
 
         # Handle tools if provided
-        tools = kwargs.get('tools')
         if tools:
             # Convert Tool objects to dict format for _adapt_tools
             tool_dicts = []
@@ -654,6 +656,7 @@ class OllamaProvider(AsyncLLMProvider):
         For Ollama 0.1.17+, uses native tools API.
         Falls back to prompt-based approach for older versions.
         """
+        warnings.warn("function_call() is deprecated, use complete(tools=...) instead", DeprecationWarning, stacklevel=2)
         if not self._is_initialized:
             await self.initialize()
 
