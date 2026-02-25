@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncGenerator
 from pathlib import Path
 from types import TracebackType
@@ -9,16 +10,19 @@ from typing import TYPE_CHECKING, Any
 
 from typing_extensions import Self
 
+from dataknobs_llm import LLMStreamResponse
 from dataknobs_llm.conversations import ConversationManager, DataknobsConversationStorage
 from dataknobs_llm.llm import AsyncLLMProvider
 from dataknobs_llm.prompts import AsyncPromptBuilder
 from dataknobs_llm.tools import ToolRegistry
 
-from .context import BotContext
 from ..memory.base import Memory
+from .context import BotContext
 
 if TYPE_CHECKING:
     from dataknobs_config import EnvironmentAwareConfig, EnvironmentConfig
+
+logger = logging.getLogger(__name__)
 
 
 def normalize_wizard_state(wizard_meta: dict[str, Any]) -> dict[str, Any]:
@@ -211,17 +215,59 @@ class DynaBot:
             bot = await DynaBot.from_config(config)
             ```
         """
-        from dataknobs_data.factory import AsyncDatabaseFactory
         from dataknobs_llm.llm import LLMProviderFactory
-        from dataknobs_llm.prompts import AsyncPromptBuilder
-        from dataknobs_llm.prompts.implementations import CompositePromptLibrary
-        from ..memory import create_memory_from_config
 
         # Create LLM provider
         llm_config = config["llm"]
         factory = LLMProviderFactory(is_async=True)
         llm = factory.create(llm_config)
         await llm.initialize()
+
+        # Everything below can fail; ensure the provider is closed on error
+        # so we don't leak aiohttp sessions or other resources.
+        try:
+            return await cls._build_from_config(config, llm, llm_config)
+        except Exception:
+            await llm.close()
+            raise
+
+    @classmethod
+    async def _build_from_config(
+        cls,
+        config: dict[str, Any],
+        llm: Any,
+        llm_config: dict[str, Any],
+    ) -> DynaBot:
+        """Build a DynaBot after the LLM provider is initialized.
+
+        Separated from from_config() so the caller can guarantee cleanup
+        of the LLM provider if anything here raises.
+        """
+        from dataknobs_data.factory import AsyncDatabaseFactory
+        from dataknobs_llm.prompts import AsyncPromptBuilder
+        from dataknobs_llm.prompts.implementations import CompositePromptLibrary
+
+        from ..memory import create_memory_from_config
+
+        # Validate capability requirements (Layer 2 — startup check)
+        from .validation import infer_capability_requirements
+
+        requirements = infer_capability_requirements(config)
+        if requirements:
+            capabilities = llm.get_capabilities()
+            capability_values = {cap.value for cap in capabilities}
+            missing = [r for r in requirements if r not in capability_values]
+            if missing:
+                from dataknobs_common.exceptions import ConfigurationError
+
+                model_name = llm_config.get("model", "unknown")
+                raise ConfigurationError(
+                    f"Bot requires capabilities {missing} but model "
+                    f"'{model_name}' provides "
+                    f"{sorted(capability_values)}. "
+                    f"Use a model that supports {missing} or "
+                    f"update the environment resource configuration."
+                )
 
         # Create conversation storage
         storage_config = config["conversation_storage"].copy()
@@ -284,8 +330,9 @@ class DynaBot:
         knowledge_base = None
         kb_config = config.get("knowledge_base", {})
         if kb_config.get("enabled"):
-            from ..knowledge import create_knowledge_base_from_config
             import logging
+
+            from ..knowledge import create_knowledge_base_from_config
             logger = logging.getLogger(__name__)
             logger.info(f"Initializing knowledge base with config: {kb_config.get('type', 'unknown')}")
             knowledge_base = await create_knowledge_base_from_config(kb_config)
@@ -506,7 +553,6 @@ class DynaBot:
         context: BotContext,
         temperature: float | None = None,
         max_tokens: int | None = None,
-        stream: bool = False,
         rag_query: str | None = None,
         llm_config_overrides: dict[str, Any] | None = None,
         **kwargs: Any,
@@ -518,7 +564,6 @@ class DynaBot:
             context: Bot execution context
             temperature: Optional temperature override
             max_tokens: Optional max tokens override
-            stream: Whether to stream the response
             rag_query: Optional explicit query for knowledge base retrieval.
                       If provided, this is used instead of the message for RAG.
                       Useful when the message contains literal text to analyze
@@ -605,6 +650,64 @@ class DynaBot:
 
         return response_content
 
+    async def greet(self, context: BotContext) -> str | None:
+        """Generate a bot-initiated greeting before the user speaks.
+
+        Delegates to the reasoning strategy's ``greet()`` method. Returns
+        ``None`` if the bot has no reasoning strategy or the strategy does
+        not support greetings (e.g. non-wizard strategies).
+
+        No user message is added to conversation history — the greeting
+        is a bot-initiated assistant message only.
+
+        Args:
+            context: Bot execution context
+
+        Returns:
+            Greeting string, or None if the bot does not support greetings
+
+        Example:
+            ```python
+            context = BotContext(conversation_id="conv-123", client_id="harness")
+            greeting = await bot.greet(context)
+            if greeting:
+                print(f"Bot says: {greeting}")
+            ```
+        """
+        if not self.reasoning_strategy:
+            return None
+
+        # Apply middleware (before) with empty message for context
+        for mw in self.middleware:
+            if hasattr(mw, "before_message"):
+                await mw.before_message("", context)
+
+        # Get or create conversation manager
+        manager = await self._get_or_create_conversation(context)
+
+        # Delegate to reasoning strategy
+        response = await self.reasoning_strategy.greet(
+            manager=manager,
+            llm=self.llm,
+        )
+
+        if response is None:
+            return None
+
+        # Extract response content
+        response_content = response.content if hasattr(response, "content") else str(response)
+
+        # Update memory with assistant greeting (no user message)
+        if self.memory:
+            await self.memory.add_message(response_content, role="assistant")
+
+        # Apply middleware (after)
+        for mw in self.middleware:
+            if hasattr(mw, "after_message"):
+                await mw.after_message(response, context)
+
+        return response_content
+
     async def stream_chat(
         self,
         message: str,
@@ -614,11 +717,12 @@ class DynaBot:
         rag_query: str | None = None,
         llm_config_overrides: dict[str, Any] | None = None,
         **kwargs: Any,
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[LLMStreamResponse, None]:
         """Stream chat response token by token.
 
-        Similar to chat() but yields response chunks as they are generated,
-        providing better UX for interactive applications.
+        Similar to chat() but yields ``LLMStreamResponse`` objects as they are
+        generated, providing both the text delta and rich metadata (usage,
+        finish_reason, is_final) for each chunk.
 
         Args:
             message: User message to process
@@ -633,7 +737,8 @@ class DynaBot:
             **kwargs: Additional arguments passed to LLM
 
         Yields:
-            Response text chunks as strings
+            LLMStreamResponse objects with ``.delta`` (text), ``.is_final``,
+            ``.usage``, and ``.finish_reason`` attributes.
 
         Example:
             ```python
@@ -645,13 +750,13 @@ class DynaBot:
 
             # Stream and display in real-time
             async for chunk in bot.stream_chat("Explain quantum computing", context):
-                print(chunk, end="", flush=True)
+                print(chunk.delta, end="", flush=True)
             print()  # Newline after streaming
 
             # Accumulate response
             full_response = ""
             async for chunk in bot.stream_chat("Hello!", context):
-                full_response += chunk
+                full_response += chunk.delta
 
             # With LLM config overrides
             async for chunk in bot.stream_chat(
@@ -659,7 +764,7 @@ class DynaBot:
                 context,
                 llm_config_overrides={"model": "gpt-4-turbo"}
             ):
-                print(chunk, end="", flush=True)
+                print(chunk.delta, end="", flush=True)
             ```
 
         Note:
@@ -696,7 +801,7 @@ class DynaBot:
                 **kwargs,
             ):
                 full_response_chunks.append(chunk.delta)
-                yield chunk.delta
+                yield chunk
         except Exception as e:
             streaming_error = e
             # Call on_error middleware
@@ -886,25 +991,40 @@ class DynaBot:
         """
         # Close LLM provider
         if self.llm and hasattr(self.llm, 'close'):
-            await self.llm.close()
+            try:
+                await self.llm.close()
+            except Exception:
+                logger.exception("Error closing LLM provider")
 
         # Close conversation storage backend
         if self.conversation_storage and hasattr(self.conversation_storage, 'backend'):
             backend = self.conversation_storage.backend
             if backend and hasattr(backend, 'close'):
-                await backend.close()
+                try:
+                    await backend.close()
+                except Exception:
+                    logger.exception("Error closing conversation storage backend")
 
         # Close knowledge base (releases embedding provider HTTP sessions)
         if self.knowledge_base and hasattr(self.knowledge_base, 'close'):
-            await self.knowledge_base.close()
+            try:
+                await self.knowledge_base.close()
+            except Exception:
+                logger.exception("Error closing knowledge base")
 
         # Close reasoning strategy (releases extractor's LLM provider sessions)
         if self.reasoning_strategy and hasattr(self.reasoning_strategy, 'close'):
-            await self.reasoning_strategy.close()
+            try:
+                await self.reasoning_strategy.close()
+            except Exception:
+                logger.exception("Error closing reasoning strategy")
 
         # Close memory store
         if self.memory and hasattr(self.memory, 'close'):
-            await self.memory.close()
+            try:
+                await self.memory.close()
+            except Exception:
+                logger.exception("Error closing memory store")
 
     async def __aenter__(self) -> Self:
         """Async context manager entry.
@@ -955,50 +1075,29 @@ class DynaBot:
                 storage=self.conversation_storage,
             )
         except Exception:
-            # Create new conversation with specified conversation_id
-            from dataknobs_llm.conversations import ConversationNode, ConversationState
-            from dataknobs_llm.llm.base import LLMMessage
-            from dataknobs_structures.tree import Tree
-
             metadata = {
                 "client_id": context.client_id,
                 "user_id": context.user_id,
+                "model": self.llm.config.model,
+                "provider": self.llm.config.provider,
+                "tools": self.tool_registry.get_tool_names(),
                 **context.session_metadata,
             }
 
-            # Create initial state with specified conversation_id
-            # Start with empty root node (will be replaced by system prompt if provided)
-            root_message = LLMMessage(role="system", content="")
-            root_node = ConversationNode(
-                message=root_message,
-                node_id="",
-            )
-            tree = Tree(root_node)
-            state = ConversationState(
-                conversation_id=conv_id,  # Use the conversation_id from context
-                message_tree=tree,
-                current_node_id="",
-                metadata=metadata,
-            )
-
-            # Create manager with pre-initialized state
             manager = ConversationManager(
                 llm=self.llm,
                 prompt_builder=self.prompt_builder,
                 storage=self.conversation_storage,
-                state=state,
+                conversation_id=conv_id,
                 metadata=metadata,
             )
 
-            # Add system prompt if specified (either as template name or inline content)
             if self.system_prompt_name:
-                # Use template name - will be rendered by prompt builder
                 await manager.add_message(
                     prompt_name=self.system_prompt_name,
                     role="system",
                 )
             elif self.system_prompt_content:
-                # Use inline content - pass RAG configs if available
                 await manager.add_message(
                     content=self.system_prompt_content,
                     role="system",

@@ -16,8 +16,8 @@ This example demonstrates:
 ```bash
 # Install Ollama: https://ollama.ai/
 
-# Pull the required model (phi3 is better for tool use)
-ollama pull phi3:mini
+# Pull a tool-capable model (required for ReAct with tools)
+ollama pull qwen3:8b
 
 # Install dataknobs-bots
 pip install dataknobs-bots
@@ -52,7 +52,7 @@ Add `reasoning` and `tools` sections:
 config = {
     "llm": {
         "provider": "ollama",
-        "model": "phi3:mini"  # Better for tool use
+        "model": "qwen3:8b"  # Must support tool/function calling
     },
     "conversation_storage": {
         "backend": "memory"
@@ -70,6 +70,8 @@ config = {
     ]
 }
 ```
+
+**Important:** The ReAct strategy with tools requires a model that supports function calling. Models like `qwen3:8b`, `llama3.1:8b`, and `mistral:7b` support this. Models like `gemma3` do **not** support tool calling and will raise a `ToolsNotSupportedError`.
 
 ## Creating a Custom Tool
 
@@ -250,11 +252,16 @@ Agents can use multiple tools:
 
 ### Model Selection
 
-| Model | Use Case |
-|-------|----------|
-| gemma3:1b | Simple conversations |
-| phi3:mini | Tool use, reasoning |
-| llama3.1:8b | Complex reasoning |
+ReAct with tools **requires** a model that supports function calling:
+
+| Model | Tool Calling | Use Case |
+|-------|:---:|----------|
+| qwen3:8b | Yes | Default — chat, tools, reasoning |
+| llama3.1:8b | Yes | Complex reasoning with tools |
+| mistral:7b | Yes | General purpose with tools |
+| command-r:latest | Yes | Tool use, RAG |
+| gemma3:4b | No | Chat only (no tools) |
+| gemma3:1b | No | Simple conversations (no tools) |
 
 ## Key Takeaways
 
@@ -270,8 +277,9 @@ Agents can use multiple tools:
 **Problem**: Agent doesn't use the tool
 
 **Solutions**:
+- Verify the model supports function calling (use `qwen3:8b`, `llama3.1:8b`, or `mistral:7b`)
+- If you see `ToolsNotSupportedError`, the model cannot do tool calling — switch to a tool-capable model
 - Improve tool description
-- Use a better model (phi3, llama3.1)
 - Increase max_iterations
 - Enable verbose mode to see reasoning
 

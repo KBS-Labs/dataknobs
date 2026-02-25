@@ -688,6 +688,54 @@ class WizardReasoning(ReasoningStrategy):
             initial_data=config.get("initial_data"),
         )
 
+    async def greet(
+        self,
+        manager: Any,
+        llm: Any,
+        **kwargs: Any,
+    ) -> Any | None:
+        """Generate a bot-initiated greeting from the wizard's start stage.
+
+        Initializes wizard state (restarting the FSM to the start stage) and
+        generates a response using the start stage's ``response_template`` or
+        LLM prompt — exactly as ``generate()`` would, but without a user
+        message.
+
+        This enables wizard scenarios to begin with the bot greeting the user
+        (e.g. "Welcome! What is your name?") so the user's first turn answers
+        the wizard's question rather than sending a throwaway message.
+
+        Args:
+            manager: ConversationManager or compatible manager instance
+            llm: LLM provider instance
+            **kwargs: Additional generation parameters
+
+        Returns:
+            LLM response object with wizard metadata
+        """
+        # Store LLM reference so transform context wrappers can access it
+        self._current_llm = llm
+
+        # Initialize fresh wizard state (restarts FSM to start stage)
+        wizard_state = self._get_wizard_state(manager)
+
+        logger.info(
+            "Wizard greet: stage='%s', history=%s",
+            wizard_state.current_stage,
+            wizard_state.history,
+        )
+
+        # Get start stage metadata and generate the response
+        stage = self._get_active_fsm().current_metadata
+        response = await self._generate_stage_response(
+            manager, llm, stage, wizard_state, tools=[],
+        )
+
+        # Persist wizard state
+        self._save_wizard_state(manager, wizard_state)
+
+        return response
+
     async def generate(
         self,
         manager: Any,
@@ -723,6 +771,16 @@ class WizardReasoning(ReasoningStrategy):
 
         # Get user message
         user_message = self._get_last_user_message(manager)
+
+        logger.debug(
+            "Wizard generate: stage='%s', completed=%s, "
+            "data_keys=%s, history=%s, subflow_depth=%d",
+            wizard_state.current_stage,
+            wizard_state.completed,
+            list(wizard_state.data.keys()),
+            wizard_state.history,
+            wizard_state.subflow_depth,
+        )
 
         # Handle post-completion amendments
         if wizard_state.completed and self._allow_amendments:
@@ -1921,8 +1979,23 @@ class WizardReasoning(ReasoningStrategy):
                 return self.confidence >= 0.8 and not self.errors
 
         schema = stage.get("schema")
+        stage_name = stage.get("name", "unknown")
+
+        logger.debug(
+            "Extraction start: stage='%s', has_schema=%s, "
+            "has_extractor=%s, input_len=%d",
+            stage_name,
+            schema is not None,
+            self._extractor is not None,
+            len(message),
+        )
+
         if not schema:
             # No schema defined - pass through any data
+            logger.debug(
+                "Extraction skip: stage='%s' has no schema, returning raw input",
+                stage_name,
+            )
             return SimpleExtractionResult(
                 data={"_raw_input": message}, confidence=1.0
             )
@@ -1979,6 +2052,15 @@ class WizardReasoning(ReasoningStrategy):
                 schema=extraction_schema,
                 context=context,
                 model=extraction_model,
+            )
+
+            logger.debug(
+                "Extraction result: stage='%s', keys=%s, confidence=%.2f, "
+                "errors=%s",
+                stage_name,
+                list(result.data.keys()) if result.data else [],
+                getattr(result, "confidence", -1.0),
+                getattr(result, "errors", []),
             )
 
             # Detect conflicts with existing data
@@ -2315,7 +2397,14 @@ class WizardReasoning(ReasoningStrategy):
                 # Persist template response to conversation store
                 # (manager.complete() does this automatically, but template
                 # mode bypasses the LLM so we must persist explicitly)
-                await manager.add_message(role="assistant", content=rendered)
+                # Include wizard state snapshot so each message in the
+                # conversation log carries the wizard state at generation time.
+                wizard_snapshot = self._build_wizard_metadata(state)
+                await manager.add_message(
+                    role="assistant",
+                    content=rendered,
+                    metadata={"wizard": wizard_snapshot},
+                )
 
             self._add_wizard_metadata(response, state, stage)
             return response
@@ -2427,6 +2516,14 @@ class WizardReasoning(ReasoningStrategy):
         # Merge extra context (e.g. LLM-generated variables)
         if extra_context:
             context.update(extra_context)
+
+        logger.debug(
+            "Template render: stage='%s', template_len=%d, "
+            "context_keys=%s",
+            stage.get("name", "unknown"),
+            len(template_str),
+            list(context.keys()),
+        )
 
         return template.render(**context)
 

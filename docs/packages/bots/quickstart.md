@@ -119,10 +119,10 @@ async def main():
         client_id="demo-client"
     )
 
-    # Stream the response
+    # Stream the response — each chunk is an LLMStreamResponse
     print("Bot: ", end="", flush=True)
     async for chunk in bot.stream_chat("Tell me a short story", context):
-        print(chunk, end="", flush=True)
+        print(chunk.delta, end="", flush=True)
     print()  # Newline after streaming
 
 if __name__ == "__main__":
@@ -140,7 +140,7 @@ if __name__ == "__main__":
 | Method | Returns | Best For |
 |--------|---------|----------|
 | `chat()` | Complete `str` | Simple integrations, batch processing |
-| `stream_chat()` | `AsyncGenerator[str]` | Interactive UIs, real-time display |
+| `stream_chat()` | `AsyncGenerator[LLMStreamResponse]` | Interactive UIs, real-time display |
 
 ## Per-Request Config Overrides
 
@@ -184,7 +184,7 @@ async def main():
         context,
         llm_config_overrides={"temperature": 0.9}
     ):
-        print(chunk, end="", flush=True)
+        print(chunk.delta, end="", flush=True)
 
 if __name__ == "__main__":
     asyncio.run(main())

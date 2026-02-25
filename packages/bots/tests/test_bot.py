@@ -550,7 +550,7 @@ Remember to always verify customer identity before sharing sensitive information
         # Stream response
         chunks = []
         async for chunk in bot.stream_chat("Hello, bot!", context):
-            chunks.append(chunk)
+            chunks.append(chunk.delta)
 
         # Should receive multiple chunks (echo provider streams char by char)
         assert len(chunks) > 0
@@ -575,7 +575,7 @@ Remember to always verify customer identity before sharing sensitive information
         # Stream a response
         full_response = ""
         async for chunk in bot.stream_chat("Test message", context):
-            full_response += chunk
+            full_response += chunk.delta
 
         # Verify conversation was updated with both user and assistant messages
         conversation_state = await bot.get_conversation("conv-stream-history")
@@ -618,7 +618,7 @@ Remember to always verify customer identity before sharing sensitive information
 
     @pytest.mark.asyncio
     async def test_stream_chat_yields_incremental_content(self):
-        """Test that stream_chat yields incremental content."""
+        """Test that stream_chat yields LLMStreamResponse objects."""
         config = {
             "llm": {"provider": "echo", "model": "test"},
             "conversation_storage": {"backend": "memory"},
@@ -630,9 +630,10 @@ Remember to always verify customer identity before sharing sensitive information
         # Collect chunks to verify streaming
         chunks = []
         async for chunk in bot.stream_chat("Hello world", context):
-            chunks.append(chunk)
-            # Each chunk should be a string
-            assert isinstance(chunk, str)
+            chunks.append(chunk.delta)
+            # Each chunk should be an LLMStreamResponse with a string delta
+            assert hasattr(chunk, "delta")
+            assert isinstance(chunk.delta, str)
 
         # Echo provider yields character by character, so we should have multiple chunks
         assert len(chunks) > 1
@@ -653,12 +654,12 @@ Remember to always verify customer identity before sharing sensitive information
         # First streamed message
         response1_chunks = []
         async for chunk in bot.stream_chat("First", context):
-            response1_chunks.append(chunk)
+            response1_chunks.append(chunk.delta)
 
         # Second streamed message
         response2_chunks = []
         async for chunk in bot.stream_chat("Second", context):
-            response2_chunks.append(chunk)
+            response2_chunks.append(chunk.delta)
 
         # Both should have produced responses
         assert len(response1_chunks) > 0
@@ -688,7 +689,7 @@ Remember to always verify customer identity before sharing sensitive information
         # Stream with temperature override
         chunks = []
         async for chunk in bot.stream_chat("Hello", context, temperature=0.9):
-            chunks.append(chunk)
+            chunks.append(chunk.delta)
 
         assert len(chunks) > 0
 
@@ -714,7 +715,7 @@ Remember to always verify customer identity before sharing sensitive information
             context,
             llm_config_overrides={"model": "gpt-4-turbo", "temperature": 0.9}
         ):
-            chunks.append(chunk)
+            chunks.append(chunk.delta)
 
         assert len(chunks) > 0
 
@@ -758,7 +759,7 @@ Remember to always verify customer identity before sharing sensitive information
             context,
             llm_config_overrides={"model": "different-model"}
         ):
-            chunks.append(chunk)
+            chunks.append(chunk.delta)
 
         assert len(chunks) > 0
 
@@ -779,7 +780,7 @@ Remember to always verify customer identity before sharing sensitive information
         # Stream response
         chunks = []
         async for chunk in bot.stream_chat("Hello", context):
-            chunks.append(chunk)
+            chunks.append(chunk.delta)
 
         assert len(chunks) > 0
 
@@ -843,7 +844,7 @@ Remember to always verify customer identity before sharing sensitive information
         # Stream a message
         chunks = []
         async for chunk in bot.stream_chat("Hello middleware!", context):
-            chunks.append(chunk)
+            chunks.append(chunk.delta)
 
         full_response = "".join(chunks)
 

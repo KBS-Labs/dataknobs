@@ -1,5 +1,9 @@
 """Unit tests for template renderer with validation."""
 
+import re
+from datetime import datetime
+from unittest.mock import patch
+
 import pytest
 from dataknobs_llm.prompts import (
     TemplateRenderer,
@@ -8,6 +12,7 @@ from dataknobs_llm.prompts import (
     render_template,
     render_template_strict,
 )
+from dataknobs_llm.prompts.base.types import TemplateMode
 
 
 class TestTemplateRenderer:
@@ -314,3 +319,75 @@ class TestComplexScenarios:
         assert result.params_used == {"name": "Alice"}
         assert "age" not in result.params_used
         assert "city" not in result.params_used
+
+
+class TestSystemContext:
+    """Test suite for automatic system context injection."""
+
+    def test_current_date_injected(self):
+        """Test that current_date is auto-injected into rendered output."""
+        renderer = TemplateRenderer()
+        result = renderer.render(
+            "Today is {{current_date}}.",
+            {}
+        )
+        today = datetime.now().strftime("%Y-%m-%d")
+        assert result.content == f"Today is {today}."
+
+    def test_current_datetime_injected(self):
+        """Test that current_datetime is auto-injected."""
+        renderer = TemplateRenderer()
+        result = renderer.render(
+            "Now: {{current_datetime}}",
+            {}
+        )
+        # Should contain a date-like ISO string
+        assert re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", result.content)
+
+    def test_current_year_injected(self):
+        """Test that current_year is auto-injected."""
+        renderer = TemplateRenderer()
+        result = renderer.render(
+            "Year: {{current_year}}",
+            {}
+        )
+        assert result.content == f"Year: {datetime.now().year}"
+
+    def test_user_params_override_system_context(self):
+        """Test that explicit user params take precedence over system context."""
+        renderer = TemplateRenderer()
+        result = renderer.render(
+            "Date: {{current_date}}",
+            {"current_date": "2000-01-01"}
+        )
+        assert result.content == "Date: 2000-01-01"
+
+    def test_system_context_in_jinja2_mode(self):
+        """Test that system context works in pure JINJA2 mode."""
+        renderer = TemplateRenderer(default_mode=TemplateMode.JINJA2)
+        result = renderer.render(
+            "Today is {{current_date}}.",
+            {}
+        )
+        today = datetime.now().strftime("%Y-%m-%d")
+        assert result.content == f"Today is {today}."
+
+    def test_system_context_in_mixed_mode(self):
+        """Test that system context works in MIXED mode with conditionals."""
+        renderer = TemplateRenderer(default_mode=TemplateMode.MIXED)
+        result = renderer.render(
+            "Hello {{name}}((, today is {{current_date}}))",
+            {"name": "Alice"}
+        )
+        today = datetime.now().strftime("%Y-%m-%d")
+        assert result.content == f"Hello Alice, today is {today}"
+
+    def test_system_context_does_not_affect_unrelated_templates(self):
+        """Test that system context vars don't appear when not referenced."""
+        renderer = TemplateRenderer()
+        result = renderer.render(
+            "Hello {{name}}",
+            {"name": "Alice"}
+        )
+        assert result.content == "Hello Alice"
+        assert "current_date" not in result.content

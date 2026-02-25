@@ -51,6 +51,7 @@ from dataknobs_llm.conversations.storage import (
     calculate_node_id,
     get_node_by_id,
     get_messages_for_llm,
+    get_nodes_for_path,
 )
 from dataknobs_llm.conversations.manager import ConversationManager
 from dataknobs_llm.conversations.middleware import (
@@ -91,4 +92,5 @@ __all__ = [
     "calculate_node_id",
     "get_node_by_id",
     "get_messages_for_llm",
+    "get_nodes_for_path",
 ]

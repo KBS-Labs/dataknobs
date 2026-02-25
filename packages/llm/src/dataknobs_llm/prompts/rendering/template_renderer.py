@@ -9,6 +9,7 @@ This module provides template rendering with:
 
 import re
 import logging
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Set, Tuple
 from dataclasses import dataclass
 
@@ -108,6 +109,24 @@ class TemplateRenderer:
         # Register custom filters (domain-specific)
         self._register_custom_filters()
 
+    @staticmethod
+    def _get_system_context() -> Dict[str, str]:
+        """Return system context variables for template rendering.
+
+        These are injected as lowest-priority parameters so that templates
+        can reference current date/time without requiring explicit params.
+        User-provided params always take precedence.
+
+        Returns:
+            Dictionary with current_date, current_datetime, and current_year.
+        """
+        now = datetime.now()
+        return {
+            "current_date": now.strftime("%Y-%m-%d"),
+            "current_datetime": now.isoformat(),
+            "current_year": str(now.year),
+        }
+
     def render(
         self,
         template: str,
@@ -117,6 +136,10 @@ class TemplateRenderer:
         mode: TemplateMode | None = None
     ) -> RenderResult:
         """Render a template with parameters and validation.
+
+        System context variables (current_date, current_datetime, current_year)
+        are automatically available in all templates. User-provided params
+        override system context if they share the same key.
 
         Args:
             template: Template string with {{variables}} and ((conditionals))
@@ -131,6 +154,9 @@ class TemplateRenderer:
         Raises:
             ValueError: If validation fails or syntax errors occur
         """
+        # Merge system context (lowest priority) with user params (highest priority)
+        effective_params = {**self._get_system_context(), **params}
+
         # Determine mode
         effective_mode = mode if mode is not None else self._default_mode
 
@@ -148,14 +174,14 @@ class TemplateRenderer:
                 self._validate_no_jinja_in_conditionals(template)
 
                 # Pre-process conditionals
-                intermediate = render_conditional_template(template, params)
+                intermediate = render_conditional_template(template, effective_params)
             else:
                 # Pure Jinja2 mode - use template as-is
                 intermediate = template
 
             # Step 2: Render with Jinja2
             jinja_template = self._jinja_env.from_string(intermediate)
-            content = jinja_template.render(**params)
+            content = jinja_template.render(**effective_params)
 
         except Jinja2SyntaxError as e:
             raise ValueError(
@@ -167,12 +193,12 @@ class TemplateRenderer:
 
         # Step 3: Validation
         template_vars = self._extract_variables(template)
-        params_used = {k: v for k, v in params.items() if k in template_vars}
+        params_used = {k: v for k, v in effective_params.items() if k in template_vars}
         params_missing = []
 
         # Check for missing required parameters
         for var in validation.required_params:
-            if var not in params or params[var] is None:
+            if var not in effective_params or effective_params[var] is None:
                 params_missing.append(var)
 
         # Handle validation

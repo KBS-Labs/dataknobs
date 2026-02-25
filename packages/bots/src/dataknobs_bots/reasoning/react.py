@@ -1,8 +1,11 @@
 """ReAct (Reasoning + Acting) reasoning strategy."""
 
+import json
 import logging
 from typing import Any
 
+from dataknobs_llm.exceptions import ToolsNotSupportedError
+from dataknobs_llm.llm.base import LLMResponse
 from dataknobs_llm.tools import ToolExecutionContext
 
 from .base import ReasoningStrategy
@@ -133,6 +136,9 @@ class ReActReasoning(ReasoningStrategy):
             },
         )
 
+        # Track previous iteration's tool calls for duplicate detection
+        prev_tool_calls: list[tuple[str, str]] | None = None
+
         # ReAct loop
         for iteration in range(self.max_iterations):
             iteration_trace = {
@@ -151,7 +157,25 @@ class ReActReasoning(ReasoningStrategy):
             )
 
             # Generate response with tools
-            response = await manager.complete(tools=tools, **kwargs)
+            try:
+                response = await manager.complete(tools=tools, **kwargs)
+            except ToolsNotSupportedError as e:
+                logger.error(
+                    "ReAct: Model '%s' does not support tools — "
+                    "returning graceful response to user",
+                    e.model,
+                    extra={"conversation_id": manager.conversation_id},
+                )
+                return LLMResponse(
+                    content=(
+                        "I'm configured to use tools for this task, but my "
+                        "current language model doesn't support tool calling. "
+                        "Please contact the administrator to update the model "
+                        "configuration."
+                    ),
+                    model=e.model,
+                    finish_reason="error",
+                )
 
             # Check if we have tool calls
             if not hasattr(response, "tool_calls") or not response.tool_calls:
@@ -183,6 +207,32 @@ class ReActReasoning(ReasoningStrategy):
                     "tools": [tc.name for tc in response.tool_calls],
                 },
             )
+
+            # Duplicate detection: compare (name, sorted params JSON)
+            # with previous iteration to avoid infinite loops
+            current_calls = [
+                (tc.name, json.dumps(tc.parameters, sort_keys=True))
+                for tc in response.tool_calls
+            ]
+
+            if prev_tool_calls is not None and current_calls == prev_tool_calls:
+                logger.warning(
+                    "ReAct: Duplicate tool calls detected, breaking loop",
+                    extra={
+                        "conversation_id": manager.conversation_id,
+                        "iteration": iteration + 1,
+                        "duplicate_calls": [tc.name for tc in response.tool_calls],
+                    },
+                )
+
+                if trace is not None:
+                    iteration_trace["status"] = "duplicate_tool_calls_detected"
+                    trace.append(iteration_trace)
+                    await self._store_trace(manager, trace)
+
+                break
+
+            prev_tool_calls = current_calls
 
             # Build execution context for tools that need it
             tool_context = ToolExecutionContext.from_manager(manager)
@@ -279,19 +329,21 @@ class ReActReasoning(ReasoningStrategy):
                 iteration_trace["status"] = "continued"
                 trace.append(iteration_trace)
 
-        # Max iterations reached, generate final response without tools
-        logger.log(
-            log_level,
-            "ReAct: Max iterations reached, generating final response",
-            extra={
-                "conversation_id": manager.conversation_id,
-                "iterations_used": self.max_iterations,
-            },
-        )
+        else:
+            # for-else: only reached when the loop exhausts all iterations
+            # without a break (i.e. not triggered by duplicate detection)
+            logger.log(
+                log_level,
+                "ReAct: Max iterations reached, generating final response",
+                extra={
+                    "conversation_id": manager.conversation_id,
+                    "iterations_used": self.max_iterations,
+                },
+            )
 
-        if trace is not None:
-            trace.append({"status": "max_iterations_reached"})
-            await self._store_trace(manager, trace)
+            if trace is not None:
+                trace.append({"status": "max_iterations_reached"})
+                await self._store_trace(manager, trace)
 
         return await manager.complete(**kwargs)
 
@@ -303,16 +355,13 @@ class ReActReasoning(ReasoningStrategy):
             trace: Reasoning trace data
         """
         try:
-            # Get existing metadata
-            metadata = manager.conversation.metadata or {}
+            # Update in-memory metadata on the manager
+            manager.update_metadata({"reasoning_trace": trace})
 
-            # Add trace to metadata
-            metadata["reasoning_trace"] = trace
-
-            # Update conversation metadata
+            # Persist to storage
             await manager.storage.update_metadata(
                 conversation_id=manager.conversation_id,
-                metadata=metadata,
+                metadata=manager.metadata,
             )
 
             logger.debug(

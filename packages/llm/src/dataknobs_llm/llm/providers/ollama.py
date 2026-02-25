@@ -88,6 +88,7 @@ See Also:
 
 import os
 import json
+import warnings
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
@@ -357,8 +358,10 @@ class OllamaProvider(AsyncLLMProvider):
         """Initialize Ollama client."""
         try:
             import aiohttp
+            connector = aiohttp.TCPConnector(force_close=True)
             self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=self.config.timeout or 30.0)
+                connector=connector,
+                timeout=aiohttp.ClientTimeout(total=self.config.timeout or 30.0),
             )
 
             # Test connection and verify model availability
@@ -421,30 +424,40 @@ class OllamaProvider(AsyncLLMProvider):
         return False
 
     def get_capabilities(self) -> List[ModelCapability]:
-        """Get Ollama model capabilities."""
-        # Capabilities depend on the specific model
-        capabilities = [
+        """Get Ollama model capabilities.
+
+        If ``config.capabilities`` is set, those values are used instead of
+        the auto-detected list below.
+        """
+        # Auto-detect capabilities based on model name
+        detected = [
             ModelCapability.TEXT_GENERATION,
             ModelCapability.CHAT,
             ModelCapability.STREAMING
         ]
 
         # Most recent Ollama models support function calling
-        if any(model in self.config.model.lower() for model in ['llama3', 'mistral', 'mixtral', 'qwen']):
-            capabilities.append(ModelCapability.FUNCTION_CALLING)
+        tool_capable_models = [
+            'llama3', 'mistral', 'mixtral', 'qwen',
+            'command-r', 'phi3', 'phi4', 'nemotron',
+            'firefunction', 'hermes',
+        ]
+        if any(model in self.config.model.lower() for model in tool_capable_models):
+            detected.append(ModelCapability.FUNCTION_CALLING)
 
         if 'llava' in self.config.model.lower():
-            capabilities.append(ModelCapability.VISION)
+            detected.append(ModelCapability.VISION)
 
         if 'codellama' in self.config.model.lower() or 'codegemma' in self.config.model.lower():
-            capabilities.append(ModelCapability.CODE)
+            detected.append(ModelCapability.CODE)
 
-        return capabilities
+        return self._resolve_capabilities(detected)
 
     async def complete(
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
         **kwargs: Any
     ) -> LLMResponse:
         """Generate completion using Ollama chat endpoint.
@@ -453,6 +466,7 @@ class OllamaProvider(AsyncLLMProvider):
             messages: Input messages or prompt
             config_overrides: Optional dict to override config fields (model,
                 temperature, max_tokens, top_p, stop_sequences, seed)
+            tools: Optional list of Tool objects for function calling
             **kwargs: Additional provider-specific parameters
         """
         if not self._is_initialized:
@@ -485,7 +499,6 @@ class OllamaProvider(AsyncLLMProvider):
             payload['format'] = 'json'
 
         # Handle tools if provided
-        tools = kwargs.get('tools')
         if tools:
             # Convert Tool objects to dict format for _adapt_tools
             tool_dicts = []
@@ -504,22 +517,17 @@ class OllamaProvider(AsyncLLMProvider):
                 import logging
                 logger = logging.getLogger(__name__)
 
-                # Handle tools not supported - retry without tools
+                # Handle tools not supported — raise explicit error
                 if response.status == 400 and "does not support tools" in error_text:
+                    from ...exceptions import ToolsNotSupportedError
                     model_name = runtime_config.model
-                    logger.warning(
-                        f"Model '{model_name}' does not support tools. "
-                        f"Continuing without tool support. "
-                        f"For tool support, use: llama3.1:8b, llama3.2:3b, mistral:7b, or qwen2.5:7b"
+                    raise ToolsNotSupportedError(
+                        model=model_name,
+                        suggestion=(
+                            "For tool support, use: llama3.1:8b, qwen3:8b, "
+                            "mistral:7b, or command-r:latest"
+                        ),
                     )
-                    # Retry without tools
-                    payload.pop('tools', None)
-                    async with self._session.post(f"{self.base_url}/api/chat", json=payload) as retry_response:
-                        if retry_response.status != 200:
-                            retry_error = await retry_response.text()
-                            logger.error(f"Ollama API error on retry (status {retry_response.status}): {retry_error}")
-                            retry_response.raise_for_status()
-                        data = await retry_response.json()
                 else:
                     logger.error(f"Ollama API error (status {response.status}): {error_text}")
                     logger.error(f"Request payload: {json.dumps(payload, indent=2)}")
@@ -648,6 +656,7 @@ class OllamaProvider(AsyncLLMProvider):
         For Ollama 0.1.17+, uses native tools API.
         Falls back to prompt-based approach for older versions.
         """
+        warnings.warn("function_call() is deprecated, use complete(tools=...) instead", DeprecationWarning, stacklevel=2)
         if not self._is_initialized:
             await self.initialize()
 

@@ -301,11 +301,12 @@ export DATAKNOBS_ENVIRONMENT=production
 ### Resource Reference Syntax
 
 ```yaml
-# Full syntax with type
+# Full syntax with type and capability requirements
 llm:
   $resource: default
   type: llm_providers
-  temperature: 0.7  # Override/default value
+  $requires: [function_calling]   # Optional: required capabilities
+  temperature: 0.7                # Override/default value
 
 # Supported resource types
 # - llm_providers
@@ -314,6 +315,8 @@ llm:
 # - embedding_providers
 ```
 
+**`$requires`** declares capabilities the bot needs from the resource. If the resolved resource declares `capabilities` metadata, the system validates that all requirements are met at config resolution time. Requirements are also **inferred** from bot config structure (e.g., `react` strategy + `tools` implies `function_calling`).
+
 Additional fields in a resource reference are merged with the resolved config:
 
 ```yaml
@@ -321,6 +324,7 @@ Additional fields in a resource reference are merged with the resolved config:
 llm:
   $resource: default
   type: llm_providers
+  $requires: [function_calling]
   temperature: 0.9  # Override the environment's default
 
 # If environment defines:
@@ -329,12 +333,44 @@ llm:
 #     provider: openai
 #     model: gpt-4
 #     temperature: 0.7
+#     capabilities: [chat, function_calling, streaming]
 
-# Resolved config:
+# Resolved config (markers and metadata stripped):
 # provider: openai
 # model: gpt-4
 # temperature: 0.9  # Overridden!
 ```
+
+### Capability Metadata on Resources
+
+Environment configs can declare what capabilities each resource provides:
+
+```yaml
+resources:
+  llm_providers:
+    default:
+      provider: ollama
+      model: qwen3:8b
+      capabilities: [chat, function_calling, streaming]
+    fast:
+      provider: ollama
+      model: gemma3:4b
+      capabilities: [chat, streaming]
+```
+
+The `capabilities` field is validation metadata — it is stripped during resolution and not passed to the provider constructor. Available capability names: `text_generation`, `chat`, `embeddings`, `function_calling`, `vision`, `code`, `json_mode`, `streaming`.
+
+### Standard Resource Naming Convention
+
+| Name | Capability Contract | Typical Models |
+|------|-------------------|----------------|
+| `default` | chat, function_calling, streaming | qwen3:8b, gpt-4, claude-3 |
+| `fast` | chat, streaming | gemma3:4b, gpt-4o-mini |
+| `micro` | text_generation | gemma3:1b, qwen3:1.7b |
+| `extraction` | chat, code, json_mode | qwen3-coder, claude-3-haiku |
+| `embedding` | embeddings | nomic-embed-text, text-embedding-3-small |
+
+Key principle: **`default` always supports function calling.**
 
 ### Best Practices
 
@@ -369,26 +405,31 @@ llm:
 ```yaml
 llm:
   provider: ollama
-  model: gemma3:1b
+  model: qwen3:8b
   base_url: http://localhost:11434  # Optional, default
   temperature: 0.7
   max_tokens: 1000
 ```
 
-**Supported Models:**
-- `gemma3:1b` - Small, fast model
-- `gemma3:7b` - Larger, better quality
-- `llama3.1:8b` - Advanced reasoning
-- `phi3:mini` - Compact model
-- `mistral:7b` - General purpose
+**Recommended Models by Capability:**
+
+| Model | Tool Calling | Best For |
+|-------|:---:|----------|
+| `qwen3:8b` | Yes | Default — chat, tools, reasoning |
+| `llama3.1:8b` | Yes | Advanced reasoning, tool use |
+| `mistral:7b` | Yes | General purpose with tools |
+| `command-r:latest` | Yes | Tool use, RAG |
+| `gemma3:4b` | No | Fast chat (no tools) |
+| `gemma3:1b` | No | Minimal/micro tasks |
+| `phi3:mini` | Yes | Compact tool-capable model |
 
 **Setup:**
 ```bash
 # Install Ollama
 curl -fsSL https://ollama.ai/install.sh | sh
 
-# Pull model
-ollama pull gemma3:1b
+# Pull recommended default model (tool-capable)
+ollama pull qwen3:8b
 ```
 
 #### OpenAI

@@ -55,6 +55,7 @@ See Also:
     - dataknobs_llm.prompts: Prompt rendering and RAG integration
 """
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
@@ -67,6 +68,8 @@ from datetime import datetime
 # Import prompt builder types - clean one-way dependency (llm depends on prompts)
 from dataknobs_llm.prompts import AsyncPromptBuilder, PromptBuilder
 from dataknobs_config.config import Config
+
+logger = logging.getLogger(__name__)
 
 
 class CompletionMode(Enum):
@@ -152,6 +155,12 @@ class ModelCapability(Enum):
     CODE = "code"
     JSON_MODE = "json_mode"
     STREAMING = "streaming"
+
+
+# String-to-enum mapping for config-driven capability references.
+CAPABILITY_NAMES: dict[str, ModelCapability] = {
+    cap.value: cap for cap in ModelCapability
+}
 
 
 @dataclass
@@ -470,6 +479,11 @@ class LLMConfig:
     # Provider-specific options
     options: Dict[str, Any] = field(default_factory=dict)
 
+    # Capability overrides — when set, these override the provider's
+    # auto-detected capabilities.  Accepts string values matching
+    # ModelCapability enum names (e.g. "json_mode", "function_calling").
+    capabilities: List[str] | None = None
+
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> "LLMConfig":
         """Create LLMConfig from a dictionary.
@@ -673,8 +687,34 @@ class LLMProvider(ABC):
 
     @abstractmethod
     def get_capabilities(self) -> List[ModelCapability]:
-        """Get model capabilities."""
+        """Get model capabilities.
+
+        If ``config.capabilities`` is set, those values override the
+        provider's auto-detected capabilities.  Subclasses should call
+        :meth:`_resolve_capabilities` with their detected list to
+        honour this override.
+        """
         pass
+
+    def _resolve_capabilities(
+        self, detected: List[ModelCapability]
+    ) -> List[ModelCapability]:
+        """Return config-declared capabilities if set, else *detected*.
+
+        Providers should call this at the end of their
+        ``get_capabilities()`` implementation so that environment configs
+        can override auto-detected capabilities.
+        """
+        if self.config.capabilities is not None:
+            resolved: list[ModelCapability] = []
+            for name in self.config.capabilities:
+                cap = CAPABILITY_NAMES.get(name)
+                if cap is not None:
+                    resolved.append(cap)
+                else:
+                    logger.warning("Unknown capability name in config: %s", name)
+            return resolved
+        return detected
 
     @property
     def is_initialized(self) -> bool:
@@ -943,6 +983,7 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
         **kwargs
     ) -> LLMResponse:
         """Generate completion asynchronously.
@@ -957,6 +998,11 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
             config_overrides: Optional dict to override config fields for this
                 request only. Supported fields: model, temperature, max_tokens,
                 top_p, stop_sequences, seed. The original config is not modified.
+            tools: Optional list of Tool objects available for this completion.
+                Each tool should have ``name``, ``description``, and ``schema``
+                attributes. When provided, the LLM may return tool calls in the
+                response. Providers that do not support tools will raise
+                ``ToolsNotSupportedError``.
             **kwargs: Additional provider-specific parameters. Common options:
                 - temperature (float): Sampling temperature (0.0-2.0)
                 - max_tokens (int): Maximum tokens to generate
@@ -1303,6 +1349,12 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
     ) -> LLMResponse:
         """Execute function calling asynchronously.
 
+        .. deprecated::
+            Use ``complete(tools=...)`` instead. The ``function_call()`` method
+            will be removed in a future major version. All providers now support
+            the ``tools`` parameter on ``complete()`` for consistent tool
+            handling.
+
         Enables the LLM to call external functions/tools. The model decides
         which function to call based on the conversation context, and returns
         the function name and arguments in a structured format.
@@ -1436,6 +1488,7 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
         **kwargs
     ) -> LLMResponse:
         """Generate completion synchronously.
@@ -1445,6 +1498,7 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
             config_overrides: Optional dict to override config fields for this
                 request only. Supported fields: model, temperature, max_tokens,
                 top_p, stop_sequences, seed. The original config is not modified.
+            tools: Optional list of Tool objects available for this completion.
             **kwargs: Additional parameters
 
         Returns:

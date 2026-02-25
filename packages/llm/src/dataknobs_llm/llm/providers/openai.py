@@ -45,6 +45,7 @@ See Also:
 """
 
 import os
+import warnings
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
@@ -290,6 +291,7 @@ class OpenAIProvider(AsyncLLMProvider):
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
         **kwargs: Any
     ) -> LLMResponse:
         """Generate completion.
@@ -298,6 +300,7 @@ class OpenAIProvider(AsyncLLMProvider):
             messages: Input messages or prompt
             config_overrides: Optional dict to override config fields (model,
                 temperature, max_tokens, top_p, stop_sequences, seed)
+            tools: Optional list of Tool objects for function calling
             **kwargs: Additional provider-specific parameters
         """
         if not self._is_initialized:
@@ -318,6 +321,20 @@ class OpenAIProvider(AsyncLLMProvider):
         adapted_messages = self.adapter.adapt_messages(messages)
         params = self.adapter.adapt_config(runtime_config)
         params.update(kwargs)
+
+        # Handle tools if provided
+        if tools:
+            openai_tools = []
+            for tool in tools:
+                openai_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.schema if hasattr(tool, "schema") else {},
+                    },
+                })
+            params["tools"] = openai_tools
 
         # Make API call
         response = await self._client.chat.completions.create(
@@ -405,6 +422,7 @@ class OpenAIProvider(AsyncLLMProvider):
         **kwargs
     ) -> LLMResponse:
         """Execute function calling."""
+        warnings.warn("function_call() is deprecated, use complete(tools=...) instead", DeprecationWarning, stacklevel=2)
         if not self._is_initialized:
             await self.initialize()
 

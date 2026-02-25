@@ -289,9 +289,9 @@ async def main():
 
     print("Bot: ", end="", flush=True)
 
-    # Stream response token by token
+    # Stream response token by token — each chunk is an LLMStreamResponse
     async for chunk in bot.stream_chat("Write a haiku about coding", context):
-        print(chunk, end="", flush=True)
+        print(chunk.delta, end="", flush=True)
 
     print()  # Newline after response
 
@@ -320,8 +320,8 @@ Coffee grows cold now
 # If you need the complete response
 full_response = ""
 async for chunk in bot.stream_chat("Tell me a joke", context):
-    full_response += chunk
-    print(chunk, end="", flush=True)
+    full_response += chunk.delta
+    print(chunk.delta, end="", flush=True)
 
 print()
 print(f"\n[Total length: {len(full_response)} characters]")
@@ -352,7 +352,7 @@ async def stream_chat(request: ChatRequest):
 
     async def generate():
         async for chunk in bot.stream_chat(request.message, context):
-            yield chunk
+            yield chunk.delta
 
     return StreamingResponse(generate(), media_type="text/plain")
 ```
@@ -361,7 +361,7 @@ async def stream_chat(request: ChatRequest):
 
 | Feature | `chat()` | `stream_chat()` |
 |---------|----------|-----------------|
-| Return type | `str` | `AsyncGenerator[str, None]` |
+| Return type | `str` | `AsyncGenerator[LLMStreamResponse, None]` |
 | Response timing | All at once | Token by token |
 | Middleware hook | `after_message()` | `post_stream()` |
 | Memory updates | After response | After stream completes |
@@ -372,7 +372,7 @@ async def stream_chat(request: ChatRequest):
 ```python
 try:
     async for chunk in bot.stream_chat("Hello", context):
-        print(chunk, end="", flush=True)
+        print(chunk.delta, end="", flush=True)
 except Exception as e:
     print(f"\nStreaming error: {e}")
     # Middleware's on_error() is automatically called
@@ -418,7 +418,7 @@ async for chunk in bot.stream_chat(
         "max_tokens": 2000
     }
 ):
-    print(chunk, end="", flush=True)
+    print(chunk.delta, end="", flush=True)
 ```
 
 #### Supported Override Fields

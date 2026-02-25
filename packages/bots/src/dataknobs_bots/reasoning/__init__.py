@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from .base import ReasoningStrategy
+from .base import ReasoningManagerProtocol, ReasoningStrategy
 from .focus_guard import FocusContext, FocusEvaluation, FocusGuard
 from .observability import (
     # Task tracking types
@@ -40,6 +40,7 @@ from .wizard_hooks import WizardHooks
 from .wizard_loader import WizardConfigLoader, load_wizard_config
 
 __all__ = [
+    "ReasoningManagerProtocol",
     "ReasoningStrategy",
     "SimpleReasoning",
     "ReActReasoning",

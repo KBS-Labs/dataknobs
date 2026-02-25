@@ -2,6 +2,7 @@
 
 import hashlib
 import re
+import warnings
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
@@ -438,6 +439,7 @@ class EchoProvider(AsyncLLMProvider):
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
         **kwargs: Any
     ) -> LLMResponse:
         """Echo back the input messages or return scripted response.
@@ -452,6 +454,7 @@ class EchoProvider(AsyncLLMProvider):
             messages: Input messages or prompt
             config_overrides: Optional dict to override config fields (model,
                 temperature, max_tokens, top_p, stop_sequences, seed)
+            tools: Optional list of Tool objects (recorded in call history)
             **kwargs: Additional parameters (ignored)
 
         Returns:
@@ -476,6 +479,7 @@ class EchoProvider(AsyncLLMProvider):
                 'messages': messages,
                 'response': None,
                 'config_overrides': config_overrides,
+                'tools': tools,
                 'kwargs': kwargs,
                 'error': True,
             })
@@ -513,6 +517,7 @@ class EchoProvider(AsyncLLMProvider):
             'messages': messages,
             'response': response,
             'config_overrides': config_overrides,
+            'tools': tools,
             'kwargs': kwargs,
         })
 
@@ -595,6 +600,7 @@ class EchoProvider(AsyncLLMProvider):
         Returns:
             Response with mock function call
         """
+        warnings.warn("function_call() is deprecated, use complete(tools=...) instead", DeprecationWarning, stacklevel=2)
         if not self._is_initialized:
             await self.initialize()
 

@@ -1,5 +1,6 @@
 """Test ConversationManager functionality."""
 
+import re
 import pytest
 from pathlib import Path
 import tempfile
@@ -450,4 +451,214 @@ class TestConversationManager:
 
         with pytest.raises(ValueError, match="Either content or prompt_name"):
             await manager.add_message(role="user")
+
+    @pytest.mark.asyncio
+    async def test_inline_content_renders_template_variables(self, test_components):
+        """Test that inline content with template variables is rendered.
+
+        Inline system prompts containing {{current_date}} etc. must go
+        through the TemplateRenderer even when no rag_configs are present.
+        """
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+        )
+
+        await manager.add_message(
+            role="system",
+            content="Today is {{current_date}}. You are helpful.",
+        )
+
+        history = await manager.get_history()
+        assert len(history) == 1
+        system_msg = history[0].content
+        # Template variable should be replaced with an actual date
+        assert "{{current_date}}" not in system_msg
+        assert re.search(r"\d{4}-\d{2}-\d{2}", system_msg)
+
+    @pytest.mark.asyncio
+    async def test_inline_user_content_renders_template_variables(self, test_components):
+        """Test that inline user content with template variables is rendered."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+        )
+
+        await manager.add_message(
+            role="user",
+            content="What day of the week is {{current_date}}?",
+        )
+
+        history = await manager.get_history()
+        user_msg = history[0].content
+        assert "{{current_date}}" not in user_msg
+        assert re.search(r"\d{4}-\d{2}-\d{2}", user_msg)
+
+    @pytest.mark.asyncio
+    async def test_node_metadata_includes_provider(self, test_components):
+        """Test that assistant node metadata includes provider from LLM config."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+        )
+        await manager.add_message(role="user", content="Hello")
+        await manager.complete()
+
+        current_node = manager.state.get_current_node()
+        assert current_node.data.metadata["provider"] == "echo"
+        assert current_node.data.metadata["model"] == "echo-model"
+
+    @pytest.mark.asyncio
+    async def test_node_metadata_includes_tool_calls(self, test_components):
+        """Test that assistant node metadata captures tool calls when present."""
+        from dataknobs_llm.testing import tool_call_response
+
+        # Set up EchoProvider with a tool call response
+        llm = test_components["llm"]
+        response_with_tools = tool_call_response(
+            tool_name="calculator",
+            arguments={"expression": "2+2"},
+            tool_id="call_123",
+        )
+        llm.set_responses([response_with_tools])
+
+        manager = await ConversationManager.create(
+            llm=llm,
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+        )
+        await manager.add_message(role="user", content="Calculate 2+2")
+        await manager.complete()
+
+        current_node = manager.state.get_current_node()
+        assert "tool_calls" in current_node.data.metadata
+        tool_calls = current_node.data.metadata["tool_calls"]
+        assert len(tool_calls) == 1
+        assert tool_calls[0]["name"] == "calculator"
+        assert tool_calls[0]["parameters"] == {"expression": "2+2"}
+        assert tool_calls[0]["id"] == "call_123"
+
+    @pytest.mark.asyncio
+    async def test_node_metadata_omits_tool_calls_when_none(self, test_components):
+        """Test that tool_calls is not in metadata for normal responses."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+        )
+        await manager.add_message(role="user", content="Hello")
+        await manager.complete()
+
+        current_node = manager.state.get_current_node()
+        assert "tool_calls" not in current_node.data.metadata
+
+
+class TestConversationIdParameter:
+    """Test the conversation_id parameter on ConversationManager."""
+
+    @pytest.mark.asyncio
+    async def test_conversation_id_property_before_first_message(self, test_components):
+        """conversation_id property returns pre-set ID before any messages."""
+        manager = ConversationManager(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            conversation_id="custom-id-123",
+        )
+        assert manager.conversation_id == "custom-id-123"
+
+    @pytest.mark.asyncio
+    async def test_conversation_id_used_in_state(self, test_components):
+        """Pre-set conversation_id is used when state is initialized."""
+        manager = ConversationManager(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            conversation_id="custom-id-456",
+        )
+        await manager.add_message(role="system", content="You are helpful")
+
+        assert manager.conversation_id == "custom-id-456"
+        assert manager.state.conversation_id == "custom-id-456"
+
+    @pytest.mark.asyncio
+    async def test_conversation_id_root_has_real_content(self, test_components):
+        """Root node has real content, not a phantom empty message."""
+        manager = ConversationManager(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            conversation_id="no-phantom",
+        )
+        await manager.add_message(role="system", content="You are helpful")
+
+        history = await manager.get_history()
+        assert len(history) == 1
+        assert history[0].role == "system"
+        assert history[0].content == "You are helpful"
+
+    @pytest.mark.asyncio
+    async def test_create_with_conversation_id(self, test_components):
+        """ConversationManager.create() passes through conversation_id."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            system_prompt_name="helpful",
+            conversation_id="create-id-789",
+        )
+
+        assert manager.conversation_id == "create-id-789"
+        history = await manager.get_history()
+        assert len(history) == 1
+        assert history[0].role == "system"
+        assert history[0].content == "You are a helpful assistant"
+
+    @pytest.mark.asyncio
+    async def test_default_generates_uuid(self, test_components):
+        """Without conversation_id, a UUID is auto-generated."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            system_prompt_name="helpful",
+        )
+
+        conv_id = manager.conversation_id
+        assert conv_id is not None
+        # Verify it looks like a UUID (8-4-4-4-12 hex pattern)
+        assert len(conv_id) == 36
+        assert conv_id.count("-") == 4
+
+    @pytest.mark.asyncio
+    async def test_round_trip_with_custom_id(self, test_components):
+        """Create with custom ID, persist, resume — ID and messages intact."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            system_prompt_name="helpful",
+            conversation_id="round-trip-id",
+        )
+        await manager.add_message(role="user", content="Hello")
+        await manager.complete()
+
+        # Resume
+        manager2 = await ConversationManager.resume(
+            conversation_id="round-trip-id",
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+        )
+
+        assert manager2.conversation_id == "round-trip-id"
+        history = await manager2.get_history()
+        assert len(history) == 3  # system, user, assistant
+        assert history[0].role == "system"
+        assert history[0].content == "You are a helpful assistant"
+        assert history[1].role == "user"
+        assert history[1].content == "Hello"
 

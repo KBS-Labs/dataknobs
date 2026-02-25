@@ -199,19 +199,30 @@ class ConnectionPoolManager(Generic[PoolType]):
 
     def _cleanup_on_exit(self):
         """Cleanup function called on program exit."""
-        if self._pools:
-            logger.debug(f"Cleaning up {len(self._pools)} connection pools on exit")
-            # Try to get any running loop
+        if not self._pools:
+            return
+
+        pool_count = len(self._pools)
+        logger.debug("Cleaning up %d connection pool(s) on exit", pool_count)
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop — create temporary loop for synchronous cleanup
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                # No running loop, try to create one
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    loop.run_until_complete(self.close_all())
-                finally:
-                    loop.close()
-            else:
-                # There's a running loop, schedule cleanup
-                asyncio.create_task(self.close_all())
+                loop.run_until_complete(self.close_all())
+            except Exception:
+                logger.exception("Error closing connection pools during exit")
+            finally:
+                loop.close()
+        else:
+            # Running loop exists — cannot reliably await from synchronous atexit.
+            # Application should have called close_all() during shutdown.
+            logger.warning(
+                "%d connection pool(s) not closed before exit. "
+                "Ensure close_all() is called during shutdown.",
+                pool_count,
+            )
+            self._pools.clear()

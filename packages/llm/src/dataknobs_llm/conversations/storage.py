@@ -310,6 +310,38 @@ def get_messages_for_llm(tree: Tree, node_id: str) -> List[LLMMessage]:
     return messages
 
 
+def get_nodes_for_path(tree: Tree, node_id: str) -> List["ConversationNode"]:
+    """Get ConversationNode objects from root to specified node.
+
+    Like get_messages_for_llm(), but returns full ConversationNode objects
+    instead of just LLMMessage. Use this when you need timestamps, node_ids,
+    prompt_names, branch_names, or per-node metadata.
+
+    Args:
+        tree: Root of conversation tree
+        node_id: ID of current position
+
+    Returns:
+        List of ConversationNode objects from root to current node
+
+    Example:
+        >>> nodes = get_nodes_for_path(tree, "0.1.2")
+        >>> for node in nodes:
+        ...     print(node.node_id, node.timestamp, node.message.role)
+    """
+    tree_node = get_node_by_id(tree, node_id)
+    if tree_node is None:
+        return []
+
+    path = tree_node.get_path()
+
+    return [
+        n.data
+        for n in path
+        if isinstance(n.data, ConversationNode)
+    ]
+
+
 @dataclass
 class ConversationState:
     """State of a conversation with tree-based branching support.
@@ -363,6 +395,14 @@ class ConversationState:
     def get_current_messages(self) -> List[LLMMessage]:
         """Get messages from root to current position (for LLM)."""
         return get_messages_for_llm(self.message_tree, self.current_node_id)
+
+    def get_current_nodes(self) -> List["ConversationNode"]:
+        """Get ConversationNode objects from root to current position.
+
+        Like get_current_messages(), but returns full ConversationNode objects
+        including timestamps, node_ids, and metadata.
+        """
+        return get_nodes_for_path(self.message_tree, self.current_node_id)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert state to dictionary for storage.
@@ -630,6 +670,69 @@ class ConversationStorage(ABC):
         """
         pass
 
+    @abstractmethod
+    async def search_conversations(
+        self,
+        content_contains: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        filter_metadata: Dict[str, Any] | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        sort_by: str = "updated_at",
+        sort_order: str = "desc",
+    ) -> List[ConversationState]:
+        """Search conversations with content, time range, and metadata filters.
+
+        Args:
+            content_contains: Case-insensitive substring to search for in
+                message content across the conversation tree.
+            created_after: Only include conversations created at or after this
+                time.
+            created_before: Only include conversations created at or before
+                this time.
+            filter_metadata: Key-value metadata filters (exact match).
+            limit: Maximum number of results.
+            offset: Number of results to skip (for pagination).
+            sort_by: Field name to sort by (default: "updated_at").
+            sort_order: Sort direction, "asc" or "desc" (default: "desc").
+
+        Returns:
+            List of matching conversation states.
+        """
+        pass
+
+    @abstractmethod
+    async def delete_conversations(
+        self,
+        content_contains: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        filter_metadata: Dict[str, Any] | None = None,
+    ) -> List[str]:
+        """Delete conversations matching the given filters.
+
+        At least one filter parameter must be provided as a safety guard
+        to prevent accidental deletion of all conversations.
+
+        Args:
+            content_contains: Case-insensitive substring to match in
+                message content across the conversation tree.
+            created_after: Only delete conversations created at or after
+                this time.
+            created_before: Only delete conversations created at or before
+                this time.
+            filter_metadata: Key-value metadata filters (exact match).
+
+        Returns:
+            List of deleted conversation IDs.
+
+        Raises:
+            ValueError: If no filter parameters are provided.
+            StorageError: On storage failures.
+        """
+        pass
+
 
 class DataknobsConversationStorage(ConversationStorage):
     """Conversation storage using dataknobs_data backends.
@@ -797,6 +900,67 @@ class DataknobsConversationStorage(ConversationStorage):
         except Exception as e:
             raise StorageError(f"Failed to delete conversation: {e}") from e
 
+    async def delete_conversations(
+        self,
+        content_contains: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        filter_metadata: Dict[str, Any] | None = None,
+    ) -> List[str]:
+        """Delete conversations matching the given filters."""
+        if not any([content_contains, created_after, created_before, filter_metadata]):
+            raise ValueError(
+                "At least one filter parameter must be provided "
+                "to prevent accidental deletion of all conversations."
+            )
+
+        try:
+            try:
+                from dataknobs_data.query import Query
+            except ImportError:
+                raise StorageError(
+                    "dataknobs_data package not available. "
+                    "Install it to use DataknobsConversationStorage."
+                ) from None
+
+            # Build query with time range and metadata filters (no limit).
+            query = Query()
+
+            if created_after:
+                query.filter("created_at", ">=", created_after.isoformat())
+            if created_before:
+                query.filter("created_at", "<=", created_before.isoformat())
+
+            if filter_metadata:
+                for key, value in filter_metadata.items():
+                    query.filter(f"metadata.{key}", "=", value)
+
+            results = await self.backend.search(query)
+            states = [self._record_to_state(record) for record in results]
+
+            # Post-query content filtering
+            if content_contains:
+                needle = content_contains.lower()
+                states = [
+                    s for s in states
+                    if self._conversation_contains_text(s, needle)
+                ]
+
+            # Delete each matching conversation
+            deleted_ids: List[str] = []
+            for state in states:
+                await self.backend.delete(state.conversation_id)
+                deleted_ids.append(state.conversation_id)
+
+            return deleted_ids
+
+        except ValueError:
+            raise
+        except StorageError:
+            raise
+        except Exception as e:
+            raise StorageError(f"Failed to delete conversations: {e}") from e
+
     async def update_metadata(
         self,
         conversation_id: str,
@@ -869,3 +1033,90 @@ class DataknobsConversationStorage(ConversationStorage):
 
         except Exception as e:
             raise StorageError(f"Failed to list conversations: {e}") from e
+
+    async def search_conversations(
+        self,
+        content_contains: str | None = None,
+        created_after: datetime | None = None,
+        created_before: datetime | None = None,
+        filter_metadata: Dict[str, Any] | None = None,
+        limit: int = 100,
+        offset: int = 0,
+        sort_by: str = "updated_at",
+        sort_order: str = "desc",
+    ) -> List[ConversationState]:
+        """Search conversations with content, time range, and metadata filters."""
+        try:
+            try:
+                from dataknobs_data.query import Query
+            except ImportError:
+                raise StorageError(
+                    "dataknobs_data package not available. "
+                    "Install it to use DataknobsConversationStorage."
+                ) from None
+
+            # Build query with time range and metadata filters
+            # Fetch a larger set when content filtering will be applied
+            # post-query, since content filtering reduces the result count.
+            fetch_limit = limit + offset if content_contains is None else 0
+            query = Query()
+            if fetch_limit:
+                query.limit(fetch_limit)
+
+            if created_after:
+                query.filter("created_at", ">=", created_after.isoformat())
+            if created_before:
+                query.filter("created_at", "<=", created_before.isoformat())
+
+            if filter_metadata:
+                for key, value in filter_metadata.items():
+                    query.filter(f"metadata.{key}", "=", value)
+
+            query.sort_by(sort_by, sort_order)
+
+            results = await self.backend.search(query)
+            states = [self._record_to_state(record) for record in results]
+
+            # Post-query content filtering: walk each conversation's message
+            # tree and check if any message content matches.
+            if content_contains:
+                needle = content_contains.lower()
+                filtered: List[ConversationState] = []
+                for state in states:
+                    if self._conversation_contains_text(state, needle):
+                        filtered.append(state)
+                states = filtered
+
+            # Apply offset/limit after content filtering
+            if content_contains:
+                states = states[offset:offset + limit]
+
+            return states
+
+        except StorageError:
+            raise
+        except Exception as e:
+            raise StorageError(f"Failed to search conversations: {e}") from e
+
+    @staticmethod
+    def _conversation_contains_text(
+        state: ConversationState, needle: str
+    ) -> bool:
+        """Check if any message in the conversation tree contains the text.
+
+        Args:
+            state: Conversation state with message tree.
+            needle: Lowercase search string to look for.
+
+        Returns:
+            True if any message content contains the needle.
+        """
+        all_nodes = state.message_tree.find_nodes(
+            lambda n: True, traversal="bfs"  # noqa: ARG005
+        )
+        for tree_node in all_nodes:
+            if isinstance(tree_node.data, ConversationNode):
+                content = tree_node.data.message.content
+                if content and needle in content.lower():
+                    return True
+        return False
