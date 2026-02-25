@@ -10,6 +10,7 @@ Complete reference for configuring DynaBot instances.
 - [LLM Configuration](#llm-configuration)
 - [Conversation Storage](#conversation-storage)
 - [Memory Configuration](#memory-configuration)
+  - [Memory Banks (Wizard Data Collection)](#memory-banks-wizard-data-collection)
 - [Knowledge Base Configuration](#knowledge-base-configuration)
 - [Reasoning Configuration](#reasoning-configuration)
 - [Tools Configuration](#tools-configuration)
@@ -651,6 +652,197 @@ memory:
 - Need to recall specific information
 - Complex context requirements
 
+### Memory Banks (Wizard Data Collection)
+
+Memory Banks are a separate concept from conversation memory. While the memory types above
+(buffer, summary, vector) manage cross-turn conversation context, **Memory Banks** manage
+structured record collections within wizard flows — ingredients, contacts, configuration
+items, or any list of typed records.
+
+Memory Banks are configured as part of wizard settings and are only relevant when using
+`strategy: wizard`.
+
+#### Bank Configuration
+
+Define banks in the wizard `settings.banks` section:
+
+```yaml
+# wizard.yaml
+name: recipe-wizard
+settings:
+  banks:
+    ingredients:
+      schema:
+        required: [name]
+      max_records: 50
+      duplicate_detection:
+        strategy: reject
+        match_fields: [name]
+
+    steps:
+      schema:
+        required: [instruction]
+
+stages:
+  - name: collect_ingredients
+    is_start: true
+    prompt: "What ingredient would you like to add?"
+    collection_mode: collection
+    collection_config:
+      bank_name: ingredients
+      done_keywords: ["done", "that's all", "finished"]
+    schema:
+      type: object
+      properties:
+        name: { type: string }
+        amount: { type: string }
+      required: [name]
+    transitions:
+      - target: collect_steps
+        condition: "data.get('_collection_done') and bank('ingredients').count() > 0"
+
+  - name: collect_steps
+    prompt: "Add a recipe step:"
+    collection_mode: collection
+    collection_config:
+      bank_name: steps
+      done_keywords: ["done", "finished"]
+    schema:
+      type: object
+      properties:
+        instruction: { type: string }
+      required: [instruction]
+    transitions:
+      - target: review
+        condition: "data.get('_collection_done') and bank('steps').count() > 0"
+
+  - name: review
+    is_end: true
+    prompt: "Recipe summary"
+    response_template: |
+      Here's your recipe:
+
+      **Ingredients ({{ bank('ingredients').count() }}):**
+      {% for item in bank('ingredients').all() %}
+      - {{ item.data.name }}{% if item.data.amount %}: {{ item.data.amount }}{% endif %}
+      {% endfor %}
+
+      **Steps ({{ bank('steps').count() }}):**
+      {% for step in bank('steps').all() %}
+      {{ loop.index }}. {{ step.data.instruction }}
+      {% endfor %}
+```
+
+**Bank Settings:**
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `schema` | object | `{}` | JSON Schema for records. `required` fields are enforced. |
+| `max_records` | int | unlimited | Maximum number of records the bank can hold |
+| `duplicate_detection.strategy` | string | `"allow"` | `"allow"`, `"reject"`, or `"merge"` |
+| `duplicate_detection.match_fields` | list | all fields | Fields used for duplicate comparison |
+
+#### Duplicate Detection Strategies
+
+| Strategy | Behavior |
+|----------|----------|
+| `allow` | Always insert (default). Duplicates are permitted. |
+| `reject` | If a matching record exists, silently return its ID without inserting. |
+| `merge` | If a matching record exists, update it with the new data fields. |
+
+When `match_fields` is specified, only those fields are compared. When omitted, all
+data fields are compared for equality.
+
+#### Collection Mode
+
+Stages with `collection_mode: collection` loop to collect multiple records into a bank.
+The user adds records one at a time until they signal "done":
+
+```yaml
+collection_mode: collection
+collection_config:
+  bank_name: ingredients         # Which bank to write to
+  done_keywords: ["done", "finished", "that's all"]  # Stop signals
+```
+
+**Collection Config Properties:**
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `bank_name` | string | required | Name of the bank (must be declared in `settings.banks`) |
+| `done_keywords` | list | `[]` | Keywords that signal collection is complete (required for done detection) |
+
+**Collection flow:**
+1. User provides input → extracted against the stage schema
+2. Extracted data is added to the bank as a new record
+3. Schema fields are cleared from wizard state for the next record
+4. Stage prompt is re-rendered, inviting the next record
+5. When user says a done keyword, `_collection_done` is set in wizard state
+6. Transition conditions can check both `_collection_done` and `bank('...').count()`
+
+#### Using Banks in Conditions
+
+The `bank()` function is available in transition conditions:
+
+```yaml
+transitions:
+  # Single bank check
+  - target: review
+    condition: "bank('ingredients').count() > 0"
+
+  # Cross-bank condition
+  - target: summary
+    condition: "bank('team').count() > 0 and bank('milestones').count() > 0"
+
+  # Combined with data checks
+  - target: next
+    condition: "data.get('_collection_done') and bank('items').count() >= 3"
+```
+
+If a bank name is not found, `bank()` returns a safe null object (count=0, all=[])
+rather than raising an error.
+
+#### Using Banks in Templates
+
+The `bank()` function is also available in `response_template` Jinja2 templates:
+
+```yaml
+response_template: |
+  Team members: {{ bank('team').count() }}
+  {% for m in bank('team').all() %}
+  - {{ m.data.name }}: {{ m.data.role }}
+  {% endfor %}
+```
+
+Each record object in templates has these properties:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `record_id` | string | Unique record identifier |
+| `data` | dict | The record's field values (e.g. `m.data.name`) |
+| `source_stage` | string | Name of the stage that produced this record |
+| `created_at` | float | Unix timestamp of record creation |
+| `updated_at` | float | Unix timestamp of last update |
+
+#### Navigation Behavior with Banks
+
+| Action | Bank Behavior |
+|--------|--------------|
+| Forward | Banks preserved |
+| Back | Banks preserved (records are not removed on back navigation) |
+| Skip | Banks preserved, `_collection_done` may be set |
+| Restart | **Banks cleared** (all records removed, same as `state.data = {}`) |
+
+#### Memory Banks vs Memory (Conversation Context)
+
+| | Memory (buffer/summary/vector) | Memory Banks |
+|---|---|---|
+| **Purpose** | Conversation context for LLM | Structured data collection |
+| **Scope** | Cross-turn, within conversation | Per-wizard-flow |
+| **Content** | Message history | Schema-typed records |
+| **Operations** | store/recall | CRUD + count/find/clear |
+| **Configuration** | Top-level `memory` key | Wizard `settings.banks` |
+
 ---
 
 ## Knowledge Base Configuration
@@ -1019,11 +1211,58 @@ global_tasks:
 For full task tracking API, see the Wizard Observability guide in the documentation.
 
 **Navigation Commands:**
-Users can navigate the wizard with natural language:
-- "back" / "go back" / "previous" - Return to previous stage
-- "skip" / "skip this" - Skip current stage (if `can_skip: true`)
-- "use default" / "use defaults" - Skip and apply `skip_default` values (if `can_skip: true`)
-- "restart" / "start over" - Restart from beginning
+
+Users can navigate the wizard with natural language. The default keywords are:
+
+| Command | Default Keywords | Effect |
+|---------|-----------------|--------|
+| Back | "back", "go back", "previous" | Return to previous stage |
+| Skip | "skip", "skip this", "use default", "use defaults" | Skip current stage (if `can_skip: true`) and apply `skip_default` values |
+| Restart | "restart", "start over" | Restart from beginning |
+
+Navigation keywords are configurable at both the wizard level and per-stage. To customize
+keywords, add a `navigation` section to wizard settings:
+
+```yaml
+# wizard.yaml
+settings:
+  navigation:
+    back:
+      keywords: ["back", "go back", "undo", "change my answer"]
+    skip:
+      keywords: ["skip", "next", "pass"]
+    restart:
+      keywords: ["restart", "begin again", "start fresh"]
+```
+
+**Per-Stage Overrides:**
+
+Individual stages can override wizard-level navigation keywords or disable commands entirely:
+
+```yaml
+stages:
+  - name: review
+    prompt: "Review your answers"
+    navigation:
+      skip:
+        enabled: false     # Disable skip for this stage
+      back:
+        keywords: ["change my answer", "edit"]  # Custom keywords for this stage
+    transitions:
+      - target: complete
+```
+
+**Navigation Configuration Properties:**
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `keywords` | list | (see defaults above) | Keywords that trigger the command (case-insensitive) |
+| `enabled` | bool | `true` | Whether the command is active |
+
+When a stage specifies navigation overrides, those keywords **replace** the wizard-level
+keywords for that command. Commands not mentioned in the stage override inherit the
+wizard-level configuration. If no navigation configuration is provided at any level,
+the default keywords above are used.
 
 **Lifecycle Hooks:**
 ```yaml
@@ -1337,6 +1576,52 @@ Special syntax:
 
 If no `context_template` is specified, the wizard uses a default format that includes
 stage info, collected data, and navigation hints.
+
+**Bot-Initiated Greeting:**
+
+Wizard bots can send an initial greeting before the user speaks. This is useful when the
+bot should start the conversation (e.g., "Welcome! What is your name?") rather than
+waiting for a user message.
+
+```python
+context = BotContext(conversation_id="conv-123", client_id="harness")
+greeting = await bot.greet(context)
+if greeting:
+    print(f"Bot: {greeting}")
+# User's first message now answers the wizard's question
+```
+
+The greeting is generated from the wizard's **start stage**:
+
+- If the start stage has a `response_template`, that template is rendered as the greeting
+- If no template is present, the start stage's `prompt` is sent to the LLM to generate one
+
+```yaml
+stages:
+  - name: welcome
+    is_start: true
+    prompt: "Ask the user for their name"
+    response_template: "Hello! Welcome to the setup wizard. What is your name?"
+    schema:
+      type: object
+      properties:
+        name: { type: string }
+      required: [name]
+    transitions:
+      - target: next_stage
+        condition: "data.get('name')"
+```
+
+**Greeting behavior:**
+
+| Aspect | Behavior |
+|--------|----------|
+| Supported strategies | Wizard only. Non-wizard bots return `None`. |
+| Conversation history | Greeting is added as an assistant message. No user message is created. |
+| Wizard state | Initialized at the start stage, ready for the user's first input. |
+| Render count | If using `response_template`, the render count is incremented to prevent duplicate rendering on the user's first turn. |
+| Middleware | Both `before_message` and `after_message` hooks are called. |
+| Memory | If memory is configured, the greeting is stored in conversation history. |
 
 **Wizard State API:**
 
