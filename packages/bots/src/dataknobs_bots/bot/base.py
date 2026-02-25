@@ -547,6 +547,91 @@ class DynaBot:
         # Dict passes through (assumed already portable)
         return config
 
+    async def _prepare_chat(
+        self,
+        message: str,
+        context: BotContext,
+        rag_query: str | None = None,
+    ) -> ConversationManager:
+        """Shared pre-processing for chat() and stream_chat().
+
+        Runs before_message middleware, builds the augmented message,
+        gets/creates the conversation manager, adds the user message,
+        and updates memory.
+
+        Args:
+            message: Raw user message
+            context: Bot execution context
+            rag_query: Optional explicit RAG query override
+
+        Returns:
+            The ConversationManager ready for response generation.
+        """
+        # Apply middleware (before)
+        for mw in self.middleware:
+            if hasattr(mw, "before_message"):
+                await mw.before_message(message, context)
+
+        # Build message with context from memory and knowledge
+        full_message = await self._build_message_with_context(message, rag_query=rag_query)
+
+        # Get or create conversation manager
+        manager = await self._get_or_create_conversation(context)
+
+        # Add user message
+        await manager.add_message(content=full_message, role="user")
+
+        # Update memory
+        if self.memory:
+            await self.memory.add_message(message, role="user")
+
+        return manager
+
+    async def _generate_response(
+        self,
+        manager: Any,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        llm_config_overrides: dict[str, Any] | None = None,
+    ) -> Any:
+        """Dispatch response generation through reasoning strategy or direct completion.
+
+        Args:
+            manager: ConversationManager instance
+            temperature: Optional temperature override
+            max_tokens: Optional max tokens override
+            llm_config_overrides: Optional per-request LLM config overrides
+
+        Returns:
+            LLM response object.
+        """
+        if self.reasoning_strategy:
+            return await self.reasoning_strategy.generate(
+                manager=manager,
+                llm=self.llm,
+                tools=list(self.tool_registry),
+                temperature=temperature or self.default_temperature,
+                max_tokens=max_tokens or self.default_max_tokens,
+                llm_config_overrides=llm_config_overrides,
+            )
+        return await manager.complete(
+            llm_config_overrides=llm_config_overrides,
+            temperature=temperature or self.default_temperature,
+            max_tokens=max_tokens or self.default_max_tokens,
+        )
+
+    @staticmethod
+    def _extract_response_content(response: Any) -> str:
+        """Extract text content from an LLM response object.
+
+        Args:
+            response: LLM response (may have .content attribute or be a string)
+
+        Returns:
+            The response text as a string.
+        """
+        return response.content if hasattr(response, "content") else str(response)
+
     async def chat(
         self,
         message: str,
@@ -601,43 +686,11 @@ class DynaBot:
             )
             ```
         """
-        # Apply middleware (before)
-        for mw in self.middleware:
-            if hasattr(mw, "before_message"):
-                await mw.before_message(message, context)
-
-        # Build message with context from memory and knowledge
-        full_message = await self._build_message_with_context(message, rag_query=rag_query)
-
-        # Get or create conversation manager
-        manager = await self._get_or_create_conversation(context)
-
-        # Add user message
-        await manager.add_message(content=full_message, role="user")
-
-        # Update memory
-        if self.memory:
-            await self.memory.add_message(message, role="user")
-
-        # Generate response
-        if self.reasoning_strategy:
-            response = await self.reasoning_strategy.generate(
-                manager=manager,
-                llm=self.llm,
-                tools=list(self.tool_registry),
-                temperature=temperature or self.default_temperature,
-                max_tokens=max_tokens or self.default_max_tokens,
-                llm_config_overrides=llm_config_overrides,
-            )
-        else:
-            response = await manager.complete(
-                llm_config_overrides=llm_config_overrides,
-                temperature=temperature or self.default_temperature,
-                max_tokens=max_tokens or self.default_max_tokens,
-            )
-
-        # Extract response content
-        response_content = response.content if hasattr(response, "content") else str(response)
+        manager = await self._prepare_chat(message, context, rag_query=rag_query)
+        response = await self._generate_response(
+            manager, temperature, max_tokens, llm_config_overrides
+        )
+        response_content = self._extract_response_content(response)
 
         # Update memory
         if self.memory:
@@ -695,7 +748,7 @@ class DynaBot:
             return None
 
         # Extract response content
-        response_content = response.content if hasattr(response, "content") else str(response)
+        response_content = self._extract_response_content(response)
 
         # Update memory with assistant greeting (no user message)
         if self.memory:
@@ -769,39 +822,36 @@ class DynaBot:
 
         Note:
             Conversation history is automatically updated after streaming completes.
-            The reasoning_strategy is not supported with streaming - use chat() instead.
+            When a reasoning_strategy is configured, the strategy produces the
+            complete response and it is emitted as a single stream chunk.
         """
-        # Apply middleware (before)
-        for mw in self.middleware:
-            if hasattr(mw, "before_message"):
-                await mw.before_message(message, context)
+        manager = await self._prepare_chat(message, context, rag_query=rag_query)
 
-        # Build message with context from memory and knowledge
-        full_message = await self._build_message_with_context(message, rag_query=rag_query)
-
-        # Get or create conversation manager
-        manager = await self._get_or_create_conversation(context)
-
-        # Add user message
-        await manager.add_message(content=full_message, role="user")
-
-        # Update memory
-        if self.memory:
-            await self.memory.add_message(message, role="user")
-
-        # Stream response (reasoning_strategy not supported for streaming)
         full_response_chunks: list[str] = []
         streaming_error: Exception | None = None
 
         try:
-            async for chunk in manager.stream_complete(
-                llm_config_overrides=llm_config_overrides,
-                temperature=temperature or self.default_temperature,
-                max_tokens=max_tokens or self.default_max_tokens,
-                **kwargs,
-            ):
-                full_response_chunks.append(chunk.delta)
-                yield chunk
+            if self.reasoning_strategy:
+                # Reasoning strategies produce complete responses.  Run the
+                # strategy, then emit the result as a single stream chunk.
+                response = await self._generate_response(
+                    manager, temperature, max_tokens, llm_config_overrides
+                )
+                content = self._extract_response_content(response)
+                full_response_chunks.append(content)
+                yield LLMStreamResponse(
+                    delta=content, is_final=True, finish_reason="stop"
+                )
+            else:
+                # No reasoning strategy — stream directly from LLM
+                async for chunk in manager.stream_complete(
+                    llm_config_overrides=llm_config_overrides,
+                    temperature=temperature or self.default_temperature,
+                    max_tokens=max_tokens or self.default_max_tokens,
+                    **kwargs,
+                ):
+                    full_response_chunks.append(chunk.delta)
+                    yield chunk
         except Exception as e:
             streaming_error = e
             # Call on_error middleware
