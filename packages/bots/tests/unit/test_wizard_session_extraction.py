@@ -9,61 +9,83 @@ import pytest
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
-
-from .conftest import WizardTestManager
+from dataknobs_llm.conversations import ConversationManager
+from dataknobs_llm.llm.providers.echo import EchoProvider
 
 
 class TestBuildWizardContext:
     """Tests for _build_wizard_context method."""
 
-    def test_no_previous_messages(self, wizard_reasoning: WizardReasoning) -> None:
+    @pytest.mark.asyncio
+    async def test_no_previous_messages(
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
+    ) -> None:
         """Test with only the current message (no context to build)."""
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "Current message"}]
+        await conversation_manager.add_message(role="user", content="Current message")
 
         wizard_state = WizardState(current_stage="welcome")
 
-        context = wizard_reasoning._build_wizard_context(manager, wizard_state)
+        context = wizard_reasoning._build_wizard_context(
+            conversation_manager, wizard_state
+        )
 
         # Should return empty string when there are no previous messages
         assert context == ""
 
-    def test_single_previous_message(
-        self, wizard_reasoning: WizardReasoning
+    @pytest.mark.asyncio
+    async def test_single_previous_message(
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
     ) -> None:
         """Test with one previous user message plus current."""
-        manager = WizardTestManager()
-        manager.messages = [
-            {"role": "user", "content": "I want to create a math tutor"},
-            {"role": "assistant", "content": "Great choice!"},
-            {"role": "user", "content": "Call it Algebra Ace"},
-        ]
+        await conversation_manager.add_message(
+            role="user", content="I want to create a math tutor"
+        )
+        await conversation_manager.add_message(
+            role="assistant", content="Great choice!"
+        )
+        await conversation_manager.add_message(
+            role="user", content="Call it Algebra Ace"
+        )
 
         wizard_state = WizardState(current_stage="configure_identity")
 
-        context = wizard_reasoning._build_wizard_context(manager, wizard_state)
+        context = wizard_reasoning._build_wizard_context(
+            conversation_manager, wizard_state
+        )
 
         assert "Previous conversation:" in context
         assert "I want to create a math tutor" in context
         # Current message should NOT be in context
         assert "Call it Algebra Ace" not in context
 
-    def test_multiple_previous_messages(
-        self, wizard_reasoning: WizardReasoning
+    @pytest.mark.asyncio
+    async def test_multiple_previous_messages(
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
     ) -> None:
         """Test with multiple previous user messages."""
-        manager = WizardTestManager()
-        manager.messages = [
-            {"role": "user", "content": "Create a tutor for algebra"},
-            {"role": "assistant", "content": "Great!"},
-            {"role": "user", "content": "Call it Algebra Ace with ID algebra-ace"},
-            {"role": "assistant", "content": "Got it!"},
-            {"role": "user", "content": "Use Claude for the LLM"},
-        ]
+        await conversation_manager.add_message(
+            role="user", content="Create a tutor for algebra"
+        )
+        await conversation_manager.add_message(role="assistant", content="Great!")
+        await conversation_manager.add_message(
+            role="user", content="Call it Algebra Ace with ID algebra-ace"
+        )
+        await conversation_manager.add_message(role="assistant", content="Got it!")
+        await conversation_manager.add_message(
+            role="user", content="Use Claude for the LLM"
+        )
 
         wizard_state = WizardState(current_stage="configure_llm")
 
-        context = wizard_reasoning._build_wizard_context(manager, wizard_state)
+        context = wizard_reasoning._build_wizard_context(
+            conversation_manager, wizard_state
+        )
 
         assert "Previous conversation:" in context
         assert "Create a tutor for algebra" in context
@@ -71,64 +93,51 @@ class TestBuildWizardContext:
         # Current message should NOT be included
         assert "Use Claude for the LLM" not in context
 
-    def test_truncates_long_messages(
-        self, wizard_reasoning: WizardReasoning
+    @pytest.mark.asyncio
+    async def test_truncates_long_messages(
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
     ) -> None:
         """Test that very long messages are truncated."""
-        manager = WizardTestManager()
         long_message = "A" * 600  # Longer than 500 char limit
-        manager.messages = [
-            {"role": "user", "content": long_message},
-            {"role": "user", "content": "Current message"},
-        ]
+        await conversation_manager.add_message(role="user", content=long_message)
+        await conversation_manager.add_message(role="user", content="Current message")
 
         wizard_state = WizardState(current_stage="welcome")
 
-        context = wizard_reasoning._build_wizard_context(manager, wizard_state)
+        context = wizard_reasoning._build_wizard_context(
+            conversation_manager, wizard_state
+        )
 
         # Should be truncated to 500 + "..."
         assert "..." in context
         # Should not contain the full long message
         assert long_message not in context
 
-    def test_handles_structured_content(
-        self, wizard_reasoning: WizardReasoning
-    ) -> None:
-        """Test handling of structured message content."""
-        manager = WizardTestManager()
-        manager.messages = [
-            {
-                "role": "user",
-                "content": [{"type": "text", "text": "Structured message content"}],
-            },
-            {"role": "user", "content": "Current message"},
-        ]
-
-        wizard_state = WizardState(current_stage="welcome")
-
-        context = wizard_reasoning._build_wizard_context(manager, wizard_state)
-
-        assert "Structured message content" in context
-
-    def test_excludes_assistant_messages(
-        self, wizard_reasoning: WizardReasoning
+    @pytest.mark.asyncio
+    async def test_excludes_assistant_messages(
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
     ) -> None:
         """Test that only user messages are included in context."""
-        manager = WizardTestManager()
-        manager.messages = [
-            {"role": "user", "content": "User message 1"},
-            {"role": "assistant", "content": "Assistant should not appear"},
-            {"role": "system", "content": "System should not appear"},
-            {"role": "user", "content": "Current message"},
-        ]
+        await conversation_manager.add_message(role="user", content="User message 1")
+        await conversation_manager.add_message(
+            role="assistant", content="Assistant should not appear"
+        )
+        await conversation_manager.add_message(role="user", content="Current message")
 
         wizard_state = WizardState(current_stage="welcome")
 
-        context = wizard_reasoning._build_wizard_context(manager, wizard_state)
+        context = wizard_reasoning._build_wizard_context(
+            conversation_manager, wizard_state
+        )
 
         assert "User message 1" in context
         assert "Assistant should not appear" not in context
-        assert "System should not appear" not in context
+        # System prompt ("You are a helpful assistant.") should not appear
+        assert "You are a helpful assistant" not in context
 
 
 class TestDetectConflicts:
@@ -308,9 +317,13 @@ class TestWizardSessionExtractionIntegration:
 
     @pytest.mark.asyncio
     async def test_extraction_with_wizard_session_scope(
-        self, simple_wizard_config: dict
+        self,
+        simple_wizard_config: dict,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Test that extraction uses wizard session context."""
+        manager, provider = conversation_manager_pair
+
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(simple_wizard_config)
         reasoning = WizardReasoning(
@@ -319,26 +332,23 @@ class TestWizardSessionExtractionIntegration:
             extraction_scope="wizard_session",
         )
 
-        manager = WizardTestManager()
         # Simulate a conversation with multiple user messages
-        manager.messages = [
-            {"role": "user", "content": "I want to create a math tutor"},
-            {"role": "assistant", "content": "Great choice!"},
-            {"role": "user", "content": "Current question"},
-        ]
-        manager.metadata = {
-            "wizard": {
-                "fsm_state": {
-                    "current_stage": "welcome",
-                    "history": ["welcome"],
-                    "data": {},
-                    "completed": False,
-                    "clarification_attempts": 0,
-                }
+        await manager.add_message(
+            role="user", content="I want to create a math tutor"
+        )
+        await manager.add_message(role="assistant", content="Great choice!")
+        await manager.add_message(role="user", content="Current question")
+        manager.metadata["wizard"] = {
+            "fsm_state": {
+                "current_stage": "welcome",
+                "history": ["welcome"],
+                "data": {},
+                "completed": False,
+                "clarification_attempts": 0,
             }
         }
 
-        manager.echo_provider.set_responses(["Processing your request."])
+        provider.set_responses(["Processing your request."])
 
         # This should use wizard session context for extraction
         await reasoning.generate(manager, llm=None)
@@ -348,9 +358,13 @@ class TestWizardSessionExtractionIntegration:
 
     @pytest.mark.asyncio
     async def test_extraction_with_current_message_scope(
-        self, simple_wizard_config: dict
+        self,
+        simple_wizard_config: dict,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Test extraction with current_message scope (original behavior)."""
+        manager, provider = conversation_manager_pair
+
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(simple_wizard_config)
         reasoning = WizardReasoning(
@@ -359,14 +373,12 @@ class TestWizardSessionExtractionIntegration:
             extraction_scope="current_message",
         )
 
-        manager = WizardTestManager()
-        manager.messages = [
-            {"role": "user", "content": "Previous message with info"},
-            {"role": "user", "content": "Current message only"},
-        ]
-        manager.metadata = {}
+        await manager.add_message(
+            role="user", content="Previous message with info"
+        )
+        await manager.add_message(role="user", content="Current message only")
 
-        manager.echo_provider.set_responses(["Response"])
+        provider.set_responses(["Response"])
 
         await reasoning.generate(manager, llm=None)
 

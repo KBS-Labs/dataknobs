@@ -382,13 +382,15 @@ class TestWizardHooksIntegration:
 
     @pytest.mark.asyncio
     async def test_hooks_with_wizard_reasoning(
-        self, simple_wizard_config: dict
+        self,
+        simple_wizard_config: dict,
+        conversation_manager_pair: tuple,
     ) -> None:
         """Test hooks integration with WizardReasoning."""
         from dataknobs_bots.reasoning.wizard import WizardReasoning
         from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 
-        from .conftest import WizardTestManager
+        manager, provider = conversation_manager_pair
 
         # Create hooks
         hooks = WizardHooks()
@@ -407,11 +409,8 @@ class TestWizardHooksIntegration:
             wizard_fsm=wizard_fsm, strict_validation=False, hooks=hooks
         )
 
-        # Create test manager
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "I want to create something"}]
-        manager.metadata = {}
-        manager.echo_provider.set_responses(
+        await manager.add_message(role="user", content="I want to create something")
+        provider.set_responses(
             ["Welcome! Let me help you create something."]
         )
 
@@ -423,12 +422,16 @@ class TestWizardHooksIntegration:
         assert "wizard" in manager.metadata
 
     @pytest.mark.asyncio
-    async def test_restart_triggers_hook(self, simple_wizard_config: dict) -> None:
+    async def test_restart_triggers_hook(
+        self,
+        simple_wizard_config: dict,
+        conversation_manager_pair: tuple,
+    ) -> None:
         """Test that restart command triggers restart hook."""
         from dataknobs_bots.reasoning.wizard import WizardReasoning
         from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 
-        from .conftest import WizardTestManager
+        manager, provider = conversation_manager_pair
 
         # Create hooks
         hooks = WizardHooks()
@@ -442,21 +445,18 @@ class TestWizardHooksIntegration:
             wizard_fsm=wizard_fsm, strict_validation=False, hooks=hooks
         )
 
-        # Create test manager at non-start stage
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "restart"}]
-        manager.metadata = {
-            "wizard": {
-                "fsm_state": {
-                    "current_stage": "configure",
-                    "history": ["welcome", "configure"],
-                    "data": {"intent": "test"},
-                    "completed": False,
-                    "clarification_attempts": 0,
-                }
+        # Set up manager at non-start stage
+        await manager.add_message(role="user", content="restart")
+        manager.metadata["wizard"] = {
+            "fsm_state": {
+                "current_stage": "configure",
+                "history": ["welcome", "configure"],
+                "data": {"intent": "test"},
+                "completed": False,
+                "clarification_attempts": 0,
             }
         }
-        manager.echo_provider.set_responses(["Starting over from the beginning."])
+        provider.set_responses(["Starting over from the beginning."])
 
         # Generate with restart command
         await reasoning.generate(manager, llm=None)

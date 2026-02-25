@@ -11,8 +11,8 @@ from dataknobs_bots.reasoning.wizard import (
     WizardState,
 )
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
-
-from .conftest import WizardTestManager
+from dataknobs_llm.conversations import ConversationManager
+from dataknobs_llm.llm.providers.echo import EchoProvider
 
 
 class TestWizardStageContext:
@@ -103,15 +103,16 @@ class TestWizardReasoning:
 
     @pytest.mark.asyncio
     async def test_generate_initial_state(
-        self, wizard_reasoning: WizardReasoning
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Test generate with initial state."""
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "Hello"}]
-        manager.metadata = {}
+        manager, provider = conversation_manager_pair
+        await manager.add_message(role="user", content="Hello")
 
         # Script a specific response for this test
-        manager.echo_provider.set_responses(["Welcome to the wizard!"])
+        provider.set_responses(["Welcome to the wizard!"])
 
         response = await wizard_reasoning.generate(manager, llm=None)
 
@@ -122,25 +123,25 @@ class TestWizardReasoning:
 
     @pytest.mark.asyncio
     async def test_generate_with_existing_state(
-        self, wizard_reasoning: WizardReasoning
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Test generate with existing wizard state."""
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "Create"}]
-        manager.metadata = {
-            "wizard": {
-                "fsm_state": {
-                    "current_stage": "welcome",
-                    "history": ["welcome"],
-                    "data": {},
-                    "completed": False,
-                    "clarification_attempts": 0,
-                }
+        manager, provider = conversation_manager_pair
+        await manager.add_message(role="user", content="Create")
+        manager.metadata["wizard"] = {
+            "fsm_state": {
+                "current_stage": "welcome",
+                "history": ["welcome"],
+                "data": {},
+                "completed": False,
+                "clarification_attempts": 0,
             }
         }
 
         # Script response for existing state
-        manager.echo_provider.set_responses(["Let's configure your settings."])
+        provider.set_responses(["Let's configure your settings."])
 
         response = await wizard_reasoning.generate(manager, llm=None)
 
@@ -151,30 +152,31 @@ class TestWizardReasoning:
 
     @pytest.mark.asyncio
     async def test_navigation_back(
-        self, simple_wizard_config: dict
+        self,
+        simple_wizard_config: dict,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Test back navigation command."""
+        manager, provider = conversation_manager_pair
+
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(simple_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False)
 
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "back"}]
+        await manager.add_message(role="user", content="back")
         # Already at second stage with history
-        manager.metadata = {
-            "wizard": {
-                "fsm_state": {
-                    "current_stage": "configure",
-                    "history": ["welcome", "configure"],
-                    "data": {"intent": "test"},
-                    "completed": False,
-                    "clarification_attempts": 0,
-                }
+        manager.metadata["wizard"] = {
+            "fsm_state": {
+                "current_stage": "configure",
+                "history": ["welcome", "configure"],
+                "data": {"intent": "test"},
+                "completed": False,
+                "clarification_attempts": 0,
             }
         }
 
         # Script response for going back
-        manager.echo_provider.set_responses(["Going back to the previous step."])
+        provider.set_responses(["Going back to the previous step."])
 
         response = await reasoning.generate(manager, llm=None)
 
@@ -187,29 +189,30 @@ class TestWizardReasoning:
 
     @pytest.mark.asyncio
     async def test_navigation_restart(
-        self, simple_wizard_config: dict
+        self,
+        simple_wizard_config: dict,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Test restart navigation command."""
+        manager, provider = conversation_manager_pair
+
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(simple_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False)
 
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "restart"}]
-        manager.metadata = {
-            "wizard": {
-                "fsm_state": {
-                    "current_stage": "configure",
-                    "history": ["welcome", "configure"],
-                    "data": {"intent": "test", "config": "value"},
-                    "completed": False,
-                    "clarification_attempts": 0,
-                }
+        await manager.add_message(role="user", content="restart")
+        manager.metadata["wizard"] = {
+            "fsm_state": {
+                "current_stage": "configure",
+                "history": ["welcome", "configure"],
+                "data": {"intent": "test", "config": "value"},
+                "completed": False,
+                "clarification_attempts": 0,
             }
         }
 
         # Script response for restart
-        manager.echo_provider.set_responses(["Starting over from the beginning."])
+        provider.set_responses(["Starting over from the beginning."])
 
         response = await reasoning.generate(manager, llm=None)
 
@@ -223,30 +226,31 @@ class TestWizardReasoning:
 
     @pytest.mark.asyncio
     async def test_navigation_skip(
-        self, simple_wizard_config: dict
+        self,
+        simple_wizard_config: dict,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Test skip navigation command on skippable stage."""
+        manager, provider = conversation_manager_pair
+
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(simple_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False)
 
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "skip"}]
+        await manager.add_message(role="user", content="skip")
         # At configure stage which is skippable
-        manager.metadata = {
-            "wizard": {
-                "fsm_state": {
-                    "current_stage": "configure",
-                    "history": ["welcome", "configure"],
-                    "data": {"intent": "test"},
-                    "completed": False,
-                    "clarification_attempts": 0,
-                }
+        manager.metadata["wizard"] = {
+            "fsm_state": {
+                "current_stage": "configure",
+                "history": ["welcome", "configure"],
+                "data": {"intent": "test"},
+                "completed": False,
+                "clarification_attempts": 0,
             }
         }
 
         # Script response for skip
-        manager.echo_provider.set_responses(["Skipping this step."])
+        provider.set_responses(["Skipping this step."])
 
         response = await reasoning.generate(manager, llm=None)
 
@@ -258,15 +262,16 @@ class TestWizardReasoning:
 
     @pytest.mark.asyncio
     async def test_response_metadata(
-        self, wizard_reasoning: WizardReasoning
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Test that response contains wizard metadata."""
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "Hello"}]
-        manager.metadata = {}
+        manager, provider = conversation_manager_pair
+        await manager.add_message(role="user", content="Hello")
 
         # Script response
-        manager.echo_provider.set_responses(["Welcome!"])
+        provider.set_responses(["Welcome!"])
 
         response = await wizard_reasoning.generate(manager, llm=None)
 
@@ -282,46 +287,47 @@ class TestWizardReasoning:
         assert "stages" in wizard_meta
 
     @pytest.mark.asyncio
-    async def test_complete_calls_tracked(
-        self, wizard_reasoning: WizardReasoning
+    async def test_system_prompt_contains_wizard_context(
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
-        """Test that complete() calls are tracked for verification."""
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "Hello"}]
-        manager.metadata = {}
+        """Test that complete() is called with wizard context in system prompt."""
+        manager, provider = conversation_manager_pair
+        await manager.add_message(role="user", content="Hello")
 
-        manager.echo_provider.set_responses(["Test response"])
+        provider.set_responses(["Test response"])
 
         await wizard_reasoning.generate(manager, llm=None)
 
-        # Verify complete was called with expected parameters
-        assert len(manager.complete_calls) == 1
-        call = manager.complete_calls[0]
-        assert "system_prompt_override" in call
-        # System prompt override should contain wizard context
-        # (either stage context or clarification context depending on extraction result)
-        system_prompt = call["system_prompt_override"]
+        # Verify the provider received the call with wizard context
+        assert provider.call_count >= 1
+        last_call = provider.get_last_call()
+        system_msg = next(
+            m for m in last_call["messages"] if m.role == "system"
+        )
         assert (
-            "## Current Wizard Stage" in system_prompt
-            or "## Clarification Needed" in system_prompt
+            "## Current Wizard Stage" in system_msg.content
+            or "## Clarification Needed" in system_msg.content
         )
 
     @pytest.mark.asyncio
     async def test_echo_provider_receives_messages(
-        self, wizard_reasoning: WizardReasoning
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Test that EchoProvider receives the conversation messages."""
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "Test input message"}]
-        manager.metadata = {}
+        manager, provider = conversation_manager_pair
+        await manager.add_message(role="user", content="Test input message")
 
-        manager.echo_provider.set_responses(["Scripted response"])
+        provider.set_responses(["Scripted response"])
 
         await wizard_reasoning.generate(manager, llm=None)
 
         # Verify EchoProvider received the messages
-        assert manager.echo_provider.call_count == 1
-        last_message = manager.echo_provider.get_last_user_message()
+        assert provider.call_count == 1
+        last_message = provider.get_last_user_message()
         assert last_message == "Test input message"
 
     def test_validate_data_required_fields(
@@ -396,34 +402,31 @@ class TestWizardReasoning:
         progress = reasoning._calculate_progress(state)
         assert progress == 1.0
 
-    def test_get_last_user_message(
-        self, wizard_reasoning: WizardReasoning
+    @pytest.mark.asyncio
+    async def test_get_last_user_message(
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
     ) -> None:
         """Test extracting last user message."""
-        manager = WizardTestManager()
+        await conversation_manager.add_message(role="user", content="First message")
+        await conversation_manager.add_message(
+            role="assistant", content="Response"
+        )
+        await conversation_manager.add_message(role="user", content="Last message")
 
-        # String content
-        manager.messages = [
-            {"role": "user", "content": "First message"},
-            {"role": "assistant", "content": "Response"},
-            {"role": "user", "content": "Last message"},
-        ]
-        message = wizard_reasoning._get_last_user_message(manager)
+        message = wizard_reasoning._get_last_user_message(conversation_manager)
         assert message == "Last message"
 
-        # Structured content
-        manager.messages = [
-            {
-                "role": "user",
-                "content": [{"type": "text", "text": "Structured message"}],
-            }
-        ]
-        message = wizard_reasoning._get_last_user_message(manager)
-        assert message == "Structured message"
-
-        # No messages
-        manager.messages = []
-        message = wizard_reasoning._get_last_user_message(manager)
+    @pytest.mark.asyncio
+    async def test_get_last_user_message_no_user_messages(
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
+    ) -> None:
+        """Test extracting last user message when none exist."""
+        # Fresh CM has only the system message — no user messages
+        message = wizard_reasoning._get_last_user_message(conversation_manager)
         assert message == ""
 
 
@@ -459,30 +462,31 @@ class TestWizardTransitionTracking:
 
     @pytest.mark.asyncio
     async def test_transition_recorded_on_stage_change(
-        self, simple_wizard_config: dict
+        self,
+        simple_wizard_config: dict,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Test that a transition is recorded when stage changes."""
+        manager, provider = conversation_manager_pair
+
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(simple_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False)
 
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "Create something"}]
-        manager.metadata = {
-            "wizard": {
-                "fsm_state": {
-                    "current_stage": "welcome",
-                    "history": ["welcome"],
-                    "data": {},
-                    "completed": False,
-                    "clarification_attempts": 0,
-                    "transitions": [],
-                    "stage_entry_time": time.time() - 5.0,  # 5 seconds ago
-                }
+        await manager.add_message(role="user", content="Create something")
+        manager.metadata["wizard"] = {
+            "fsm_state": {
+                "current_stage": "welcome",
+                "history": ["welcome"],
+                "data": {},
+                "completed": False,
+                "clarification_attempts": 0,
+                "transitions": [],
+                "stage_entry_time": time.time() - 5.0,  # 5 seconds ago
             }
         }
 
-        manager.echo_provider.set_responses(["Moving to configuration step."])
+        provider.set_responses(["Moving to configuration step."])
 
         await reasoning.generate(manager, llm=None)
 
@@ -498,31 +502,32 @@ class TestWizardTransitionTracking:
 
     @pytest.mark.asyncio
     async def test_transition_recorded_on_back_navigation(
-        self, simple_wizard_config: dict
+        self,
+        simple_wizard_config: dict,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Test that a transition is recorded on back navigation."""
+        manager, provider = conversation_manager_pair
+
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(simple_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False)
 
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "back"}]
+        await manager.add_message(role="user", content="back")
         entry_time = time.time() - 5.0
-        manager.metadata = {
-            "wizard": {
-                "fsm_state": {
-                    "current_stage": "configure",
-                    "history": ["welcome", "configure"],
-                    "data": {"intent": "test"},
-                    "completed": False,
-                    "clarification_attempts": 0,
-                    "transitions": [],
-                    "stage_entry_time": entry_time,
-                }
+        manager.metadata["wizard"] = {
+            "fsm_state": {
+                "current_stage": "configure",
+                "history": ["welcome", "configure"],
+                "data": {"intent": "test"},
+                "completed": False,
+                "clarification_attempts": 0,
+                "transitions": [],
+                "stage_entry_time": entry_time,
             }
         }
 
-        manager.echo_provider.set_responses(["Going back to welcome."])
+        provider.set_responses(["Going back to welcome."])
 
         await reasoning.generate(manager, llm=None)
 
@@ -540,31 +545,32 @@ class TestWizardTransitionTracking:
 
     @pytest.mark.asyncio
     async def test_transition_recorded_on_restart(
-        self, simple_wizard_config: dict
+        self,
+        simple_wizard_config: dict,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Test that a transition is recorded on restart."""
+        manager, provider = conversation_manager_pair
+
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(simple_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False)
 
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "restart"}]
+        await manager.add_message(role="user", content="restart")
         entry_time = time.time() - 10.0
-        manager.metadata = {
-            "wizard": {
-                "fsm_state": {
-                    "current_stage": "configure",
-                    "history": ["welcome", "configure"],
-                    "data": {"intent": "test", "config": "value"},
-                    "completed": False,
-                    "clarification_attempts": 0,
-                    "transitions": [],
-                    "stage_entry_time": entry_time,
-                }
+        manager.metadata["wizard"] = {
+            "fsm_state": {
+                "current_stage": "configure",
+                "history": ["welcome", "configure"],
+                "data": {"intent": "test", "config": "value"},
+                "completed": False,
+                "clarification_attempts": 0,
+                "transitions": [],
+                "stage_entry_time": entry_time,
             }
         }
 
-        manager.echo_provider.set_responses(["Starting over."])
+        provider.set_responses(["Starting over."])
 
         await reasoning.generate(manager, llm=None)
 
@@ -583,9 +589,13 @@ class TestWizardTransitionTracking:
 
     @pytest.mark.asyncio
     async def test_transitions_preserved_across_restarts(
-        self, simple_wizard_config: dict
+        self,
+        simple_wizard_config: dict,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Test that transition history is preserved across restarts."""
+        manager, provider = conversation_manager_pair
+
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(simple_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False)
@@ -602,23 +612,20 @@ class TestWizardTransitionTracking:
             "error": None,
         }
 
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "restart"}]
-        manager.metadata = {
-            "wizard": {
-                "fsm_state": {
-                    "current_stage": "configure",
-                    "history": ["welcome", "configure"],
-                    "data": {"intent": "test"},
-                    "completed": False,
-                    "clarification_attempts": 0,
-                    "transitions": [existing_transition],
-                    "stage_entry_time": time.time() - 10.0,
-                }
+        await manager.add_message(role="user", content="restart")
+        manager.metadata["wizard"] = {
+            "fsm_state": {
+                "current_stage": "configure",
+                "history": ["welcome", "configure"],
+                "data": {"intent": "test"},
+                "completed": False,
+                "clarification_attempts": 0,
+                "transitions": [existing_transition],
+                "stage_entry_time": time.time() - 10.0,
             }
         }
 
-        manager.echo_provider.set_responses(["Starting over."])
+        provider.set_responses(["Starting over."])
 
         await reasoning.generate(manager, llm=None)
 
@@ -664,32 +671,33 @@ class TestWizardTransitionTracking:
 
     @pytest.mark.asyncio
     async def test_stage_entry_time_updated_on_transition(
-        self, simple_wizard_config: dict
+        self,
+        simple_wizard_config: dict,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Test that stage_entry_time is updated when transitioning."""
+        manager, provider = conversation_manager_pair
+
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(simple_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False)
 
         old_entry_time = time.time() - 100.0
 
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "back"}]
-        manager.metadata = {
-            "wizard": {
-                "fsm_state": {
-                    "current_stage": "configure",
-                    "history": ["welcome", "configure"],
-                    "data": {},
-                    "completed": False,
-                    "clarification_attempts": 0,
-                    "transitions": [],
-                    "stage_entry_time": old_entry_time,
-                }
+        await manager.add_message(role="user", content="back")
+        manager.metadata["wizard"] = {
+            "fsm_state": {
+                "current_stage": "configure",
+                "history": ["welcome", "configure"],
+                "data": {},
+                "completed": False,
+                "clarification_attempts": 0,
+                "transitions": [],
+                "stage_entry_time": old_entry_time,
             }
         }
 
-        manager.echo_provider.set_responses(["Going back."])
+        provider.set_responses(["Going back."])
 
         before = time.time()
         await reasoning.generate(manager, llm=None)

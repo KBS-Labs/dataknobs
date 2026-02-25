@@ -9,8 +9,8 @@ import pytest
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
-
-from .conftest import WizardTestManager
+from dataknobs_llm.conversations import ConversationManager
+from dataknobs_llm.llm.providers.echo import EchoProvider
 
 
 class TestSkipDefault:
@@ -65,7 +65,9 @@ class TestSkipWithDefaults:
     """Tests for applying skip_default when user skips."""
 
     @pytest.mark.asyncio
-    async def test_skip_applies_default_values(self) -> None:
+    async def test_skip_applies_default_values(
+        self, conversation_manager: ConversationManager
+    ) -> None:
         """Skipping a stage should apply skip_default values to state data."""
         wizard_config: dict[str, Any] = {
             "name": "test-wizard",
@@ -90,18 +92,10 @@ class TestSkipWithDefaults:
         wizard_fsm = loader.load_from_dict(wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False)
 
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "skip"}]
-        manager.metadata = {}
-
-        # Script response for after skip
-        manager.echo_provider.set_responses(["Skipped! Moving on."])
-
         state = WizardState(current_stage="configure_llm")
 
         # Handle navigation should apply skip_default
-        # Args: message, state, manager, llm
-        result = await reasoning._handle_navigation("skip", state, manager, None)
+        result = await reasoning._handle_navigation("skip", state, conversation_manager, None)
 
         # Should return None (continue to normal flow)
         assert result is None
@@ -112,7 +106,9 @@ class TestSkipWithDefaults:
         assert state.data["model"] == "claude-3"
 
     @pytest.mark.asyncio
-    async def test_skip_without_default_no_values_added(self) -> None:
+    async def test_skip_without_default_no_values_added(
+        self, conversation_manager: ConversationManager
+    ) -> None:
         """Skipping without skip_default should only set skip marker."""
         wizard_config: dict[str, Any] = {
             "name": "test-wizard",
@@ -137,17 +133,18 @@ class TestSkipWithDefaults:
         wizard_fsm = loader.load_from_dict(wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False)
 
-        manager = WizardTestManager()
         state = WizardState(current_stage="optional_step")
 
-        await reasoning._handle_navigation("skip", state, manager, None)
+        await reasoning._handle_navigation("skip", state, conversation_manager, None)
 
         # Should only have skip marker
         assert state.data["_skipped_optional_step"] is True
         assert len(state.data) == 1  # Only the skip marker
 
     @pytest.mark.asyncio
-    async def test_use_defaults_triggers_skip(self) -> None:
+    async def test_use_defaults_triggers_skip(
+        self, conversation_manager: ConversationManager
+    ) -> None:
         """'use defaults' should trigger skip with defaults."""
         wizard_config: dict[str, Any] = {
             "name": "test-wizard",
@@ -167,16 +164,17 @@ class TestSkipWithDefaults:
         wizard_fsm = loader.load_from_dict(wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False)
 
-        manager = WizardTestManager()
         state = WizardState(current_stage="settings")
 
-        await reasoning._handle_navigation("use defaults", state, manager, None)
+        await reasoning._handle_navigation("use defaults", state, conversation_manager, None)
 
         assert state.data["theme"] == "dark"
         assert state.data["language"] == "en"
 
     @pytest.mark.asyncio
-    async def test_use_default_singular_triggers_skip(self) -> None:
+    async def test_use_default_singular_triggers_skip(
+        self, conversation_manager: ConversationManager
+    ) -> None:
         """'use default' (singular) should trigger skip with defaults."""
         wizard_config: dict[str, Any] = {
             "name": "test-wizard",
@@ -196,16 +194,19 @@ class TestSkipWithDefaults:
         wizard_fsm = loader.load_from_dict(wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False)
 
-        manager = WizardTestManager()
         state = WizardState(current_stage="settings")
 
-        await reasoning._handle_navigation("use default", state, manager, None)
+        await reasoning._handle_navigation("use default", state, conversation_manager, None)
 
         assert state.data["value"] == 42
 
     @pytest.mark.asyncio
-    async def test_skip_non_skippable_stage_rejected(self) -> None:
+    async def test_skip_non_skippable_stage_rejected(
+        self, conversation_manager_pair: tuple[ConversationManager, EchoProvider]
+    ) -> None:
         """Skipping a non-skippable stage should be rejected."""
+        manager, provider = conversation_manager_pair
+
         wizard_config: dict[str, Any] = {
             "name": "test-wizard",
             "stages": [
@@ -224,8 +225,7 @@ class TestSkipWithDefaults:
         wizard_fsm = loader.load_from_dict(wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False)
 
-        manager = WizardTestManager()
-        manager.echo_provider.set_responses(["This step cannot be skipped."])
+        provider.set_responses(["This step cannot be skipped."])
         state = WizardState(current_stage="required_step")
 
         result = await reasoning._handle_navigation("skip", state, manager, None)
@@ -237,7 +237,9 @@ class TestSkipWithDefaults:
         assert "value" not in state.data
 
     @pytest.mark.asyncio
-    async def test_skip_default_merges_with_existing_data(self) -> None:
+    async def test_skip_default_merges_with_existing_data(
+        self, conversation_manager: ConversationManager
+    ) -> None:
         """skip_default should merge with, not replace, existing state data."""
         wizard_config: dict[str, Any] = {
             "name": "test-wizard",
@@ -257,14 +259,13 @@ class TestSkipWithDefaults:
         wizard_fsm = loader.load_from_dict(wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False)
 
-        manager = WizardTestManager()
         # Pre-existing data from earlier stages
         state = WizardState(
             current_stage="configure",
             data={"existing_field": "existing_value"},
         )
 
-        await reasoning._handle_navigation("skip", state, manager, None)
+        await reasoning._handle_navigation("skip", state, conversation_manager, None)
 
         # Both existing and default values should be present
         assert state.data["existing_field"] == "existing_value"
@@ -272,7 +273,9 @@ class TestSkipWithDefaults:
         assert state.data["_skipped_configure"] is True
 
     @pytest.mark.asyncio
-    async def test_skip_default_with_nested_values(self) -> None:
+    async def test_skip_default_with_nested_values(
+        self, conversation_manager: ConversationManager
+    ) -> None:
         """skip_default should work with nested dict values."""
         wizard_config: dict[str, Any] = {
             "name": "test-wizard",
@@ -295,10 +298,9 @@ class TestSkipWithDefaults:
         wizard_fsm = loader.load_from_dict(wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm, strict_validation=False)
 
-        manager = WizardTestManager()
         state = WizardState(current_stage="configure")
 
-        await reasoning._handle_navigation("skip", state, manager, None)
+        await reasoning._handle_navigation("skip", state, conversation_manager, None)
 
         assert state.data["llm"] == {"provider": "anthropic", "model": "claude-3"}
         assert state.data["features"] == ["chat", "tools"]

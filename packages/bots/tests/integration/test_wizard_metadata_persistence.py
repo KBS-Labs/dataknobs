@@ -2,7 +2,7 @@
 
 Validates that all code paths in ``_generate_stage_response`` persist
 ``metadata.wizard`` on the assistant conversation node via the real
-``ConversationManager`` pipeline (not the lightweight WizardTestManager).
+``ConversationManager`` pipeline backed by ``EchoProvider``.
 
 The four paths tested:
 1. **Template pure** — ``response_template`` with no ``llm_assist``
