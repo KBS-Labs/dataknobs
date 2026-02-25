@@ -895,8 +895,9 @@ class WizardReasoning(ReasoningStrategy):
         artifacts_config = config.get("artifacts", {})
         if artifacts_config:
             try:
-                from ..artifacts import ArtifactRegistry, ArtifactTypeDefinition
                 from dataknobs_data.backends.memory import AsyncMemoryDatabase
+
+                from ..artifacts import ArtifactRegistry, ArtifactTypeDefinition
 
                 # Build type definitions from config
                 type_definitions: dict[str, ArtifactTypeDefinition] = {}
@@ -1356,9 +1357,9 @@ class WizardReasoning(ReasoningStrategy):
 
         # Check for subflow push BEFORE regular FSM transition
         subflow_config = self._should_push_subflow(wizard_state, user_message)
-        if subflow_config:
-            # Push to subflow
-            if self._handle_subflow_push(wizard_state, subflow_config, user_message):
+        if subflow_config and self._handle_subflow_push(
+            wizard_state, subflow_config, user_message
+        ):
                 # Generate response for subflow's first stage
                 active_fsm = self._get_active_fsm()
                 new_stage = active_fsm.current_metadata
@@ -1775,9 +1776,8 @@ class WizardReasoning(ReasoningStrategy):
 
             # Evaluate condition if present
             condition = transition.get("condition")
-            if condition:
-                if not self._evaluate_condition(condition, wizard_state.data):
-                    continue
+            if condition and not self._evaluate_condition(condition, wizard_state.data):
+                continue
 
             # This transition matches and is a subflow transition
             return transition.get("subflow_config", {})
@@ -2088,11 +2088,12 @@ class WizardReasoning(ReasoningStrategy):
         ) -> NavigationCommandConfig:
             if override_raw is None:
                 return base
-            keywords = override_raw.get("keywords")
-            if keywords is not None:
-                keywords = tuple(k.lower() for k in keywords)
-            else:
-                keywords = base.keywords
+            keywords_raw = override_raw.get("keywords")
+            keywords = (
+                tuple(k.lower() for k in keywords_raw)
+                if keywords_raw is not None
+                else base.keywords
+            )
             enabled = override_raw.get("enabled", base.enabled)
             return NavigationCommandConfig(keywords=keywords, enabled=enabled)
 
@@ -2276,7 +2277,7 @@ class WizardReasoning(ReasoningStrategy):
             user_input=message,
         )
         # Preserve transition history but clear other state
-        previous_transitions = state.transitions + [transition]
+        previous_transitions = [*state.transitions, transition]
 
         state.current_stage = to_stage
         state.data = {}
@@ -3960,8 +3961,7 @@ class WizardReasoning(ReasoningStrategy):
         section_lower = section.lower().strip()
 
         # Check custom mapping first
-        if self._section_to_stage_mapping:
-            if section_lower in self._section_to_stage_mapping:
+        if self._section_to_stage_mapping and section_lower in self._section_to_stage_mapping:
                 return self._section_to_stage_mapping[section_lower]
 
         # Default mappings for common wizard patterns
@@ -3981,9 +3981,7 @@ class WizardReasoning(ReasoningStrategy):
         }
 
         mapped_stage = default_mapping.get(section_lower)
-        if mapped_stage:
-            # Verify the stage exists in the FSM
-            if mapped_stage in self._fsm._stage_metadata:
+        if mapped_stage and mapped_stage in self._fsm._stage_metadata:
                 return mapped_stage
 
         return None
@@ -4098,7 +4096,9 @@ I wasn't able to clearly understand the user's response for this stage.
 **Potential Issues**:
 {issue_list}
 
-**What I'm Looking For**: {stage.get('prompt', 'Please provide more specific information.')}{suggestions_text}
+**What I'm Looking For**: \
+{stage.get('prompt', 'Please provide more specific information.')}\
+{suggestions_text}
 
 Please ask a clarifying question to help gather the needed information.
 Be conversational and helpful - don't make the user feel like they did something wrong.
