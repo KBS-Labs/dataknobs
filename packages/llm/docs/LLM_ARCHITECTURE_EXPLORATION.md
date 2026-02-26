@@ -247,6 +247,7 @@ class ConversationManager:
     
     # Navigation
     async def switch_to_node(node_id: str) -> None
+    async def branch_from(sibling_node_id: str) -> None
     async def get_conversation_history() -> List[LLMMessage]
     async def get_branch_names() -> List[str]
 ```

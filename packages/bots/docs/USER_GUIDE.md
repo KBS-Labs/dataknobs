@@ -1030,6 +1030,15 @@ These keywords are the defaults. You can customize them per-wizard or per-stage 
 the `navigation` section in wizard settings. See the
 [Configuration Reference](configuration.md#reasoning-configuration) for details.
 
+**Conversation Tree Branching:**
+
+When a wizard stage is revisited via back or restart, the conversation tree
+creates a **sibling branch** from the point where the stage was previously
+entered. This preserves earlier conversation paths rather than chaining
+messages deeper into a single linear chain. For example, restarting a wizard
+that was on the greeting stage creates a new greeting node as a sibling of the
+original, both sharing the same parent node.
+
 #### Adding Lifecycle Hooks
 
 Customize behavior at stage transitions:

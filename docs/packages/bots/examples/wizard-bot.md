@@ -322,6 +322,11 @@ User: Actually, go back
 Bot: Returning to the previous step. What type of bot would you like to create?
 ```
 
+When a stage is revisited via back or restart, the conversation tree creates a
+sibling branch from the point where the stage was previously entered. This
+preserves earlier conversation paths as separate branches rather than chaining
+messages deeper into a single linear chain.
+
 ## Adding Lifecycle Hooks
 
 Customize wizard behavior with hooks:

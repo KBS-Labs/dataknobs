@@ -1220,6 +1220,10 @@ Users can navigate the wizard with natural language. The default keywords are:
 | Skip | "skip", "skip this", "use default", "use defaults" | Skip current stage (if `can_skip: true`) and apply `skip_default` values |
 | Restart | "restart", "start over" | Restart from beginning |
 
+When a stage is revisited via back or restart, the conversation tree creates a
+sibling branch from the point where the stage was previously entered rather than
+chaining deeper. This preserves prior conversation paths as separate branches.
+
 Navigation keywords are configurable at both the wizard level and per-stage. To customize
 keywords, add a `navigation` section to wizard settings:
 
