@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.serialization import sanitize_for_json
+from dataknobs_llm.conversations.storage import ConversationNode
 
 from .base import ReasoningStrategy
 from .observability import (
@@ -1018,6 +1019,7 @@ class WizardReasoning(ReasoningStrategy):
 
         # Get start stage metadata and generate the response
         stage = self._get_active_fsm().current_metadata
+        await self._branch_for_revisited_stage(manager, stage.get("name", ""))
         response = await self._generate_stage_response(
             manager, llm, stage, wizard_state, tools=[],
         )
@@ -1118,6 +1120,9 @@ class WizardReasoning(ReasoningStrategy):
 
                 # Generate response for the re-opened stage
                 stage = active_fsm.current_metadata
+                await self._branch_for_revisited_stage(
+                    manager, target_stage
+                )
                 response = await self._generate_stage_response(
                     manager, llm, stage, wizard_state, tools
                 )
@@ -1363,6 +1368,9 @@ class WizardReasoning(ReasoningStrategy):
                 # Generate response for subflow's first stage
                 active_fsm = self._get_active_fsm()
                 new_stage = active_fsm.current_metadata
+                await self._branch_for_revisited_stage(
+                    manager, new_stage.get("name", "")
+                )
                 response = await self._generate_stage_response(
                     manager, llm, new_stage, wizard_state, tools
                 )
@@ -1528,6 +1536,10 @@ class WizardReasoning(ReasoningStrategy):
 
         # Generate stage-aware response
         new_stage = active_fsm.current_metadata
+        if new_stage.get("name") != from_stage:
+            await self._branch_for_revisited_stage(
+                manager, new_stage.get("name", "")
+            )
         response = await self._generate_stage_response(
             manager, llm, new_stage, wizard_state, tools
         )
@@ -2187,6 +2199,9 @@ class WizardReasoning(ReasoningStrategy):
             state.stage_entry_time = time.time()
 
             stage = self._fsm.current_metadata
+            await self._branch_for_revisited_stage(
+                manager, state.current_stage
+            )
             response = await self._generate_stage_response(
                 manager, llm, stage, state, None
             )
@@ -2292,6 +2307,9 @@ class WizardReasoning(ReasoningStrategy):
             bank.clear()
 
         stage = self._fsm.current_metadata
+        await self._branch_for_revisited_stage(
+            manager, state.current_stage
+        )
         response = await self._generate_stage_response(
             manager, llm, stage, state, None
         )
@@ -2755,6 +2773,75 @@ class WizardReasoning(ReasoningStrategy):
                     )
 
         return errors
+
+    @staticmethod
+    def _find_stage_node_id(manager: Any, stage_name: str) -> str | None:
+        """Find the most recent assistant node for the given wizard stage.
+
+        Searches the conversation tree for assistant response nodes whose
+        metadata records ``wizard.current_stage == stage_name``.  Returns
+        the ``node_id`` of the last match in DFS order (the most recent
+        visit), or ``None`` if the stage has not been visited yet.
+
+        Args:
+            manager: ConversationManager instance (must have ``state``).
+            stage_name: Wizard stage name to search for.
+
+        Returns:
+            ``node_id`` string of the most recent matching node, or ``None``.
+        """
+        state = getattr(manager, "state", None)
+        if state is None:
+            return None
+
+        matches = state.message_tree.find_nodes(
+            lambda n: (
+                isinstance(n.data, ConversationNode)
+                and n.data.message.role == "assistant"
+                and n.data.metadata.get("wizard", {}).get("current_stage")
+                == stage_name
+            ),
+        )
+        if not matches:
+            return None
+
+        # Last match in DFS order is the most recent visit.
+        last = matches[-1]
+        return last.data.node_id if isinstance(last.data, ConversationNode) else None
+
+    async def _branch_for_revisited_stage(
+        self, manager: Any, stage_name: str
+    ) -> None:
+        """Branch the conversation tree when revisiting a wizard stage.
+
+        If the tree already contains an assistant response for
+        ``stage_name``, positions the tree so the next message becomes a
+        sibling of that node (a new branch from the same parent).
+
+        Does nothing on first visit (no previous node to branch from).
+
+        Args:
+            manager: ConversationManager instance.
+            stage_name: Wizard stage about to be (re-)entered.
+        """
+        prev_node_id = self._find_stage_node_id(manager, stage_name)
+        if prev_node_id is not None:
+            try:
+                await manager.branch_from(prev_node_id)
+                logger.debug(
+                    "Branched conversation tree for revisited stage '%s' "
+                    "(sibling of node '%s')",
+                    stage_name,
+                    prev_node_id,
+                )
+            except (ValueError, AttributeError):
+                # Manager may not support branch_from (e.g. test doubles).
+                # Gracefully degrade — tree will just chain deeper.
+                logger.debug(
+                    "branch_from not available; skipping tree branching "
+                    "for stage '%s'",
+                    stage_name,
+                )
 
     async def _generate_stage_response(
         self,
