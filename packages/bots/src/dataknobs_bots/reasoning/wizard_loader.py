@@ -411,18 +411,19 @@ class WizardConfigLoader:
         is_subflow_transition = target == SUBFLOW_TARGET
         actual_target = source_stage if is_subflow_transition else target
 
-        # Build condition function reference if specified
+        # Build condition function reference if specified.
+        # The function was already pre-registered by
+        # _register_inline_conditions, so reference it by name
+        # (type="registered") rather than passing inline code.
+        # Using type="inline" would cause the FSM builder to create
+        # a second function from the code text, without ``bank`` or
+        # other wizard-specific names in scope, resulting in silent
+        # NameError when conditions reference bank().
         condition = None
         if "condition" in transition:
-            condition_code = transition["condition"]
-            # Wrap in return statement if not already
-            if not condition_code.strip().startswith("return"):
-                condition_code = f"return {condition_code}"
-
             condition = FunctionReference(
-                type="inline",
+                type="registered",
                 name=f"condition_{source_stage}_{actual_target}_{idx}",
-                code=condition_code,
             )
 
         # Build transform function reference(s) if specified
@@ -642,7 +643,15 @@ class WizardConfigLoader:
 
                 condition_code = transition["condition"]
                 target = transition.get("target", "unknown")
-                func_name = f"condition_{stage['name']}_{target}_{idx}"
+                # For subflow transitions the FSM arc target is the
+                # source stage (self-loop), not the raw "_subflow"
+                # sentinel.  Mirror _translate_transition's logic so
+                # the registered name matches the FunctionReference.
+                if target == SUBFLOW_TARGET:
+                    actual_target = stage["name"]
+                else:
+                    actual_target = target
+                func_name = f"condition_{stage['name']}_{actual_target}_{idx}"
 
                 # Wrap in return statement if not already
                 if not condition_code.strip().startswith("return"):

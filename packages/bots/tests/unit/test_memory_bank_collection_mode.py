@@ -30,14 +30,16 @@ from dataknobs_llm.testing import text_response
 def _make_collection_wizard(
     done_keywords: list[str] | None = None,
     min_records: int = 0,
+    condition: str | None = None,
 ) -> WizardReasoning:
     """Create a WizardReasoning with a collection-mode stage."""
     if done_keywords is None:
         done_keywords = ["done", "that's all", "finished"]
 
-    condition = "data.get('_collection_done')"
-    if min_records > 0:
-        condition += f" and bank('ingredients').count() >= {min_records}"
+    if condition is None:
+        condition = "data.get('_collection_done')"
+        if min_records > 0:
+            condition += f" and bank('ingredients').count() >= {min_records}"
 
     config: dict[str, Any] = {
         "name": "collection-wizard",
@@ -611,3 +613,117 @@ class TestCollectionModeGenerateFlow:
         fsm_state = manager.metadata["wizard"]["fsm_state"]
         assert fsm_state["current_stage"] == "collect"
         assert reasoning._banks["ingredients"].count() == 1
+
+
+# =====================================================================
+# Bank-count condition tests (Bug #3)
+#
+# Real wizard configs (e.g. recipe-wizard.yaml) use conditions like
+# ``bank('ingredients').count() > 0`` as the SOLE transition condition.
+# The wizard_loader pre-registers these as inline condition functions
+# that extract ``_bank_fn`` from the data dict at evaluation time.
+#
+# Bug: The FSM builder's _resolve_function created a *second* inline
+# function from the code text (without ``bank`` in scope), shadowing
+# the pre-registered one.  The result was a silent NameError caught
+# by ``except Exception: pass``, so the transition never fired.
+# =====================================================================
+
+def _seed_wizard_state_with_banks(
+    manager: Any,
+    reasoning: WizardReasoning,
+    stage: str = "collect",
+    data: dict[str, Any] | None = None,
+) -> None:
+    """Seed wizard state AND bank data into manager metadata.
+
+    Unlike _seed_wizard_state, this also persists the current bank
+    contents so that _restore_banks populates the banks correctly
+    when generate() reconstitutes state.
+    """
+    banks_data = {}
+    for name, bank in reasoning._banks.items():
+        banks_data[name] = bank.to_dict()
+
+    manager.set_metadata("wizard", {
+        "fsm_state": {
+            "current_stage": stage,
+            "history": [stage],
+            "data": data or {},
+            "completed": False,
+            "clarification_attempts": 0,
+            "transitions": [],
+            "stage_entry_time": 0,
+            "tasks": {},
+            "subflow_stack": [],
+        },
+        "banks": banks_data,
+    })
+
+
+class TestBankCountConditionInGenerate:
+    """Tests for bank-count transition conditions through full generate().
+
+    These use ``bank('ingredients').count() > 0`` as the sole transition
+    condition, matching real wizard configs like recipe-wizard.yaml.
+    """
+
+    @pytest.mark.asyncio
+    async def test_bank_count_condition_fires_on_done(self) -> None:
+        """'done' with populated bank must transition via bank-count condition.
+
+        Regression: the FSM builder created a duplicate inline function
+        without ``bank`` in scope, causing a silent NameError.  The
+        pre-registered condition function (which correctly extracts
+        ``_bank_fn`` from data) was never called.
+        """
+        reasoning = _make_collection_wizard(
+            condition="bank('ingredients').count() > 0",
+        )
+        manager, provider = await _make_manager_and_provider()
+
+        # Pre-populate the bank
+        reasoning._banks["ingredients"].add(
+            {"name": "flour", "amount": "2 cups"}, source_stage="collect",
+        )
+
+        # Seed state AND bank data into metadata
+        _seed_wizard_state_with_banks(
+            manager, reasoning, stage="collect",
+        )
+
+        await manager.add_message(role="user", content="done")
+        await reasoning.generate(manager=manager, llm=provider)
+
+        fsm_state = manager.metadata["wizard"]["fsm_state"]
+        assert fsm_state["current_stage"] == "review", (
+            f"Expected transition to 'review' via bank-count condition, "
+            f"but stuck at '{fsm_state['current_stage']}'. "
+            "The bank('ingredients').count() > 0 condition likely raised "
+            "a silent NameError because _bank_fn was not in scope."
+        )
+        assert fsm_state["completed"] is True
+
+    @pytest.mark.asyncio
+    async def test_bank_count_condition_blocks_with_empty_bank(self) -> None:
+        """'done' with empty bank must NOT transition (count == 0)."""
+        reasoning = _make_collection_wizard(
+            condition="bank('ingredients').count() > 0",
+        )
+        manager, provider = await _make_manager_and_provider()
+
+        # Bank is empty — condition should be False
+        _seed_wizard_state_with_banks(
+            manager, reasoning, stage="collect",
+        )
+
+        await manager.add_message(role="user", content="done")
+        provider.set_responses([
+            text_response("Please add at least one ingredient."),
+        ])
+        await reasoning.generate(manager=manager, llm=provider)
+
+        fsm_state = manager.metadata["wizard"]["fsm_state"]
+        assert fsm_state["current_stage"] == "collect", (
+            "Should stay at 'collect' because bank is empty."
+        )
