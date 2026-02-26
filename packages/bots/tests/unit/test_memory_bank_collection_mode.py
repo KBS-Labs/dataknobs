@@ -839,3 +839,77 @@ class TestCollectionModeBranching:
                 f"{collect_stage_ids} with depths {depths}. "
                 f"An ever-deepening tree means branching is missing."
             )
+
+    @pytest.mark.asyncio
+    async def test_get_all_nodes_includes_all_branches(self) -> None:
+        """get_all_nodes() must return messages from ALL branches.
+
+        The active-path method (get_current_nodes) only returns the last
+        branch, losing intermediate collection iterations.  get_all_nodes
+        returns every node across all branches in chronological order,
+        so the full interaction history is available for logging/export.
+        """
+        from dataknobs_llm.extraction import SchemaExtractor
+
+        ext_config = LLMConfig(
+            provider="echo", model="echo-ext",
+            options={"echo_prefix": ""},
+        )
+        ext_provider = EchoProvider(ext_config)
+        extractor = SchemaExtractor(provider=ext_provider)
+
+        reasoning = _make_collection_wizard()
+        reasoning._extractor = extractor
+
+        manager, provider = await _make_manager_and_provider()
+        _seed_wizard_state(manager, stage="collect")
+
+        ingredients = ["flour", "sugar", "eggs"]
+        for name in ingredients:
+            await manager.add_message(role="user", content=f"1 cup {name}")
+            ext_provider.set_responses([
+                text_response(f'{{"name": "{name}", "amount": "1 cup"}}'),
+            ])
+            provider.set_responses([text_response("Got it! What's next?")])
+            await reasoning.generate(manager=manager, llm=provider)
+
+        # Active-path view misses intermediate branches
+        active_nodes = manager.state.get_current_nodes()
+        active_user_msgs = [
+            n.message.content for n in active_nodes
+            if n.message.role == "user"
+        ]
+
+        # Full-tree view includes everything
+        all_nodes = manager.state.get_all_nodes()
+        all_user_msgs = [
+            n.message.content for n in all_nodes
+            if n.message.role == "user"
+        ]
+
+        # All 3 user messages should appear in the full tree
+        assert len(all_user_msgs) >= len(ingredients), (
+            f"get_all_nodes should include all {len(ingredients)} user messages "
+            f"but only found {len(all_user_msgs)}: {all_user_msgs}"
+        )
+
+        # get_all_nodes should return MORE nodes than get_current_nodes
+        # because the current path misses abandoned branches
+        assert len(all_nodes) > len(active_nodes), (
+            f"get_all_nodes ({len(all_nodes)}) should return more nodes "
+            f"than get_current_nodes ({len(active_nodes)}) because "
+            f"intermediate collection branches are not on the active path."
+        )
+
+        # All 3 assistant collection responses should be in the full tree
+        all_assistant_msgs = [
+            n.message.content for n in all_nodes
+            if n.message.role == "assistant"
+        ]
+        collection_responses = [
+            m for m in all_assistant_msgs if "Got it" in m
+        ]
+        assert len(collection_responses) == len(ingredients), (
+            f"Expected {len(ingredients)} collection responses but found "
+            f"{len(collection_responses)}: {all_assistant_msgs}"
+        )
