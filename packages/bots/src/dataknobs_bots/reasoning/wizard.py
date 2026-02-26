@@ -732,6 +732,14 @@ class WizardReasoning(ReasoningStrategy):
         for field_name in schema_props:
             state.data.pop(field_name, None)
 
+        # Branch the conversation tree so this iteration becomes a sibling
+        # of the previous collection response, not a child.  Without this,
+        # each loop iteration deepens the tree (0 → 0.0 → 0.0.0 …) instead
+        # of branching (0, 0.1, 0.2 …).
+        await self._branch_for_revisited_stage(
+            manager, stage.get("name", ""),
+        )
+
         # Render the stage response
         response = await self._generate_stage_response(
             manager, llm, stage, state, tools,

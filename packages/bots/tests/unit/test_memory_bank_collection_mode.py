@@ -20,6 +20,7 @@ from dataknobs_llm.conversations.storage import DataknobsConversationStorage
 from dataknobs_llm.llm import LLMConfig
 from dataknobs_llm.prompts.builders import AsyncPromptBuilder
 from dataknobs_llm.prompts.implementations.config_library import ConfigPromptLibrary
+from dataknobs_llm.conversations.storage import ConversationNode, calculate_node_id
 from dataknobs_llm.testing import text_response
 
 
@@ -727,3 +728,114 @@ class TestBankCountConditionInGenerate:
         assert fsm_state["current_stage"] == "collect", (
             "Should stay at 'collect' because bank is empty."
         )
+
+
+# =====================================================================
+# Collection-mode conversation branching tests
+#
+# Each iteration through collection mode should create sibling nodes
+# in the conversation tree (branching from the same parent), NOT
+# ever-deeper child nodes.  Without branching, the node IDs deepen:
+#   0 → 0.0 → 0.0.0  (bad: linear chain)
+# With branching, iterations are siblings:
+#   0, 0.1, 0.2       (good: branches from same parent)
+# =====================================================================
+
+
+def _collect_assistant_node_ids(manager: Any) -> list[str]:
+    """Extract node IDs of all assistant messages in the conversation tree."""
+    node_ids: list[str] = []
+    tree = manager.state.message_tree
+
+    def _walk(node: Any) -> None:
+        if isinstance(node.data, ConversationNode):
+            if node.data.message.role == "assistant":
+                node_ids.append(calculate_node_id(node))
+        for child in (node.children or []):
+            _walk(child)
+
+    _walk(tree)
+    return node_ids
+
+
+class TestCollectionModeBranching:
+    """Verify that collection-mode iterations create sibling branches.
+
+    Each time the wizard loops in a collection stage, the assistant
+    response should branch from the same parent node so that all
+    iterations are siblings (same depth), not an ever-deepening chain.
+    """
+
+    @pytest.mark.asyncio
+    async def test_collection_iterations_are_siblings(self) -> None:
+        """Multiple collection iterations must create sibling nodes.
+
+        Regression: without _branch_for_revisited_stage in the
+        collection loop, each iteration appended as a child of the
+        previous one, producing node IDs like 0, 0.0, 0.0.0 instead
+        of 0, 0.1, 0.2.
+        """
+        from dataknobs_llm.extraction import SchemaExtractor
+
+        ext_config = LLMConfig(
+            provider="echo", model="echo-ext",
+            options={"echo_prefix": ""},
+        )
+        ext_provider = EchoProvider(ext_config)
+        extractor = SchemaExtractor(provider=ext_provider)
+
+        reasoning = _make_collection_wizard()
+        reasoning._extractor = extractor
+
+        manager, provider = await _make_manager_and_provider()
+        _seed_wizard_state(manager, stage="collect")
+
+        # --- Iteration 1: add flour ---
+        await manager.add_message(role="user", content="2 cups flour")
+        ext_provider.set_responses([
+            text_response('{"name": "flour", "amount": "2 cups"}'),
+        ])
+        provider.set_responses([text_response("Got it! What's next?")])
+        await reasoning.generate(manager=manager, llm=provider)
+
+        ids_after_1 = _collect_assistant_node_ids(manager)
+        assert len(ids_after_1) >= 1, "Should have at least 1 assistant node"
+
+        # --- Iteration 2: add sugar ---
+        await manager.add_message(role="user", content="1 cup sugar")
+        ext_provider.set_responses([
+            text_response('{"name": "sugar", "amount": "1 cup"}'),
+        ])
+        provider.set_responses([text_response("Got it! What's next?")])
+        await reasoning.generate(manager=manager, llm=provider)
+
+        ids_after_2 = _collect_assistant_node_ids(manager)
+        assert len(ids_after_2) >= 2, "Should have at least 2 assistant nodes"
+
+        # --- Iteration 3: add eggs ---
+        await manager.add_message(role="user", content="3 eggs")
+        ext_provider.set_responses([
+            text_response('{"name": "eggs", "amount": "3"}'),
+        ])
+        provider.set_responses([text_response("Got it! What's next?")])
+        await reasoning.generate(manager=manager, llm=provider)
+
+        ids_after_3 = _collect_assistant_node_ids(manager)
+        assert len(ids_after_3) >= 3, "Should have at least 3 assistant nodes"
+
+        # Verify all collection-iteration assistant nodes are at the
+        # same depth (same number of dots in node ID = siblings).
+        # An ever-deepening chain would have depths 1, 2, 3, ...
+        # Siblings would all have the same depth.
+        collect_stage_ids = [
+            nid for nid in ids_after_3
+            if nid.count(".") > 0  # skip the system/initial node
+        ]
+        if len(collect_stage_ids) >= 2:
+            depths = [nid.count(".") for nid in collect_stage_ids]
+            assert len(set(depths)) == 1, (
+                f"Collection iteration assistant nodes should all be at "
+                f"the same depth (siblings), but got node IDs "
+                f"{collect_stage_ids} with depths {depths}. "
+                f"An ever-deepening tree means branching is missing."
+            )
