@@ -9,9 +9,18 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+import pytest_asyncio
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+from dataknobs_data.backends.memory import AsyncMemoryDatabase
+from dataknobs_llm import EchoProvider
+from dataknobs_llm.conversations.manager import ConversationManager
+from dataknobs_llm.conversations.storage import DataknobsConversationStorage
+from dataknobs_llm.llm import LLMConfig
+from dataknobs_llm.prompts.builders import AsyncPromptBuilder
+from dataknobs_llm.prompts.implementations.config_library import ConfigPromptLibrary
+from dataknobs_llm.testing import text_response
 
 
 # =====================================================================
@@ -256,3 +265,190 @@ class TestCollectionModeIntegration:
             data,
         )
         assert result is True
+
+
+# =====================================================================
+# Loaded metadata end-to-end tests
+#
+# These tests exercise collection mode through the loader-produced
+# stage metadata (active_fsm.current_metadata), not manually
+# constructed dicts.  This catches the bug where _extract_metadata
+# omitted collection_mode/collection_config from the metadata.
+# =====================================================================
+
+class TestCollectionModeThroughLoadedMetadata:
+    """Verify collection mode works when stage metadata comes from the loader."""
+
+    def test_loaded_metadata_contains_collection_mode(self) -> None:
+        """current_metadata from a loaded FSM must include collection_mode."""
+        reasoning = _make_collection_wizard()
+        fsm = reasoning._fsm
+
+        # Navigate to the collect stage (it's the start stage)
+        stage = fsm.current_metadata
+        assert stage["name"] == "collect"
+        assert stage.get("collection_mode") == "collection", (
+            "collection_mode missing from loaded stage metadata — "
+            "_extract_metadata must include it"
+        )
+        assert stage.get("collection_config") is not None
+        assert stage["collection_config"]["bank_name"] == "ingredients"
+
+    @pytest.mark.asyncio
+    async def test_handle_collection_mode_with_loaded_metadata(self) -> None:
+        """_handle_collection_mode works with loader-produced metadata.
+
+        Previous tests constructed the stage dict manually, which masked
+        the bug where collection_mode was absent from loaded metadata.
+        """
+        reasoning = _make_collection_wizard()
+        fsm = reasoning._fsm
+        stage = fsm.current_metadata  # From the loader
+
+        # Create minimal manager and state for the async call
+        config = LLMConfig(
+            provider="echo", model="echo-test",
+            options={"echo_prefix": ""},
+        )
+        provider = EchoProvider(config)
+        library = ConfigPromptLibrary(
+            {"system": {"test": {"template": "Test bot."}}}
+        )
+        builder = AsyncPromptBuilder(library=library)
+        storage = DataknobsConversationStorage(AsyncMemoryDatabase())
+        manager = await ConversationManager.create(
+            llm=provider, prompt_builder=builder,
+            storage=storage, system_prompt_name="test",
+        )
+        state = WizardState(current_stage="collect", data={})
+        # Seed a user message so _generate_stage_response can find it
+        await manager.add_message(role="user", content="2 cups of flour")
+
+        # Script a response for the template render
+        provider.set_responses([text_response("Got it! Anything else?")])
+
+        extracted = {"name": "flour", "amount": "2 cups"}
+        result = await reasoning._handle_collection_mode(
+            user_message="2 cups of flour",
+            extracted_data=extracted,
+            stage=stage,  # From the loader, not manually constructed
+            state=state,
+            manager=manager,
+            llm=provider,
+            tools=[],
+        )
+
+        # Should return a response (not None — that's the done path)
+        assert result is not None
+        # Record should be in the bank
+        assert reasoning._banks["ingredients"].count() == 1
+        records = reasoning._banks["ingredients"].all()
+        assert records[0].data["name"] == "flour"
+        assert records[0].data["amount"] == "2 cups"
+        # Schema fields should be cleared from state.data
+        assert "name" not in state.data
+        assert "amount" not in state.data
+
+    @pytest.mark.asyncio
+    async def test_done_signal_through_loaded_metadata(self) -> None:
+        """'done' keyword triggers exit when using loader-produced metadata."""
+        reasoning = _make_collection_wizard()
+        fsm = reasoning._fsm
+        stage = fsm.current_metadata
+
+        config = LLMConfig(
+            provider="echo", model="echo-test",
+            options={"echo_prefix": ""},
+        )
+        provider = EchoProvider(config)
+        library = ConfigPromptLibrary(
+            {"system": {"test": {"template": "Test bot."}}}
+        )
+        builder = AsyncPromptBuilder(library=library)
+        storage = DataknobsConversationStorage(AsyncMemoryDatabase())
+        manager = await ConversationManager.create(
+            llm=provider, prompt_builder=builder,
+            storage=storage, system_prompt_name="test",
+        )
+        state = WizardState(current_stage="collect", data={})
+
+        # Pre-populate bank with an ingredient
+        reasoning._banks["ingredients"].add(
+            {"name": "flour", "amount": "2 cups"}, source_stage="collect"
+        )
+
+        result = await reasoning._handle_collection_mode(
+            user_message="done",
+            extracted_data={},
+            stage=stage,
+            state=state,
+            manager=manager,
+            llm=provider,
+            tools=[],
+        )
+
+        # Should return None (fall through to transition evaluation)
+        assert result is None
+        # _collection_done flag should be set
+        assert state.data.get("_collection_done") is True
+
+
+# =====================================================================
+# Bank config parsing tests
+# =====================================================================
+
+class TestBankConfigParsing:
+    """Verify _init_banks handles both flat and nested duplicate config."""
+
+    def test_flat_duplicate_strategy(self) -> None:
+        """Top-level duplicate_strategy and match_fields are honoured."""
+        config: dict[str, Any] = {
+            "name": "flat-bank-test",
+            "settings": {
+                "banks": {
+                    "items": {
+                        "schema": {"required": ["name"]},
+                        "max_records": 20,
+                        "duplicate_strategy": "reject",
+                        "match_fields": ["name"],
+                    },
+                },
+            },
+            "stages": [
+                {"name": "s", "is_start": True, "is_end": True, "prompt": "Go"},
+            ],
+        }
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict(config)
+        reasoning = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
+
+        bank = reasoning._banks["items"]
+        assert bank._duplicate_strategy == "reject"
+        assert bank._match_fields == ["name"]
+
+    def test_nested_duplicate_detection(self) -> None:
+        """Nested duplicate_detection.strategy format is also supported."""
+        config: dict[str, Any] = {
+            "name": "nested-bank-test",
+            "settings": {
+                "banks": {
+                    "items": {
+                        "schema": {"required": ["name"]},
+                        "duplicate_detection": {
+                            "strategy": "reject",
+                            "match_fields": ["name"],
+                        },
+                    },
+                },
+            },
+            "stages": [
+                {"name": "s", "is_start": True, "is_end": True, "prompt": "Go"},
+            ],
+        }
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict(config)
+        reasoning = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
+
+        bank = reasoning._banks["items"]
+        assert bank._duplicate_strategy == "reject"
+        assert bank._match_fields == ["name"]

@@ -559,6 +559,9 @@ class WizardConfigLoader:
                 "intent_detection": stage.get("intent_detection"),
                 # Per-stage navigation keyword overrides
                 "navigation": stage.get("navigation"),
+                # Collection mode (multi-record collection via MemoryBank)
+                "collection_mode": stage.get("collection_mode"),
+                "collection_config": stage.get("collection_config"),
             }
 
         # Add global tasks to the first stage's metadata

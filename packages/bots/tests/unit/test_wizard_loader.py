@@ -177,6 +177,80 @@ class TestConfirmOnNewDataLoader:
         assert meta.get("confirm_on_new_data") is True
 
 
+class TestCollectionModeMetadataLoader:
+    """Tests that collection_mode and collection_config survive the loader."""
+
+    def test_collection_mode_loaded_into_stage_metadata(self) -> None:
+        """collection_mode and collection_config must appear in stage metadata.
+
+        This is the regression test for the bug where _extract_metadata()
+        listed these fields in KNOWN_STAGE_FIELDS but never copied them
+        into the metadata dict, so _handle_collection_mode was unreachable.
+        """
+        config: dict = {
+            "name": "collection-test",
+            "settings": {
+                "banks": {
+                    "ingredients": {
+                        "schema": {"required": ["name"]},
+                        "max_records": 30,
+                    },
+                },
+            },
+            "stages": [
+                {
+                    "name": "collect",
+                    "is_start": True,
+                    "prompt": "Add an ingredient",
+                    "collection_mode": "collection",
+                    "collection_config": {
+                        "bank_name": "ingredients",
+                        "done_keywords": ["done", "finished"],
+                        "done_prompt": "Got it!",
+                    },
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "amount": {"type": "string"},
+                        },
+                        "required": ["name"],
+                    },
+                    "transitions": [
+                        {
+                            "target": "review",
+                            "condition": "data.get('_collection_done')",
+                        },
+                    ],
+                },
+                {
+                    "name": "review",
+                    "is_end": True,
+                    "prompt": "Done",
+                },
+            ],
+        }
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(config)
+
+        meta = wizard_fsm._stage_metadata.get("collect", {})
+        assert meta.get("collection_mode") == "collection"
+        assert meta.get("collection_config") is not None
+        assert meta["collection_config"]["bank_name"] == "ingredients"
+        assert "done" in meta["collection_config"]["done_keywords"]
+
+    def test_collection_mode_defaults_none_when_absent(
+        self, simple_wizard_config: dict
+    ) -> None:
+        """Stages without collection_mode get None (not missing key)."""
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(simple_wizard_config)
+
+        welcome_meta = wizard_fsm._stage_metadata.get("welcome", {})
+        assert "collection_mode" in welcome_meta
+        assert welcome_meta["collection_mode"] is None
+
+
 class TestWizardFSMOperations:
     """Tests for WizardFSM operations."""
 

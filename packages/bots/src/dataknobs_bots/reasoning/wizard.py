@@ -604,17 +604,24 @@ class WizardReasoning(ReasoningStrategy):
         from ..memory.bank import MemoryBank
 
         for name, cfg in self._bank_configs.items():
+            # Support both flat keys (duplicate_strategy, match_fields)
+            # and nested duplicate_detection.{strategy, match_fields}.
+            dup_cfg = cfg.get("duplicate_detection", {})
+            dup_strategy = (
+                cfg.get("duplicate_strategy")
+                or dup_cfg.get("strategy", "allow")
+            )
+            match_fields = (
+                cfg.get("match_fields")
+                or dup_cfg.get("match_fields")
+            )
             self._banks[name] = MemoryBank(
                 name=name,
                 schema=cfg.get("schema", {}),
                 db=SyncMemoryDatabase(),
                 max_records=cfg.get("max_records"),
-                duplicate_strategy=cfg.get(
-                    "duplicate_detection", {}
-                ).get("strategy", "allow"),
-                match_fields=cfg.get(
-                    "duplicate_detection", {}
-                ).get("match_fields"),
+                duplicate_strategy=dup_strategy,
+                match_fields=match_fields,
             )
         logger.debug("Initialised %d memory banks: %s",
                       len(self._banks), list(self._banks))
