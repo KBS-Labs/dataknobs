@@ -404,6 +404,29 @@ class ConversationState:
         """
         return get_nodes_for_path(self.message_tree, self.current_node_id)
 
+    def get_all_nodes(self) -> List["ConversationNode"]:
+        """Get all ConversationNode objects across all branches.
+
+        Unlike :meth:`get_current_nodes` (which returns only the active
+        root-to-leaf path), this returns **every** node in the tree sorted
+        by timestamp.  Use this for full interaction logging, auditing, or
+        conversation export where abandoned branches (e.g. collection-mode
+        iterations) must be visible.
+
+        Returns:
+            All ``ConversationNode`` objects in chronological order.
+        """
+        all_tree_nodes = self.message_tree.find_nodes(
+            lambda n: True, traversal="bfs",  # noqa: ARG005
+        )
+        nodes = [
+            tn.data
+            for tn in all_tree_nodes
+            if isinstance(tn.data, ConversationNode)
+        ]
+        nodes.sort(key=lambda n: n.timestamp)
+        return nodes
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert state to dictionary for storage.
 
