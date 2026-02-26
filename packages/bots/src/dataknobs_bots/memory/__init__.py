@@ -2,14 +2,19 @@
 
 from typing import Any
 
+from .bank import AsyncMemoryBank, BankRecord, EmptyBankProxy, MemoryBank
 from .base import Memory
 from .buffer import BufferMemory
 from .summary import SummaryMemory
 from .vector import VectorMemory
 
 __all__ = [
-    "Memory",
+    "AsyncMemoryBank",
+    "BankRecord",
     "BufferMemory",
+    "EmptyBankProxy",
+    "Memory",
+    "MemoryBank",
     "SummaryMemory",
     "VectorMemory",
     "create_memory_from_config",

@@ -67,6 +67,10 @@ await manager.switch_to_node("earlier-node-id")
 
 # Continue from that point
 response = await manager.complete(branch_name="new_path")
+
+# Branch from an existing node (create a sibling)
+await manager.branch_from("node-id")  # Navigates to parent
+response_alt = await manager.complete()  # New sibling node
 ```
 
 ### RAG Caching
@@ -151,6 +155,21 @@ response_b = await manager.complete(branch_name="approach_b")
 
 # Compare results
 ```
+
+### Branching from a Node
+
+Use `branch_from()` to create a sibling of a specific node without manually
+locating its parent:
+
+```python
+# response_a is at node "0.0" — branch from the same parent
+await manager.branch_from("0.0")  # Positions at node "0"
+response_b = await manager.complete()  # Creates node "0.1"
+```
+
+This is used internally by the wizard reasoning strategy when a stage is
+revisited via back or restart navigation, creating sibling branches in the
+conversation tree rather than chaining deeper.
 
 ### Persistence
 

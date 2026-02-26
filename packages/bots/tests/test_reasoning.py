@@ -788,3 +788,86 @@ class TestReasoningIntegration:
 
         # Both responses should work without errors
         # The wizard maintains state through conversation metadata
+
+
+class TestStreamChatWithReasoningStrategy:
+    """Tests that stream_chat() correctly dispatches through reasoning strategies."""
+
+    @pytest.mark.asyncio
+    async def test_stream_chat_with_simple_reasoning(self):
+        """stream_chat() with a reasoning strategy yields a single chunk from the strategy."""
+        from dataknobs_llm import LLMStreamResponse
+        from dataknobs_llm.testing import text_response
+
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "reasoning": {"strategy": "simple"},
+        }
+
+        bot = await DynaBot.from_config(config)
+        bot.llm.set_responses([text_response("Strategy response")])
+
+        context = BotContext(
+            conversation_id="conv-stream-strategy", client_id="test-client"
+        )
+
+        chunks: list[LLMStreamResponse] = []
+        async for chunk in bot.stream_chat("Hello", context):
+            chunks.append(chunk)
+
+        # Reasoning strategy produces a single complete chunk
+        assert len(chunks) == 1
+        assert chunks[0].delta == "Strategy response"
+        assert chunks[0].is_final is True
+        assert chunks[0].finish_reason == "stop"
+
+    @pytest.mark.asyncio
+    async def test_stream_chat_without_reasoning_streams_normally(self):
+        """stream_chat() without a reasoning strategy streams token by token."""
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+        }
+
+        bot = await DynaBot.from_config(config)
+        assert bot.reasoning_strategy is None
+
+        context = BotContext(
+            conversation_id="conv-stream-no-strategy", client_id="test-client"
+        )
+
+        chunks = []
+        async for chunk in bot.stream_chat("Hello", context):
+            chunks.append(chunk)
+
+        # Without strategy, streaming comes from the LLM directly
+        assert len(chunks) >= 1
+        full_response = "".join(c.delta for c in chunks)
+        assert len(full_response) > 0
+
+    @pytest.mark.asyncio
+    async def test_stream_chat_with_reasoning_updates_memory(self):
+        """stream_chat() with a reasoning strategy still updates memory."""
+        from dataknobs_llm.testing import text_response
+
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "memory": {"type": "buffer", "max_messages": 10},
+            "reasoning": {"strategy": "simple"},
+        }
+
+        bot = await DynaBot.from_config(config)
+        bot.llm.set_responses([text_response("Memory check response")])
+
+        context = BotContext(
+            conversation_id="conv-stream-memory", client_id="test-client"
+        )
+
+        async for _ in bot.stream_chat("Test message", context):
+            pass
+
+        # Verify memory was updated with both user and assistant messages
+        memory_context = await bot.memory.get_context("test")
+        assert len(memory_context) >= 2

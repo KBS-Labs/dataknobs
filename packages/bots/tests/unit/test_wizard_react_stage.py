@@ -10,10 +10,10 @@ import pytest
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+from dataknobs_llm.conversations import ConversationManager
+from dataknobs_llm.llm.providers.echo import EchoProvider
 from dataknobs_llm.testing import ResponseSequenceBuilder, text_response, tool_call_response
 from dataknobs_llm.tools.base import Tool
-
-from .conftest import WizardTestManager
 
 
 # -----------------------------------------------------------------------------
@@ -454,18 +454,20 @@ class TestReactStageResponse:
         self,
         react_wizard_config: dict[str, Any],
         preview_tool: PreviewConfigTool,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """ReAct loop returns immediately when LLM doesn't request tools."""
+        manager, provider = conversation_manager_pair
+
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
         state = WizardState(current_stage="review", data={})
 
-        manager = WizardTestManager()
-        manager.add_user_message("Show me the config")
+        await manager.add_message(role="user", content="Show me the config")
 
         # Script the provider to return a text response (no tool calls)
-        manager.echo_provider.set_responses([
+        provider.set_responses([
             text_response("Here's your config summary.")
         ])
 
@@ -484,18 +486,20 @@ class TestReactStageResponse:
         self,
         react_wizard_config: dict[str, Any],
         preview_tool: PreviewConfigTool,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """ReAct loop executes tool, then returns final response."""
+        manager, provider = conversation_manager_pair
+
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
         state = WizardState(current_stage="review", data={})
 
-        manager = WizardTestManager()
-        manager.add_user_message("Preview the config")
+        await manager.add_message(role="user", content="Preview the config")
 
         # Script responses: first a tool call, then a text response
-        manager.echo_provider.set_responses([
+        provider.set_responses([
             tool_call_response("preview_config", {"format": "yaml"}),
             text_response("I've previewed your config. It looks good!"),
         ])
@@ -516,18 +520,20 @@ class TestReactStageResponse:
         react_wizard_config: dict[str, Any],
         preview_tool: PreviewConfigTool,
         validate_tool: ValidateConfigTool,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """ReAct loop can make multiple sequential tool calls."""
+        manager, provider = conversation_manager_pair
+
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
         state = WizardState(current_stage="review", data={})
 
-        manager = WizardTestManager()
-        manager.add_user_message("Preview and validate the config")
+        await manager.add_message(role="user", content="Preview and validate the config")
 
         # Script responses: preview, validate, then text
-        manager.echo_provider.set_responses([
+        provider.set_responses([
             tool_call_response("preview_config", {}),
             tool_call_response("validate_config", {}),
             text_response("Config previewed and validated!"),
@@ -549,18 +555,20 @@ class TestReactStageResponse:
         self,
         react_wizard_config: dict[str, Any],
         preview_tool: PreviewConfigTool,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Max iterations reached forces final text response."""
+        manager, provider = conversation_manager_pair
+
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
         state = WizardState(current_stage="review", data={})
 
-        manager = WizardTestManager()
-        manager.add_user_message("Preview endlessly")
+        await manager.add_message(role="user", content="Preview endlessly")
 
         # Script: 2 tool calls (hitting max_iterations=2), then final text
-        manager.echo_provider.set_responses([
+        provider.set_responses([
             tool_call_response("preview_config", {}),  # Iteration 1
             tool_call_response("preview_config", {}),  # Iteration 2 (max)
             text_response("Final response after max iterations"),  # Forced

@@ -13,9 +13,8 @@ import pytest
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
-from dataknobs_llm.llm import LLMMessage, LLMResponse
-
-from .conftest import WizardTestManager
+from dataknobs_llm.conversations import ConversationManager
+from dataknobs_llm.llm.providers.echo import EchoProvider
 
 
 # ---------------------------------------------------------------------------
@@ -197,14 +196,14 @@ class TestMessageInjection:
     async def test_message_not_persisted_after_step(
         self,
         conversation_reasoning: WizardReasoning,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """_message is cleaned up from wizard_state.data after FSM step."""
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "just chatting"}]
-        manager.metadata = {}
+        manager, provider = conversation_manager_pair
+        await manager.add_message(role="user", content="just chatting")
 
         # Script response
-        manager.echo_provider.set_responses(["Hello!"])
+        provider.set_responses(["Hello!"])
 
         await conversation_reasoning.generate(manager, llm=None)
 
@@ -225,13 +224,13 @@ class TestConversationMode:
     async def test_conversation_stage_skips_extraction(
         self,
         conversation_reasoning: WizardReasoning,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Conversation stage generates response without extraction."""
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "Tell me about math"}]
-        manager.metadata = {}
+        manager, provider = conversation_manager_pair
+        await manager.add_message(role="user", content="Tell me about math")
 
-        manager.echo_provider.set_responses(["Math is fascinating!"])
+        provider.set_responses(["Math is fascinating!"])
 
         response = await conversation_reasoning.generate(manager, llm=None)
 
@@ -245,13 +244,13 @@ class TestConversationMode:
     async def test_conversation_stage_with_intent_triggers_transition(
         self,
         conversation_reasoning: WizardReasoning,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Keyword intent triggers transition from conversation stage."""
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "Quiz me please!"}]
-        manager.metadata = {}
+        manager, provider = conversation_manager_pair
+        await manager.add_message(role="user", content="Quiz me please!")
 
-        manager.echo_provider.set_responses(["Let's start the quiz!"])
+        provider.set_responses(["Let's start the quiz!"])
 
         response = await conversation_reasoning.generate(manager, llm=None)
 
@@ -264,17 +263,17 @@ class TestConversationMode:
     async def test_conversation_no_clarification_loop(
         self,
         conversation_reasoning: WizardReasoning,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Conversation stage does not increment clarification_attempts."""
-        manager = WizardTestManager()
-        manager.metadata = {}
+        manager, provider = conversation_manager_pair
 
         # Send multiple messages - none should trigger clarification
         for i in range(5):
-            manager.messages = [
-                {"role": "user", "content": f"Random message {i}"}
-            ]
-            manager.echo_provider.set_responses([f"Response {i}"])
+            await manager.add_message(
+                role="user", content=f"Random message {i}"
+            )
+            provider.set_responses([f"Response {i}"])
             await conversation_reasoning.generate(manager, llm=None)
 
         state = manager.metadata["wizard"]["fsm_state"]
@@ -484,8 +483,13 @@ class TestStructuredStageIntentDetection:
     """Tests for intent detection on structured (non-conversation) stages."""
 
     @pytest.mark.asyncio
-    async def test_structured_stage_runs_intent_detection(self) -> None:
+    async def test_structured_stage_runs_intent_detection(
+        self,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+    ) -> None:
         """Structured stage with intent_detection runs detection after extraction."""
+        manager, provider = conversation_manager_pair
+
         config = {
             "name": "structured-intent-test",
             "version": "1.0",
@@ -530,11 +534,9 @@ class TestStructuredStageIntentDetection:
         fsm = loader.load_from_dict(config)
         reasoning = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
 
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "I'm confused, help!"}]
-        manager.metadata = {}
+        await manager.add_message(role="user", content="I'm confused, help!")
 
-        manager.echo_provider.set_responses(["How can I help?"])
+        provider.set_responses(["How can I help?"])
 
         await reasoning.generate(manager, llm=None)
 
@@ -554,13 +556,13 @@ class TestStageModeMeta:
     async def test_conversation_stage_mode(
         self,
         conversation_reasoning: WizardReasoning,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Conversation stage returns stage_mode='conversation' in metadata."""
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "hello"}]
-        manager.metadata = {}
+        manager, provider = conversation_manager_pair
+        await manager.add_message(role="user", content="hello")
 
-        manager.echo_provider.set_responses(["Hi!"])
+        provider.set_responses(["Hi!"])
 
         await conversation_reasoning.generate(manager, llm=None)
 
@@ -568,8 +570,13 @@ class TestStageModeMeta:
         assert wizard_meta["stage_mode"] == "conversation"
 
     @pytest.mark.asyncio
-    async def test_structured_stage_mode_default(self) -> None:
+    async def test_structured_stage_mode_default(
+        self,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+    ) -> None:
         """Structured stage returns stage_mode='structured' (default)."""
+        manager, provider = conversation_manager_pair
+
         config = {
             "name": "structured-test",
             "version": "1.0",
@@ -591,11 +598,9 @@ class TestStageModeMeta:
         fsm = loader.load_from_dict(config)
         reasoning = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
 
-        manager = WizardTestManager()
-        manager.messages = [{"role": "user", "content": "hello"}]
-        manager.metadata = {}
+        await manager.add_message(role="user", content="hello")
 
-        manager.echo_provider.set_responses(["Welcome!"])
+        provider.set_responses(["Welcome!"])
 
         await reasoning.generate(manager, llm=None)
 
@@ -703,19 +708,20 @@ class TestConversationRoundTrip:
 
     @pytest.mark.asyncio
     async def test_data_preserved_across_conversation_detour(
-        self, roundtrip_wizard_config: dict
+        self,
+        roundtrip_wizard_config: dict,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """Partially collected data survives a conversation detour and back."""
+        manager, provider = conversation_manager_pair
+
         loader = WizardConfigLoader()
         fsm = loader.load_from_dict(roundtrip_wizard_config)
         reasoning = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
 
-        manager = WizardTestManager()
-
         # Turn 1: User provides partial data + "help" keyword
-        manager.messages = [{"role": "user", "content": "I'm confused, help me"}]
-        manager.metadata = {}
-        manager.echo_provider.set_responses(["Happy to help!"])
+        await manager.add_message(role="user", content="I'm confused, help me")
+        provider.set_responses(["Happy to help!"])
 
         await reasoning.generate(manager, llm=None)
 
@@ -723,10 +729,10 @@ class TestConversationRoundTrip:
         assert state["current_stage"] == "help_chat"
 
         # Turn 2: User asks a question in conversation mode
-        manager.messages = [
-            {"role": "user", "content": "What topics are available?"}
-        ]
-        manager.echo_provider.set_responses(["We have math and science!"])
+        await manager.add_message(
+            role="user", content="What topics are available?"
+        )
+        provider.set_responses(["We have math and science!"])
 
         await reasoning.generate(manager, llm=None)
 
@@ -734,10 +740,10 @@ class TestConversationRoundTrip:
         assert state["current_stage"] == "help_chat"
 
         # Turn 3: User says "let's continue" to go back
-        manager.messages = [
-            {"role": "user", "content": "OK let's continue with setup"}
-        ]
-        manager.echo_provider.set_responses(["Great, let's continue!"])
+        await manager.add_message(
+            role="user", content="OK let's continue with setup"
+        )
+        provider.set_responses(["Great, let's continue!"])
 
         await reasoning.generate(manager, llm=None)
 

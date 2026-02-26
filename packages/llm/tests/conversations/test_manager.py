@@ -555,6 +555,77 @@ class TestConversationManager:
         current_node = manager.state.get_current_node()
         assert "tool_calls" not in current_node.data.metadata
 
+    @pytest.mark.asyncio
+    async def test_branch_from(self, test_components):
+        """branch_from positions at parent so next complete() creates a sibling."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            system_prompt_name="helpful",
+        )
+        # Build tree: root("") -> user("0") -> assistant("0.0")
+        await manager.add_message(role="user", content="Hello")
+        await manager.complete()
+        assert manager.current_node_id == "0.0"
+
+        # Branch from "0.0" — should navigate to its parent "0"
+        await manager.branch_from("0.0")
+        assert manager.current_node_id == "0"
+
+        # Next complete() should create sibling "0.1"
+        await manager.complete()
+        assert manager.current_node_id == "0.1"
+
+    @pytest.mark.asyncio
+    async def test_branch_from_root_child(self, test_components):
+        """branch_from a root child positions at root."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            system_prompt_name="helpful",
+        )
+        # root("") [system] -> user("0")
+        await manager.add_message(role="user", content="Hello")
+        assert manager.current_node_id == "0"
+
+        # Branch from "0" — should navigate to root ""
+        await manager.branch_from("0")
+        assert manager.current_node_id == ""
+
+        # Next add_message creates sibling "1"
+        await manager.add_message(role="user", content="Alternative")
+        assert manager.current_node_id == "1"
+
+    @pytest.mark.asyncio
+    async def test_branch_from_nonexistent_node(self, test_components):
+        """branch_from raises ValueError for unknown node IDs."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            system_prompt_name="helpful",
+        )
+        await manager.add_message(role="user", content="Hello")
+
+        with pytest.raises(ValueError, match="not found"):
+            await manager.branch_from("99.99")
+
+    @pytest.mark.asyncio
+    async def test_branch_from_root(self, test_components):
+        """branch_from raises ValueError when given the root node."""
+        manager = await ConversationManager.create(
+            llm=test_components["llm"],
+            prompt_builder=test_components["builder"],
+            storage=test_components["storage"],
+            system_prompt_name="helpful",
+        )
+        await manager.add_message(role="user", content="Hello")
+
+        with pytest.raises(ValueError, match="root"):
+            await manager.branch_from("")
+
 
 class TestConversationIdParameter:
     """Test the conversation_id parameter on ConversationManager."""

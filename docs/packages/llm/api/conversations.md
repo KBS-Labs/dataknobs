@@ -21,6 +21,7 @@ The conversations API provides a powerful system for managing multi-turn convers
         - add_message
         - complete
         - switch_to_node
+        - branch_from
         - get_tree_structure
         - get_rag_metadata
         - save
@@ -307,6 +308,10 @@ for node in nodes:
 
 # Navigate to specific node
 await manager.switch_to_node("node-123")
+
+# Branch from a node (navigate to its parent for sibling creation)
+await manager.branch_from("node-123")
+# Next add_message() or complete() creates a sibling of "node-123"
 
 # Get parent node
 parent = manager.get_parent_node()

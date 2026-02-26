@@ -6,6 +6,7 @@ import pytest
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+from dataknobs_llm.conversations import ConversationManager
 from dataknobs_llm.llm import LLMMessage
 from dataknobs_llm.llm.providers.echo import EchoProvider
 
@@ -577,56 +578,69 @@ class TestApplyTransitionDerivations:
 class TestGetLastBotResponse:
     """Tests for _get_last_bot_response."""
 
-    def test_returns_last_assistant_message(
-        self, wizard_reasoning: WizardReasoning, test_manager: Any
+    @pytest.mark.asyncio
+    async def test_returns_last_assistant_message(
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
     ) -> None:
         """Returns the most recent assistant message."""
-        test_manager.add_user_message("I want a quiz bot")
-        test_manager.add_assistant_message("Great! Here are some names...")
-        test_manager.add_user_message("Use the first suggestion")
+        await conversation_manager.add_message(
+            role="user", content="I want a quiz bot"
+        )
+        await conversation_manager.add_message(
+            role="assistant", content="Great! Here are some names..."
+        )
+        await conversation_manager.add_message(
+            role="user", content="Use the first suggestion"
+        )
 
-        result = wizard_reasoning._get_last_bot_response(test_manager)
+        result = wizard_reasoning._get_last_bot_response(conversation_manager)
         assert result == "Great! Here are some names..."
 
-    def test_returns_empty_when_no_assistant_messages(
-        self, wizard_reasoning: WizardReasoning, test_manager: Any
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_no_assistant_messages(
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
     ) -> None:
         """Returns empty string when there are no assistant messages."""
-        test_manager.add_user_message("Hello")
+        await conversation_manager.add_message(role="user", content="Hello")
 
-        result = wizard_reasoning._get_last_bot_response(test_manager)
+        result = wizard_reasoning._get_last_bot_response(conversation_manager)
         assert result == ""
 
-    def test_returns_empty_for_empty_conversation(
-        self, wizard_reasoning: WizardReasoning, test_manager: Any
+    @pytest.mark.asyncio
+    async def test_returns_empty_for_empty_conversation(
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
     ) -> None:
-        """Returns empty string for empty conversation."""
-        result = wizard_reasoning._get_last_bot_response(test_manager)
+        """Returns empty string when no assistant messages exist."""
+        # Fresh CM has only the system message — no assistant messages
+        result = wizard_reasoning._get_last_bot_response(conversation_manager)
         assert result == ""
 
-    def test_returns_most_recent_of_multiple(
-        self, wizard_reasoning: WizardReasoning, test_manager: Any
+    @pytest.mark.asyncio
+    async def test_returns_most_recent_of_multiple(
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
     ) -> None:
         """Returns the most recent assistant message when there are multiple."""
-        test_manager.add_assistant_message("First bot response")
-        test_manager.add_user_message("Something")
-        test_manager.add_assistant_message("Second bot response")
-        test_manager.add_user_message("Another thing")
+        await conversation_manager.add_message(
+            role="assistant", content="First bot response"
+        )
+        await conversation_manager.add_message(role="user", content="Something")
+        await conversation_manager.add_message(
+            role="assistant", content="Second bot response"
+        )
+        await conversation_manager.add_message(
+            role="user", content="Another thing"
+        )
 
-        result = wizard_reasoning._get_last_bot_response(test_manager)
+        result = wizard_reasoning._get_last_bot_response(conversation_manager)
         assert result == "Second bot response"
-
-    def test_handles_structured_content(
-        self, wizard_reasoning: WizardReasoning, test_manager: Any
-    ) -> None:
-        """Handles structured content (list of dicts) in assistant messages."""
-        test_manager.messages.append({
-            "role": "assistant",
-            "content": [{"type": "text", "text": "Structured response"}],
-        })
-
-        result = wizard_reasoning._get_last_bot_response(test_manager)
-        assert result == "Structured response"
 
 
 # =========================================================================
@@ -639,15 +653,22 @@ class TestExtractionBotResponseContext:
 
     @pytest.mark.asyncio
     async def test_bot_response_included_in_extraction_input(
-        self, wizard_reasoning: WizardReasoning, test_manager: Any
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
     ) -> None:
         """Bot's last response is prepended to extraction input."""
-        test_manager.add_assistant_message(
-            "Here are some names:\n"
-            "- **Grammar Guru** (`grammar-guru`)\n"
-            "- **Word Wizard** (`word-wizard`)"
+        await conversation_manager.add_message(
+            role="assistant",
+            content=(
+                "Here are some names:\n"
+                "- **Grammar Guru** (`grammar-guru`)\n"
+                "- **Word Wizard** (`word-wizard`)"
+            ),
         )
-        test_manager.add_user_message("Use the first suggestion")
+        await conversation_manager.add_message(
+            role="user", content="Use the first suggestion"
+        )
 
         state = WizardState(current_stage="configure_identity", data={})
         stage = {
@@ -667,7 +688,7 @@ class TestExtractionBotResponseContext:
             "Use the first suggestion",
             stage,
             _make_echo_llm(),
-            test_manager,
+            conversation_manager,
             state,
         )
         # Without an extractor, raw input is passed through.
@@ -696,10 +717,14 @@ class TestExtractionBotResponseContext:
 
     @pytest.mark.asyncio
     async def test_no_bot_response_skips_prepend(
-        self, wizard_reasoning: WizardReasoning, test_manager: Any
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
     ) -> None:
         """When there are no assistant messages, no prepend happens."""
-        test_manager.add_user_message("I want a quiz bot")
+        await conversation_manager.add_message(
+            role="user", content="I want a quiz bot"
+        )
 
         state = WizardState(current_stage="welcome", data={})
         stage = {
@@ -714,19 +739,23 @@ class TestExtractionBotResponseContext:
             "I want a quiz bot",
             stage,
             _make_echo_llm(),
-            test_manager,
+            conversation_manager,
             state,
         )
         assert result is not None
 
     @pytest.mark.asyncio
     async def test_long_bot_response_truncated(
-        self, wizard_reasoning: WizardReasoning, test_manager: Any
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
     ) -> None:
         """Bot responses longer than 1500 chars are truncated."""
         long_response = "x" * 2000
-        test_manager.add_assistant_message(long_response)
-        test_manager.add_user_message("Yes")
+        await conversation_manager.add_message(
+            role="assistant", content=long_response
+        )
+        await conversation_manager.add_message(role="user", content="Yes")
 
         state = WizardState(current_stage="welcome", data={})
         stage = {
@@ -739,7 +768,7 @@ class TestExtractionBotResponseContext:
 
         # Should not error; truncation is handled internally
         result = await wizard_reasoning._extract_data(
-            "Yes", stage, _make_echo_llm(), test_manager, state
+            "Yes", stage, _make_echo_llm(), conversation_manager, state
         )
         assert result is not None
 

@@ -982,9 +982,34 @@ Bot: Your project is configured!
      - Features: ['authentication', 'database']
 ```
 
+#### Bot-Initiated Greeting
+
+Instead of requiring the user to send the first message, wizard bots can greet the user
+proactively using `bot.greet()`:
+
+```python
+context = BotContext(conversation_id="onboarding-001", client_id="my-app")
+
+# Bot speaks first — renders the start stage's response_template or uses LLM
+greeting = await bot.greet(context)
+if greeting:
+    print(f"Bot: {greeting}")
+
+# Now the user's first message answers the wizard's question
+while True:
+    user_input = input("You: ").strip()
+    if user_input.lower() == "quit":
+        break
+    response = await bot.chat(user_input, context)
+    print(f"Bot: {response}\n")
+```
+
+This works with wizard bots only. Non-wizard bots return `None` from `greet()`. See the
+[Configuration Reference](configuration.md#reasoning-configuration) for details.
+
 #### Navigation Commands
 
-Users can navigate naturally:
+Users can navigate naturally using keyword commands:
 
 | Say | Effect |
 |-----|--------|
@@ -1000,6 +1025,19 @@ Bot: Returning to previous step. What would you like to name your project?
 You: restart
 Bot: Starting over. Welcome! What type of project are you creating?
 ```
+
+These keywords are the defaults. You can customize them per-wizard or per-stage via
+the `navigation` section in wizard settings. See the
+[Configuration Reference](configuration.md#reasoning-configuration) for details.
+
+**Conversation Tree Branching:**
+
+When a wizard stage is revisited via back or restart, the conversation tree
+creates a **sibling branch** from the point where the stage was previously
+entered. This preserves earlier conversation paths rather than chaining
+messages deeper into a single linear chain. For example, restarting a wizard
+that was on the greeting stage creates a new greeting node as a sibling of the
+original, both sharing the same parent node.
 
 #### Adding Lifecycle Hooks
 

@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.serialization import sanitize_for_json
+from dataknobs_llm.conversations.storage import ConversationNode
 
 from .base import ReasoningStrategy
 from .observability import (
@@ -37,6 +38,7 @@ DEFAULT_EPHEMERAL_KEYS: frozenset[str] = frozenset({
     "_message",             # Per-step raw user message (already popped)
     "_intent",              # Per-step intent detection result
     "_transform_error",     # Per-step error (may be Exception)
+    "_bank_fn",             # Per-step bank accessor (non-serializable callable)
 })
 
 
@@ -226,6 +228,129 @@ class WizardState:
         """
         return self.subflow_stack[-1] if self.subflow_stack else None
 
+    # -- Render count helpers -------------------------------------------------
+    # Centralise stage render-count management so every code path (greet,
+    # generate, restart, back) uses the same logic — eliminating the class
+    # of bug where a caller forgets to increment after rendering.
+
+    def increment_render_count(self, stage_name: str) -> int:
+        """Increment and return the render count for a stage."""
+        counts: dict[str, int] = self.data.setdefault(
+            "_stage_render_counts", {}
+        )
+        counts[stage_name] = counts.get(stage_name, 0) + 1
+        return counts[stage_name]
+
+    def get_render_count(self, stage_name: str) -> int:
+        """Get the current render count for a stage."""
+        return self.data.get("_stage_render_counts", {}).get(stage_name, 0)
+
+    def save_stage_snapshot(self, stage_name: str, schema_props: set[str]) -> None:
+        """Save current schema property values for confirm_on_new_data comparison."""
+        snapshots: dict[str, dict[str, Any]] = self.data.setdefault(
+            "_stage_rendered_snapshot", {}
+        )
+        snapshots[stage_name] = {
+            k: self.data[k]
+            for k in schema_props
+            if k in self.data and self.data[k] is not None
+        }
+
+    def get_stage_snapshot(self, stage_name: str) -> dict[str, Any]:
+        """Get saved schema snapshot for a stage."""
+        return self.data.get("_stage_rendered_snapshot", {}).get(stage_name, {})
+
+
+# ---------------------------------------------------------------------------
+# Navigation keyword configuration
+# ---------------------------------------------------------------------------
+
+DEFAULT_BACK_KEYWORDS: tuple[str, ...] = ("back", "go back", "previous")
+DEFAULT_SKIP_KEYWORDS: tuple[str, ...] = ("skip", "skip this", "use default", "use defaults")
+DEFAULT_RESTART_KEYWORDS: tuple[str, ...] = ("restart", "start over")
+
+
+@dataclass(frozen=True)
+class NavigationCommandConfig:
+    """Configuration for a single navigation command.
+
+    Attributes:
+        keywords: Tuple of keyword strings that trigger this command.
+            All keywords are stored in lowercase.
+        enabled: Whether this command is active. When ``False``, the
+            command is disabled regardless of keywords.
+    """
+
+    keywords: tuple[str, ...]
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
+class NavigationConfig:
+    """Configuration for wizard navigation commands (back, skip, restart).
+
+    Wizard authors can customize navigation keywords at the wizard level
+    (via ``settings.navigation``) and override them per-stage. When no
+    configuration is provided, the hardcoded defaults are used, preserving
+    backward compatibility.
+
+    Attributes:
+        back: Configuration for the back/previous navigation command.
+        skip: Configuration for the skip/use-default command.
+        restart: Configuration for the restart/start-over command.
+    """
+
+    back: NavigationCommandConfig
+    skip: NavigationCommandConfig
+    restart: NavigationCommandConfig
+
+    @classmethod
+    def defaults(cls) -> NavigationConfig:
+        """Create a ``NavigationConfig`` with the default keywords."""
+        return cls(
+            back=NavigationCommandConfig(keywords=DEFAULT_BACK_KEYWORDS),
+            skip=NavigationCommandConfig(keywords=DEFAULT_SKIP_KEYWORDS),
+            restart=NavigationCommandConfig(keywords=DEFAULT_RESTART_KEYWORDS),
+        )
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> NavigationConfig:
+        """Build a ``NavigationConfig`` from a settings dict.
+
+        Missing commands fall back to defaults. Keywords are normalised
+        to lowercase.
+
+        Args:
+            data: Dict with optional ``back``, ``skip``, ``restart`` keys.
+                Each value is a dict with optional ``keywords`` (list of
+                strings) and ``enabled`` (bool) keys.
+
+        Returns:
+            A new ``NavigationConfig`` instance.
+        """
+        if not data:
+            return cls.defaults()
+
+        def _build_command(
+            raw: dict[str, Any] | None,
+            default_keywords: tuple[str, ...],
+        ) -> NavigationCommandConfig:
+            if raw is None:
+                return NavigationCommandConfig(keywords=default_keywords)
+            keywords = raw.get("keywords")
+            if keywords is not None:
+                keywords = tuple(k.lower() for k in keywords)
+            else:
+                keywords = default_keywords
+            enabled = raw.get("enabled", True)
+            return NavigationCommandConfig(keywords=keywords, enabled=enabled)
+
+        return cls(
+            back=_build_command(data.get("back"), DEFAULT_BACK_KEYWORDS),
+            skip=_build_command(data.get("skip"), DEFAULT_SKIP_KEYWORDS),
+            restart=_build_command(data.get("restart"), DEFAULT_RESTART_KEYWORDS),
+        )
+
 
 class WizardReasoning(ReasoningStrategy):
     """FSM-backed reasoning strategy for guided conversational flows.
@@ -339,6 +464,19 @@ class WizardReasoning(ReasoningStrategy):
             DEFAULT_EPHEMERAL_KEYS | frozenset(config_ephemeral)
         )
 
+        # Initialise MemoryBank instances from wizard-level ``banks`` config
+        self._bank_configs: dict[str, dict[str, Any]] = dict(
+            wizard_fsm.settings.get("banks", {})
+        )
+        self._banks: dict[str, Any] = {}
+        self._init_banks()
+
+        # Build navigation keyword config from wizard-level settings
+        nav_settings = wizard_fsm.settings.get("navigation", {})
+        self._navigation_config: NavigationConfig = NavigationConfig.from_dict(
+            nav_settings or {}
+        )
+
         # Bridge FSM custom functions so they receive a TransformContext
         # instead of a raw FunctionContext.  This lets transforms that
         # need artifact_registry, rubric_executor, etc. work seamlessly.
@@ -427,6 +565,7 @@ class WizardReasoning(ReasoningStrategy):
                 artifact_registry=self._artifact_registry,
                 rubric_executor=self._review_executor,
                 config={"llm": self._current_llm} if self._current_llm else {},
+                banks=self._banks,
             )
             result = func(data, transform_ctx, **kwargs)
             if inspect.isawaitable(result):
@@ -442,6 +581,7 @@ class WizardReasoning(ReasoningStrategy):
                 artifact_registry=self._artifact_registry,
                 rubric_executor=self._review_executor,
                 config={"llm": self._current_llm} if self._current_llm else {},
+                banks=self._banks,
             )
             result = func(data, transform_ctx, **kwargs)
             return result if result is not None else data
@@ -450,6 +590,157 @@ class WizardReasoning(ReasoningStrategy):
         if asyncio.iscoroutinefunction(func):
             return _async_wrapper
         return _sync_wrapper
+
+    # -----------------------------------------------------------------
+    # MemoryBank management
+    # -----------------------------------------------------------------
+
+    def _init_banks(self) -> None:
+        """Create ``MemoryBank`` instances from wizard ``banks`` config."""
+        if not self._bank_configs:
+            return
+        from dataknobs_data.backends.memory import SyncMemoryDatabase
+
+        from ..memory.bank import MemoryBank
+
+        for name, cfg in self._bank_configs.items():
+            self._banks[name] = MemoryBank(
+                name=name,
+                schema=cfg.get("schema", {}),
+                db=SyncMemoryDatabase(),
+                max_records=cfg.get("max_records"),
+                duplicate_strategy=cfg.get(
+                    "duplicate_detection", {}
+                ).get("strategy", "allow"),
+                match_fields=cfg.get(
+                    "duplicate_detection", {}
+                ).get("match_fields"),
+            )
+        logger.debug("Initialised %d memory banks: %s",
+                      len(self._banks), list(self._banks))
+
+    def _restore_banks(self, banks_data: dict[str, Any]) -> None:
+        """Restore ``MemoryBank`` instances from persisted data.
+
+        Banks that exist in the persisted data are deserialized.  Banks
+        declared in config but not yet persisted are freshly initialised.
+        """
+        from ..memory.bank import MemoryBank
+
+        for name, bank_dict in banks_data.items():
+            self._banks[name] = MemoryBank.from_dict(bank_dict)
+        # Ensure any newly-configured banks that weren't persisted yet
+        # are also initialised.
+        for name in self._bank_configs:
+            if name not in self._banks:
+                self._init_banks()
+                break
+        if banks_data:
+            logger.debug(
+                "Restored %d memory banks from persisted data",
+                len(banks_data),
+            )
+
+    def _make_bank_accessor(self) -> Any:
+        """Return a callable ``bank(name) -> MemoryBank | EmptyBankProxy``."""
+        from ..memory.bank import EmptyBankProxy
+
+        banks = self._banks
+
+        def _bank(name: str) -> Any:
+            return banks.get(name, EmptyBankProxy(name))
+
+        return _bank
+
+    # -----------------------------------------------------------------
+    # Collection mode helpers
+    # -----------------------------------------------------------------
+
+    async def _handle_collection_mode(
+        self,
+        user_message: str,
+        extracted_data: dict[str, Any],
+        stage: dict[str, Any],
+        state: WizardState,
+        manager: Any,
+        llm: Any,
+        tools: Any,
+    ) -> Any | None:
+        """Handle a collection-mode stage after extraction.
+
+        If the user signalled "done", sets ``_collection_done`` in state
+        data and returns ``None`` to let normal transition evaluation
+        proceed.  Otherwise, adds extracted data to the target bank,
+        clears schema fields for the next record, renders the stage
+        response, saves state, and returns the response.
+
+        Returns:
+            A response object if the stage should loop, or ``None``
+            if the collection is done and transition evaluation should
+            continue.
+        """
+        col_config = stage.get("collection_config", {})
+        bank_name = col_config.get("bank_name", "")
+        done_keywords = col_config.get("done_keywords", [])
+
+        # Check for done signal
+        if self._is_done_signal(user_message, done_keywords):
+            state.data["_collection_done"] = True
+            logger.debug(
+                "Collection done signal at stage '%s'",
+                stage.get("name"),
+            )
+            return None  # Fall through to transition evaluation
+
+        # Add extracted data to the bank
+        bank_accessor = self._make_bank_accessor()
+        bank = bank_accessor(bank_name)
+
+        # Filter to only schema-defined fields
+        schema_props = set(
+            stage.get("schema", {}).get("properties", {}).keys()
+        )
+        record_data = {
+            k: v for k, v in extracted_data.items()
+            if k in schema_props and v is not None
+        }
+
+        if record_data:
+            try:
+                bank.add(record_data, source_stage=stage.get("name", ""))
+                logger.debug(
+                    "Added record to bank '%s' (count=%d)",
+                    bank_name,
+                    bank.count(),
+                )
+            except ValueError as e:
+                logger.warning(
+                    "Failed to add record to bank '%s': %s",
+                    bank_name,
+                    e,
+                )
+
+        # Clear schema fields from state.data so the next extraction
+        # starts fresh (don't keep the previous record's values).
+        for field_name in schema_props:
+            state.data.pop(field_name, None)
+
+        # Render the stage response
+        response = await self._generate_stage_response(
+            manager, llm, stage, state, tools,
+        )
+        self._save_wizard_state(manager, state)
+        return response
+
+    @staticmethod
+    def _is_done_signal(message: str, done_keywords: list[str]) -> bool:
+        """Check whether a user message matches a collection done keyword."""
+        if not done_keywords:
+            return False
+        normalised = message.strip().lower()
+        return any(
+            normalised == kw.strip().lower() for kw in done_keywords
+        )
 
     async def close(self) -> None:
         """Close the reasoning strategy and release resources.
@@ -605,8 +896,9 @@ class WizardReasoning(ReasoningStrategy):
         artifacts_config = config.get("artifacts", {})
         if artifacts_config:
             try:
-                from ..artifacts import ArtifactRegistry, ArtifactTypeDefinition
                 from dataknobs_data.backends.memory import AsyncMemoryDatabase
+
+                from ..artifacts import ArtifactRegistry, ArtifactTypeDefinition
 
                 # Build type definitions from config
                 type_definitions: dict[str, ArtifactTypeDefinition] = {}
@@ -727,9 +1019,16 @@ class WizardReasoning(ReasoningStrategy):
 
         # Get start stage metadata and generate the response
         stage = self._get_active_fsm().current_metadata
+        await self._branch_for_revisited_stage(manager, stage.get("name", ""))
         response = await self._generate_stage_response(
             manager, llm, stage, wizard_state, tools=[],
         )
+
+        # Record that the start stage template has been rendered so that
+        # generate() does not re-render it as a "first confirmation" when
+        # the user's first message arrives with extracted data.
+        if stage.get("response_template"):
+            wizard_state.increment_render_count(stage.get("name", "unknown"))
 
         # Persist wizard state
         self._save_wizard_state(manager, wizard_state)
@@ -821,6 +1120,9 @@ class WizardReasoning(ReasoningStrategy):
 
                 # Generate response for the re-opened stage
                 stage = active_fsm.current_metadata
+                await self._branch_for_revisited_stage(
+                    manager, target_stage
+                )
                 response = await self._generate_stage_response(
                     manager, llm, stage, wizard_state, tools
                 )
@@ -952,6 +1254,23 @@ class WizardReasoning(ReasoningStrategy):
                 if default_keys:
                     new_data_keys |= default_keys
 
+                # ── Collection mode handling ──
+                # When a stage is in "collection" mode, extracted data
+                # is added to a MemoryBank rather than triggering a
+                # transition.  The stage loops until a done signal.
+                if stage.get("collection_mode") == "collection":
+                    col_response = await self._handle_collection_mode(
+                        user_message,
+                        extraction.data,
+                        stage,
+                        wizard_state,
+                        manager,
+                        llm,
+                        tools,
+                    )
+                    if col_response is not None:
+                        return col_response
+
                 # When meaningful new data was extracted at a stage with a
                 # response_template, decide whether to render a
                 # confirmation before evaluating transitions.
@@ -968,59 +1287,49 @@ class WizardReasoning(ReasoningStrategy):
                 # that lack confirm_on_new_data skip this — the
                 # user's response is an action (e.g. "review") and
                 # should trigger a transition.
-                render_counts = wizard_state.data.setdefault(
-                    "_stage_render_counts", {}
-                )
                 should_confirm = False
                 if new_data_keys and stage.get("response_template"):
-                    if render_counts.get(stage_name, 0) == 0:
+                    if wizard_state.get_render_count(stage_name) == 0:
                         should_confirm = True  # First render — always
                     elif stage.get("confirm_on_new_data"):
                         # Re-confirm when schema property values changed
-                        snapshots = wizard_state.data.setdefault(
-                            "_stage_rendered_snapshot", {}
-                        )
                         schema_props = set(
                             stage.get("schema", {})
                             .get("properties", {})
                             .keys()
                         )
-                        data = wizard_state.data
                         current_snapshot = {
-                            k: data[k]
+                            k: wizard_state.data[k]
                             for k in schema_props
-                            if k in data and data[k] is not None
+                            if k in wizard_state.data
+                            and wizard_state.data[k] is not None
                         }
-                        prior_snapshot = snapshots.get(stage_name, {})
+                        prior_snapshot = wizard_state.get_stage_snapshot(
+                            stage_name
+                        )
                         if current_snapshot != prior_snapshot:
                             should_confirm = True
 
                 if should_confirm:
-                    render_counts[stage_name] = (
-                        render_counts.get(stage_name, 0) + 1
+                    render_count = wizard_state.increment_render_count(
+                        stage_name
                     )
                     # Save snapshot for confirm_on_new_data comparison
                     if stage.get("confirm_on_new_data"):
-                        snapshots = wizard_state.data.setdefault(
-                            "_stage_rendered_snapshot", {}
-                        )
                         schema_props = set(
                             stage.get("schema", {})
                             .get("properties", {})
                             .keys()
                         )
-                        data = wizard_state.data
-                        snapshots[stage_name] = {
-                            k: data[k]
-                            for k in schema_props
-                            if k in data and data[k] is not None
-                        }
+                        wizard_state.save_stage_snapshot(
+                            stage_name, schema_props
+                        )
                     logger.debug(
                         "New data extracted (%s) at stage '%s' — "
                         "rendering confirmation (render #%d)",
                         new_data_keys,
                         stage_name,
-                        render_counts[stage_name],
+                        render_count,
                     )
                     response = await self._generate_stage_response(
                         manager, llm, stage, wizard_state, tools
@@ -1053,12 +1362,15 @@ class WizardReasoning(ReasoningStrategy):
 
         # Check for subflow push BEFORE regular FSM transition
         subflow_config = self._should_push_subflow(wizard_state, user_message)
-        if subflow_config:
-            # Push to subflow
-            if self._handle_subflow_push(wizard_state, subflow_config, user_message):
+        if subflow_config and self._handle_subflow_push(
+            wizard_state, subflow_config, user_message
+        ):
                 # Generate response for subflow's first stage
                 active_fsm = self._get_active_fsm()
                 new_stage = active_fsm.current_metadata
+                await self._branch_for_revisited_stage(
+                    manager, new_stage.get("name", "")
+                )
                 response = await self._generate_stage_response(
                     manager, llm, new_stage, wizard_state, tools
                 )
@@ -1083,9 +1395,12 @@ class WizardReasoning(ReasoningStrategy):
 
         # Inject raw message for condition evaluation (prefixed with _ per convention)
         wizard_state.data["_message"] = user_message
+        # Inject bank accessor for condition evaluation
+        wizard_state.data["_bank_fn"] = self._make_bank_accessor()
         # Execute FSM transition using active FSM (async to support async transforms)
         step_result = await active_fsm.step_async(wizard_state.data)
         wizard_state.data.pop("_message", None)
+        wizard_state.data.pop("_bank_fn", None)
         to_stage = active_fsm.current_stage
 
         # Log transition result
@@ -1221,6 +1536,10 @@ class WizardReasoning(ReasoningStrategy):
 
         # Generate stage-aware response
         new_stage = active_fsm.current_metadata
+        if new_stage.get("name") != from_stage:
+            await self._branch_for_revisited_stage(
+                manager, new_stage.get("name", "")
+            )
         response = await self._generate_stage_response(
             manager, llm, new_stage, wizard_state, tools
         )
@@ -1229,12 +1548,7 @@ class WizardReasoning(ReasoningStrategy):
         # at this stage don't trigger the first-render confirmation logic.
         stage_rendered_name = new_stage.get("name", "")
         if stage_rendered_name and new_stage.get("response_template"):
-            render_counts = wizard_state.data.setdefault(
-                "_stage_render_counts", {}
-            )
-            render_counts[stage_rendered_name] = (
-                render_counts.get(stage_rendered_name, 0) + 1
-            )
+            wizard_state.increment_render_count(stage_rendered_name)
 
         # Save wizard state
         self._save_wizard_state(manager, wizard_state)
@@ -1293,6 +1607,9 @@ class WizardReasoning(ReasoningStrategy):
                     self._active_subflow_fsm.restore(fsm_state)
             else:
                 self._active_subflow_fsm = None
+
+            # Restore MemoryBank instances from persisted data
+            self._restore_banks(wizard_data.get("banks", {}))
             return state
 
         # Initialize new wizard state with tasks from config
@@ -1422,6 +1739,11 @@ class WizardReasoning(ReasoningStrategy):
             "tasks": state.tasks.to_dict(),
             "subflow_stack": [s.to_dict() for s in state.subflow_stack],
         }
+        # Persist MemoryBank data alongside FSM state
+        if self._banks:
+            wizard_meta["banks"] = {
+                name: bank.to_dict() for name, bank in self._banks.items()
+            }
         manager.metadata["wizard"] = wizard_meta
 
     # =========================================================================
@@ -1466,9 +1788,8 @@ class WizardReasoning(ReasoningStrategy):
 
             # Evaluate condition if present
             condition = transition.get("condition")
-            if condition:
-                if not self._evaluate_condition(condition, wizard_state.data):
-                    continue
+            if condition and not self._evaluate_condition(condition, wizard_state.data):
+                continue
 
             # This transition matches and is a subflow transition
             return transition.get("subflow_config", {})
@@ -1753,6 +2074,53 @@ class WizardReasoning(ReasoningStrategy):
                             return part.get("text", "")
         return ""
 
+    def _resolve_navigation_config(self, stage_name: str) -> NavigationConfig:
+        """Resolve the effective navigation config for a stage.
+
+        Per-stage overrides use **replace** semantics: if a stage specifies
+        keywords for a command, those fully replace the wizard-level keywords
+        for that command.  Commands not mentioned in the stage override
+        inherit from the wizard-level config.
+
+        Args:
+            stage_name: Current stage name.
+
+        Returns:
+            Resolved ``NavigationConfig`` for the given stage.
+        """
+        stage_meta = self._fsm._stage_metadata.get(stage_name, {})
+        stage_nav = stage_meta.get("navigation")
+        if not stage_nav:
+            return self._navigation_config
+
+        # Merge: per-command, stage overrides wizard-level
+        def _merge_command(
+            base: NavigationCommandConfig,
+            override_raw: dict[str, Any] | None,
+        ) -> NavigationCommandConfig:
+            if override_raw is None:
+                return base
+            keywords_raw = override_raw.get("keywords")
+            keywords = (
+                tuple(k.lower() for k in keywords_raw)
+                if keywords_raw is not None
+                else base.keywords
+            )
+            enabled = override_raw.get("enabled", base.enabled)
+            return NavigationCommandConfig(keywords=keywords, enabled=enabled)
+
+        return NavigationConfig(
+            back=_merge_command(
+                self._navigation_config.back, stage_nav.get("back")
+            ),
+            skip=_merge_command(
+                self._navigation_config.skip, stage_nav.get("skip")
+            ),
+            restart=_merge_command(
+                self._navigation_config.restart, stage_nav.get("restart")
+            ),
+        )
+
     async def _handle_navigation(
         self,
         message: str,
@@ -1761,6 +2129,10 @@ class WizardReasoning(ReasoningStrategy):
         llm: Any,
     ) -> Any | None:
         """Handle navigation commands (back, skip, restart).
+
+        Resolves the effective navigation config for the current stage,
+        matches the user message against configured keywords, and
+        dispatches to the appropriate action method.
 
         Args:
             message: User message text
@@ -1772,102 +2144,180 @@ class WizardReasoning(ReasoningStrategy):
             Response if navigation handled, None otherwise
         """
         lower = message.lower().strip()
+        nav = self._resolve_navigation_config(state.current_stage)
 
-        # Back navigation
-        if lower in ("back", "go back", "previous"):
-            if self._fsm.can_go_back() and len(state.history) > 1:
-                from_stage = state.current_stage
-                duration_ms = (time.time() - state.stage_entry_time) * 1000
+        if nav.back.enabled and lower in nav.back.keywords:
+            return await self._execute_back(message, state, manager, llm)
 
-                state.history.pop()
-                state.current_stage = state.history[-1]
-                self._fsm.restore(
-                    {"current_stage": state.current_stage, "data": state.data}
-                )
-                state.clarification_attempts = 0
+        if nav.skip.enabled and lower in nav.skip.keywords:
+            return await self._execute_skip(state, manager)
 
-                # Record the back navigation transition
-                transition = create_transition_record(
-                    from_stage=from_stage,
-                    to_stage=state.current_stage,
-                    trigger="navigation_back",
-                    duration_in_stage_ms=duration_ms,
-                    user_input=message,
-                )
-                state.transitions.append(transition)
-                state.stage_entry_time = time.time()
+        if nav.restart.enabled and lower in nav.restart.keywords:
+            return await self._execute_restart(message, state, manager, llm)
 
-                stage = self._fsm.current_metadata
-                return await self._generate_stage_response(
-                    manager, llm, stage, state, None
-                )
-            # Can't go back - inform user
-            return await manager.complete(
-                system_prompt_override=(
-                    manager.system_prompt
-                    + "\n\nThe user asked to go back but we're at the beginning. "
-                    "Kindly explain we can't go back further and continue with "
-                    "the current step."
-                ),
-            )
+        return None  # Not a navigation command
 
-        # Skip
-        if lower in ("skip", "skip this", "use default", "use defaults"):
-            if self._fsm.can_skip():
-                state.data[f"_skipped_{state.current_stage}"] = True
-                # Apply skip_default values if configured
-                skip_default = self._fsm.current_metadata.get("skip_default")
-                if skip_default and isinstance(skip_default, dict):
-                    state.data.update(skip_default)
-                state.clarification_attempts = 0
-                return None  # Continue to normal flow, triggering transition
-            return await manager.complete(
-                system_prompt_override=(
-                    manager.system_prompt
-                    + "\n\nThe user asked to skip this step but it's required. "
-                    "Kindly explain the step cannot be skipped and ask for the "
-                    "information needed."
-                ),
-            )
+    async def _execute_back(
+        self,
+        message: str,
+        state: WizardState,
+        manager: Any,
+        llm: Any,
+    ) -> Any:
+        """Execute back navigation.
 
-        # Restart
-        if lower in ("restart", "start over"):
+        Args:
+            message: Original user message
+            state: Current wizard state
+            manager: ConversationManager instance
+            llm: LLM provider
+
+        Returns:
+            Response for the previous stage, or an explanation if
+            back navigation is not possible.
+        """
+        if self._fsm.can_go_back() and len(state.history) > 1:
             from_stage = state.current_stage
             duration_ms = (time.time() - state.stage_entry_time) * 1000
 
-            # Trigger restart hook if configured
-            if self._hooks:
-                await self._hooks.trigger_restart()
+            state.history.pop()
+            state.current_stage = state.history[-1]
+            self._fsm.restore(
+                {"current_stage": state.current_stage, "data": state.data}
+            )
+            state.clarification_attempts = 0
 
-            self._fsm.restart()
-            to_stage = self._fsm.current_stage
-
-            # Record the restart transition (preserving transition history)
+            # Record the back navigation transition
             transition = create_transition_record(
                 from_stage=from_stage,
-                to_stage=to_stage,
-                trigger="restart",
+                to_stage=state.current_stage,
+                trigger="navigation_back",
                 duration_in_stage_ms=duration_ms,
-                data_snapshot=state.data.copy(),
                 user_input=message,
             )
-            # Preserve transition history but clear other state
-            previous_transitions = state.transitions + [transition]
-
-            state.current_stage = to_stage
-            state.data = {}
-            state.history = [state.current_stage]
-            state.completed = False
-            state.clarification_attempts = 0
-            state.transitions = previous_transitions
+            state.transitions.append(transition)
             state.stage_entry_time = time.time()
 
             stage = self._fsm.current_metadata
-            return await self._generate_stage_response(
+            await self._branch_for_revisited_stage(
+                manager, state.current_stage
+            )
+            response = await self._generate_stage_response(
                 manager, llm, stage, state, None
             )
+            # Record render so next input doesn't trigger first-render
+            # confirmation.
+            if stage.get("response_template"):
+                state.increment_render_count(
+                    stage.get("name", "unknown")
+                )
+            return response
+        # Can't go back - inform user
+        return await manager.complete(
+            system_prompt_override=(
+                manager.system_prompt
+                + "\n\nThe user asked to go back but we're at the beginning. "
+                "Kindly explain we can't go back further and continue with "
+                "the current step."
+            ),
+        )
 
-        return None  # Not a navigation command
+    async def _execute_skip(
+        self,
+        state: WizardState,
+        manager: Any,
+    ) -> Any | None:
+        """Execute skip navigation.
+
+        Args:
+            state: Current wizard state
+            manager: ConversationManager instance
+
+        Returns:
+            ``None`` on success (falls through to transition evaluation),
+            or an explanation response if skip is not allowed.
+        """
+        if self._fsm.can_skip():
+            state.data[f"_skipped_{state.current_stage}"] = True
+            # Apply skip_default values if configured
+            skip_default = self._fsm.current_metadata.get("skip_default")
+            if skip_default and isinstance(skip_default, dict):
+                state.data.update(skip_default)
+            state.clarification_attempts = 0
+            return None  # Continue to normal flow, triggering transition
+        return await manager.complete(
+            system_prompt_override=(
+                manager.system_prompt
+                + "\n\nThe user asked to skip this step but it's required. "
+                "Kindly explain the step cannot be skipped and ask for the "
+                "information needed."
+            ),
+        )
+
+    async def _execute_restart(
+        self,
+        message: str,
+        state: WizardState,
+        manager: Any,
+        llm: Any,
+    ) -> Any:
+        """Execute restart navigation.
+
+        Args:
+            message: Original user message
+            state: Current wizard state
+            manager: ConversationManager instance
+            llm: LLM provider
+
+        Returns:
+            Response for the restarted first stage.
+        """
+        from_stage = state.current_stage
+        duration_ms = (time.time() - state.stage_entry_time) * 1000
+
+        # Trigger restart hook if configured
+        if self._hooks:
+            await self._hooks.trigger_restart()
+
+        self._fsm.restart()
+        to_stage = self._fsm.current_stage
+
+        # Record the restart transition (preserving transition history)
+        transition = create_transition_record(
+            from_stage=from_stage,
+            to_stage=to_stage,
+            trigger="restart",
+            duration_in_stage_ms=duration_ms,
+            data_snapshot=state.data.copy(),
+            user_input=message,
+        )
+        # Preserve transition history but clear other state
+        previous_transitions = [*state.transitions, transition]
+
+        state.current_stage = to_stage
+        state.data = {}
+        state.history = [state.current_stage]
+        state.completed = False
+        state.clarification_attempts = 0
+        state.transitions = previous_transitions
+        state.stage_entry_time = time.time()
+
+        # Clear all memory banks on restart (clean slate)
+        for bank in self._banks.values():
+            bank.clear()
+
+        stage = self._fsm.current_metadata
+        await self._branch_for_revisited_stage(
+            manager, state.current_stage
+        )
+        response = await self._generate_stage_response(
+            manager, llm, stage, state, None
+        )
+        # Record that the start stage template has been rendered so
+        # the next user message doesn't trigger first-render confirmation.
+        if stage.get("response_template"):
+            state.increment_render_count(stage.get("name", "unknown"))
+        return response
 
     async def _detect_intent(
         self,
@@ -2324,6 +2774,75 @@ class WizardReasoning(ReasoningStrategy):
 
         return errors
 
+    @staticmethod
+    def _find_stage_node_id(manager: Any, stage_name: str) -> str | None:
+        """Find the most recent assistant node for the given wizard stage.
+
+        Searches the conversation tree for assistant response nodes whose
+        metadata records ``wizard.current_stage == stage_name``.  Returns
+        the ``node_id`` of the last match in DFS order (the most recent
+        visit), or ``None`` if the stage has not been visited yet.
+
+        Args:
+            manager: ConversationManager instance (must have ``state``).
+            stage_name: Wizard stage name to search for.
+
+        Returns:
+            ``node_id`` string of the most recent matching node, or ``None``.
+        """
+        state = getattr(manager, "state", None)
+        if state is None:
+            return None
+
+        matches = state.message_tree.find_nodes(
+            lambda n: (
+                isinstance(n.data, ConversationNode)
+                and n.data.message.role == "assistant"
+                and n.data.metadata.get("wizard", {}).get("current_stage")
+                == stage_name
+            ),
+        )
+        if not matches:
+            return None
+
+        # Last match in DFS order is the most recent visit.
+        last = matches[-1]
+        return last.data.node_id if isinstance(last.data, ConversationNode) else None
+
+    async def _branch_for_revisited_stage(
+        self, manager: Any, stage_name: str
+    ) -> None:
+        """Branch the conversation tree when revisiting a wizard stage.
+
+        If the tree already contains an assistant response for
+        ``stage_name``, positions the tree so the next message becomes a
+        sibling of that node (a new branch from the same parent).
+
+        Does nothing on first visit (no previous node to branch from).
+
+        Args:
+            manager: ConversationManager instance.
+            stage_name: Wizard stage about to be (re-)entered.
+        """
+        prev_node_id = self._find_stage_node_id(manager, stage_name)
+        if prev_node_id is not None:
+            try:
+                await manager.branch_from(prev_node_id)
+                logger.debug(
+                    "Branched conversation tree for revisited stage '%s' "
+                    "(sibling of node '%s')",
+                    stage_name,
+                    prev_node_id,
+                )
+            except (ValueError, AttributeError):
+                # Manager may not support branch_from (e.g. test doubles).
+                # Gracefully degrade — tree will just chain deeper.
+                logger.debug(
+                    "branch_from not available; skipping tree branching "
+                    "for stage '%s'",
+                    stage_name,
+                )
+
     async def _generate_stage_response(
         self,
         manager: Any,
@@ -2358,6 +2877,10 @@ class WizardReasoning(ReasoningStrategy):
         stage_name = stage.get("name", "unknown")
         response_template = stage.get("response_template")
 
+        # Build wizard metadata snapshot once — passed to whichever call
+        # creates the conversation node so every path persists it.
+        wizard_snapshot = {"wizard": self._build_wizard_metadata(state)}
+
         # ── Template mode ────────────────────────────────────────
         if response_template:
             # Generate LLM context variables if configured
@@ -2386,6 +2909,7 @@ class WizardReasoning(ReasoningStrategy):
                 )
                 response = await manager.complete(
                     system_prompt_override=scoped_prompt,
+                    metadata=wizard_snapshot,
                 )
             else:
                 logger.debug(
@@ -2397,13 +2921,10 @@ class WizardReasoning(ReasoningStrategy):
                 # Persist template response to conversation store
                 # (manager.complete() does this automatically, but template
                 # mode bypasses the LLM so we must persist explicitly)
-                # Include wizard state snapshot so each message in the
-                # conversation log carries the wizard state at generation time.
-                wizard_snapshot = self._build_wizard_metadata(state)
                 await manager.add_message(
                     role="assistant",
                     content=rendered,
-                    metadata={"wizard": wizard_snapshot},
+                    metadata=wizard_snapshot,
                 )
 
             self._add_wizard_metadata(response, state, stage)
@@ -2427,13 +2948,15 @@ class WizardReasoning(ReasoningStrategy):
 
         if stage_tools and self._use_react_for_stage(stage):
             response = await self._react_stage_response(
-                manager, enhanced_prompt, stage, state, stage_tools
+                manager, enhanced_prompt, stage, state, stage_tools,
+                metadata=wizard_snapshot,
             )
         else:
             # Single LLM call (default behavior)
             response = await manager.complete(
                 system_prompt_override=enhanced_prompt,
                 tools=stage_tools,
+                metadata=wizard_snapshot,
             )
 
         # Log response details
@@ -2511,6 +3034,8 @@ class WizardReasoning(ReasoningStrategy):
             # Wizard progress
             "history": state.history,
             "completed": state.completed,
+            # MemoryBank accessor for template expressions
+            "bank": self._make_bank_accessor(),
         }
 
         # Merge extra context (e.g. LLM-generated variables)
@@ -2847,6 +3372,7 @@ class WizardReasoning(ReasoningStrategy):
         stage: dict[str, Any],
         state: WizardState,
         tools: list[Any],
+        metadata: dict[str, Any] | None = None,
     ) -> Any:
         """Generate response using ReAct loop for tool-using stage.
 
@@ -2859,6 +3385,7 @@ class WizardReasoning(ReasoningStrategy):
             stage: Stage metadata dict
             state: Current wizard state
             tools: Available tools for this stage
+            metadata: Optional metadata to persist on conversation nodes
 
         Returns:
             Final LLM response after ReAct loop completes
@@ -2897,6 +3424,7 @@ class WizardReasoning(ReasoningStrategy):
             response = await manager.complete(
                 system_prompt_override=enhanced_prompt,
                 tools=tools,
+                metadata=metadata,
             )
 
             # Check if response has tool calls
@@ -2937,6 +3465,7 @@ class WizardReasoning(ReasoningStrategy):
         return await manager.complete(
             system_prompt_override=enhanced_prompt,
             tools=None,  # Force text response
+            metadata=metadata,
         )
 
     async def _execute_react_tool_call(
@@ -3423,7 +3952,10 @@ class WizardReasoning(ReasoningStrategy):
 
             # Create a function to evaluate the condition
             # Note: 'data' must be in globals for the function to access it
-            global_vars: dict[str, Any] = {"data": data}
+            global_vars: dict[str, Any] = {
+                "data": data,
+                "bank": self._make_bank_accessor(),
+            }
             local_vars: dict[str, Any] = {}
             exec_code = f"def _test():\n    {code}\n_result = _test()"
             exec(exec_code, global_vars, local_vars)  # nosec B102
@@ -3516,8 +4048,7 @@ class WizardReasoning(ReasoningStrategy):
         section_lower = section.lower().strip()
 
         # Check custom mapping first
-        if self._section_to_stage_mapping:
-            if section_lower in self._section_to_stage_mapping:
+        if self._section_to_stage_mapping and section_lower in self._section_to_stage_mapping:
                 return self._section_to_stage_mapping[section_lower]
 
         # Default mappings for common wizard patterns
@@ -3537,9 +4068,7 @@ class WizardReasoning(ReasoningStrategy):
         }
 
         mapped_stage = default_mapping.get(section_lower)
-        if mapped_stage:
-            # Verify the stage exists in the FSM
-            if mapped_stage in self._fsm._stage_metadata:
+        if mapped_stage and mapped_stage in self._fsm._stage_metadata:
                 return mapped_stage
 
         return None
@@ -3654,7 +4183,9 @@ I wasn't able to clearly understand the user's response for this stage.
 **Potential Issues**:
 {issue_list}
 
-**What I'm Looking For**: {stage.get('prompt', 'Please provide more specific information.')}{suggestions_text}
+**What I'm Looking For**: \
+{stage.get('prompt', 'Please provide more specific information.')}\
+{suggestions_text}
 
 Please ask a clarifying question to help gather the needed information.
 Be conversational and helpful - don't make the user feel like they did something wrong.

@@ -15,8 +15,8 @@ import pytest
 from dataknobs_bots.reasoning.simple import SimpleReasoning
 from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
-
-from .conftest import WizardTestManager
+from dataknobs_llm.conversations import ConversationManager
+from dataknobs_llm.llm.providers.echo import EchoProvider
 
 
 # ---------------------------------------------------------------------------
@@ -74,13 +74,12 @@ class TestWizardReasoningGreet:
     async def test_greet_initializes_wizard_state(
         self,
         greeting_wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
     ) -> None:
         """greet() creates wizard state at the start stage."""
-        manager = WizardTestManager()
+        await greeting_wizard_reasoning.greet(conversation_manager, llm=None)
 
-        await greeting_wizard_reasoning.greet(manager, llm=None)
-
-        wizard_meta = manager.metadata.get("wizard", {})
+        wizard_meta = conversation_manager.metadata.get("wizard", {})
         assert wizard_meta.get("current_stage") == "greeting"
         fsm_state = wizard_meta.get("fsm_state", {})
         assert fsm_state.get("current_stage") == "greeting"
@@ -90,11 +89,10 @@ class TestWizardReasoningGreet:
     async def test_greet_returns_response(
         self,
         greeting_wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
     ) -> None:
         """greet() returns a response object with content."""
-        manager = WizardTestManager()
-
-        response = await greeting_wizard_reasoning.greet(manager, llm=None)
+        response = await greeting_wizard_reasoning.greet(conversation_manager, llm=None)
 
         assert response is not None
         assert hasattr(response, "content")
@@ -104,11 +102,10 @@ class TestWizardReasoningGreet:
     async def test_greet_with_response_template(
         self,
         greeting_wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
     ) -> None:
         """greet() renders the start stage's response_template."""
-        manager = WizardTestManager()
-
-        response = await greeting_wizard_reasoning.greet(manager, llm=None)
+        response = await greeting_wizard_reasoning.greet(conversation_manager, llm=None)
 
         assert response.content == "Hello! Welcome to the wizard. What is your name?"
 
@@ -116,39 +113,38 @@ class TestWizardReasoningGreet:
     async def test_greet_saves_wizard_state(
         self,
         greeting_wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
     ) -> None:
         """greet() persists wizard state to manager.metadata."""
-        manager = WizardTestManager()
+        await greeting_wizard_reasoning.greet(conversation_manager, llm=None)
 
-        await greeting_wizard_reasoning.greet(manager, llm=None)
-
-        assert "wizard" in manager.metadata
-        assert "fsm_state" in manager.metadata["wizard"]
+        assert "wizard" in conversation_manager.metadata
+        assert "fsm_state" in conversation_manager.metadata["wizard"]
 
     @pytest.mark.asyncio
     async def test_greet_adds_assistant_message(
         self,
         greeting_wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
     ) -> None:
         """greet() adds an assistant message (no user message) to history."""
-        manager = WizardTestManager()
+        await greeting_wizard_reasoning.greet(conversation_manager, llm=None)
 
-        await greeting_wizard_reasoning.greet(manager, llm=None)
-
-        messages = manager.get_messages()
-        # Only assistant message, no user message
-        assert len(messages) == 1
-        assert messages[0]["role"] == "assistant"
-        assert "Welcome to the wizard" in messages[0]["content"]
+        messages = conversation_manager.get_messages()
+        # Real CM includes system message as first message
+        assistant_msgs = [m for m in messages if m["role"] == "assistant"]
+        assert len(assistant_msgs) == 1
+        assert "Welcome to the wizard" in assistant_msgs[0]["content"]
 
     @pytest.mark.asyncio
     async def test_greet_without_template_uses_llm(
         self,
         wizard_reasoning: WizardReasoning,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """greet() on a stage without response_template uses LLM."""
-        manager = WizardTestManager()
-        manager.echo_provider.set_responses(["Welcome! What would you like?"])
+        manager, provider = conversation_manager_pair
+        provider.set_responses(["Welcome! What would you like?"])
 
         response = await wizard_reasoning.greet(manager, llm=None)
 
@@ -164,12 +160,13 @@ class TestReasoningStrategyGreetDefault:
     """Tests that non-wizard strategies return None from greet()."""
 
     @pytest.mark.asyncio
-    async def test_simple_reasoning_greet_returns_none(self) -> None:
+    async def test_simple_reasoning_greet_returns_none(
+        self, conversation_manager: ConversationManager
+    ) -> None:
         """SimpleReasoning inherits the base default (returns None)."""
         strategy = SimpleReasoning()
-        manager = WizardTestManager()
 
-        result = await strategy.greet(manager, llm=None)
+        result = await strategy.greet(conversation_manager, llm=None)
 
         assert result is None
 

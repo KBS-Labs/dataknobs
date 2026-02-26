@@ -21,10 +21,9 @@ import pytest
 
 from dataknobs_bots.reasoning.wizard import WizardReasoning
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+from dataknobs_llm.conversations import ConversationManager
 from dataknobs_llm.extraction.schema_extractor import SchemaExtractor
 from dataknobs_llm.llm.providers.echo import EchoProvider
-
-from .conftest import WizardTestManager
 
 
 # ── Test transform functions ──────────────────────────────────────────
@@ -245,25 +244,6 @@ def _build_wizard(
     return reasoning, extraction_provider
 
 
-def _advance_to_generate_questions(
-    extraction_responses: list[str] | None = None,
-    artifact_registry: Any = None,
-) -> tuple[WizardReasoning, WizardTestManager, list[str]]:
-    """Helper: build wizard and prepare extraction for a 2-turn advance
-    to generate_questions.  Returns (reasoning, manager, remaining_responses)
-    where remaining_responses should be passed as additional set_responses.
-    """
-    all_responses = [
-        '{"topic": "English grammar"}',
-        "{}",
-        *(extraction_responses or []),
-    ]
-    reasoning, _ = _build_wizard(
-        all_responses, artifact_registry=artifact_registry
-    )
-    return reasoning, WizardTestManager(), all_responses
-
-
 # ── Tests ─────────────────────────────────────────────────────────────
 
 
@@ -273,16 +253,17 @@ class TestWizardConfirmation:
     @pytest.mark.asyncio
     async def test_first_message_shows_confirmation_not_transition(
         self,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
     ) -> None:
         """First user message providing data should show confirmation
         template, NOT immediately transition to the next stage.
         """
+        manager, _ = conversation_manager_pair
         reasoning, _ = _build_wizard(
             extraction_responses=['{"topic": "English grammar"}']
         )
 
-        manager = WizardTestManager()
-        manager.add_user_message("Create English grammar questions")
+        await manager.add_message(role="user", content="Create English grammar questions")
 
         response = await reasoning.generate(manager, llm=None)
 
@@ -295,10 +276,14 @@ class TestWizardConfirmation:
         assert "English grammar" in response.content
 
     @pytest.mark.asyncio
-    async def test_confirmation_message_triggers_transition(self) -> None:
+    async def test_confirmation_message_triggers_transition(
+        self,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+    ) -> None:
         """Second message ('Looks good') should trigger the transition
         because no new data is extracted — it's a confirmation.
         """
+        manager, _ = conversation_manager_pair
         reasoning, _ = _build_wizard(
             extraction_responses=[
                 '{"topic": "English grammar"}',
@@ -306,16 +291,15 @@ class TestWizardConfirmation:
             ]
         )
 
-        manager = WizardTestManager()
-
         # Turn 1: provide topic → confirmation
-        manager.add_user_message("Create English grammar questions")
-        response1 = await reasoning.generate(manager, llm=None)
+        await manager.add_message(
+            role="user", content="Create English grammar questions"
+        )
+        await reasoning.generate(manager, llm=None)
         assert manager.metadata["wizard"]["fsm_state"]["current_stage"] == "define_topic"
 
         # Turn 2: confirm → transition
-        manager.add_assistant_message(response1.content)
-        manager.add_user_message("Looks good, generate")
+        await manager.add_message(role="user", content="Looks good, generate")
         await reasoning.generate(manager, llm=None)
 
         state = manager.metadata["wizard"]["fsm_state"]
@@ -325,12 +309,16 @@ class TestWizardConfirmation:
         )
 
     @pytest.mark.asyncio
-    async def test_data_update_after_confirmation_proceeds(self) -> None:
+    async def test_data_update_after_confirmation_proceeds(
+        self,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+    ) -> None:
         """After the confirmation template has been shown once, subsequent
         messages with new data proceed to transition evaluation rather
         than re-showing confirmation.  This prevents action-selection
         stages from being blocked.
         """
+        manager, _ = conversation_manager_pair
         reasoning, _ = _build_wizard(
             extraction_responses=[
                 '{"topic": "English grammar"}',
@@ -338,17 +326,16 @@ class TestWizardConfirmation:
             ]
         )
 
-        manager = WizardTestManager()
-
         # Turn 1: topic extracted → confirmation shown
-        manager.add_user_message("Create English grammar questions")
-        response1 = await reasoning.generate(manager, llm=None)
+        await manager.add_message(
+            role="user", content="Create English grammar questions"
+        )
+        await reasoning.generate(manager, llm=None)
         assert manager.metadata["wizard"]["fsm_state"]["current_stage"] == "define_topic"
 
         # Turn 2: difficulty changed — template already shown once,
         # so this proceeds to transition evaluation.
-        manager.add_assistant_message(response1.content)
-        manager.add_user_message("Change difficulty to hard")
+        await manager.add_message(role="user", content="Change difficulty to hard")
         await reasoning.generate(manager, llm=None)
 
         state = manager.metadata["wizard"]["fsm_state"]
@@ -358,16 +345,19 @@ class TestWizardConfirmation:
         assert state["current_stage"] == "generate_questions"
 
     @pytest.mark.asyncio
-    async def test_missing_required_fields_shows_clarification(self) -> None:
+    async def test_missing_required_fields_shows_clarification(
+        self,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+    ) -> None:
         """When extraction can't satisfy required fields, a clarification
         response should be returned.
         """
+        manager, _ = conversation_manager_pair
         reasoning, _ = _build_wizard(
             extraction_responses=['{"difficulty": "hard"}']
         )
 
-        manager = WizardTestManager()
-        manager.add_user_message("Make it hard difficulty")
+        await manager.add_message(role="user", content="Make it hard difficulty")
         await reasoning.generate(manager, llm=None)
 
         state = manager.metadata["wizard"]["fsm_state"]
@@ -379,19 +369,23 @@ class TestWizardTransformDataPropagation:
     """Tests for transform data propagation and template rendering."""
 
     @pytest.mark.asyncio
-    async def test_transform_data_in_wizard_state(self) -> None:
+    async def test_transform_data_in_wizard_state(
+        self,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+    ) -> None:
         """Transform outputs (_questions, _bank_questions) should be in
         wizard_state.data after the FSM transition.
         """
+        manager, _ = conversation_manager_pair
         reasoning, _ = _build_wizard(
             extraction_responses=['{"topic": "English grammar"}', "{}"]
         )
-        manager = WizardTestManager()
 
-        manager.add_user_message("Create English grammar questions")
-        r1 = await reasoning.generate(manager, llm=None)
-        manager.add_assistant_message(r1.content)
-        manager.add_user_message("Looks good")
+        await manager.add_message(
+            role="user", content="Create English grammar questions"
+        )
+        await reasoning.generate(manager, llm=None)
+        await manager.add_message(role="user", content="Looks good")
         await reasoning.generate(manager, llm=None)
 
         state = manager.metadata["wizard"]["fsm_state"]
@@ -400,19 +394,23 @@ class TestWizardTransformDataPropagation:
         assert "_bank_questions" in state["data"]
 
     @pytest.mark.asyncio
-    async def test_underscore_keys_in_template(self) -> None:
+    async def test_underscore_keys_in_template(
+        self,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+    ) -> None:
         """_-prefixed keys (set by transforms) should be accessible in
         response templates.
         """
+        manager, _ = conversation_manager_pair
         reasoning, _ = _build_wizard(
             extraction_responses=['{"topic": "English grammar"}', "{}"]
         )
-        manager = WizardTestManager()
 
-        manager.add_user_message("Create English grammar questions")
-        r1 = await reasoning.generate(manager, llm=None)
-        manager.add_assistant_message(r1.content)
-        manager.add_user_message("Looks good")
+        await manager.add_message(
+            role="user", content="Create English grammar questions"
+        )
+        await reasoning.generate(manager, llm=None)
+        await manager.add_message(role="user", content="Looks good")
         r2 = await reasoning.generate(manager, llm=None)
 
         assert "Generated 3 questions" in r2.content, (
@@ -421,17 +419,19 @@ class TestWizardTransformDataPropagation:
         assert "English grammar" in r2.content
 
     @pytest.mark.asyncio
-    async def test_transform_none_return_preserves_data(self) -> None:
+    async def test_transform_none_return_preserves_data(
+        self,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+    ) -> None:
         """Transforms that return None should not break the chain."""
+        manager, _ = conversation_manager_pair
         reasoning, _ = _build_wizard(
             extraction_responses=['{"topic": "Physics"}', "{}"]
         )
-        manager = WizardTestManager()
 
-        manager.add_user_message("Create Physics quiz")
-        r1 = await reasoning.generate(manager, llm=None)
-        manager.add_assistant_message(r1.content)
-        manager.add_user_message("Go ahead")
+        await manager.add_message(role="user", content="Create Physics quiz")
+        await reasoning.generate(manager, llm=None)
+        await manager.add_message(role="user", content="Go ahead")
         await reasoning.generate(manager, llm=None)
 
         state = manager.metadata["wizard"]["fsm_state"]
@@ -444,10 +444,14 @@ class TestWizardReviewTransition:
     """Tests for the review action triggering a stage transition."""
 
     @pytest.mark.asyncio
-    async def test_review_action_transitions_to_review_stage(self) -> None:
+    async def test_review_action_transitions_to_review_stage(
+        self,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+    ) -> None:
         """At generate_questions, saying 'review' should transition to
         review_questions — NOT re-render the generate_questions template.
         """
+        manager, _ = conversation_manager_pair
         reasoning, _ = _build_wizard(
             extraction_responses=[
                 '{"topic": "English grammar"}',
@@ -455,22 +459,21 @@ class TestWizardReviewTransition:
                 '{"action": "review"}',
             ]
         )
-        manager = WizardTestManager()
 
         # Turn 1: topic → confirmation
-        manager.add_user_message("Create English grammar questions")
-        r1 = await reasoning.generate(manager, llm=None)
+        await manager.add_message(
+            role="user", content="Create English grammar questions"
+        )
+        await reasoning.generate(manager, llm=None)
 
         # Turn 2: confirm → transition to generate_questions
-        manager.add_assistant_message(r1.content)
-        manager.add_user_message("Looks good")
+        await manager.add_message(role="user", content="Looks good")
         r2 = await reasoning.generate(manager, llm=None)
         assert "Generated 3 questions" in r2.content
 
         # Turn 3: review → should transition to review_questions
-        manager.add_assistant_message(r2.content)
-        manager.add_user_message("Review these questions")
-        r3 = await reasoning.generate(manager, llm=None)
+        await manager.add_message(role="user", content="Review these questions")
+        await reasoning.generate(manager, llm=None)
 
         state = manager.metadata["wizard"]["fsm_state"]
         assert state["current_stage"] == "review_questions", (
@@ -479,10 +482,14 @@ class TestWizardReviewTransition:
         )
 
     @pytest.mark.asyncio
-    async def test_review_template_shows_quality_results(self) -> None:
+    async def test_review_template_shows_quality_results(
+        self,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+    ) -> None:
         """The review_questions template should show pass/fail counts
         and per-question evaluations, not re-display the questions.
         """
+        manager, _ = conversation_manager_pair
         reasoning, _ = _build_wizard(
             extraction_responses=[
                 '{"topic": "English grammar"}',
@@ -490,15 +497,14 @@ class TestWizardReviewTransition:
                 '{"action": "review"}',
             ]
         )
-        manager = WizardTestManager()
 
-        manager.add_user_message("Create English grammar questions")
-        r1 = await reasoning.generate(manager, llm=None)
-        manager.add_assistant_message(r1.content)
-        manager.add_user_message("Looks good")
-        r2 = await reasoning.generate(manager, llm=None)
-        manager.add_assistant_message(r2.content)
-        manager.add_user_message("Review these questions")
+        await manager.add_message(
+            role="user", content="Create English grammar questions"
+        )
+        await reasoning.generate(manager, llm=None)
+        await manager.add_message(role="user", content="Looks good")
+        await reasoning.generate(manager, llm=None)
+        await manager.add_message(role="user", content="Review these questions")
         r3 = await reasoning.generate(manager, llm=None)
 
         # Review template should show quality results
@@ -509,10 +515,14 @@ class TestWizardReviewTransition:
         assert "3" in r3.content  # 3 passed
 
     @pytest.mark.asyncio
-    async def test_review_transform_receives_questions(self) -> None:
+    async def test_review_transform_receives_questions(
+        self,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+    ) -> None:
         """The submit_test_review transform should receive _questions in
         its data dict and produce _question_evaluations.
         """
+        manager, _ = conversation_manager_pair
         _captured_contexts.clear()
         reasoning, _ = _build_wizard(
             extraction_responses=[
@@ -521,15 +531,14 @@ class TestWizardReviewTransition:
                 '{"action": "review"}',
             ]
         )
-        manager = WizardTestManager()
 
-        manager.add_user_message("Create English grammar questions")
-        r1 = await reasoning.generate(manager, llm=None)
-        manager.add_assistant_message(r1.content)
-        manager.add_user_message("Looks good")
-        r2 = await reasoning.generate(manager, llm=None)
-        manager.add_assistant_message(r2.content)
-        manager.add_user_message("Review these questions")
+        await manager.add_message(
+            role="user", content="Create English grammar questions"
+        )
+        await reasoning.generate(manager, llm=None)
+        await manager.add_message(role="user", content="Looks good")
+        await reasoning.generate(manager, llm=None)
+        await manager.add_message(role="user", content="Review these questions")
         await reasoning.generate(manager, llm=None)
 
         state = manager.metadata["wizard"]["fsm_state"]
@@ -543,11 +552,15 @@ class TestWizardTransformContext:
     """Tests for LLM and artifact registry availability in transforms."""
 
     @pytest.mark.asyncio
-    async def test_llm_available_in_transform_context(self) -> None:
+    async def test_llm_available_in_transform_context(
+        self,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+    ) -> None:
         """When an LLM is passed to generate(), it should be accessible
         in the TransformContext.config['llm'] for transforms that need it
         (e.g., question polishing).
         """
+        manager, _ = conversation_manager_pair
         _captured_contexts.clear()
 
         # Use a config with context_capturing_transform to inspect
@@ -597,8 +610,7 @@ class TestWizardTransformContext:
             extraction_scope="current_message",
         )
 
-        manager = WizardTestManager()
-        manager.add_user_message("go")
+        await manager.add_message(role="user", content="go")
         # No confirmation stage (no response_template), so transition
         # fires on first message.
         await reasoning.generate(manager, llm=fake_llm)
@@ -609,10 +621,14 @@ class TestWizardTransformContext:
         assert ctx.config.get("llm") is fake_llm
 
     @pytest.mark.asyncio
-    async def test_artifact_registry_in_transform_context(self) -> None:
+    async def test_artifact_registry_in_transform_context(
+        self,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+    ) -> None:
         """When artifact_registry is set on WizardReasoning, it should
         be available in the TransformContext passed to transforms.
         """
+        manager, _ = conversation_manager_pair
         _captured_contexts.clear()
         fake_registry = sentinel.artifact_registry
 
@@ -662,8 +678,7 @@ class TestWizardTransformContext:
             artifact_registry=fake_registry,
         )
 
-        manager = WizardTestManager()
-        manager.add_user_message("go")
+        await manager.add_message(role="user", content="go")
         await reasoning.generate(manager, llm=None)
 
         assert len(_captured_contexts) == 1
@@ -675,19 +690,21 @@ class TestWizardTransitionRecords:
     """Tests for transition audit trail."""
 
     @pytest.mark.asyncio
-    async def test_transition_records_created(self) -> None:
+    async def test_transition_records_created(
+        self,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+    ) -> None:
         """Transition records should be created when the wizard moves
         between stages.
         """
+        manager, _ = conversation_manager_pair
         reasoning, _ = _build_wizard(
             extraction_responses=['{"topic": "Biology"}', "{}"]
         )
-        manager = WizardTestManager()
 
-        manager.add_user_message("Create Biology quiz")
-        r1 = await reasoning.generate(manager, llm=None)
-        manager.add_assistant_message(r1.content)
-        manager.add_user_message("Looks good")
+        await manager.add_message(role="user", content="Create Biology quiz")
+        await reasoning.generate(manager, llm=None)
+        await manager.add_message(role="user", content="Looks good")
         await reasoning.generate(manager, llm=None)
 
         state = manager.metadata["wizard"]["fsm_state"]
@@ -697,10 +714,14 @@ class TestWizardTransitionRecords:
         assert transitions[-1]["to_stage"] == "generate_questions"
 
     @pytest.mark.asyncio
-    async def test_full_three_stage_flow(self) -> None:
+    async def test_full_three_stage_flow(
+        self,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+    ) -> None:
         """Full flow: define_topic → generate_questions → review_questions
         should produce two transition records.
         """
+        manager, _ = conversation_manager_pair
         reasoning, _ = _build_wizard(
             extraction_responses=[
                 '{"topic": "Math"}',
@@ -708,15 +729,12 @@ class TestWizardTransitionRecords:
                 '{"action": "review"}',
             ]
         )
-        manager = WizardTestManager()
 
-        manager.add_user_message("Create Math quiz")
-        r1 = await reasoning.generate(manager, llm=None)
-        manager.add_assistant_message(r1.content)
-        manager.add_user_message("Looks good")
-        r2 = await reasoning.generate(manager, llm=None)
-        manager.add_assistant_message(r2.content)
-        manager.add_user_message("Review")
+        await manager.add_message(role="user", content="Create Math quiz")
+        await reasoning.generate(manager, llm=None)
+        await manager.add_message(role="user", content="Looks good")
+        await reasoning.generate(manager, llm=None)
+        await manager.add_message(role="user", content="Review")
         await reasoning.generate(manager, llm=None)
 
         state = manager.metadata["wizard"]["fsm_state"]

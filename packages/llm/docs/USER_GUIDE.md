@@ -547,6 +547,22 @@ for branch in branches:
     print(f"  Content: {branch['message'].content[:50]}...")
 ```
 
+#### Branching from an Existing Node
+
+Use `branch_from()` to create a sibling of a specific node. This navigates to
+the node's parent so the next message becomes a sibling rather than a child:
+
+```python
+# Conversation has node "0.0" (an assistant response)
+# Create a sibling — a new branch from the same parent
+await manager.branch_from("0.0")  # Now positioned at node "0"
+response_alt = await manager.complete()  # Creates node "0.1"
+```
+
+This is useful when revisiting a conversation point to explore an alternative
+path without manually locating the parent node. The wizard reasoning strategy
+uses this internally when stages are revisited via back or restart navigation.
+
 ### RAG Caching
 
 When using prompts with RAG (Retrieval-Augmented Generation), you can enable caching to improve performance and reduce costs:

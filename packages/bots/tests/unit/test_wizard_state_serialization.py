@@ -26,9 +26,11 @@ from dataknobs_bots.reasoning.wizard import (
     DEFAULT_EPHEMERAL_KEYS,
     SubflowContext,
     WizardReasoning,
+    WizardState,
     _is_json_safe,
 )
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
+from dataknobs_llm.conversations import ConversationManager
 
 
 class NonSerializableObject:
@@ -49,12 +51,10 @@ class FakeDedupResult:
     content_hash: str = ""
 
 
-def _make_wizard_and_manager(
+def _make_wizard(
     config: dict[str, Any] | None = None,
-) -> tuple[WizardReasoning, Any]:
-    """Create a WizardReasoning + WizardTestManager pair."""
-    from tests.unit.conftest import WizardTestManager
-
+) -> WizardReasoning:
+    """Create a WizardReasoning instance for tests."""
     if config is None:
         config = {
             "name": "test-wizard",
@@ -71,44 +71,48 @@ def _make_wizard_and_manager(
         }
     loader = WizardConfigLoader()
     fsm = loader.load_from_dict(config)
-    reasoning = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
-    manager = WizardTestManager()
-    return reasoning, manager
+    return WizardReasoning(wizard_fsm=fsm, strict_validation=False)
 
 
 class TestWizardStateSerialization:
     """Tests for wizard state serialization safety."""
 
-    def test_save_state_strips_non_serializable_objects(self) -> None:
+    @pytest.mark.asyncio
+    async def test_save_state_strips_non_serializable_objects(
+        self, conversation_manager: ConversationManager
+    ) -> None:
         """Verifies fix for the crash: non-serializable objects in state.data
         are stripped during save, so json.dumps(metadata) succeeds.
 
         Before this fix, ArtifactCorpus in state.data caused:
             TypeError: Object of type ArtifactCorpus is not JSON serializable
         """
-        reasoning, manager = _make_wizard_and_manager()
+        reasoning = _make_wizard()
 
         # Simulate what happens after initialize_bank stores _corpus in data
-        state = reasoning._get_wizard_state(manager)
+        state = reasoning._get_wizard_state(conversation_manager)
         state.data["topic"] = "English grammar"
         state.data["_corpus_id"] = "corpus-abc"
         state.data["_corpus"] = NonSerializableObject("ArtifactCorpus")
 
-        reasoning._save_wizard_state(manager, state)
+        reasoning._save_wizard_state(conversation_manager, state)
 
         # Must NOT raise — non-serializable object stripped during save
-        json_str = json.dumps(manager.metadata)
+        json_str = json.dumps(conversation_manager.metadata)
         parsed = json.loads(json_str)
         data = parsed["wizard"]["fsm_state"]["data"]
         assert data["topic"] == "English grammar"
         assert data["_corpus_id"] == "corpus-abc"
         assert "_corpus" not in data
 
-    def test_save_state_preserves_all_serializable_underscore_keys(self) -> None:
+    @pytest.mark.asyncio
+    async def test_save_state_preserves_all_serializable_underscore_keys(
+        self, conversation_manager: ConversationManager
+    ) -> None:
         """Every quiz-style underscore-prefixed serializable key survives save."""
-        reasoning, manager = _make_wizard_and_manager()
+        reasoning = _make_wizard()
 
-        state = reasoning._get_wizard_state(manager)
+        state = reasoning._get_wizard_state(conversation_manager)
         state.data["topic"] = "Biology"
         state.data["_corpus_id"] = "corpus-xyz"
         state.data["_bank_questions"] = [{"id": "q1"}, {"id": "q2"}]
@@ -120,9 +124,9 @@ class TestWizardStateSerialization:
         state.data["_current_question_number"] = 3
         state.data["_dedup_result"] = None
 
-        reasoning._save_wizard_state(manager, state)
+        reasoning._save_wizard_state(conversation_manager, state)
 
-        saved_data = manager.metadata["wizard"]["fsm_state"]["data"]
+        saved_data = conversation_manager.metadata["wizard"]["fsm_state"]["data"]
         assert saved_data["topic"] == "Biology"
         assert saved_data["_corpus_id"] == "corpus-xyz"
         assert saved_data["_bank_questions"] == [{"id": "q1"}, {"id": "q2"}]
@@ -133,46 +137,55 @@ class TestWizardStateSerialization:
         assert saved_data["_current_question"] == {"question_text": "What is DNA?"}
         assert saved_data["_current_question_number"] == 3
 
-    def test_save_state_converts_dataclass_in_data(self) -> None:
+    @pytest.mark.asyncio
+    async def test_save_state_converts_dataclass_in_data(
+        self, conversation_manager: ConversationManager
+    ) -> None:
         """DedupResult dataclass in data becomes a dict after save."""
-        reasoning, manager = _make_wizard_and_manager()
+        reasoning = _make_wizard()
 
-        state = reasoning._get_wizard_state(manager)
+        state = reasoning._get_wizard_state(conversation_manager)
         state.data["_dedup_result"] = FakeDedupResult(
             is_exact_duplicate=False,
             content_hash="abc123",
         )
 
-        reasoning._save_wizard_state(manager, state)
+        reasoning._save_wizard_state(conversation_manager, state)
 
-        saved_data = manager.metadata["wizard"]["fsm_state"]["data"]
+        saved_data = conversation_manager.metadata["wizard"]["fsm_state"]["data"]
         dedup = saved_data["_dedup_result"]
         assert isinstance(dedup, dict)
         assert dedup["is_exact_duplicate"] is False
         assert dedup["content_hash"] == "abc123"
 
-    def test_save_state_none_values_preserved(self) -> None:
+    @pytest.mark.asyncio
+    async def test_save_state_none_values_preserved(
+        self, conversation_manager: ConversationManager
+    ) -> None:
         """data["_dedup_result"] = None remains None after save."""
-        reasoning, manager = _make_wizard_and_manager()
+        reasoning = _make_wizard()
 
-        state = reasoning._get_wizard_state(manager)
+        state = reasoning._get_wizard_state(conversation_manager)
         state.data["_dedup_result"] = None
         state.data["_corpus_id"] = None
         state.data["topic"] = "test"
 
-        reasoning._save_wizard_state(manager, state)
+        reasoning._save_wizard_state(conversation_manager, state)
 
-        saved_data = manager.metadata["wizard"]["fsm_state"]["data"]
+        saved_data = conversation_manager.metadata["wizard"]["fsm_state"]["data"]
         assert saved_data["_dedup_result"] is None
         assert saved_data["_corpus_id"] is None
         assert saved_data["topic"] == "test"
 
-    def test_saved_state_is_json_serializable(self) -> None:
+    @pytest.mark.asyncio
+    async def test_saved_state_is_json_serializable(
+        self, conversation_manager: ConversationManager
+    ) -> None:
         """json.dumps(metadata) succeeds with mixed data including
         non-serializable objects and dataclasses."""
-        reasoning, manager = _make_wizard_and_manager()
+        reasoning = _make_wizard()
 
-        state = reasoning._get_wizard_state(manager)
+        state = reasoning._get_wizard_state(conversation_manager)
         state.data["topic"] = "English grammar"
         state.data["_corpus_id"] = "corpus-abc"
         state.data["_corpus"] = NonSerializableObject("live corpus")
@@ -182,10 +195,10 @@ class TestWizardStateSerialization:
         )
         state.data["_bank_questions"] = [{"id": "q1"}]
 
-        reasoning._save_wizard_state(manager, state)
+        reasoning._save_wizard_state(conversation_manager, state)
 
         # Must not raise
-        json_str = json.dumps(manager.metadata)
+        json_str = json.dumps(conversation_manager.metadata)
         parsed = json.loads(json_str)
 
         data = parsed["wizard"]["fsm_state"]["data"]
@@ -195,12 +208,15 @@ class TestWizardStateSerialization:
         assert data["_dedup_result"]["is_exact_duplicate"] is True
         assert data["_bank_questions"] == [{"id": "q1"}]
 
-    def test_roundtrip_save_and_restore_preserves_data(self) -> None:
+    @pytest.mark.asyncio
+    async def test_roundtrip_save_and_restore_preserves_data(
+        self, conversation_manager: ConversationManager
+    ) -> None:
         """Save → restore via _get_wizard_state → all serializable data intact."""
-        reasoning, manager = _make_wizard_and_manager()
+        reasoning = _make_wizard()
 
         # Set up state with mixed data
-        state = reasoning._get_wizard_state(manager)
+        state = reasoning._get_wizard_state(conversation_manager)
         state.data["topic"] = "Chemistry"
         state.data["_corpus_id"] = "corpus-chem"
         state.data["_corpus"] = NonSerializableObject("live")
@@ -209,10 +225,10 @@ class TestWizardStateSerialization:
         state.data["_bank_difficulty_counts"] = {"easy": 0, "medium": 1, "hard": 0}
 
         # Save
-        reasoning._save_wizard_state(manager, state)
+        reasoning._save_wizard_state(conversation_manager, state)
 
         # Restore
-        restored = reasoning._get_wizard_state(manager)
+        restored = reasoning._get_wizard_state(conversation_manager)
 
         assert restored.data["topic"] == "Chemistry"
         assert restored.data["_corpus_id"] == "corpus-chem"
@@ -357,7 +373,10 @@ class TestWizardStateSharedReference:
     in both _get_wizard_state and restore() fully breaks the reference chain.
     """
 
-    def test_get_wizard_state_data_is_decoupled_from_metadata(self) -> None:
+    @pytest.mark.asyncio
+    async def test_get_wizard_state_data_is_decoupled_from_metadata(
+        self, conversation_manager: ConversationManager
+    ) -> None:
         """Modifying wizard_state.data after _get_wizard_state must NOT
         modify manager.metadata.
 
@@ -365,22 +384,22 @@ class TestWizardStateSharedReference:
         uses a reference to the same dict stored in metadata. When transforms
         add _corpus to wizard_state.data, it appears in metadata too.
         """
-        reasoning, manager = _make_wizard_and_manager()
+        reasoning = _make_wizard()
 
         # Initial save with clean data
-        state = reasoning._get_wizard_state(manager)
+        state = reasoning._get_wizard_state(conversation_manager)
         state.data["topic"] = "English grammar"
-        reasoning._save_wizard_state(manager, state)
+        reasoning._save_wizard_state(conversation_manager, state)
 
         # Load state back — this is where the shared reference is created
-        loaded_state = reasoning._get_wizard_state(manager)
+        loaded_state = reasoning._get_wizard_state(conversation_manager)
 
         # Simulate what transforms do: add non-serializable object
         loaded_state.data["_corpus"] = NonSerializableObject("live corpus")
         loaded_state.data["_new_key"] = "injected"
 
         # The metadata must NOT be contaminated
-        fsm_data = manager.metadata["wizard"]["fsm_state"]["data"]
+        fsm_data = conversation_manager.metadata["wizard"]["fsm_state"]["data"]
         assert "_corpus" not in fsm_data, (
             "Non-serializable object leaked from wizard_state.data "
             "into manager.metadata via shared reference"
@@ -389,40 +408,46 @@ class TestWizardStateSharedReference:
             "New key leaked from wizard_state.data into manager.metadata"
         )
 
-    def test_mutating_data_after_load_does_not_crash_json_dumps(self) -> None:
+    @pytest.mark.asyncio
+    async def test_mutating_data_after_load_does_not_crash_json_dumps(
+        self, conversation_manager: ConversationManager
+    ) -> None:
         """Load state → add non-serializable to data → json.dumps(metadata) → no crash.
 
         This reproduces the exact crash from the api-log: after transforms
         add _corpus to wizard_state.data, the next json.dumps(metadata) fails
         because the shared reference puts the ArtifactCorpus in metadata.
         """
-        reasoning, manager = _make_wizard_and_manager()
+        reasoning = _make_wizard()
 
         # Save clean state
-        state = reasoning._get_wizard_state(manager)
+        state = reasoning._get_wizard_state(conversation_manager)
         state.data["topic"] = "English grammar"
-        reasoning._save_wizard_state(manager, state)
+        reasoning._save_wizard_state(conversation_manager, state)
 
         # Reload state (creates the shared reference)
-        reloaded = reasoning._get_wizard_state(manager)
+        reloaded = reasoning._get_wizard_state(conversation_manager)
 
         # Simulate transform adding non-serializable object
         reloaded.data["_corpus"] = NonSerializableObject("ArtifactCorpus")
         reloaded.data["_corpus_id"] = "corpus-abc"
 
         # json.dumps on metadata must succeed (the key assertion)
-        json_str = json.dumps(manager.metadata)
+        json_str = json.dumps(conversation_manager.metadata)
         parsed = json.loads(json_str)
         assert "wizard" in parsed
 
-    def test_transition_data_snapshot_is_serializable(self) -> None:
+    @pytest.mark.asyncio
+    async def test_transition_data_snapshot_is_serializable(
+        self, conversation_manager: ConversationManager
+    ) -> None:
         """Transition records with non-serializable data in snapshot must
         not crash json.dumps after _save_wizard_state."""
         from dataknobs_bots.reasoning.observability import create_transition_record
 
-        reasoning, manager = _make_wizard_and_manager()
+        reasoning = _make_wizard()
 
-        state = reasoning._get_wizard_state(manager)
+        state = reasoning._get_wizard_state(conversation_manager)
         state.data["topic"] = "Physics"
         state.data["_corpus"] = NonSerializableObject("live corpus")
         state.data["_corpus_id"] = "corpus-phys"
@@ -437,10 +462,10 @@ class TestWizardStateSharedReference:
         state.transitions.append(transition)
 
         # Save must sanitize transitions too
-        reasoning._save_wizard_state(manager, state)
+        reasoning._save_wizard_state(conversation_manager, state)
 
         # json.dumps on full metadata must succeed
-        json_str = json.dumps(manager.metadata)
+        json_str = json.dumps(conversation_manager.metadata)
         parsed = json.loads(json_str)
         transitions = parsed["wizard"]["fsm_state"]["transitions"]
         assert len(transitions) == 1
@@ -493,7 +518,7 @@ class TestPartitionData:
 
     def test_classifies_ephemeral_keys(self) -> None:
         """Known ephemeral keys end up in transient dict."""
-        reasoning, _ = _make_wizard_and_manager()
+        reasoning = _make_wizard()
 
         data = {
             "topic": "Math",
@@ -513,7 +538,7 @@ class TestPartitionData:
 
     def test_classifies_persistent_keys(self) -> None:
         """User data and persistent _-prefixed keys stay in persistent dict."""
-        reasoning, _ = _make_wizard_and_manager()
+        reasoning = _make_wizard()
 
         data = {
             "topic": "English grammar",
@@ -530,7 +555,7 @@ class TestPartitionData:
 
     def test_catches_unknown_non_serializable(self) -> None:
         """Non-serializable objects not in EPHEMERAL_KEYS go to transient."""
-        reasoning, _ = _make_wizard_and_manager()
+        reasoning = _make_wizard()
 
         data = {
             "topic": "Math",
@@ -609,21 +634,24 @@ class TestPartitionData:
         # Config key should be present
         assert "_custom_key" in reasoning._ephemeral_keys
 
-    def test_save_wizard_state_excludes_transient(self) -> None:
+    @pytest.mark.asyncio
+    async def test_save_wizard_state_excludes_transient(
+        self, conversation_manager: ConversationManager
+    ) -> None:
         """After partition + save, persisted metadata has no ephemeral keys."""
-        reasoning, manager = _make_wizard_and_manager()
+        reasoning = _make_wizard()
 
-        state = reasoning._get_wizard_state(manager)
+        state = reasoning._get_wizard_state(conversation_manager)
         state.data["topic"] = "English grammar"
         state.data["_corpus_id"] = "corpus-abc"
         state.data["_corpus"] = NonSerializableObject("ArtifactCorpus")
         state.data["_transform_error"] = "Generation failed"
         state.data["_message"] = "user input"
 
-        reasoning._save_wizard_state(manager, state)
+        reasoning._save_wizard_state(conversation_manager, state)
 
         # Verify persisted data excludes ephemeral keys
-        saved_data = manager.metadata["wizard"]["fsm_state"]["data"]
+        saved_data = conversation_manager.metadata["wizard"]["fsm_state"]["data"]
         assert saved_data["topic"] == "English grammar"
         assert saved_data["_corpus_id"] == "corpus-abc"
         assert "_corpus" not in saved_data
@@ -635,26 +663,29 @@ class TestPartitionData:
         assert state.transient.get("_transform_error") == "Generation failed"
 
         # Verify JSON serializable
-        json.dumps(manager.metadata)
+        json.dumps(conversation_manager.metadata)
 
-    def test_metadata_data_includes_transient_for_ui(self) -> None:
+    @pytest.mark.asyncio
+    async def test_metadata_data_includes_transient_for_ui(
+        self, conversation_manager: ConversationManager
+    ) -> None:
         """The 'data' field in response metadata includes both persistent + transient."""
-        reasoning, manager = _make_wizard_and_manager()
+        reasoning = _make_wizard()
 
-        state = reasoning._get_wizard_state(manager)
+        state = reasoning._get_wizard_state(conversation_manager)
         state.data["topic"] = "English grammar"
         state.data["_transform_error"] = "Generation failed"
 
-        reasoning._save_wizard_state(manager, state)
+        reasoning._save_wizard_state(conversation_manager, state)
 
         # The top-level wizard metadata 'data' should include transient
         # (for UI display), sanitized via sanitize_for_json
-        ui_data = manager.metadata["wizard"]["data"]
+        ui_data = conversation_manager.metadata["wizard"]["data"]
         assert ui_data["topic"] == "English grammar"
         assert ui_data["_transform_error"] == "Generation failed"
 
         # But fsm_state.data should NOT have transient
-        persisted_data = manager.metadata["wizard"]["fsm_state"]["data"]
+        persisted_data = conversation_manager.metadata["wizard"]["fsm_state"]["data"]
         assert persisted_data["topic"] == "English grammar"
         assert "_transform_error" not in persisted_data
 
@@ -677,8 +708,6 @@ class TestPartitionData:
         loader = WizardConfigLoader()
         fsm = loader.load_from_dict(config)
         reasoning = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
-
-        from dataknobs_bots.reasoning.wizard import WizardState
 
         state = WizardState(
             current_stage="show",
