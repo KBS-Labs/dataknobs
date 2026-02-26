@@ -427,6 +427,27 @@ class ConversationState:
         nodes.sort(key=lambda n: n.timestamp)
         return nodes
 
+    def to_export_dict(self) -> Dict[str, Any]:
+        """Export the full conversation as a flat message list.
+
+        Returns the conversation in a format suitable for logging, auditing,
+        and API responses.  All branches are included (not just the active
+        path), so collection-mode iterations and other abandoned branches
+        are visible.
+
+        Returns:
+            Dictionary with ``conversation_id``, ``metadata``,
+            ``messages`` (list of serialised nodes in chronological
+            order), and ``message_count``.
+        """
+        messages = [node.to_dict() for node in self.get_all_nodes()]
+        return {
+            "conversation_id": self.conversation_id,
+            "metadata": self.metadata,
+            "messages": messages,
+            "message_count": len(messages),
+        }
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert state to dictionary for storage.
 
