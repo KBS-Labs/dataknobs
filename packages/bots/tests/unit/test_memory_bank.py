@@ -478,7 +478,7 @@ class TestWizardBankIntegration:
         assert reasoning._banks["ingredients"].count() == 2
 
         # Save state
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         # Verify banks are in metadata
         wizard_meta = conversation_manager.metadata.get("wizard", {})
@@ -545,7 +545,7 @@ class TestWizardBankIntegration:
         reasoning = _make_wizard_with_banks()
         state = reasoning._get_wizard_state(conversation_manager)
         reasoning._banks["ingredients"].add({"name": "flour"})
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         # Must be JSON serializable
         import json

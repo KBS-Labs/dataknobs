@@ -729,7 +729,7 @@ class WizardReasoning(ReasoningStrategy):
         response = await self._generate_stage_response(
             manager, llm, stage, state, tools,
         )
-        self._save_wizard_state(manager, state)
+        await self._save_wizard_state(manager, state)
         return response
 
     @staticmethod
@@ -1031,7 +1031,7 @@ class WizardReasoning(ReasoningStrategy):
             wizard_state.increment_render_count(stage.get("name", "unknown"))
 
         # Persist wizard state
-        self._save_wizard_state(manager, wizard_state)
+        await self._save_wizard_state(manager, wizard_state)
 
         return response
 
@@ -1126,7 +1126,7 @@ class WizardReasoning(ReasoningStrategy):
                 response = await self._generate_stage_response(
                     manager, llm, stage, wizard_state, tools
                 )
-                self._save_wizard_state(manager, wizard_state)
+                await self._save_wizard_state(manager, wizard_state)
                 return response
 
         # Handle navigation commands
@@ -1134,7 +1134,7 @@ class WizardReasoning(ReasoningStrategy):
             user_message, wizard_state, manager, llm
         )
         if nav_result:
-            self._save_wizard_state(manager, wizard_state)
+            await self._save_wizard_state(manager, wizard_state)
             return nav_result
 
         # Get current stage context from active FSM (subflow or main)
@@ -1198,7 +1198,7 @@ class WizardReasoning(ReasoningStrategy):
 
                     if not can_satisfy:
                         wizard_state.clarification_attempts += 1
-                        self._save_wizard_state(manager, wizard_state)
+                        await self._save_wizard_state(manager, wizard_state)
 
                         if wizard_state.clarification_attempts >= 3:
                             response = await self._generate_restart_offer(
@@ -1334,7 +1334,7 @@ class WizardReasoning(ReasoningStrategy):
                     response = await self._generate_stage_response(
                         manager, llm, stage, wizard_state, tools
                     )
-                    self._save_wizard_state(manager, wizard_state)
+                    await self._save_wizard_state(manager, wizard_state)
                     return response
 
                 # Validate against stage schema
@@ -1344,7 +1344,7 @@ class WizardReasoning(ReasoningStrategy):
                     )
                     if validation_errors:
                         # Save state before returning validation error
-                        self._save_wizard_state(manager, wizard_state)
+                        await self._save_wizard_state(manager, wizard_state)
                         response = await self._generate_validation_response(
                             manager, llm, stage, validation_errors
                         )
@@ -1374,7 +1374,7 @@ class WizardReasoning(ReasoningStrategy):
                 response = await self._generate_stage_response(
                     manager, llm, new_stage, wizard_state, tools
                 )
-                self._save_wizard_state(manager, wizard_state)
+                await self._save_wizard_state(manager, wizard_state)
                 return response
 
         # Capture state before transition
@@ -1551,7 +1551,7 @@ class WizardReasoning(ReasoningStrategy):
             wizard_state.increment_render_count(stage_rendered_name)
 
         # Save wizard state
-        self._save_wizard_state(manager, wizard_state)
+        await self._save_wizard_state(manager, wizard_state)
 
         return response
 
@@ -1708,7 +1708,7 @@ class WizardReasoning(ReasoningStrategy):
 
         return metadata
 
-    def _save_wizard_state(self, manager: Any, state: WizardState) -> None:
+    async def _save_wizard_state(self, manager: Any, state: WizardState) -> None:
         """Save wizard state to conversation manager.
 
         Partitions ``state.data`` into persistent and transient parts before
@@ -1745,6 +1745,14 @@ class WizardReasoning(ReasoningStrategy):
                 name: bank.to_dict() for name, bank in self._banks.items()
             }
         manager.metadata["wizard"] = wizard_meta
+
+        # Persist so conversation-level metadata is up to date in storage.
+        # Without this, the metadata written by manager.complete() /
+        # manager.add_message() inside _generate_stage_response would
+        # snapshot the *previous* turn's wizard metadata because those
+        # calls run _save_state() before we reach this point.
+        if hasattr(manager, "_save_state"):
+            await manager._save_state()
 
     # =========================================================================
     # Subflow Management Methods

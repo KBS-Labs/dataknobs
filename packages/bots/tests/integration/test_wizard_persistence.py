@@ -107,7 +107,7 @@ class TestWizardPersistence:
         state.data["_target_count"] = 50
 
         # Save wizard state → metadata
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         # Persist to storage (this is where json.dumps happens)
         conv_id = conversation_manager.state.conversation_id
@@ -150,7 +150,7 @@ class TestWizardPersistence:
         state.data["_corpus"] = NonSerializableObject("live corpus")
 
         # Save state (this populates manager.metadata)
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         # Now attempt to add a message — this triggers _save_state → storage → json.dumps
         await conversation_manager.add_message(
@@ -189,7 +189,7 @@ class TestWizardPersistence:
         # Step 1: Save clean wizard state to metadata (simulates previous request)
         state = reasoning._get_wizard_state(conversation_manager)
         state.data["topic"] = "English grammar"
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         # Persist to storage (so next load is realistic)
         await conversation_storage.save_conversation(conversation_manager.state)
@@ -257,7 +257,7 @@ class TestWizardPersistence:
         state.transitions.append(transition)
 
         # Save wizard state (must sanitize transitions too)
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         # add_message → _save_state → json.dumps → must not crash
         await conversation_manager.add_message(
@@ -295,7 +295,7 @@ class TestWizardPersistence:
         # Step 1: Save clean wizard state
         state = reasoning._get_wizard_state(conversation_manager)
         state.data["topic"] = "English grammar"
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
         await conversation_storage.save_conversation(conversation_manager.state)
 
         # Step 2: Reload — this calls fsm.restore() which used to create
@@ -369,7 +369,7 @@ class TestEphemeralKeyRoundtrip:
         state.data["_bank_questions"] = [{"id": "q1"}]
 
         # Save → persist
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
         await conversation_storage.save_conversation(conversation_manager.state)
 
         # Load from storage
@@ -412,7 +412,7 @@ class TestEphemeralKeyRoundtrip:
         state.data["_target_count"] = 10
 
         # Save → persist → load
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
         await conversation_storage.save_conversation(conversation_manager.state)
         conv_id = conversation_manager.state.conversation_id
         loaded_conv = await conversation_storage.load_conversation(conv_id)
