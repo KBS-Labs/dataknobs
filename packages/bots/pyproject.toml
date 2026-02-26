@@ -1,6 +1,6 @@
 [project]
 name = "dataknobs-bots"
-version = "0.4.8"
+version = "0.5.0"
 description = "Configuration-driven AI agents for DataKnobs"
 readme = "README.md"
 authors = [
