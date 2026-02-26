@@ -452,3 +452,162 @@ class TestBankConfigParsing:
         bank = reasoning._banks["items"]
         assert bank._duplicate_strategy == "reject"
         assert bank._match_fields == ["name"]
+
+
+# =====================================================================
+# Full generate() flow tests
+#
+# These exercise the complete generate() path, ensuring the
+# pre-extraction done-keyword check prevents clarification loops.
+#
+# NOTE: generate() retrieves wizard state from manager.metadata, not
+# from a passed-in state parameter.  To simulate a second turn at
+# the "collect" stage we seed the manager metadata with fsm_state.
+# =====================================================================
+
+async def _make_manager_and_provider() -> tuple[ConversationManager, EchoProvider]:
+    """Create a ConversationManager + EchoProvider pair for tests."""
+    config = LLMConfig(
+        provider="echo", model="echo-test",
+        options={"echo_prefix": ""},
+    )
+    provider = EchoProvider(config)
+    library = ConfigPromptLibrary(
+        {"system": {"test": {"template": "You are a test bot."}}}
+    )
+    builder = AsyncPromptBuilder(library=library)
+    storage = DataknobsConversationStorage(AsyncMemoryDatabase())
+    manager = await ConversationManager.create(
+        llm=provider, prompt_builder=builder,
+        storage=storage, system_prompt_name="test",
+    )
+    return manager, provider
+
+
+def _seed_wizard_state(
+    manager: Any,
+    stage: str = "collect",
+    data: dict[str, Any] | None = None,
+) -> None:
+    """Seed wizard FSM state into manager metadata.
+
+    generate() retrieves state via manager.metadata["wizard"]["fsm_state"].
+    This helper sets that up so tests can simulate a conversation already
+    at a particular stage.
+    """
+    manager.set_metadata("wizard", {
+        "fsm_state": {
+            "current_stage": stage,
+            "history": [stage],
+            "data": data or {},
+            "completed": False,
+            "clarification_attempts": 0,
+            "transitions": [],
+            "stage_entry_time": 0,
+            "tasks": {},
+            "subflow_stack": [],
+        },
+    })
+
+
+class TestCollectionModeGenerateFlow:
+    """Full generate() tests for collection-mode done signal and transitions.
+
+    These tests call reasoning.generate() directly, covering the
+    pre-extraction done-keyword check that prevents the "done" keyword
+    from being treated as a data record (which would fail extraction
+    confidence and produce a clarification response instead of
+    transitioning out of the collection stage).
+    """
+
+    @pytest.mark.asyncio
+    async def test_done_triggers_transition_not_clarification(self) -> None:
+        """'done' must trigger a stage transition, not a clarification loop.
+
+        Regression: before the pre-extraction done check, 'done' was sent
+        to the schema extractor, failed confidence, and produced a
+        clarification response — the wizard never reached the transition.
+        """
+        reasoning = _make_collection_wizard()
+        manager, provider = await _make_manager_and_provider()
+
+        # Seed state at "collect" so generate() restores it there
+        _seed_wizard_state(manager, stage="collect")
+
+        # The user says "done"
+        await manager.add_message(role="user", content="done")
+
+        # generate() produces a response — no LLM calls needed
+        # because "review" uses a response_template.
+        result = await reasoning.generate(manager=manager, llm=provider)
+
+        # Read persisted wizard state back from manager metadata
+        fsm_state = manager.metadata["wizard"]["fsm_state"]
+        assert fsm_state["current_stage"] == "review", (
+            f"Expected transition to 'review', but stuck at "
+            f"'{fsm_state['current_stage']}'. "
+            "The done keyword likely fell through to extraction/clarification."
+        )
+        assert fsm_state["completed"] is True
+        assert fsm_state["data"].get("_collection_done") is True
+
+    @pytest.mark.asyncio
+    async def test_done_with_empty_bank_stays_at_collection(self) -> None:
+        """'done' with an empty bank and min_records=1 should not transition.
+
+        The done flag is set, but the transition condition requires
+        bank('ingredients').count() >= 1, which is not satisfied.
+        """
+        reasoning = _make_collection_wizard(min_records=1)
+        manager, provider = await _make_manager_and_provider()
+
+        _seed_wizard_state(manager, stage="collect")
+        await manager.add_message(role="user", content="done")
+
+        # No transition → wizard stays at "collect" and generates a
+        # stage response via LLM (collect has no response_template).
+        provider.set_responses([
+            text_response("Please add at least one ingredient."),
+        ])
+
+        result = await reasoning.generate(manager=manager, llm=provider)
+
+        fsm_state = manager.metadata["wizard"]["fsm_state"]
+        assert fsm_state["current_stage"] == "collect"
+        assert fsm_state["data"].get("_collection_done") is True
+
+    @pytest.mark.asyncio
+    async def test_ingredient_message_adds_to_bank_via_generate(self) -> None:
+        """A non-done message should be extracted and added to the bank."""
+        from dataknobs_llm.extraction import SchemaExtractor
+
+        # EchoProvider for extraction — returns JSON for the ingredient
+        ext_config = LLMConfig(
+            provider="echo", model="echo-ext",
+            options={"echo_prefix": ""},
+        )
+        ext_provider = EchoProvider(ext_config)
+        extractor = SchemaExtractor(provider=ext_provider)
+
+        reasoning = _make_collection_wizard()
+        reasoning._extractor = extractor  # inject extractor
+
+        manager, provider = await _make_manager_and_provider()
+        _seed_wizard_state(manager, stage="collect")
+        await manager.add_message(role="user", content="2 cups flour")
+
+        # Extraction provider returns structured JSON
+        ext_provider.set_responses([
+            text_response('{"name": "flour", "amount": "2 cups"}'),
+        ])
+        # Main provider generates the collection-loop stage response
+        provider.set_responses([
+            text_response("Got it! What's next?"),
+        ])
+
+        result = await reasoning.generate(manager=manager, llm=provider)
+
+        # Should stay on collect, ingredient added to bank
+        fsm_state = manager.metadata["wizard"]["fsm_state"]
+        assert fsm_state["current_stage"] == "collect"
+        assert reasoning._banks["ingredients"].count() == 1

@@ -1149,6 +1149,26 @@ class WizardReasoning(ReasoningStrategy):
         stage = active_fsm.current_metadata
         is_conversation = stage.get("mode") == "conversation"
 
+        # ── Collection-mode done signal (before extraction) ──
+        # When a collection-mode stage receives a done keyword, skip
+        # extraction entirely.  The keyword (e.g. "done") is not a data
+        # record and would fail the extraction confidence check, causing
+        # a clarification loop that never reaches _handle_collection_mode.
+        _collection_done_signal = False
+        if (
+            stage.get("collection_mode") == "collection"
+            and not is_conversation
+        ):
+            col_config = stage.get("collection_config", {})
+            done_keywords = col_config.get("done_keywords", [])
+            if self._is_done_signal(user_message, done_keywords):
+                wizard_state.data["_collection_done"] = True
+                _collection_done_signal = True
+                logger.debug(
+                    "Collection done signal (pre-extraction) at stage '%s'",
+                    stage.get("name"),
+                )
+
         if is_conversation:
             # Conversation mode: skip extraction, run intent detection
             stage_name = stage.get("name", "unknown")
@@ -1157,6 +1177,10 @@ class WizardReasoning(ReasoningStrategy):
                 stage_name,
             )
             await self._detect_intent(user_message, stage, wizard_state, llm)
+        elif _collection_done_signal:
+            # Done keyword detected — skip extraction and fall through
+            # to transition evaluation below.
+            pass
         else:
             # Structured mode: extract data and validate
 
