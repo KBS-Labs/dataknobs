@@ -5,6 +5,61 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-02-26
+
+### dataknobs-config [0.3.5]
+
+#### Added
+- added validation of $requires against capabilities metadata
+
+### dataknobs-data [0.4.9]
+
+#### Fixed
+- resource management fixes
+
+### dataknobs-llm [0.4.0]
+
+#### Added
+- improved storage and retrieval for visibility (w/ bots)
+- broadened conversation search capabilities
+- added llm resource specs and layered enforcement strategies (w/ bots, config)
+- added delete conversations by filter
+- added metadata accessor
+- added a conversation branching helper method
+- updated tool-using strategy across llm providers, including deprecation
+
+#### Fixed
+- fixes to inject system context variables, including current_date (including performing template rendering without rag — old bug)
+- fixed gaps in persisting conversation metadata (w/ bots)
+- fixed conversation_id initialization, eliminating wasteful conversation root node (w/ bots)
+- fixed to allow injected capabilities
+- fixed resource management
+
+### dataknobs-bots [0.5.0]
+
+#### Added
+- improved storage and retrieval for visibility (w/ llm)
+- added llm resource specs and layered enforcement strategies (w/ llm, config)
+- added per-message wizard state snapshots, config validation warnings, and debug logging; updated documentation
+- added bot greeting
+- added configurable wizard navigation
+- added memory bank abstraction
+
+#### Fixed
+- fixed dynabot stream_chat to return all information, not just the text — BREAKING CHANGE in return value
+- fixed resource leaks (multiple instances)
+- fixed gaps in persisting conversation metadata (w/ llm)
+- fixed to detect and break duplicate tool calls; fix post-break logic
+- fixed resource cleanup bugs (w/ data)
+- fixed conversation_id initialization, eliminating wasteful conversation root node (w/ llm)
+- fixed wizard reasoning vs conversation manager interface disconnect
+- fixed to centralize wizard metadata (across all wizard modes)
+- refactored tests to remove bug-obscuring mocks (WizardTestManager)
+- fixed state counting bugs using centralized code
+- fixed stream_chat's defects/divergence from chat
+- fixed conversation tree to properly build branches
+
+
 ## Release - 2026-02-21
 
 ### dataknobs-bots [0.4.8]
