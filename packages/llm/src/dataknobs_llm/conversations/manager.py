@@ -952,6 +952,44 @@ class ConversationManager:
         # Persist
         await self._save_state()
 
+    async def branch_from(self, sibling_node_id: str) -> None:
+        """Position tree so the next message becomes a sibling of the given node.
+
+        Navigates to the parent of the specified node. The next ``add_message()``
+        or ``complete()`` call will create a new child of that parent, effectively
+        branching the conversation from the same point.
+
+        Args:
+            sibling_node_id: ID of the node whose parent we should navigate to.
+
+        Raises:
+            ValueError: If no conversation state, node not found, or node is
+                the root (root has no parent to branch from).
+
+        Example:
+            >>> # Branch from the same parent as node "0.0"
+            >>> await manager.branch_from("0.0")
+            >>> # Now at node "0"; next complete() creates "0.1"
+            >>> response = await manager.complete()
+        """
+        if not self.state:
+            raise ValueError("No conversation state")
+
+        sibling_node = get_node_by_id(self.state.message_tree, sibling_node_id)
+        if sibling_node is None:
+            raise ValueError(
+                f"Node '{sibling_node_id}' not found in conversation tree"
+            )
+
+        if sibling_node.parent is None:
+            raise ValueError(
+                f"Node '{sibling_node_id}' is the root and has no parent to "
+                "branch from"
+            )
+
+        parent_id = calculate_node_id(sibling_node.parent)
+        await self.switch_to_node(parent_id)
+
     async def execute_flow(
         self,
         flow: ConversationFlow,
