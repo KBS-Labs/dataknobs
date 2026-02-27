@@ -9,8 +9,10 @@ from dataknobs_data.backends.memory import SyncMemoryDatabase
 from dataknobs_llm.tools.context import ToolExecutionContext
 
 from dataknobs_bots.memory.bank import MemoryBank
+from dataknobs_bots.memory.artifact_bank import ArtifactBank
 from dataknobs_bots.tools.bank_tools import (
     AddBankRecordTool,
+    CompileArtifactTool,
     FinalizeBankTool,
     ListBankRecordsTool,
     RemoveBankRecordTool,
@@ -677,3 +679,87 @@ class TestValidateRecordId:
 
         assert result["success"] is False
         assert "Invalid record_id format" in result["error"]
+
+
+def _make_artifact_context(
+    with_data: bool = False,
+) -> tuple[ToolExecutionContext, ArtifactBank]:
+    """Create a context with an ArtifactBank for testing."""
+    ingredients = _make_bank("ingredients", required=["name"], match_fields=["name"])
+    instructions = _make_bank("instructions", required=["instruction"])
+    artifact = ArtifactBank(
+        name="recipe",
+        field_defs={"recipe_name": {"required": True}},
+        sections={"ingredients": ingredients, "instructions": instructions},
+    )
+    if with_data:
+        artifact.set_field("recipe_name", "Chocolate Chip Cookies")
+        ingredients.add({"name": "flour", "amount": "2 cups"})
+        instructions.add({"instruction": "Preheat oven to 375F"})
+
+    extra: dict[str, Any] = {"artifact": artifact}
+    context = ToolExecutionContext(
+        conversation_id="test-conv",
+        user_id="test-user",
+        extra=extra,
+    )
+    return context, artifact
+
+
+class TestCompileArtifactTool:
+    """Tests for CompileArtifactTool."""
+
+    @pytest.mark.asyncio
+    async def test_no_artifact_in_context(self) -> None:
+        context = _make_context()
+        tool = CompileArtifactTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is False
+        assert "No artifact configured" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_validation_errors_returned(self) -> None:
+        context, _artifact = _make_artifact_context(with_data=False)
+        tool = CompileArtifactTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is False
+        assert "errors" in result
+        assert len(result["errors"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_successful_compile(self) -> None:
+        context, _artifact = _make_artifact_context(with_data=True)
+        tool = CompileArtifactTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is True
+        assert "artifact" in result
+        compiled = result["artifact"]
+        assert compiled["recipe_name"] == "Chocolate Chip Cookies"
+        assert len(compiled["ingredients"]) == 1
+        assert len(compiled["instructions"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_schema_no_required_params(self) -> None:
+        tool = CompileArtifactTool()
+        schema = tool.schema
+        assert schema["type"] == "object"
+        assert "required" not in schema
+
+    def test_catalog_metadata(self) -> None:
+        meta = CompileArtifactTool.catalog_metadata()
+        assert meta["name"] == "compile_artifact"
+        assert "artifact" in meta["tags"]
+
+    def test_custom_tool_name(self) -> None:
+        tool = CompileArtifactTool(tool_name="compile_recipe")
+        assert tool.name == "compile_recipe"
+
+    def test_default_tool_name(self) -> None:
+        tool = CompileArtifactTool()
+        assert tool.name == "compile_artifact"

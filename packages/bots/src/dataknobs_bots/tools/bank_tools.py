@@ -1,4 +1,4 @@
-"""MemoryBank CRUD tools for wizard review stages.
+"""MemoryBank CRUD tools and ArtifactBank tools for wizard review stages.
 
 Provides LLM-callable tools that operate on ``MemoryBank`` instances
 injected into the tool execution context via ``context.extra["banks"]``.
@@ -13,6 +13,7 @@ Tools:
 - UpdateBankRecordTool: Update a record by record_id
 - RemoveBankRecordTool: Remove a record by record_id
 - FinalizeBankTool: Confirm save (bank data already persisted)
+- CompileArtifactTool: Compile all artifact fields and sections into output
 
 Example:
     ```python
@@ -661,4 +662,91 @@ class FinalizeBankTool(ContextAwareTool):
             "bank_name": bank_name,
             "record_count": count,
             "records": items,
+        }
+
+
+class CompileArtifactTool(ContextAwareTool):
+    """Compile all fields and sections into the complete artifact.
+
+    Reads the ``ArtifactBank`` from ``context.extra["artifact"]``,
+    validates it, and returns the compiled output.
+    """
+
+    @classmethod
+    def catalog_metadata(cls) -> dict[str, Any]:
+        """Return catalog metadata for this tool class."""
+        return {
+            "name": "compile_artifact",
+            "description": "Compile the complete artifact from fields and sections.",
+            "tags": ("wizard", "bank", "artifact"),
+        }
+
+    def __init__(self, tool_name: str | None = None) -> None:
+        """Initialize the tool.
+
+        Args:
+            tool_name: Custom tool name.  Defaults to ``"compile_artifact"``.
+        """
+        super().__init__(
+            name=tool_name or "compile_artifact",
+            description=(
+                "Compile the complete artifact from all fields and "
+                "sections. Validates completeness before compiling."
+            ),
+        )
+
+    @property
+    def schema(self) -> dict[str, Any]:
+        """Return JSON Schema for tool parameters."""
+        return {
+            "type": "object",
+            "properties": {},
+        }
+
+    async def execute_with_context(
+        self,
+        context: ToolExecutionContext,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Compile the artifact from context.
+
+        Args:
+            context: Execution context with ``extra["artifact"]``.
+            **kwargs: Not used.
+
+        Returns:
+            Dict with compiled artifact or validation errors.
+        """
+        artifact = context.extra.get("artifact")
+        if artifact is None:
+            return {
+                "success": False,
+                "error": (
+                    "No artifact configured. "
+                    "Ensure the wizard has an artifact configuration."
+                ),
+            }
+
+        errors = artifact.validate()
+        if errors:
+            logger.debug(
+                "Artifact validation failed: %s",
+                errors,
+                extra={"conversation_id": context.conversation_id},
+            )
+            return {
+                "success": False,
+                "errors": errors,
+            }
+
+        compiled = artifact.compile()
+        logger.info(
+            "Compiled artifact '%s' with %d sections",
+            artifact.name,
+            len(artifact.sections),
+            extra={"conversation_id": context.conversation_id},
+        )
+        return {
+            "success": True,
+            "artifact": compiled,
         }

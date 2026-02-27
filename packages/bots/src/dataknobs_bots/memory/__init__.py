@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from .artifact_bank import ArtifactBank
 from .bank import AsyncMemoryBank, BankRecord, EmptyBankProxy, MemoryBank
 from .base import Memory
 from .buffer import BufferMemory
@@ -9,6 +10,7 @@ from .summary import SummaryMemory
 from .vector import VectorMemory
 
 __all__ = [
+    "ArtifactBank",
     "AsyncMemoryBank",
     "BankRecord",
     "BufferMemory",

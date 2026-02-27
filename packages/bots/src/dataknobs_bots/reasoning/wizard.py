@@ -473,6 +473,14 @@ class WizardReasoning(ReasoningStrategy):
         self._banks: dict[str, Any] = {}
         self._init_banks()
 
+        # Initialise ArtifactBank if ``artifact`` config is present.
+        # When artifact is configured, its sections ARE the banks —
+        # ``self._banks`` references the same MemoryBank instances.
+        self._artifact: Any = None
+        artifact_config = wizard_fsm.settings.get("artifact")
+        if artifact_config:
+            self._init_artifact(artifact_config)
+
         # Build navigation keyword config from wizard-level settings
         nav_settings = wizard_fsm.settings.get("navigation", {})
         self._navigation_config: NavigationConfig = NavigationConfig.from_dict(
@@ -694,6 +702,53 @@ class WizardReasoning(ReasoningStrategy):
             return banks.get(name, EmptyBankProxy(name))
 
         return _bank
+
+    def _init_artifact(self, artifact_config: dict[str, Any]) -> None:
+        """Create an ``ArtifactBank`` from wizard ``artifact`` config.
+
+        When an artifact is configured, its sections replace the banks —
+        ``self._banks`` and ``self._bank_configs`` are populated from
+        the artifact's sections.
+
+        Args:
+            artifact_config: Artifact configuration dict with ``name``,
+                ``fields``, and ``sections`` keys.
+
+        Raises:
+            ConfigurationError: If both ``banks`` and ``artifact`` are
+                configured.
+        """
+        from dataknobs_common.exceptions import ConfigurationError
+
+        from ..memory.artifact_bank import ArtifactBank
+
+        if self._bank_configs:
+            raise ConfigurationError(
+                "Cannot configure both 'banks' and 'artifact'. "
+                "Use artifact.sections instead of banks.",
+                context={"setting": "artifact"},
+            )
+        self._artifact = ArtifactBank.from_config(
+            artifact_config, db_factory=self._create_bank_db
+        )
+        self._banks = dict(self._artifact.sections)
+        self._bank_configs = dict(artifact_config.get("sections", {}))
+
+    def _sync_artifact_fields(self, state: WizardState) -> None:
+        """Sync wizard state data into artifact fields.
+
+        Called before state serialization so that artifact fields
+        auto-populate from matching wizard ``state.data`` keys.
+
+        Args:
+            state: Current wizard state.
+        """
+        if not self._artifact or self._artifact.is_finalized:
+            return
+        for field_name in self._artifact.field_defs:
+            value = state.data.get(field_name)
+            if value is not None and value != self._artifact.field(field_name):
+                self._artifact.set_field(field_name, value)
 
     # -----------------------------------------------------------------
     # Collection mode helpers
@@ -1692,6 +1747,17 @@ class WizardReasoning(ReasoningStrategy):
 
             # Restore MemoryBank instances from persisted data
             self._restore_banks(wizard_data.get("banks", {}))
+
+            # Restore ArtifactBank from persisted data
+            artifact_data = wizard_data.get("artifact")
+            if artifact_data and self._artifact is not None:
+                from ..memory.artifact_bank import ArtifactBank
+
+                self._artifact = ArtifactBank.from_dict(
+                    artifact_data, db_factory=self._create_bank_db
+                )
+                self._banks = dict(self._artifact.sections)
+
             return state
 
         # Initialize new wizard state with tasks from config
@@ -1805,6 +1871,9 @@ class WizardReasoning(ReasoningStrategy):
         # Build metadata BEFORE partition so UI sees all keys (incl. transient)
         wizard_meta = self._build_wizard_metadata(state)
 
+        # Sync artifact fields from wizard state data before serialization
+        self._sync_artifact_fields(state)
+
         # Partition: separate ephemeral/non-serializable keys from persistent
         state.data, state.transient = self._partition_data(state.data)
 
@@ -1826,6 +1895,9 @@ class WizardReasoning(ReasoningStrategy):
             wizard_meta["banks"] = {
                 name: bank.to_dict() for name, bank in self._banks.items()
             }
+        # Persist ArtifactBank data alongside banks
+        if self._artifact:
+            wizard_meta["artifact"] = self._artifact.to_dict()
         manager.metadata["wizard"] = wizard_meta
 
         # Persist so conversation-level metadata is up to date in storage.
@@ -2395,6 +2467,10 @@ class WizardReasoning(ReasoningStrategy):
         # Clear all memory banks on restart (clean slate)
         for bank in self._banks.values():
             bank.clear()
+        if self._artifact:
+            self._artifact.clear_fields()
+            if self._artifact.is_finalized:
+                self._artifact.unfinalize()
 
         stage = self._fsm.current_metadata
         await self._branch_for_revisited_stage(
@@ -3126,6 +3202,8 @@ class WizardReasoning(ReasoningStrategy):
             "completed": state.completed,
             # MemoryBank accessor for template expressions
             "bank": self._make_bank_accessor(),
+            # ArtifactBank (None if not configured)
+            "artifact": self._artifact,
         }
 
         # Merge extra context (e.g. LLM-generated variables)
@@ -3487,6 +3565,8 @@ class WizardReasoning(ReasoningStrategy):
         extra_context: dict[str, Any] = {}
         if self._banks:
             extra_context["banks"] = self._banks
+        if self._artifact:
+            extra_context["artifact"] = self._artifact
 
         react = ReActReasoning(
             max_iterations=max_iterations,
@@ -3934,6 +4014,7 @@ class WizardReasoning(ReasoningStrategy):
             global_vars: dict[str, Any] = {
                 "data": data,
                 "bank": self._make_bank_accessor(),
+                "artifact": self._artifact,
             }
             local_vars: dict[str, Any] = {}
             exec_code = f"def _test():\n    {code}\n_result = _test()"
