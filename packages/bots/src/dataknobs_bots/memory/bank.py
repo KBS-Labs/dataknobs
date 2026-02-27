@@ -116,6 +116,11 @@ class MemoryBank:
         """Schema definition for this bank's records."""
         return self._schema
 
+    @property
+    def match_fields(self) -> list[str] | None:
+        """Fields used for duplicate detection, or ``None`` for all-field comparison."""
+        return self._match_fields
+
     # -----------------------------------------------------------------
     # CRUD
     # -----------------------------------------------------------------
@@ -431,6 +436,10 @@ class EmptyBankProxy:
     def schema(self) -> dict[str, Any]:
         return {}
 
+    @property
+    def match_fields(self) -> list[str] | None:
+        return None
+
     def add(self, data: dict[str, Any], source_stage: str = "") -> str:
         logger.warning("add() called on EmptyBankProxy '%s'", self._name)
         return ""
@@ -504,6 +513,11 @@ class AsyncMemoryBank:
     @property
     def schema(self) -> dict[str, Any]:
         return self._schema
+
+    @property
+    def match_fields(self) -> list[str] | None:
+        """Fields used for duplicate detection, or ``None`` for all-field comparison."""
+        return self._match_fields
 
     # -----------------------------------------------------------------
     # CRUD
