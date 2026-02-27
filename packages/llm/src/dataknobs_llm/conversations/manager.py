@@ -82,6 +82,7 @@ See Also:
     - AsyncPromptBuilder: Prompt rendering with RAG integration
 """
 
+import copy
 import logging
 import uuid
 from typing import List, Dict, Any, AsyncIterator
@@ -365,6 +366,7 @@ class ConversationManager:
         include_rag: bool = True,
         rag_configs: List[Dict[str, Any]] | None = None,
         metadata: Dict[str, Any] | None = None,
+        name: str | None = None,
     ) -> ConversationNode:
         """Add a message to the current conversation node.
 
@@ -372,16 +374,24 @@ class ConversationManager:
         with RAG configuration, the RAG searches will be executed and results
         will be automatically inserted into the prompt.
 
+        Prompt rendering (template variables, RAG) is only applied for
+        ``"system"`` and ``"user"`` roles.  Other roles (``"tool"``,
+        ``"assistant"``, ``"function"``) are stored directly with no
+        prompt processing.
+
         Args:
-            role: Message role ("system", "user", or "assistant")
+            role: Message role — ``"system"``, ``"user"``, ``"assistant"``,
+                ``"tool"``, or ``"function"``.
             content: Direct message content (if not using prompt)
-            prompt_name: Name of prompt template to render
+            prompt_name: Name of prompt template to render (system/user only)
             params: Parameters for prompt rendering
             include_rag: Whether to execute RAG searches for prompts
             rag_configs: RAG configurations for inline content (only used when
                         content is provided without prompt_name). Allows inline
                         prompts to benefit from RAG enhancement.
             metadata: Optional metadata for this message node
+            name: Optional name for the message — used for tool result
+                messages to identify which tool produced the result.
 
         Returns:
             The created ConversationNode
@@ -416,11 +426,11 @@ class ConversationManager:
                 }]
             )
 
-            # Add system prompt with custom metadata
+            # Add tool result message
             await manager.add_message(
-                role="system",
-                prompt_name="expert_coder",
-                metadata={"version": "v2"}
+                role="tool",
+                content='{"success": true, "data": {"name": "flour"}}',
+                name="add_bank_record",
             )
             ```
 
@@ -445,7 +455,8 @@ class ConversationManager:
         if not content and not prompt_name:
             raise ValueError("Either content or prompt_name must be provided")
 
-        # Render prompt if needed
+        # Prompt rendering only applies to system/user roles.
+        # Other roles (tool, assistant, function) are stored directly.
         rag_metadata_to_store = None
         if prompt_name:
             params = params or {}
@@ -508,7 +519,7 @@ class ConversationManager:
                     rag_metadata_to_store = result.rag_metadata
 
         # Create message
-        message = LLMMessage(role=role, content=content)
+        message = LLMMessage(role=role, content=content, name=name)
 
         # Prepare node metadata
         node_metadata = metadata or {}
@@ -699,10 +710,12 @@ class ConversationManager:
         if current_tree_node is None:
             raise ValueError(f"Current node '{self.state.current_node_id}' not found")
 
-        # Create assistant message node
+        # Create assistant message node, including tool_calls on the
+        # message itself so providers can include them in message history.
         assistant_message = LLMMessage(
             role="assistant",
             content=response.content,
+            tool_calls=response.tool_calls if response.tool_calls else None,
         )
 
         assistant_metadata = metadata or {}
@@ -713,10 +726,14 @@ class ConversationManager:
             "finish_reason": response.finish_reason,
         })
 
-        # Capture tool calls if present
+        # Capture tool calls in metadata for persistence/inspection
         if response.tool_calls:
             assistant_metadata["tool_calls"] = [
-                {"name": tc.name, "parameters": tc.parameters, "id": tc.id}
+                {
+                    "name": tc.name,
+                    "parameters": copy.deepcopy(tc.parameters),
+                    "id": tc.id,
+                }
                 for tc in response.tool_calls
             ]
 
@@ -874,7 +891,11 @@ class ConversationManager:
         if current_tree_node is None:
             raise ValueError(f"Current node '{self.state.current_node_id}' not found")
 
-        assistant_message = LLMMessage(role="assistant", content=response.content)
+        assistant_message = LLMMessage(
+            role="assistant",
+            content=response.content,
+            tool_calls=response.tool_calls if response.tool_calls else None,
+        )
 
         assistant_metadata = metadata or {}
         assistant_metadata.update({
@@ -884,10 +905,14 @@ class ConversationManager:
             "finish_reason": response.finish_reason,
         })
 
-        # Capture tool calls if present
+        # Capture tool calls in metadata for persistence/inspection
         if response.tool_calls:
             assistant_metadata["tool_calls"] = [
-                {"name": tc.name, "parameters": tc.parameters, "id": tc.id}
+                {
+                    "name": tc.name,
+                    "parameters": copy.deepcopy(tc.parameters),
+                    "id": tc.id,
+                }
                 for tc in response.tool_calls
             ]
 
