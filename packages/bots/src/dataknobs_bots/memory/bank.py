@@ -437,6 +437,7 @@ class MemoryBank:
                     "source_stage": bank_record.source_stage,
                     "created_at": bank_record.created_at,
                     "updated_at": bank_record.updated_at,
+                    "modified_in_stage": bank_record.modified_in_stage,
                 },
             )
             db.create(db_record)
@@ -753,6 +754,7 @@ class AsyncMemoryBank:
                     "source_stage": bank_record.source_stage,
                     "created_at": bank_record.created_at,
                     "updated_at": bank_record.updated_at,
+                    "modified_in_stage": bank_record.modified_in_stage,
                 },
             )
             await db.create(db_record)

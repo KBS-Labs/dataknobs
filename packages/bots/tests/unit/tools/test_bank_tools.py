@@ -6,9 +6,9 @@ from typing import Any
 
 import pytest
 from dataknobs_data.backends.memory import SyncMemoryDatabase
-from dataknobs_llm.tools.context import ToolExecutionContext
+from dataknobs_llm.tools.context import ToolExecutionContext, WizardStateSnapshot
 
-from dataknobs_bots.memory.bank import MemoryBank
+from dataknobs_bots.memory.bank import BankRecord, MemoryBank
 from dataknobs_bots.memory.artifact_bank import ArtifactBank
 from dataknobs_bots.tools.bank_tools import (
     AddBankRecordTool,
@@ -51,6 +51,19 @@ def _make_context(
         conversation_id="test-conv",
         user_id="test-user",
         extra=extra,
+    )
+
+
+def _make_context_with_stage(
+    banks: dict[str, MemoryBank],
+    current_stage: str,
+) -> ToolExecutionContext:
+    """Create a ToolExecutionContext with banks and a wizard stage."""
+    return ToolExecutionContext(
+        conversation_id="test-conv",
+        user_id="test-user",
+        wizard_state=WizardStateSnapshot(current_stage=current_stage),
+        extra={"banks": banks},
     )
 
 
@@ -763,3 +776,164 @@ class TestCompileArtifactTool:
     def test_default_tool_name(self) -> None:
         tool = CompileArtifactTool()
         assert tool.name == "compile_artifact"
+
+
+class TestBankToolProvenance:
+    """Tests for data provenance tracking in bank tools.
+
+    Records added/updated via bank tools during a wizard stage should
+    carry provenance metadata (source_stage, modified_in_stage) from
+    the wizard execution context.
+    """
+
+    @pytest.mark.asyncio
+    async def test_add_sets_source_stage_from_wizard_context(self) -> None:
+        """AddBankRecordTool should pass source_stage from wizard context."""
+        bank = _make_bank(required=["name"], match_fields=["name"])
+        context = _make_context_with_stage(
+            banks={"ingredients": bank},
+            current_stage="review",
+        )
+        tool = AddBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            data={"name": "malt", "amount": "1/4 cup"},
+        )
+
+        assert result["success"] is True
+        record = bank.get(result["record_id"])
+        assert record is not None
+        assert record.source_stage == "review"
+
+    @pytest.mark.asyncio
+    async def test_add_without_wizard_context_gets_empty_source_stage(self) -> None:
+        """AddBankRecordTool without wizard context uses empty source_stage."""
+        bank = _make_bank(required=["name"], match_fields=["name"])
+        context = _make_context(banks={"ingredients": bank})
+        tool = AddBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            data={"name": "flour", "amount": "2 cups"},
+        )
+
+        assert result["success"] is True
+        record = bank.get(result["record_id"])
+        assert record is not None
+        assert record.source_stage == ""
+
+    @pytest.mark.asyncio
+    async def test_update_sets_modified_in_stage_from_wizard_context(self) -> None:
+        """UpdateBankRecordTool should set modified_in_stage from context."""
+        bank = _make_bank(required=["name"], match_fields=["name"])
+        rec_id = bank.add(
+            {"name": "flour", "amount": "2 cups"},
+            source_stage="ingredients",
+        )
+        context = _make_context_with_stage(
+            banks={"ingredients": bank},
+            current_stage="review",
+        )
+        tool = UpdateBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            record_id=rec_id,
+            data={"amount": "3 cups"},
+        )
+
+        assert result["success"] is True
+        record = bank.get(rec_id)
+        assert record is not None
+        # Original source_stage preserved
+        assert record.source_stage == "ingredients"
+        # Modification provenance recorded
+        assert record.modified_in_stage == "review"
+
+    @pytest.mark.asyncio
+    async def test_update_without_wizard_context_no_modified_in_stage(self) -> None:
+        """UpdateBankRecordTool without wizard context leaves modified_in_stage empty."""
+        bank = _make_bank(required=["name"], match_fields=["name"])
+        rec_id = bank.add(
+            {"name": "flour", "amount": "2 cups"},
+            source_stage="ingredients",
+        )
+        context = _make_context(banks={"ingredients": bank})
+        tool = UpdateBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            record_id=rec_id,
+            data={"amount": "3 cups"},
+        )
+
+        assert result["success"] is True
+        record = bank.get(rec_id)
+        assert record is not None
+        assert record.source_stage == "ingredients"
+        assert record.modified_in_stage == ""
+
+
+class TestBankRecordProvenance:
+    """Tests for BankRecord provenance fields and serialization."""
+
+    def test_modified_in_stage_default_empty(self) -> None:
+        """New BankRecord has empty modified_in_stage."""
+        record = BankRecord(record_id="abcdef012345", data={"x": 1})
+        assert record.modified_in_stage == ""
+
+    def test_modified_in_stage_roundtrip(self) -> None:
+        """modified_in_stage survives to_dict/from_dict."""
+        record = BankRecord(
+            record_id="abcdef012345",
+            data={"x": 1},
+            source_stage="collect",
+            modified_in_stage="review",
+        )
+        d = record.to_dict()
+        assert d["modified_in_stage"] == "review"
+
+        restored = BankRecord.from_dict(d)
+        assert restored.modified_in_stage == "review"
+        assert restored.source_stage == "collect"
+
+    def test_from_dict_missing_modified_in_stage_defaults_empty(self) -> None:
+        """Deserializing old records without modified_in_stage gets empty string."""
+        d = {
+            "record_id": "abcdef012345",
+            "data": {"x": 1},
+            "source_stage": "collect",
+            "created_at": 1000.0,
+            "updated_at": 1000.0,
+        }
+        record = BankRecord.from_dict(d)
+        assert record.modified_in_stage == ""
+
+    def test_memory_bank_update_stores_modified_in_stage(self) -> None:
+        """MemoryBank.update() with modified_in_stage stores it in metadata."""
+        bank = _make_bank(required=["name"])
+        rec_id = bank.add({"name": "flour"}, source_stage="collect")
+
+        bank.update(rec_id, {"name": "flour"}, modified_in_stage="review")
+
+        record = bank.get(rec_id)
+        assert record is not None
+        assert record.source_stage == "collect"
+        assert record.modified_in_stage == "review"
+
+    def test_memory_bank_update_without_modified_in_stage(self) -> None:
+        """MemoryBank.update() without modified_in_stage preserves existing."""
+        bank = _make_bank(required=["name"])
+        rec_id = bank.add({"name": "flour"}, source_stage="collect")
+
+        bank.update(rec_id, {"name": "flour updated"})
+
+        record = bank.get(rec_id)
+        assert record is not None
+        assert record.source_stage == "collect"
+        assert record.modified_in_stage == ""

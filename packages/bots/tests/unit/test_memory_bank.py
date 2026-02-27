@@ -343,6 +343,19 @@ class TestMemoryBankSerialization:
         assert restored.count() == 0
         assert restored.name == "items"
 
+    def test_modified_in_stage_survives_roundtrip(self) -> None:
+        bank = _make_bank()
+        rec_id = bank.add({"name": "flour"}, source_stage="collect")
+        bank.update(rec_id, {"name": "flour"}, modified_in_stage="review")
+
+        d = bank.to_dict()
+        restored = MemoryBank.from_dict(d)
+
+        record = restored.get(rec_id)
+        assert record is not None
+        assert record.source_stage == "collect"
+        assert record.modified_in_stage == "review"
+
     def test_duplicate_config_survives_roundtrip(self) -> None:
         bank = _make_bank(
             duplicate_strategy="reject",
