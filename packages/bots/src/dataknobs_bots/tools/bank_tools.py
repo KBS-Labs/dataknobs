@@ -317,12 +317,19 @@ class AddBankRecordTool(ContextAwareTool):
                         },
                     }
 
-        record_id = bank.add(data)
+        # Pass source_stage from wizard context so tool-added records
+        # carry the same provenance as collection-mode adds.
+        source_stage = ""
+        if context.wizard_state and context.wizard_state.current_stage:
+            source_stage = context.wizard_state.current_stage
+
+        record_id = bank.add(data, source_stage=source_stage)
 
         logger.debug(
-            "Added record %s to bank '%s'",
+            "Added record %s to bank '%s' (source_stage='%s')",
             record_id,
             bank_name,
+            source_stage,
             extra={"conversation_id": context.conversation_id},
         )
 
@@ -445,12 +452,19 @@ class UpdateBankRecordTool(ContextAwareTool):
             }
 
         updated_data = {**record.data, **data}
-        bank.update(record_id, updated_data)
+
+        # Pass modification provenance from wizard context.
+        modified_in_stage = ""
+        if context.wizard_state and context.wizard_state.current_stage:
+            modified_in_stage = context.wizard_state.current_stage
+
+        bank.update(record_id, updated_data, modified_in_stage=modified_in_stage)
 
         logger.debug(
-            "Updated record %s in bank '%s'",
+            "Updated record %s in bank '%s' (modified_in_stage='%s')",
             record_id,
             bank_name,
+            modified_in_stage,
             extra={"conversation_id": context.conversation_id},
         )
 

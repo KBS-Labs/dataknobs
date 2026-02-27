@@ -33,13 +33,24 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class BankRecord:
-    """Single record in a MemoryBank with provenance metadata."""
+    """Single record in a MemoryBank with provenance metadata.
+
+    Attributes:
+        record_id: Unique identifier (12-char hex).
+        data: Field values for this record.
+        source_stage: Wizard stage that originally created this record.
+        created_at: Unix timestamp of creation.
+        updated_at: Unix timestamp of last modification.
+        modified_in_stage: Wizard stage that last modified this record.
+            Empty string means never modified after creation.
+    """
 
     record_id: str
     data: dict[str, Any]
     source_stage: str = ""
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
+    modified_in_stage: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict."""
@@ -49,6 +60,7 @@ class BankRecord:
             "source_stage": self.source_stage,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "modified_in_stage": self.modified_in_stage,
         }
 
     @classmethod
@@ -60,6 +72,7 @@ class BankRecord:
             source_stage=d.get("source_stage", ""),
             created_at=d.get("created_at", time.time()),
             updated_at=d.get("updated_at", time.time()),
+            modified_in_stage=d.get("modified_in_stage", ""),
         )
 
 
@@ -202,8 +215,19 @@ class MemoryBank:
                 return bank_record
         return None
 
-    def update(self, record_id: str, data: dict[str, Any]) -> bool:
+    def update(
+        self,
+        record_id: str,
+        data: dict[str, Any],
+        modified_in_stage: str = "",
+    ) -> bool:
         """Update a record's data fields.
+
+        Args:
+            record_id: ID of the record to update.
+            data: New field values.
+            modified_in_stage: Wizard stage performing the update
+                (for provenance tracking).
 
         Returns:
             ``True`` if the record was found and updated.
@@ -214,12 +238,12 @@ class MemoryBank:
             if meta.get("record_id") == record_id:
                 self._validate(data)
                 now = time.time()
+                updated_meta = {**meta, "updated_at": now}
+                if modified_in_stage:
+                    updated_meta["modified_in_stage"] = modified_in_stage
                 updated_record = Record(
                     data=dict(data),
-                    metadata={
-                        **meta,
-                        "updated_at": now,
-                    },
+                    metadata=updated_meta,
                 )
                 self._db.update(db_record.storage_id, updated_record)
                 logger.debug(
@@ -349,6 +373,7 @@ class MemoryBank:
             source_stage=meta.get("source_stage", ""),
             created_at=meta.get("created_at", 0.0),
             updated_at=meta.get("updated_at", 0.0),
+            modified_in_stage=meta.get("modified_in_stage", ""),
         )
 
     # -----------------------------------------------------------------
@@ -447,7 +472,12 @@ class EmptyBankProxy:
     def get(self, record_id: str) -> None:
         return None
 
-    def update(self, record_id: str, data: dict[str, Any]) -> bool:
+    def update(
+        self,
+        record_id: str,
+        data: dict[str, Any],
+        modified_in_stage: str = "",
+    ) -> bool:
         return False
 
     def remove(self, record_id: str) -> bool:
@@ -572,16 +602,31 @@ class AsyncMemoryBank:
                 return bank_record
         return None
 
-    async def update(self, record_id: str, data: dict[str, Any]) -> bool:
-        """Update a record's data fields."""
+    async def update(
+        self,
+        record_id: str,
+        data: dict[str, Any],
+        modified_in_stage: str = "",
+    ) -> bool:
+        """Update a record's data fields.
+
+        Args:
+            record_id: ID of the record to update.
+            data: New field values.
+            modified_in_stage: Wizard stage performing the update
+                (for provenance tracking).
+        """
         for db_record in await self._db_records():
             meta = db_record.metadata or {}
             if meta.get("record_id") == record_id:
                 self._validate(data)
                 now = time.time()
+                updated_meta = {**meta, "updated_at": now}
+                if modified_in_stage:
+                    updated_meta["modified_in_stage"] = modified_in_stage
                 updated_record = Record(
                     data=dict(data),
-                    metadata={**meta, "updated_at": now},
+                    metadata=updated_meta,
                 )
                 await self._db.update(db_record.storage_id, updated_record)
                 return True
