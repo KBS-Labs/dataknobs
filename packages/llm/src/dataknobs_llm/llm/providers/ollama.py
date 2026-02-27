@@ -312,6 +312,16 @@ class OllamaProvider(AsyncLLMProvider):
     def _messages_to_ollama(self, messages: List[LLMMessage]) -> List[Dict[str, Any]]:
         """Convert LLMMessage list to Ollama chat format.
 
+        Handles three special cases beyond basic role/content conversion:
+
+        1. **Assistant messages with tool_calls**: Includes the ``tool_calls``
+           list so the model sees what it previously called and with what
+           parameters on subsequent turns.
+        2. **Tool result messages** (``role="tool"``): Passed through directly
+           so Ollama receives structured tool results paired with the
+           assistant's tool_calls.
+        3. **Vision messages**: Includes ``images`` from metadata.
+
         Args:
             messages: List of LLM messages
 
@@ -320,13 +330,28 @@ class OllamaProvider(AsyncLLMProvider):
         """
         ollama_messages = []
         for msg in messages:
-            message = {
+            message: Dict[str, Any] = {
                 'role': msg.role,
-                'content': msg.content
+                'content': msg.content or '',
             }
+
+            # Include tool_calls on assistant messages so the model
+            # retains structured memory of what it called.
+            if msg.tool_calls and msg.role == 'assistant':
+                message['tool_calls'] = [
+                    {
+                        'function': {
+                            'name': tc.name,
+                            'arguments': tc.parameters,
+                        },
+                    }
+                    for tc in msg.tool_calls
+                ]
+
             # Ollama supports images in messages for vision models
             if msg.metadata.get('images'):
                 message['images'] = msg.metadata['images']
+
             ollama_messages.append(message)
         return ollama_messages
 

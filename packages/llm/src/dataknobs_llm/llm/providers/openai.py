@@ -44,6 +44,7 @@ See Also:
     - openai Python package: https://github.com/openai/openai-python
 """
 
+import json
 import os
 import warnings
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
@@ -63,17 +64,40 @@ class OpenAIAdapter(LLMAdapter):
     """Adapter for OpenAI API format."""
 
     def adapt_messages(self, messages: List[LLMMessage]) -> List[Dict[str, Any]]:
-        """Convert messages to OpenAI format."""
+        """Convert messages to OpenAI format.
+
+        Handles assistant messages with ``tool_calls`` and tool result
+        messages (``role="tool"``) so that multi-turn tool calling
+        conversations retain full structured history.
+        """
         adapted = []
         for msg in messages:
-            message = {
+            message: Dict[str, Any] = {
                 'role': msg.role,
-                'content': msg.content
+                'content': msg.content,
             }
             if msg.name:
                 message['name'] = msg.name
             if msg.function_call:
                 message['function_call'] = msg.function_call
+            # Include tool_calls on assistant messages so the model
+            # retains structured memory of what it called.
+            if msg.tool_calls and msg.role == 'assistant':
+                message['tool_calls'] = [
+                    {
+                        'id': tc.id or '',
+                        'type': 'function',
+                        'function': {
+                            'name': tc.name,
+                            'arguments': (
+                                tc.parameters
+                                if isinstance(tc.parameters, str)
+                                else json.dumps(tc.parameters)
+                            ),
+                        },
+                    }
+                    for tc in msg.tool_calls
+                ]
             adapted.append(message)
         return adapted
 
