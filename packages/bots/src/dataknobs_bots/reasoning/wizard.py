@@ -26,6 +26,8 @@ from .observability import (
 from .wizard_hooks import WizardHooks
 
 if TYPE_CHECKING:
+    from dataknobs_data import SyncDatabase
+
     from .wizard_fsm import WizardFSM
 
 logger = logging.getLogger(__name__)
@@ -595,12 +597,34 @@ class WizardReasoning(ReasoningStrategy):
     # MemoryBank management
     # -----------------------------------------------------------------
 
+    def _create_bank_db(
+        self, bank_name: str, cfg: dict[str, Any]
+    ) -> tuple[SyncDatabase, str]:
+        """Create database backend and storage mode for a memory bank.
+
+        Args:
+            bank_name: Bank identifier (used as default table name).
+            cfg: Per-bank configuration dict from wizard settings.
+
+        Returns:
+            Tuple of ``(database, storage_mode)``.
+        """
+        backend = cfg.get("backend", "memory")
+        if backend == "memory":
+            from dataknobs_data.backends.memory import SyncMemoryDatabase
+
+            return SyncMemoryDatabase(), "inline"
+        from dataknobs_data import database_factory
+
+        backend_config = dict(cfg.get("backend_config", {}))
+        backend_config["backend"] = backend
+        backend_config.setdefault("table", bank_name)
+        return database_factory.create(**backend_config), "external"
+
     def _init_banks(self) -> None:
         """Create ``MemoryBank`` instances from wizard ``banks`` config."""
         if not self._bank_configs:
             return
-        from dataknobs_data.backends.memory import SyncMemoryDatabase
-
         from ..memory.bank import MemoryBank
 
         for name, cfg in self._bank_configs.items():
@@ -615,13 +639,15 @@ class WizardReasoning(ReasoningStrategy):
                 cfg.get("match_fields")
                 or dup_cfg.get("match_fields")
             )
+            db, storage_mode = self._create_bank_db(name, cfg)
             self._banks[name] = MemoryBank(
                 name=name,
                 schema=cfg.get("schema", {}),
-                db=SyncMemoryDatabase(),
+                db=db,
                 max_records=cfg.get("max_records"),
                 duplicate_strategy=dup_strategy,
                 match_fields=match_fields,
+                storage_mode=storage_mode,
             )
         logger.debug("Initialised %d memory banks: %s",
                       len(self._banks), list(self._banks))
@@ -631,11 +657,21 @@ class WizardReasoning(ReasoningStrategy):
 
         Banks that exist in the persisted data are deserialized.  Banks
         declared in config but not yet persisted are freshly initialised.
+
+        For persistent backends (non-memory), the database is reconnected
+        via ``_create_bank_db`` so records already in the backend are
+        accessible without re-insertion.
         """
         from ..memory.bank import MemoryBank
 
         for name, bank_dict in banks_data.items():
-            self._banks[name] = MemoryBank.from_dict(bank_dict)
+            cfg = self._bank_configs.get(name, {})
+            backend = cfg.get("backend", "memory")
+            if backend != "memory":
+                db, _mode = self._create_bank_db(name, cfg)
+                self._banks[name] = MemoryBank.from_dict(bank_dict, db=db)
+            else:
+                self._banks[name] = MemoryBank.from_dict(bank_dict)
         # Ensure any newly-configured banks that weren't persisted yet
         # are also initialised.
         for name in self._bank_configs:
@@ -761,12 +797,19 @@ class WizardReasoning(ReasoningStrategy):
         """Close the reasoning strategy and release resources.
 
         Closes the SchemaExtractor's LLM provider if present, releasing
-        HTTP connections. Should be called when the reasoning strategy
-        is no longer needed (typically via DynaBot.close()).
+        HTTP connections, and closes all memory bank database connections.
+        Should be called when the reasoning strategy is no longer needed
+        (typically via DynaBot.close()).
         """
         if self._extractor is not None and hasattr(self._extractor, "close"):
             await self._extractor.close()
             logger.debug("Closed WizardReasoning extractor")
+        for _name, bank in self._banks.items():
+            bank.close()
+        if self._banks:
+            logger.debug(
+                "Closed %d memory bank database(s)", len(self._banks)
+            )
 
     def _partition_data(
         self, data: dict[str, Any]

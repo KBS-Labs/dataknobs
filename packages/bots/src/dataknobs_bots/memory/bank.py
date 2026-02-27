@@ -66,7 +66,7 @@ class BankRecord:
 class MemoryBank:
     """Typed collection of structured records for wizard data collection.
 
-    Backed by ``SyncDatabase`` (Phase 1: ``SyncMemoryDatabase``).
+    Backed by any ``SyncDatabase`` backend (memory, SQLite, PostgreSQL, etc.).
 
     Args:
         name: Bank identifier (e.g. ``"ingredients"``).
@@ -78,6 +78,9 @@ class MemoryBank:
             ``"allow"`` (default), ``"reject"``, or ``"merge"``.
         match_fields: Fields used for duplicate detection.  ``None``
             means all data fields are compared.
+        storage_mode: ``"inline"`` serialises all records in ``to_dict()``;
+            ``"external"`` stores only the bank reference (records live
+            in the persistent backend).
     """
 
     def __init__(
@@ -89,6 +92,7 @@ class MemoryBank:
         max_records: int | None = None,
         duplicate_strategy: str = "allow",
         match_fields: list[str] | None = None,
+        storage_mode: str = "inline",
     ) -> None:
         self._name = name
         self._schema = schema
@@ -96,6 +100,7 @@ class MemoryBank:
         self._max_records = max_records
         self._duplicate_strategy = duplicate_strategy
         self._match_fields = match_fields
+        self._storage_mode = storage_mode
 
     # -----------------------------------------------------------------
     # Properties
@@ -345,23 +350,44 @@ class MemoryBank:
     # Serialization
     # -----------------------------------------------------------------
 
+    def close(self) -> None:
+        """Close the underlying database connection."""
+        self._db.close()
+
     def to_dict(self) -> dict[str, Any]:
-        """Serialize the bank (including all records) to a plain dict."""
-        return {
+        """Serialize the bank to a plain dict.
+
+        In ``inline`` mode, all records are included.
+        In ``external`` mode, only the bank reference is stored.
+        """
+        base: dict[str, Any] = {
             "name": self._name,
             "schema": self._schema,
             "max_records": self._max_records,
             "duplicate_strategy": self._duplicate_strategy,
             "match_fields": self._match_fields,
-            "records": [r.to_dict() for r in self.all()],
+            "storage_mode": self._storage_mode,
         }
+        if self._storage_mode == "inline":
+            base["records"] = [r.to_dict() for r in self.all()]
+        return base
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> MemoryBank:
-        """Deserialize a bank from a plain dict, reconstructing the database."""
-        from dataknobs_data.backends.memory import SyncMemoryDatabase
+    def from_dict(
+        cls, d: dict[str, Any], db: SyncDatabase | None = None
+    ) -> MemoryBank:
+        """Deserialize a bank from a plain dict.
 
-        db = SyncMemoryDatabase()
+        Args:
+            d: Serialized bank dict (from ``to_dict()``).
+            db: Optional pre-configured database backend.  When ``None``
+                a fresh ``SyncMemoryDatabase`` is created and any
+                serialized records are re-inserted (inline mode).
+        """
+        if db is None:
+            from dataknobs_data.backends.memory import SyncMemoryDatabase
+
+            db = SyncMemoryDatabase()
         bank = cls(
             name=d["name"],
             schema=d.get("schema", {}),
@@ -369,8 +395,9 @@ class MemoryBank:
             max_records=d.get("max_records"),
             duplicate_strategy=d.get("duplicate_strategy", "allow"),
             match_fields=d.get("match_fields"),
+            storage_mode=d.get("storage_mode", "inline"),
         )
-        # Re-insert persisted records
+        # Re-insert persisted records (present only in inline mode)
         for rec_dict in d.get("records", []):
             bank_record = BankRecord.from_dict(rec_dict)
             db_record = Record(

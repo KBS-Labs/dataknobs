@@ -553,3 +553,129 @@ class TestWizardBankIntegration:
         json_str = json.dumps(conversation_manager.metadata)
         parsed = json.loads(json_str)
         assert "banks" in parsed["wizard"]
+
+
+# =====================================================================
+# Storage mode tests
+# =====================================================================
+
+class TestMemoryBankStorageMode:
+
+    def test_storage_mode_defaults_to_inline(self) -> None:
+        bank = _make_bank()
+        d = bank.to_dict()
+        assert d["storage_mode"] == "inline"
+        assert "records" in d
+
+    def test_to_dict_external_omits_records(self) -> None:
+        bank = MemoryBank(
+            name="items",
+            schema={"required": ["name"]},
+            db=SyncMemoryDatabase(),
+            storage_mode="external",
+        )
+        bank.add({"name": "flour"})
+        d = bank.to_dict()
+        assert d["storage_mode"] == "external"
+        assert "records" not in d
+
+    def test_from_dict_with_injected_db(self) -> None:
+        """Provided db is used instead of creating a fresh SyncMemoryDatabase."""
+        injected_db = SyncMemoryDatabase()
+        bank_dict = {
+            "name": "items",
+            "schema": {"required": ["name"]},
+            "storage_mode": "external",
+        }
+        bank = MemoryBank.from_dict(bank_dict, db=injected_db)
+        # Add a record through the bank and verify it lands in the injected db
+        bank.add({"name": "flour"})
+        from dataknobs_data import Query
+
+        raw_records = list(injected_db.search(Query()))
+        assert len(raw_records) == 1
+        assert raw_records[0].data["name"] == "flour"
+
+    def test_sqlite_backend_round_trip(self) -> None:
+        """Records persist in SQLite across MemoryBank instances."""
+        from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
+
+        db = SyncSQLiteDatabase({"path": ":memory:", "table": "items"})
+        db.connect()
+
+        bank = MemoryBank(
+            name="items",
+            schema={"required": ["name"]},
+            db=db,
+            storage_mode="external",
+        )
+        bank.add({"name": "flour"})
+        bank.add({"name": "sugar"})
+        assert bank.count() == 2
+
+        # to_dict in external mode has no records
+        d = bank.to_dict()
+        assert "records" not in d
+
+        # Reconstruct from same db — records are still there
+        bank2 = MemoryBank.from_dict(d, db=db)
+        assert bank2.count() == 2
+        names = {r.data["name"] for r in bank2.all()}
+        assert names == {"flour", "sugar"}
+
+        db.close()
+
+
+# =====================================================================
+# Close / cleanup tests
+# =====================================================================
+
+class TestMemoryBankClose:
+
+    def test_close_calls_db_close(self) -> None:
+        db = SyncMemoryDatabase()
+        bank = MemoryBank(
+            name="items",
+            schema={},
+            db=db,
+        )
+        # SyncMemoryDatabase.close() is a no-op — just verify no error
+        bank.close()
+
+    def test_close_on_sqlite_closes_connection(self) -> None:
+        from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
+
+        db = SyncSQLiteDatabase({"path": ":memory:", "table": "items"})
+        db.connect()
+        bank = MemoryBank(name="items", schema={}, db=db)
+        bank.add({"name": "flour"})
+
+        bank.close()
+        assert not db._connected
+
+    @pytest.mark.asyncio
+    async def test_wizard_close_closes_bank_dbs(self) -> None:
+        from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
+
+        reasoning = _make_wizard_with_banks(banks_config={
+            "ingredients": {
+                "schema": {"required": ["name"]},
+                "max_records": 50,
+            },
+        })
+        # Replace the memory db with an SQLite db so we can observe close
+        sqlite_db = SyncSQLiteDatabase(
+            {"path": ":memory:", "table": "ingredients"}
+        )
+        sqlite_db.connect()
+        reasoning._banks["ingredients"] = MemoryBank(
+            name="ingredients",
+            schema={"required": ["name"]},
+            db=sqlite_db,
+            storage_mode="external",
+        )
+        reasoning._banks["ingredients"].add({"name": "flour"})
+        assert sqlite_db._connected
+
+        await reasoning.close()
+        assert not sqlite_db._connected
