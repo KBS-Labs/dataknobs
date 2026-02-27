@@ -363,17 +363,22 @@ class TestSelfDescribingTools:
 
     def test_all_builtin_tools_describable(self) -> None:
         from dataknobs_bots.tools import (
+            AddBankRecordTool,
             AddKBResourceTool,
             CheckKnowledgeSourceTool,
+            FinalizeBankTool,
             GetTemplateDetailsTool,
             IngestKnowledgeBaseTool,
             KnowledgeSearchTool,
             ListAvailableToolsTool,
+            ListBankRecordsTool,
             ListKBResourcesTool,
             ListTemplatesTool,
             PreviewConfigTool,
+            RemoveBankRecordTool,
             RemoveKBResourceTool,
             SaveConfigTool,
+            UpdateBankRecordTool,
             ValidateConfigTool,
         )
 
@@ -390,6 +395,11 @@ class TestSelfDescribingTools:
             AddKBResourceTool,
             RemoveKBResourceTool,
             IngestKnowledgeBaseTool,
+            ListBankRecordsTool,
+            AddBankRecordTool,
+            UpdateBankRecordTool,
+            RemoveBankRecordTool,
+            FinalizeBankTool,
         ]:
             assert hasattr(tool_class, "catalog_metadata"), (
                 f"{tool_class.__name__} missing catalog_metadata()"
@@ -532,7 +542,7 @@ class TestDefaultCatalog:
     """Tests for default_catalog and create_default_catalog()."""
 
     def test_default_catalog_populated(self) -> None:
-        assert default_catalog.count() == 12
+        assert default_catalog.count() == 17
 
     def test_default_catalog_has_knowledge_search(self) -> None:
         assert default_catalog.has("knowledge_search")
@@ -580,6 +590,11 @@ class TestDefaultCatalog:
             "add_kb_resource",
             "remove_kb_resource",
             "ingest_knowledge_base",
+            "list_bank_records",
+            "add_bank_record",
+            "update_bank_record",
+            "remove_bank_record",
+            "finalize_bank",
         }
         actual_names = set(default_catalog.get_names())
         assert actual_names == expected_names

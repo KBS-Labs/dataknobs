@@ -1,0 +1,102 @@
+# Recipe Wizard (Extended): interactive review stage with bank tools
+#
+# Extends the base recipe wizard with an interactive review stage that
+# uses ReAct reasoning and MemoryBank CRUD tools. Instead of a static
+# summary template, the LLM generates the listing via list_bank_records
+# and can add, update, or remove ingredients interactively.
+#
+# Key differences from recipe-wizard.yaml:
+# - The final stage is "review" instead of "summary"
+# - No response_template on review (LLM generates output via tools)
+# - ReAct reasoning with max_iterations=5
+# - Five bank tools for full CRUD + finalize
+#
+# Stages: recipe_name -> ingredients (collection) -> review (ReAct)
+
+name: recipe-wizard-extended
+description: Recipe builder with interactive review via bank tools
+
+settings:
+  banks:
+    ingredients:
+      schema:
+        required: [name]
+      max_records: 30
+      duplicate_strategy: reject
+      match_fields: [name]
+
+stages:
+  - name: recipe_name
+    label: Recipe Name
+    is_start: true
+    prompt: >
+      Ask the user what recipe they'd like to build.
+    response_template: >
+      Let's build a recipe! What dish would you like to make?
+    schema:
+      type: object
+      properties:
+        recipe_name:
+          type: string
+          description: Name of the recipe
+      required:
+        - recipe_name
+    transitions:
+      - target: ingredients
+        condition: "data.get('recipe_name')"
+
+  - name: ingredients
+    label: Add Ingredients
+    prompt: >
+      Ask the user for an ingredient to add. Ask for both the
+      name and the amount.
+    response_template: >
+      Building "{{ recipe_name }}" — add an ingredient (name and amount),
+      or say "done" when finished.
+    collection_mode: collection
+    collection_config:
+      bank_name: ingredients
+      done_keywords: ["done", "finished", "that's all"]
+      done_prompt: "Added! What's the next ingredient, or say 'done' to finish."
+    schema:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Ingredient name
+        amount:
+          type: string
+          description: Amount of the ingredient
+      required:
+        - name
+    transitions:
+      - target: review
+        condition: "bank('ingredients').count() > 0"
+
+  - name: review
+    label: Review Recipe
+    reasoning: react
+    max_iterations: 5
+    prompt: >
+      You are reviewing the recipe "{{ recipe_name }}" with the user.
+
+      First, use the list_bank_records tool to see all current ingredients,
+      then present them to the user in a clear list.
+
+      The user can request changes:
+      - Add a new ingredient: use add_bank_record
+      - Change an ingredient's amount: use update_bank_record
+      - Remove an ingredient: use remove_bank_record
+      - Save/finalize: use finalize_bank
+
+      After each change, list the updated ingredients so the user
+      can see the current state.
+
+      When the user says they're happy or wants to save, use finalize_bank
+      and confirm the recipe is saved.
+    tools:
+      - list_bank_records
+      - add_bank_record
+      - update_bank_record
+      - remove_bank_record
+      - finalize_bank

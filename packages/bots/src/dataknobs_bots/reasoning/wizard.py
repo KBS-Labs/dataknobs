@@ -3463,6 +3463,8 @@ class WizardReasoning(ReasoningStrategy):
                 extra_context["conversation_context"] = conversation_context
             except Exception as e:
                 logger.warning("Failed to build conversation context: %s", e)
+        if self._banks:
+            extra_context["banks"] = self._banks
         if extra_context:
             tool_context = tool_context.with_extra(**extra_context)
 

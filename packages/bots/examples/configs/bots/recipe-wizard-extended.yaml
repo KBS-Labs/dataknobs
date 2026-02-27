@@ -1,0 +1,57 @@
+# Recipe Wizard Bot (Extended) — interactive review with bank tools
+#
+# Uses the extended recipe wizard with ReAct review stage.
+# Bank tools are configured for the "ingredients" bank with
+# name/amount fields.
+
+name: recipe-wizard-extended
+version: "1.0.0"
+description: Recipe builder with interactive ingredient review
+
+bot:
+  llm:
+    $resource: default
+    type: llm_providers
+
+  conversation_storage:
+    $resource: conversations
+    type: databases
+
+  reasoning:
+    strategy: wizard
+    wizard_config: wizards/recipe-wizard-extended.yaml
+    extraction_config:
+      $resource: default
+      type: llm_providers
+    extraction_scope: current_message
+
+  system_prompt:
+    content: >
+      You are a recipe-building assistant. Help the user create a recipe
+      by collecting the recipe name and ingredients one at a time.
+      Be friendly and encouraging. When reviewing, use the provided
+      tools to list, add, update, or remove ingredients.
+
+  tools:
+    - class: dataknobs_bots.tools.bank_tools.ListBankRecordsTool
+      params:
+        bank_name: ingredients
+        field_names: [name, amount]
+    - class: dataknobs_bots.tools.bank_tools.AddBankRecordTool
+      params:
+        bank_name: ingredients
+        field_names: [name, amount]
+        required_fields: [name]
+        lookup_field: name
+    - class: dataknobs_bots.tools.bank_tools.UpdateBankRecordTool
+      params:
+        bank_name: ingredients
+        field_names: [name, amount]
+        lookup_field: name
+    - class: dataknobs_bots.tools.bank_tools.RemoveBankRecordTool
+      params:
+        bank_name: ingredients
+        lookup_field: name
+    - class: dataknobs_bots.tools.bank_tools.FinalizeBankTool
+      params:
+        bank_name: ingredients
