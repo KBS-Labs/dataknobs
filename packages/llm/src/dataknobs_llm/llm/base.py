@@ -188,10 +188,11 @@ class LLMMessage:
     for multi-turn conversations.
 
     Attributes:
-        role: Message role - 'system', 'user', 'assistant', or 'function'
+        role: Message role - 'system', 'user', 'assistant', 'tool', or 'function'
         content: Message content text
-        name: Optional name for function messages or multi-user scenarios
+        name: Optional name for function/tool messages or multi-user scenarios
         function_call: Function call data for tool-using models
+        tool_calls: Tool calls made by the assistant in this message
         metadata: Additional metadata (timestamps, IDs, etc.)
 
     Example:
@@ -227,10 +228,11 @@ class LLMMessage:
         messages = [system_msg, user_msg, assistant_msg]
         ```
     """
-    role: str  # 'system', 'user', 'assistant', 'function'
+    role: str  # 'system', 'user', 'assistant', 'tool', 'function'
     content: str
-    name: str | None = None  # For function messages
+    name: str | None = None  # For function/tool messages
     function_call: Dict[str, Any] | None = None  # For function calling
+    tool_calls: list[ToolCall] | None = None  # Tool calls from assistant
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
