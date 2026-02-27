@@ -283,24 +283,52 @@ class TestUpdateBankRecordTool:
     """Tests for UpdateBankRecordTool."""
 
     @pytest.mark.asyncio
-    async def test_update_by_lookup(self) -> None:
+    async def test_update_by_record_id(self) -> None:
         bank = _make_bank(required=["name"], match_fields=["name"])
-        bank.add({"name": "flour", "amount": "2 cups"})
+        rec_id = bank.add({"name": "flour", "amount": "2 cups"})
         context = _make_context(banks={"ingredients": bank})
         tool = UpdateBankRecordTool()
 
         result = await tool.execute_with_context(
             context,
             bank_name="ingredients",
-            data={"name": "flour", "amount": "3 cups"},
+            record_id=rec_id,
+            data={"amount": "3 cups"},
         )
 
         assert result["success"] is True
+        assert result["record_id"] == rec_id
         assert result["updated_data"]["amount"] == "3 cups"
         assert result["updated_data"]["name"] == "flour"
         records = bank.all()
         assert len(records) == 1
         assert records[0].data["amount"] == "3 cups"
+
+    @pytest.mark.asyncio
+    async def test_update_single_field_record(self) -> None:
+        """Updating the only field (e.g. instruction) works via record_id."""
+        bank = _make_bank(
+            "instructions", required=["instruction"],
+        )
+        rec_id = bank.add({"instruction": "Mix dry and wet ingredients"})
+        context = _make_context(banks={"instructions": bank})
+        tool = UpdateBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="instructions",
+            record_id=rec_id,
+            data={"instruction": "Mix dry and wet ingredients separately"},
+        )
+
+        assert result["success"] is True
+        assert result["updated_data"]["instruction"] == (
+            "Mix dry and wet ingredients separately"
+        )
+        records = bank.all()
+        assert records[0].data["instruction"] == (
+            "Mix dry and wet ingredients separately"
+        )
 
     @pytest.mark.asyncio
     async def test_record_not_found(self) -> None:
@@ -312,16 +340,17 @@ class TestUpdateBankRecordTool:
         result = await tool.execute_with_context(
             context,
             bank_name="ingredients",
-            data={"name": "sugar", "amount": "1 cup"},
+            record_id="nonexistent-id",
+            data={"amount": "1 cup"},
         )
 
         assert result["success"] is False
         assert "No record found" in result["error"]
-        assert "flour" in result["available"]
+        assert "list_bank_records" in result["error"]
 
     @pytest.mark.asyncio
-    async def test_missing_lookup_field_in_data(self) -> None:
-        bank = _make_bank(required=["name"], match_fields=["name"])
+    async def test_missing_record_id(self) -> None:
+        bank = _make_bank(required=["name"])
         context = _make_context(banks={"ingredients": bank})
         tool = UpdateBankRecordTool()
 
@@ -332,22 +361,38 @@ class TestUpdateBankRecordTool:
         )
 
         assert result["success"] is False
-        assert "lookup field" in result["error"]
+        assert "record_id" in result["error"]
 
     @pytest.mark.asyncio
-    async def test_schema_requires_bank_name_and_data(self) -> None:
+    async def test_missing_data(self) -> None:
+        bank = _make_bank(required=["name"])
+        context = _make_context(banks={"ingredients": bank})
+        tool = UpdateBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            record_id="some-id",
+        )
+
+        assert result["success"] is False
+        assert "data" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_schema_requires_bank_name_record_id_and_data(self) -> None:
         tool = UpdateBankRecordTool()
         schema = tool.schema
-        assert schema["required"] == ["bank_name", "data"]
+        assert set(schema["required"]) == {"bank_name", "record_id", "data"}
+        assert "record_id" in schema["properties"]
 
 
 class TestRemoveBankRecordTool:
     """Tests for RemoveBankRecordTool."""
 
     @pytest.mark.asyncio
-    async def test_remove_by_lookup(self) -> None:
+    async def test_remove_by_record_id(self) -> None:
         bank = _make_bank(required=["name"], match_fields=["name"])
-        bank.add({"name": "flour", "amount": "2 cups"})
+        flour_id = bank.add({"name": "flour", "amount": "2 cups"})
         bank.add({"name": "sugar", "amount": "1 cup"})
         context = _make_context(banks={"ingredients": bank})
         tool = RemoveBankRecordTool()
@@ -355,11 +400,12 @@ class TestRemoveBankRecordTool:
         result = await tool.execute_with_context(
             context,
             bank_name="ingredients",
-            data={"name": "flour"},
+            record_id=flour_id,
         )
 
         assert result["success"] is True
         assert result["removed"]["name"] == "flour"
+        assert result["removed"]["record_id"] == flour_id
         assert result["remaining_records"] == 1
         assert bank.count() == 1
         remaining = bank.all()
@@ -375,16 +421,16 @@ class TestRemoveBankRecordTool:
         result = await tool.execute_with_context(
             context,
             bank_name="ingredients",
-            data={"name": "sugar"},
+            record_id="nonexistent-id",
         )
 
         assert result["success"] is False
         assert "No record found" in result["error"]
-        assert "flour" in result["available"]
+        assert "list_bank_records" in result["error"]
         assert bank.count() == 1
 
     @pytest.mark.asyncio
-    async def test_missing_lookup_field_in_data(self) -> None:
+    async def test_missing_record_id(self) -> None:
         bank = _make_bank(required=["name"], match_fields=["name"])
         context = _make_context(banks={"ingredients": bank})
         tool = RemoveBankRecordTool()
@@ -392,17 +438,18 @@ class TestRemoveBankRecordTool:
         result = await tool.execute_with_context(
             context,
             bank_name="ingredients",
-            data={"amount": "1 cup"},
         )
 
         assert result["success"] is False
-        assert "lookup field" in result["error"]
+        assert "record_id" in result["error"]
 
     @pytest.mark.asyncio
-    async def test_schema_requires_bank_name_and_data(self) -> None:
+    async def test_schema_requires_bank_name_and_record_id(self) -> None:
         tool = RemoveBankRecordTool()
         schema = tool.schema
-        assert schema["required"] == ["bank_name", "data"]
+        assert set(schema["required"]) == {"bank_name", "record_id"}
+        assert "record_id" in schema["properties"]
+        assert "data" not in schema["properties"]
 
 
 class TestFinalizeBankTool:

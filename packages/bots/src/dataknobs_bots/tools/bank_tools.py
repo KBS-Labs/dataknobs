@@ -8,10 +8,10 @@ single tool instance can operate on any bank in the context.  The LLM
 specifies which bank to target and passes record data as a dict.
 
 Tools:
-- ListBankRecordsTool: List all records in a bank
+- ListBankRecordsTool: List all records in a bank (returns record_id per record)
 - AddBankRecordTool: Add a record with duplicate detection
-- UpdateBankRecordTool: Update a record by lookup field
-- RemoveBankRecordTool: Remove a record by lookup field
+- UpdateBankRecordTool: Update a record by record_id
+- RemoveBankRecordTool: Remove a record by record_id
 - FinalizeBankTool: Confirm save (bank data already persisted)
 
 Example:
@@ -305,10 +305,9 @@ class AddBankRecordTool(ContextAwareTool):
 class UpdateBankRecordTool(ContextAwareTool):
     """Tool for updating a record in a MemoryBank.
 
-    The LLM specifies which bank via ``bank_name`` and passes a ``data``
-    dict containing the lookup field value (to find the record) plus any
-    fields to update.  The lookup field is derived from the bank's
-    ``match_fields`` or schema.
+    The LLM specifies which bank via ``bank_name``, identifies the record
+    by ``record_id`` (obtained from ``list_bank_records``), and passes a
+    ``data`` dict with the fields to change.
     """
 
     @classmethod
@@ -330,8 +329,9 @@ class UpdateBankRecordTool(ContextAwareTool):
             name=tool_name or "update_bank_record",
             description=(
                 "Update an existing record in a memory bank. "
-                "Pass the lookup field value to identify the record, "
-                "plus any fields to change."
+                "Use the record_id from list_bank_records to identify "
+                "which record to update, and pass the new field values "
+                "in data."
             ),
         )
 
@@ -345,15 +345,19 @@ class UpdateBankRecordTool(ContextAwareTool):
                     "type": "string",
                     "description": "Name of the bank to update in.",
                 },
-                "data": {
-                    "type": "object",
+                "record_id": {
+                    "type": "string",
                     "description": (
-                        "Must include the lookup field to find the record, "
-                        "plus fields to update with new values."
+                        "ID of the record to update "
+                        "(from list_bank_records)."
                     ),
                 },
+                "data": {
+                    "type": "object",
+                    "description": "Fields to update with new values.",
+                },
             },
-            "required": ["bank_name", "data"],
+            "required": ["bank_name", "record_id", "data"],
         }
 
     async def execute_with_context(
@@ -365,7 +369,7 @@ class UpdateBankRecordTool(ContextAwareTool):
 
         Args:
             context: Execution context with banks.
-            **kwargs: Must include ``bank_name`` and ``data``.
+            **kwargs: Must include ``bank_name``, ``record_id``, and ``data``.
 
         Returns:
             Dict with update result or not-found error.
@@ -377,6 +381,13 @@ class UpdateBankRecordTool(ContextAwareTool):
                 "error": "Missing required parameter: bank_name",
             }
 
+        record_id = kwargs.get("record_id")
+        if not record_id:
+            return {
+                "success": False,
+                "error": "Missing required parameter: record_id",
+            }
+
         data = kwargs.get("data")
         if not data or not isinstance(data, dict):
             return {
@@ -386,54 +397,30 @@ class UpdateBankRecordTool(ContextAwareTool):
 
         bank = _get_bank_from_context(context, bank_name)
 
-        lookup_field = _resolve_lookup_field(bank, data)
-        if not lookup_field:
+        record = bank.get(record_id)
+        if record is None:
             return {
                 "success": False,
                 "error": (
-                    "Cannot determine lookup field for bank "
-                    f"'{bank_name}'. Configure match_fields or "
-                    "required fields in the bank schema."
+                    f"No record found with record_id='{record_id}' "
+                    f"in bank '{bank_name}'. Use list_bank_records "
+                    "to see available records and their IDs."
                 ),
             }
 
-        lookup_value = data.get(lookup_field)
-        if lookup_value is None:
-            return {
-                "success": False,
-                "error": f"Missing lookup field '{lookup_field}' in data.",
-            }
-
-        matches = bank.find(**{lookup_field: lookup_value})
-        if not matches:
-            all_records = bank.all()
-            available = [r.data.get(lookup_field) for r in all_records]
-            return {
-                "success": False,
-                "error": (
-                    f"No record found with {lookup_field}="
-                    f"'{lookup_value}'."
-                ),
-                "available": available,
-            }
-
-        record = matches[0]
         updated_data = {**record.data, **data}
-
-        bank.update(record.record_id, updated_data)
+        bank.update(record_id, updated_data)
 
         logger.debug(
-            "Updated record %s in bank '%s' (lookup: %s='%s')",
-            record.record_id,
+            "Updated record %s in bank '%s'",
+            record_id,
             bank_name,
-            lookup_field,
-            lookup_value,
             extra={"conversation_id": context.conversation_id},
         )
 
         return {
             "success": True,
-            "record_id": record.record_id,
+            "record_id": record_id,
             "updated_data": updated_data,
         }
 
@@ -441,8 +428,8 @@ class UpdateBankRecordTool(ContextAwareTool):
 class RemoveBankRecordTool(ContextAwareTool):
     """Tool for removing a record from a MemoryBank.
 
-    The LLM specifies which bank via ``bank_name`` and passes a ``data``
-    dict containing the lookup field value to identify the record.
+    The LLM specifies which bank via ``bank_name`` and identifies the
+    record by ``record_id`` (obtained from ``list_bank_records``).
     """
 
     @classmethod
@@ -463,8 +450,8 @@ class RemoveBankRecordTool(ContextAwareTool):
         super().__init__(
             name=tool_name or "remove_bank_record",
             description=(
-                "Remove a record from a memory bank "
-                "by looking it up with the bank's match field."
+                "Remove a record from a memory bank by its record_id "
+                "(from list_bank_records)."
             ),
         )
 
@@ -478,15 +465,15 @@ class RemoveBankRecordTool(ContextAwareTool):
                     "type": "string",
                     "description": "Name of the bank to remove from.",
                 },
-                "data": {
-                    "type": "object",
+                "record_id": {
+                    "type": "string",
                     "description": (
-                        "Must include the lookup field to identify "
-                        "the record to remove."
+                        "ID of the record to remove "
+                        "(from list_bank_records)."
                     ),
                 },
             },
-            "required": ["bank_name", "data"],
+            "required": ["bank_name", "record_id"],
         }
 
     async def execute_with_context(
@@ -498,7 +485,7 @@ class RemoveBankRecordTool(ContextAwareTool):
 
         Args:
             context: Execution context with banks.
-            **kwargs: Must include ``bank_name`` and ``data``.
+            **kwargs: Must include ``bank_name`` and ``record_id``.
 
         Returns:
             Dict with removal result or not-found error.
@@ -510,62 +497,39 @@ class RemoveBankRecordTool(ContextAwareTool):
                 "error": "Missing required parameter: bank_name",
             }
 
-        data = kwargs.get("data")
-        if not data or not isinstance(data, dict):
+        record_id = kwargs.get("record_id")
+        if not record_id:
             return {
                 "success": False,
-                "error": "Missing required parameter: data (must be a dict)",
+                "error": "Missing required parameter: record_id",
             }
 
         bank = _get_bank_from_context(context, bank_name)
 
-        lookup_field = _resolve_lookup_field(bank, data)
-        if not lookup_field:
+        record = bank.get(record_id)
+        if record is None:
             return {
                 "success": False,
                 "error": (
-                    "Cannot determine lookup field for bank "
-                    f"'{bank_name}'. Configure match_fields or "
-                    "required fields in the bank schema."
+                    f"No record found with record_id='{record_id}' "
+                    f"in bank '{bank_name}'. Use list_bank_records "
+                    "to see available records and their IDs."
                 ),
             }
 
-        lookup_value = data.get(lookup_field)
-        if lookup_value is None:
-            return {
-                "success": False,
-                "error": f"Missing lookup field '{lookup_field}' in data.",
-            }
-
-        matches = bank.find(**{lookup_field: lookup_value})
-        if not matches:
-            all_records = bank.all()
-            available = [r.data.get(lookup_field) for r in all_records]
-            return {
-                "success": False,
-                "error": (
-                    f"No record found with {lookup_field}="
-                    f"'{lookup_value}'."
-                ),
-                "available": available,
-            }
-
-        record = matches[0]
-        bank.remove(record.record_id)
+        bank.remove(record_id)
 
         logger.debug(
-            "Removed record %s from bank '%s' (lookup: %s='%s')",
-            record.record_id,
+            "Removed record %s from bank '%s'",
+            record_id,
             bank_name,
-            lookup_field,
-            lookup_value,
             extra={"conversation_id": context.conversation_id},
         )
 
         return {
             "success": True,
             "removed": {
-                "record_id": record.record_id,
+                "record_id": record_id,
                 **record.data,
             },
             "remaining_records": bank.count(),
