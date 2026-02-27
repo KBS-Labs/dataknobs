@@ -3423,156 +3423,43 @@ class WizardReasoning(ReasoningStrategy):
     ) -> Any:
         """Generate response using ReAct loop for tool-using stage.
 
-        This allows the LLM to make multiple tool calls within a single
-        wizard turn, reasoning about results before responding.
+        Delegates to ``ReActReasoning`` which provides duplicate tool call
+        detection, ToolsNotSupportedError handling, and trace storage.
 
         Args:
             manager: ConversationManager instance
             enhanced_prompt: Stage-aware system prompt
             stage: Stage metadata dict
-            state: Current wizard state
+            state: Current wizard state (kept for call-site stability)
             tools: Available tools for this stage
             metadata: Optional metadata to persist on conversation nodes
 
         Returns:
             Final LLM response after ReAct loop completes
         """
-        from dataknobs_llm.tools import ToolExecutionContext
+        from .react import ReActReasoning
 
         max_iterations = self._get_max_iterations(stage)
-        stage_name = stage.get("name", "unknown")
 
-        logger.debug(
-            "Starting ReAct loop for stage '%s' (max_iterations=%d)",
-            stage_name,
-            max_iterations,
-        )
-
-        # Build execution context for tools that need it
-        tool_context = ToolExecutionContext.from_manager(manager)
-
-        # Extend context with artifact/review infrastructure if available
         extra_context: dict[str, Any] = {}
-        if self._artifact_registry is not None:
-            extra_context["artifact_registry"] = self._artifact_registry
-        if self._review_executor is not None:
-            extra_context["review_executor"] = self._review_executor
-        if self._context_builder is not None:
-            try:
-                conversation_context = await self._context_builder.build(manager)
-                extra_context["conversation_context"] = conversation_context
-            except Exception as e:
-                logger.warning("Failed to build conversation context: %s", e)
         if self._banks:
             extra_context["banks"] = self._banks
-        if extra_context:
-            tool_context = tool_context.with_extra(**extra_context)
 
-        for iteration in range(max_iterations):
-            # Make LLM call
-            response = await manager.complete(
-                system_prompt_override=enhanced_prompt,
-                tools=tools,
-                metadata=metadata,
-            )
-
-            # Check if response has tool calls
-            tool_calls = getattr(response, "tool_calls", None) or []
-            if not tool_calls:
-                # No tool calls - this is the final response
-                logger.debug(
-                    "ReAct iteration %d/%d: No tool calls, returning response",
-                    iteration + 1,
-                    max_iterations,
-                )
-                return response
-
-            logger.debug(
-                "ReAct iteration %d/%d: Executing %d tool call(s): %s",
-                iteration + 1,
-                max_iterations,
-                len(tool_calls),
-                [tc.name for tc in tool_calls],
-            )
-
-            # Execute tool calls and add observations
-            for tool_call in tool_calls:
-                result = await self._execute_react_tool_call(
-                    tool_call, tools, state, tool_context
-                )
-
-                # Add observation to conversation for next iteration
-                observation = f"Tool result from {tool_call.name}: {result}"
-                await manager.add_message(content=observation, role="system")
-
-        # Max iterations reached - get final response without tools
-        logger.warning(
-            "ReAct max iterations (%d) reached for stage '%s'",
-            max_iterations,
-            stage_name,
+        react = ReActReasoning(
+            max_iterations=max_iterations,
+            artifact_registry=self._artifact_registry,
+            review_executor=self._review_executor,
+            context_builder=self._context_builder,
+            extra_context=extra_context or None,
         )
-        return await manager.complete(
+
+        return await react.generate(
+            manager=manager,
+            llm=None,
+            tools=tools,
             system_prompt_override=enhanced_prompt,
-            tools=None,  # Force text response
             metadata=metadata,
         )
-
-    async def _execute_react_tool_call(
-        self,
-        tool_call: Any,
-        tools: list[Any],
-        state: WizardState,
-        tool_context: Any,
-    ) -> Any:
-        """Execute a single tool call within a ReAct loop.
-
-        Args:
-            tool_call: Tool call object with name and parameters
-            tools: Available tools
-            state: Wizard state (for tools that need it)
-            tool_context: ToolExecutionContext for context-aware tools
-
-        Returns:
-            Tool execution result or error dict
-        """
-        tool_name = tool_call.name
-        tool_args = getattr(tool_call, "parameters", {}) or {}
-
-        # Find the tool
-        tool = self._find_tool(tool_name, tools)
-        if tool is None:
-            error_msg = f"Tool '{tool_name}' not found"
-            logger.warning("ReAct: %s", error_msg)
-            return {"error": error_msg}
-
-        try:
-            # Execute tool with context injection
-            # Context-aware tools will extract _context and use it
-            # Regular tools will ignore _context via **kwargs
-            result = await tool.execute(**tool_args, _context=tool_context)
-
-            logger.debug("ReAct: Tool '%s' executed successfully", tool_name)
-            return result
-
-        except Exception as e:
-            error_msg = f"Tool execution failed: {e}"
-            logger.error("ReAct: Tool '%s' failed: %s", tool_name, e)
-            return {"error": error_msg}
-
-    def _find_tool(self, tool_name: str, tools: list[Any]) -> Any | None:
-        """Find a tool by name.
-
-        Args:
-            tool_name: Name of the tool to find
-            tools: List of available tools
-
-        Returns:
-            Tool instance or None if not found
-        """
-        for tool in tools:
-            if getattr(tool, "name", None) == tool_name:
-                return tool
-        return None
 
     def _build_stage_context(
         self, stage: dict[str, Any], state: WizardState

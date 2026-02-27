@@ -55,6 +55,7 @@ class ReActReasoning(ReasoningStrategy):
         artifact_registry: Any | None = None,
         review_executor: Any | None = None,
         context_builder: Any | None = None,
+        extra_context: dict[str, Any] | None = None,
     ):
         """Initialize ReAct reasoning strategy.
 
@@ -65,6 +66,8 @@ class ReActReasoning(ReasoningStrategy):
             artifact_registry: Optional ArtifactRegistry for artifact management
             review_executor: Optional ReviewExecutor for running reviews
             context_builder: Optional ContextBuilder for building conversation context
+            extra_context: Optional extra key-value pairs to merge into the
+                ToolExecutionContext for every tool call (e.g. banks, custom state)
         """
         self.max_iterations = max_iterations
         self.verbose = verbose
@@ -72,6 +75,7 @@ class ReActReasoning(ReasoningStrategy):
         self._artifact_registry = artifact_registry
         self._review_executor = review_executor
         self._context_builder = context_builder
+        self._extra_context = extra_context
 
     @property
     def artifact_registry(self) -> Any | None:
@@ -249,6 +253,8 @@ class ReActReasoning(ReasoningStrategy):
                     extra_context["conversation_context"] = conversation_context
                 except Exception as e:
                     logger.warning("Failed to build conversation context: %s", e)
+            if self._extra_context:
+                extra_context.update(self._extra_context)
             if extra_context:
                 tool_context = tool_context.with_extra(**extra_context)
 

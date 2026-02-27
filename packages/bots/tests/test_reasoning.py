@@ -518,6 +518,75 @@ class TestReActLoopBehavior:
         assert tool_entry["result"] == "42"  # CalculatorTool always returns "42"
 
 
+class TestReActExtraContext:
+    """Tests for the extra_context parameter on ReActReasoning."""
+
+    @pytest.mark.asyncio
+    async def test_extra_context_propagates_to_tools(self):
+        """extra_context values are available in ToolExecutionContext."""
+        from typing import Any
+
+        from dataknobs_llm.testing import text_response, tool_call_response
+        from dataknobs_llm.tools import ContextAwareTool, ToolExecutionContext
+
+        captured_contexts: list[ToolExecutionContext] = []
+
+        class ContextCaptureTool(ContextAwareTool):
+            """Tool that captures its execution context for inspection."""
+
+            def __init__(self) -> None:
+                super().__init__(
+                    name="capture",
+                    description="Captures execution context",
+                )
+
+            @property
+            def schema(self) -> dict[str, Any]:
+                return {"type": "object", "properties": {}}
+
+            async def execute_with_context(
+                self, context: ToolExecutionContext, **kwargs: Any
+            ) -> str:
+                captured_contexts.append(context)
+                return "captured"
+
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "reasoning": {
+                "strategy": "react",
+                "max_iterations": 3,
+            },
+        }
+
+        bot = await DynaBot.from_config(config)
+        bot.tool_registry.register_tool(ContextCaptureTool())
+
+        # Inject extra_context into the reasoning strategy
+        bot.reasoning_strategy._extra_context = {"my_key": "my_value"}
+
+        context = BotContext(
+            conversation_id="conv-extra-ctx", client_id="test-client"
+        )
+
+        bot.llm.set_responses([
+            tool_call_response("capture", {}),
+            text_response("Done"),
+        ])
+
+        await bot.chat("Capture context", context)
+
+        assert len(captured_contexts) == 1
+        tool_ctx = captured_contexts[0]
+        assert tool_ctx.extra.get("my_key") == "my_value"
+
+    @pytest.mark.asyncio
+    async def test_extra_context_none_by_default(self):
+        """Without extra_context, tools still get context (just no extras)."""
+        strategy = ReActReasoning(max_iterations=3)
+        assert strategy._extra_context is None
+
+
 class TestReasoningIntegration:
     """Integration tests for reasoning with bots."""
 
