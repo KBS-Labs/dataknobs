@@ -33,6 +33,7 @@ Example:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from dataknobs_llm.tools.context import ToolExecutionContext
@@ -89,6 +90,36 @@ def _resolve_lookup_field(bank: Any, data: dict[str, Any]) -> str | None:
     required = bank.schema.get("required", [])
     if required:
         return required[0]
+    return None
+
+
+# Bank record IDs are 12-char hex strings (uuid4().hex[:12])
+_RECORD_ID_PATTERN = re.compile(r"^[0-9a-f]{12}$")
+
+
+def _validate_record_id(record_id: str) -> dict[str, Any] | None:
+    """Validate record_id format, returning an error dict if invalid.
+
+    Bank record IDs are 12-character lowercase hex strings generated
+    from ``uuid.uuid4().hex[:12]``.  This catches obviously wrong
+    values (e.g. ``"1"``) with a clear message directing the model
+    to use ``list_bank_records``.
+
+    Args:
+        record_id: The record_id string to validate.
+
+    Returns:
+        Error response dict if invalid, ``None`` if valid.
+    """
+    if not _RECORD_ID_PATTERN.match(record_id):
+        return {
+            "success": False,
+            "error": (
+                f"Invalid record_id format: '{record_id}'. "
+                "Record IDs are 12-character hex strings. "
+                "Use list_bank_records to see available records and their IDs."
+            ),
+        }
     return None
 
 
@@ -388,6 +419,10 @@ class UpdateBankRecordTool(ContextAwareTool):
                 "error": "Missing required parameter: record_id",
             }
 
+        id_error = _validate_record_id(record_id)
+        if id_error is not None:
+            return id_error
+
         data = kwargs.get("data")
         if not data or not isinstance(data, dict):
             return {
@@ -503,6 +538,10 @@ class RemoveBankRecordTool(ContextAwareTool):
                 "success": False,
                 "error": "Missing required parameter: record_id",
             }
+
+        id_error = _validate_record_id(record_id)
+        if id_error is not None:
+            return id_error
 
         bank = _get_bank_from_context(context, bank_name)
 

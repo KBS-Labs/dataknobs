@@ -229,6 +229,19 @@ class ReActReasoning(ReasoningStrategy):
                     },
                 )
 
+                # Add explanatory message so the final LLM call doesn't
+                # see dangling tool_calls with no corresponding observations.
+                tool_names = [tc.name for tc in response.tool_calls]
+                await manager.add_message(
+                    content=(
+                        f"System notice: The tools {tool_names} were already "
+                        "called with identical parameters in the previous step. "
+                        "Their results are already in the conversation above. "
+                        "Please use those results to respond to the user."
+                    ),
+                    role="system",
+                )
+
                 if trace is not None:
                     iteration_trace["status"] = "duplicate_tool_calls_detected"
                     trace.append(iteration_trace)
@@ -288,7 +301,10 @@ class ReActReasoning(ReasoningStrategy):
                         result = await tool.execute(
                             **tool_call.parameters, _context=tool_context
                         )
-                        observation = f"Tool result: {result}"
+                        try:
+                            observation = f"Tool result: {json.dumps(result, default=str)}"
+                        except (TypeError, ValueError):
+                            observation = f"Tool result: {result}"
                         tool_trace["status"] = "success"
                         tool_trace["result"] = str(result)
 
@@ -303,14 +319,17 @@ class ReActReasoning(ReasoningStrategy):
                             },
                         )
 
-                    # Add observation to conversation
+                    # Add observation using role="tool" so providers can
+                    # pair it with the assistant's tool_calls in history.
                     await manager.add_message(
                         content=f"Observation from {tool_call.name}: {observation}",
-                        role="system",
+                        role="tool",
+                        name=tool_call.name,
                     )
 
                 except Exception as e:
-                    # Handle tool execution errors
+                    # Handle tool execution errors — use role="tool" so the
+                    # error is paired with the tool call in conversation.
                     error_msg = f"Error executing tool {tool_call.name}: {e!s}"
                     tool_trace["status"] = "error"
                     tool_trace["error"] = str(e)
@@ -326,7 +345,11 @@ class ReActReasoning(ReasoningStrategy):
                         exc_info=True,
                     )
 
-                    await manager.add_message(content=error_msg, role="system")
+                    await manager.add_message(
+                        content=error_msg,
+                        role="tool",
+                        name=tool_call.name,
+                    )
 
                 if trace is not None:
                     iteration_trace["tool_calls"].append(tool_trace)

@@ -17,6 +17,7 @@ from dataknobs_bots.tools.bank_tools import (
     UpdateBankRecordTool,
     _get_bank_from_context,
     _resolve_lookup_field,
+    _validate_record_id,
 )
 
 
@@ -340,7 +341,7 @@ class TestUpdateBankRecordTool:
         result = await tool.execute_with_context(
             context,
             bank_name="ingredients",
-            record_id="nonexistent-id",
+            record_id="deadbeef0000",
             data={"amount": "1 cup"},
         )
 
@@ -372,7 +373,7 @@ class TestUpdateBankRecordTool:
         result = await tool.execute_with_context(
             context,
             bank_name="ingredients",
-            record_id="some-id",
+            record_id="deadbeef0001",
         )
 
         assert result["success"] is False
@@ -421,7 +422,7 @@ class TestRemoveBankRecordTool:
         result = await tool.execute_with_context(
             context,
             bank_name="ingredients",
-            record_id="nonexistent-id",
+            record_id="deadbeef0000",
         )
 
         assert result["success"] is False
@@ -605,3 +606,74 @@ class TestCatalogMetadata:
     def test_finalize_bank_metadata(self) -> None:
         meta = FinalizeBankTool.catalog_metadata()
         assert meta["name"] == "finalize_bank"
+
+
+class TestValidateRecordId:
+    """Tests for record_id format validation."""
+
+    def test_valid_12_char_hex(self) -> None:
+        assert _validate_record_id("a1b2c3d4e5f6") is None
+
+    def test_valid_all_zeros(self) -> None:
+        assert _validate_record_id("000000000000") is None
+
+    def test_valid_all_f(self) -> None:
+        assert _validate_record_id("ffffffffffff") is None
+
+    def test_rejects_short_id(self) -> None:
+        result = _validate_record_id("1")
+        assert result is not None
+        assert result["success"] is False
+        assert "Invalid record_id format" in result["error"]
+        assert "list_bank_records" in result["error"]
+
+    def test_rejects_long_id(self) -> None:
+        result = _validate_record_id("a1b2c3d4e5f6a")
+        assert result is not None
+        assert result["success"] is False
+
+    def test_rejects_non_hex_chars(self) -> None:
+        result = _validate_record_id("a1b2c3d4e5gz")
+        assert result is not None
+        assert result["success"] is False
+
+    def test_rejects_uppercase_hex(self) -> None:
+        result = _validate_record_id("A1B2C3D4E5F6")
+        assert result is not None
+        assert result["success"] is False
+
+    def test_rejects_descriptive_string(self) -> None:
+        result = _validate_record_id("nonexistent-id")
+        assert result is not None
+        assert result["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_update_rejects_invalid_format(self) -> None:
+        bank = _make_bank()
+        context = _make_context(banks={"ingredients": bank})
+        tool = UpdateBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            record_id="1",
+            data={"amount": "2 cups"},
+        )
+
+        assert result["success"] is False
+        assert "Invalid record_id format" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_remove_rejects_invalid_format(self) -> None:
+        bank = _make_bank()
+        context = _make_context(banks={"ingredients": bank})
+        tool = RemoveBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            record_id="1",
+        )
+
+        assert result["success"] is False
+        assert "Invalid record_id format" in result["error"]
