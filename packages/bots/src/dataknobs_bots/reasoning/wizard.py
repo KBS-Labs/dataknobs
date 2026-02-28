@@ -1297,15 +1297,14 @@ class WizardReasoning(ReasoningStrategy):
         # the user's message is processed by the fresh first stage
         # (extraction, transitions, etc.) rather than the stale ReAct
         # loop on the old stage.
-        _should_auto_restart = False
-        if wizard_state.completed and not self._allow_amendments:
-            _should_auto_restart = True
-        elif (
-            not wizard_state.completed
-            and self._artifact
-            and self._artifact.is_finalized
-        ):
-            _should_auto_restart = True
+        _should_auto_restart = (
+            (wizard_state.completed and not self._allow_amendments)
+            or (
+                not wizard_state.completed
+                and self._artifact is not None
+                and self._artifact.is_finalized
+            )
+        )
 
         if _should_auto_restart:
             logger.info(
@@ -1317,6 +1316,12 @@ class WizardReasoning(ReasoningStrategy):
             )
             await self._restart_cleanup(
                 wizard_state, user_message, trigger="auto_restart"
+            )
+            # Branch the conversation tree so the new recipe's context
+            # starts fresh — the LLM won't see the old recipe's detailed
+            # tool calls and record-level operations.
+            await self._branch_for_revisited_stage(
+                manager, wizard_state.current_stage
             )
 
         # Handle navigation commands
@@ -2524,6 +2529,10 @@ class WizardReasoning(ReasoningStrategy):
     ) -> None:
         """Reset wizard state, banks, and artifact for a fresh start.
 
+        If a catalog is configured and the artifact passes validation,
+        auto-saves to the catalog before clearing — preventing data loss
+        when the LLM calls restart without saving first.
+
         Performs the cleanup portion of a restart without generating a
         response.  Callers are responsible for branching and response
         generation after cleanup completes.
@@ -2533,6 +2542,29 @@ class WizardReasoning(ReasoningStrategy):
             message: User message that triggered the restart.
             trigger: Transition trigger label for the audit trail.
         """
+        # Auto-save artifact to catalog before clearing.  This catches
+        # the common case where the LLM calls restart_wizard (or the
+        # auto-restart guard fires) without calling save_to_catalog first.
+        if self._catalog and self._artifact:
+            try:
+                errors = self._artifact.validate()
+                if not errors:
+                    self._catalog.save(self._artifact)
+                    logger.info(
+                        "Auto-saved artifact '%s' to catalog before restart",
+                        self._artifact.name,
+                    )
+                else:
+                    logger.debug(
+                        "Skipping auto-save before restart "
+                        "(validation errors: %s)",
+                        errors,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Failed to auto-save artifact before restart: %s", e
+                )
+
         from_stage = state.current_stage
         duration_ms = (time.time() - state.stage_entry_time) * 1000
 
