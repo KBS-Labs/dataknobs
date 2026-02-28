@@ -1284,25 +1284,40 @@ class WizardReasoning(ReasoningStrategy):
                 await self._save_wizard_state(manager, wizard_state)
                 return response
 
-        # Auto-restart completed wizard when amendments are not allowed.
-        # When the wizard is completed and a new message arrives, the user
-        # expects a fresh start.  Without this, the wizard stays on the
-        # completed stage with stale bank/artifact data and the ReAct loop
-        # processes the message against the old recipe.
+        # Auto-restart when the wizard can't meaningfully continue:
         #
-        # We clear state here and fall through so the user's message is
-        # processed by the fresh first stage (extraction, transitions, etc.)
-        # rather than returning a canned "what would you like to make?" prompt.
+        # 1. Wizard completed (via complete_wizard tool) with amendments
+        #    disabled — the workflow is done, new message = fresh start.
+        # 2. Artifact finalized (via finalize_artifact tool) but wizard
+        #    NOT completed — the LLM forgot to call complete_wizard or
+        #    restart_wizard.  The artifact is locked so no further edits
+        #    are possible; the wizard is stuck.
+        #
+        # In both cases, clear state/banks/artifact and fall through so
+        # the user's message is processed by the fresh first stage
+        # (extraction, transitions, etc.) rather than the stale ReAct
+        # loop on the old stage.
+        _should_auto_restart = False
         if wizard_state.completed and not self._allow_amendments:
+            _should_auto_restart = True
+        elif (
+            not wizard_state.completed
+            and self._artifact
+            and self._artifact.is_finalized
+        ):
+            _should_auto_restart = True
+
+        if _should_auto_restart:
             logger.info(
-                "Wizard completed (amendments disabled): auto-restarting "
-                "for new user message"
+                "Auto-restarting wizard (completed=%s, "
+                "artifact_finalized=%s, amendments=%s)",
+                wizard_state.completed,
+                self._artifact.is_finalized if self._artifact else False,
+                self._allow_amendments,
             )
             await self._restart_cleanup(
                 wizard_state, user_message, trigger="auto_restart"
             )
-            # State is now reset to the first stage — fall through
-            # to process the user's message normally.
 
         # Handle navigation commands
         nav_result = await self._handle_navigation(
