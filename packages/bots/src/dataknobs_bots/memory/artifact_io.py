@@ -115,18 +115,7 @@ def _populate_from_compiled(
     data: dict[str, Any],
 ) -> None:
     """Set fields and add section records from compiled data."""
-    # Set field values
-    for field_name in artifact.field_defs:
-        if field_name in data:
-            artifact.set_field(field_name, data[field_name])
-
-    # Add section records
-    for section_name, bank in artifact.sections.items():
-        records = data.get(section_name, [])
-        if isinstance(records, list):
-            for record_data in records:
-                if isinstance(record_data, dict):
-                    bank.add(record_data, source_stage="import")
+    artifact.populate_from_compiled(data, source_stage="import")
 
 
 # ---------------------------------------------------------------------------

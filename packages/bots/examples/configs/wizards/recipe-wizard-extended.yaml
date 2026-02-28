@@ -1,15 +1,18 @@
-# Recipe Wizard (Extended): interactive review stage with bank tools
+# Recipe Wizard (Extended): interactive review stage with bank tools + catalog
 #
 # Extends the base recipe wizard with an interactive review stage that
 # uses ReAct reasoning and MemoryBank CRUD tools. Instead of a static
 # summary template, the LLM generates the listing via list_bank_records
 # and can add, update, or remove ingredients interactively.
 #
+# The catalog allows saving and loading multiple recipes in a session.
+#
 # Key differences from recipe-wizard.yaml:
 # - The final stage is "review" instead of "summary"
 # - No response_template on review (LLM generates output via tools)
 # - ReAct reasoning with max_iterations=5
 # - Five bank tools for full CRUD + finalize
+# - Three catalog tools for list/save/load recipes
 #
 # Stages: recipe_name -> ingredients (collection) -> review (ReAct)
 
@@ -17,13 +20,20 @@ name: recipe-wizard-extended
 description: Recipe builder with interactive review via bank tools
 
 settings:
-  banks:
-    ingredients:
-      schema:
-        required: [name]
-      max_records: 30
-      duplicate_strategy: reject
-      match_fields: [name]
+  artifact:
+    name: recipe
+    catalog:
+      backend: memory
+    fields:
+      recipe_name:
+        required: true
+    sections:
+      ingredients:
+        schema:
+          required: [name]
+        max_records: 30
+        duplicate_strategy: reject
+        match_fields: [name]
 
 stages:
   - name: recipe_name
@@ -89,6 +99,11 @@ stages:
       - Remove an ingredient: use remove_bank_record
       - Save/finalize: use finalize_bank
 
+      Recipe catalog commands:
+      - Save this recipe to the catalog: use save_to_catalog
+      - List all saved recipes: use list_catalog
+      - Load a previously saved recipe: use load_from_catalog
+
       After each change, list the updated ingredients so the user
       can see the current state.
 
@@ -100,3 +115,6 @@ stages:
       - update_bank_record
       - remove_bank_record
       - finalize_bank
+      - list_catalog
+      - save_to_catalog
+      - load_from_catalog

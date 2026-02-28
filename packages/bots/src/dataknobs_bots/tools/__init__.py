@@ -7,6 +7,11 @@ from .bank_tools import (
     RemoveBankRecordTool,
     UpdateBankRecordTool,
 )
+from .catalog_tools import (
+    ListCatalogTool,
+    LoadFromCatalogTool,
+    SaveToCatalogTool,
+)
 from .config_tools import (
     GetTemplateDetailsTool,
     ListAvailableToolsTool,
@@ -45,4 +50,8 @@ __all__ = [
     "UpdateBankRecordTool",
     "RemoveBankRecordTool",
     "FinalizeBankTool",
+    # Catalog Tools
+    "ListCatalogTool",
+    "SaveToCatalogTool",
+    "LoadFromCatalogTool",
 ]

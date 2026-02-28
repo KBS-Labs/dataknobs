@@ -55,3 +55,6 @@ bot:
     - class: dataknobs_bots.tools.bank_tools.FinalizeBankTool
       params:
         bank_name: ingredients
+    - class: dataknobs_bots.tools.catalog_tools.ListCatalogTool
+    - class: dataknobs_bots.tools.catalog_tools.SaveToCatalogTool
+    - class: dataknobs_bots.tools.catalog_tools.LoadFromCatalogTool

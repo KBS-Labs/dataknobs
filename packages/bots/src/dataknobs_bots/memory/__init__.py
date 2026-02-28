@@ -3,6 +3,7 @@
 from typing import Any
 
 from .artifact_bank import ArtifactBank
+from .catalog import ArtifactBankCatalog
 from .artifact_io import (
     append_to_book,
     list_book,
@@ -19,6 +20,7 @@ from .vector import VectorMemory
 
 __all__ = [
     "ArtifactBank",
+    "ArtifactBankCatalog",
     "AsyncMemoryBank",
     "BankRecord",
     "BufferMemory",

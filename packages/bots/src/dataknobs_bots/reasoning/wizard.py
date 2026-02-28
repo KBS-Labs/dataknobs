@@ -477,6 +477,7 @@ class WizardReasoning(ReasoningStrategy):
         # When artifact is configured, its sections ARE the banks —
         # ``self._banks`` references the same MemoryBank instances.
         self._artifact: Any = None
+        self._catalog: Any = None
         artifact_config = wizard_fsm.settings.get("artifact")
         if artifact_config:
             self._init_artifact(artifact_config)
@@ -710,9 +711,14 @@ class WizardReasoning(ReasoningStrategy):
         ``self._banks`` and ``self._bank_configs`` are populated from
         the artifact's sections.
 
+        If the config contains a ``catalog`` key, an
+        ``ArtifactBankCatalog`` is also created and stored on
+        ``self._catalog``.
+
         Args:
             artifact_config: Artifact configuration dict with ``name``,
-                ``fields``, and ``sections`` keys.
+                ``fields``, and ``sections`` keys.  Optional ``catalog``
+                sub-dict for catalog backend configuration.
 
         Raises:
             ConfigurationError: If both ``banks`` and ``artifact`` are
@@ -734,6 +740,16 @@ class WizardReasoning(ReasoningStrategy):
         self._banks = dict(self._artifact.sections)
         self._bank_configs = dict(artifact_config.get("sections", {}))
 
+        # Optionally create a catalog for storing/loading artifacts.
+        catalog_config = artifact_config.get("catalog")
+        if catalog_config:
+            from ..memory.catalog import ArtifactBankCatalog
+
+            self._catalog = ArtifactBankCatalog.from_config({
+                **catalog_config,
+                "artifact_config": artifact_config,
+            })
+
     def _sync_artifact_fields(self, state: WizardState) -> None:
         """Sync wizard state data into artifact fields.
 
@@ -749,6 +765,23 @@ class WizardReasoning(ReasoningStrategy):
             value = state.data.get(field_name)
             if value is not None and value != self._artifact.field(field_name):
                 self._artifact.set_field(field_name, value)
+
+    def _reverse_sync_artifact_to_state(self, state: WizardState) -> None:
+        """Sync artifact field values back into wizard state data.
+
+        Called before the forward sync (``_sync_artifact_fields``) so that
+        tool-driven changes to the artifact (e.g. ``LoadFromCatalogTool``
+        replacing all fields) are reflected in ``state.data``.
+
+        Args:
+            state: Current wizard state.
+        """
+        if not self._artifact:
+            return
+        for field_name in self._artifact.field_defs:
+            artifact_value = self._artifact.field(field_name)
+            if artifact_value is not None:
+                state.data[field_name] = artifact_value
 
     # -----------------------------------------------------------------
     # Collection mode helpers
@@ -1871,7 +1904,10 @@ class WizardReasoning(ReasoningStrategy):
         # Build metadata BEFORE partition so UI sees all keys (incl. transient)
         wizard_meta = self._build_wizard_metadata(state)
 
-        # Sync artifact fields from wizard state data before serialization
+        # Reverse sync: artifact → state.data (picks up tool-driven changes
+        # like LoadFromCatalogTool replacing fields).
+        self._reverse_sync_artifact_to_state(state)
+        # Forward sync: state.data → artifact fields before serialization
         self._sync_artifact_fields(state)
 
         # Partition: separate ephemeral/non-serializable keys from persistent
@@ -3567,6 +3603,8 @@ class WizardReasoning(ReasoningStrategy):
             extra_context["banks"] = self._banks
         if self._artifact:
             extra_context["artifact"] = self._artifact
+        if self._catalog:
+            extra_context["catalog"] = self._catalog
 
         react = ReActReasoning(
             max_iterations=max_iterations,

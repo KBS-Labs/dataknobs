@@ -138,6 +138,56 @@ class ArtifactBank:
         return self._sections.get(name, EmptyBankProxy(name))
 
     # -----------------------------------------------------------------
+    # Population from compiled data
+    # -----------------------------------------------------------------
+
+    def populate_from_compiled(
+        self,
+        data: dict[str, Any],
+        source_stage: str = "import",
+    ) -> None:
+        """Additive: set fields and add section records from a compiled dict.
+
+        Sets field values for any field defined in ``field_defs`` that has
+        a matching key in *data*.  Adds section records for any section
+        whose name appears as a ``list[dict]`` in *data*.
+
+        Args:
+            data: Compiled artifact dict (from ``compile()``).
+            source_stage: Provenance label for added records.
+        """
+        for field_name in self._field_defs:
+            if field_name in data:
+                self.set_field(field_name, data[field_name])
+
+        for section_name, bank in self._sections.items():
+            records = data.get(section_name, [])
+            if isinstance(records, list):
+                for record_data in records:
+                    if isinstance(record_data, dict):
+                        bank.add(record_data, source_stage=source_stage)
+
+    def replace_from_compiled(
+        self,
+        data: dict[str, Any],
+        source_stage: str = "import",
+    ) -> None:
+        """Destructive: clear all state and repopulate from a compiled dict.
+
+        Unfinalizes the artifact, clears all fields and section records,
+        then delegates to ``populate_from_compiled``.
+
+        Args:
+            data: Compiled artifact dict (from ``compile()``).
+            source_stage: Provenance label for added records.
+        """
+        self.unfinalize()
+        self.clear_fields()
+        for bank in self._sections.values():
+            bank.clear()
+        self.populate_from_compiled(data, source_stage=source_stage)
+
+    # -----------------------------------------------------------------
     # Compilation
     # -----------------------------------------------------------------
 
