@@ -311,6 +311,7 @@ class LLMStreamResponse:
         is_final: True if this is the last chunk in the stream
         finish_reason: Why generation stopped (only set on final chunk)
         usage: Token usage stats (only set on final chunk)
+        tool_calls: Tool calls requested by the model (only set on final chunk)
         metadata: Additional chunk metadata
 
     Example:
@@ -351,6 +352,7 @@ class LLMStreamResponse:
     is_final: bool = False
     finish_reason: str | None = None
     usage: Dict[str, int] | None = None
+    tool_calls: list["ToolCall"] | None = None  # Only set on final chunk
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 

@@ -601,13 +601,18 @@ class OllamaProvider(AsyncLLMProvider):
         config_overrides: Dict[str, Any] | None = None,
         **kwargs: Any
     ) -> AsyncIterator[LLMStreamResponse]:
-        """Generate streaming completion.
+        """Generate streaming completion using Ollama chat endpoint.
+
+        Uses the ``/api/chat`` endpoint with ``stream: true`` so that the
+        model's native chat template is applied and tool calls are supported,
+        matching the behaviour of :meth:`complete`.
 
         Args:
             messages: Input messages or prompt
             config_overrides: Optional dict to override config fields (model,
                 temperature, max_tokens, top_p, stop_sequences, seed)
-            **kwargs: Additional provider-specific parameters
+            **kwargs: Additional provider-specific parameters.  Accepts
+                ``tools`` (list of Tool objects) for function calling.
         """
         if not self._is_initialized:
             await self.initialize()
@@ -615,30 +620,86 @@ class OllamaProvider(AsyncLLMProvider):
         # Get runtime config (with overrides applied if provided)
         runtime_config = self._get_runtime_config(config_overrides)
 
-        # Convert to Ollama format
+        # Convert to message list
         if isinstance(messages, str):
-            prompt = messages
-        else:
-            prompt = self._build_prompt(messages)
+            messages = [LLMMessage(role='user', content=messages)]
 
-        # Stream API call
-        payload = {
+        # Add system prompt if configured
+        if runtime_config.system_prompt and (not messages or messages[0].role != 'system'):
+            messages = [LLMMessage(role='system', content=runtime_config.system_prompt)] + list(messages)
+
+        # Convert to Ollama format
+        ollama_messages = self._messages_to_ollama(messages)
+
+        # Build payload for chat endpoint (mirrors complete())
+        payload: Dict[str, Any] = {
             'model': runtime_config.model,
-            'prompt': prompt,
+            'messages': ollama_messages,
             'stream': True,
             'options': self._build_options(runtime_config)
         }
 
-        async with self._session.post(f"{self.base_url}/api/generate", json=payload) as response:
+        # Add format if JSON mode requested
+        if runtime_config.response_format == 'json':
+            payload['format'] = 'json'
+
+        # Handle tools if provided
+        tools = kwargs.pop('tools', None)
+        if tools:
+            tool_dicts = []
+            for tool in tools:
+                tool_dicts.append({
+                    'name': tool.name,
+                    'description': tool.description,
+                    'parameters': tool.schema if hasattr(tool, 'schema') else {}
+                })
+            payload['tools'] = self._adapt_tools(tool_dicts)
+
+        async with self._session.post(f"{self.base_url}/api/chat", json=payload) as response:
             response.raise_for_status()
 
             async for line in response.content:
                 if line:
                     data = json.loads(line.decode('utf-8'))
+                    msg = data.get('message', {})
+                    done = data.get('done', False)
+
+                    # Build usage info from final chunk
+                    usage = None
+                    if done and 'eval_count' in data:
+                        usage = {
+                            'prompt_tokens': data.get('prompt_eval_count', 0),
+                            'completion_tokens': data.get('eval_count', 0),
+                            'total_tokens': (
+                                data.get('prompt_eval_count', 0)
+                                + data.get('eval_count', 0)
+                            ),
+                        }
+
+                    # Parse tool calls from final chunk
+                    tool_calls = None
+                    raw_tool_calls = msg.get('tool_calls', [])
+                    if raw_tool_calls:
+                        from ..base import ToolCall
+                        tool_calls = [
+                            ToolCall(
+                                name=tc.get('function', {}).get('name', ''),
+                                parameters=tc.get('function', {}).get('arguments', {}),
+                                id=tc.get('id'),
+                            )
+                            for tc in raw_tool_calls
+                        ]
+
+                    finish_reason = None
+                    if done:
+                        finish_reason = 'tool_calls' if tool_calls else 'stop'
+
                     yield LLMStreamResponse(
-                        delta=data.get('response', ''),
-                        is_final=data.get('done', False),
-                        finish_reason='stop' if data.get('done') else None
+                        delta=msg.get('content', ''),
+                        is_final=done,
+                        finish_reason=finish_reason,
+                        usage=usage,
+                        tool_calls=tool_calls,
                     )
 
     async def embed(

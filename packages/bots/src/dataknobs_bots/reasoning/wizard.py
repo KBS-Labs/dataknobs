@@ -3093,19 +3093,27 @@ class WizardReasoning(ReasoningStrategy):
 
     @staticmethod
     def _find_stage_node_id(manager: Any, stage_name: str) -> str | None:
-        """Find the most recent assistant node for the given wizard stage.
+        """Find the entry-point assistant node for the given wizard stage.
 
         Searches the conversation tree for assistant response nodes whose
         metadata records ``wizard.current_stage == stage_name``.  Returns
-        the ``node_id`` of the last match in DFS order (the most recent
-        visit), or ``None`` if the stage has not been visited yet.
+        the ``node_id`` of the **first** match in DFS order (the stage
+        entry node), or ``None`` if the stage has not been visited yet.
+
+        Using the first match is critical for ReAct stages, where the
+        ReAct loop creates many assistant nodes all tagged with the same
+        ``current_stage``.  Branching from the *last* (deepest) node
+        would nest the new branch inside the old ReAct subtree, leaking
+        prior tool-call context into the new visit.  Branching from the
+        *first* (entry) node makes the new visit a sibling of the entire
+        previous subtree — proper isolation.
 
         Args:
             manager: ConversationManager instance (must have ``state``).
             stage_name: Wizard stage name to search for.
 
         Returns:
-            ``node_id`` string of the most recent matching node, or ``None``.
+            ``node_id`` string of the stage entry node, or ``None``.
         """
         state = getattr(manager, "state", None)
         if state is None:
@@ -3122,9 +3130,11 @@ class WizardReasoning(ReasoningStrategy):
         if not matches:
             return None
 
-        # Last match in DFS order is the most recent visit.
-        last = matches[-1]
-        return last.data.node_id if isinstance(last.data, ConversationNode) else None
+        # First match in DFS order is the stage entry node — the
+        # correct branch point for isolating a new visit from the
+        # previous visit's subtree (especially ReAct tool-call chains).
+        first = matches[0]
+        return first.data.node_id if isinstance(first.data, ConversationNode) else None
 
     async def _branch_for_revisited_stage(
         self, manager: Any, stage_name: str
