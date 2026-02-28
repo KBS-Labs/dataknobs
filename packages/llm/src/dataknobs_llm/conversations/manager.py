@@ -576,6 +576,168 @@ class ConversationManager:
 
         return self.state.get_current_node().data
 
+    # -----------------------------------------------------------------
+    # Shared completion helpers (used by both complete & stream_complete)
+    # -----------------------------------------------------------------
+
+    def _prepare_completion(
+        self,
+        system_prompt_override: str | None = None,
+    ) -> list[LLMMessage]:
+        """Validate state and build the message list for an LLM call.
+
+        Steps: validate conversation state, get messages from root to current
+        node, and optionally replace the system prompt (without mutating the
+        conversation tree).
+
+        Args:
+            system_prompt_override: Optional system prompt to use instead of
+                the one stored in the tree.
+
+        Returns:
+            Message list ready for middleware and the LLM provider.
+
+        Raises:
+            ValueError: If the conversation has no messages yet.
+        """
+        if not self.state:
+            raise ValueError("Cannot complete: no messages in conversation")
+
+        messages = self.state.get_current_messages()
+
+        if system_prompt_override is not None:
+            messages = list(messages)  # shallow copy
+            if messages and messages[0].role == "system":
+                messages[0] = LLMMessage(
+                    role="system", content=system_prompt_override
+                )
+            else:
+                messages.insert(
+                    0, LLMMessage(role="system", content=system_prompt_override)
+                )
+            logger.debug(
+                "System prompt overridden for this completion (%d chars)",
+                len(system_prompt_override),
+            )
+
+        return messages
+
+    async def _run_pre_middleware(
+        self,
+        messages: list[LLMMessage],
+    ) -> list[LLMMessage]:
+        """Execute pre-LLM middleware in forward order.
+
+        Args:
+            messages: Message list to process.
+
+        Returns:
+            Processed message list.
+        """
+        for mw in self.middleware:
+            messages = await mw.process_request(messages, self.state)
+        return messages
+
+    async def _finalize_completion(
+        self,
+        response: LLMResponse,
+        branch_name: str | None = None,
+        metadata: Dict[str, Any] | None = None,
+        llm_config_overrides: Dict[str, Any] | None = None,
+    ) -> LLMResponse:
+        """Post-LLM processing shared by complete() and stream_complete().
+
+        Steps: run post-middleware, add assistant node to tree, record
+        tool_calls metadata, calculate cost, persist state.
+
+        Args:
+            response: The assembled LLMResponse (from provider or from
+                accumulated stream chunks).
+            branch_name: Optional label for this branch.
+            metadata: Optional extra metadata for the assistant node.
+            llm_config_overrides: Config overrides that were applied (for
+                metadata tracking).
+
+        Returns:
+            The (possibly middleware-mutated) LLMResponse.
+
+        Raises:
+            ValueError: If the current tree node cannot be found.
+        """
+        # Execute middleware (post-LLM) in reverse order (onion model)
+        for mw in reversed(self.middleware):
+            response = await mw.process_response(response, self.state)
+
+        # Add assistant message as child
+        current_tree_node = self.state.get_current_node()
+        if current_tree_node is None:
+            raise ValueError(
+                f"Current node '{self.state.current_node_id}' not found"
+            )
+
+        # Create assistant message node, including tool_calls on the
+        # message itself so providers can include them in message history.
+        assistant_message = LLMMessage(
+            role="assistant",
+            content=response.content,
+            tool_calls=response.tool_calls if response.tool_calls else None,
+        )
+
+        assistant_metadata = metadata or {}
+        assistant_metadata.update({
+            "usage": response.usage,
+            "model": response.model,
+            "provider": self.llm.config.provider,
+            "finish_reason": response.finish_reason,
+        })
+
+        # Capture tool calls in metadata for persistence/inspection
+        if response.tool_calls:
+            assistant_metadata["tool_calls"] = [
+                {
+                    "name": tc.name,
+                    "parameters": copy.deepcopy(tc.parameters),
+                    "id": tc.id,
+                }
+                for tc in response.tool_calls
+            ]
+
+        # Track config overrides if they were applied
+        if llm_config_overrides:
+            assistant_metadata["config_overrides_applied"] = llm_config_overrides
+
+        # Calculate and track cost
+        self._calculate_and_track_cost(response, assistant_metadata)
+
+        new_tree_node = Tree(
+            ConversationNode(
+                message=assistant_message,
+                node_id="",  # Will be calculated
+                branch_name=branch_name,
+                metadata=assistant_metadata,
+            )
+        )
+
+        # Add to tree
+        current_tree_node.add_child(new_tree_node)
+
+        # Calculate node_id
+        node_id = calculate_node_id(new_tree_node)
+        new_tree_node.data.node_id = node_id
+
+        # Move current position
+        self.state.current_node_id = node_id
+        self.state.updated_at = datetime.now()
+
+        # Persist
+        await self._save_state()
+
+        return response
+
+    # -----------------------------------------------------------------
+    # Public completion methods
+    # -----------------------------------------------------------------
+
     async def complete(
         self,
         branch_name: str | None = None,
@@ -667,107 +829,19 @@ class ConversationManager:
             add_message: Add user/system message before calling complete
             switch_to_node: Navigate to different branch before completing
         """
-        if not self.state:
-            raise ValueError("Cannot complete: no messages in conversation")
+        messages = self._prepare_completion(system_prompt_override)
+        messages = await self._run_pre_middleware(messages)
 
-        # Get messages from root to current position
-        messages = self.state.get_current_messages()
-
-        # Apply system prompt override if provided (copy, don't mutate tree)
-        if system_prompt_override is not None:
-            messages = list(messages)  # shallow copy
-            if messages and messages[0].role == "system":
-                messages[0] = LLMMessage(
-                    role="system", content=system_prompt_override
-                )
-            else:
-                messages.insert(
-                    0, LLMMessage(role="system", content=system_prompt_override)
-                )
-            logger.debug(
-                "System prompt overridden for this completion (%d chars)",
-                len(system_prompt_override),
-            )
-
-        # Execute middleware (pre-LLM) in forward order
-        for mw in self.middleware:
-            messages = await mw.process_request(messages, self.state)
-
-        # Call LLM with config overrides if provided
         response = await self.llm.complete(
             messages,
             config_overrides=llm_config_overrides,
             tools=tools,
-            **llm_kwargs
+            **llm_kwargs,
         )
 
-        # Execute middleware (post-LLM) in reverse order (onion model)
-        for mw in reversed(self.middleware):
-            response = await mw.process_response(response, self.state)
-
-        # Add assistant message as child
-        current_tree_node = self.state.get_current_node()
-        if current_tree_node is None:
-            raise ValueError(f"Current node '{self.state.current_node_id}' not found")
-
-        # Create assistant message node, including tool_calls on the
-        # message itself so providers can include them in message history.
-        assistant_message = LLMMessage(
-            role="assistant",
-            content=response.content,
-            tool_calls=response.tool_calls if response.tool_calls else None,
+        return await self._finalize_completion(
+            response, branch_name, metadata, llm_config_overrides,
         )
-
-        assistant_metadata = metadata or {}
-        assistant_metadata.update({
-            "usage": response.usage,
-            "model": response.model,
-            "provider": self.llm.config.provider,
-            "finish_reason": response.finish_reason,
-        })
-
-        # Capture tool calls in metadata for persistence/inspection
-        if response.tool_calls:
-            assistant_metadata["tool_calls"] = [
-                {
-                    "name": tc.name,
-                    "parameters": copy.deepcopy(tc.parameters),
-                    "id": tc.id,
-                }
-                for tc in response.tool_calls
-            ]
-
-        # Track config overrides if they were applied
-        if llm_config_overrides:
-            assistant_metadata["config_overrides_applied"] = llm_config_overrides
-
-        # Calculate and track cost
-        self._calculate_and_track_cost(response, assistant_metadata)
-
-        new_tree_node = Tree(
-            ConversationNode(
-                message=assistant_message,
-                node_id="",  # Will be calculated
-                branch_name=branch_name,
-                metadata=assistant_metadata,
-            )
-        )
-
-        # Add to tree
-        current_tree_node.add_child(new_tree_node)
-
-        # Calculate node_id
-        node_id = calculate_node_id(new_tree_node)
-        new_tree_node.data.node_id = node_id
-
-        # Move current position
-        self.state.current_node_id = node_id
-        self.state.updated_at = datetime.now()
-
-        # Persist
-        await self._save_state()
-
-        return response
 
     async def stream_complete(
         self,
@@ -836,110 +910,36 @@ class ConversationManager:
             complete: Non-streaming version for simple use cases
             add_message: Add message before streaming
         """
-        if not self.state:
-            raise ValueError("Cannot complete: no messages in conversation")
-
-        # Get messages
-        messages = self.state.get_current_messages()
-
-        # Apply system prompt override if provided (copy, don't mutate tree)
-        if system_prompt_override is not None:
-            messages = list(messages)
-            if messages and messages[0].role == "system":
-                messages[0] = LLMMessage(
-                    role="system", content=system_prompt_override
-                )
-            else:
-                messages.insert(
-                    0, LLMMessage(role="system", content=system_prompt_override)
-                )
-            logger.debug(
-                "System prompt overridden for this stream completion (%d chars)",
-                len(system_prompt_override),
-            )
-
-        # Execute middleware (pre-LLM) in forward order
-        for mw in self.middleware:
-            messages = await mw.process_request(messages, self.state)
+        messages = self._prepare_completion(system_prompt_override)
+        messages = await self._run_pre_middleware(messages)
 
         # Stream LLM response and accumulate
         full_content = ""
-        final_chunk = None
+        final_chunk: LLMStreamResponse | None = None
         async for chunk in self.llm.stream_complete(
             messages,
             config_overrides=llm_config_overrides,
-            **llm_kwargs
+            tools=tools,
+            **llm_kwargs,
         ):
             full_content += chunk.delta
-            final_chunk = chunk
+            if chunk.is_final:
+                final_chunk = chunk
             yield chunk
 
-        # Create complete response for state update
+        # Assemble a complete LLMResponse from accumulated stream data
         response = LLMResponse(
             content=full_content,
-            model=self.llm.config.model,
+            model=(final_chunk.model if final_chunk and final_chunk.model
+                   else self.llm.config.model),
             finish_reason=final_chunk.finish_reason if final_chunk else "stop",
             usage=final_chunk.usage if final_chunk else None,
+            tool_calls=final_chunk.tool_calls if final_chunk else None,
         )
 
-        # Execute middleware (post-LLM) in reverse order (onion model)
-        for mw in reversed(self.middleware):
-            response = await mw.process_response(response, self.state)
-
-        # Add assistant message as child (same as complete())
-        current_tree_node = self.state.get_current_node()
-        if current_tree_node is None:
-            raise ValueError(f"Current node '{self.state.current_node_id}' not found")
-
-        assistant_message = LLMMessage(
-            role="assistant",
-            content=response.content,
-            tool_calls=response.tool_calls if response.tool_calls else None,
+        await self._finalize_completion(
+            response, branch_name, metadata, llm_config_overrides,
         )
-
-        assistant_metadata = metadata or {}
-        assistant_metadata.update({
-            "usage": response.usage,
-            "model": response.model,
-            "provider": self.llm.config.provider,
-            "finish_reason": response.finish_reason,
-        })
-
-        # Capture tool calls in metadata for persistence/inspection
-        if response.tool_calls:
-            assistant_metadata["tool_calls"] = [
-                {
-                    "name": tc.name,
-                    "parameters": copy.deepcopy(tc.parameters),
-                    "id": tc.id,
-                }
-                for tc in response.tool_calls
-            ]
-
-        # Track config overrides if they were applied
-        if llm_config_overrides:
-            assistant_metadata["config_overrides_applied"] = llm_config_overrides
-
-        # Calculate and track cost
-        self._calculate_and_track_cost(response, assistant_metadata)
-
-        new_tree_node = Tree(
-            ConversationNode(
-                message=assistant_message,
-                node_id="",
-                branch_name=branch_name,
-                metadata=assistant_metadata,
-            )
-        )
-
-        current_tree_node.add_child(new_tree_node)
-        node_id = calculate_node_id(new_tree_node)
-        new_tree_node.data.node_id = node_id
-
-        self.state.current_node_id = node_id
-        self.state.updated_at = datetime.now()
-
-        await self._save_state()
 
     async def switch_to_node(self, node_id: str) -> None:
         """Switch current position to a different node in the tree.

@@ -51,7 +51,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
     LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
-    AsyncLLMProvider, ModelCapability,
+    AsyncLLMProvider, ModelCapability, ToolCall,
     LLMAdapter, normalize_llm_config
 )
 from dataknobs_llm.prompts import AsyncPromptBuilder
@@ -372,6 +372,7 @@ class OpenAIProvider(AsyncLLMProvider):
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
         **kwargs: Any
     ) -> AsyncIterator[LLMStreamResponse]:
         """Generate streaming completion.
@@ -380,6 +381,7 @@ class OpenAIProvider(AsyncLLMProvider):
             messages: Input messages or prompt
             config_overrides: Optional dict to override config fields (model,
                 temperature, max_tokens, top_p, stop_sequences, seed)
+            tools: Optional list of Tool objects for function calling.
             **kwargs: Additional provider-specific parameters
         """
         if not self._is_initialized:
@@ -402,18 +404,80 @@ class OpenAIProvider(AsyncLLMProvider):
         params['stream'] = True
         params.update(kwargs)
 
+        # Handle tools if provided (same as complete())
+        if tools:
+            openai_tools = []
+            for tool in tools:
+                openai_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.schema if hasattr(tool, "schema") else {},
+                    },
+                })
+            params["tools"] = openai_tools
+
         # Stream API call
         stream = await self._client.chat.completions.create(
             messages=adapted_messages,
             **params
         )
 
+        # Accumulate tool call deltas across chunks. OpenAI sends them
+        # incrementally via delta.tool_calls[i].index.
+        tool_call_accumulators: dict[int, dict[str, Any]] = {}
+
         async for chunk in stream:
-            if chunk.choices[0].delta.content:
+            choice = chunk.choices[0] if chunk.choices else None
+            if not choice:
+                continue
+
+            delta = choice.delta
+            finish_reason = choice.finish_reason
+
+            # Accumulate tool call deltas
+            if delta.tool_calls:
+                for tc_delta in delta.tool_calls:
+                    idx = tc_delta.index
+                    if idx not in tool_call_accumulators:
+                        tool_call_accumulators[idx] = {
+                            "id": "",
+                            "name": "",
+                            "arguments": "",
+                        }
+                    acc = tool_call_accumulators[idx]
+                    if tc_delta.id:
+                        acc["id"] += tc_delta.id
+                    if tc_delta.function:
+                        if tc_delta.function.name:
+                            acc["name"] += tc_delta.function.name
+                        if tc_delta.function.arguments:
+                            acc["arguments"] += tc_delta.function.arguments
+
+            # Yield content chunks
+            content = delta.content or ""
+            if content or finish_reason is not None:
+                # Build tool_calls on final chunk
+                accumulated_tool_calls = None
+                if finish_reason is not None and tool_call_accumulators:
+                    accumulated_tool_calls = [
+                        ToolCall(
+                            name=acc["name"],
+                            parameters=json.loads(acc["arguments"])
+                            if acc["arguments"]
+                            else {},
+                            id=acc["id"] or None,
+                        )
+                        for _, acc in sorted(tool_call_accumulators.items())
+                    ]
+
                 yield LLMStreamResponse(
-                    delta=chunk.choices[0].delta.content,
-                    is_final=chunk.choices[0].finish_reason is not None,
-                    finish_reason=chunk.choices[0].finish_reason
+                    delta=content,
+                    is_final=finish_reason is not None,
+                    finish_reason=finish_reason,
+                    tool_calls=accumulated_tool_calls,
+                    model=runtime_config.model if finish_reason is not None else None,
                 )
 
     async def embed(

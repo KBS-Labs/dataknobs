@@ -599,6 +599,7 @@ class OllamaProvider(AsyncLLMProvider):
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
         **kwargs: Any
     ) -> AsyncIterator[LLMStreamResponse]:
         """Generate streaming completion using Ollama chat endpoint.
@@ -611,8 +612,8 @@ class OllamaProvider(AsyncLLMProvider):
             messages: Input messages or prompt
             config_overrides: Optional dict to override config fields (model,
                 temperature, max_tokens, top_p, stop_sequences, seed)
-            **kwargs: Additional provider-specific parameters.  Accepts
-                ``tools`` (list of Tool objects) for function calling.
+            tools: Optional list of Tool objects for function calling.
+            **kwargs: Additional provider-specific parameters.
         """
         if not self._is_initialized:
             await self.initialize()
@@ -644,7 +645,6 @@ class OllamaProvider(AsyncLLMProvider):
             payload['format'] = 'json'
 
         # Handle tools if provided
-        tools = kwargs.pop('tools', None)
         if tools:
             tool_dicts = []
             for tool in tools:
@@ -700,6 +700,7 @@ class OllamaProvider(AsyncLLMProvider):
                         finish_reason=finish_reason,
                         usage=usage,
                         tool_calls=tool_calls,
+                        model=runtime_config.model if done else None,
                     )
 
     async def embed(

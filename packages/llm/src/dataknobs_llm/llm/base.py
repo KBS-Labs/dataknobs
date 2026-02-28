@@ -312,6 +312,7 @@ class LLMStreamResponse:
         finish_reason: Why generation stopped (only set on final chunk)
         usage: Token usage stats (only set on final chunk)
         tool_calls: Tool calls requested by the model (only set on final chunk)
+        model: Model identifier (only set on final chunk)
         metadata: Additional chunk metadata
 
     Example:
@@ -353,6 +354,7 @@ class LLMStreamResponse:
     finish_reason: str | None = None
     usage: Dict[str, int] | None = None
     tool_calls: list["ToolCall"] | None = None  # Only set on final chunk
+    model: str | None = None  # Only set on final chunk
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -1203,19 +1205,22 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
         **kwargs
     ) -> AsyncIterator[LLMStreamResponse]:
         r"""Generate streaming completion asynchronously.
 
         Streams response chunks as they are generated, enabling real-time
         display of LLM output. Each chunk contains incremental content
-        (delta), and the final chunk includes usage statistics.
+        (delta), and the final chunk includes usage statistics and any
+        tool calls requested by the model.
 
         Args:
             messages: Either a single string prompt or list of LLMMessage objects
             config_overrides: Optional dict to override config fields for this
                 request only. Supported fields: model, temperature, max_tokens,
                 top_p, stop_sequences, seed. The original config is not modified.
+            tools: Optional list of Tool objects available for this completion.
             **kwargs: Provider-specific parameters (same as complete())
 
         Yields:
@@ -1651,6 +1656,7 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
         **kwargs
     ) -> Iterator[LLMStreamResponse]:
         """Generate streaming completion synchronously.
@@ -1660,6 +1666,7 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
             config_overrides: Optional dict to override config fields for this
                 request only. Supported fields: model, temperature, max_tokens,
                 top_p, stop_sequences, seed. The original config is not modified.
+            tools: Optional list of Tool objects available for this completion.
             **kwargs: Additional parameters
 
         Yields:

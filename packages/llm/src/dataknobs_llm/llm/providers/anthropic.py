@@ -64,7 +64,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
     LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
-    AsyncLLMProvider, ModelCapability,
+    AsyncLLMProvider, ModelCapability, ToolCall,
     normalize_llm_config
 )
 from dataknobs_llm.prompts import AsyncPromptBuilder
@@ -328,6 +328,7 @@ class AnthropicProvider(AsyncLLMProvider):
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
         **kwargs: Any
     ) -> AsyncIterator[LLMStreamResponse]:
         """Generate streaming completion.
@@ -336,6 +337,7 @@ class AnthropicProvider(AsyncLLMProvider):
             messages: Input messages or prompt
             config_overrides: Optional dict to override config fields (model,
                 temperature, max_tokens, top_p, stop_sequences, seed)
+            tools: Optional list of Tool objects for function calling.
             **kwargs: Additional provider-specific parameters
         """
         if not self._is_initialized:
@@ -350,26 +352,59 @@ class AnthropicProvider(AsyncLLMProvider):
         else:
             prompt = self._build_prompt(messages)
 
+        # Build stream kwargs
+        stream_kwargs: Dict[str, Any] = {
+            "model": runtime_config.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": runtime_config.max_tokens or 1024,
+            "temperature": runtime_config.temperature,
+        }
+
+        # Handle tools if provided (same as complete())
+        if tools:
+            anthropic_tools = []
+            for tool in tools:
+                anthropic_tools.append({
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": tool.schema if hasattr(tool, "schema") else {},
+                })
+            stream_kwargs["tools"] = anthropic_tools
+
         # Stream API call
-        async with self._client.messages.stream(
-            model=runtime_config.model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=runtime_config.max_tokens or 1024,
-            temperature=runtime_config.temperature
-        ) as stream:
+        async with self._client.messages.stream(**stream_kwargs) as stream:
             async for chunk in stream:
                 if chunk.type == 'content_block_delta':
-                    yield LLMStreamResponse(
-                        delta=chunk.delta.text,
-                        is_final=False
-                    )
+                    # Text deltas
+                    if hasattr(chunk.delta, 'text'):
+                        yield LLMStreamResponse(
+                            delta=chunk.delta.text,
+                            is_final=False
+                        )
 
-            # Final message
+            # Final message — extract tool_use blocks as ToolCall objects
             message = await stream.get_final_message()
+            tool_calls = None
+            tool_use_blocks = [
+                block for block in message.content
+                if block.type == "tool_use"
+            ]
+            if tool_use_blocks:
+                tool_calls = [
+                    ToolCall(
+                        name=block.name,
+                        parameters=block.input if isinstance(block.input, dict) else {},
+                        id=block.id,
+                    )
+                    for block in tool_use_blocks
+                ]
+
             yield LLMStreamResponse(
                 delta='',
                 is_final=True,
-                finish_reason=message.stop_reason
+                finish_reason=message.stop_reason,
+                tool_calls=tool_calls,
+                model=runtime_config.model,
             )
 
     async def embed(
