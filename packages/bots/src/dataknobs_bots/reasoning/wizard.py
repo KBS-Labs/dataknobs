@@ -1284,6 +1284,26 @@ class WizardReasoning(ReasoningStrategy):
                 await self._save_wizard_state(manager, wizard_state)
                 return response
 
+        # Auto-restart completed wizard when amendments are not allowed.
+        # When the wizard is completed and a new message arrives, the user
+        # expects a fresh start.  Without this, the wizard stays on the
+        # completed stage with stale bank/artifact data and the ReAct loop
+        # processes the message against the old recipe.
+        #
+        # We clear state here and fall through so the user's message is
+        # processed by the fresh first stage (extraction, transitions, etc.)
+        # rather than returning a canned "what would you like to make?" prompt.
+        if wizard_state.completed and not self._allow_amendments:
+            logger.info(
+                "Wizard completed (amendments disabled): auto-restarting "
+                "for new user message"
+            )
+            await self._restart_cleanup(
+                wizard_state, user_message, trigger="auto_restart"
+            )
+            # State is now reset to the first stage — fall through
+            # to process the user's message normally.
+
         # Handle navigation commands
         nav_result = await self._handle_navigation(
             user_message, wizard_state, manager, llm
@@ -2481,23 +2501,22 @@ class WizardReasoning(ReasoningStrategy):
             ),
         )
 
-    async def _execute_restart(
+    async def _restart_cleanup(
         self,
-        message: str,
         state: WizardState,
-        manager: Any,
-        llm: Any,
-    ) -> Any:
-        """Execute restart navigation.
+        message: str,
+        trigger: str = "restart",
+    ) -> None:
+        """Reset wizard state, banks, and artifact for a fresh start.
+
+        Performs the cleanup portion of a restart without generating a
+        response.  Callers are responsible for branching and response
+        generation after cleanup completes.
 
         Args:
-            message: Original user message
-            state: Current wizard state
-            manager: ConversationManager instance
-            llm: LLM provider
-
-        Returns:
-            Response for the restarted first stage.
+            state: Current wizard state (mutated in place).
+            message: User message that triggered the restart.
+            trigger: Transition trigger label for the audit trail.
         """
         from_stage = state.current_stage
         duration_ms = (time.time() - state.stage_entry_time) * 1000
@@ -2513,7 +2532,7 @@ class WizardReasoning(ReasoningStrategy):
         transition = create_transition_record(
             from_stage=from_stage,
             to_stage=to_stage,
-            trigger="restart",
+            trigger=trigger,
             duration_in_stage_ms=duration_ms,
             data_snapshot=state.data.copy(),
             user_input=message,
@@ -2536,6 +2555,26 @@ class WizardReasoning(ReasoningStrategy):
             self._artifact.clear_fields()
             if self._artifact.is_finalized:
                 self._artifact.unfinalize()
+
+    async def _execute_restart(
+        self,
+        message: str,
+        state: WizardState,
+        manager: Any,
+        llm: Any,
+    ) -> Any:
+        """Execute restart navigation.
+
+        Args:
+            message: Original user message
+            state: Current wizard state
+            manager: ConversationManager instance
+            llm: LLM provider
+
+        Returns:
+            Response for the restarted first stage.
+        """
+        await self._restart_cleanup(state, message)
 
         stage = self._fsm.current_metadata
         await self._branch_for_revisited_stage(
