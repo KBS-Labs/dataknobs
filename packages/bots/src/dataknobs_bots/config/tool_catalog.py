@@ -479,7 +479,10 @@ def _register_builtin_tools() -> None:
         AddBankRecordTool,
         AddKBResourceTool,
         CheckKnowledgeSourceTool,
+        CompileArtifactTool,
+        CompleteWizardTool,
         FinalizeBankTool,
+        FinalizeArtifactTool,
         GetTemplateDetailsTool,
         IngestKnowledgeBaseTool,
         KnowledgeSearchTool,
@@ -513,6 +516,9 @@ def _register_builtin_tools() -> None:
         UpdateBankRecordTool,
         RemoveBankRecordTool,
         FinalizeBankTool,
+        CompileArtifactTool,
+        FinalizeArtifactTool,
+        CompleteWizardTool,
     ]:
         default_catalog.register_from_class(tool_class)
 

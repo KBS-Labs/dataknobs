@@ -459,6 +459,10 @@ class WizardReasoning(ReasoningStrategy):
         self._active_subflow_fsm: WizardFSM | None = None
         # LLM provider set by generate() for transform context access
         self._current_llm: Any = None
+        # Completion signal bridge: set by CompleteWizardTool in
+        # _react_stage_response, checked by generate() after response.
+        self._tool_completion_requested: bool = False
+        self._tool_completion_summary: str = ""
 
         # Merge framework-level ephemeral keys with config-declared ones
         config_ephemeral = wizard_fsm.settings.get("ephemeral_keys", [])
@@ -1712,9 +1716,18 @@ class WizardReasoning(ReasoningStrategy):
             await self._branch_for_revisited_stage(
                 manager, new_stage.get("name", "")
             )
+        completed_before = wizard_state.completed
         response = await self._generate_stage_response(
             manager, llm, new_stage, wizard_state, tools
         )
+
+        # Check for tool-initiated completion (CompleteWizardTool signal)
+        if not completed_before and self._tool_completion_requested:
+            wizard_state.completed = True
+            self._tool_completion_requested = False
+            logger.info("Wizard completion signaled by complete_wizard tool")
+            if self._hooks:
+                await self._hooks.trigger_complete(wizard_state.data)
 
         # Mark this stage's template as rendered so subsequent messages
         # at this stage don't trigger the first-render confirmation logic.
@@ -3608,6 +3621,10 @@ class WizardReasoning(ReasoningStrategy):
         if self._catalog:
             extra_context["catalog"] = self._catalog
 
+        # Mutable signal dict for CompleteWizardTool to communicate back
+        completion_signal: dict[str, Any] = {"requested": False}
+        extra_context["_completion_signal"] = completion_signal
+
         react = ReActReasoning(
             max_iterations=max_iterations,
             artifact_registry=self._artifact_registry,
@@ -3616,13 +3633,22 @@ class WizardReasoning(ReasoningStrategy):
             extra_context=extra_context or None,
         )
 
-        return await react.generate(
+        response = await react.generate(
             manager=manager,
             llm=None,
             tools=tools,
             system_prompt_override=enhanced_prompt,
             metadata=metadata,
         )
+
+        # Check if CompleteWizardTool signaled completion
+        if completion_signal.get("requested"):
+            self._tool_completion_requested = True
+            self._tool_completion_summary = completion_signal.get(
+                "summary", ""
+            )
+
+        return response
 
     def _build_stage_context(
         self, stage: dict[str, Any], state: WizardState

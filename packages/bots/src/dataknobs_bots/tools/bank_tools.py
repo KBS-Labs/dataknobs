@@ -14,6 +14,8 @@ Tools:
 - RemoveBankRecordTool: Remove a record by record_id
 - FinalizeBankTool: Confirm save (bank data already persisted)
 - CompileArtifactTool: Compile all artifact fields and sections into output
+- FinalizeArtifactTool: Validate, compile, and lock an artifact
+- CompleteWizardTool: Signal wizard completion from a ReAct stage
 
 Example:
     ```python
@@ -763,4 +765,239 @@ class CompileArtifactTool(ContextAwareTool):
         return {
             "success": True,
             "artifact": compiled,
+        }
+
+
+class FinalizeArtifactTool(ContextAwareTool):
+    """Validate, compile, and lock the artifact against further edits.
+
+    Reads the ``ArtifactBank`` from ``context.extra["artifact"]``,
+    calls ``artifact.finalize()`` which validates, compiles, and sets
+    ``_finalized = True``.
+
+    Distinct from ``CompileArtifactTool``: compile = preview (no lock),
+    finalize = commit (locks the artifact).
+    """
+
+    @classmethod
+    def catalog_metadata(cls) -> dict[str, Any]:
+        """Return catalog metadata for this tool class."""
+        return {
+            "name": "finalize_artifact",
+            "description": (
+                "Validate, compile, and lock the artifact. "
+                "No further edits are allowed after finalization."
+            ),
+            "tags": ("wizard", "bank", "artifact"),
+        }
+
+    def __init__(self, tool_name: str | None = None) -> None:
+        """Initialize the tool.
+
+        Args:
+            tool_name: Custom tool name.  Defaults to ``"finalize_artifact"``.
+        """
+        super().__init__(
+            name=tool_name or "finalize_artifact",
+            description=(
+                "Validate, compile, and lock the artifact. "
+                "After finalization no further edits are allowed."
+            ),
+        )
+
+    @property
+    def schema(self) -> dict[str, Any]:
+        """Return JSON Schema for tool parameters."""
+        return {
+            "type": "object",
+            "properties": {},
+        }
+
+    async def execute_with_context(
+        self,
+        context: ToolExecutionContext,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Finalize the artifact from context.
+
+        Args:
+            context: Execution context with ``extra["artifact"]``.
+            **kwargs: Not used.
+
+        Returns:
+            Dict with compiled artifact on success, or errors on failure.
+        """
+        artifact = context.extra.get("artifact")
+        if artifact is None:
+            return {
+                "success": False,
+                "error": (
+                    "No artifact configured. "
+                    "Ensure the wizard has an artifact configuration."
+                ),
+            }
+
+        # Idempotent: already finalized -> return compiled without error
+        if artifact.is_finalized:
+            compiled = artifact.compile()
+            logger.debug(
+                "Artifact '%s' already finalized, returning compiled",
+                artifact.name,
+                extra={"conversation_id": context.conversation_id},
+            )
+            return {
+                "success": True,
+                "already_finalized": True,
+                "artifact": compiled,
+            }
+
+        # Validate before finalizing — return errors without locking
+        errors = artifact.validate()
+        if errors:
+            logger.debug(
+                "Artifact finalization failed validation: %s",
+                errors,
+                extra={"conversation_id": context.conversation_id},
+            )
+            return {
+                "success": False,
+                "errors": errors,
+            }
+
+        compiled = artifact.finalize()
+        logger.info(
+            "Finalized artifact '%s' with %d sections",
+            artifact.name,
+            len(artifact.sections),
+            extra={"conversation_id": context.conversation_id},
+        )
+        return {
+            "success": True,
+            "is_finalized": True,
+            "artifact": compiled,
+        }
+
+
+class CompleteWizardTool(ContextAwareTool):
+    """Signal wizard completion from within a ReAct stage.
+
+    Sets a completion signal in ``context.extra["_completion_signal"]``
+    that the wizard checks after the ReAct loop returns.  If an
+    unfinalised artifact exists, it is auto-finalized for convenience.
+
+    Works with or without an artifact — wizard completion is a lifecycle
+    concern independent of artifact finalization.
+    """
+
+    @classmethod
+    def catalog_metadata(cls) -> dict[str, Any]:
+        """Return catalog metadata for this tool class."""
+        return {
+            "name": "complete_wizard",
+            "description": (
+                "Signal that the wizard workflow is complete. "
+                "Auto-finalizes the artifact if present and not yet finalized."
+            ),
+            "tags": ("wizard",),
+        }
+
+    def __init__(self, tool_name: str | None = None) -> None:
+        """Initialize the tool.
+
+        Args:
+            tool_name: Custom tool name.  Defaults to ``"complete_wizard"``.
+        """
+        super().__init__(
+            name=tool_name or "complete_wizard",
+            description=(
+                "Signal that the wizard workflow is complete. "
+                "Auto-finalizes the artifact if present."
+            ),
+        )
+
+    @property
+    def schema(self) -> dict[str, Any]:
+        """Return JSON Schema for tool parameters."""
+        return {
+            "type": "object",
+            "properties": {
+                "summary": {
+                    "type": "string",
+                    "description": (
+                        "Optional closing notes or summary of the "
+                        "completed workflow."
+                    ),
+                },
+            },
+        }
+
+    async def execute_with_context(
+        self,
+        context: ToolExecutionContext,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Signal wizard completion.
+
+        Args:
+            context: Execution context with ``extra["_completion_signal"]``.
+            **kwargs: Optional ``summary``.
+
+        Returns:
+            Dict confirming completion signal was set.
+        """
+        signal = context.extra.get("_completion_signal")
+        if signal is None:
+            return {
+                "success": False,
+                "error": (
+                    "No completion signal available. "
+                    "This tool can only be used within a wizard ReAct stage."
+                ),
+            }
+
+        # Idempotent: already requested
+        if signal.get("requested"):
+            return {
+                "success": True,
+                "already_completed": True,
+            }
+
+        summary = kwargs.get("summary", "")
+
+        # Auto-finalize artifact if present and not yet finalized
+        artifact = context.extra.get("artifact")
+        if artifact is not None and not artifact.is_finalized:
+            errors = artifact.validate()
+            if errors:
+                logger.debug(
+                    "Cannot complete wizard — artifact validation failed: %s",
+                    errors,
+                    extra={"conversation_id": context.conversation_id},
+                )
+                return {
+                    "success": False,
+                    "error": (
+                        "Cannot complete wizard: artifact validation failed."
+                    ),
+                    "artifact_errors": errors,
+                }
+            artifact.finalize()
+            logger.info(
+                "Auto-finalized artifact '%s' during wizard completion",
+                artifact.name,
+                extra={"conversation_id": context.conversation_id},
+            )
+
+        # Set the signal for the wizard to pick up
+        signal["requested"] = True
+        signal["summary"] = summary
+
+        logger.info(
+            "Wizard completion signaled via complete_wizard tool",
+            extra={"conversation_id": context.conversation_id},
+        )
+        return {
+            "success": True,
+            "completed": True,
+            "summary": summary,
         }

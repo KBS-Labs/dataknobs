@@ -2,7 +2,10 @@
 
 from .bank_tools import (
     AddBankRecordTool,
+    CompileArtifactTool,
+    CompleteWizardTool,
     FinalizeBankTool,
+    FinalizeArtifactTool,
     ListBankRecordsTool,
     RemoveBankRecordTool,
     UpdateBankRecordTool,
@@ -50,6 +53,10 @@ __all__ = [
     "UpdateBankRecordTool",
     "RemoveBankRecordTool",
     "FinalizeBankTool",
+    # Artifact / Lifecycle Tools
+    "CompileArtifactTool",
+    "FinalizeArtifactTool",
+    "CompleteWizardTool",
     # Catalog Tools
     "ListCatalogTool",
     "SaveToCatalogTool",

@@ -13,7 +13,9 @@ from dataknobs_bots.memory.artifact_bank import ArtifactBank
 from dataknobs_bots.tools.bank_tools import (
     AddBankRecordTool,
     CompileArtifactTool,
+    CompleteWizardTool,
     FinalizeBankTool,
+    FinalizeArtifactTool,
     ListBankRecordsTool,
     RemoveBankRecordTool,
     UpdateBankRecordTool,
@@ -937,3 +939,252 @@ class TestBankRecordProvenance:
         assert record is not None
         assert record.source_stage == "collect"
         assert record.modified_in_stage == ""
+
+
+# -- Helpers for FinalizeArtifactTool / CompleteWizardTool tests --
+
+
+def _make_artifact_context_with_signal(
+    with_data: bool = False,
+    with_signal: bool = True,
+) -> tuple[ToolExecutionContext, ArtifactBank, dict[str, Any]]:
+    """Create a context with ArtifactBank and completion signal dict."""
+    ingredients = _make_bank("ingredients", required=["name"], match_fields=["name"])
+    instructions = _make_bank("instructions", required=["instruction"])
+    artifact = ArtifactBank(
+        name="recipe",
+        field_defs={"recipe_name": {"required": True}},
+        sections={"ingredients": ingredients, "instructions": instructions},
+    )
+    if with_data:
+        artifact.set_field("recipe_name", "Chocolate Chip Cookies")
+        ingredients.add({"name": "flour", "amount": "2 cups"})
+        instructions.add({"instruction": "Preheat oven to 375F"})
+
+    signal: dict[str, Any] = {"requested": False}
+    extra: dict[str, Any] = {"artifact": artifact}
+    if with_signal:
+        extra["_completion_signal"] = signal
+    context = ToolExecutionContext(
+        conversation_id="test-conv",
+        user_id="test-user",
+        extra=extra,
+    )
+    return context, artifact, signal
+
+
+class TestFinalizeArtifactTool:
+    """Tests for FinalizeArtifactTool."""
+
+    @pytest.mark.asyncio
+    async def test_finalize_success(self) -> None:
+        """Valid artifact -> returns compiled, is_finalized True."""
+        context, artifact = _make_artifact_context(with_data=True)
+        tool = FinalizeArtifactTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is True
+        assert result["is_finalized"] is True
+        assert "artifact" in result
+        assert result["artifact"]["recipe_name"] == "Chocolate Chip Cookies"
+        assert artifact.is_finalized is True
+
+    @pytest.mark.asyncio
+    async def test_finalize_validation_error(self) -> None:
+        """Missing required field -> returns errors, not finalized."""
+        context, artifact = _make_artifact_context(with_data=False)
+        tool = FinalizeArtifactTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is False
+        assert "errors" in result
+        assert len(result["errors"]) > 0
+        assert artifact.is_finalized is False
+
+    @pytest.mark.asyncio
+    async def test_finalize_already_finalized(self) -> None:
+        """Idempotent: returns already_finalized + compiled."""
+        context, artifact = _make_artifact_context(with_data=True)
+        artifact.finalize()
+        tool = FinalizeArtifactTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is True
+        assert result["already_finalized"] is True
+        assert "artifact" in result
+        assert artifact.is_finalized is True
+
+    @pytest.mark.asyncio
+    async def test_finalize_no_artifact(self) -> None:
+        """No artifact in context -> returns error."""
+        context = _make_context()
+        tool = FinalizeArtifactTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is False
+        assert "No artifact configured" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_schema_no_required_params(self) -> None:
+        tool = FinalizeArtifactTool()
+        schema = tool.schema
+        assert schema["type"] == "object"
+        assert "required" not in schema
+
+    def test_catalog_metadata(self) -> None:
+        meta = FinalizeArtifactTool.catalog_metadata()
+        assert meta["name"] == "finalize_artifact"
+        assert "artifact" in meta["tags"]
+
+    def test_custom_tool_name(self) -> None:
+        tool = FinalizeArtifactTool(tool_name="lock_recipe")
+        assert tool.name == "lock_recipe"
+
+    def test_default_tool_name(self) -> None:
+        tool = FinalizeArtifactTool()
+        assert tool.name == "finalize_artifact"
+
+
+class TestCompleteWizardTool:
+    """Tests for CompleteWizardTool."""
+
+    @pytest.mark.asyncio
+    async def test_complete_sets_signal(self) -> None:
+        """Signal dict mutated to requested: True."""
+        context, _artifact, signal = _make_artifact_context_with_signal(
+            with_data=True,
+        )
+        tool = CompleteWizardTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is True
+        assert result["completed"] is True
+        assert signal["requested"] is True
+
+    @pytest.mark.asyncio
+    async def test_complete_with_summary(self) -> None:
+        """Summary stored in signal."""
+        context, _artifact, signal = _make_artifact_context_with_signal(
+            with_data=True,
+        )
+        tool = CompleteWizardTool()
+
+        result = await tool.execute_with_context(
+            context, summary="Recipe complete!"
+        )
+
+        assert result["success"] is True
+        assert result["summary"] == "Recipe complete!"
+        assert signal["summary"] == "Recipe complete!"
+
+    @pytest.mark.asyncio
+    async def test_complete_auto_finalizes_artifact(self) -> None:
+        """Unfinalised artifact gets finalized."""
+        context, artifact, signal = _make_artifact_context_with_signal(
+            with_data=True,
+        )
+        assert artifact.is_finalized is False
+        tool = CompleteWizardTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is True
+        assert artifact.is_finalized is True
+        assert signal["requested"] is True
+
+    @pytest.mark.asyncio
+    async def test_complete_fails_on_invalid_artifact(self) -> None:
+        """Finalization error prevents completion."""
+        context, artifact, signal = _make_artifact_context_with_signal(
+            with_data=False,
+        )
+        tool = CompleteWizardTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is False
+        assert "artifact_errors" in result
+        assert artifact.is_finalized is False
+        assert signal["requested"] is False
+
+    @pytest.mark.asyncio
+    async def test_complete_no_signal(self) -> None:
+        """No signal in context -> returns error."""
+        context, _artifact = _make_artifact_context(with_data=True)
+        tool = CompleteWizardTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is False
+        assert "No completion signal" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_complete_already_requested(self) -> None:
+        """Idempotent: returns already_completed."""
+        context, _artifact, signal = _make_artifact_context_with_signal(
+            with_data=True,
+        )
+        signal["requested"] = True
+        tool = CompleteWizardTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is True
+        assert result["already_completed"] is True
+
+    @pytest.mark.asyncio
+    async def test_complete_without_artifact(self) -> None:
+        """Works for wizards without artifacts."""
+        signal: dict[str, Any] = {"requested": False}
+        context = ToolExecutionContext(
+            conversation_id="test-conv",
+            user_id="test-user",
+            extra={"_completion_signal": signal},
+        )
+        tool = CompleteWizardTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is True
+        assert result["completed"] is True
+        assert signal["requested"] is True
+
+    @pytest.mark.asyncio
+    async def test_complete_skips_finalize_when_already_finalized(self) -> None:
+        """Already-finalized artifact is not re-finalized."""
+        context, artifact, signal = _make_artifact_context_with_signal(
+            with_data=True,
+        )
+        artifact.finalize()
+        tool = CompleteWizardTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is True
+        assert artifact.is_finalized is True
+        assert signal["requested"] is True
+
+    def test_catalog_metadata(self) -> None:
+        meta = CompleteWizardTool.catalog_metadata()
+        assert meta["name"] == "complete_wizard"
+        assert "wizard" in meta["tags"]
+
+    def test_default_tool_name(self) -> None:
+        tool = CompleteWizardTool()
+        assert tool.name == "complete_wizard"
+
+    def test_custom_tool_name(self) -> None:
+        tool = CompleteWizardTool(tool_name="finish_flow")
+        assert tool.name == "finish_flow"
+
+    def test_schema_has_optional_summary(self) -> None:
+        tool = CompleteWizardTool()
+        schema = tool.schema
+        assert schema["type"] == "object"
+        assert "summary" in schema["properties"]
+        assert "required" not in schema
