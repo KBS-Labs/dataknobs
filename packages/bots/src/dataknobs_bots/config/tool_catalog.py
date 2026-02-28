@@ -484,6 +484,7 @@ def _register_builtin_tools() -> None:
         FinalizeBankTool,
         FinalizeArtifactTool,
         GetTemplateDetailsTool,
+        RestartWizardTool,
         IngestKnowledgeBaseTool,
         KnowledgeSearchTool,
         ListAvailableToolsTool,
@@ -519,6 +520,7 @@ def _register_builtin_tools() -> None:
         CompileArtifactTool,
         FinalizeArtifactTool,
         CompleteWizardTool,
+        RestartWizardTool,
     ]:
         default_catalog.register_from_class(tool_class)
 

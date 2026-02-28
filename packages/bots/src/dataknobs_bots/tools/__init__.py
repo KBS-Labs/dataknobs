@@ -8,6 +8,7 @@ from .bank_tools import (
     FinalizeArtifactTool,
     ListBankRecordsTool,
     RemoveBankRecordTool,
+    RestartWizardTool,
     UpdateBankRecordTool,
 )
 from .catalog_tools import (
@@ -57,6 +58,7 @@ __all__ = [
     "CompileArtifactTool",
     "FinalizeArtifactTool",
     "CompleteWizardTool",
+    "RestartWizardTool",
     # Catalog Tools
     "ListCatalogTool",
     "SaveToCatalogTool",

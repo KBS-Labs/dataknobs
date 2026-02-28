@@ -542,7 +542,7 @@ class TestDefaultCatalog:
     """Tests for default_catalog and create_default_catalog()."""
 
     def test_default_catalog_populated(self) -> None:
-        assert default_catalog.count() == 20
+        assert default_catalog.count() == 21
 
     def test_default_catalog_has_knowledge_search(self) -> None:
         assert default_catalog.has("knowledge_search")
@@ -598,6 +598,7 @@ class TestDefaultCatalog:
             "compile_artifact",
             "finalize_artifact",
             "complete_wizard",
+            "restart_wizard",
         }
         actual_names = set(default_catalog.get_names())
         assert actual_names == expected_names

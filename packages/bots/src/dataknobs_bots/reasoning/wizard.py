@@ -463,6 +463,9 @@ class WizardReasoning(ReasoningStrategy):
         # _react_stage_response, checked by generate() after response.
         self._tool_completion_requested: bool = False
         self._tool_completion_summary: str = ""
+        # Restart signal bridge: set by RestartWizardTool, checked
+        # by generate() after response to delegate to _execute_restart.
+        self._tool_restart_requested: bool = False
 
         # Merge framework-level ephemeral keys with config-declared ones
         config_ephemeral = wizard_fsm.settings.get("ephemeral_keys", [])
@@ -1721,8 +1724,19 @@ class WizardReasoning(ReasoningStrategy):
             manager, llm, new_stage, wizard_state, tools
         )
 
+        # Check for tool-initiated restart (RestartWizardTool signal).
+        # Restart takes priority over completion — if both are set, restart
+        # clears the wizard state so completion would be meaningless.
+        if self._tool_restart_requested:
+            self._tool_restart_requested = False
+            self._tool_completion_requested = False
+            logger.info("Wizard restart signaled by restart_wizard tool")
+            response = await self._execute_restart(
+                user_message, wizard_state, manager, llm
+            )
+
         # Check for tool-initiated completion (CompleteWizardTool signal)
-        if not completed_before and self._tool_completion_requested:
+        elif not completed_before and self._tool_completion_requested:
             wizard_state.completed = True
             self._tool_completion_requested = False
             logger.info("Wizard completion signaled by complete_wizard tool")
@@ -3621,9 +3635,11 @@ class WizardReasoning(ReasoningStrategy):
         if self._catalog:
             extra_context["catalog"] = self._catalog
 
-        # Mutable signal dict for CompleteWizardTool to communicate back
+        # Mutable signal dicts for lifecycle tools to communicate back
         completion_signal: dict[str, Any] = {"requested": False}
         extra_context["_completion_signal"] = completion_signal
+        restart_signal: dict[str, Any] = {"requested": False}
+        extra_context["_restart_signal"] = restart_signal
 
         react = ReActReasoning(
             max_iterations=max_iterations,
@@ -3641,12 +3657,14 @@ class WizardReasoning(ReasoningStrategy):
             metadata=metadata,
         )
 
-        # Check if CompleteWizardTool signaled completion
+        # Check if lifecycle tools signaled completion or restart
         if completion_signal.get("requested"):
             self._tool_completion_requested = True
             self._tool_completion_summary = completion_signal.get(
                 "summary", ""
             )
+        if restart_signal.get("requested"):
+            self._tool_restart_requested = True
 
         return response
 

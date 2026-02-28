@@ -18,6 +18,7 @@ from dataknobs_bots.tools.bank_tools import (
     FinalizeArtifactTool,
     ListBankRecordsTool,
     RemoveBankRecordTool,
+    RestartWizardTool,
     UpdateBankRecordTool,
     _get_bank_from_context,
     _resolve_lookup_field,
@@ -1188,3 +1189,70 @@ class TestCompleteWizardTool:
         assert schema["type"] == "object"
         assert "summary" in schema["properties"]
         assert "required" not in schema
+
+
+class TestRestartWizardTool:
+    """Tests for RestartWizardTool."""
+
+    @pytest.mark.asyncio
+    async def test_restart_sets_signal(self) -> None:
+        """Signal dict mutated to requested: True."""
+        signal: dict[str, Any] = {"requested": False}
+        context = ToolExecutionContext(
+            conversation_id="test-conv",
+            user_id="test-user",
+            extra={"_restart_signal": signal},
+        )
+        tool = RestartWizardTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is True
+        assert result["restarting"] is True
+        assert signal["requested"] is True
+
+    @pytest.mark.asyncio
+    async def test_restart_already_requested(self) -> None:
+        """Idempotent: returns already_requested."""
+        signal: dict[str, Any] = {"requested": True}
+        context = ToolExecutionContext(
+            conversation_id="test-conv",
+            user_id="test-user",
+            extra={"_restart_signal": signal},
+        )
+        tool = RestartWizardTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is True
+        assert result["already_requested"] is True
+
+    @pytest.mark.asyncio
+    async def test_restart_no_signal(self) -> None:
+        """No signal in context -> error."""
+        context = _make_context()
+        tool = RestartWizardTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is False
+        assert "No restart signal" in result["error"]
+
+    def test_catalog_metadata(self) -> None:
+        meta = RestartWizardTool.catalog_metadata()
+        assert meta["name"] == "restart_wizard"
+        assert "wizard" in meta["tags"]
+
+    def test_schema_no_required_params(self) -> None:
+        tool = RestartWizardTool()
+        schema = tool.schema
+        assert schema["type"] == "object"
+        assert "required" not in schema
+
+    def test_default_tool_name(self) -> None:
+        tool = RestartWizardTool()
+        assert tool.name == "restart_wizard"
+
+    def test_custom_tool_name(self) -> None:
+        tool = RestartWizardTool(tool_name="reset_flow")
+        assert tool.name == "reset_flow"

@@ -16,6 +16,7 @@ Tools:
 - CompileArtifactTool: Compile all artifact fields and sections into output
 - FinalizeArtifactTool: Validate, compile, and lock an artifact
 - CompleteWizardTool: Signal wizard completion from a ReAct stage
+- RestartWizardTool: Signal wizard restart from a ReAct stage
 
 Example:
     ```python
@@ -1000,4 +1001,91 @@ class CompleteWizardTool(ContextAwareTool):
             "success": True,
             "completed": True,
             "summary": summary,
+        }
+
+
+class RestartWizardTool(ContextAwareTool):
+    """Signal wizard restart from within a ReAct stage.
+
+    Sets a restart signal in ``context.extra["_restart_signal"]``
+    that the wizard checks after the ReAct loop returns.  The wizard
+    then delegates to its existing ``_execute_restart()`` which clears
+    all banks, resets the artifact, and returns the FSM to the start
+    stage.
+    """
+
+    @classmethod
+    def catalog_metadata(cls) -> dict[str, Any]:
+        """Return catalog metadata for this tool class."""
+        return {
+            "name": "restart_wizard",
+            "description": (
+                "Restart the wizard from the beginning. "
+                "Clears all data and returns to the first stage."
+            ),
+            "tags": ("wizard",),
+        }
+
+    def __init__(self, tool_name: str | None = None) -> None:
+        """Initialize the tool.
+
+        Args:
+            tool_name: Custom tool name.  Defaults to ``"restart_wizard"``.
+        """
+        super().__init__(
+            name=tool_name or "restart_wizard",
+            description=(
+                "Restart the wizard from the beginning, "
+                "clearing all collected data."
+            ),
+        )
+
+    @property
+    def schema(self) -> dict[str, Any]:
+        """Return JSON Schema for tool parameters."""
+        return {
+            "type": "object",
+            "properties": {},
+        }
+
+    async def execute_with_context(
+        self,
+        context: ToolExecutionContext,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """Signal wizard restart.
+
+        Args:
+            context: Execution context with ``extra["_restart_signal"]``.
+            **kwargs: Not used.
+
+        Returns:
+            Dict confirming restart signal was set.
+        """
+        signal = context.extra.get("_restart_signal")
+        if signal is None:
+            return {
+                "success": False,
+                "error": (
+                    "No restart signal available. "
+                    "This tool can only be used within a wizard ReAct stage."
+                ),
+            }
+
+        # Idempotent: already requested
+        if signal.get("requested"):
+            return {
+                "success": True,
+                "already_requested": True,
+            }
+
+        signal["requested"] = True
+
+        logger.info(
+            "Wizard restart signaled via restart_wizard tool",
+            extra={"conversation_id": context.conversation_id},
+        )
+        return {
+            "success": True,
+            "restarting": True,
         }
