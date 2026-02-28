@@ -3,6 +3,14 @@
 from typing import Any
 
 from .artifact_bank import ArtifactBank
+from .artifact_io import (
+    append_to_book,
+    list_book,
+    load_artifact,
+    load_from_book,
+    save_artifact,
+    save_book,
+)
 from .bank import AsyncMemoryBank, BankRecord, EmptyBankProxy, MemoryBank
 from .base import Memory
 from .buffer import BufferMemory
@@ -19,7 +27,13 @@ __all__ = [
     "MemoryBank",
     "SummaryMemory",
     "VectorMemory",
+    "append_to_book",
     "create_memory_from_config",
+    "list_book",
+    "load_artifact",
+    "load_from_book",
+    "save_artifact",
+    "save_book",
 ]
 
 
