@@ -199,5 +199,6 @@ class ArtifactBankCatalog:
         backend_config = dict(config.get("backend_config", {}))
         backend_config["backend"] = backend
         db = database_factory.create(**backend_config)
+        db.connect()
         artifact_config = config.get("artifact_config")
         return cls(db=db, artifact_config=artifact_config)

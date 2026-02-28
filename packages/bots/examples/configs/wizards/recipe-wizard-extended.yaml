@@ -23,12 +23,17 @@ settings:
   artifact:
     name: recipe
     catalog:
-      backend: memory
+      backend: memory              # "sqlite" for cross-session persistence
+      # backend_config:
+      #   path: ./recipe-catalog.db
     fields:
       recipe_name:
         required: true
     sections:
       ingredients:
+        # backend: sqlite            # "sqlite" for persistent storage
+        # backend_config:
+        #   path: ./recipes.db
         schema:
           required: [name]
         max_records: 30

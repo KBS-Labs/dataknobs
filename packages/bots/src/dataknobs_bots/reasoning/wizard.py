@@ -628,7 +628,9 @@ class WizardReasoning(ReasoningStrategy):
         backend_config = dict(cfg.get("backend_config", {}))
         backend_config["backend"] = backend
         backend_config.setdefault("table", bank_name)
-        return database_factory.create(**backend_config), "external"
+        db = database_factory.create(**backend_config)
+        db.connect()
+        return db, "external"
 
     def _init_banks(self) -> None:
         """Create ``MemoryBank`` instances from wizard ``banks`` config."""
