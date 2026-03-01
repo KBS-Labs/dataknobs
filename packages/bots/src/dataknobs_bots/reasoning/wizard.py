@@ -1421,12 +1421,14 @@ class WizardReasoning(ReasoningStrategy):
 
                         if wizard_state.clarification_attempts >= 3:
                             response = await self._generate_restart_offer(
-                                manager, llm, stage, extraction.errors
+                                manager, llm, stage, extraction.errors,
+                                tools=tools, wizard_state=wizard_state,
                             )
                         else:
                             response = (
                                 await self._generate_clarification_response(
-                                    manager, llm, stage, extraction.errors
+                                    manager, llm, stage, extraction.errors,
+                                    tools=tools, wizard_state=wizard_state,
                                 )
                             )
 
@@ -1565,7 +1567,8 @@ class WizardReasoning(ReasoningStrategy):
                         # Save state before returning validation error
                         await self._save_wizard_state(manager, wizard_state)
                         response = await self._generate_validation_response(
-                            manager, llm, stage, validation_errors
+                            manager, llm, stage, validation_errors,
+                            tools=tools, wizard_state=wizard_state,
                         )
                         self._add_wizard_metadata(response, wizard_state, stage)
                         return response
@@ -4372,6 +4375,8 @@ class WizardReasoning(ReasoningStrategy):
         llm: Any,
         stage: dict[str, Any],
         errors: list[str],
+        tools: list[Any] | None = None,
+        wizard_state: WizardState | None = None,
     ) -> Any:
         """Generate response asking for corrections.
 
@@ -4380,6 +4385,8 @@ class WizardReasoning(ReasoningStrategy):
             llm: LLM provider
             stage: Current stage metadata
             errors: Validation error messages
+            tools: Available tools (so LLM can handle out-of-stage requests)
+            wizard_state: Current wizard state for metadata snapshot
 
         Returns:
             LLM response requesting corrections
@@ -4398,8 +4405,15 @@ The user's input for this stage needs clarification:
 Please kindly ask the user to provide the missing or corrected information.
 Be specific about what's needed but remain friendly and helpful.
 """
+        wizard_snapshot = (
+            {"wizard": self._build_wizard_metadata(wizard_state)}
+            if wizard_state
+            else None
+        )
         return await manager.complete(
             system_prompt_override=manager.system_prompt + error_context,
+            tools=tools,
+            metadata=wizard_snapshot,
         )
 
     async def _generate_transform_error_response(
@@ -4408,6 +4422,8 @@ Be specific about what's needed but remain friendly and helpful.
         llm: Any,
         stage: dict[str, Any],
         error: str,
+        tools: list[Any] | None = None,
+        wizard_state: WizardState | None = None,
     ) -> Any:
         """Generate response when a transition transform fails.
 
@@ -4420,6 +4436,8 @@ Be specific about what's needed but remain friendly and helpful.
             llm: LLM provider
             stage: Current stage metadata
             error: Error message from the failed transform
+            tools: Available tools (so LLM can handle out-of-stage requests)
+            wizard_state: Current wizard state for metadata snapshot
 
         Returns:
             LLM response explaining the error and offering retry
@@ -4436,8 +4454,15 @@ Please apologize for the issue and let the user know they can try again.
 If the error suggests a configuration or system issue, suggest they contact support.
 Be concise and helpful.
 """
+        wizard_snapshot = (
+            {"wizard": self._build_wizard_metadata(wizard_state)}
+            if wizard_state
+            else None
+        )
         return await manager.complete(
             system_prompt_override=manager.system_prompt + error_context,
+            tools=tools,
+            metadata=wizard_snapshot,
         )
 
     async def _generate_clarification_response(
@@ -4446,6 +4471,8 @@ Be concise and helpful.
         llm: Any,
         stage: dict[str, Any],
         issues: list[str],
+        tools: list[Any] | None = None,
+        wizard_state: WizardState | None = None,
     ) -> Any:
         """Generate response asking for clarification.
 
@@ -4454,6 +4481,8 @@ Be concise and helpful.
             llm: LLM provider
             stage: Current stage metadata
             issues: Extraction issues
+            tools: Available tools (so LLM can handle out-of-stage requests)
+            wizard_state: Current wizard state for metadata snapshot
 
         Returns:
             LLM response requesting clarification
@@ -4483,8 +4512,15 @@ I wasn't able to clearly understand the user's response for this stage.
 Please ask a clarifying question to help gather the needed information.
 Be conversational and helpful - don't make the user feel like they did something wrong.
 """
+        wizard_snapshot = (
+            {"wizard": self._build_wizard_metadata(wizard_state)}
+            if wizard_state
+            else None
+        )
         return await manager.complete(
             system_prompt_override=manager.system_prompt + clarification_context,
+            tools=tools,
+            metadata=wizard_snapshot,
         )
 
     async def _generate_restart_offer(
@@ -4493,6 +4529,8 @@ Be conversational and helpful - don't make the user feel like they did something
         llm: Any,
         stage: dict[str, Any],
         issues: list[str],
+        tools: list[Any] | None = None,
+        wizard_state: WizardState | None = None,
     ) -> Any:
         """Generate response offering to restart after multiple failures.
 
@@ -4501,6 +4539,8 @@ Be conversational and helpful - don't make the user feel like they did something
             llm: LLM provider
             stage: Current stage metadata
             issues: Extraction issues
+            tools: Available tools (so LLM can handle out-of-stage requests)
+            wizard_state: Current wizard state for metadata snapshot
 
         Returns:
             LLM response offering restart option
@@ -4519,8 +4559,15 @@ Please offer the user two options:
 
 Be empathetic and helpful - acknowledge that the questions might not be clear.
 """
+        wizard_snapshot = (
+            {"wizard": self._build_wizard_metadata(wizard_state)}
+            if wizard_state
+            else None
+        )
         return await manager.complete(
             system_prompt_override=manager.system_prompt + restart_context,
+            tools=tools,
+            metadata=wizard_snapshot,
         )
 
     # =========================================================================
