@@ -3112,21 +3112,46 @@ class WizardReasoning(ReasoningStrategy):
         return errors
 
     @staticmethod
+    def _is_ancestor_of(ancestor_id: str, descendant_id: str) -> bool:
+        """Check if *ancestor_id* is an ancestor of *descendant_id*.
+
+        Both IDs use dot-delimited segment notation (e.g. ``"0.1.2"``).
+        The root node (empty string) is considered an ancestor of every
+        node.  A node is NOT considered its own ancestor.
+
+        Args:
+            ancestor_id: Candidate ancestor node ID.
+            descendant_id: Node ID to check against.
+
+        Returns:
+            ``True`` if *ancestor_id* is a strict ancestor of
+            *descendant_id*.
+        """
+        if not ancestor_id:
+            # Root is ancestor of everything
+            return True
+        return descendant_id.startswith(ancestor_id + ".")
+
+    @staticmethod
     def _find_stage_node_id(manager: Any, stage_name: str) -> str | None:
         """Find the entry-point assistant node for the given wizard stage.
 
         Searches the conversation tree for assistant response nodes whose
-        metadata records ``wizard.current_stage == stage_name``.  Returns
-        the ``node_id`` of the **first** match in DFS order (the stage
-        entry node), or ``None`` if the stage has not been visited yet.
+        metadata records ``wizard.current_stage == stage_name``.  Only
+        nodes that are **ancestors of the current position** are
+        considered — nodes on other branches (e.g. from a previous
+        wizard run) are ignored.  This prevents post-restart stage
+        transitions from grafting new nodes onto old branches.
 
-        Using the first match is critical for ReAct stages, where the
-        ReAct loop creates many assistant nodes all tagged with the same
-        ``current_stage``.  Branching from the *last* (deepest) node
-        would nest the new branch inside the old ReAct subtree, leaking
-        prior tool-call context into the new visit.  Branching from the
-        *first* (entry) node makes the new visit a sibling of the entire
-        previous subtree — proper isolation.
+        Among ancestor matches, the first in DFS order (the shallowest
+        stage entry node) is returned.  This is critical for ReAct
+        stages, where the ReAct loop creates many assistant nodes all
+        tagged with the same ``current_stage``.  Branching from the
+        *last* (deepest) node would nest the new branch inside the old
+        ReAct subtree, leaking prior tool-call context into the new
+        visit.  Branching from the *first* (entry) node makes the new
+        visit a sibling of the entire previous subtree — proper
+        isolation.
 
         Args:
             manager: ConversationManager instance (must have ``state``).
@@ -3139,6 +3164,8 @@ class WizardReasoning(ReasoningStrategy):
         if state is None:
             return None
 
+        current_node_id: str = state.current_node_id
+
         matches = state.message_tree.find_nodes(
             lambda n: (
                 isinstance(n.data, ConversationNode)
@@ -3150,11 +3177,17 @@ class WizardReasoning(ReasoningStrategy):
         if not matches:
             return None
 
-        # First match in DFS order is the stage entry node — the
-        # correct branch point for isolating a new visit from the
-        # previous visit's subtree (especially ReAct tool-call chains).
-        first = matches[0]
-        return first.data.node_id if isinstance(first.data, ConversationNode) else None
+        # Return the first DFS match that is an ancestor of the current
+        # position.  Matches on other branches are stale references from
+        # prior wizard runs and must be ignored.
+        for match in matches:
+            if not isinstance(match.data, ConversationNode):
+                continue
+            node_id = match.data.node_id
+            if WizardReasoning._is_ancestor_of(node_id, current_node_id):
+                return node_id
+
+        return None
 
     async def _branch_for_revisited_stage(
         self, manager: Any, stage_name: str
