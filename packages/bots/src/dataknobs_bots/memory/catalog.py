@@ -30,24 +30,55 @@ logger = logging.getLogger(__name__)
 class ArtifactBankCatalog:
     """Collection of compiled artifacts backed by a ``SyncDatabase``.
 
-    Each artifact is stored as a ``Record`` keyed by its ``_artifact_name``
-    field.  The record data is the full compiled dict from
-    ``ArtifactBank.compile()``.
+    Each artifact is stored as a ``Record`` keyed by either a
+    configurable field value (``entry_name_field``) or the artifact's
+    type name.  The record data contains the compiled dict and an
+    optional ``"previous"`` field for single-level undo.
 
     Args:
         db: Sync database backend for storage.
         artifact_config: Optional artifact configuration dict passed to
             ``ArtifactBank.from_config`` when loading entries back into
             an ``ArtifactBank``.
+        entry_name_field: Optional artifact field name whose value is
+            used as the catalog entry key.  When set, each distinct
+            field value gets its own entry (e.g. each recipe name).
+            Falls back to ``artifact.name`` if unset or the field is
+            empty.
     """
 
     def __init__(
         self,
         db: SyncDatabase,
         artifact_config: dict[str, Any] | None = None,
+        entry_name_field: str | None = None,
     ) -> None:
         self._db = db
         self._artifact_config = artifact_config
+        self._entry_name_field = entry_name_field
+
+    # -----------------------------------------------------------------
+    # Entry name resolution
+    # -----------------------------------------------------------------
+
+    def resolve_entry_name(self, artifact: ArtifactBank) -> str:
+        """Resolve the catalog entry key for this artifact.
+
+        If ``entry_name_field`` is configured and the artifact has a
+        non-empty value for that field, the field value is used as the
+        key.  Otherwise falls back to ``artifact.name``.
+
+        Args:
+            artifact: The artifact to resolve a key for.
+
+        Returns:
+            The catalog entry key string.
+        """
+        if self._entry_name_field:
+            value = artifact.field(self._entry_name_field)
+            if value:
+                return str(value)
+        return artifact.name
 
     # -----------------------------------------------------------------
     # Read operations
@@ -106,13 +137,22 @@ class ArtifactBankCatalog:
     # Write operations
     # -----------------------------------------------------------------
 
-    def save(self, artifact: ArtifactBank) -> None:
+    def save(self, artifact: ArtifactBank) -> str:
         """Validate, compile, and upsert an artifact into the catalog.
 
-        The artifact is stored under its ``name`` as the record key.
+        The artifact is stored under a key resolved by
+        ``resolve_entry_name()`` (either the configured field value or
+        the artifact type name).
+
+        Before overwriting, the existing compiled data is preserved as a
+        ``"previous"`` field in the new record, enabling single-level
+        undo via ``revert()``.
 
         Args:
             artifact: The artifact to save.
+
+        Returns:
+            The catalog entry key under which the artifact was stored.
 
         Raises:
             ValueError: If the artifact fails validation.
@@ -123,14 +163,25 @@ class ArtifactBankCatalog:
                 f"Cannot save artifact '{artifact.name}': "
                 + "; ".join(errors)
             )
+        key = self.resolve_entry_name(artifact)
         compiled = artifact.compile()
-        record = Record({"compiled": compiled}, storage_id=artifact.name)
-        self._db.upsert(artifact.name, record)
+
+        # Preserve previous version for single-level undo.
+        existing = self._db.read(key)
+        previous = existing.data.get("compiled") if existing else None
+
+        record = Record(
+            {"compiled": compiled, "previous": previous},
+            storage_id=key,
+        )
+        self._db.upsert(key, record)
         logger.info(
-            "Saved artifact '%s' to catalog (%d sections)",
+            "Saved artifact '%s' to catalog as '%s' (%d sections)",
             artifact.name,
+            key,
             len(artifact.sections),
         )
+        return key
 
     def delete(self, name: str) -> bool:
         """Remove an entry by name.
@@ -145,6 +196,34 @@ class ArtifactBankCatalog:
             return False
         self._db.delete(name)
         logger.info("Deleted artifact '%s' from catalog", name)
+        return True
+
+    def revert(self, name: str) -> bool:
+        """Restore the previous version of a catalog entry.
+
+        Reads the ``"previous"`` field from the DB record and overwrites
+        ``"compiled"`` with it.  Sets ``"previous"`` to ``None`` — there
+        is no cascading undo.
+
+        Args:
+            name: Catalog entry name to revert.
+
+        Returns:
+            ``True`` if the entry was reverted, ``False`` if no entry or
+            no previous version exists.
+        """
+        record = self._db.read(name)
+        if record is None:
+            return False
+        previous = record.data.get("previous")
+        if previous is None:
+            return False
+        reverted = Record(
+            {"compiled": previous, "previous": None},
+            storage_id=name,
+        )
+        self._db.upsert(name, reverted)
+        logger.info("Reverted catalog entry '%s' to previous version", name)
         return True
 
     # -----------------------------------------------------------------
@@ -201,4 +280,9 @@ class ArtifactBankCatalog:
         db = database_factory.create(**backend_config)
         db.connect()
         artifact_config = config.get("artifact_config")
-        return cls(db=db, artifact_config=artifact_config)
+        entry_name_field = config.get("entry_name_field")
+        return cls(
+            db=db,
+            artifact_config=artifact_config,
+            entry_name_field=entry_name_field,
+        )

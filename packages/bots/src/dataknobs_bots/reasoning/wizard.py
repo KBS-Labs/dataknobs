@@ -1675,6 +1675,26 @@ class WizardReasoning(ReasoningStrategy):
             wizard_state.history.append(wizard_state.current_stage)
         wizard_state.completed = step_result.is_complete
 
+        # Auto-save artifact to catalog on stage transition.  Collection
+        # stages add records via bank.add() directly (not through tools),
+        # so tool-level auto-save won't capture them.  Saving here ensures
+        # the catalog stays current as the wizard progresses.
+        if to_stage != from_stage and self._catalog and self._artifact:
+            try:
+                errors = self._artifact.validate()
+                if not errors:
+                    self._catalog.save(self._artifact)
+                    logger.debug(
+                        "Auto-saved artifact on stage transition %s -> %s",
+                        from_stage,
+                        to_stage,
+                    )
+            except Exception:
+                logger.warning(
+                    "Auto-save on stage transition failed",
+                    exc_info=True,
+                )
+
         # Check for subflow pop (reached end state in subflow)
         if self._should_pop_subflow(wizard_state):
             self._handle_subflow_pop(wizard_state)

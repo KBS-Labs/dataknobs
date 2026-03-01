@@ -10,6 +10,7 @@ from dataknobs_llm.tools.context import ToolExecutionContext, WizardStateSnapsho
 
 from dataknobs_bots.memory.bank import BankRecord, MemoryBank
 from dataknobs_bots.memory.artifact_bank import ArtifactBank
+from dataknobs_bots.memory.catalog import ArtifactBankCatalog
 from dataknobs_bots.tools.bank_tools import (
     AddBankRecordTool,
     CompileArtifactTool,
@@ -1256,3 +1257,159 @@ class TestRestartWizardTool:
     def test_custom_tool_name(self) -> None:
         tool = RestartWizardTool(tool_name="reset_flow")
         assert tool.name == "reset_flow"
+
+
+# -----------------------------------------------------------------
+# Auto-save to catalog tests
+# -----------------------------------------------------------------
+
+
+def _make_artifact_with_catalog(
+    recipe_name: str | None = None,
+    ingredients: list[dict[str, Any]] | None = None,
+) -> tuple[ArtifactBank, ArtifactBankCatalog]:
+    """Create an ArtifactBank + catalog wired together for auto-save tests."""
+    section_db = SyncMemoryDatabase()
+    sections = {
+        "ingredients": MemoryBank(
+            name="ingredients",
+            schema={"required": ["name"]},
+            db=section_db,
+        ),
+    }
+    artifact = ArtifactBank(
+        name="recipe",
+        field_defs={"recipe_name": {"required": True}},
+        sections=sections,
+    )
+    if recipe_name:
+        artifact.set_field("recipe_name", recipe_name)
+    if ingredients:
+        bank = artifact.sections["ingredients"]
+        for ing in ingredients:
+            bank.add(ing, source_stage="test")
+    catalog = ArtifactBankCatalog(
+        SyncMemoryDatabase(), entry_name_field="recipe_name",
+    )
+    return artifact, catalog
+
+
+def _make_auto_save_context(
+    artifact: ArtifactBank,
+    catalog: ArtifactBankCatalog,
+    bank_name: str = "ingredients",
+) -> ToolExecutionContext:
+    """Create a context with banks, artifact, and catalog for auto-save."""
+    bank = artifact.sections[bank_name]
+    return ToolExecutionContext(
+        conversation_id="test-conv",
+        user_id="test-user",
+        extra={
+            "banks": {bank_name: bank},
+            "artifact": artifact,
+            "catalog": catalog,
+        },
+    )
+
+
+class TestAutoSaveToCatalog:
+    """Tests for auto-save to catalog after bank modifications."""
+
+    @pytest.mark.asyncio
+    async def test_add_bank_record_auto_saves(self) -> None:
+        """Adding a record auto-saves a valid artifact to catalog."""
+        artifact, catalog = _make_artifact_with_catalog(
+            recipe_name="Cookies",
+            ingredients=[{"name": "flour"}],
+        )
+        context = _make_auto_save_context(artifact, catalog)
+        tool = AddBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context, bank_name="ingredients", data={"name": "sugar"},
+        )
+        assert result["success"] is True
+
+        # Catalog should have the artifact saved under the recipe name
+        assert catalog.count() == 1
+        entry = catalog.get("Cookies")
+        assert entry is not None
+        assert entry["recipe_name"] == "Cookies"
+
+    @pytest.mark.asyncio
+    async def test_add_bank_record_auto_save_skips_invalid(self) -> None:
+        """Auto-save is skipped when the artifact is incomplete."""
+        artifact, catalog = _make_artifact_with_catalog()
+        # No recipe_name set, artifact validation will fail
+        context = _make_auto_save_context(artifact, catalog)
+        tool = AddBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context, bank_name="ingredients", data={"name": "flour"},
+        )
+        assert result["success"] is True
+        # Catalog should still be empty — validation failed
+        assert catalog.count() == 0
+
+    @pytest.mark.asyncio
+    async def test_update_bank_record_auto_saves(self) -> None:
+        """Updating a record auto-saves to catalog."""
+        artifact, catalog = _make_artifact_with_catalog(
+            recipe_name="Cookies",
+            ingredients=[{"name": "flour"}],
+        )
+        context = _make_auto_save_context(artifact, catalog)
+
+        # Get the record_id of the existing ingredient
+        bank = artifact.sections["ingredients"]
+        records = bank.all()
+        record_id = records[0].record_id
+
+        tool = UpdateBankRecordTool()
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            record_id=record_id,
+            data={"name": "whole wheat flour"},
+        )
+        assert result["success"] is True
+        assert catalog.count() == 1
+
+    @pytest.mark.asyncio
+    async def test_remove_bank_record_auto_saves(self) -> None:
+        """Removing a record auto-saves to catalog (if still valid)."""
+        artifact, catalog = _make_artifact_with_catalog(
+            recipe_name="Cookies",
+            ingredients=[{"name": "flour"}, {"name": "sugar"}],
+        )
+        context = _make_auto_save_context(artifact, catalog)
+
+        # Remove one ingredient (still has one left, so artifact is valid)
+        bank = artifact.sections["ingredients"]
+        records = bank.all()
+        record_id = records[0].record_id
+
+        tool = RemoveBankRecordTool()
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            record_id=record_id,
+        )
+        assert result["success"] is True
+        assert catalog.count() == 1
+
+    @pytest.mark.asyncio
+    async def test_auto_save_no_catalog_noop(self) -> None:
+        """No catalog in context → no error, no crash."""
+        bank = _make_bank("ingredients", required=["name"])
+        context = ToolExecutionContext(
+            conversation_id="test-conv",
+            user_id="test-user",
+            extra={"banks": {"ingredients": bank}},
+        )
+        tool = AddBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context, bank_name="ingredients", data={"name": "flour"},
+        )
+        assert result["success"] is True

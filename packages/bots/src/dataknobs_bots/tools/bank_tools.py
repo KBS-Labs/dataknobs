@@ -127,6 +127,31 @@ def _validate_record_id(record_id: str) -> dict[str, Any] | None:
     return None
 
 
+def _auto_save_to_catalog(context: ToolExecutionContext) -> None:
+    """Auto-save artifact to catalog after a bank modification.
+
+    Silent no-op if catalog or artifact isn't configured, or if
+    the artifact fails validation (e.g. incomplete recipe).
+
+    Args:
+        context: Tool execution context with optional ``"catalog"``
+            and ``"artifact"`` in ``extra``.
+    """
+    catalog = context.extra.get("catalog")
+    artifact = context.extra.get("artifact")
+    if catalog is None or artifact is None:
+        return
+    errors = artifact.validate()
+    if errors:
+        logger.debug("Auto-save skipped (validation): %s", errors)
+        return
+    try:
+        entry_name = catalog.save(artifact)
+        logger.debug("Auto-saved artifact to catalog as '%s'", entry_name)
+    except Exception:
+        logger.warning("Auto-save to catalog failed", exc_info=True)
+
+
 class ListBankRecordsTool(ContextAwareTool):
     """Tool for listing all records in a MemoryBank.
 
@@ -336,6 +361,8 @@ class AddBankRecordTool(ContextAwareTool):
             extra={"conversation_id": context.conversation_id},
         )
 
+        _auto_save_to_catalog(context)
+
         return {
             "success": True,
             "record_id": record_id,
@@ -471,6 +498,8 @@ class UpdateBankRecordTool(ContextAwareTool):
             extra={"conversation_id": context.conversation_id},
         )
 
+        _auto_save_to_catalog(context)
+
         return {
             "success": True,
             "record_id": record_id,
@@ -582,6 +611,8 @@ class RemoveBankRecordTool(ContextAwareTool):
             bank_name,
             extra={"conversation_id": context.conversation_id},
         )
+
+        _auto_save_to_catalog(context)
 
         return {
             "success": True,

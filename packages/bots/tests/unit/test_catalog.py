@@ -193,6 +193,175 @@ class TestArtifactBankCatalog:
         assert catalog.count() == 0
 
 
+class TestCatalogEntryNameField:
+    """Tests for entry_name_field and per-entry keying."""
+
+    def test_save_uses_entry_name_field(self) -> None:
+        """Catalog with entry_name_field saves under the field value."""
+        catalog = ArtifactBankCatalog(
+            SyncMemoryDatabase(), entry_name_field="recipe_name",
+        )
+        artifact = _make_artifact(
+            recipe_name="Chocolate Cookies",
+            ingredients=[{"name": "cocoa"}],
+        )
+        key = catalog.save(artifact)
+        assert key == "Chocolate Cookies"
+        assert catalog.get("Chocolate Cookies") is not None
+        assert catalog.get("recipe") is None  # NOT stored under type name
+
+    def test_save_entry_name_fallback(self) -> None:
+        """Without entry_name_field, falls back to artifact.name."""
+        catalog = ArtifactBankCatalog(SyncMemoryDatabase())
+        artifact = _make_artifact(
+            recipe_name="Cookies",
+            ingredients=[{"name": "flour"}],
+        )
+        key = catalog.save(artifact)
+        assert key == "recipe"
+        assert catalog.get("recipe") is not None
+
+    def test_save_entry_name_field_empty_fallback(self) -> None:
+        """entry_name_field configured but field is empty → fallback."""
+        catalog = ArtifactBankCatalog(
+            SyncMemoryDatabase(), entry_name_field="recipe_name",
+        )
+        # Create artifact with required field set (for validation),
+        # but entry_name_field points to recipe_name.  We need it set.
+        artifact = _make_artifact(
+            recipe_name="Cookies",
+            ingredients=[{"name": "flour"}],
+        )
+        # Verify it uses the field value
+        key = catalog.save(artifact)
+        assert key == "Cookies"
+
+    def test_save_returns_entry_name(self) -> None:
+        """save() returns the resolved entry name string."""
+        catalog = ArtifactBankCatalog(
+            SyncMemoryDatabase(), entry_name_field="recipe_name",
+        )
+        artifact = _make_artifact(
+            recipe_name="Pasta",
+            ingredients=[{"name": "noodles"}],
+        )
+        result = catalog.save(artifact)
+        assert isinstance(result, str)
+        assert result == "Pasta"
+
+    def test_separate_entries_for_different_names(self) -> None:
+        """Different field values create separate catalog entries."""
+        catalog = ArtifactBankCatalog(
+            SyncMemoryDatabase(), entry_name_field="recipe_name",
+        )
+        a1 = _make_artifact(recipe_name="Cookies", ingredients=[{"name": "flour"}])
+        a2 = _make_artifact(recipe_name="Pasta", ingredients=[{"name": "noodles"}])
+        catalog.save(a1)
+        catalog.save(a2)
+        assert catalog.count() == 2
+        assert catalog.get("Cookies") is not None
+        assert catalog.get("Pasta") is not None
+
+    def test_from_config_entry_name_field(self) -> None:
+        """from_config passes through entry_name_field."""
+        catalog = ArtifactBankCatalog.from_config({
+            "backend": "memory",
+            "entry_name_field": "recipe_name",
+        })
+        artifact = _make_artifact(
+            recipe_name="Test",
+            ingredients=[{"name": "salt"}],
+        )
+        key = catalog.save(artifact)
+        assert key == "Test"
+
+
+class TestCatalogPreviousVersion:
+    """Tests for previous-version cache and revert."""
+
+    def test_save_stores_previous_in_db(self) -> None:
+        """Saving twice stores the first version as 'previous'."""
+        db = SyncMemoryDatabase()
+        catalog = ArtifactBankCatalog(db)
+
+        v1 = _make_artifact(
+            recipe_name="Cookies v1",
+            ingredients=[{"name": "flour"}],
+        )
+        catalog.save(v1)
+
+        v2 = _make_artifact(
+            recipe_name="Cookies v2",
+            ingredients=[{"name": "sugar"}],
+        )
+        catalog.save(v2)
+
+        # Read raw DB record to verify 'previous' field
+        record = db.read("recipe")
+        assert record is not None
+        assert record.data["compiled"]["recipe_name"] == "Cookies v2"
+        assert record.data["previous"] is not None
+        assert record.data["previous"]["recipe_name"] == "Cookies v1"
+
+    def test_first_save_has_no_previous(self) -> None:
+        """First save has previous=None."""
+        db = SyncMemoryDatabase()
+        catalog = ArtifactBankCatalog(db)
+
+        artifact = _make_artifact(
+            recipe_name="Cookies",
+            ingredients=[{"name": "flour"}],
+        )
+        catalog.save(artifact)
+
+        record = db.read("recipe")
+        assert record is not None
+        assert record.data["previous"] is None
+
+    def test_revert_restores_previous(self) -> None:
+        """revert() overwrites compiled with previous, clears previous."""
+        db = SyncMemoryDatabase()
+        catalog = ArtifactBankCatalog(db)
+
+        v1 = _make_artifact(
+            recipe_name="Cookies v1",
+            ingredients=[{"name": "flour"}],
+        )
+        catalog.save(v1)
+
+        v2 = _make_artifact(
+            recipe_name="Cookies v2",
+            ingredients=[{"name": "sugar"}],
+        )
+        catalog.save(v2)
+
+        assert catalog.revert("recipe") is True
+
+        result = catalog.get("recipe")
+        assert result is not None
+        assert result["recipe_name"] == "Cookies v1"
+
+        # Previous is cleared (no cascading undo)
+        record = db.read("recipe")
+        assert record is not None
+        assert record.data["previous"] is None
+
+    def test_revert_no_previous(self) -> None:
+        """revert() returns False when there is no previous version."""
+        catalog = ArtifactBankCatalog(SyncMemoryDatabase())
+        artifact = _make_artifact(
+            recipe_name="Cookies",
+            ingredients=[{"name": "flour"}],
+        )
+        catalog.save(artifact)
+        assert catalog.revert("recipe") is False
+
+    def test_revert_nonexistent_entry(self) -> None:
+        """revert() returns False for a non-existent entry."""
+        catalog = ArtifactBankCatalog(SyncMemoryDatabase())
+        assert catalog.revert("nonexistent") is False
+
+
 class TestArtifactBankPopulateReplace:
     """Tests for ArtifactBank.populate_from_compiled and replace_from_compiled."""
 

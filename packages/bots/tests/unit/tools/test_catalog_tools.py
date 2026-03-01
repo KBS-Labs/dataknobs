@@ -228,3 +228,59 @@ class TestLoadFromCatalogTool:
         result = await tool.execute_with_context(context, name="recipe")
         assert result["success"] is False
         assert "artifact" in result["error"].lower()
+
+
+class TestSaveToCatalogAutoFinalize:
+    """Tests for auto-finalize behaviour after explicit catalog save."""
+
+    @pytest.mark.asyncio
+    async def test_save_to_catalog_auto_finalizes(self) -> None:
+        """Explicit save_to_catalog auto-finalizes the artifact."""
+        catalog = ArtifactBankCatalog(SyncMemoryDatabase())
+        artifact = _make_artifact(
+            recipe_name="Cookies",
+            ingredients=[{"name": "flour"}],
+        )
+        assert artifact.is_finalized is False
+
+        context = _make_context(artifact=artifact, catalog=catalog)
+        tool = SaveToCatalogTool()
+
+        result = await tool.execute_with_context(context)
+        assert result["success"] is True
+        assert artifact.is_finalized is True
+
+    @pytest.mark.asyncio
+    async def test_save_already_finalized_is_idempotent(self) -> None:
+        """If artifact is already finalized, save still succeeds."""
+        catalog = ArtifactBankCatalog(SyncMemoryDatabase())
+        artifact = _make_artifact(
+            recipe_name="Cookies",
+            ingredients=[{"name": "flour"}],
+        )
+        artifact.finalize()
+        assert artifact.is_finalized is True
+
+        context = _make_context(artifact=artifact, catalog=catalog)
+        tool = SaveToCatalogTool()
+
+        result = await tool.execute_with_context(context)
+        assert result["success"] is True
+        assert artifact.is_finalized is True
+
+    @pytest.mark.asyncio
+    async def test_save_returns_resolved_entry_name(self) -> None:
+        """SaveToCatalogTool returns the resolved entry name."""
+        catalog = ArtifactBankCatalog(
+            SyncMemoryDatabase(), entry_name_field="recipe_name",
+        )
+        artifact = _make_artifact(
+            recipe_name="Chocolate Cake",
+            ingredients=[{"name": "cocoa"}],
+        )
+        context = _make_context(artifact=artifact, catalog=catalog)
+        tool = SaveToCatalogTool()
+
+        result = await tool.execute_with_context(context)
+        assert result["success"] is True
+        assert result["name"] == "Chocolate Cake"

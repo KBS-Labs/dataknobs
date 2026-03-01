@@ -217,15 +217,31 @@ class SaveToCatalogTool(ContextAwareTool):
                 "errors": errors,
             }
 
-        catalog.save(artifact)
+        entry_name = catalog.save(artifact)
+
+        # Auto-finalize after explicit save — triggers the auto-restart
+        # guard in wizard.py when the next user message arrives, so the
+        # LLM doesn't need to remember to call finalize_artifact +
+        # complete_wizard separately.
+        if not artifact.is_finalized:
+            try:
+                artifact.finalize()
+                logger.info(
+                    "Auto-finalized artifact after catalog save",
+                    extra={"conversation_id": context.conversation_id},
+                )
+            except ValueError:
+                pass  # Validation errors — already saved, just can't finalize
+
         logger.info(
-            "Saved artifact '%s' to catalog",
+            "Saved artifact '%s' to catalog as '%s'",
             artifact.name,
+            entry_name,
             extra={"conversation_id": context.conversation_id},
         )
         return {
             "success": True,
-            "name": artifact.name,
+            "name": entry_name,
             "catalog_count": catalog.count(),
         }
 
