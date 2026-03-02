@@ -26,6 +26,8 @@ from .observability import (
 from .wizard_hooks import WizardHooks
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from dataknobs_data import SyncDatabase
 
     from .wizard_fsm import WizardFSM
@@ -759,6 +761,144 @@ class WizardReasoning(ReasoningStrategy):
                 "artifact_config": artifact_config,
             })
 
+        # Optionally seed the artifact from a file.
+        seed_config = artifact_config.get("seed")
+        if seed_config:
+            self._seed_artifact(seed_config)
+
+    def _seed_artifact(self, seed_config: dict[str, Any]) -> None:
+        """Populate the artifact from a seed file.
+
+        Loads a JSON or JSONL file and populates the existing artifact
+        using ``populate_from_compiled()``.  Format is auto-detected
+        from the file extension unless explicitly specified.
+
+        For JSONL books, ``select`` matches against ``_artifact_name``
+        first, then against any top-level string field value (e.g. a
+        recipe name).  Without ``select``, the first entry is used.
+
+        Failures are logged as warnings and do not prevent the wizard
+        from starting with an empty artifact.
+
+        Args:
+            seed_config: Seed configuration with ``source`` (file path),
+                optional ``format`` (``"json"`` or ``"jsonl"``), and
+                optional ``select`` (name to match in JSONL book).
+        """
+        import json
+        from pathlib import Path
+
+        source = seed_config.get("source")
+        if not source:
+            logger.warning("Seed config missing 'source', skipping seed")
+            return
+
+        source_path = Path(source)
+        if not source_path.exists():
+            logger.warning(
+                "Seed file not found: %s, proceeding with empty artifact",
+                source_path,
+            )
+            return
+
+        # Determine format: explicit config or auto-detect from extension
+        fmt = seed_config.get("format")
+        if not fmt:
+            fmt = "jsonl" if source_path.suffix.lower() == ".jsonl" else "json"
+
+        try:
+            if fmt == "jsonl":
+                data = self._load_jsonl_entry(
+                    source_path, seed_config.get("select"),
+                )
+            else:
+                text = source_path.read_text(encoding="utf-8")
+                data = json.loads(text)
+                if not isinstance(data, dict):
+                    logger.warning(
+                        "Seed file %s does not contain a JSON object",
+                        source_path,
+                    )
+                    return
+
+            # Full-state format (from to_dict()) has nested structure;
+            # convert to compiled format for populate_from_compiled().
+            if "name" in data and "sections" in data and "_artifact_name" not in data:
+                from ..memory.artifact_bank import ArtifactBank
+
+                temp = ArtifactBank.from_dict(data)
+                data = temp.compile()
+
+            self._artifact.populate_from_compiled(
+                data, source_stage="seed",
+            )
+            logger.info(
+                "Seeded artifact '%s' from %s",
+                self._artifact.name,
+                source_path,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to seed artifact from %s, proceeding with empty artifact",
+                source_path,
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _load_jsonl_entry(
+        path: Path,
+        select: str | None,
+    ) -> dict[str, Any]:
+        """Read a single entry from a JSONL book file.
+
+        Args:
+            path: JSONL file path.
+            select: Optional name to match.  Checked against
+                ``_artifact_name`` first, then any top-level string
+                field value.  If ``None``, the first entry is returned.
+
+        Returns:
+            Parsed JSON dict for the matched entry.
+
+        Raises:
+            ValueError: If no entries or no match found.
+        """
+        import json
+
+        entries: list[dict[str, Any]] = []
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped:
+                    obj = json.loads(stripped)
+                    if isinstance(obj, dict):
+                        entries.append(obj)
+
+        if not entries:
+            raise ValueError(f"No entries in JSONL book: {path}")
+
+        if select is None:
+            return entries[0]
+
+        # Match on _artifact_name first
+        for entry in entries:
+            if entry.get("_artifact_name") == select:
+                return entry
+
+        # Match on any top-level string field value
+        for entry in entries:
+            for key, value in entry.items():
+                if not key.startswith("_") and isinstance(value, str) and value == select:
+                    return entry
+
+        available = [
+            entry.get("_artifact_name", "<unnamed>") for entry in entries
+        ]
+        raise ValueError(
+            f"No entry matching '{select}' in {path}. "
+            f"Available artifact names: {available}"
+        )
+
     def _sync_artifact_fields(self, state: WizardState) -> None:
         """Sync wizard state data into artifact fields.
 
@@ -920,9 +1060,8 @@ class WizardReasoning(ReasoningStrategy):
         # Stage-configurable help keywords (exact match)
         col_config = stage.get("collection_config") or {}
         help_keywords = col_config.get("help_keywords", [])
-        if help_keywords:
-            if any(msg == kw.strip().lower() for kw in help_keywords):
-                return "help"
+        if help_keywords and any(msg == kw.strip().lower() for kw in help_keywords):
+            return "help"
 
         # Built-in heuristic: question marks or common help phrasing
         if msg.endswith("?"):

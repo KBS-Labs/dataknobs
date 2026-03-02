@@ -27,6 +27,10 @@ settings:
       backend: memory              # "sqlite" for cross-session persistence
       # backend_config:
       #   path: ./recipe-catalog.db
+    # seed:                          # Pre-populate artifact from file
+    #   source: ./my-recipe.json     # JSON file path
+    #   # format: json               # "json" (default) or "jsonl" (auto-detected from extension)
+    #   # select: "Banana Bread"     # For JSONL: pick entry by name (default: first entry)
     fields:
       recipe_name:
         required: true
