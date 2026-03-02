@@ -890,6 +890,61 @@ class WizardReasoning(ReasoningStrategy):
             normalised == kw.strip().lower() for kw in done_keywords
         )
 
+    @staticmethod
+    def _classify_collection_intent(
+        message: str, stage: dict[str, Any],
+    ) -> str:
+        """Classify user intent during a collection-mode stage.
+
+        Runs rule-based checks to distinguish help requests from data
+        input **before** extraction.  Navigation and done signals are
+        handled upstream (``_handle_navigation`` and
+        ``_is_done_signal``), so this method only discriminates between:
+
+        - ``"help"`` — the user is asking a question about what to
+          provide, not providing data.
+        - ``"data_input"`` — default; proceed to extraction.
+
+        Custom help keywords can be supplied per-stage via
+        ``collection_config.help_keywords``.
+
+        Args:
+            message: Raw user message text.
+            stage: Current stage metadata dict.
+
+        Returns:
+            Intent string: ``"help"`` or ``"data_input"``.
+        """
+        msg = message.strip().lower()
+
+        # Stage-configurable help keywords (exact match)
+        col_config = stage.get("collection_config") or {}
+        help_keywords = col_config.get("help_keywords", [])
+        if help_keywords:
+            if any(msg == kw.strip().lower() for kw in help_keywords):
+                return "help"
+
+        # Built-in heuristic: question marks or common help phrasing
+        if msg.endswith("?"):
+            return "help"
+
+        help_starters = (
+            "what should i",
+            "what do i",
+            "what do you need",
+            "what goes here",
+            "help",
+            "explain",
+            "i don't understand",
+            "i don't know what",
+            "what kind of",
+            "what format",
+        )
+        if any(msg.startswith(s) for s in help_starters):
+            return "help"
+
+        return "data_input"
+
     async def close(self) -> None:
         """Close the reasoning strategy and release resources.
 
@@ -1357,6 +1412,25 @@ class WizardReasoning(ReasoningStrategy):
                     stage.get("name"),
                 )
 
+        # ── Collection-mode help intent (before extraction) ──
+        # When a collection-mode stage receives a help request, skip
+        # extraction and generate a contextual help response.
+        _collection_help = False
+        if (
+            stage.get("collection_mode") == "collection"
+            and not is_conversation
+            and not _collection_done_signal
+        ):
+            collection_intent = self._classify_collection_intent(
+                user_message, stage,
+            )
+            if collection_intent == "help":
+                _collection_help = True
+                logger.debug(
+                    "Collection help intent at stage '%s'",
+                    stage.get("name"),
+                )
+
         if is_conversation:
             # Conversation mode: skip extraction, run intent detection
             stage_name = stage.get("name", "unknown")
@@ -1369,6 +1443,27 @@ class WizardReasoning(ReasoningStrategy):
             # Done keyword detected — skip extraction and fall through
             # to transition evaluation below.
             pass
+        elif _collection_help:
+            # Help request during collection — generate a contextual
+            # response without extraction, then return immediately so
+            # the stage loops for the next data input.
+            stage_context = self._build_stage_context(stage, wizard_state)
+            enhanced = f"{manager.system_prompt}\n\n{stage_context}"
+            help_context = (
+                "\n\n## User Needs Help\n"
+                "The user is asking for guidance about what to provide. "
+                "Answer their question helpfully and concisely, then "
+                "invite them to provide the next item."
+            )
+            wizard_snapshot = {"wizard": self._build_wizard_metadata(wizard_state)}
+            response = await manager.complete(
+                system_prompt_override=enhanced + help_context,
+                tools=self._filter_tools_for_stage(stage, tools),
+                metadata=wizard_snapshot,
+            )
+            self._add_wizard_metadata(response, wizard_state, stage)
+            await self._save_wizard_state(manager, wizard_state)
+            return response
         else:
             # Structured mode: extract data and validate
 
@@ -2790,6 +2885,22 @@ class WizardReasoning(ReasoningStrategy):
                 data={"_raw_input": message}, confidence=1.0
             )
 
+        # Verbatim capture: skip LLM extraction for trivial schemas
+        # (single required string field, no constraints) or when
+        # capture_mode is explicitly set to "verbatim".
+        if not self._needs_llm_extraction(schema, stage):
+            field_name = next(iter(schema.get("properties", {})))
+            logger.debug(
+                "Verbatim capture: stage='%s', field='%s'",
+                stage_name,
+                field_name,
+            )
+            return SimpleExtractionResult(
+                data={field_name: message},
+                confidence=1.0,
+                metadata={"capture_mode": "verbatim"},
+            )
+
         # Build extraction input based on scope (stage override or wizard default)
         extraction_scope = self._get_extraction_scope(stage)
         if (
@@ -3749,6 +3860,54 @@ class WizardReasoning(ReasoningStrategy):
             Extraction scope from stage config or wizard default
         """
         return stage.get("extraction_scope") or self._extraction_scope
+
+    def _needs_llm_extraction(
+        self, schema: dict[str, Any], stage: dict[str, Any],
+    ) -> bool:
+        """Determine whether LLM extraction is needed for a schema.
+
+        Returns ``False`` when the schema describes a single required string
+        field with no enum or format constraints — the user's raw input can
+        be used directly (verbatim capture).
+
+        The decision can be overridden via ``collection_config.capture_mode``:
+
+        - ``"auto"`` (default): use schema-based detection described above.
+        - ``"verbatim"``: always skip LLM extraction.
+        - ``"extract"``: always use LLM extraction.
+
+        Args:
+            schema: JSON Schema dict for the current stage.
+            stage: Current stage metadata dict.
+
+        Returns:
+            ``True`` if LLM extraction should be used, ``False`` for
+            verbatim capture.
+        """
+        col_config = stage.get("collection_config") or {}
+        capture_mode = col_config.get("capture_mode", "auto")
+
+        if capture_mode == "verbatim":
+            return False
+        if capture_mode == "extract":
+            return True
+
+        # Auto-detect: single required string field with no constraints
+        properties = schema.get("properties", {})
+        required = schema.get("required", [])
+
+        if len(required) == 1 and len(properties) == 1:
+            field_name = required[0]
+            field_def = properties.get(field_name, {})
+            if (
+                field_def.get("type") == "string"
+                and "enum" not in field_def
+                and "pattern" not in field_def
+                and "format" not in field_def
+            ):
+                return False
+
+        return True
 
     async def _react_stage_response(
         self,
