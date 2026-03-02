@@ -3929,6 +3929,73 @@ class WizardReasoning(ReasoningStrategy):
                     lines.append(f"- {key}: {value}")
                 lines.append("")
 
+        # CD-2: Inject collection progress during collection iterations
+        # Sibling branching prunes prior inputs from the ancestor path,
+        # so the LLM needs an explicit summary of what's been collected.
+        if stage.get("collection_mode") == "collection":
+            col_config = stage.get("collection_config", {})
+            bank_name = col_config.get("bank_name", "")
+            bank = self._banks.get(bank_name)
+            if bank and bank.count() > 0:
+                max_display = 20
+                records = bank.all()
+                lines.append(f"\n## Collection Progress ({bank_name})")
+                lines.append(
+                    f"{bank.count()} items collected so far:"
+                )
+                for record in records[:max_display]:
+                    summary = ", ".join(
+                        f"{v}" for k, v in record.data.items()
+                        if not k.startswith("_")
+                    )
+                    lines.append(f"- {summary}")
+                if len(records) > max_display:
+                    lines.append(
+                        f"- ... and {len(records) - max_display} more"
+                    )
+                lines.append("")
+
+        # CD-3: Inject compiled artifact snapshot at guided-to-dynamic boundary
+        # When transitioning to a ReAct review stage, provide the full artifact
+        # overview so the LLM doesn't need tool calls to see collected data.
+        if self._use_react_for_stage(stage) and self._artifact:
+            has_data = (
+                self._artifact.fields
+                or any(
+                    bank.count() > 0
+                    for bank in self._artifact.sections.values()
+                )
+            )
+            if has_data:
+                max_section_display = 20
+                lines.append("\n## Collection Summary")
+                compiled = self._artifact.compile()
+                for key, value in compiled.items():
+                    if key.startswith("_"):
+                        continue
+                    if isinstance(value, list):
+                        continue  # Sections handled below
+                    if value is not None:
+                        lines.append(f"- {key}: {value}")
+                for section_name, bank in self._artifact.sections.items():
+                    if bank.count() > 0:
+                        lines.append(
+                            f"\n### {section_name} "
+                            f"({bank.count()} records)"
+                        )
+                        for record in bank.all()[:max_section_display]:
+                            summary = ", ".join(
+                                f"{v}" for k, v in record.data.items()
+                                if not k.startswith("_")
+                            )
+                            lines.append(f"- {summary}")
+                        if bank.count() > max_section_display:
+                            lines.append(
+                                f"- ... and "
+                                f"{bank.count() - max_section_display} more"
+                            )
+                lines.append("")
+
         if state.completed:
             lines.append("\nThe wizard is complete. Summarize what was collected.")
         else:
@@ -4405,13 +4472,24 @@ The user's input for this stage needs clarification:
 Please kindly ask the user to provide the missing or corrected information.
 Be specific about what's needed but remain friendly and helpful.
 """
+        # CD-8: Include full stage context (collection progress, already
+        # collected data) so non-happy-path responses have the same
+        # context richness as happy-path responses.
+        stage_context = (
+            self._build_stage_context(stage, wizard_state)
+            if wizard_state
+            else ""
+        )
         wizard_snapshot = (
             {"wizard": self._build_wizard_metadata(wizard_state)}
             if wizard_state
             else None
         )
+        base = manager.system_prompt
+        if stage_context:
+            base = f"{base}\n\n{stage_context}"
         return await manager.complete(
-            system_prompt_override=manager.system_prompt + error_context,
+            system_prompt_override=base + error_context,
             tools=tools,
             metadata=wizard_snapshot,
         )
@@ -4512,13 +4590,24 @@ I wasn't able to clearly understand the user's response for this stage.
 Please ask a clarifying question to help gather the needed information.
 Be conversational and helpful - don't make the user feel like they did something wrong.
 """
+        # CD-8: Include full stage context (collection progress, already
+        # collected data) so non-happy-path responses have the same
+        # context richness as happy-path responses.
+        stage_context = (
+            self._build_stage_context(stage, wizard_state)
+            if wizard_state
+            else ""
+        )
         wizard_snapshot = (
             {"wizard": self._build_wizard_metadata(wizard_state)}
             if wizard_state
             else None
         )
+        base = manager.system_prompt
+        if stage_context:
+            base = f"{base}\n\n{stage_context}"
         return await manager.complete(
-            system_prompt_override=manager.system_prompt + clarification_context,
+            system_prompt_override=base + clarification_context,
             tools=tools,
             metadata=wizard_snapshot,
         )
@@ -4559,13 +4648,24 @@ Please offer the user two options:
 
 Be empathetic and helpful - acknowledge that the questions might not be clear.
 """
+        # CD-8: Include full stage context (collection progress, already
+        # collected data) so non-happy-path responses have the same
+        # context richness as happy-path responses.
+        stage_context = (
+            self._build_stage_context(stage, wizard_state)
+            if wizard_state
+            else ""
+        )
         wizard_snapshot = (
             {"wizard": self._build_wizard_metadata(wizard_state)}
             if wizard_state
             else None
         )
+        base = manager.system_prompt
+        if stage_context:
+            base = f"{base}\n\n{stage_context}"
         return await manager.complete(
-            system_prompt_override=manager.system_prompt + restart_context,
+            system_prompt_override=base + restart_context,
             tools=tools,
             metadata=wizard_snapshot,
         )
