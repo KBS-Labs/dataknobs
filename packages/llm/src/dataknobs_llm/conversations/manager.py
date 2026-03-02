@@ -644,6 +644,7 @@ class ConversationManager:
         branch_name: str | None = None,
         metadata: Dict[str, Any] | None = None,
         llm_config_overrides: Dict[str, Any] | None = None,
+        system_prompt_override: str | None = None,
     ) -> LLMResponse:
         """Post-LLM processing shared by complete() and stream_complete().
 
@@ -657,6 +658,8 @@ class ConversationManager:
             metadata: Optional extra metadata for the assistant node.
             llm_config_overrides: Config overrides that were applied (for
                 metadata tracking).
+            system_prompt_override: The system prompt override that was used
+                for this completion (stored in metadata for replay/debugging).
 
         Returns:
             The (possibly middleware-mutated) LLMResponse.
@@ -705,6 +708,10 @@ class ConversationManager:
         # Track config overrides if they were applied
         if llm_config_overrides:
             assistant_metadata["config_overrides_applied"] = llm_config_overrides
+
+        # Track system prompt override for replay/debugging (CD-10)
+        if system_prompt_override is not None:
+            assistant_metadata["system_prompt_override"] = system_prompt_override
 
         # Calculate and track cost
         self._calculate_and_track_cost(response, assistant_metadata)
@@ -841,6 +848,7 @@ class ConversationManager:
 
         return await self._finalize_completion(
             response, branch_name, metadata, llm_config_overrides,
+            system_prompt_override=system_prompt_override,
         )
 
     async def stream_complete(
@@ -939,6 +947,7 @@ class ConversationManager:
 
         await self._finalize_completion(
             response, branch_name, metadata, llm_config_overrides,
+            system_prompt_override=system_prompt_override,
         )
 
     async def switch_to_node(self, node_id: str) -> None:
