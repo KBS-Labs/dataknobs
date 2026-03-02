@@ -50,7 +50,7 @@ class BankRecord:
     source_stage: str = ""
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
-    modified_in_stage: str = ""
+    modified_in_stage: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict."""
@@ -64,15 +64,34 @@ class BankRecord:
         }
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> BankRecord:
-        """Deserialize from a plain dict."""
+    def from_dict(
+        cls, d: dict[str, Any], *, strict: bool = True
+    ) -> BankRecord:
+        """Deserialize from a plain dict.
+
+        Args:
+            d: Serialized record dict (from ``to_dict()``).
+            strict: When ``True`` (default), raise ``ValueError`` if
+                ``created_at`` or ``updated_at`` is missing.  When
+                ``False``, fall back to ``time.time()`` for missing
+                timestamps (legacy data migration).
+        """
+        if strict:
+            missing = [
+                f for f in ("created_at", "updated_at") if f not in d
+            ]
+            if missing:
+                raise ValueError(
+                    f"BankRecord.from_dict(): missing required timestamp "
+                    f"fields: {missing}"
+                )
         return cls(
             record_id=d["record_id"],
             data=dict(d.get("data", {})),
             source_stage=d.get("source_stage", ""),
             created_at=d.get("created_at", time.time()),
             updated_at=d.get("updated_at", time.time()),
-            modified_in_stage=d.get("modified_in_stage", ""),
+            modified_in_stage=d.get("modified_in_stage"),
         )
 
 
@@ -338,14 +357,18 @@ class MemoryBank:
     def _check_duplicate(self, data: dict[str, Any]) -> BankRecord | None:
         """Check if a record with matching fields already exists.
 
-        Uses ``match_fields`` if set, otherwise compares all data fields.
+        Uses ``match_fields`` if set, otherwise compares the union of
+        keys from both the new and existing records.
 
         Returns:
             The existing ``BankRecord`` if a duplicate is found,
             ``None`` otherwise.
         """
-        fields_to_check = self._match_fields or list(data.keys())
         for existing in self.all():
+            fields_to_check = (
+                self._match_fields
+                or list(set(data.keys()) | set(existing.data.keys()))
+            )
             if all(
                 existing.data.get(f) == data.get(f) for f in fields_to_check
             ):
@@ -689,8 +712,11 @@ class AsyncMemoryBank:
     async def _check_duplicate(
         self, data: dict[str, Any]
     ) -> BankRecord | None:
-        fields_to_check = self._match_fields or list(data.keys())
         for existing in await self.all():
+            fields_to_check = (
+                self._match_fields
+                or list(set(data.keys()) | set(existing.data.keys()))
+            )
             if all(
                 existing.data.get(f) == data.get(f)
                 for f in fields_to_check

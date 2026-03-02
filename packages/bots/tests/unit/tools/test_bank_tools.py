@@ -886,10 +886,10 @@ class TestBankToolProvenance:
 class TestBankRecordProvenance:
     """Tests for BankRecord provenance fields and serialization."""
 
-    def test_modified_in_stage_default_empty(self) -> None:
-        """New BankRecord has empty modified_in_stage."""
+    def test_modified_in_stage_default_none(self) -> None:
+        """New BankRecord has None modified_in_stage (never modified)."""
         record = BankRecord(record_id="abcdef012345", data={"x": 1})
-        assert record.modified_in_stage == ""
+        assert record.modified_in_stage is None
 
     def test_modified_in_stage_roundtrip(self) -> None:
         """modified_in_stage survives to_dict/from_dict."""
@@ -906,8 +906,8 @@ class TestBankRecordProvenance:
         assert restored.modified_in_stage == "review"
         assert restored.source_stage == "collect"
 
-    def test_from_dict_missing_modified_in_stage_defaults_empty(self) -> None:
-        """Deserializing old records without modified_in_stage gets empty string."""
+    def test_from_dict_missing_modified_in_stage_defaults_none(self) -> None:
+        """Deserializing records without modified_in_stage gets None."""
         d = {
             "record_id": "abcdef012345",
             "data": {"x": 1},
@@ -916,7 +916,7 @@ class TestBankRecordProvenance:
             "updated_at": 1000.0,
         }
         record = BankRecord.from_dict(d)
-        assert record.modified_in_stage == ""
+        assert record.modified_in_stage is None
 
     def test_memory_bank_update_stores_modified_in_stage(self) -> None:
         """MemoryBank.update() with modified_in_stage stores it in metadata."""
