@@ -1,8 +1,7 @@
-"""Tests for _BankCore shared logic and Protocol conformance.
+"""Tests for _BankCore shared logic, Protocol conformance, and storage layer.
 
-Covers Phase 2 of 03a (Structural Extraction): verifying that the
-extracted _BankCore logic works correctly and that all bank
-implementations satisfy their respective Protocols.
+Covers Phases 2–3 of 03a: _BankCore logic, Protocol conformance (Phase 2),
+storage_id as record key, direct lookups, Query/Filter find (Phase 3).
 """
 
 from __future__ import annotations
@@ -448,3 +447,206 @@ class TestEmptyBankProxyNewMethods:
     def test_close_noop(self) -> None:
         proxy = EmptyBankProxy("missing")
         proxy.close()  # No error
+
+
+# =====================================================================
+# Phase 3: Storage ID as record key
+# =====================================================================
+
+
+class TestBankCoreStorageId:
+    """Verify storage_id is set on all created Records (Phase 3, AD-3)."""
+
+    def test_create_bank_record_sets_storage_id(self) -> None:
+        core = _make_core()
+        bank_record, db_record = core.create_bank_record({"name": "flour"})
+        assert db_record.storage_id == bank_record.record_id
+
+    def test_bank_record_to_db_record_sets_storage_id(self) -> None:
+        bank_record = BankRecord(
+            record_id="abc123",
+            data={"name": "flour"},
+            created_at=1000.0,
+            updated_at=1000.0,
+        )
+        db_record = _BankCore.bank_record_to_db_record(bank_record)
+        assert db_record.storage_id == "abc123"
+
+    def test_create_updated_record_sets_storage_id(self) -> None:
+        core = _make_core()
+        existing_meta = {
+            "record_id": "abc123",
+            "created_at": 1000.0,
+            "updated_at": 1000.0,
+        }
+        updated = core.create_updated_record(
+            {"name": "flour updated"}, existing_meta
+        )
+        assert updated.storage_id == "abc123"
+
+    def test_create_updated_record_no_record_id_no_storage_id(self) -> None:
+        core = _make_core()
+        existing_meta = {"created_at": 1000.0, "updated_at": 1000.0}
+        updated = core.create_updated_record(
+            {"name": "flour"}, existing_meta
+        )
+        # No record_id in metadata → storage_id not set
+        assert updated.storage_id is None
+
+
+class TestDirectLookupSync:
+    """Verify MemoryBank uses direct DB lookups (Phase 3, AD-10)."""
+
+    def test_get_uses_direct_lookup(self) -> None:
+        """Record added via add() is retrievable by db.read(record_id)."""
+        db = SyncMemoryDatabase()
+        bank = MemoryBank("items", {"required": ["name"]}, db)
+        record_id = bank.add({"name": "flour"})
+
+        # Direct DB lookup should work (proves storage_id alignment)
+        db_record = db.read(record_id)
+        assert db_record is not None
+        assert db_record.data == {"name": "flour"}
+
+    def test_update_via_direct_lookup(self) -> None:
+        db = SyncMemoryDatabase()
+        bank = MemoryBank("items", {"required": ["name"]}, db)
+        record_id = bank.add({"name": "flour"})
+        bank.update(record_id, {"name": "sugar"})
+
+        # Verify via direct DB read
+        db_record = db.read(record_id)
+        assert db_record is not None
+        assert db_record.data == {"name": "sugar"}
+
+    def test_remove_via_direct_lookup(self) -> None:
+        db = SyncMemoryDatabase()
+        bank = MemoryBank("items", {"required": ["name"]}, db)
+        record_id = bank.add({"name": "flour"})
+        assert bank.remove(record_id) is True
+        assert db.read(record_id) is None
+
+    def test_get_nonexistent_returns_none(self) -> None:
+        db = SyncMemoryDatabase()
+        bank = MemoryBank("items", {}, db)
+        assert bank.get("nonexistent") is None
+
+    def test_remove_nonexistent_returns_false(self) -> None:
+        db = SyncMemoryDatabase()
+        bank = MemoryBank("items", {}, db)
+        assert bank.remove("nonexistent") is False
+
+
+class TestDirectLookupAsync:
+    """Verify AsyncMemoryBank uses direct DB lookups (Phase 3, AD-10)."""
+
+    @pytest.mark.asyncio
+    async def test_get_uses_direct_lookup(self) -> None:
+        db = AsyncMemoryDatabase()
+        bank = AsyncMemoryBank("items", {"required": ["name"]}, db)
+        record_id = await bank.add({"name": "flour"})
+
+        db_record = await db.read(record_id)
+        assert db_record is not None
+        assert db_record.data == {"name": "flour"}
+
+    @pytest.mark.asyncio
+    async def test_update_via_direct_lookup(self) -> None:
+        db = AsyncMemoryDatabase()
+        bank = AsyncMemoryBank("items", {"required": ["name"]}, db)
+        record_id = await bank.add({"name": "flour"})
+        await bank.update(record_id, {"name": "sugar"})
+
+        db_record = await db.read(record_id)
+        assert db_record is not None
+        assert db_record.data == {"name": "sugar"}
+
+    @pytest.mark.asyncio
+    async def test_remove_via_direct_lookup(self) -> None:
+        db = AsyncMemoryDatabase()
+        bank = AsyncMemoryBank("items", {"required": ["name"]}, db)
+        record_id = await bank.add({"name": "flour"})
+        assert await bank.remove(record_id) is True
+        assert await db.read(record_id) is None
+
+
+class TestQueryFilterFind:
+    """Verify find() uses Query/Filter for DB-level filtering (Phase 3)."""
+
+    def test_find_with_field_values(self) -> None:
+        db = SyncMemoryDatabase()
+        bank = MemoryBank("items", {"required": ["name"]}, db)
+        bank.add({"name": "flour", "type": "dry"})
+        bank.add({"name": "sugar", "type": "dry"})
+        bank.add({"name": "milk", "type": "wet"})
+
+        results = bank.find(type="dry")
+        assert len(results) == 2
+        names = {r.data["name"] for r in results}
+        assert names == {"flour", "sugar"}
+
+    def test_find_no_matches(self) -> None:
+        db = SyncMemoryDatabase()
+        bank = MemoryBank("items", {"required": ["name"]}, db)
+        bank.add({"name": "flour"})
+        assert bank.find(name="nonexistent") == []
+
+    def test_find_no_field_values_returns_all(self) -> None:
+        db = SyncMemoryDatabase()
+        bank = MemoryBank("items", {"required": ["name"]}, db)
+        bank.add({"name": "flour"})
+        bank.add({"name": "sugar"})
+        results = bank.find()
+        assert len(results) == 2
+
+    @pytest.mark.asyncio
+    async def test_async_find_with_field_values(self) -> None:
+        db = AsyncMemoryDatabase()
+        bank = AsyncMemoryBank("items", {"required": ["name"]}, db)
+        await bank.add({"name": "flour", "type": "dry"})
+        await bank.add({"name": "sugar", "type": "dry"})
+        await bank.add({"name": "milk", "type": "wet"})
+
+        results = await bank.find(type="dry")
+        assert len(results) == 2
+        names = {r.data["name"] for r in results}
+        assert names == {"flour", "sugar"}
+
+
+class TestFromDictBackwardCompat:
+    """Verify from_dict() restores old-format records with correct storage_id."""
+
+    def test_sync_from_dict_restores_with_storage_id(self) -> None:
+        """Records from from_dict() are accessible via direct lookup."""
+        bank = MemoryBank("items", {"required": ["name"]}, SyncMemoryDatabase())
+        rid = bank.add({"name": "flour"})
+        serialized = bank.to_dict()
+
+        # Restore
+        restored = MemoryBank.from_dict(serialized)
+        record = restored.get(rid)
+        assert record is not None
+        assert record.data == {"name": "flour"}
+
+    def test_sync_from_dict_update_and_remove_work(self) -> None:
+        bank = MemoryBank("items", {"required": ["name"]}, SyncMemoryDatabase())
+        rid = bank.add({"name": "flour"})
+        serialized = bank.to_dict()
+
+        restored = MemoryBank.from_dict(serialized)
+        assert restored.update(rid, {"name": "sugar"}) is True
+        assert restored.get(rid).data == {"name": "sugar"}
+        assert restored.remove(rid) is True
+        assert restored.get(rid) is None
+
+    @pytest.mark.asyncio
+    async def test_async_from_dict_restores_with_storage_id(self) -> None:
+        db = AsyncMemoryDatabase()
+        bank = AsyncMemoryBank("items", {"required": ["name"]}, db)
+        rid = await bank.add({"name": "flour"})
+        serialized = await bank.to_dict()
+
+        restored = await AsyncMemoryBank.from_dict(serialized)
+        record = await restored.get(rid)
+        assert record is not None
+        assert record.data == {"name": "flour"}

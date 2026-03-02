@@ -349,6 +349,7 @@ class _BankCore:
                 "created_at": now,
                 "updated_at": now,
             },
+            storage_id=record_id,
         )
         return bank_record, db_record
 
@@ -372,7 +373,11 @@ class _BankCore:
         updated_meta = {**existing_meta, "updated_at": now}
         if modified_in_stage:
             updated_meta["modified_in_stage"] = modified_in_stage
-        return Record(data=dict(data), metadata=updated_meta)
+        record = Record(data=dict(data), metadata=updated_meta)
+        rid = existing_meta.get("record_id", "")
+        if rid:
+            record.storage_id = rid
+        return record
 
     # -- DB Record ↔ BankRecord conversion (static, pure) --
 
@@ -404,6 +409,7 @@ class _BankCore:
                 "updated_at": bank_record.updated_at,
                 "modified_in_stage": bank_record.modified_in_stage,
             },
+            storage_id=bank_record.record_id,
         )
 
     # -- Serialization helpers (pure) --
@@ -553,10 +559,10 @@ class MemoryBank:
 
     def get(self, record_id: str) -> BankRecord | None:
         """Retrieve a record by ID.  Returns ``None`` if not found."""
-        for bank_record in self.all():
-            if bank_record.record_id == record_id:
-                return bank_record
-        return None
+        db_record = self._db.read(record_id)
+        if db_record is None:
+            return None
+        return _BankCore.to_bank_record(db_record)
 
     def update(
         self,
@@ -575,21 +581,21 @@ class MemoryBank:
         Returns:
             ``True`` if the record was found and updated.
         """
-        for db_record in self._db_records():
-            meta = db_record.metadata or {}
-            if meta.get("record_id") == record_id:
-                self._core.validate(data)
-                updated_record = self._core.create_updated_record(
-                    data, meta, modified_in_stage
-                )
-                self._db.update(db_record.storage_id, updated_record)
-                logger.debug(
-                    "Updated record %s in bank '%s'",
-                    record_id,
-                    self._core.name,
-                )
-                return True
-        return False
+        db_record = self._db.read(record_id)
+        if db_record is None:
+            return False
+        meta = db_record.metadata or {}
+        self._core.validate(data)
+        updated_record = self._core.create_updated_record(
+            data, meta, modified_in_stage
+        )
+        self._db.update(record_id, updated_record)
+        logger.debug(
+            "Updated record %s in bank '%s'",
+            record_id,
+            self._core.name,
+        )
+        return True
 
     def remove(self, record_id: str) -> bool:
         """Remove a record by ID.
@@ -597,17 +603,14 @@ class MemoryBank:
         Returns:
             ``True`` if the record was found and removed.
         """
-        for db_record in self._db_records():
-            meta = db_record.metadata or {}
-            if meta.get("record_id") == record_id:
-                self._db.delete(db_record.storage_id)
-                logger.debug(
-                    "Removed record %s from bank '%s'",
-                    record_id,
-                    self._core.name,
-                )
-                return True
-        return False
+        result = self._db.delete(record_id)
+        if result:
+            logger.debug(
+                "Removed record %s from bank '%s'",
+                record_id,
+                self._core.name,
+            )
+        return result
 
     # -----------------------------------------------------------------
     # Collection operations
@@ -644,13 +647,19 @@ class MemoryBank:
         Returns:
             List of matching ``BankRecord`` objects.
         """
-        results: list[BankRecord] = []
-        for bank_record in self.all():
-            if all(
-                bank_record.data.get(k) == v for k, v in field_values.items()
-            ):
-                results.append(bank_record)
-        return results
+        if not field_values:
+            return self.all()
+        from dataknobs_data import Filter, Operator, Query
+
+        query = Query(
+            filters=[
+                Filter(k, Operator.EQ, v) for k, v in field_values.items()
+            ]
+        )
+        results = self._db.search(query)
+        records = [_BankCore.to_bank_record(r) for r in (results or [])]
+        records.sort(key=lambda r: r.created_at)
+        return records
 
     # -----------------------------------------------------------------
     # Internal helpers
@@ -866,10 +875,10 @@ class AsyncMemoryBank:
 
     async def get(self, record_id: str) -> BankRecord | None:
         """Retrieve a record by ID."""
-        for bank_record in await self.all():
-            if bank_record.record_id == record_id:
-                return bank_record
-        return None
+        db_record = await self._db.read(record_id)
+        if db_record is None:
+            return None
+        return _BankCore.to_bank_record(db_record)
 
     async def update(
         self,
@@ -885,25 +894,21 @@ class AsyncMemoryBank:
             modified_in_stage: Wizard stage performing the update
                 (for provenance tracking).
         """
-        for db_record in await self._db_records():
-            meta = db_record.metadata or {}
-            if meta.get("record_id") == record_id:
-                self._core.validate(data)
-                updated_record = self._core.create_updated_record(
-                    data, meta, modified_in_stage
-                )
-                await self._db.update(db_record.storage_id, updated_record)
-                return True
-        return False
+        db_record = await self._db.read(record_id)
+        if db_record is None:
+            return False
+        meta = db_record.metadata or {}
+        self._core.validate(data)
+        updated_record = self._core.create_updated_record(
+            data, meta, modified_in_stage
+        )
+        await self._db.update(record_id, updated_record)
+        return True
 
     async def remove(self, record_id: str) -> bool:
         """Remove a record by ID."""
-        for db_record in await self._db_records():
-            meta = db_record.metadata or {}
-            if meta.get("record_id") == record_id:
-                await self._db.delete(db_record.storage_id)
-                return True
-        return False
+        result = await self._db.delete(record_id)
+        return result
 
     # -----------------------------------------------------------------
     # Collection operations
@@ -924,14 +929,19 @@ class AsyncMemoryBank:
             await self._db.delete(db_record.storage_id)
 
     async def find(self, **field_values: Any) -> list[BankRecord]:
-        results: list[BankRecord] = []
-        for bank_record in await self.all():
-            if all(
-                bank_record.data.get(k) == v
-                for k, v in field_values.items()
-            ):
-                results.append(bank_record)
-        return results
+        if not field_values:
+            return await self.all()
+        from dataknobs_data import Filter, Operator, Query
+
+        query = Query(
+            filters=[
+                Filter(k, Operator.EQ, v) for k, v in field_values.items()
+            ]
+        )
+        results = await self._db.search(query)
+        records = [_BankCore.to_bank_record(r) for r in (results or [])]
+        records.sort(key=lambda r: r.created_at)
+        return records
 
     # -----------------------------------------------------------------
     # Internal helpers
