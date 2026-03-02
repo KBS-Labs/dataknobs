@@ -1413,3 +1413,62 @@ class TestAutoSaveToCatalog:
             context, bank_name="ingredients", data={"name": "flour"},
         )
         assert result["success"] is True
+
+
+class TestConstructorInjection:
+    """Tests for AD-8 constructor injection on bank tools."""
+
+    @pytest.mark.asyncio
+    async def test_injected_banks_used_over_context(self) -> None:
+        """Constructor-injected banks take precedence over context.extra."""
+        injected_bank = _make_bank("items", required=["name"])
+        injected_bank.add({"name": "flour"})
+
+        # Context has NO banks — injection provides them.
+        context = ToolExecutionContext(
+            conversation_id="test-conv",
+            user_id="test-user",
+            extra={},
+        )
+        tool = ListBankRecordsTool(banks={"items": injected_bank})
+        result = await tool.execute_with_context(context, bank_name="items")
+        assert result["count"] == 1
+        assert result["records"][0]["name"] == "flour"
+
+    @pytest.mark.asyncio
+    async def test_context_fallback_when_no_injection(self) -> None:
+        """Without constructor injection, context.extra is used."""
+        bank = _make_bank("items", required=["name"])
+        bank.add({"name": "sugar"})
+        context = _make_context({"items": bank})
+
+        tool = ListBankRecordsTool()  # No injection
+        result = await tool.execute_with_context(context, bank_name="items")
+        assert result["count"] == 1
+        assert result["records"][0]["name"] == "sugar"
+
+    @pytest.mark.asyncio
+    async def test_injected_catalog_and_artifact(self) -> None:
+        """Constructor-injected catalog/artifact used for auto-save."""
+        bank = _make_bank("ingredients", required=["name"])
+        artifact = ArtifactBank(
+            name="test_recipe",
+            field_defs={"title": {"type": "string"}},
+            sections={"ingredients": bank},
+        )
+        artifact.set_field("title", "Test Recipe")
+        catalog = ArtifactBankCatalog(db=SyncMemoryDatabase())
+
+        # Context has NO catalog/artifact — injection provides them.
+        context = ToolExecutionContext(
+            conversation_id="test-conv",
+            user_id="test-user",
+            extra={"banks": {"ingredients": bank}},
+        )
+        tool = AddBankRecordTool(catalog=catalog, artifact=artifact)
+        result = await tool.execute_with_context(
+            context, bank_name="ingredients", data={"name": "flour"},
+        )
+        assert result["success"] is True
+        # Auto-save hook fired via constructor-injected catalog
+        assert catalog.count() == 1

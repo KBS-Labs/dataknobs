@@ -28,14 +28,20 @@ from typing import Any
 from dataknobs_llm.tools.context import ToolExecutionContext
 from dataknobs_llm.tools.context_aware import ContextAwareTool
 
+from dataknobs_bots.tools.response import error_response, success_response
+
 logger = logging.getLogger(__name__)
 
 
-def _get_catalog_from_context(context: ToolExecutionContext) -> Any:
+def _get_catalog_from_context(
+    context: ToolExecutionContext,
+    catalog_override: Any | None = None,
+) -> Any:
     """Extract ArtifactBankCatalog from tool execution context.
 
     Args:
         context: Tool execution context with ``extra["catalog"]``.
+        catalog_override: Explicit catalog (from constructor injection).
 
     Returns:
         The ``ArtifactBankCatalog`` instance.
@@ -43,7 +49,7 @@ def _get_catalog_from_context(context: ToolExecutionContext) -> Any:
     Raises:
         ValueError: If catalog is not in context.
     """
-    catalog = context.extra.get("catalog")
+    catalog = catalog_override or context.extra.get("catalog")
     if catalog is None:
         raise ValueError(
             "Catalog tools require a catalog in execution context. "
@@ -52,11 +58,15 @@ def _get_catalog_from_context(context: ToolExecutionContext) -> Any:
     return catalog
 
 
-def _get_artifact_from_context(context: ToolExecutionContext) -> Any:
+def _get_artifact_from_context(
+    context: ToolExecutionContext,
+    artifact_override: Any | None = None,
+) -> Any:
     """Extract ArtifactBank from tool execution context.
 
     Args:
         context: Tool execution context with ``extra["artifact"]``.
+        artifact_override: Explicit artifact (from constructor injection).
 
     Returns:
         The ``ArtifactBank`` instance.
@@ -64,7 +74,7 @@ def _get_artifact_from_context(context: ToolExecutionContext) -> Any:
     Raises:
         ValueError: If artifact is not in context.
     """
-    artifact = context.extra.get("artifact")
+    artifact = artifact_override or context.extra.get("artifact")
     if artifact is None:
         raise ValueError(
             "Catalog tools require an artifact in execution context. "
@@ -89,12 +99,19 @@ class ListCatalogTool(ContextAwareTool):
             "tags": ("wizard", "catalog"),
         }
 
-    def __init__(self, tool_name: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        catalog: Any | None = None,
+        tool_name: str | None = None,
+    ) -> None:
         """Initialize the tool.
 
         Args:
+            catalog: Explicit catalog (constructor injection).
             tool_name: Custom tool name.  Defaults to ``"list_catalog"``.
         """
+        self._catalog = catalog
         super().__init__(
             name=tool_name or "list_catalog",
             description=(
@@ -126,9 +143,11 @@ class ListCatalogTool(ContextAwareTool):
             Dict with entries list and count.
         """
         try:
-            catalog = _get_catalog_from_context(context)
+            catalog = _get_catalog_from_context(
+                context, catalog_override=self._catalog,
+            )
         except ValueError as exc:
-            return {"success": False, "error": str(exc)}
+            return error_response(str(exc))
 
         entries = catalog.list()
         logger.debug(
@@ -159,17 +178,27 @@ class SaveToCatalogTool(ContextAwareTool):
             "tags": ("wizard", "catalog"),
         }
 
-    def __init__(self, tool_name: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        catalog: Any | None = None,
+        artifact: Any | None = None,
+        tool_name: str | None = None,
+    ) -> None:
         """Initialize the tool.
 
         Args:
+            catalog: Explicit catalog (constructor injection).
+            artifact: Explicit artifact (constructor injection).
             tool_name: Custom tool name.  Defaults to ``"save_to_catalog"``.
         """
+        self._catalog = catalog
+        self._artifact = artifact
         super().__init__(
             name=tool_name or "save_to_catalog",
             description=(
                 "Validate and save the current artifact to the catalog. "
-                "The artifact is stored by its name for later retrieval."
+                "Auto-finalizes artifact if not already finalized."
             ),
         )
 
@@ -196,14 +225,18 @@ class SaveToCatalogTool(ContextAwareTool):
             Dict with success status and artifact info, or errors.
         """
         try:
-            artifact = _get_artifact_from_context(context)
+            artifact = _get_artifact_from_context(
+                context, artifact_override=self._artifact,
+            )
         except ValueError as exc:
-            return {"success": False, "error": str(exc)}
+            return error_response(str(exc))
 
         try:
-            catalog = _get_catalog_from_context(context)
+            catalog = _get_catalog_from_context(
+                context, catalog_override=self._catalog,
+            )
         except ValueError as exc:
-            return {"success": False, "error": str(exc)}
+            return error_response(str(exc))
 
         errors = artifact.validate()
         if errors:
@@ -212,10 +245,10 @@ class SaveToCatalogTool(ContextAwareTool):
                 errors,
                 extra={"conversation_id": context.conversation_id},
             )
-            return {
-                "success": False,
-                "errors": errors,
-            }
+            return error_response(
+                "Artifact validation failed",
+                errors=errors,
+            )
 
         entry_name = catalog.save(artifact)
 
@@ -239,11 +272,10 @@ class SaveToCatalogTool(ContextAwareTool):
             entry_name,
             extra={"conversation_id": context.conversation_id},
         )
-        return {
-            "success": True,
-            "name": entry_name,
-            "catalog_count": catalog.count(),
-        }
+        return success_response(
+            name=entry_name,
+            catalog_count=catalog.count(),
+        )
 
 
 class LoadFromCatalogTool(ContextAwareTool):
@@ -263,12 +295,22 @@ class LoadFromCatalogTool(ContextAwareTool):
             "tags": ("wizard", "catalog"),
         }
 
-    def __init__(self, tool_name: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        catalog: Any | None = None,
+        artifact: Any | None = None,
+        tool_name: str | None = None,
+    ) -> None:
         """Initialize the tool.
 
         Args:
+            catalog: Explicit catalog (constructor injection).
+            artifact: Explicit artifact (constructor injection).
             tool_name: Custom tool name.  Defaults to ``"load_from_catalog"``.
         """
+        self._catalog = catalog
+        self._artifact = artifact
         super().__init__(
             name=tool_name or "load_from_catalog",
             description=(
@@ -307,31 +349,29 @@ class LoadFromCatalogTool(ContextAwareTool):
         """
         entry_name = kwargs.get("name")
         if not entry_name:
-            return {
-                "success": False,
-                "error": "Missing required parameter: name",
-            }
+            return error_response("Missing required parameter: name")
 
         try:
-            catalog = _get_catalog_from_context(context)
+            catalog = _get_catalog_from_context(
+                context, catalog_override=self._catalog,
+            )
         except ValueError as exc:
-            return {"success": False, "error": str(exc)}
+            return error_response(str(exc))
 
         try:
-            artifact = _get_artifact_from_context(context)
+            artifact = _get_artifact_from_context(
+                context, artifact_override=self._artifact,
+            )
         except ValueError as exc:
-            return {"success": False, "error": str(exc)}
+            return error_response(str(exc))
 
         found = catalog.load_into(entry_name, artifact)
         if not found:
             available = [e["name"] for e in catalog.list()]
-            return {
-                "success": False,
-                "error": (
-                    f"No artifact named '{entry_name}' in catalog. "
-                    f"Available: {available}"
-                ),
-            }
+            return error_response(
+                f"No artifact named '{entry_name}' in catalog. "
+                f"Available: {available}",
+            )
 
         compiled = artifact.compile()
         section_summary: dict[str, int] = {}
@@ -346,9 +386,8 @@ class LoadFromCatalogTool(ContextAwareTool):
             entry_name,
             extra={"conversation_id": context.conversation_id},
         )
-        return {
-            "success": True,
-            "loaded": {
+        return success_response(
+            loaded={
                 "name": entry_name,
                 "fields": {
                     k: v for k, v in compiled.items()
@@ -357,4 +396,4 @@ class LoadFromCatalogTool(ContextAwareTool):
                 },
                 "sections": section_summary,
             },
-        }
+        )

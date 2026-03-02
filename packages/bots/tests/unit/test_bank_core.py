@@ -1,7 +1,8 @@
-"""Tests for _BankCore shared logic, Protocol conformance, and storage layer.
+"""Tests for _BankCore shared logic, Protocol conformance, storage layer, and lifecycle hooks.
 
-Covers Phases 2–3 of 03a: _BankCore logic, Protocol conformance (Phase 2),
-storage_id as record key, direct lookups, Query/Filter find (Phase 3).
+Covers Phases 2–4 of 03a: _BankCore logic, Protocol conformance (Phase 2),
+storage_id as record key, direct lookups, Query/Filter find (Phase 3),
+lifecycle hooks on MemoryBank/AsyncMemoryBank (Phase 4).
 """
 
 from __future__ import annotations
@@ -49,6 +50,24 @@ def _make_core(
         match_fields=match_fields,
         storage_mode=storage_mode,
     )
+
+
+def _make_bank(
+    name: str = "items",
+    schema: dict[str, Any] | None = None,
+) -> MemoryBank:
+    if schema is None:
+        schema = {"required": ["name"]}
+    return MemoryBank(name, schema, SyncMemoryDatabase())
+
+
+def _make_async_bank(
+    name: str = "items",
+    schema: dict[str, Any] | None = None,
+) -> AsyncMemoryBank:
+    if schema is None:
+        schema = {"required": ["name"]}
+    return AsyncMemoryBank(name, schema, AsyncMemoryDatabase())
 
 
 # =====================================================================
@@ -650,3 +669,160 @@ class TestFromDictBackwardCompat:
         record = await restored.get(rid)
         assert record is not None
         assert record.data == {"name": "flour"}
+
+
+# =====================================================================
+# Phase 4 — Lifecycle hooks
+# =====================================================================
+
+
+class TestLifecycleHooksSync:
+    """Lifecycle hooks on MemoryBank (sync)."""
+
+    def test_on_add_hook_fires(self) -> None:
+        bank = _make_bank()
+        captured: list[BankRecord] = []
+        bank.on_add(lambda r: captured.append(r))
+        bank.add({"name": "flour"})
+        assert len(captured) == 1
+        assert captured[0].data == {"name": "flour"}
+
+    def test_on_update_hook_fires(self) -> None:
+        bank = _make_bank()
+        captured: list[BankRecord] = []
+        bank.on_update(lambda r: captured.append(r))
+        rid = bank.add({"name": "flour"})
+        bank.update(rid, {"name": "sugar"})
+        assert len(captured) == 1
+        assert captured[0].data == {"name": "sugar"}
+        assert captured[0].record_id == rid
+
+    def test_on_remove_hook_fires(self) -> None:
+        bank = _make_bank()
+        captured: list[BankRecord] = []
+        bank.on_remove(lambda r: captured.append(r))
+        rid = bank.add({"name": "flour"})
+        bank.remove(rid)
+        assert len(captured) == 1
+        assert captured[0].data == {"name": "flour"}
+        assert captured[0].record_id == rid
+
+    def test_hook_error_does_not_break_operation(self) -> None:
+        bank = _make_bank()
+
+        def bad_hook(r: BankRecord) -> None:
+            raise RuntimeError("hook failure")
+
+        bank.on_add(bad_hook)
+        rid = bank.add({"name": "flour"})
+        assert bank.get(rid) is not None
+
+    def test_hook_key_prevents_double_registration(self) -> None:
+        bank = _make_bank()
+        call_count = 0
+
+        def counting_hook(r: BankRecord) -> None:
+            nonlocal call_count
+            call_count += 1
+
+        bank.on_add(counting_hook, key="my_hook")
+        bank.on_add(counting_hook, key="my_hook")
+        bank.add({"name": "flour"})
+        assert call_count == 1
+
+    def test_multiple_hooks_all_fire(self) -> None:
+        bank = _make_bank()
+        calls_a: list[str] = []
+        calls_b: list[str] = []
+        bank.on_add(lambda r: calls_a.append(r.record_id))
+        bank.on_add(lambda r: calls_b.append(r.record_id))
+        bank.add({"name": "flour"})
+        assert len(calls_a) == 1
+        assert len(calls_b) == 1
+
+    def test_remove_nonexistent_does_not_fire_hook(self) -> None:
+        bank = _make_bank()
+        captured: list[BankRecord] = []
+        bank.on_remove(lambda r: captured.append(r))
+        result = bank.remove("nonexistent0")
+        assert result is False
+        assert len(captured) == 0
+
+    def test_update_nonexistent_does_not_fire_hook(self) -> None:
+        bank = _make_bank()
+        captured: list[BankRecord] = []
+        bank.on_update(lambda r: captured.append(r))
+        result = bank.update("nonexistent0", {"name": "x"})
+        assert result is False
+        assert len(captured) == 0
+
+
+class TestLifecycleHooksAsync:
+    """Lifecycle hooks on AsyncMemoryBank."""
+
+    @pytest.mark.asyncio
+    async def test_on_add_hook_fires(self) -> None:
+        bank = _make_async_bank()
+        captured: list[BankRecord] = []
+
+        async def hook(r: BankRecord) -> None:
+            captured.append(r)
+
+        bank.on_add(hook)
+        await bank.add({"name": "flour"})
+        assert len(captured) == 1
+        assert captured[0].data == {"name": "flour"}
+
+    @pytest.mark.asyncio
+    async def test_on_update_hook_fires(self) -> None:
+        bank = _make_async_bank()
+        captured: list[BankRecord] = []
+
+        async def hook(r: BankRecord) -> None:
+            captured.append(r)
+
+        bank.on_update(hook)
+        rid = await bank.add({"name": "flour"})
+        await bank.update(rid, {"name": "sugar"})
+        assert len(captured) == 1
+        assert captured[0].data == {"name": "sugar"}
+
+    @pytest.mark.asyncio
+    async def test_on_remove_hook_fires(self) -> None:
+        bank = _make_async_bank()
+        captured: list[BankRecord] = []
+
+        async def hook(r: BankRecord) -> None:
+            captured.append(r)
+
+        bank.on_remove(hook)
+        rid = await bank.add({"name": "flour"})
+        await bank.remove(rid)
+        assert len(captured) == 1
+        assert captured[0].record_id == rid
+
+    @pytest.mark.asyncio
+    async def test_hook_error_does_not_break_async(self) -> None:
+        bank = _make_async_bank()
+
+        async def bad_hook(r: BankRecord) -> None:
+            raise RuntimeError("hook failure")
+
+        bank.on_add(bad_hook)
+        rid = await bank.add({"name": "flour"})
+        record = await bank.get(rid)
+        assert record is not None
+
+    @pytest.mark.asyncio
+    async def test_hook_key_prevents_double_registration_async(self) -> None:
+        bank = _make_async_bank()
+        call_count = 0
+
+        async def counting_hook(r: BankRecord) -> None:
+            nonlocal call_count
+            call_count += 1
+
+        bank.on_add(counting_hook, key="my_hook")
+        bank.on_add(counting_hook, key="my_hook")
+        await bank.add({"name": "flour"})
+        assert call_count == 1

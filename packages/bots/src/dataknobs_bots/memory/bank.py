@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -93,6 +94,17 @@ class BankRecord:
             updated_at=d.get("updated_at", time.time()),
             modified_in_stage=d.get("modified_in_stage"),
         )
+
+
+# =====================================================================
+# Lifecycle hook types
+# =====================================================================
+
+BankHook = Callable[[BankRecord], None]
+"""Sync lifecycle hook — called after a successful bank operation."""
+
+AsyncBankHook = Callable[[BankRecord], Awaitable[None]]
+"""Async lifecycle hook — called after a successful async bank operation."""
 
 
 # =====================================================================
@@ -483,6 +495,10 @@ class MemoryBank:
             storage_mode=storage_mode,
         )
         self._db = db
+        self._on_add_hooks: list[BankHook] = []
+        self._on_update_hooks: list[BankHook] = []
+        self._on_remove_hooks: list[BankHook] = []
+        self._hook_keys: set[str] = set()
 
     # -----------------------------------------------------------------
     # Properties (delegate to core)
@@ -555,6 +571,7 @@ class MemoryBank:
             self._core.name,
             self.count(),
         )
+        self._fire_hooks(self._on_add_hooks, bank_record)
         return bank_record.record_id
 
     def get(self, record_id: str) -> BankRecord | None:
@@ -595,6 +612,17 @@ class MemoryBank:
             record_id,
             self._core.name,
         )
+        updated_bank_record = BankRecord(
+            record_id=record_id,
+            data=dict(data),
+            source_stage=meta.get("source_stage", ""),
+            created_at=meta.get("created_at", 0.0),
+            updated_at=updated_record.metadata.get("updated_at", 0.0)
+            if updated_record.metadata
+            else 0.0,
+            modified_in_stage=modified_in_stage or None,
+        )
+        self._fire_hooks(self._on_update_hooks, updated_bank_record)
         return True
 
     def remove(self, record_id: str) -> bool:
@@ -603,6 +631,9 @@ class MemoryBank:
         Returns:
             ``True`` if the record was found and removed.
         """
+        record = self.get(record_id)
+        if record is None:
+            return False
         result = self._db.delete(record_id)
         if result:
             logger.debug(
@@ -610,6 +641,7 @@ class MemoryBank:
                 record_id,
                 self._core.name,
             )
+            self._fire_hooks(self._on_remove_hooks, record)
         return result
 
     # -----------------------------------------------------------------
@@ -671,6 +703,74 @@ class MemoryBank:
 
         result = self._db.search(Query())
         return list(result) if result else []
+
+    # -----------------------------------------------------------------
+    # Serialization
+    # -----------------------------------------------------------------
+
+    # -----------------------------------------------------------------
+    # Lifecycle hooks (AD-4)
+    # -----------------------------------------------------------------
+
+    def on_add(self, hook: BankHook, *, key: str | None = None) -> None:
+        """Register a hook called after a record is added.
+
+        Args:
+            hook: Callback receiving the new ``BankRecord``.
+            key: Optional idempotent key — if already registered, skip.
+                Keys are scoped per event type (add/update/remove).
+        """
+        scoped = f"add:{key}" if key is not None else None
+        if scoped is not None and scoped in self._hook_keys:
+            return
+        self._on_add_hooks.append(hook)
+        if scoped is not None:
+            self._hook_keys.add(scoped)
+
+    def on_update(self, hook: BankHook, *, key: str | None = None) -> None:
+        """Register a hook called after a record is updated.
+
+        Args:
+            hook: Callback receiving the updated ``BankRecord``.
+            key: Optional idempotent key — if already registered, skip.
+                Keys are scoped per event type (add/update/remove).
+        """
+        scoped = f"update:{key}" if key is not None else None
+        if scoped is not None and scoped in self._hook_keys:
+            return
+        self._on_update_hooks.append(hook)
+        if scoped is not None:
+            self._hook_keys.add(scoped)
+
+    def on_remove(self, hook: BankHook, *, key: str | None = None) -> None:
+        """Register a hook called after a record is removed.
+
+        Args:
+            hook: Callback receiving the removed ``BankRecord``.
+            key: Optional idempotent key — if already registered, skip.
+                Keys are scoped per event type (add/update/remove).
+        """
+        scoped = f"remove:{key}" if key is not None else None
+        if scoped is not None and scoped in self._hook_keys:
+            return
+        self._on_remove_hooks.append(hook)
+        if scoped is not None:
+            self._hook_keys.add(scoped)
+
+    def _fire_hooks(
+        self, hooks: list[BankHook], record: BankRecord
+    ) -> None:
+        """Invoke all hooks, logging and continuing on failure."""
+        for hook in hooks:
+            try:
+                hook(record)
+            except Exception:
+                logger.warning(
+                    "Lifecycle hook failed for record %s in bank '%s'",
+                    record.record_id,
+                    self._core.name,
+                    exc_info=True,
+                )
 
     # -----------------------------------------------------------------
     # Serialization
@@ -824,6 +924,10 @@ class AsyncMemoryBank:
             storage_mode=storage_mode,
         )
         self._db = db
+        self._on_add_hooks: list[AsyncBankHook] = []
+        self._on_update_hooks: list[AsyncBankHook] = []
+        self._on_remove_hooks: list[AsyncBankHook] = []
+        self._hook_keys: set[str] = set()
 
     # -----------------------------------------------------------------
     # Properties (delegate to core)
@@ -871,6 +975,7 @@ class AsyncMemoryBank:
             bank_record.record_id,
             self._core.name,
         )
+        await self._fire_hooks(self._on_add_hooks, bank_record)
         return bank_record.record_id
 
     async def get(self, record_id: str) -> BankRecord | None:
@@ -903,11 +1008,27 @@ class AsyncMemoryBank:
             data, meta, modified_in_stage
         )
         await self._db.update(record_id, updated_record)
+        updated_bank_record = BankRecord(
+            record_id=record_id,
+            data=dict(data),
+            source_stage=meta.get("source_stage", ""),
+            created_at=meta.get("created_at", 0.0),
+            updated_at=updated_record.metadata.get("updated_at", 0.0)
+            if updated_record.metadata
+            else 0.0,
+            modified_in_stage=modified_in_stage or None,
+        )
+        await self._fire_hooks(self._on_update_hooks, updated_bank_record)
         return True
 
     async def remove(self, record_id: str) -> bool:
         """Remove a record by ID."""
+        record = await self.get(record_id)
+        if record is None:
+            return False
         result = await self._db.delete(record_id)
+        if result:
+            await self._fire_hooks(self._on_remove_hooks, record)
         return result
 
     # -----------------------------------------------------------------
@@ -952,6 +1073,74 @@ class AsyncMemoryBank:
 
         result = await self._db.search(Query())
         return list(result) if result else []
+
+    # -----------------------------------------------------------------
+    # Lifecycle hooks (AD-4)
+    # -----------------------------------------------------------------
+
+    def on_add(self, hook: AsyncBankHook, *, key: str | None = None) -> None:
+        """Register a hook called after a record is added.
+
+        Args:
+            hook: Async callback receiving the new ``BankRecord``.
+            key: Optional idempotent key — if already registered, skip.
+                Keys are scoped per event type (add/update/remove).
+        """
+        scoped = f"add:{key}" if key is not None else None
+        if scoped is not None and scoped in self._hook_keys:
+            return
+        self._on_add_hooks.append(hook)
+        if scoped is not None:
+            self._hook_keys.add(scoped)
+
+    def on_update(
+        self, hook: AsyncBankHook, *, key: str | None = None
+    ) -> None:
+        """Register a hook called after a record is updated.
+
+        Args:
+            hook: Async callback receiving the updated ``BankRecord``.
+            key: Optional idempotent key — if already registered, skip.
+                Keys are scoped per event type (add/update/remove).
+        """
+        scoped = f"update:{key}" if key is not None else None
+        if scoped is not None and scoped in self._hook_keys:
+            return
+        self._on_update_hooks.append(hook)
+        if scoped is not None:
+            self._hook_keys.add(scoped)
+
+    def on_remove(
+        self, hook: AsyncBankHook, *, key: str | None = None
+    ) -> None:
+        """Register a hook called after a record is removed.
+
+        Args:
+            hook: Async callback receiving the removed ``BankRecord``.
+            key: Optional idempotent key — if already registered, skip.
+                Keys are scoped per event type (add/update/remove).
+        """
+        scoped = f"remove:{key}" if key is not None else None
+        if scoped is not None and scoped in self._hook_keys:
+            return
+        self._on_remove_hooks.append(hook)
+        if scoped is not None:
+            self._hook_keys.add(scoped)
+
+    async def _fire_hooks(
+        self, hooks: list[AsyncBankHook], record: BankRecord
+    ) -> None:
+        """Invoke all hooks, logging and continuing on failure."""
+        for hook in hooks:
+            try:
+                await hook(record)
+            except Exception:
+                logger.warning(
+                    "Lifecycle hook failed for record %s in bank '%s'",
+                    record.record_id,
+                    self._core.name,
+                    exc_info=True,
+                )
 
     # -----------------------------------------------------------------
     # Serialization

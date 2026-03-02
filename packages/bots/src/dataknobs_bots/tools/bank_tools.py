@@ -38,20 +38,29 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from typing import Any
 
 from dataknobs_llm.tools.context import ToolExecutionContext
 from dataknobs_llm.tools.context_aware import ContextAwareTool
 
+from dataknobs_bots.memory.bank import BankRecord
+from dataknobs_bots.tools.response import error_response, success_response
+
 logger = logging.getLogger(__name__)
 
 
-def _get_bank_from_context(context: ToolExecutionContext, bank_name: str) -> Any:
+def _get_bank_from_context(
+    context: ToolExecutionContext,
+    bank_name: str,
+    banks_override: dict[str, Any] | None = None,
+) -> Any:
     """Extract a MemoryBank from the tool execution context.
 
     Args:
         context: Tool execution context with ``extra["banks"]``.
         bank_name: Name of the bank to retrieve.
+        banks_override: Explicit banks dict (from constructor injection).
 
     Returns:
         The ``MemoryBank`` instance.
@@ -59,7 +68,7 @@ def _get_bank_from_context(context: ToolExecutionContext, bank_name: str) -> Any
     Raises:
         ValueError: If banks are not in context or the named bank is missing.
     """
-    banks = context.extra.get("banks")
+    banks = banks_override or context.extra.get("banks")
     if not banks:
         raise ValueError(
             "MemoryBank tools require banks in execution context. "
@@ -116,40 +125,70 @@ def _validate_record_id(record_id: str) -> dict[str, Any] | None:
         Error response dict if invalid, ``None`` if valid.
     """
     if not _RECORD_ID_PATTERN.match(record_id):
-        return {
-            "success": False,
-            "error": (
-                f"Invalid record_id format: '{record_id}'. "
-                "Record IDs are 12-character hex strings. "
-                "Use list_bank_records to see available records and their IDs."
-            ),
-        }
+        return error_response(
+            f"Invalid record_id format: '{record_id}'. "
+            "Record IDs are 12-character hex strings. "
+            "Use list_bank_records to see available records and their IDs."
+        )
     return None
 
 
-def _auto_save_to_catalog(context: ToolExecutionContext) -> None:
-    """Auto-save artifact to catalog after a bank modification.
+def create_auto_save_hook(
+    catalog: Any, artifact: Any
+) -> Callable[[BankRecord], None]:
+    """Create a lifecycle hook that auto-saves artifact to catalog.
 
-    Silent no-op if catalog or artifact isn't configured, or if
-    the artifact fails validation (e.g. incomplete recipe).
+    The hook validates the artifact and, on success, saves it to the
+    catalog.  Observable: logs at INFO on save, WARNING on failure
+    (not silent).
 
     Args:
-        context: Tool execution context with optional ``"catalog"``
-            and ``"artifact"`` in ``extra``.
+        catalog: ``ArtifactBankCatalog`` instance.
+        artifact: ``ArtifactBank`` instance.
+
+    Returns:
+        A sync hook suitable for ``MemoryBank.on_add/on_update/on_remove``.
     """
-    catalog = context.extra.get("catalog")
-    artifact = context.extra.get("artifact")
+
+    def hook(record: BankRecord) -> None:
+        errors = artifact.validate()
+        if errors:
+            logger.debug("Auto-save skipped (validation): %s", errors)
+            return
+        try:
+            entry_name = catalog.save(artifact)
+            logger.info("Auto-saved artifact to catalog as '%s'", entry_name)
+        except Exception:
+            logger.warning("Auto-save to catalog failed", exc_info=True)
+
+    return hook
+
+
+def _register_auto_save(
+    bank: Any,
+    context: ToolExecutionContext,
+    catalog_override: Any | None = None,
+    artifact_override: Any | None = None,
+) -> None:
+    """Register auto-save hook on bank if catalog+artifact available.
+
+    Idempotent — uses ``key="auto_save"`` to prevent double-registration
+    across multiple tool calls on the same bank instance.
+
+    Args:
+        bank: ``MemoryBank`` instance.
+        context: Execution context (fallback source for catalog/artifact).
+        catalog_override: Explicit catalog (from constructor injection).
+        artifact_override: Explicit artifact (from constructor injection).
+    """
+    catalog = catalog_override or context.extra.get("catalog")
+    artifact = artifact_override or context.extra.get("artifact")
     if catalog is None or artifact is None:
         return
-    errors = artifact.validate()
-    if errors:
-        logger.debug("Auto-save skipped (validation): %s", errors)
-        return
-    try:
-        entry_name = catalog.save(artifact)
-        logger.debug("Auto-saved artifact to catalog as '%s'", entry_name)
-    except Exception:
-        logger.warning("Auto-save to catalog failed", exc_info=True)
+    hook = create_auto_save_hook(catalog, artifact)
+    bank.on_add(hook, key="auto_save")
+    bank.on_update(hook, key="auto_save")
+    bank.on_remove(hook, key="auto_save")
 
 
 class ListBankRecordsTool(ContextAwareTool):
@@ -168,12 +207,20 @@ class ListBankRecordsTool(ContextAwareTool):
             "tags": ("wizard", "bank"),
         }
 
-    def __init__(self, tool_name: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        banks: dict[str, Any] | None = None,
+        tool_name: str | None = None,
+    ) -> None:
         """Initialize the tool.
 
         Args:
+            banks: Explicit banks dict (constructor injection).
+                Falls back to ``context.extra["banks"]`` at runtime.
             tool_name: Custom tool name.  Defaults to ``"list_bank_records"``.
         """
+        self._banks = banks
         super().__init__(
             name=tool_name or "list_bank_records",
             description="List all records in a memory bank with their current values.",
@@ -209,12 +256,9 @@ class ListBankRecordsTool(ContextAwareTool):
         """
         bank_name = kwargs.get("bank_name")
         if not bank_name:
-            return {
-                "success": False,
-                "error": "Missing required parameter: bank_name",
-            }
+            return error_response("Missing required parameter: bank_name")
 
-        bank = _get_bank_from_context(context, bank_name)
+        bank = _get_bank_from_context(context, bank_name, banks_override=self._banks)
         records = bank.all()
 
         items = []
@@ -250,21 +294,35 @@ class AddBankRecordTool(ContextAwareTool):
         """Return catalog metadata for this tool class."""
         return {
             "name": "add_bank_record",
-            "description": "Add a new record to a memory bank.",
+            "description": "Add a new record to a memory bank. Auto-saves artifact to catalog.",
             "tags": ("wizard", "bank"),
         }
 
-    def __init__(self, tool_name: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        banks: dict[str, Any] | None = None,
+        catalog: Any | None = None,
+        artifact: Any | None = None,
+        tool_name: str | None = None,
+    ) -> None:
         """Initialize the tool.
 
         Args:
+            banks: Explicit banks dict (constructor injection).
+            catalog: Explicit catalog (constructor injection).
+            artifact: Explicit artifact (constructor injection).
             tool_name: Custom tool name.  Defaults to ``"add_bank_record"``.
         """
+        self._banks = banks
+        self._catalog = catalog
+        self._artifact = artifact
         super().__init__(
             name=tool_name or "add_bank_record",
             description=(
                 "Add a new record to a memory bank. "
-                "Checks for duplicates by the bank's match fields."
+                "Checks for duplicates by the bank's match fields. "
+                "Auto-saves artifact to catalog on success."
             ),
         )
 
@@ -302,19 +360,20 @@ class AddBankRecordTool(ContextAwareTool):
         """
         bank_name = kwargs.get("bank_name")
         if not bank_name:
-            return {
-                "success": False,
-                "error": "Missing required parameter: bank_name",
-            }
+            return error_response("Missing required parameter: bank_name")
 
         data = kwargs.get("data")
         if not data or not isinstance(data, dict):
-            return {
-                "success": False,
-                "error": "Missing required parameter: data (must be a dict)",
-            }
+            return error_response(
+                "Missing required parameter: data (must be a dict)"
+            )
 
-        bank = _get_bank_from_context(context, bank_name)
+        bank = _get_bank_from_context(context, bank_name, banks_override=self._banks)
+        _register_auto_save(
+            bank, context,
+            catalog_override=self._catalog,
+            artifact_override=self._artifact,
+        )
 
         # Pre-check for duplicates using the bank's lookup field
         lookup_field = _resolve_lookup_field(bank, data)
@@ -332,18 +391,15 @@ class AddBankRecordTool(ContextAwareTool):
                         existing.record_id,
                         extra={"conversation_id": context.conversation_id},
                     )
-                    return {
-                        "success": False,
-                        "error": (
-                            f"A record with {lookup_field}="
-                            f"'{lookup_value}' already exists. "
-                            f"Use the update tool to modify it."
-                        ),
-                        "existing_record": {
+                    return error_response(
+                        f"A record with {lookup_field}="
+                        f"'{lookup_value}' already exists. "
+                        f"Use the update tool to modify it.",
+                        existing_record={
                             "record_id": existing.record_id,
                             **existing.data,
                         },
-                    }
+                    )
 
         # Pass source_stage from wizard context so tool-added records
         # carry the same provenance as collection-mode adds.
@@ -361,14 +417,11 @@ class AddBankRecordTool(ContextAwareTool):
             extra={"conversation_id": context.conversation_id},
         )
 
-        _auto_save_to_catalog(context)
-
-        return {
-            "success": True,
-            "record_id": record_id,
-            "data": data,
-            "total_records": bank.count(),
-        }
+        return success_response(
+            record_id=record_id,
+            data=data,
+            total_records=bank.count(),
+        )
 
 
 class UpdateBankRecordTool(ContextAwareTool):
@@ -384,23 +437,36 @@ class UpdateBankRecordTool(ContextAwareTool):
         """Return catalog metadata for this tool class."""
         return {
             "name": "update_bank_record",
-            "description": "Update an existing record in a memory bank.",
+            "description": "Update an existing record in a memory bank. Auto-saves artifact to catalog.",
             "tags": ("wizard", "bank"),
         }
 
-    def __init__(self, tool_name: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        banks: dict[str, Any] | None = None,
+        catalog: Any | None = None,
+        artifact: Any | None = None,
+        tool_name: str | None = None,
+    ) -> None:
         """Initialize the tool.
 
         Args:
+            banks: Explicit banks dict (constructor injection).
+            catalog: Explicit catalog (constructor injection).
+            artifact: Explicit artifact (constructor injection).
             tool_name: Custom tool name.  Defaults to ``"update_bank_record"``.
         """
+        self._banks = banks
+        self._catalog = catalog
+        self._artifact = artifact
         super().__init__(
             name=tool_name or "update_bank_record",
             description=(
                 "Update an existing record in a memory bank. "
                 "Use the record_id from list_bank_records to identify "
                 "which record to update, and pass the new field values "
-                "in data."
+                "in data. Auto-saves artifact to catalog on success."
             ),
         )
 
@@ -445,17 +511,11 @@ class UpdateBankRecordTool(ContextAwareTool):
         """
         bank_name = kwargs.get("bank_name")
         if not bank_name:
-            return {
-                "success": False,
-                "error": "Missing required parameter: bank_name",
-            }
+            return error_response("Missing required parameter: bank_name")
 
         record_id = kwargs.get("record_id")
         if not record_id:
-            return {
-                "success": False,
-                "error": "Missing required parameter: record_id",
-            }
+            return error_response("Missing required parameter: record_id")
 
         id_error = _validate_record_id(record_id)
         if id_error is not None:
@@ -463,23 +523,24 @@ class UpdateBankRecordTool(ContextAwareTool):
 
         data = kwargs.get("data")
         if not data or not isinstance(data, dict):
-            return {
-                "success": False,
-                "error": "Missing required parameter: data (must be a dict)",
-            }
+            return error_response(
+                "Missing required parameter: data (must be a dict)"
+            )
 
-        bank = _get_bank_from_context(context, bank_name)
+        bank = _get_bank_from_context(context, bank_name, banks_override=self._banks)
+        _register_auto_save(
+            bank, context,
+            catalog_override=self._catalog,
+            artifact_override=self._artifact,
+        )
 
         record = bank.get(record_id)
         if record is None:
-            return {
-                "success": False,
-                "error": (
-                    f"No record found with record_id='{record_id}' "
-                    f"in bank '{bank_name}'. Use list_bank_records "
-                    "to see available records and their IDs."
-                ),
-            }
+            return error_response(
+                f"No record found with record_id='{record_id}' "
+                f"in bank '{bank_name}'. Use list_bank_records "
+                "to see available records and their IDs.",
+            )
 
         updated_data = {**record.data, **data}
 
@@ -498,13 +559,10 @@ class UpdateBankRecordTool(ContextAwareTool):
             extra={"conversation_id": context.conversation_id},
         )
 
-        _auto_save_to_catalog(context)
-
-        return {
-            "success": True,
-            "record_id": record_id,
-            "updated_data": updated_data,
-        }
+        return success_response(
+            record_id=record_id,
+            updated_data=updated_data,
+        )
 
 
 class RemoveBankRecordTool(ContextAwareTool):
@@ -519,21 +577,35 @@ class RemoveBankRecordTool(ContextAwareTool):
         """Return catalog metadata for this tool class."""
         return {
             "name": "remove_bank_record",
-            "description": "Remove a record from a memory bank.",
+            "description": "Remove a record from a memory bank. Auto-saves artifact to catalog.",
             "tags": ("wizard", "bank"),
         }
 
-    def __init__(self, tool_name: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        banks: dict[str, Any] | None = None,
+        catalog: Any | None = None,
+        artifact: Any | None = None,
+        tool_name: str | None = None,
+    ) -> None:
         """Initialize the tool.
 
         Args:
+            banks: Explicit banks dict (constructor injection).
+            catalog: Explicit catalog (constructor injection).
+            artifact: Explicit artifact (constructor injection).
             tool_name: Custom tool name.  Defaults to ``"remove_bank_record"``.
         """
+        self._banks = banks
+        self._catalog = catalog
+        self._artifact = artifact
         super().__init__(
             name=tool_name or "remove_bank_record",
             description=(
                 "Remove a record from a memory bank by its record_id "
-                "(from list_bank_records)."
+                "(from list_bank_records). "
+                "Auto-saves artifact to catalog on success."
             ),
         )
 
@@ -574,34 +646,30 @@ class RemoveBankRecordTool(ContextAwareTool):
         """
         bank_name = kwargs.get("bank_name")
         if not bank_name:
-            return {
-                "success": False,
-                "error": "Missing required parameter: bank_name",
-            }
+            return error_response("Missing required parameter: bank_name")
 
         record_id = kwargs.get("record_id")
         if not record_id:
-            return {
-                "success": False,
-                "error": "Missing required parameter: record_id",
-            }
+            return error_response("Missing required parameter: record_id")
 
         id_error = _validate_record_id(record_id)
         if id_error is not None:
             return id_error
 
-        bank = _get_bank_from_context(context, bank_name)
+        bank = _get_bank_from_context(context, bank_name, banks_override=self._banks)
+        _register_auto_save(
+            bank, context,
+            catalog_override=self._catalog,
+            artifact_override=self._artifact,
+        )
 
         record = bank.get(record_id)
         if record is None:
-            return {
-                "success": False,
-                "error": (
-                    f"No record found with record_id='{record_id}' "
-                    f"in bank '{bank_name}'. Use list_bank_records "
-                    "to see available records and their IDs."
-                ),
-            }
+            return error_response(
+                f"No record found with record_id='{record_id}' "
+                f"in bank '{bank_name}'. Use list_bank_records "
+                "to see available records and their IDs.",
+            )
 
         bank.remove(record_id)
 
@@ -612,16 +680,13 @@ class RemoveBankRecordTool(ContextAwareTool):
             extra={"conversation_id": context.conversation_id},
         )
 
-        _auto_save_to_catalog(context)
-
-        return {
-            "success": True,
-            "removed": {
+        return success_response(
+            removed={
                 "record_id": record_id,
                 **record.data,
             },
-            "remaining_records": bank.count(),
-        }
+            remaining_records=bank.count(),
+        )
 
 
 class FinalizeBankTool(ContextAwareTool):
@@ -642,12 +707,19 @@ class FinalizeBankTool(ContextAwareTool):
             "tags": ("wizard", "bank"),
         }
 
-    def __init__(self, tool_name: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        banks: dict[str, Any] | None = None,
+        tool_name: str | None = None,
+    ) -> None:
         """Initialize the tool.
 
         Args:
+            banks: Explicit banks dict (constructor injection).
             tool_name: Custom tool name.  Defaults to ``"finalize_bank"``.
         """
+        self._banks = banks
         super().__init__(
             name=tool_name or "finalize_bank",
             description=(
@@ -686,12 +758,9 @@ class FinalizeBankTool(ContextAwareTool):
         """
         bank_name = kwargs.get("bank_name")
         if not bank_name:
-            return {
-                "success": False,
-                "error": "Missing required parameter: bank_name",
-            }
+            return error_response("Missing required parameter: bank_name")
 
-        bank = _get_bank_from_context(context, bank_name)
+        bank = _get_bank_from_context(context, bank_name, banks_override=self._banks)
         count = bank.count()
         records = bank.all()
 
@@ -704,13 +773,12 @@ class FinalizeBankTool(ContextAwareTool):
             extra={"conversation_id": context.conversation_id},
         )
 
-        return {
-            "success": True,
-            "finalized": True,
-            "bank_name": bank_name,
-            "record_count": count,
-            "records": items,
-        }
+        return success_response(
+            finalized=True,
+            bank_name=bank_name,
+            record_count=count,
+            records=items,
+        )
 
 
 class CompileArtifactTool(ContextAwareTool):
@@ -729,12 +797,19 @@ class CompileArtifactTool(ContextAwareTool):
             "tags": ("wizard", "bank", "artifact"),
         }
 
-    def __init__(self, tool_name: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        artifact: Any | None = None,
+        tool_name: str | None = None,
+    ) -> None:
         """Initialize the tool.
 
         Args:
+            artifact: Explicit artifact (constructor injection).
             tool_name: Custom tool name.  Defaults to ``"compile_artifact"``.
         """
+        self._artifact = artifact
         super().__init__(
             name=tool_name or "compile_artifact",
             description=(
@@ -765,15 +840,12 @@ class CompileArtifactTool(ContextAwareTool):
         Returns:
             Dict with compiled artifact or validation errors.
         """
-        artifact = context.extra.get("artifact")
+        artifact = self._artifact or context.extra.get("artifact")
         if artifact is None:
-            return {
-                "success": False,
-                "error": (
-                    "No artifact configured. "
-                    "Ensure the wizard has an artifact configuration."
-                ),
-            }
+            return error_response(
+                "No artifact configured. "
+                "Ensure the wizard has an artifact configuration.",
+            )
 
         errors = artifact.validate()
         if errors:
@@ -782,10 +854,10 @@ class CompileArtifactTool(ContextAwareTool):
                 errors,
                 extra={"conversation_id": context.conversation_id},
             )
-            return {
-                "success": False,
-                "errors": errors,
-            }
+            return error_response(
+                "Artifact validation failed",
+                errors=errors,
+            )
 
         compiled = artifact.compile()
         logger.info(
@@ -794,10 +866,7 @@ class CompileArtifactTool(ContextAwareTool):
             len(artifact.sections),
             extra={"conversation_id": context.conversation_id},
         )
-        return {
-            "success": True,
-            "artifact": compiled,
-        }
+        return success_response(artifact=compiled)
 
 
 class FinalizeArtifactTool(ContextAwareTool):
@@ -823,17 +892,24 @@ class FinalizeArtifactTool(ContextAwareTool):
             "tags": ("wizard", "bank", "artifact"),
         }
 
-    def __init__(self, tool_name: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        artifact: Any | None = None,
+        tool_name: str | None = None,
+    ) -> None:
         """Initialize the tool.
 
         Args:
+            artifact: Explicit artifact (constructor injection).
             tool_name: Custom tool name.  Defaults to ``"finalize_artifact"``.
         """
+        self._artifact = artifact
         super().__init__(
             name=tool_name or "finalize_artifact",
             description=(
                 "Validate, compile, and lock the artifact. "
-                "After finalization no further edits are allowed."
+                "No further edits are allowed after finalization."
             ),
         )
 
@@ -859,15 +935,12 @@ class FinalizeArtifactTool(ContextAwareTool):
         Returns:
             Dict with compiled artifact on success, or errors on failure.
         """
-        artifact = context.extra.get("artifact")
+        artifact = self._artifact or context.extra.get("artifact")
         if artifact is None:
-            return {
-                "success": False,
-                "error": (
-                    "No artifact configured. "
-                    "Ensure the wizard has an artifact configuration."
-                ),
-            }
+            return error_response(
+                "No artifact configured. "
+                "Ensure the wizard has an artifact configuration.",
+            )
 
         # Idempotent: already finalized -> return compiled without error
         if artifact.is_finalized:
@@ -877,11 +950,10 @@ class FinalizeArtifactTool(ContextAwareTool):
                 artifact.name,
                 extra={"conversation_id": context.conversation_id},
             )
-            return {
-                "success": True,
-                "already_finalized": True,
-                "artifact": compiled,
-            }
+            return success_response(
+                already_finalized=True,
+                artifact=compiled,
+            )
 
         # Validate before finalizing — return errors without locking
         errors = artifact.validate()
@@ -891,10 +963,10 @@ class FinalizeArtifactTool(ContextAwareTool):
                 errors,
                 extra={"conversation_id": context.conversation_id},
             )
-            return {
-                "success": False,
-                "errors": errors,
-            }
+            return error_response(
+                "Artifact validation failed",
+                errors=errors,
+            )
 
         compiled = artifact.finalize()
         logger.info(
@@ -903,11 +975,10 @@ class FinalizeArtifactTool(ContextAwareTool):
             len(artifact.sections),
             extra={"conversation_id": context.conversation_id},
         )
-        return {
-            "success": True,
-            "is_finalized": True,
-            "artifact": compiled,
-        }
+        return success_response(
+            is_finalized=True,
+            artifact=compiled,
+        )
 
 
 class CompleteWizardTool(ContextAwareTool):
@@ -933,17 +1004,24 @@ class CompleteWizardTool(ContextAwareTool):
             "tags": ("wizard",),
         }
 
-    def __init__(self, tool_name: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        artifact: Any | None = None,
+        tool_name: str | None = None,
+    ) -> None:
         """Initialize the tool.
 
         Args:
+            artifact: Explicit artifact (constructor injection).
             tool_name: Custom tool name.  Defaults to ``"complete_wizard"``.
         """
+        self._artifact = artifact
         super().__init__(
             name=tool_name or "complete_wizard",
             description=(
                 "Signal that the wizard workflow is complete. "
-                "Auto-finalizes the artifact if present."
+                "Finalizes the artifact and saves to catalog."
             ),
         )
 
@@ -979,25 +1057,19 @@ class CompleteWizardTool(ContextAwareTool):
         """
         signal = context.extra.get("_completion_signal")
         if signal is None:
-            return {
-                "success": False,
-                "error": (
-                    "No completion signal available. "
-                    "This tool can only be used within a wizard ReAct stage."
-                ),
-            }
+            return error_response(
+                "No completion signal available. "
+                "This tool can only be used within a wizard ReAct stage.",
+            )
 
         # Idempotent: already requested
         if signal.get("requested"):
-            return {
-                "success": True,
-                "already_completed": True,
-            }
+            return success_response(already_completed=True)
 
         summary = kwargs.get("summary", "")
 
         # Auto-finalize artifact if present and not yet finalized
-        artifact = context.extra.get("artifact")
+        artifact = self._artifact or context.extra.get("artifact")
         if artifact is not None and not artifact.is_finalized:
             errors = artifact.validate()
             if errors:
@@ -1006,13 +1078,10 @@ class CompleteWizardTool(ContextAwareTool):
                     errors,
                     extra={"conversation_id": context.conversation_id},
                 )
-                return {
-                    "success": False,
-                    "error": (
-                        "Cannot complete wizard: artifact validation failed."
-                    ),
-                    "artifact_errors": errors,
-                }
+                return error_response(
+                    "Cannot complete wizard: artifact validation failed.",
+                    artifact_errors=errors,
+                )
             artifact.finalize()
             logger.info(
                 "Auto-finalized artifact '%s' during wizard completion",
@@ -1028,11 +1097,7 @@ class CompleteWizardTool(ContextAwareTool):
             "Wizard completion signaled via complete_wizard tool",
             extra={"conversation_id": context.conversation_id},
         )
-        return {
-            "success": True,
-            "completed": True,
-            "summary": summary,
-        }
+        return success_response(completed=True, summary=summary)
 
 
 class RestartWizardTool(ContextAwareTool):
@@ -1095,20 +1160,14 @@ class RestartWizardTool(ContextAwareTool):
         """
         signal = context.extra.get("_restart_signal")
         if signal is None:
-            return {
-                "success": False,
-                "error": (
-                    "No restart signal available. "
-                    "This tool can only be used within a wizard ReAct stage."
-                ),
-            }
+            return error_response(
+                "No restart signal available. "
+                "This tool can only be used within a wizard ReAct stage.",
+            )
 
         # Idempotent: already requested
         if signal.get("requested"):
-            return {
-                "success": True,
-                "already_requested": True,
-            }
+            return success_response(already_requested=True)
 
         signal["requested"] = True
 
@@ -1116,7 +1175,4 @@ class RestartWizardTool(ContextAwareTool):
             "Wizard restart signaled via restart_wizard tool",
             extra={"conversation_id": context.conversation_id},
         )
-        return {
-            "success": True,
-            "restarting": True,
-        }
+        return success_response(restarting=True)
