@@ -12,7 +12,14 @@ from .artifact_io import (
     save_artifact,
     save_book,
 )
-from .bank import AsyncMemoryBank, BankRecord, EmptyBankProxy, MemoryBank
+from .bank import (
+    AsyncBankProtocol,
+    AsyncMemoryBank,
+    BankRecord,
+    EmptyBankProxy,
+    MemoryBank,
+    SyncBankProtocol,
+)
 from .base import Memory
 from .buffer import BufferMemory
 from .summary import SummaryMemory
@@ -21,12 +28,14 @@ from .vector import VectorMemory
 __all__ = [
     "ArtifactBank",
     "ArtifactBankCatalog",
+    "AsyncBankProtocol",
     "AsyncMemoryBank",
     "BankRecord",
     "BufferMemory",
     "EmptyBankProxy",
     "Memory",
     "MemoryBank",
+    "SyncBankProtocol",
     "SummaryMemory",
     "VectorMemory",
     "append_to_book",

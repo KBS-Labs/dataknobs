@@ -421,7 +421,7 @@ class TestArtifactBankFromConfig:
         assert isinstance(bank, MemoryBank)
         assert bank.match_fields == ["name"]
         # max_records is enforced
-        assert bank._max_records == 10
+        assert bank._core.max_records == 10
 
     def test_config_with_nested_duplicate_detection(self) -> None:
         config: dict[str, Any] = {

@@ -426,8 +426,8 @@ class TestBankConfigParsing:
         reasoning = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
 
         bank = reasoning._banks["items"]
-        assert bank._duplicate_strategy == "reject"
-        assert bank._match_fields == ["name"]
+        assert bank._core.duplicate_strategy == "reject"
+        assert bank.match_fields == ["name"]
 
     def test_nested_duplicate_detection(self) -> None:
         """Nested duplicate_detection.strategy format is also supported."""
@@ -453,8 +453,8 @@ class TestBankConfigParsing:
         reasoning = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
 
         bank = reasoning._banks["items"]
-        assert bank._duplicate_strategy == "reject"
-        assert bank._match_fields == ["name"]
+        assert bank._core.duplicate_strategy == "reject"
+        assert bank.match_fields == ["name"]
 
 
 # =====================================================================

@@ -860,7 +860,7 @@ class TestBankToolProvenance:
 
     @pytest.mark.asyncio
     async def test_update_without_wizard_context_no_modified_in_stage(self) -> None:
-        """UpdateBankRecordTool without wizard context leaves modified_in_stage empty."""
+        """UpdateBankRecordTool without wizard context leaves modified_in_stage None."""
         bank = _make_bank(required=["name"], match_fields=["name"])
         rec_id = bank.add(
             {"name": "flour", "amount": "2 cups"},
@@ -880,7 +880,7 @@ class TestBankToolProvenance:
         record = bank.get(rec_id)
         assert record is not None
         assert record.source_stage == "ingredients"
-        assert record.modified_in_stage == ""
+        assert record.modified_in_stage is None
 
 
 class TestBankRecordProvenance:
@@ -931,7 +931,7 @@ class TestBankRecordProvenance:
         assert record.modified_in_stage == "review"
 
     def test_memory_bank_update_without_modified_in_stage(self) -> None:
-        """MemoryBank.update() without modified_in_stage preserves existing."""
+        """MemoryBank.update() without modified_in_stage leaves it as None."""
         bank = _make_bank(required=["name"])
         rec_id = bank.add({"name": "flour"}, source_stage="collect")
 
@@ -940,7 +940,7 @@ class TestBankRecordProvenance:
         record = bank.get(rec_id)
         assert record is not None
         assert record.source_stage == "collect"
-        assert record.modified_in_stage == ""
+        assert record.modified_in_stage is None
 
 
 # -- Helpers for FinalizeArtifactTool / CompleteWizardTool tests --
