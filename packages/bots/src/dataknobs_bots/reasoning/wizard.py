@@ -2246,7 +2246,7 @@ class WizardReasoning(ReasoningStrategy):
             "completed": state.completed,
             "clarification_attempts": state.clarification_attempts,
             "transitions": [
-                sanitize_for_json(t.to_dict()) for t in state.transitions
+                sanitize_for_json(t) for t in state.transitions
             ],
             "stage_entry_time": state.stage_entry_time,
             "tasks": state.tasks.to_dict(),
