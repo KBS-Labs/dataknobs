@@ -101,8 +101,10 @@ class TestArtifactBankCatalog:
         assert len(entries) == 1
         entry = entries[0]
         assert entry["name"] == "recipe"
+        assert entry["artifact_type"] == "recipe"
+        assert entry["fields"] == {"recipe_name": "Cookies"}
         assert "ingredients" in entry["sections"]
-        assert entry["field_count"] == 1  # recipe_name
+        assert entry["sections"]["ingredients"] == 2
 
     def test_delete_existing(self) -> None:
         catalog = ArtifactBankCatalog(SyncMemoryDatabase())
@@ -261,6 +263,44 @@ class TestCatalogEntryNameField:
         assert catalog.count() == 2
         assert catalog.get("Cookies") is not None
         assert catalog.get("Pasta") is not None
+
+    def test_list_with_entry_name_field(self) -> None:
+        """list() returns storage key as name, not artifact type."""
+        catalog = ArtifactBankCatalog(
+            SyncMemoryDatabase(), entry_name_field="recipe_name",
+        )
+        a1 = _make_artifact(
+            recipe_name="Chocolate Chip Cookies",
+            ingredients=[{"name": "flour"}, {"name": "sugar"}, {"name": "chips"}],
+        )
+        a2 = _make_artifact(
+            recipe_name="Pasta Carbonara",
+            ingredients=[{"name": "pasta"}, {"name": "eggs"}],
+        )
+        catalog.save(a1)
+        catalog.save(a2)
+
+        entries = catalog.list()
+        assert len(entries) == 2
+
+        # Sort by name for deterministic assertions
+        entries.sort(key=lambda e: e["name"])
+
+        # Entry names are the storage keys (recipe_name values), not "recipe"
+        assert entries[0]["name"] == "Chocolate Chip Cookies"
+        assert entries[1]["name"] == "Pasta Carbonara"
+
+        # artifact_type is the type for both
+        assert entries[0]["artifact_type"] == "recipe"
+        assert entries[1]["artifact_type"] == "recipe"
+
+        # Fields contain actual scalar values
+        assert entries[0]["fields"]["recipe_name"] == "Chocolate Chip Cookies"
+        assert entries[1]["fields"]["recipe_name"] == "Pasta Carbonara"
+
+        # Sections have record counts
+        assert entries[0]["sections"]["ingredients"] == 3
+        assert entries[1]["sections"]["ingredients"] == 2
 
     def test_from_config_entry_name_field(self) -> None:
         """from_config passes through entry_name_field."""

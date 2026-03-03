@@ -11,8 +11,8 @@ Example::
     >>> from dataknobs_bots.memory.catalog import ArtifactBankCatalog
     >>> catalog = ArtifactBankCatalog(SyncMemoryDatabase())
     >>> catalog.save(artifact)
-    >>> catalog.list()
-    [{'name': 'recipe', 'sections': ['ingredients', 'instructions'], 'field_count': 1}]
+    >>> catalog.list()  # doctest: +SKIP
+    [{'name': 'recipe', 'artifact_type': 'recipe', 'fields': {...}, 'sections': {...}}]
 """
 
 from __future__ import annotations
@@ -88,30 +88,39 @@ class ArtifactBankCatalog:
         """List summary info for all catalog entries.
 
         Returns:
-            List of dicts with ``name``, ``sections`` (list of section
-            names), and ``field_count`` keys.
+            List of dicts with:
+
+            - ``name``: The catalog entry key (``storage_id``), usable
+              with ``get()``, ``load_into()``, ``delete()``, and
+              ``revert()``.
+            - ``artifact_type``: The artifact type name (e.g.
+              ``"recipe"``).
+            - ``fields``: Dict of scalar field names to their values.
+            - ``sections``: Dict of section names to record counts.
         """
         records = self._db.all()
         entries: list[dict[str, Any]] = []
         for record in records:
             data = record.data
             compiled = data.get("compiled", {})
-            name = compiled.get("_artifact_name", record.storage_id or "")
-            sections: list[str] = []
-            field_count = 0
+            name = record.storage_id or ""
+            artifact_type = compiled.get("_artifact_name", "unknown")
+            fields: dict[str, Any] = {}
+            sections: dict[str, int] = {}
             for key, value in compiled.items():
                 if key.startswith("_"):
                     continue
                 if isinstance(value, list) and all(
                     isinstance(v, dict) for v in value
                 ):
-                    sections.append(key)
+                    sections[key] = len(value)
                 else:
-                    field_count += 1
+                    fields[key] = value
             entries.append({
                 "name": name,
+                "artifact_type": artifact_type,
+                "fields": fields,
                 "sections": sections,
-                "field_count": field_count,
             })
         return entries
 

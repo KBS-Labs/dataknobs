@@ -97,7 +97,7 @@ class ListCatalogTool(ContextAwareTool):
             "name": "list_catalog",
             "description": (
                 "List all saved artifacts in the catalog with their "
-                "names, sections, and field counts. "
+                "names, fields, and section record counts. "
                 "Use load_from_catalog to restore a previous artifact."
             ),
             "tags": ("wizard", "catalog"),
@@ -121,7 +121,7 @@ class ListCatalogTool(ContextAwareTool):
             name=tool_name or "list_catalog",
             description=(
                 "List all saved artifacts in the catalog with their "
-                "names, sections, and field counts. "
+                "names, fields, and section record counts. "
                 "Use load_from_catalog to restore a previous artifact."
             ),
         )
