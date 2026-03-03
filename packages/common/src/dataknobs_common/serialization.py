@@ -316,7 +316,7 @@ def sanitize_for_json(value: Any) -> Any:
     - ``None``, ``bool``, ``int``, ``float``, ``str`` → pass through
     - ``dict`` → recurse on values; drop entries whose values are not convertible
     - ``list`` / ``tuple`` → recurse on elements; filter out non-convertible items
-    - dataclass instance → ``dataclasses.asdict()``
+    - dataclass instance → field-by-field recursive sanitization
     - Object with ``to_dict()`` → call ``to_dict()``
     - Anything else → dropped (logged at debug level)
 
@@ -348,9 +348,20 @@ def sanitize_for_json(value: Any) -> Any:
                 items.append(sanitized)
         return items
 
-    # Dataclass instances → asdict
+    # Dataclass instances → field-by-field recursive sanitization.
+    # We intentionally avoid ``dataclasses.asdict()`` here because it uses
+    # ``copy.deepcopy`` on every field value, which crashes on non-picklable
+    # objects (e.g., ``asyncio.Task`` stored in wizard data snapshots).
+    # Field-by-field recursion is both safer and more thorough — each field
+    # value passes through the full sanitize_for_json logic, so nested
+    # non-serializable values are dropped cleanly rather than causing a crash.
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return dataclasses.asdict(value)
+        result = {}
+        for f in dataclasses.fields(value):
+            sanitized = sanitize_for_json(getattr(value, f.name))
+            if sanitized is not _SENTINEL:
+                result[f.name] = sanitized
+        return result
 
     # Serializable protocol (has to_dict)
     if hasattr(value, "to_dict") and callable(value.to_dict):
