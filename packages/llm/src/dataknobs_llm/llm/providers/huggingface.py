@@ -136,6 +136,7 @@ class HuggingFaceProvider(AsyncLLMProvider):
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
         **kwargs: Any
     ) -> AsyncIterator[LLMStreamResponse]:
         """HuggingFace Inference API doesn't support streaming.
@@ -144,14 +145,20 @@ class HuggingFaceProvider(AsyncLLMProvider):
             messages: Input messages or prompt
             config_overrides: Optional dict to override config fields (model,
                 temperature, max_tokens, top_p, stop_sequences, seed)
+            tools: Optional list of Tool objects (not supported — raises
+                ToolsNotSupportedError if provided)
             **kwargs: Additional provider-specific parameters
         """
-        # Simulate streaming by yielding complete response
-        response = await self.complete(messages, config_overrides=config_overrides, **kwargs)
+        # Simulate streaming by yielding complete response (tools forwarded to
+        # complete(), which raises ToolsNotSupportedError if tools are passed)
+        response = await self.complete(
+            messages, config_overrides=config_overrides, tools=tools, **kwargs
+        )
         yield LLMStreamResponse(
             delta=response.content,
             is_final=True,
-            finish_reason=response.finish_reason
+            finish_reason=response.finish_reason,
+            model=response.model,
         )
 
     async def embed(

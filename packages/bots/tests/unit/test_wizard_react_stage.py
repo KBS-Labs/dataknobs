@@ -12,7 +12,7 @@ from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 from dataknobs_llm.conversations import ConversationManager
 from dataknobs_llm.llm.providers.echo import EchoProvider
-from dataknobs_llm.testing import ResponseSequenceBuilder, text_response, tool_call_response
+from dataknobs_llm.testing import text_response, tool_call_response
 from dataknobs_llm.tools.base import Tool
 
 
@@ -82,25 +82,6 @@ class ValidateConfigTool(Tool):
             "valid": len(self.errors) == 0,
             "errors": self.errors,
         }
-
-
-class FailingTool(Tool):
-    """Test tool that raises an exception."""
-
-    def __init__(self) -> None:
-        super().__init__(
-            name="failing_tool",
-            description="A tool that always fails",
-        )
-        self.call_count = 0
-
-    @property
-    def schema(self) -> dict[str, Any]:
-        return {"type": "object", "properties": {}}
-
-    async def execute(self, **kwargs: Any) -> dict[str, Any]:
-        self.call_count += 1
-        raise ValueError("Tool execution failed intentionally")
 
 
 # -----------------------------------------------------------------------------
@@ -174,12 +155,6 @@ def preview_tool() -> PreviewConfigTool:
 def validate_tool() -> ValidateConfigTool:
     """Create validate config tool."""
     return ValidateConfigTool()
-
-
-@pytest.fixture
-def failing_tool() -> FailingTool:
-    """Create failing tool."""
-    return FailingTool()
 
 
 # -----------------------------------------------------------------------------
@@ -289,156 +264,6 @@ class TestGetMaxIterations:
 
         stage = {"name": "review", "max_iterations": 0}
         assert reasoning._get_max_iterations(stage) == 3
-
-
-# -----------------------------------------------------------------------------
-# TestFindTool
-# -----------------------------------------------------------------------------
-
-
-class TestFindTool:
-    """Tests for _find_tool method."""
-
-    def test_find_existing_tool(
-        self,
-        react_wizard_config: dict[str, Any],
-        preview_tool: PreviewConfigTool,
-        validate_tool: ValidateConfigTool,
-    ) -> None:
-        """Find tool by name."""
-        loader = WizardConfigLoader()
-        wizard_fsm = loader.load_from_dict(react_wizard_config)
-        reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
-
-        tools = [preview_tool, validate_tool]
-
-        found = reasoning._find_tool("preview_config", tools)
-        assert found is preview_tool
-
-        found = reasoning._find_tool("validate_config", tools)
-        assert found is validate_tool
-
-    def test_find_nonexistent_tool_returns_none(
-        self,
-        react_wizard_config: dict[str, Any],
-        preview_tool: PreviewConfigTool,
-    ) -> None:
-        """Finding nonexistent tool returns None."""
-        loader = WizardConfigLoader()
-        wizard_fsm = loader.load_from_dict(react_wizard_config)
-        reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
-
-        tools = [preview_tool]
-
-        found = reasoning._find_tool("unknown_tool", tools)
-        assert found is None
-
-    def test_find_tool_empty_list(
-        self, react_wizard_config: dict[str, Any]
-    ) -> None:
-        """Finding tool in empty list returns None."""
-        loader = WizardConfigLoader()
-        wizard_fsm = loader.load_from_dict(react_wizard_config)
-        reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
-
-        found = reasoning._find_tool("any_tool", [])
-        assert found is None
-
-
-# -----------------------------------------------------------------------------
-# TestExecuteReactToolCall
-# -----------------------------------------------------------------------------
-
-
-class TestExecuteReactToolCall:
-    """Tests for _execute_react_tool_call method."""
-
-    @pytest.mark.asyncio
-    async def test_execute_tool_successfully(
-        self,
-        react_wizard_config: dict[str, Any],
-        preview_tool: PreviewConfigTool,
-    ) -> None:
-        """Execute tool and get result."""
-        loader = WizardConfigLoader()
-        wizard_fsm = loader.load_from_dict(react_wizard_config)
-        reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
-        state = WizardState(current_stage="review", data={})
-
-        # Create a mock tool call
-        class MockToolCall:
-            name = "preview_config"
-            parameters: dict[str, Any] = {"format": "yaml"}
-
-        tool_call = MockToolCall()
-        tools = [preview_tool]
-
-        # Mock tool context (we don't need real context for this test)
-        tool_context = None
-
-        result = await reasoning._execute_react_tool_call(
-            tool_call, tools, state, tool_context
-        )
-
-        assert preview_tool.call_count == 1
-        assert "preview" in result
-        assert result["preview"]["name"] == "Test Bot"
-
-    @pytest.mark.asyncio
-    async def test_execute_unknown_tool_returns_error(
-        self,
-        react_wizard_config: dict[str, Any],
-        preview_tool: PreviewConfigTool,
-    ) -> None:
-        """Executing unknown tool returns error dict."""
-        loader = WizardConfigLoader()
-        wizard_fsm = loader.load_from_dict(react_wizard_config)
-        reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
-        state = WizardState(current_stage="review", data={})
-
-        class MockToolCall:
-            name = "unknown_tool"
-            parameters: dict[str, Any] = {}
-
-        tool_call = MockToolCall()
-        tools = [preview_tool]
-        tool_context = None
-
-        result = await reasoning._execute_react_tool_call(
-            tool_call, tools, state, tool_context
-        )
-
-        assert "error" in result
-        assert "not found" in result["error"]
-        assert preview_tool.call_count == 0
-
-    @pytest.mark.asyncio
-    async def test_execute_failing_tool_returns_error(
-        self,
-        react_wizard_config: dict[str, Any],
-        failing_tool: FailingTool,
-    ) -> None:
-        """Executing failing tool returns error dict."""
-        loader = WizardConfigLoader()
-        wizard_fsm = loader.load_from_dict(react_wizard_config)
-        reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
-        state = WizardState(current_stage="review", data={})
-
-        class MockToolCall:
-            name = "failing_tool"
-            parameters: dict[str, Any] = {}
-
-        tool_call = MockToolCall()
-        tools = [failing_tool]
-        tool_context = None
-
-        result = await reasoning._execute_react_tool_call(
-            tool_call, tools, state, tool_context
-        )
-
-        assert "error" in result
-        assert "failed" in result["error"].lower()
-        assert failing_tool.call_count == 1
 
 
 # -----------------------------------------------------------------------------
@@ -567,10 +392,10 @@ class TestReactStageResponse:
 
         await manager.add_message(role="user", content="Preview endlessly")
 
-        # Script: 2 tool calls (hitting max_iterations=2), then final text
+        # Use *different* params each iteration to avoid duplicate detection
         provider.set_responses([
-            tool_call_response("preview_config", {}),  # Iteration 1
-            tool_call_response("preview_config", {}),  # Iteration 2 (max)
+            tool_call_response("preview_config", {"format": "yaml"}),  # Iteration 1
+            tool_call_response("preview_config", {"format": "json"}),  # Iteration 2 (max)
             text_response("Final response after max iterations"),  # Forced
         ])
 
@@ -584,6 +409,41 @@ class TestReactStageResponse:
         # Tool was called twice (once per iteration)
         assert preview_tool.call_count == 2
         assert response.content == "Final response after max iterations"
+
+    @pytest.mark.asyncio
+    async def test_react_loop_duplicate_tool_calls_break_early(
+        self,
+        react_wizard_config: dict[str, Any],
+        preview_tool: PreviewConfigTool,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+    ) -> None:
+        """Identical consecutive tool calls trigger early break."""
+        manager, provider = conversation_manager_pair
+
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(react_wizard_config)
+        reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
+        state = WizardState(current_stage="review", data={})
+
+        await manager.add_message(role="user", content="Preview config")
+
+        # Same tool + same params on two consecutive iterations
+        provider.set_responses([
+            tool_call_response("preview_config", {"format": "yaml"}),  # Iteration 1
+            tool_call_response("preview_config", {"format": "yaml"}),  # Iteration 2 (dup)
+            text_response("Done after duplicate detection"),  # Post-loop
+        ])
+
+        stage = {"name": "review", "max_iterations": 5}
+        tools = [preview_tool]
+
+        response = await reasoning._react_stage_response(
+            manager, "Test prompt", stage, state, tools
+        )
+
+        # Duplicate detection breaks after 1st execution; tool only called once
+        assert preview_tool.call_count == 1
+        assert response.content == "Done after duplicate detection"
 
 
 # -----------------------------------------------------------------------------

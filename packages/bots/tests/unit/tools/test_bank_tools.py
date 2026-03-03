@@ -1,0 +1,1474 @@
+"""Tests for tools/bank_tools.py."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+from dataknobs_data.backends.memory import SyncMemoryDatabase
+from dataknobs_llm.tools.context import ToolExecutionContext, WizardStateSnapshot
+
+from dataknobs_bots.memory.bank import BankRecord, MemoryBank
+from dataknobs_bots.memory.artifact_bank import ArtifactBank
+from dataknobs_bots.memory.catalog import ArtifactBankCatalog
+from dataknobs_bots.tools.bank_tools import (
+    AddBankRecordTool,
+    CompileArtifactTool,
+    CompleteWizardTool,
+    FinalizeBankTool,
+    FinalizeArtifactTool,
+    ListBankRecordsTool,
+    RemoveBankRecordTool,
+    RestartWizardTool,
+    UpdateBankRecordTool,
+    _get_bank_from_context,
+    _resolve_lookup_field,
+    _validate_record_id,
+)
+
+
+def _make_bank(
+    name: str = "ingredients",
+    required: list[str] | None = None,
+    match_fields: list[str] | None = None,
+) -> MemoryBank:
+    """Create a MemoryBank backed by SyncMemoryDatabase."""
+    schema: dict[str, Any] = {}
+    if required:
+        schema["required"] = required
+    return MemoryBank(
+        name=name,
+        schema=schema,
+        db=SyncMemoryDatabase(),
+        match_fields=match_fields,
+    )
+
+
+def _make_context(
+    banks: dict[str, MemoryBank] | None = None,
+) -> ToolExecutionContext:
+    """Create a ToolExecutionContext with banks in extra."""
+    extra: dict[str, Any] = {}
+    if banks is not None:
+        extra["banks"] = banks
+    return ToolExecutionContext(
+        conversation_id="test-conv",
+        user_id="test-user",
+        extra=extra,
+    )
+
+
+def _make_context_with_stage(
+    banks: dict[str, MemoryBank],
+    current_stage: str,
+) -> ToolExecutionContext:
+    """Create a ToolExecutionContext with banks and a wizard stage."""
+    return ToolExecutionContext(
+        conversation_id="test-conv",
+        user_id="test-user",
+        wizard_state=WizardStateSnapshot(current_stage=current_stage),
+        extra={"banks": banks},
+    )
+
+
+class TestGetBankFromContext:
+    """Tests for _get_bank_from_context helper."""
+
+    def test_missing_banks_raises(self) -> None:
+        context = _make_context()
+        with pytest.raises(ValueError, match="banks in execution context"):
+            _get_bank_from_context(context, "ingredients")
+
+    def test_missing_bank_name_raises(self) -> None:
+        bank = _make_bank("other")
+        context = _make_context(banks={"other": bank})
+        with pytest.raises(ValueError, match="'ingredients' not found"):
+            _get_bank_from_context(context, "ingredients")
+
+    def test_returns_bank(self) -> None:
+        bank = _make_bank("ingredients")
+        context = _make_context(banks={"ingredients": bank})
+        result = _get_bank_from_context(context, "ingredients")
+        assert result is bank
+
+
+class TestResolveLookupField:
+    """Tests for _resolve_lookup_field helper."""
+
+    def test_uses_match_fields(self) -> None:
+        bank = _make_bank(match_fields=["name"])
+        assert _resolve_lookup_field(bank, {"name": "x"}) == "name"
+
+    def test_falls_back_to_required(self) -> None:
+        bank = _make_bank(required=["instruction"])
+        assert _resolve_lookup_field(bank, {"instruction": "x"}) == "instruction"
+
+    def test_match_fields_takes_priority(self) -> None:
+        bank = _make_bank(required=["a"], match_fields=["b"])
+        assert _resolve_lookup_field(bank, {"a": "1", "b": "2"}) == "b"
+
+    def test_returns_none_when_no_info(self) -> None:
+        bank = _make_bank()
+        assert _resolve_lookup_field(bank, {"x": "1"}) is None
+
+
+class TestToolNameOverride:
+    """Tests for the tool_name constructor parameter."""
+
+    def test_list_custom_name(self) -> None:
+        tool = ListBankRecordsTool(tool_name="list_items")
+        assert tool.name == "list_items"
+
+    def test_list_default_name(self) -> None:
+        tool = ListBankRecordsTool()
+        assert tool.name == "list_bank_records"
+
+    def test_add_custom_name(self) -> None:
+        tool = AddBankRecordTool(tool_name="add_item")
+        assert tool.name == "add_item"
+
+    def test_add_default_name(self) -> None:
+        tool = AddBankRecordTool()
+        assert tool.name == "add_bank_record"
+
+    def test_update_custom_name(self) -> None:
+        tool = UpdateBankRecordTool(tool_name="update_item")
+        assert tool.name == "update_item"
+
+    def test_remove_custom_name(self) -> None:
+        tool = RemoveBankRecordTool(tool_name="remove_item")
+        assert tool.name == "remove_item"
+
+    def test_finalize_custom_name(self) -> None:
+        tool = FinalizeBankTool(tool_name="finalize_items")
+        assert tool.name == "finalize_items"
+
+
+class TestListBankRecordsTool:
+    """Tests for ListBankRecordsTool."""
+
+    @pytest.mark.asyncio
+    async def test_empty_bank(self) -> None:
+        bank = _make_bank()
+        context = _make_context(banks={"ingredients": bank})
+        tool = ListBankRecordsTool()
+
+        result = await tool.execute_with_context(
+            context, bank_name="ingredients"
+        )
+
+        assert result["count"] == 0
+        assert result["records"] == []
+        assert result["bank_name"] == "ingredients"
+
+    @pytest.mark.asyncio
+    async def test_bank_with_records(self) -> None:
+        bank = _make_bank(required=["name"])
+        bank.add({"name": "flour", "amount": "2 cups"})
+        bank.add({"name": "sugar", "amount": "1 cup"})
+        context = _make_context(banks={"ingredients": bank})
+        tool = ListBankRecordsTool()
+
+        result = await tool.execute_with_context(
+            context, bank_name="ingredients"
+        )
+
+        assert result["count"] == 2
+        assert len(result["records"]) == 2
+        names = [r["name"] for r in result["records"]]
+        assert "flour" in names
+        assert "sugar" in names
+        # All data fields are included
+        flour_rec = next(r for r in result["records"] if r["name"] == "flour")
+        assert flour_rec["amount"] == "2 cups"
+
+    @pytest.mark.asyncio
+    async def test_missing_bank_name(self) -> None:
+        bank = _make_bank()
+        context = _make_context(banks={"ingredients": bank})
+        tool = ListBankRecordsTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is False
+        assert "bank_name" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_schema_requires_bank_name(self) -> None:
+        tool = ListBankRecordsTool()
+        schema = tool.schema
+        assert schema["type"] == "object"
+        assert "bank_name" in schema["properties"]
+        assert schema["required"] == ["bank_name"]
+
+    @pytest.mark.asyncio
+    async def test_no_banks_in_context(self) -> None:
+        context = _make_context()
+        tool = ListBankRecordsTool()
+        with pytest.raises(ValueError, match="banks in execution context"):
+            await tool.execute_with_context(context, bank_name="ingredients")
+
+
+class TestAddBankRecordTool:
+    """Tests for AddBankRecordTool."""
+
+    @pytest.mark.asyncio
+    async def test_add_new_record(self) -> None:
+        bank = _make_bank(required=["name"], match_fields=["name"])
+        context = _make_context(banks={"ingredients": bank})
+        tool = AddBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            data={"name": "flour", "amount": "2 cups"},
+        )
+
+        assert result["success"] is True
+        assert result["data"] == {"name": "flour", "amount": "2 cups"}
+        assert result["total_records"] == 1
+        assert bank.count() == 1
+
+    @pytest.mark.asyncio
+    async def test_duplicate_detection(self) -> None:
+        bank = _make_bank(required=["name"], match_fields=["name"])
+        bank.add({"name": "flour", "amount": "2 cups"})
+        context = _make_context(banks={"ingredients": bank})
+        tool = AddBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            data={"name": "flour", "amount": "3 cups"},
+        )
+
+        assert result["success"] is False
+        assert "already exists" in result["error"]
+        assert "update tool" in result["error"]
+        assert result["existing_record"]["name"] == "flour"
+        assert bank.count() == 1
+
+    @pytest.mark.asyncio
+    async def test_add_without_optional_field(self) -> None:
+        bank = _make_bank(required=["name"], match_fields=["name"])
+        context = _make_context(banks={"ingredients": bank})
+        tool = AddBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            data={"name": "salt"},
+        )
+
+        assert result["success"] is True
+        assert result["data"] == {"name": "salt"}
+        assert bank.count() == 1
+
+    @pytest.mark.asyncio
+    async def test_missing_bank_name(self) -> None:
+        tool = AddBankRecordTool()
+        bank = _make_bank()
+        context = _make_context(banks={"ingredients": bank})
+
+        result = await tool.execute_with_context(
+            context, data={"name": "flour"}
+        )
+
+        assert result["success"] is False
+        assert "bank_name" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_missing_data(self) -> None:
+        tool = AddBankRecordTool()
+        bank = _make_bank()
+        context = _make_context(banks={"ingredients": bank})
+
+        result = await tool.execute_with_context(
+            context, bank_name="ingredients"
+        )
+
+        assert result["success"] is False
+        assert "data" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_schema_requires_bank_name_and_data(self) -> None:
+        tool = AddBankRecordTool()
+        schema = tool.schema
+        assert "bank_name" in schema["properties"]
+        assert "data" in schema["properties"]
+        assert set(schema["required"]) == {"bank_name", "data"}
+
+
+class TestUpdateBankRecordTool:
+    """Tests for UpdateBankRecordTool."""
+
+    @pytest.mark.asyncio
+    async def test_update_by_record_id(self) -> None:
+        bank = _make_bank(required=["name"], match_fields=["name"])
+        rec_id = bank.add({"name": "flour", "amount": "2 cups"})
+        context = _make_context(banks={"ingredients": bank})
+        tool = UpdateBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            record_id=rec_id,
+            data={"amount": "3 cups"},
+        )
+
+        assert result["success"] is True
+        assert result["record_id"] == rec_id
+        assert result["updated_data"]["amount"] == "3 cups"
+        assert result["updated_data"]["name"] == "flour"
+        records = bank.all()
+        assert len(records) == 1
+        assert records[0].data["amount"] == "3 cups"
+
+    @pytest.mark.asyncio
+    async def test_update_single_field_record(self) -> None:
+        """Updating the only field (e.g. instruction) works via record_id."""
+        bank = _make_bank(
+            "instructions", required=["instruction"],
+        )
+        rec_id = bank.add({"instruction": "Mix dry and wet ingredients"})
+        context = _make_context(banks={"instructions": bank})
+        tool = UpdateBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="instructions",
+            record_id=rec_id,
+            data={"instruction": "Mix dry and wet ingredients separately"},
+        )
+
+        assert result["success"] is True
+        assert result["updated_data"]["instruction"] == (
+            "Mix dry and wet ingredients separately"
+        )
+        records = bank.all()
+        assert records[0].data["instruction"] == (
+            "Mix dry and wet ingredients separately"
+        )
+
+    @pytest.mark.asyncio
+    async def test_record_not_found(self) -> None:
+        bank = _make_bank(required=["name"], match_fields=["name"])
+        bank.add({"name": "flour", "amount": "2 cups"})
+        context = _make_context(banks={"ingredients": bank})
+        tool = UpdateBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            record_id="deadbeef0000",
+            data={"amount": "1 cup"},
+        )
+
+        assert result["success"] is False
+        assert "No record found" in result["error"]
+        assert "list_bank_records" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_missing_record_id(self) -> None:
+        bank = _make_bank(required=["name"])
+        context = _make_context(banks={"ingredients": bank})
+        tool = UpdateBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            data={"amount": "1 cup"},
+        )
+
+        assert result["success"] is False
+        assert "record_id" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_missing_data(self) -> None:
+        bank = _make_bank(required=["name"])
+        context = _make_context(banks={"ingredients": bank})
+        tool = UpdateBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            record_id="deadbeef0001",
+        )
+
+        assert result["success"] is False
+        assert "data" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_schema_requires_bank_name_record_id_and_data(self) -> None:
+        tool = UpdateBankRecordTool()
+        schema = tool.schema
+        assert set(schema["required"]) == {"bank_name", "record_id", "data"}
+        assert "record_id" in schema["properties"]
+
+
+class TestRemoveBankRecordTool:
+    """Tests for RemoveBankRecordTool."""
+
+    @pytest.mark.asyncio
+    async def test_remove_by_record_id(self) -> None:
+        bank = _make_bank(required=["name"], match_fields=["name"])
+        flour_id = bank.add({"name": "flour", "amount": "2 cups"})
+        bank.add({"name": "sugar", "amount": "1 cup"})
+        context = _make_context(banks={"ingredients": bank})
+        tool = RemoveBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            record_id=flour_id,
+        )
+
+        assert result["success"] is True
+        assert result["removed"]["name"] == "flour"
+        assert result["removed"]["record_id"] == flour_id
+        assert result["remaining_records"] == 1
+        assert bank.count() == 1
+        remaining = bank.all()
+        assert remaining[0].data["name"] == "sugar"
+
+    @pytest.mark.asyncio
+    async def test_record_not_found(self) -> None:
+        bank = _make_bank(required=["name"], match_fields=["name"])
+        bank.add({"name": "flour", "amount": "2 cups"})
+        context = _make_context(banks={"ingredients": bank})
+        tool = RemoveBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            record_id="deadbeef0000",
+        )
+
+        assert result["success"] is False
+        assert "No record found" in result["error"]
+        assert "list_bank_records" in result["error"]
+        assert bank.count() == 1
+
+    @pytest.mark.asyncio
+    async def test_missing_record_id(self) -> None:
+        bank = _make_bank(required=["name"], match_fields=["name"])
+        context = _make_context(banks={"ingredients": bank})
+        tool = RemoveBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+        )
+
+        assert result["success"] is False
+        assert "record_id" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_schema_requires_bank_name_and_record_id(self) -> None:
+        tool = RemoveBankRecordTool()
+        schema = tool.schema
+        assert set(schema["required"]) == {"bank_name", "record_id"}
+        assert "record_id" in schema["properties"]
+        assert "data" not in schema["properties"]
+
+
+class TestFinalizeBankTool:
+    """Tests for FinalizeBankTool."""
+
+    @pytest.mark.asyncio
+    async def test_finalize_with_records(self) -> None:
+        bank = _make_bank(required=["name"])
+        bank.add({"name": "flour", "amount": "2 cups"})
+        bank.add({"name": "sugar", "amount": "1 cup"})
+        context = _make_context(banks={"ingredients": bank})
+        tool = FinalizeBankTool()
+
+        result = await tool.execute_with_context(
+            context, bank_name="ingredients"
+        )
+
+        assert result["success"] is True
+        assert result["finalized"] is True
+        assert result["record_count"] == 2
+        assert result["bank_name"] == "ingredients"
+        assert len(result["records"]) == 2
+
+    @pytest.mark.asyncio
+    async def test_finalize_empty_bank(self) -> None:
+        bank = _make_bank()
+        context = _make_context(banks={"ingredients": bank})
+        tool = FinalizeBankTool()
+
+        result = await tool.execute_with_context(
+            context, bank_name="ingredients"
+        )
+
+        assert result["success"] is True
+        assert result["record_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_missing_bank_name(self) -> None:
+        bank = _make_bank()
+        context = _make_context(banks={"ingredients": bank})
+        tool = FinalizeBankTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is False
+        assert "bank_name" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_schema_requires_bank_name(self) -> None:
+        tool = FinalizeBankTool()
+        schema = tool.schema
+        assert schema["type"] == "object"
+        assert "bank_name" in schema["properties"]
+        assert schema["required"] == ["bank_name"]
+
+
+class TestMultiBankContext:
+    """Tests for tools operating across multiple banks."""
+
+    @pytest.mark.asyncio
+    async def test_add_to_different_banks(self) -> None:
+        ing_bank = _make_bank("ingredients", required=["name"], match_fields=["name"])
+        inst_bank = _make_bank(
+            "instructions", required=["instruction"], match_fields=["instruction"]
+        )
+        context = _make_context(
+            banks={"ingredients": ing_bank, "instructions": inst_bank}
+        )
+        tool = AddBankRecordTool()
+
+        r1 = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            data={"name": "flour", "amount": "2 cups"},
+        )
+        r2 = await tool.execute_with_context(
+            context,
+            bank_name="instructions",
+            data={"instruction": "Preheat oven to 375F"},
+        )
+
+        assert r1["success"] is True
+        assert r2["success"] is True
+        assert ing_bank.count() == 1
+        assert inst_bank.count() == 1
+
+    @pytest.mark.asyncio
+    async def test_list_from_different_banks(self) -> None:
+        ing_bank = _make_bank("ingredients", required=["name"])
+        ing_bank.add({"name": "flour"})
+        inst_bank = _make_bank("instructions", required=["instruction"])
+        inst_bank.add({"instruction": "Mix dry ingredients"})
+        context = _make_context(
+            banks={"ingredients": ing_bank, "instructions": inst_bank}
+        )
+        tool = ListBankRecordsTool()
+
+        r1 = await tool.execute_with_context(
+            context, bank_name="ingredients"
+        )
+        r2 = await tool.execute_with_context(
+            context, bank_name="instructions"
+        )
+
+        assert r1["count"] == 1
+        assert r1["records"][0]["name"] == "flour"
+        assert r2["count"] == 1
+        assert r2["records"][0]["instruction"] == "Mix dry ingredients"
+
+    @pytest.mark.asyncio
+    async def test_finalize_different_banks(self) -> None:
+        ing_bank = _make_bank("ingredients", required=["name"])
+        ing_bank.add({"name": "flour"})
+        inst_bank = _make_bank("instructions", required=["instruction"])
+        inst_bank.add({"instruction": "Step 1"})
+        inst_bank.add({"instruction": "Step 2"})
+        context = _make_context(
+            banks={"ingredients": ing_bank, "instructions": inst_bank}
+        )
+        tool = FinalizeBankTool()
+
+        r1 = await tool.execute_with_context(
+            context, bank_name="ingredients"
+        )
+        r2 = await tool.execute_with_context(
+            context, bank_name="instructions"
+        )
+
+        assert r1["record_count"] == 1
+        assert r2["record_count"] == 2
+
+
+class TestCatalogMetadata:
+    """Tests for catalog_metadata classmethods."""
+
+    def test_list_bank_records_metadata(self) -> None:
+        meta = ListBankRecordsTool.catalog_metadata()
+        assert meta["name"] == "list_bank_records"
+        assert "tags" in meta
+
+    def test_add_bank_record_metadata(self) -> None:
+        meta = AddBankRecordTool.catalog_metadata()
+        assert meta["name"] == "add_bank_record"
+
+    def test_update_bank_record_metadata(self) -> None:
+        meta = UpdateBankRecordTool.catalog_metadata()
+        assert meta["name"] == "update_bank_record"
+
+    def test_remove_bank_record_metadata(self) -> None:
+        meta = RemoveBankRecordTool.catalog_metadata()
+        assert meta["name"] == "remove_bank_record"
+
+    def test_finalize_bank_metadata(self) -> None:
+        meta = FinalizeBankTool.catalog_metadata()
+        assert meta["name"] == "finalize_bank"
+
+
+class TestValidateRecordId:
+    """Tests for record_id format validation."""
+
+    def test_valid_12_char_hex(self) -> None:
+        assert _validate_record_id("a1b2c3d4e5f6") is None
+
+    def test_valid_all_zeros(self) -> None:
+        assert _validate_record_id("000000000000") is None
+
+    def test_valid_all_f(self) -> None:
+        assert _validate_record_id("ffffffffffff") is None
+
+    def test_rejects_short_id(self) -> None:
+        result = _validate_record_id("1")
+        assert result is not None
+        assert result["success"] is False
+        assert "Invalid record_id format" in result["error"]
+        assert "list_bank_records" in result["error"]
+
+    def test_rejects_long_id(self) -> None:
+        result = _validate_record_id("a1b2c3d4e5f6a")
+        assert result is not None
+        assert result["success"] is False
+
+    def test_rejects_non_hex_chars(self) -> None:
+        result = _validate_record_id("a1b2c3d4e5gz")
+        assert result is not None
+        assert result["success"] is False
+
+    def test_rejects_uppercase_hex(self) -> None:
+        result = _validate_record_id("A1B2C3D4E5F6")
+        assert result is not None
+        assert result["success"] is False
+
+    def test_rejects_descriptive_string(self) -> None:
+        result = _validate_record_id("nonexistent-id")
+        assert result is not None
+        assert result["success"] is False
+
+    @pytest.mark.asyncio
+    async def test_update_rejects_invalid_format(self) -> None:
+        bank = _make_bank()
+        context = _make_context(banks={"ingredients": bank})
+        tool = UpdateBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            record_id="1",
+            data={"amount": "2 cups"},
+        )
+
+        assert result["success"] is False
+        assert "Invalid record_id format" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_remove_rejects_invalid_format(self) -> None:
+        bank = _make_bank()
+        context = _make_context(banks={"ingredients": bank})
+        tool = RemoveBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            record_id="1",
+        )
+
+        assert result["success"] is False
+        assert "Invalid record_id format" in result["error"]
+
+
+def _make_artifact_context(
+    with_data: bool = False,
+) -> tuple[ToolExecutionContext, ArtifactBank]:
+    """Create a context with an ArtifactBank for testing."""
+    ingredients = _make_bank("ingredients", required=["name"], match_fields=["name"])
+    instructions = _make_bank("instructions", required=["instruction"])
+    artifact = ArtifactBank(
+        name="recipe",
+        field_defs={"recipe_name": {"required": True}},
+        sections={"ingredients": ingredients, "instructions": instructions},
+    )
+    if with_data:
+        artifact.set_field("recipe_name", "Chocolate Chip Cookies")
+        ingredients.add({"name": "flour", "amount": "2 cups"})
+        instructions.add({"instruction": "Preheat oven to 375F"})
+
+    extra: dict[str, Any] = {"artifact": artifact}
+    context = ToolExecutionContext(
+        conversation_id="test-conv",
+        user_id="test-user",
+        extra=extra,
+    )
+    return context, artifact
+
+
+class TestCompileArtifactTool:
+    """Tests for CompileArtifactTool."""
+
+    @pytest.mark.asyncio
+    async def test_no_artifact_in_context(self) -> None:
+        context = _make_context()
+        tool = CompileArtifactTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is False
+        assert "No artifact configured" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_validation_errors_returned(self) -> None:
+        context, _artifact = _make_artifact_context(with_data=False)
+        tool = CompileArtifactTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is False
+        assert "errors" in result
+        assert len(result["errors"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_successful_compile(self) -> None:
+        context, _artifact = _make_artifact_context(with_data=True)
+        tool = CompileArtifactTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is True
+        assert "artifact" in result
+        compiled = result["artifact"]
+        assert compiled["recipe_name"] == "Chocolate Chip Cookies"
+        assert len(compiled["ingredients"]) == 1
+        assert len(compiled["instructions"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_schema_no_required_params(self) -> None:
+        tool = CompileArtifactTool()
+        schema = tool.schema
+        assert schema["type"] == "object"
+        assert "required" not in schema
+
+    def test_catalog_metadata(self) -> None:
+        meta = CompileArtifactTool.catalog_metadata()
+        assert meta["name"] == "compile_artifact"
+        assert "artifact" in meta["tags"]
+
+    def test_custom_tool_name(self) -> None:
+        tool = CompileArtifactTool(tool_name="compile_recipe")
+        assert tool.name == "compile_recipe"
+
+    def test_default_tool_name(self) -> None:
+        tool = CompileArtifactTool()
+        assert tool.name == "compile_artifact"
+
+
+class TestBankToolProvenance:
+    """Tests for data provenance tracking in bank tools.
+
+    Records added/updated via bank tools during a wizard stage should
+    carry provenance metadata (source_stage, modified_in_stage) from
+    the wizard execution context.
+    """
+
+    @pytest.mark.asyncio
+    async def test_add_sets_source_stage_from_wizard_context(self) -> None:
+        """AddBankRecordTool should pass source_stage from wizard context."""
+        bank = _make_bank(required=["name"], match_fields=["name"])
+        context = _make_context_with_stage(
+            banks={"ingredients": bank},
+            current_stage="review",
+        )
+        tool = AddBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            data={"name": "malt", "amount": "1/4 cup"},
+        )
+
+        assert result["success"] is True
+        record = bank.get(result["record_id"])
+        assert record is not None
+        assert record.source_stage == "review"
+
+    @pytest.mark.asyncio
+    async def test_add_without_wizard_context_gets_empty_source_stage(self) -> None:
+        """AddBankRecordTool without wizard context uses empty source_stage."""
+        bank = _make_bank(required=["name"], match_fields=["name"])
+        context = _make_context(banks={"ingredients": bank})
+        tool = AddBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            data={"name": "flour", "amount": "2 cups"},
+        )
+
+        assert result["success"] is True
+        record = bank.get(result["record_id"])
+        assert record is not None
+        assert record.source_stage == ""
+
+    @pytest.mark.asyncio
+    async def test_update_sets_modified_in_stage_from_wizard_context(self) -> None:
+        """UpdateBankRecordTool should set modified_in_stage from context."""
+        bank = _make_bank(required=["name"], match_fields=["name"])
+        rec_id = bank.add(
+            {"name": "flour", "amount": "2 cups"},
+            source_stage="ingredients",
+        )
+        context = _make_context_with_stage(
+            banks={"ingredients": bank},
+            current_stage="review",
+        )
+        tool = UpdateBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            record_id=rec_id,
+            data={"amount": "3 cups"},
+        )
+
+        assert result["success"] is True
+        record = bank.get(rec_id)
+        assert record is not None
+        # Original source_stage preserved
+        assert record.source_stage == "ingredients"
+        # Modification provenance recorded
+        assert record.modified_in_stage == "review"
+
+    @pytest.mark.asyncio
+    async def test_update_without_wizard_context_no_modified_in_stage(self) -> None:
+        """UpdateBankRecordTool without wizard context leaves modified_in_stage None."""
+        bank = _make_bank(required=["name"], match_fields=["name"])
+        rec_id = bank.add(
+            {"name": "flour", "amount": "2 cups"},
+            source_stage="ingredients",
+        )
+        context = _make_context(banks={"ingredients": bank})
+        tool = UpdateBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            record_id=rec_id,
+            data={"amount": "3 cups"},
+        )
+
+        assert result["success"] is True
+        record = bank.get(rec_id)
+        assert record is not None
+        assert record.source_stage == "ingredients"
+        assert record.modified_in_stage is None
+
+
+class TestBankRecordProvenance:
+    """Tests for BankRecord provenance fields and serialization."""
+
+    def test_modified_in_stage_default_none(self) -> None:
+        """New BankRecord has None modified_in_stage (never modified)."""
+        record = BankRecord(record_id="abcdef012345", data={"x": 1})
+        assert record.modified_in_stage is None
+
+    def test_modified_in_stage_roundtrip(self) -> None:
+        """modified_in_stage survives to_dict/from_dict."""
+        record = BankRecord(
+            record_id="abcdef012345",
+            data={"x": 1},
+            source_stage="collect",
+            modified_in_stage="review",
+        )
+        d = record.to_dict()
+        assert d["modified_in_stage"] == "review"
+
+        restored = BankRecord.from_dict(d)
+        assert restored.modified_in_stage == "review"
+        assert restored.source_stage == "collect"
+
+    def test_from_dict_missing_modified_in_stage_defaults_none(self) -> None:
+        """Deserializing records without modified_in_stage gets None."""
+        d = {
+            "record_id": "abcdef012345",
+            "data": {"x": 1},
+            "source_stage": "collect",
+            "created_at": 1000.0,
+            "updated_at": 1000.0,
+        }
+        record = BankRecord.from_dict(d)
+        assert record.modified_in_stage is None
+
+    def test_memory_bank_update_stores_modified_in_stage(self) -> None:
+        """MemoryBank.update() with modified_in_stage stores it in metadata."""
+        bank = _make_bank(required=["name"])
+        rec_id = bank.add({"name": "flour"}, source_stage="collect")
+
+        bank.update(rec_id, {"name": "flour"}, modified_in_stage="review")
+
+        record = bank.get(rec_id)
+        assert record is not None
+        assert record.source_stage == "collect"
+        assert record.modified_in_stage == "review"
+
+    def test_memory_bank_update_without_modified_in_stage(self) -> None:
+        """MemoryBank.update() without modified_in_stage leaves it as None."""
+        bank = _make_bank(required=["name"])
+        rec_id = bank.add({"name": "flour"}, source_stage="collect")
+
+        bank.update(rec_id, {"name": "flour updated"})
+
+        record = bank.get(rec_id)
+        assert record is not None
+        assert record.source_stage == "collect"
+        assert record.modified_in_stage is None
+
+
+# -- Helpers for FinalizeArtifactTool / CompleteWizardTool tests --
+
+
+def _make_artifact_context_with_signal(
+    with_data: bool = False,
+    with_signal: bool = True,
+) -> tuple[ToolExecutionContext, ArtifactBank, dict[str, Any]]:
+    """Create a context with ArtifactBank and completion signal dict."""
+    ingredients = _make_bank("ingredients", required=["name"], match_fields=["name"])
+    instructions = _make_bank("instructions", required=["instruction"])
+    artifact = ArtifactBank(
+        name="recipe",
+        field_defs={"recipe_name": {"required": True}},
+        sections={"ingredients": ingredients, "instructions": instructions},
+    )
+    if with_data:
+        artifact.set_field("recipe_name", "Chocolate Chip Cookies")
+        ingredients.add({"name": "flour", "amount": "2 cups"})
+        instructions.add({"instruction": "Preheat oven to 375F"})
+
+    signal: dict[str, Any] = {"requested": False}
+    extra: dict[str, Any] = {"artifact": artifact}
+    if with_signal:
+        extra["_completion_signal"] = signal
+    context = ToolExecutionContext(
+        conversation_id="test-conv",
+        user_id="test-user",
+        extra=extra,
+    )
+    return context, artifact, signal
+
+
+class TestFinalizeArtifactTool:
+    """Tests for FinalizeArtifactTool."""
+
+    @pytest.mark.asyncio
+    async def test_finalize_success(self) -> None:
+        """Valid artifact -> returns compiled, is_finalized True."""
+        context, artifact = _make_artifact_context(with_data=True)
+        tool = FinalizeArtifactTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is True
+        assert result["is_finalized"] is True
+        assert "artifact" in result
+        assert result["artifact"]["recipe_name"] == "Chocolate Chip Cookies"
+        assert artifact.is_finalized is True
+
+    @pytest.mark.asyncio
+    async def test_finalize_validation_error(self) -> None:
+        """Missing required field -> returns errors, not finalized."""
+        context, artifact = _make_artifact_context(with_data=False)
+        tool = FinalizeArtifactTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is False
+        assert "errors" in result
+        assert len(result["errors"]) > 0
+        assert artifact.is_finalized is False
+
+    @pytest.mark.asyncio
+    async def test_finalize_already_finalized(self) -> None:
+        """Idempotent: returns already_finalized + compiled."""
+        context, artifact = _make_artifact_context(with_data=True)
+        artifact.finalize()
+        tool = FinalizeArtifactTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is True
+        assert result["already_finalized"] is True
+        assert "artifact" in result
+        assert artifact.is_finalized is True
+
+    @pytest.mark.asyncio
+    async def test_finalize_no_artifact(self) -> None:
+        """No artifact in context -> returns error."""
+        context = _make_context()
+        tool = FinalizeArtifactTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is False
+        assert "No artifact configured" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_schema_no_required_params(self) -> None:
+        tool = FinalizeArtifactTool()
+        schema = tool.schema
+        assert schema["type"] == "object"
+        assert "required" not in schema
+
+    def test_catalog_metadata(self) -> None:
+        meta = FinalizeArtifactTool.catalog_metadata()
+        assert meta["name"] == "finalize_artifact"
+        assert "artifact" in meta["tags"]
+
+    def test_custom_tool_name(self) -> None:
+        tool = FinalizeArtifactTool(tool_name="lock_recipe")
+        assert tool.name == "lock_recipe"
+
+    def test_default_tool_name(self) -> None:
+        tool = FinalizeArtifactTool()
+        assert tool.name == "finalize_artifact"
+
+
+class TestCompleteWizardTool:
+    """Tests for CompleteWizardTool."""
+
+    @pytest.mark.asyncio
+    async def test_complete_sets_signal(self) -> None:
+        """Signal dict mutated to requested: True."""
+        context, _artifact, signal = _make_artifact_context_with_signal(
+            with_data=True,
+        )
+        tool = CompleteWizardTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is True
+        assert result["completed"] is True
+        assert signal["requested"] is True
+
+    @pytest.mark.asyncio
+    async def test_complete_with_summary(self) -> None:
+        """Summary stored in signal."""
+        context, _artifact, signal = _make_artifact_context_with_signal(
+            with_data=True,
+        )
+        tool = CompleteWizardTool()
+
+        result = await tool.execute_with_context(
+            context, summary="Recipe complete!"
+        )
+
+        assert result["success"] is True
+        assert result["summary"] == "Recipe complete!"
+        assert signal["summary"] == "Recipe complete!"
+
+    @pytest.mark.asyncio
+    async def test_complete_auto_finalizes_artifact(self) -> None:
+        """Unfinalised artifact gets finalized."""
+        context, artifact, signal = _make_artifact_context_with_signal(
+            with_data=True,
+        )
+        assert artifact.is_finalized is False
+        tool = CompleteWizardTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is True
+        assert artifact.is_finalized is True
+        assert signal["requested"] is True
+
+    @pytest.mark.asyncio
+    async def test_complete_fails_on_invalid_artifact(self) -> None:
+        """Finalization error prevents completion."""
+        context, artifact, signal = _make_artifact_context_with_signal(
+            with_data=False,
+        )
+        tool = CompleteWizardTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is False
+        assert "artifact_errors" in result
+        assert artifact.is_finalized is False
+        assert signal["requested"] is False
+
+    @pytest.mark.asyncio
+    async def test_complete_no_signal(self) -> None:
+        """No signal in context -> returns error."""
+        context, _artifact = _make_artifact_context(with_data=True)
+        tool = CompleteWizardTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is False
+        assert "No completion signal" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_complete_already_requested(self) -> None:
+        """Idempotent: returns already_completed."""
+        context, _artifact, signal = _make_artifact_context_with_signal(
+            with_data=True,
+        )
+        signal["requested"] = True
+        tool = CompleteWizardTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is True
+        assert result["already_completed"] is True
+
+    @pytest.mark.asyncio
+    async def test_complete_without_artifact(self) -> None:
+        """Works for wizards without artifacts."""
+        signal: dict[str, Any] = {"requested": False}
+        context = ToolExecutionContext(
+            conversation_id="test-conv",
+            user_id="test-user",
+            extra={"_completion_signal": signal},
+        )
+        tool = CompleteWizardTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is True
+        assert result["completed"] is True
+        assert signal["requested"] is True
+
+    @pytest.mark.asyncio
+    async def test_complete_skips_finalize_when_already_finalized(self) -> None:
+        """Already-finalized artifact is not re-finalized."""
+        context, artifact, signal = _make_artifact_context_with_signal(
+            with_data=True,
+        )
+        artifact.finalize()
+        tool = CompleteWizardTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is True
+        assert artifact.is_finalized is True
+        assert signal["requested"] is True
+
+    def test_catalog_metadata(self) -> None:
+        meta = CompleteWizardTool.catalog_metadata()
+        assert meta["name"] == "complete_wizard"
+        assert "wizard" in meta["tags"]
+
+    def test_default_tool_name(self) -> None:
+        tool = CompleteWizardTool()
+        assert tool.name == "complete_wizard"
+
+    def test_custom_tool_name(self) -> None:
+        tool = CompleteWizardTool(tool_name="finish_flow")
+        assert tool.name == "finish_flow"
+
+    def test_schema_has_optional_summary(self) -> None:
+        tool = CompleteWizardTool()
+        schema = tool.schema
+        assert schema["type"] == "object"
+        assert "summary" in schema["properties"]
+        assert "required" not in schema
+
+
+class TestRestartWizardTool:
+    """Tests for RestartWizardTool."""
+
+    @pytest.mark.asyncio
+    async def test_restart_sets_signal(self) -> None:
+        """Signal dict mutated to requested: True."""
+        signal: dict[str, Any] = {"requested": False}
+        context = ToolExecutionContext(
+            conversation_id="test-conv",
+            user_id="test-user",
+            extra={"_restart_signal": signal},
+        )
+        tool = RestartWizardTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is True
+        assert result["restarting"] is True
+        assert signal["requested"] is True
+
+    @pytest.mark.asyncio
+    async def test_restart_already_requested(self) -> None:
+        """Idempotent: returns already_requested."""
+        signal: dict[str, Any] = {"requested": True}
+        context = ToolExecutionContext(
+            conversation_id="test-conv",
+            user_id="test-user",
+            extra={"_restart_signal": signal},
+        )
+        tool = RestartWizardTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is True
+        assert result["already_requested"] is True
+
+    @pytest.mark.asyncio
+    async def test_restart_no_signal(self) -> None:
+        """No signal in context -> error."""
+        context = _make_context()
+        tool = RestartWizardTool()
+
+        result = await tool.execute_with_context(context)
+
+        assert result["success"] is False
+        assert "No restart signal" in result["error"]
+
+    def test_catalog_metadata(self) -> None:
+        meta = RestartWizardTool.catalog_metadata()
+        assert meta["name"] == "restart_wizard"
+        assert "wizard" in meta["tags"]
+
+    def test_schema_no_required_params(self) -> None:
+        tool = RestartWizardTool()
+        schema = tool.schema
+        assert schema["type"] == "object"
+        assert "required" not in schema
+
+    def test_default_tool_name(self) -> None:
+        tool = RestartWizardTool()
+        assert tool.name == "restart_wizard"
+
+    def test_custom_tool_name(self) -> None:
+        tool = RestartWizardTool(tool_name="reset_flow")
+        assert tool.name == "reset_flow"
+
+
+# -----------------------------------------------------------------
+# Auto-save to catalog tests
+# -----------------------------------------------------------------
+
+
+def _make_artifact_with_catalog(
+    recipe_name: str | None = None,
+    ingredients: list[dict[str, Any]] | None = None,
+) -> tuple[ArtifactBank, ArtifactBankCatalog]:
+    """Create an ArtifactBank + catalog wired together for auto-save tests."""
+    section_db = SyncMemoryDatabase()
+    sections = {
+        "ingredients": MemoryBank(
+            name="ingredients",
+            schema={"required": ["name"]},
+            db=section_db,
+        ),
+    }
+    artifact = ArtifactBank(
+        name="recipe",
+        field_defs={"recipe_name": {"required": True}},
+        sections=sections,
+    )
+    if recipe_name:
+        artifact.set_field("recipe_name", recipe_name)
+    if ingredients:
+        bank = artifact.sections["ingredients"]
+        for ing in ingredients:
+            bank.add(ing, source_stage="test")
+    catalog = ArtifactBankCatalog(
+        SyncMemoryDatabase(), entry_name_field="recipe_name",
+    )
+    return artifact, catalog
+
+
+def _make_auto_save_context(
+    artifact: ArtifactBank,
+    catalog: ArtifactBankCatalog,
+    bank_name: str = "ingredients",
+) -> ToolExecutionContext:
+    """Create a context with banks, artifact, and catalog for auto-save."""
+    bank = artifact.sections[bank_name]
+    return ToolExecutionContext(
+        conversation_id="test-conv",
+        user_id="test-user",
+        extra={
+            "banks": {bank_name: bank},
+            "artifact": artifact,
+            "catalog": catalog,
+        },
+    )
+
+
+class TestAutoSaveToCatalog:
+    """Tests for auto-save to catalog after bank modifications."""
+
+    @pytest.mark.asyncio
+    async def test_add_bank_record_auto_saves(self) -> None:
+        """Adding a record auto-saves a valid artifact to catalog."""
+        artifact, catalog = _make_artifact_with_catalog(
+            recipe_name="Cookies",
+            ingredients=[{"name": "flour"}],
+        )
+        context = _make_auto_save_context(artifact, catalog)
+        tool = AddBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context, bank_name="ingredients", data={"name": "sugar"},
+        )
+        assert result["success"] is True
+
+        # Catalog should have the artifact saved under the recipe name
+        assert catalog.count() == 1
+        entry = catalog.get("Cookies")
+        assert entry is not None
+        assert entry["recipe_name"] == "Cookies"
+
+    @pytest.mark.asyncio
+    async def test_add_bank_record_auto_save_skips_invalid(self) -> None:
+        """Auto-save is skipped when the artifact is incomplete."""
+        artifact, catalog = _make_artifact_with_catalog()
+        # No recipe_name set, artifact validation will fail
+        context = _make_auto_save_context(artifact, catalog)
+        tool = AddBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context, bank_name="ingredients", data={"name": "flour"},
+        )
+        assert result["success"] is True
+        # Catalog should still be empty — validation failed
+        assert catalog.count() == 0
+
+    @pytest.mark.asyncio
+    async def test_update_bank_record_auto_saves(self) -> None:
+        """Updating a record auto-saves to catalog."""
+        artifact, catalog = _make_artifact_with_catalog(
+            recipe_name="Cookies",
+            ingredients=[{"name": "flour"}],
+        )
+        context = _make_auto_save_context(artifact, catalog)
+
+        # Get the record_id of the existing ingredient
+        bank = artifact.sections["ingredients"]
+        records = bank.all()
+        record_id = records[0].record_id
+
+        tool = UpdateBankRecordTool()
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            record_id=record_id,
+            data={"name": "whole wheat flour"},
+        )
+        assert result["success"] is True
+        assert catalog.count() == 1
+
+    @pytest.mark.asyncio
+    async def test_remove_bank_record_auto_saves(self) -> None:
+        """Removing a record auto-saves to catalog (if still valid)."""
+        artifact, catalog = _make_artifact_with_catalog(
+            recipe_name="Cookies",
+            ingredients=[{"name": "flour"}, {"name": "sugar"}],
+        )
+        context = _make_auto_save_context(artifact, catalog)
+
+        # Remove one ingredient (still has one left, so artifact is valid)
+        bank = artifact.sections["ingredients"]
+        records = bank.all()
+        record_id = records[0].record_id
+
+        tool = RemoveBankRecordTool()
+        result = await tool.execute_with_context(
+            context,
+            bank_name="ingredients",
+            record_id=record_id,
+        )
+        assert result["success"] is True
+        assert catalog.count() == 1
+
+    @pytest.mark.asyncio
+    async def test_auto_save_no_catalog_noop(self) -> None:
+        """No catalog in context → no error, no crash."""
+        bank = _make_bank("ingredients", required=["name"])
+        context = ToolExecutionContext(
+            conversation_id="test-conv",
+            user_id="test-user",
+            extra={"banks": {"ingredients": bank}},
+        )
+        tool = AddBankRecordTool()
+
+        result = await tool.execute_with_context(
+            context, bank_name="ingredients", data={"name": "flour"},
+        )
+        assert result["success"] is True
+
+
+class TestConstructorInjection:
+    """Tests for AD-8 constructor injection on bank tools."""
+
+    @pytest.mark.asyncio
+    async def test_injected_banks_used_over_context(self) -> None:
+        """Constructor-injected banks take precedence over context.extra."""
+        injected_bank = _make_bank("items", required=["name"])
+        injected_bank.add({"name": "flour"})
+
+        # Context has NO banks — injection provides them.
+        context = ToolExecutionContext(
+            conversation_id="test-conv",
+            user_id="test-user",
+            extra={},
+        )
+        tool = ListBankRecordsTool(banks={"items": injected_bank})
+        result = await tool.execute_with_context(context, bank_name="items")
+        assert result["count"] == 1
+        assert result["records"][0]["name"] == "flour"
+
+    @pytest.mark.asyncio
+    async def test_context_fallback_when_no_injection(self) -> None:
+        """Without constructor injection, context.extra is used."""
+        bank = _make_bank("items", required=["name"])
+        bank.add({"name": "sugar"})
+        context = _make_context({"items": bank})
+
+        tool = ListBankRecordsTool()  # No injection
+        result = await tool.execute_with_context(context, bank_name="items")
+        assert result["count"] == 1
+        assert result["records"][0]["name"] == "sugar"
+
+    @pytest.mark.asyncio
+    async def test_injected_catalog_and_artifact(self) -> None:
+        """Constructor-injected catalog/artifact used for auto-save."""
+        bank = _make_bank("ingredients", required=["name"])
+        artifact = ArtifactBank(
+            name="test_recipe",
+            field_defs={"title": {"type": "string"}},
+            sections={"ingredients": bank},
+        )
+        artifact.set_field("title", "Test Recipe")
+        catalog = ArtifactBankCatalog(db=SyncMemoryDatabase())
+
+        # Context has NO catalog/artifact — injection provides them.
+        context = ToolExecutionContext(
+            conversation_id="test-conv",
+            user_id="test-user",
+            extra={"banks": {"ingredients": bank}},
+        )
+        tool = AddBankRecordTool(catalog=catalog, artifact=artifact)
+        result = await tool.execute_with_context(
+            context, bank_name="ingredients", data={"name": "flour"},
+        )
+        assert result["success"] is True
+        # Auto-save hook fired via constructor-injected catalog
+        assert catalog.count() == 1

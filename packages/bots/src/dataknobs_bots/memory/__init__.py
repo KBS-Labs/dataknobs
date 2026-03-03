@@ -2,22 +2,49 @@
 
 from typing import Any
 
-from .bank import AsyncMemoryBank, BankRecord, EmptyBankProxy, MemoryBank
+from .artifact_bank import ArtifactBank
+from .catalog import ArtifactBankCatalog
+from .artifact_io import (
+    append_to_book,
+    list_book,
+    load_artifact,
+    load_from_book,
+    save_artifact,
+    save_book,
+)
+from .bank import (
+    AsyncBankProtocol,
+    AsyncMemoryBank,
+    BankRecord,
+    EmptyBankProxy,
+    MemoryBank,
+    SyncBankProtocol,
+)
 from .base import Memory
 from .buffer import BufferMemory
 from .summary import SummaryMemory
 from .vector import VectorMemory
 
 __all__ = [
+    "ArtifactBank",
+    "ArtifactBankCatalog",
+    "AsyncBankProtocol",
     "AsyncMemoryBank",
     "BankRecord",
     "BufferMemory",
     "EmptyBankProxy",
     "Memory",
     "MemoryBank",
+    "SyncBankProtocol",
     "SummaryMemory",
     "VectorMemory",
+    "append_to_book",
     "create_memory_from_config",
+    "list_book",
+    "load_artifact",
+    "load_from_book",
+    "save_artifact",
+    "save_book",
 ]
 
 

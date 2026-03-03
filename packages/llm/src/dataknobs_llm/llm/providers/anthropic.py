@@ -64,7 +64,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
 from ..base import (
     LLMConfig, LLMMessage, LLMResponse, LLMStreamResponse,
-    AsyncLLMProvider, ModelCapability,
+    AsyncLLMProvider, ModelCapability, ToolCall,
     normalize_llm_config
 )
 from dataknobs_llm.prompts import AsyncPromptBuilder
@@ -284,6 +284,9 @@ class AnthropicProvider(AsyncLLMProvider):
                     prompt += f"\n\nHuman: {msg.content}"
                 elif msg.role == 'assistant':
                     prompt += f"\n\nAssistant: {msg.content}"
+                elif msg.role == 'tool':
+                    tool_name = msg.name or "tool"
+                    prompt += f"\n\n[Tool result from {tool_name}]: {msg.content}"
             prompt += "\n\nAssistant:"
 
         # Build API call kwargs
@@ -325,6 +328,7 @@ class AnthropicProvider(AsyncLLMProvider):
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
         **kwargs: Any
     ) -> AsyncIterator[LLMStreamResponse]:
         """Generate streaming completion.
@@ -333,6 +337,7 @@ class AnthropicProvider(AsyncLLMProvider):
             messages: Input messages or prompt
             config_overrides: Optional dict to override config fields (model,
                 temperature, max_tokens, top_p, stop_sequences, seed)
+            tools: Optional list of Tool objects for function calling.
             **kwargs: Additional provider-specific parameters
         """
         if not self._is_initialized:
@@ -347,26 +352,59 @@ class AnthropicProvider(AsyncLLMProvider):
         else:
             prompt = self._build_prompt(messages)
 
+        # Build stream kwargs
+        stream_kwargs: Dict[str, Any] = {
+            "model": runtime_config.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": runtime_config.max_tokens or 1024,
+            "temperature": runtime_config.temperature,
+        }
+
+        # Handle tools if provided (same as complete())
+        if tools:
+            anthropic_tools = []
+            for tool in tools:
+                anthropic_tools.append({
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": tool.schema if hasattr(tool, "schema") else {},
+                })
+            stream_kwargs["tools"] = anthropic_tools
+
         # Stream API call
-        async with self._client.messages.stream(
-            model=runtime_config.model,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=runtime_config.max_tokens or 1024,
-            temperature=runtime_config.temperature
-        ) as stream:
+        async with self._client.messages.stream(**stream_kwargs) as stream:
             async for chunk in stream:
                 if chunk.type == 'content_block_delta':
-                    yield LLMStreamResponse(
-                        delta=chunk.delta.text,
-                        is_final=False
-                    )
+                    # Text deltas
+                    if hasattr(chunk.delta, 'text'):
+                        yield LLMStreamResponse(
+                            delta=chunk.delta.text,
+                            is_final=False
+                        )
 
-            # Final message
+            # Final message — extract tool_use blocks as ToolCall objects
             message = await stream.get_final_message()
+            tool_calls = None
+            tool_use_blocks = [
+                block for block in message.content
+                if block.type == "tool_use"
+            ]
+            if tool_use_blocks:
+                tool_calls = [
+                    ToolCall(
+                        name=block.name,
+                        parameters=block.input if isinstance(block.input, dict) else {},
+                        id=block.id,
+                    )
+                    for block in tool_use_blocks
+                ]
+
             yield LLMStreamResponse(
                 delta='',
                 is_final=True,
-                finish_reason=message.stop_reason
+                finish_reason=message.stop_reason,
+                tool_calls=tool_calls,
+                model=runtime_config.model,
             )
 
     async def embed(
@@ -388,18 +426,48 @@ class AnthropicProvider(AsyncLLMProvider):
         if not self._is_initialized:
             await self.initialize()
 
-        # Convert to Anthropic message format
-        anthropic_messages = []
+        # Convert to Anthropic message format.
+        # Anthropic uses a different structure for tool calling:
+        # - System messages go into the system parameter
+        # - Assistant tool calls use content blocks with type="tool_use"
+        # - Tool results use role="user" with type="tool_result" blocks
+        anthropic_messages: List[Dict[str, Any]] = []
         system_content = self.config.system_prompt or ''
 
         for msg in messages:
             if msg.role == 'system':
-                # Anthropic uses system parameter, not system messages
                 system_content = msg.content if not system_content else f"{system_content}\n\n{msg.content}"
+            elif msg.role == 'assistant' and msg.tool_calls:
+                # Build content blocks for assistant tool use
+                content_blocks: List[Dict[str, Any]] = []
+                if msg.content:
+                    content_blocks.append({'type': 'text', 'text': msg.content})
+                for tc in msg.tool_calls:
+                    content_blocks.append({
+                        'type': 'tool_use',
+                        'id': tc.id or tc.name,
+                        'name': tc.name,
+                        'input': tc.parameters,
+                    })
+                anthropic_messages.append({
+                    'role': 'assistant',
+                    'content': content_blocks,
+                })
+            elif msg.role == 'tool':
+                # Anthropic expects tool results as user messages
+                # with tool_result content blocks
+                anthropic_messages.append({
+                    'role': 'user',
+                    'content': [{
+                        'type': 'tool_result',
+                        'tool_use_id': msg.name or 'unknown',
+                        'content': msg.content,
+                    }],
+                })
             else:
                 anthropic_messages.append({
                     'role': msg.role,
-                    'content': msg.content
+                    'content': msg.content,
                 })
 
         # Convert functions to Anthropic tools format
@@ -501,5 +569,8 @@ FUNCTION_CALL: {{
                 prompt += f"\n\nHuman: {msg.content}"
             elif msg.role == 'assistant':
                 prompt += f"\n\nAssistant: {msg.content}"
+            elif msg.role == 'tool':
+                tool_name = msg.name or "tool"
+                prompt += f"\n\n[Tool result from {tool_name}]: {msg.content}"
         prompt += "\n\nAssistant:"
         return prompt

@@ -1,0 +1,165 @@
+# Recipe Wizard (Extended): ArtifactBank with interactive review + catalog
+#
+# Extends the base recipe wizard with an ArtifactBank that composes
+# the recipe as a coherent artifact with named sections. Each section
+# is a MemoryBank with full CRUD via bank tools. The review stage
+# uses ReAct reasoning with compile_artifact to assemble the final output.
+#
+# The catalog allows saving and loading multiple recipes in a session.
+#
+# Key differences from recipe-wizard.yaml:
+# - Uses ArtifactBank (not standalone banks) for correlated data
+# - recipe_name is an artifact field (auto-synced from wizard state)
+# - ingredients and instructions are artifact sections (MemoryBanks)
+# - Review stage uses compile_artifact to validate and assemble
+# - ReAct reasoning with max_iterations=5
+# - Three catalog tools for list/save/load recipes
+#
+# Stages: recipe_name -> ingredients (collection) -> instructions (collection) -> review (ReAct)
+
+name: recipe-wizard-extended
+description: Recipe builder with interactive review via bank tools
+
+settings:
+  artifact:
+    name: recipe
+    catalog:
+      backend: memory              # "sqlite" for cross-session persistence
+      # backend_config:
+      #   path: ./recipe-catalog.db
+    # seed:                          # Pre-populate artifact from file
+    #   source: ./my-recipe.json     # JSON file path
+    #   # format: json               # "json" (default) or "jsonl" (auto-detected from extension)
+    #   # select: "Banana Bread"     # For JSONL: pick entry by name (default: first entry)
+    fields:
+      recipe_name:
+        required: true
+    sections:
+      ingredients:
+        # backend: sqlite            # "sqlite" for persistent storage
+        # backend_config:
+        #   path: ./recipes.db
+        schema:
+          required: [name]
+        max_records: 30
+        duplicate_strategy: reject
+        match_fields: [name]
+      instructions:
+        schema:
+          required: [instruction]
+        max_records: 50
+
+stages:
+  - name: recipe_name
+    label: Recipe Name
+    is_start: true
+    prompt: >
+      Ask the user what recipe they'd like to build.
+    response_template: >
+      Let's build a recipe! What dish would you like to make?
+    schema:
+      type: object
+      properties:
+        recipe_name:
+          type: string
+          description: Name of the recipe
+      required:
+        - recipe_name
+    transitions:
+      - target: ingredients
+        condition: "data.get('recipe_name')"
+
+  - name: ingredients
+    label: Add Ingredients
+    prompt: >
+      Ask the user for an ingredient to add. Ask for both the
+      name and the amount.
+    response_template: >
+      Building "{{ recipe_name }}" — add an ingredient (name and amount),
+      or say "done" when finished.
+    collection_mode: collection
+    collection_config:
+      bank_name: ingredients
+      done_keywords: ["done", "finished", "that's all"]
+      done_prompt: "Added! What's the next ingredient, or say 'done' to finish."
+    schema:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Ingredient name
+        amount:
+          type: string
+          description: Amount of the ingredient
+      required:
+        - name
+    transitions:
+      - target: instructions
+        condition: "bank('ingredients').count() > 0"
+
+  - name: instructions
+    label: Add Instructions
+    prompt: >
+      Ask the user for recipe instructions one step at a time.
+      Each step should be a clear, actionable instruction.
+    response_template: >
+      Now let's add the cooking instructions for "{{ recipe_name }}".
+      Tell me each step one at a time, or say "done" when finished.
+    collection_mode: collection
+    collection_config:
+      bank_name: instructions
+      done_keywords: ["done", "finished", "that's all"]
+      done_prompt: "Got it! What's the next step, or say 'done' to finish."
+    schema:
+      type: object
+      properties:
+        instruction:
+          type: string
+          description: A single recipe instruction step
+      required:
+        - instruction
+    transitions:
+      - target: review
+        condition: "bank('instructions').count() > 0"
+
+  - name: review
+    label: Review Recipe
+    reasoning: react
+    max_iterations: 5
+    prompt: >
+      You are reviewing the recipe "{{ recipe_name }}" with the user.
+      This recipe is managed as an artifact with two sections:
+
+      **ingredients** bank — fields: name, amount
+      **instructions** bank — fields: instruction
+
+      First, use list_bank_records for both banks to show the full recipe.
+      Present ingredients as a bulleted list and instructions as numbered steps.
+
+      The user can request changes to either bank:
+      - Add: use add_bank_record with bank_name and data
+      - Update: first use list_bank_records to get the record_id, then use
+        update_bank_record with bank_name, record_id, and data (new field values)
+      - Remove: first use list_bank_records to get the record_id, then use
+        remove_bank_record with bank_name and record_id
+
+      After each change, list the updated contents of the affected bank.
+
+      When the user says they're happy or wants to save, use compile_artifact
+      to compile and validate the complete recipe. This assembles the recipe
+      name, ingredients, and instructions into a single output. Present the
+      compiled result to the user and confirm the recipe is saved.
+
+      Recipe catalog commands:
+      - Save this recipe to the catalog: use save_to_catalog
+      - List all saved recipes: use list_catalog
+      - Load a previously saved recipe: use load_from_catalog
+    tools:
+      - list_bank_records
+      - add_bank_record
+      - update_bank_record
+      - remove_bank_record
+      - compile_artifact
+      - list_catalog
+      - save_to_catalog
+      - load_from_catalog

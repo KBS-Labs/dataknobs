@@ -476,17 +476,26 @@ default_catalog: ToolCatalog = ToolCatalog()
 def _register_builtin_tools() -> None:
     """Register all built-in dataknobs-bots tools in the default catalog."""
     from dataknobs_bots.tools import (
+        AddBankRecordTool,
         AddKBResourceTool,
         CheckKnowledgeSourceTool,
+        CompileArtifactTool,
+        CompleteWizardTool,
+        FinalizeBankTool,
+        FinalizeArtifactTool,
         GetTemplateDetailsTool,
+        RestartWizardTool,
         IngestKnowledgeBaseTool,
         KnowledgeSearchTool,
         ListAvailableToolsTool,
+        ListBankRecordsTool,
         ListKBResourcesTool,
         ListTemplatesTool,
         PreviewConfigTool,
+        RemoveBankRecordTool,
         RemoveKBResourceTool,
         SaveConfigTool,
+        UpdateBankRecordTool,
         ValidateConfigTool,
     )
 
@@ -503,6 +512,15 @@ def _register_builtin_tools() -> None:
         AddKBResourceTool,
         RemoveKBResourceTool,
         IngestKnowledgeBaseTool,
+        ListBankRecordsTool,
+        AddBankRecordTool,
+        UpdateBankRecordTool,
+        RemoveBankRecordTool,
+        FinalizeBankTool,
+        CompileArtifactTool,
+        FinalizeArtifactTool,
+        CompleteWizardTool,
+        RestartWizardTool,
     ]:
         default_catalog.register_from_class(tool_class)
 
