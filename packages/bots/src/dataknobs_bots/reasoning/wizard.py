@@ -26,6 +26,10 @@ from .observability import (
 from .wizard_hooks import WizardHooks
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
+    from dataknobs_data import SyncDatabase
+
     from .wizard_fsm import WizardFSM
 
 logger = logging.getLogger(__name__)
@@ -457,6 +461,13 @@ class WizardReasoning(ReasoningStrategy):
         self._active_subflow_fsm: WizardFSM | None = None
         # LLM provider set by generate() for transform context access
         self._current_llm: Any = None
+        # Completion signal bridge: set by CompleteWizardTool in
+        # _react_stage_response, checked by generate() after response.
+        self._tool_completion_requested: bool = False
+        self._tool_completion_summary: str = ""
+        # Restart signal bridge: set by RestartWizardTool, checked
+        # by generate() after response to delegate to _execute_restart.
+        self._tool_restart_requested: bool = False
 
         # Merge framework-level ephemeral keys with config-declared ones
         config_ephemeral = wizard_fsm.settings.get("ephemeral_keys", [])
@@ -470,6 +481,15 @@ class WizardReasoning(ReasoningStrategy):
         )
         self._banks: dict[str, Any] = {}
         self._init_banks()
+
+        # Initialise ArtifactBank if ``artifact`` config is present.
+        # When artifact is configured, its sections ARE the banks —
+        # ``self._banks`` references the same MemoryBank instances.
+        self._artifact: Any = None
+        self._catalog: Any = None
+        artifact_config = wizard_fsm.settings.get("artifact")
+        if artifact_config:
+            self._init_artifact(artifact_config)
 
         # Build navigation keyword config from wizard-level settings
         nav_settings = wizard_fsm.settings.get("navigation", {})
@@ -595,26 +615,59 @@ class WizardReasoning(ReasoningStrategy):
     # MemoryBank management
     # -----------------------------------------------------------------
 
+    def _create_bank_db(
+        self, bank_name: str, cfg: dict[str, Any]
+    ) -> tuple[SyncDatabase, str]:
+        """Create database backend and storage mode for a memory bank.
+
+        Args:
+            bank_name: Bank identifier (used as default table name).
+            cfg: Per-bank configuration dict from wizard settings.
+
+        Returns:
+            Tuple of ``(database, storage_mode)``.
+        """
+        backend = cfg.get("backend", "memory")
+        if backend == "memory":
+            from dataknobs_data.backends.memory import SyncMemoryDatabase
+
+            return SyncMemoryDatabase(), "inline"
+        from dataknobs_data import database_factory
+
+        backend_config = dict(cfg.get("backend_config", {}))
+        backend_config["backend"] = backend
+        backend_config.setdefault("table", bank_name)
+        db = database_factory.create(**backend_config)
+        db.connect()
+        return db, "external"
+
     def _init_banks(self) -> None:
         """Create ``MemoryBank`` instances from wizard ``banks`` config."""
         if not self._bank_configs:
             return
-        from dataknobs_data.backends.memory import SyncMemoryDatabase
-
         from ..memory.bank import MemoryBank
 
         for name, cfg in self._bank_configs.items():
+            # Support both flat keys (duplicate_strategy, match_fields)
+            # and nested duplicate_detection.{strategy, match_fields}.
+            dup_cfg = cfg.get("duplicate_detection", {})
+            dup_strategy = (
+                cfg.get("duplicate_strategy")
+                or dup_cfg.get("strategy", "allow")
+            )
+            match_fields = (
+                cfg.get("match_fields")
+                or dup_cfg.get("match_fields")
+            )
+            db, storage_mode = self._create_bank_db(name, cfg)
             self._banks[name] = MemoryBank(
                 name=name,
                 schema=cfg.get("schema", {}),
-                db=SyncMemoryDatabase(),
+                db=db,
                 max_records=cfg.get("max_records"),
-                duplicate_strategy=cfg.get(
-                    "duplicate_detection", {}
-                ).get("strategy", "allow"),
-                match_fields=cfg.get(
-                    "duplicate_detection", {}
-                ).get("match_fields"),
+                duplicate_strategy=dup_strategy,
+                match_fields=match_fields,
+                storage_mode=storage_mode,
             )
         logger.debug("Initialised %d memory banks: %s",
                       len(self._banks), list(self._banks))
@@ -624,11 +677,21 @@ class WizardReasoning(ReasoningStrategy):
 
         Banks that exist in the persisted data are deserialized.  Banks
         declared in config but not yet persisted are freshly initialised.
+
+        For persistent backends (non-memory), the database is reconnected
+        via ``_create_bank_db`` so records already in the backend are
+        accessible without re-insertion.
         """
         from ..memory.bank import MemoryBank
 
         for name, bank_dict in banks_data.items():
-            self._banks[name] = MemoryBank.from_dict(bank_dict)
+            cfg = self._bank_configs.get(name, {})
+            backend = cfg.get("backend", "memory")
+            if backend != "memory":
+                db, _mode = self._create_bank_db(name, cfg)
+                self._banks[name] = MemoryBank.from_dict(bank_dict, db=db)
+            else:
+                self._banks[name] = MemoryBank.from_dict(bank_dict)
         # Ensure any newly-configured banks that weren't persisted yet
         # are also initialised.
         for name in self._bank_configs:
@@ -651,6 +714,223 @@ class WizardReasoning(ReasoningStrategy):
             return banks.get(name, EmptyBankProxy(name))
 
         return _bank
+
+    def _init_artifact(self, artifact_config: dict[str, Any]) -> None:
+        """Create an ``ArtifactBank`` from wizard ``artifact`` config.
+
+        When an artifact is configured, its sections replace the banks —
+        ``self._banks`` and ``self._bank_configs`` are populated from
+        the artifact's sections.
+
+        If the config contains a ``catalog`` key, an
+        ``ArtifactBankCatalog`` is also created and stored on
+        ``self._catalog``.
+
+        Args:
+            artifact_config: Artifact configuration dict with ``name``,
+                ``fields``, and ``sections`` keys.  Optional ``catalog``
+                sub-dict for catalog backend configuration.
+
+        Raises:
+            ConfigurationError: If both ``banks`` and ``artifact`` are
+                configured.
+        """
+        from dataknobs_common.exceptions import ConfigurationError
+
+        from ..memory.artifact_bank import ArtifactBank
+
+        if self._bank_configs:
+            raise ConfigurationError(
+                "Cannot configure both 'banks' and 'artifact'. "
+                "Use artifact.sections instead of banks.",
+                context={"setting": "artifact"},
+            )
+        self._artifact = ArtifactBank.from_config(
+            artifact_config, db_factory=self._create_bank_db
+        )
+        self._banks = dict(self._artifact.sections)
+        self._bank_configs = dict(artifact_config.get("sections", {}))
+
+        # Optionally create a catalog for storing/loading artifacts.
+        catalog_config = artifact_config.get("catalog")
+        if catalog_config:
+            from ..memory.catalog import ArtifactBankCatalog
+
+            self._catalog = ArtifactBankCatalog.from_config({
+                **catalog_config,
+                "artifact_config": artifact_config,
+            })
+
+        # Optionally seed the artifact from a file.
+        seed_config = artifact_config.get("seed")
+        if seed_config:
+            self._seed_artifact(seed_config)
+
+    def _seed_artifact(self, seed_config: dict[str, Any]) -> None:
+        """Populate the artifact from a seed file.
+
+        Loads a JSON or JSONL file and populates the existing artifact
+        using ``populate_from_compiled()``.  Format is auto-detected
+        from the file extension unless explicitly specified.
+
+        For JSONL books, ``select`` matches against ``_artifact_name``
+        first, then against any top-level string field value (e.g. a
+        recipe name).  Without ``select``, the first entry is used.
+
+        Failures are logged as warnings and do not prevent the wizard
+        from starting with an empty artifact.
+
+        Args:
+            seed_config: Seed configuration with ``source`` (file path),
+                optional ``format`` (``"json"`` or ``"jsonl"``), and
+                optional ``select`` (name to match in JSONL book).
+        """
+        import json
+        from pathlib import Path
+
+        source = seed_config.get("source")
+        if not source:
+            logger.warning("Seed config missing 'source', skipping seed")
+            return
+
+        source_path = Path(source)
+        if not source_path.exists():
+            logger.warning(
+                "Seed file not found: %s, proceeding with empty artifact",
+                source_path,
+            )
+            return
+
+        # Determine format: explicit config or auto-detect from extension
+        fmt = seed_config.get("format")
+        if not fmt:
+            fmt = "jsonl" if source_path.suffix.lower() == ".jsonl" else "json"
+
+        try:
+            if fmt == "jsonl":
+                data = self._load_jsonl_entry(
+                    source_path, seed_config.get("select"),
+                )
+            else:
+                text = source_path.read_text(encoding="utf-8")
+                data = json.loads(text)
+                if not isinstance(data, dict):
+                    logger.warning(
+                        "Seed file %s does not contain a JSON object",
+                        source_path,
+                    )
+                    return
+
+            # Full-state format (from to_dict()) has nested structure;
+            # convert to compiled format for populate_from_compiled().
+            if "name" in data and "sections" in data and "_artifact_name" not in data:
+                from ..memory.artifact_bank import ArtifactBank
+
+                temp = ArtifactBank.from_dict(data)
+                data = temp.compile()
+
+            self._artifact.populate_from_compiled(
+                data, source_stage="seed",
+            )
+            logger.info(
+                "Seeded artifact '%s' from %s",
+                self._artifact.name,
+                source_path,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to seed artifact from %s, proceeding with empty artifact",
+                source_path,
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _load_jsonl_entry(
+        path: Path,
+        select: str | None,
+    ) -> dict[str, Any]:
+        """Read a single entry from a JSONL book file.
+
+        Args:
+            path: JSONL file path.
+            select: Optional name to match.  Checked against
+                ``_artifact_name`` first, then any top-level string
+                field value.  If ``None``, the first entry is returned.
+
+        Returns:
+            Parsed JSON dict for the matched entry.
+
+        Raises:
+            ValueError: If no entries or no match found.
+        """
+        import json
+
+        entries: list[dict[str, Any]] = []
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped:
+                    obj = json.loads(stripped)
+                    if isinstance(obj, dict):
+                        entries.append(obj)
+
+        if not entries:
+            raise ValueError(f"No entries in JSONL book: {path}")
+
+        if select is None:
+            return entries[0]
+
+        # Match on _artifact_name first
+        for entry in entries:
+            if entry.get("_artifact_name") == select:
+                return entry
+
+        # Match on any top-level string field value
+        for entry in entries:
+            for key, value in entry.items():
+                if not key.startswith("_") and isinstance(value, str) and value == select:
+                    return entry
+
+        available = [
+            entry.get("_artifact_name", "<unnamed>") for entry in entries
+        ]
+        raise ValueError(
+            f"No entry matching '{select}' in {path}. "
+            f"Available artifact names: {available}"
+        )
+
+    def _sync_artifact_fields(self, state: WizardState) -> None:
+        """Sync wizard state data into artifact fields.
+
+        Called before state serialization so that artifact fields
+        auto-populate from matching wizard ``state.data`` keys.
+
+        Args:
+            state: Current wizard state.
+        """
+        if not self._artifact or self._artifact.is_finalized:
+            return
+        for field_name in self._artifact.field_defs:
+            value = state.data.get(field_name)
+            if value is not None and value != self._artifact.field(field_name):
+                self._artifact.set_field(field_name, value)
+
+    def _reverse_sync_artifact_to_state(self, state: WizardState) -> None:
+        """Sync artifact field values back into wizard state data.
+
+        Called before the forward sync (``_sync_artifact_fields``) so that
+        tool-driven changes to the artifact (e.g. ``LoadFromCatalogTool``
+        replacing all fields) are reflected in ``state.data``.
+
+        Args:
+            state: Current wizard state.
+        """
+        if not self._artifact:
+            return
+        for field_name in self._artifact.field_defs:
+            artifact_value = self._artifact.field(field_name)
+            if artifact_value is not None:
+                state.data[field_name] = artifact_value
 
     # -----------------------------------------------------------------
     # Collection mode helpers
@@ -725,11 +1005,19 @@ class WizardReasoning(ReasoningStrategy):
         for field_name in schema_props:
             state.data.pop(field_name, None)
 
+        # Branch the conversation tree so this iteration becomes a sibling
+        # of the previous collection response, not a child.  Without this,
+        # each loop iteration deepens the tree (0 → 0.0 → 0.0.0 …) instead
+        # of branching (0, 0.1, 0.2 …).
+        await self._branch_for_revisited_stage(
+            manager, stage.get("name", ""),
+        )
+
         # Render the stage response
         response = await self._generate_stage_response(
             manager, llm, stage, state, tools,
         )
-        self._save_wizard_state(manager, state)
+        await self._save_wizard_state(manager, state)
         return response
 
     @staticmethod
@@ -742,16 +1030,77 @@ class WizardReasoning(ReasoningStrategy):
             normalised == kw.strip().lower() for kw in done_keywords
         )
 
+    @staticmethod
+    def _classify_collection_intent(
+        message: str, stage: dict[str, Any],
+    ) -> str:
+        """Classify user intent during a collection-mode stage.
+
+        Runs rule-based checks to distinguish help requests from data
+        input **before** extraction.  Navigation and done signals are
+        handled upstream (``_handle_navigation`` and
+        ``_is_done_signal``), so this method only discriminates between:
+
+        - ``"help"`` — the user is asking a question about what to
+          provide, not providing data.
+        - ``"data_input"`` — default; proceed to extraction.
+
+        Custom help keywords can be supplied per-stage via
+        ``collection_config.help_keywords``.
+
+        Args:
+            message: Raw user message text.
+            stage: Current stage metadata dict.
+
+        Returns:
+            Intent string: ``"help"`` or ``"data_input"``.
+        """
+        msg = message.strip().lower()
+
+        # Stage-configurable help keywords (exact match)
+        col_config = stage.get("collection_config") or {}
+        help_keywords = col_config.get("help_keywords", [])
+        if help_keywords and any(msg == kw.strip().lower() for kw in help_keywords):
+            return "help"
+
+        # Built-in heuristic: question marks or common help phrasing
+        if msg.endswith("?"):
+            return "help"
+
+        help_starters = (
+            "what should i",
+            "what do i",
+            "what do you need",
+            "what goes here",
+            "help",
+            "explain",
+            "i don't understand",
+            "i don't know what",
+            "what kind of",
+            "what format",
+        )
+        if any(msg.startswith(s) for s in help_starters):
+            return "help"
+
+        return "data_input"
+
     async def close(self) -> None:
         """Close the reasoning strategy and release resources.
 
         Closes the SchemaExtractor's LLM provider if present, releasing
-        HTTP connections. Should be called when the reasoning strategy
-        is no longer needed (typically via DynaBot.close()).
+        HTTP connections, and closes all memory bank database connections.
+        Should be called when the reasoning strategy is no longer needed
+        (typically via DynaBot.close()).
         """
         if self._extractor is not None and hasattr(self._extractor, "close"):
             await self._extractor.close()
             logger.debug("Closed WizardReasoning extractor")
+        for _name, bank in self._banks.items():
+            bank.close()
+        if self._banks:
+            logger.debug(
+                "Closed %d memory bank database(s)", len(self._banks)
+            )
 
     def _partition_data(
         self, data: dict[str, Any]
@@ -1031,7 +1380,7 @@ class WizardReasoning(ReasoningStrategy):
             wizard_state.increment_render_count(stage.get("name", "unknown"))
 
         # Persist wizard state
-        self._save_wizard_state(manager, wizard_state)
+        await self._save_wizard_state(manager, wizard_state)
 
         return response
 
@@ -1126,21 +1475,100 @@ class WizardReasoning(ReasoningStrategy):
                 response = await self._generate_stage_response(
                     manager, llm, stage, wizard_state, tools
                 )
-                self._save_wizard_state(manager, wizard_state)
+                await self._save_wizard_state(manager, wizard_state)
                 return response
+
+        # Auto-restart when the wizard can't meaningfully continue:
+        #
+        # 1. Wizard completed (via complete_wizard tool) with amendments
+        #    disabled — the workflow is done, new message = fresh start.
+        # 2. Artifact finalized (via finalize_artifact tool) but wizard
+        #    NOT completed — the LLM forgot to call complete_wizard or
+        #    restart_wizard.  The artifact is locked so no further edits
+        #    are possible; the wizard is stuck.
+        #
+        # In both cases, clear state/banks/artifact and fall through so
+        # the user's message is processed by the fresh first stage
+        # (extraction, transitions, etc.) rather than the stale ReAct
+        # loop on the old stage.
+        _should_auto_restart = (
+            (wizard_state.completed and not self._allow_amendments)
+            or (
+                not wizard_state.completed
+                and self._artifact is not None
+                and self._artifact.is_finalized
+            )
+        )
+
+        if _should_auto_restart:
+            logger.info(
+                "Auto-restarting wizard (completed=%s, "
+                "artifact_finalized=%s, amendments=%s)",
+                wizard_state.completed,
+                self._artifact.is_finalized if self._artifact else False,
+                self._allow_amendments,
+            )
+            await self._restart_cleanup(
+                wizard_state, user_message, trigger="auto_restart"
+            )
+            # Branch the conversation tree so the new recipe's context
+            # starts fresh — the LLM won't see the old recipe's detailed
+            # tool calls and record-level operations.
+            await self._branch_for_revisited_stage(
+                manager, wizard_state.current_stage
+            )
 
         # Handle navigation commands
         nav_result = await self._handle_navigation(
             user_message, wizard_state, manager, llm
         )
         if nav_result:
-            self._save_wizard_state(manager, wizard_state)
+            await self._save_wizard_state(manager, wizard_state)
             return nav_result
 
         # Get current stage context from active FSM (subflow or main)
         active_fsm = self._get_active_fsm()
         stage = active_fsm.current_metadata
         is_conversation = stage.get("mode") == "conversation"
+
+        # ── Collection-mode done signal (before extraction) ──
+        # When a collection-mode stage receives a done keyword, skip
+        # extraction entirely.  The keyword (e.g. "done") is not a data
+        # record and would fail the extraction confidence check, causing
+        # a clarification loop that never reaches _handle_collection_mode.
+        _collection_done_signal = False
+        if (
+            stage.get("collection_mode") == "collection"
+            and not is_conversation
+        ):
+            col_config = stage.get("collection_config", {})
+            done_keywords = col_config.get("done_keywords", [])
+            if self._is_done_signal(user_message, done_keywords):
+                wizard_state.data["_collection_done"] = True
+                _collection_done_signal = True
+                logger.debug(
+                    "Collection done signal (pre-extraction) at stage '%s'",
+                    stage.get("name"),
+                )
+
+        # ── Collection-mode help intent (before extraction) ──
+        # When a collection-mode stage receives a help request, skip
+        # extraction and generate a contextual help response.
+        _collection_help = False
+        if (
+            stage.get("collection_mode") == "collection"
+            and not is_conversation
+            and not _collection_done_signal
+        ):
+            collection_intent = self._classify_collection_intent(
+                user_message, stage,
+            )
+            if collection_intent == "help":
+                _collection_help = True
+                logger.debug(
+                    "Collection help intent at stage '%s'",
+                    stage.get("name"),
+                )
 
         if is_conversation:
             # Conversation mode: skip extraction, run intent detection
@@ -1150,6 +1578,31 @@ class WizardReasoning(ReasoningStrategy):
                 stage_name,
             )
             await self._detect_intent(user_message, stage, wizard_state, llm)
+        elif _collection_done_signal:
+            # Done keyword detected — skip extraction and fall through
+            # to transition evaluation below.
+            pass
+        elif _collection_help:
+            # Help request during collection — generate a contextual
+            # response without extraction, then return immediately so
+            # the stage loops for the next data input.
+            stage_context = self._build_stage_context(stage, wizard_state)
+            enhanced = f"{manager.system_prompt}\n\n{stage_context}"
+            help_context = (
+                "\n\n## User Needs Help\n"
+                "The user is asking for guidance about what to provide. "
+                "Answer their question helpfully and concisely, then "
+                "invite them to provide the next item."
+            )
+            wizard_snapshot = {"wizard": self._build_wizard_metadata(wizard_state)}
+            response = await manager.complete(
+                system_prompt_override=enhanced + help_context,
+                tools=self._filter_tools_for_stage(stage, tools),
+                metadata=wizard_snapshot,
+            )
+            self._add_wizard_metadata(response, wizard_state, stage)
+            await self._save_wizard_state(manager, wizard_state)
+            return response
         else:
             # Structured mode: extract data and validate
 
@@ -1198,16 +1651,18 @@ class WizardReasoning(ReasoningStrategy):
 
                     if not can_satisfy:
                         wizard_state.clarification_attempts += 1
-                        self._save_wizard_state(manager, wizard_state)
+                        await self._save_wizard_state(manager, wizard_state)
 
                         if wizard_state.clarification_attempts >= 3:
                             response = await self._generate_restart_offer(
-                                manager, llm, stage, extraction.errors
+                                manager, llm, stage, extraction.errors,
+                                tools=tools, wizard_state=wizard_state,
                             )
                         else:
                             response = (
                                 await self._generate_clarification_response(
-                                    manager, llm, stage, extraction.errors
+                                    manager, llm, stage, extraction.errors,
+                                    tools=tools, wizard_state=wizard_state,
                                 )
                             )
 
@@ -1334,7 +1789,7 @@ class WizardReasoning(ReasoningStrategy):
                     response = await self._generate_stage_response(
                         manager, llm, stage, wizard_state, tools
                     )
-                    self._save_wizard_state(manager, wizard_state)
+                    await self._save_wizard_state(manager, wizard_state)
                     return response
 
                 # Validate against stage schema
@@ -1344,9 +1799,10 @@ class WizardReasoning(ReasoningStrategy):
                     )
                     if validation_errors:
                         # Save state before returning validation error
-                        self._save_wizard_state(manager, wizard_state)
+                        await self._save_wizard_state(manager, wizard_state)
                         response = await self._generate_validation_response(
-                            manager, llm, stage, validation_errors
+                            manager, llm, stage, validation_errors,
+                            tools=tools, wizard_state=wizard_state,
                         )
                         self._add_wizard_metadata(response, wizard_state, stage)
                         return response
@@ -1374,7 +1830,7 @@ class WizardReasoning(ReasoningStrategy):
                 response = await self._generate_stage_response(
                     manager, llm, new_stage, wizard_state, tools
                 )
-                self._save_wizard_state(manager, wizard_state)
+                await self._save_wizard_state(manager, wizard_state)
                 return response
 
         # Capture state before transition
@@ -1455,6 +1911,26 @@ class WizardReasoning(ReasoningStrategy):
         if wizard_state.current_stage not in wizard_state.history:
             wizard_state.history.append(wizard_state.current_stage)
         wizard_state.completed = step_result.is_complete
+
+        # Auto-save artifact to catalog on stage transition.  Collection
+        # stages add records via bank.add() directly (not through tools),
+        # so tool-level auto-save won't capture them.  Saving here ensures
+        # the catalog stays current as the wizard progresses.
+        if to_stage != from_stage and self._catalog and self._artifact:
+            try:
+                errors = self._artifact.validate()
+                if not errors:
+                    self._catalog.save(self._artifact)
+                    logger.debug(
+                        "Auto-saved artifact on stage transition %s -> %s",
+                        from_stage,
+                        to_stage,
+                    )
+            except Exception:
+                logger.warning(
+                    "Auto-save on stage transition failed",
+                    exc_info=True,
+                )
 
         # Check for subflow pop (reached end state in subflow)
         if self._should_pop_subflow(wizard_state):
@@ -1540,9 +2016,29 @@ class WizardReasoning(ReasoningStrategy):
             await self._branch_for_revisited_stage(
                 manager, new_stage.get("name", "")
             )
+        completed_before = wizard_state.completed
         response = await self._generate_stage_response(
             manager, llm, new_stage, wizard_state, tools
         )
+
+        # Check for tool-initiated restart (RestartWizardTool signal).
+        # Restart takes priority over completion — if both are set, restart
+        # clears the wizard state so completion would be meaningless.
+        if self._tool_restart_requested:
+            self._tool_restart_requested = False
+            self._tool_completion_requested = False
+            logger.info("Wizard restart signaled by restart_wizard tool")
+            response = await self._execute_restart(
+                user_message, wizard_state, manager, llm
+            )
+
+        # Check for tool-initiated completion (CompleteWizardTool signal)
+        elif not completed_before and self._tool_completion_requested:
+            wizard_state.completed = True
+            self._tool_completion_requested = False
+            logger.info("Wizard completion signaled by complete_wizard tool")
+            if self._hooks:
+                await self._hooks.trigger_complete(wizard_state.data)
 
         # Mark this stage's template as rendered so subsequent messages
         # at this stage don't trigger the first-render confirmation logic.
@@ -1551,7 +2047,7 @@ class WizardReasoning(ReasoningStrategy):
             wizard_state.increment_render_count(stage_rendered_name)
 
         # Save wizard state
-        self._save_wizard_state(manager, wizard_state)
+        await self._save_wizard_state(manager, wizard_state)
 
         return response
 
@@ -1610,6 +2106,17 @@ class WizardReasoning(ReasoningStrategy):
 
             # Restore MemoryBank instances from persisted data
             self._restore_banks(wizard_data.get("banks", {}))
+
+            # Restore ArtifactBank from persisted data
+            artifact_data = wizard_data.get("artifact")
+            if artifact_data and self._artifact is not None:
+                from ..memory.artifact_bank import ArtifactBank
+
+                self._artifact = ArtifactBank.from_dict(
+                    artifact_data, db_factory=self._create_bank_db
+                )
+                self._banks = dict(self._artifact.sections)
+
             return state
 
         # Initialize new wizard state with tasks from config
@@ -1708,7 +2215,7 @@ class WizardReasoning(ReasoningStrategy):
 
         return metadata
 
-    def _save_wizard_state(self, manager: Any, state: WizardState) -> None:
+    async def _save_wizard_state(self, manager: Any, state: WizardState) -> None:
         """Save wizard state to conversation manager.
 
         Partitions ``state.data`` into persistent and transient parts before
@@ -1722,6 +2229,12 @@ class WizardReasoning(ReasoningStrategy):
         """
         # Build metadata BEFORE partition so UI sees all keys (incl. transient)
         wizard_meta = self._build_wizard_metadata(state)
+
+        # Reverse sync: artifact → state.data (picks up tool-driven changes
+        # like LoadFromCatalogTool replacing fields).
+        self._reverse_sync_artifact_to_state(state)
+        # Forward sync: state.data → artifact fields before serialization
+        self._sync_artifact_fields(state)
 
         # Partition: separate ephemeral/non-serializable keys from persistent
         state.data, state.transient = self._partition_data(state.data)
@@ -1744,7 +2257,18 @@ class WizardReasoning(ReasoningStrategy):
             wizard_meta["banks"] = {
                 name: bank.to_dict() for name, bank in self._banks.items()
             }
+        # Persist ArtifactBank data alongside banks
+        if self._artifact:
+            wizard_meta["artifact"] = self._artifact.to_dict()
         manager.metadata["wizard"] = wizard_meta
+
+        # Persist so conversation-level metadata is up to date in storage.
+        # Without this, the metadata written by manager.complete() /
+        # manager.add_message() inside _generate_stage_response would
+        # snapshot the *previous* turn's wizard metadata because those
+        # calls run _save_state() before we reach this point.
+        if hasattr(manager, "_save_state"):
+            await manager._save_state()
 
     # =========================================================================
     # Subflow Management Methods
@@ -2254,24 +2778,50 @@ class WizardReasoning(ReasoningStrategy):
             ),
         )
 
-    async def _execute_restart(
+    async def _restart_cleanup(
         self,
-        message: str,
         state: WizardState,
-        manager: Any,
-        llm: Any,
-    ) -> Any:
-        """Execute restart navigation.
+        message: str,
+        trigger: str = "restart",
+    ) -> None:
+        """Reset wizard state, banks, and artifact for a fresh start.
+
+        If a catalog is configured and the artifact passes validation,
+        auto-saves to the catalog before clearing — preventing data loss
+        when the LLM calls restart without saving first.
+
+        Performs the cleanup portion of a restart without generating a
+        response.  Callers are responsible for branching and response
+        generation after cleanup completes.
 
         Args:
-            message: Original user message
-            state: Current wizard state
-            manager: ConversationManager instance
-            llm: LLM provider
-
-        Returns:
-            Response for the restarted first stage.
+            state: Current wizard state (mutated in place).
+            message: User message that triggered the restart.
+            trigger: Transition trigger label for the audit trail.
         """
+        # Auto-save artifact to catalog before clearing.  This catches
+        # the common case where the LLM calls restart_wizard (or the
+        # auto-restart guard fires) without calling save_to_catalog first.
+        if self._catalog and self._artifact:
+            try:
+                errors = self._artifact.validate()
+                if not errors:
+                    self._catalog.save(self._artifact)
+                    logger.info(
+                        "Auto-saved artifact '%s' to catalog before restart",
+                        self._artifact.name,
+                    )
+                else:
+                    logger.debug(
+                        "Skipping auto-save before restart "
+                        "(validation errors: %s)",
+                        errors,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Failed to auto-save artifact before restart: %s", e
+                )
+
         from_stage = state.current_stage
         duration_ms = (time.time() - state.stage_entry_time) * 1000
 
@@ -2286,7 +2836,7 @@ class WizardReasoning(ReasoningStrategy):
         transition = create_transition_record(
             from_stage=from_stage,
             to_stage=to_stage,
-            trigger="restart",
+            trigger=trigger,
             duration_in_stage_ms=duration_ms,
             data_snapshot=state.data.copy(),
             user_input=message,
@@ -2305,6 +2855,30 @@ class WizardReasoning(ReasoningStrategy):
         # Clear all memory banks on restart (clean slate)
         for bank in self._banks.values():
             bank.clear()
+        if self._artifact:
+            self._artifact.clear_fields()
+            if self._artifact.is_finalized:
+                self._artifact.unfinalize()
+
+    async def _execute_restart(
+        self,
+        message: str,
+        state: WizardState,
+        manager: Any,
+        llm: Any,
+    ) -> Any:
+        """Execute restart navigation.
+
+        Args:
+            message: Original user message
+            state: Current wizard state
+            manager: ConversationManager instance
+            llm: LLM provider
+
+        Returns:
+            Response for the restarted first stage.
+        """
+        await self._restart_cleanup(state, message)
 
         stage = self._fsm.current_metadata
         await self._branch_for_revisited_stage(
@@ -2448,6 +3022,22 @@ class WizardReasoning(ReasoningStrategy):
             )
             return SimpleExtractionResult(
                 data={"_raw_input": message}, confidence=1.0
+            )
+
+        # Verbatim capture: skip LLM extraction for trivial schemas
+        # (single required string field, no constraints) or when
+        # capture_mode is explicitly set to "verbatim".
+        if not self._needs_llm_extraction(schema, stage):
+            field_name = next(iter(schema.get("properties", {})))
+            logger.debug(
+                "Verbatim capture: stage='%s', field='%s'",
+                stage_name,
+                field_name,
+            )
+            return SimpleExtractionResult(
+                data={field_name: message},
+                confidence=1.0,
+                metadata={"capture_mode": "verbatim"},
             )
 
         # Build extraction input based on scope (stage override or wizard default)
@@ -2775,24 +3365,59 @@ class WizardReasoning(ReasoningStrategy):
         return errors
 
     @staticmethod
+    def _is_ancestor_of(ancestor_id: str, descendant_id: str) -> bool:
+        """Check if *ancestor_id* is an ancestor of *descendant_id*.
+
+        Both IDs use dot-delimited segment notation (e.g. ``"0.1.2"``).
+        The root node (empty string) is considered an ancestor of every
+        node.  A node is NOT considered its own ancestor.
+
+        Args:
+            ancestor_id: Candidate ancestor node ID.
+            descendant_id: Node ID to check against.
+
+        Returns:
+            ``True`` if *ancestor_id* is a strict ancestor of
+            *descendant_id*.
+        """
+        if not ancestor_id:
+            # Root is ancestor of everything
+            return True
+        return descendant_id.startswith(ancestor_id + ".")
+
+    @staticmethod
     def _find_stage_node_id(manager: Any, stage_name: str) -> str | None:
-        """Find the most recent assistant node for the given wizard stage.
+        """Find the entry-point assistant node for the given wizard stage.
 
         Searches the conversation tree for assistant response nodes whose
-        metadata records ``wizard.current_stage == stage_name``.  Returns
-        the ``node_id`` of the last match in DFS order (the most recent
-        visit), or ``None`` if the stage has not been visited yet.
+        metadata records ``wizard.current_stage == stage_name``.  Only
+        nodes that are **ancestors of the current position** are
+        considered — nodes on other branches (e.g. from a previous
+        wizard run) are ignored.  This prevents post-restart stage
+        transitions from grafting new nodes onto old branches.
+
+        Among ancestor matches, the first in DFS order (the shallowest
+        stage entry node) is returned.  This is critical for ReAct
+        stages, where the ReAct loop creates many assistant nodes all
+        tagged with the same ``current_stage``.  Branching from the
+        *last* (deepest) node would nest the new branch inside the old
+        ReAct subtree, leaking prior tool-call context into the new
+        visit.  Branching from the *first* (entry) node makes the new
+        visit a sibling of the entire previous subtree — proper
+        isolation.
 
         Args:
             manager: ConversationManager instance (must have ``state``).
             stage_name: Wizard stage name to search for.
 
         Returns:
-            ``node_id`` string of the most recent matching node, or ``None``.
+            ``node_id`` string of the stage entry node, or ``None``.
         """
         state = getattr(manager, "state", None)
         if state is None:
             return None
+
+        current_node_id: str = state.current_node_id
 
         matches = state.message_tree.find_nodes(
             lambda n: (
@@ -2805,9 +3430,17 @@ class WizardReasoning(ReasoningStrategy):
         if not matches:
             return None
 
-        # Last match in DFS order is the most recent visit.
-        last = matches[-1]
-        return last.data.node_id if isinstance(last.data, ConversationNode) else None
+        # Return the first DFS match that is an ancestor of the current
+        # position.  Matches on other branches are stale references from
+        # prior wizard runs and must be ignored.
+        for match in matches:
+            if not isinstance(match.data, ConversationNode):
+                continue
+            node_id = match.data.node_id
+            if WizardReasoning._is_ancestor_of(node_id, current_node_id):
+                return node_id
+
+        return None
 
     async def _branch_for_revisited_stage(
         self, manager: Any, stage_name: str
@@ -3036,6 +3669,8 @@ class WizardReasoning(ReasoningStrategy):
             "completed": state.completed,
             # MemoryBank accessor for template expressions
             "bank": self._make_bank_accessor(),
+            # ArtifactBank (None if not configured)
+            "artifact": self._artifact,
         }
 
         # Merge extra context (e.g. LLM-generated variables)
@@ -3365,6 +4000,54 @@ class WizardReasoning(ReasoningStrategy):
         """
         return stage.get("extraction_scope") or self._extraction_scope
 
+    def _needs_llm_extraction(
+        self, schema: dict[str, Any], stage: dict[str, Any],
+    ) -> bool:
+        """Determine whether LLM extraction is needed for a schema.
+
+        Returns ``False`` when the schema describes a single required string
+        field with no enum or format constraints — the user's raw input can
+        be used directly (verbatim capture).
+
+        The decision can be overridden via ``collection_config.capture_mode``:
+
+        - ``"auto"`` (default): use schema-based detection described above.
+        - ``"verbatim"``: always skip LLM extraction.
+        - ``"extract"``: always use LLM extraction.
+
+        Args:
+            schema: JSON Schema dict for the current stage.
+            stage: Current stage metadata dict.
+
+        Returns:
+            ``True`` if LLM extraction should be used, ``False`` for
+            verbatim capture.
+        """
+        col_config = stage.get("collection_config") or {}
+        capture_mode = col_config.get("capture_mode", "auto")
+
+        if capture_mode == "verbatim":
+            return False
+        if capture_mode == "extract":
+            return True
+
+        # Auto-detect: single required string field with no constraints
+        properties = schema.get("properties", {})
+        required = schema.get("required", [])
+
+        if len(required) == 1 and len(properties) == 1:
+            field_name = required[0]
+            field_def = properties.get(field_name, {})
+            if (
+                field_def.get("type") == "string"
+                and "enum" not in field_def
+                and "pattern" not in field_def
+                and "format" not in field_def
+            ):
+                return False
+
+        return True
+
     async def _react_stage_response(
         self,
         manager: Any,
@@ -3376,154 +4059,73 @@ class WizardReasoning(ReasoningStrategy):
     ) -> Any:
         """Generate response using ReAct loop for tool-using stage.
 
-        This allows the LLM to make multiple tool calls within a single
-        wizard turn, reasoning about results before responding.
+        Delegates to ``ReActReasoning`` which provides duplicate tool call
+        detection, ToolsNotSupportedError handling, and trace storage.
 
         Args:
             manager: ConversationManager instance
             enhanced_prompt: Stage-aware system prompt
             stage: Stage metadata dict
-            state: Current wizard state
+            state: Current wizard state (kept for call-site stability)
             tools: Available tools for this stage
             metadata: Optional metadata to persist on conversation nodes
 
         Returns:
             Final LLM response after ReAct loop completes
         """
-        from dataknobs_llm.tools import ToolExecutionContext
+        from .react import ReActReasoning
 
         max_iterations = self._get_max_iterations(stage)
-        stage_name = stage.get("name", "unknown")
 
-        logger.debug(
-            "Starting ReAct loop for stage '%s' (max_iterations=%d)",
-            stage_name,
-            max_iterations,
-        )
-
-        # Build execution context for tools that need it
-        tool_context = ToolExecutionContext.from_manager(manager)
-
-        # Extend context with artifact/review infrastructure if available
         extra_context: dict[str, Any] = {}
-        if self._artifact_registry is not None:
-            extra_context["artifact_registry"] = self._artifact_registry
-        if self._review_executor is not None:
-            extra_context["review_executor"] = self._review_executor
-        if self._context_builder is not None:
-            try:
-                conversation_context = await self._context_builder.build(manager)
-                extra_context["conversation_context"] = conversation_context
-            except Exception as e:
-                logger.warning("Failed to build conversation context: %s", e)
-        if extra_context:
-            tool_context = tool_context.with_extra(**extra_context)
+        if self._banks:
+            extra_context["banks"] = self._banks
+        if self._artifact:
+            extra_context["artifact"] = self._artifact
+        if self._catalog:
+            extra_context["catalog"] = self._catalog
 
-        for iteration in range(max_iterations):
-            # Make LLM call
-            response = await manager.complete(
-                system_prompt_override=enhanced_prompt,
-                tools=tools,
-                metadata=metadata,
-            )
+        # Mutable signal dicts for lifecycle tools to communicate back
+        completion_signal: dict[str, Any] = {"requested": False}
+        extra_context["_completion_signal"] = completion_signal
+        restart_signal: dict[str, Any] = {"requested": False}
+        extra_context["_restart_signal"] = restart_signal
 
-            # Check if response has tool calls
-            tool_calls = getattr(response, "tool_calls", None) or []
-            if not tool_calls:
-                # No tool calls - this is the final response
-                logger.debug(
-                    "ReAct iteration %d/%d: No tool calls, returning response",
-                    iteration + 1,
-                    max_iterations,
-                )
-                return response
+        # Build a prompt refresher so the ReAct loop can re-render the
+        # system prompt between iterations.  This ensures that mutating
+        # tools (load_from_catalog, add_bank_record, etc.) produce an
+        # up-to-date collection summary for the next LLM call.
+        def prompt_refresher() -> str:
+            fresh_context = self._build_stage_context(stage, state)
+            return f"{manager.system_prompt}\n\n{fresh_context}"
 
-            logger.debug(
-                "ReAct iteration %d/%d: Executing %d tool call(s): %s",
-                iteration + 1,
-                max_iterations,
-                len(tool_calls),
-                [tc.name for tc in tool_calls],
-            )
-
-            # Execute tool calls and add observations
-            for tool_call in tool_calls:
-                result = await self._execute_react_tool_call(
-                    tool_call, tools, state, tool_context
-                )
-
-                # Add observation to conversation for next iteration
-                observation = f"Tool result from {tool_call.name}: {result}"
-                await manager.add_message(content=observation, role="system")
-
-        # Max iterations reached - get final response without tools
-        logger.warning(
-            "ReAct max iterations (%d) reached for stage '%s'",
-            max_iterations,
-            stage_name,
+        react = ReActReasoning(
+            max_iterations=max_iterations,
+            artifact_registry=self._artifact_registry,
+            review_executor=self._review_executor,
+            context_builder=self._context_builder,
+            extra_context=extra_context or None,
+            prompt_refresher=prompt_refresher,
         )
-        return await manager.complete(
+
+        response = await react.generate(
+            manager=manager,
+            llm=None,
+            tools=tools,
             system_prompt_override=enhanced_prompt,
-            tools=None,  # Force text response
             metadata=metadata,
         )
 
-    async def _execute_react_tool_call(
-        self,
-        tool_call: Any,
-        tools: list[Any],
-        state: WizardState,
-        tool_context: Any,
-    ) -> Any:
-        """Execute a single tool call within a ReAct loop.
+        # Check if lifecycle tools signaled completion or restart
+        if completion_signal.get("requested"):
+            self._tool_completion_requested = True
+            self._tool_completion_summary = completion_signal.get(
+                "summary", ""
+            )
+        if restart_signal.get("requested"):
+            self._tool_restart_requested = True
 
-        Args:
-            tool_call: Tool call object with name and parameters
-            tools: Available tools
-            state: Wizard state (for tools that need it)
-            tool_context: ToolExecutionContext for context-aware tools
-
-        Returns:
-            Tool execution result or error dict
-        """
-        tool_name = tool_call.name
-        tool_args = getattr(tool_call, "parameters", {}) or {}
-
-        # Find the tool
-        tool = self._find_tool(tool_name, tools)
-        if tool is None:
-            error_msg = f"Tool '{tool_name}' not found"
-            logger.warning("ReAct: %s", error_msg)
-            return {"error": error_msg}
-
-        try:
-            # Execute tool with context injection
-            # Context-aware tools will extract _context and use it
-            # Regular tools will ignore _context via **kwargs
-            result = await tool.execute(**tool_args, _context=tool_context)
-
-            logger.debug("ReAct: Tool '%s' executed successfully", tool_name)
-            return result
-
-        except Exception as e:
-            error_msg = f"Tool execution failed: {e}"
-            logger.error("ReAct: Tool '%s' failed: %s", tool_name, e)
-            return {"error": error_msg}
-
-    def _find_tool(self, tool_name: str, tools: list[Any]) -> Any | None:
-        """Find a tool by name.
-
-        Args:
-            tool_name: Name of the tool to find
-            tools: List of available tools
-
-        Returns:
-            Tool instance or None if not found
-        """
-        for tool in tools:
-            if getattr(tool, "name", None) == tool_name:
-                return tool
-        return None
+        return response
 
     def _build_stage_context(
         self, stage: dict[str, Any], state: WizardState
@@ -3632,6 +4234,73 @@ class WizardReasoning(ReasoningStrategy):
                 )
                 for key, value in filtered_data.items():
                     lines.append(f"- {key}: {value}")
+                lines.append("")
+
+        # CD-2: Inject collection progress during collection iterations
+        # Sibling branching prunes prior inputs from the ancestor path,
+        # so the LLM needs an explicit summary of what's been collected.
+        if stage.get("collection_mode") == "collection":
+            col_config = stage.get("collection_config", {})
+            bank_name = col_config.get("bank_name", "")
+            bank = self._banks.get(bank_name)
+            if bank and bank.count() > 0:
+                max_display = 20
+                records = bank.all()
+                lines.append(f"\n## Collection Progress ({bank_name})")
+                lines.append(
+                    f"{bank.count()} items collected so far:"
+                )
+                for record in records[:max_display]:
+                    summary = ", ".join(
+                        f"{v}" for k, v in record.data.items()
+                        if not k.startswith("_")
+                    )
+                    lines.append(f"- {summary}")
+                if len(records) > max_display:
+                    lines.append(
+                        f"- ... and {len(records) - max_display} more"
+                    )
+                lines.append("")
+
+        # CD-3: Inject compiled artifact snapshot at guided-to-dynamic boundary
+        # When transitioning to a ReAct review stage, provide the full artifact
+        # overview so the LLM doesn't need tool calls to see collected data.
+        if self._use_react_for_stage(stage) and self._artifact:
+            has_data = (
+                self._artifact.fields
+                or any(
+                    bank.count() > 0
+                    for bank in self._artifact.sections.values()
+                )
+            )
+            if has_data:
+                max_section_display = 20
+                lines.append("\n## Collection Summary")
+                compiled = self._artifact.compile()
+                for key, value in compiled.items():
+                    if key.startswith("_"):
+                        continue
+                    if isinstance(value, list):
+                        continue  # Sections handled below
+                    if value is not None:
+                        lines.append(f"- {key}: {value}")
+                for section_name, bank in self._artifact.sections.items():
+                    if bank.count() > 0:
+                        lines.append(
+                            f"\n### {section_name} "
+                            f"({bank.count()} records)"
+                        )
+                        for record in bank.all()[:max_section_display]:
+                            summary = ", ".join(
+                                f"{v}" for k, v in record.data.items()
+                                if not k.startswith("_")
+                            )
+                            lines.append(f"- {summary}")
+                        if bank.count() > max_section_display:
+                            lines.append(
+                                f"- ... and "
+                                f"{bank.count() - max_section_display} more"
+                            )
                 lines.append("")
 
         if state.completed:
@@ -3955,6 +4624,7 @@ class WizardReasoning(ReasoningStrategy):
             global_vars: dict[str, Any] = {
                 "data": data,
                 "bank": self._make_bank_accessor(),
+                "artifact": self._artifact,
             }
             local_vars: dict[str, Any] = {}
             exec_code = f"def _test():\n    {code}\n_result = _test()"
@@ -4079,6 +4749,8 @@ class WizardReasoning(ReasoningStrategy):
         llm: Any,
         stage: dict[str, Any],
         errors: list[str],
+        tools: list[Any] | None = None,
+        wizard_state: WizardState | None = None,
     ) -> Any:
         """Generate response asking for corrections.
 
@@ -4087,6 +4759,8 @@ class WizardReasoning(ReasoningStrategy):
             llm: LLM provider
             stage: Current stage metadata
             errors: Validation error messages
+            tools: Available tools (so LLM can handle out-of-stage requests)
+            wizard_state: Current wizard state for metadata snapshot
 
         Returns:
             LLM response requesting corrections
@@ -4105,8 +4779,26 @@ The user's input for this stage needs clarification:
 Please kindly ask the user to provide the missing or corrected information.
 Be specific about what's needed but remain friendly and helpful.
 """
+        # CD-8: Include full stage context (collection progress, already
+        # collected data) so non-happy-path responses have the same
+        # context richness as happy-path responses.
+        stage_context = (
+            self._build_stage_context(stage, wizard_state)
+            if wizard_state
+            else ""
+        )
+        wizard_snapshot = (
+            {"wizard": self._build_wizard_metadata(wizard_state)}
+            if wizard_state
+            else None
+        )
+        base = manager.system_prompt
+        if stage_context:
+            base = f"{base}\n\n{stage_context}"
         return await manager.complete(
-            system_prompt_override=manager.system_prompt + error_context,
+            system_prompt_override=base + error_context,
+            tools=tools,
+            metadata=wizard_snapshot,
         )
 
     async def _generate_transform_error_response(
@@ -4115,6 +4807,8 @@ Be specific about what's needed but remain friendly and helpful.
         llm: Any,
         stage: dict[str, Any],
         error: str,
+        tools: list[Any] | None = None,
+        wizard_state: WizardState | None = None,
     ) -> Any:
         """Generate response when a transition transform fails.
 
@@ -4127,6 +4821,8 @@ Be specific about what's needed but remain friendly and helpful.
             llm: LLM provider
             stage: Current stage metadata
             error: Error message from the failed transform
+            tools: Available tools (so LLM can handle out-of-stage requests)
+            wizard_state: Current wizard state for metadata snapshot
 
         Returns:
             LLM response explaining the error and offering retry
@@ -4143,8 +4839,15 @@ Please apologize for the issue and let the user know they can try again.
 If the error suggests a configuration or system issue, suggest they contact support.
 Be concise and helpful.
 """
+        wizard_snapshot = (
+            {"wizard": self._build_wizard_metadata(wizard_state)}
+            if wizard_state
+            else None
+        )
         return await manager.complete(
             system_prompt_override=manager.system_prompt + error_context,
+            tools=tools,
+            metadata=wizard_snapshot,
         )
 
     async def _generate_clarification_response(
@@ -4153,6 +4856,8 @@ Be concise and helpful.
         llm: Any,
         stage: dict[str, Any],
         issues: list[str],
+        tools: list[Any] | None = None,
+        wizard_state: WizardState | None = None,
     ) -> Any:
         """Generate response asking for clarification.
 
@@ -4161,6 +4866,8 @@ Be concise and helpful.
             llm: LLM provider
             stage: Current stage metadata
             issues: Extraction issues
+            tools: Available tools (so LLM can handle out-of-stage requests)
+            wizard_state: Current wizard state for metadata snapshot
 
         Returns:
             LLM response requesting clarification
@@ -4190,8 +4897,26 @@ I wasn't able to clearly understand the user's response for this stage.
 Please ask a clarifying question to help gather the needed information.
 Be conversational and helpful - don't make the user feel like they did something wrong.
 """
+        # CD-8: Include full stage context (collection progress, already
+        # collected data) so non-happy-path responses have the same
+        # context richness as happy-path responses.
+        stage_context = (
+            self._build_stage_context(stage, wizard_state)
+            if wizard_state
+            else ""
+        )
+        wizard_snapshot = (
+            {"wizard": self._build_wizard_metadata(wizard_state)}
+            if wizard_state
+            else None
+        )
+        base = manager.system_prompt
+        if stage_context:
+            base = f"{base}\n\n{stage_context}"
         return await manager.complete(
-            system_prompt_override=manager.system_prompt + clarification_context,
+            system_prompt_override=base + clarification_context,
+            tools=tools,
+            metadata=wizard_snapshot,
         )
 
     async def _generate_restart_offer(
@@ -4200,6 +4925,8 @@ Be conversational and helpful - don't make the user feel like they did something
         llm: Any,
         stage: dict[str, Any],
         issues: list[str],
+        tools: list[Any] | None = None,
+        wizard_state: WizardState | None = None,
     ) -> Any:
         """Generate response offering to restart after multiple failures.
 
@@ -4208,6 +4935,8 @@ Be conversational and helpful - don't make the user feel like they did something
             llm: LLM provider
             stage: Current stage metadata
             issues: Extraction issues
+            tools: Available tools (so LLM can handle out-of-stage requests)
+            wizard_state: Current wizard state for metadata snapshot
 
         Returns:
             LLM response offering restart option
@@ -4226,8 +4955,26 @@ Please offer the user two options:
 
 Be empathetic and helpful - acknowledge that the questions might not be clear.
 """
+        # CD-8: Include full stage context (collection progress, already
+        # collected data) so non-happy-path responses have the same
+        # context richness as happy-path responses.
+        stage_context = (
+            self._build_stage_context(stage, wizard_state)
+            if wizard_state
+            else ""
+        )
+        wizard_snapshot = (
+            {"wizard": self._build_wizard_metadata(wizard_state)}
+            if wizard_state
+            else None
+        )
+        base = manager.system_prompt
+        if stage_context:
+            base = f"{base}\n\n{stage_context}"
         return await manager.complete(
-            system_prompt_override=manager.system_prompt + restart_context,
+            system_prompt_override=base + restart_context,
+            tools=tools,
+            metadata=wizard_snapshot,
         )
 
     # =========================================================================

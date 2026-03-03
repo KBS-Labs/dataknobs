@@ -527,6 +527,7 @@ class EchoProvider(AsyncLLMProvider):
         self,
         messages: Union[str, List[LLMMessage]],
         config_overrides: Dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
         **kwargs: Any
     ) -> AsyncIterator[LLMStreamResponse]:
         """Stream echo response character by character.
@@ -535,16 +536,31 @@ class EchoProvider(AsyncLLMProvider):
             messages: Input messages or prompt
             config_overrides: Optional dict to override config fields (model,
                 temperature, max_tokens, top_p, stop_sequences, seed)
+            tools: Optional list of Tool objects (forwarded to complete())
             **kwargs: Additional parameters (ignored)
 
         Yields:
-            Streaming response chunks
+            Streaming response chunks with tool_calls on final chunk
         """
         if not self._is_initialized:
             await self.initialize()
 
-        # Get full response
-        response = await self.complete(messages, config_overrides=config_overrides, **kwargs)
+        # Get full response (forwards tools to complete())
+        response = await self.complete(
+            messages, config_overrides=config_overrides, tools=tools, **kwargs
+        )
+
+        # Handle empty content (e.g. tool_call_response with content="")
+        if not response.content:
+            yield LLMStreamResponse(
+                delta="",
+                is_final=True,
+                finish_reason=response.finish_reason or "stop",
+                usage=response.usage,
+                tool_calls=response.tool_calls,
+                model=response.model,
+            )
+            return
 
         # Stream character by character
         for i, char in enumerate(response.content):
@@ -553,8 +569,10 @@ class EchoProvider(AsyncLLMProvider):
             yield LLMStreamResponse(
                 delta=char,
                 is_final=is_final,
-                finish_reason='stop' if is_final else None,
-                usage=response.usage if is_final else None
+                finish_reason=response.finish_reason if is_final else None,
+                usage=response.usage if is_final else None,
+                tool_calls=response.tool_calls if is_final else None,
+                model=response.model if is_final else None,
             )
 
             # Optional delay for realistic streaming

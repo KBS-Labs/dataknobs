@@ -3,6 +3,8 @@
 These tests verify the fixes for the WizardReasoning / ConversationManager
 interface disconnect where system_prompt_override was silently dropped and
 tools handling was inconsistent across providers.
+
+Also tests CD-10: system_prompt_override persistence in assistant node metadata.
 """
 
 import tempfile
@@ -218,3 +220,123 @@ class TestToolsParameter:
         system_msgs = [m for m in messages if m.role == "system"]
         assert system_msgs[0].content == "You are a wizard with tools"
         assert last_call.get("tools") is not None
+
+
+class TestSystemPromptOverridePersistence:
+    """Tests for CD-10: system_prompt_override persisted in assistant node metadata."""
+
+    @pytest.mark.asyncio
+    async def test_override_persisted_in_node_metadata(
+        self, manager_with_provider: dict[str, Any],
+    ) -> None:
+        """system_prompt_override is stored in the assistant node metadata."""
+        manager = manager_with_provider["manager"]
+        provider: EchoProvider = manager_with_provider["provider"]
+
+        await manager.add_message(role="user", content="Hello")
+        provider.set_responses(["Response with override"])
+        await manager.complete(
+            system_prompt_override="You are a wizard at step 2",
+        )
+
+        # The current node is the assistant response
+        node = manager.state.get_current_node().data
+        assert node.message.role == "assistant"
+        assert "system_prompt_override" in node.metadata
+        assert node.metadata["system_prompt_override"] == "You are a wizard at step 2"
+
+    @pytest.mark.asyncio
+    async def test_no_override_no_metadata_key(
+        self, manager_with_provider: dict[str, Any],
+    ) -> None:
+        """Without system_prompt_override, metadata does NOT contain the key."""
+        manager = manager_with_provider["manager"]
+        provider: EchoProvider = manager_with_provider["provider"]
+
+        await manager.add_message(role="user", content="Hello")
+        provider.set_responses(["Normal response"])
+        await manager.complete()
+
+        node = manager.state.get_current_node().data
+        assert "system_prompt_override" not in node.metadata
+
+    @pytest.mark.asyncio
+    async def test_override_stores_full_prompt(
+        self, manager_with_provider: dict[str, Any],
+    ) -> None:
+        """The full enhanced prompt is stored, not just the delta."""
+        manager = manager_with_provider["manager"]
+        provider: EchoProvider = manager_with_provider["provider"]
+
+        full_override = (
+            "You are a helpful assistant.\n\n"
+            "## Current Wizard Stage\nIngredients collection\n\n"
+            "## ALREADY COLLECTED\n- recipe_name: Chocolate Chip Cookies\n\n"
+            "## Collection Progress (ingredients)\n3 items collected so far:\n"
+            "- flour, 2 cups\n- sugar, 1 cup\n- chocolate chips, 1 cup"
+        )
+
+        await manager.add_message(role="user", content="Add butter")
+        provider.set_responses(["Added butter"])
+        await manager.complete(system_prompt_override=full_override)
+
+        node = manager.state.get_current_node().data
+        assert node.metadata["system_prompt_override"] == full_override
+
+    @pytest.mark.asyncio
+    async def test_override_survives_serialization(
+        self, manager_with_provider: dict[str, Any],
+    ) -> None:
+        """Override persists through node to_dict/from_dict round-trip."""
+        manager = manager_with_provider["manager"]
+        provider: EchoProvider = manager_with_provider["provider"]
+
+        await manager.add_message(role="user", content="Hello")
+        provider.set_responses(["Response"])
+        await manager.complete(
+            system_prompt_override="Wizard context override",
+        )
+
+        node = manager.state.get_current_node().data
+        serialized = node.to_dict()
+        restored = type(node).from_dict(serialized)
+
+        assert restored.metadata["system_prompt_override"] == "Wizard context override"
+
+    @pytest.mark.asyncio
+    async def test_stream_complete_persists_override(
+        self, manager_with_provider: dict[str, Any],
+    ) -> None:
+        """stream_complete() also persists the system_prompt_override."""
+        manager = manager_with_provider["manager"]
+        provider: EchoProvider = manager_with_provider["provider"]
+
+        await manager.add_message(role="user", content="Hello")
+        provider.set_responses(["Streamed response"])
+
+        # Consume the stream
+        async for _chunk in manager.stream_complete(
+            system_prompt_override="Streaming wizard context",
+        ):
+            pass
+
+        node = manager.state.get_current_node().data
+        assert node.message.role == "assistant"
+        assert node.metadata["system_prompt_override"] == "Streaming wizard context"
+
+    @pytest.mark.asyncio
+    async def test_stream_complete_no_override_no_key(
+        self, manager_with_provider: dict[str, Any],
+    ) -> None:
+        """stream_complete() without override does not add the metadata key."""
+        manager = manager_with_provider["manager"]
+        provider: EchoProvider = manager_with_provider["provider"]
+
+        await manager.add_message(role="user", content="Hello")
+        provider.set_responses(["Streamed"])
+
+        async for _chunk in manager.stream_complete():
+            pass
+
+        node = manager.state.get_current_node().data
+        assert "system_prompt_override" not in node.metadata

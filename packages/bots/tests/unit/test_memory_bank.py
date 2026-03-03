@@ -126,6 +126,47 @@ class TestBankRecord:
         json_str = json.dumps(record.to_dict())
         assert json_str  # No serialization error
 
+    def test_from_dict_missing_timestamps_raises(self) -> None:
+        """Bug: from_dict() silently defaults missing timestamps to now.
+
+        Missing timestamps should raise ValueError in strict mode (default)
+        because silent defaults corrupt provenance data — a record
+        deserialized at 3pm looks like it was created at 3pm regardless
+        of actual creation time.
+        """
+        d = {"record_id": "abc123", "data": {"name": "flour"}}
+        with pytest.raises(ValueError, match="missing required.*created_at"):
+            BankRecord.from_dict(d)
+
+    def test_from_dict_missing_updated_at_raises(self) -> None:
+        """updated_at must also be required in strict mode."""
+        d = {
+            "record_id": "abc123",
+            "data": {"name": "flour"},
+            "created_at": 1000.0,
+        }
+        with pytest.raises(ValueError, match="missing required.*updated_at"):
+            BankRecord.from_dict(d)
+
+    def test_from_dict_legacy_mode_uses_defaults(self) -> None:
+        """strict=False retains time.time() fallback for legacy data."""
+        d = {"record_id": "abc123", "data": {"name": "flour"}}
+        record = BankRecord.from_dict(d, strict=False)
+        assert record.record_id == "abc123"
+        assert record.created_at > 0
+        assert record.updated_at > 0
+
+    def test_from_dict_modified_in_stage_defaults_to_none(self) -> None:
+        """modified_in_stage should default to None, not empty string."""
+        d = {
+            "record_id": "abc123",
+            "data": {"name": "flour"},
+            "created_at": 1000.0,
+            "updated_at": 1001.0,
+        }
+        record = BankRecord.from_dict(d)
+        assert record.modified_in_stage is None
+
 
 # =====================================================================
 # MemoryBank CRUD tests
@@ -287,6 +328,21 @@ class TestMemoryBankDuplicates:
         bank.add({"name": "sugar"})
         assert bank.count() == 2
 
+    def test_extra_fields_on_existing_not_false_duplicate(self) -> None:
+        """Bug: duplicate detection only checks new record's keys.
+
+        When match_fields is None, _check_duplicate uses list(data.keys())
+        which only considers the NEW record's keys. If the existing record
+        has extra fields, those are ignored — records that differ by extra
+        fields on the existing record are falsely treated as duplicates.
+        """
+        bank = _make_bank(duplicate_strategy="reject")
+        # Existing record has "amount" field
+        bank.add({"name": "flour", "amount": "2 cups"})
+        # New record lacks "amount" — these differ, should NOT be duplicate
+        bank.add({"name": "flour"})
+        assert bank.count() == 2
+
 
 # =====================================================================
 # Find tests
@@ -330,6 +386,31 @@ class TestMemoryBankSerialization:
         assert records[0].data["name"] == "flour"
         assert records[1].data["name"] == "sugar"
 
+    def test_roundtrip_preserves_exact_timestamps(self) -> None:
+        """Regression guard: from_dict(to_dict()) must preserve timestamps.
+
+        Ensures timestamps survive serialization/deserialization without
+        being silently replaced by time.time().
+        """
+        bank = _make_bank()
+        bank.add({"name": "flour"}, source_stage="collect")
+        bank.add({"name": "sugar"}, source_stage="collect")
+
+        original_records = bank.all()
+        original_timestamps = [
+            (r.created_at, r.updated_at) for r in original_records
+        ]
+
+        d = bank.to_dict()
+        restored = MemoryBank.from_dict(d)
+        restored_records = restored.all()
+
+        assert len(restored_records) == len(original_records)
+        for orig, restored_rec in zip(original_records, restored_records):
+            assert restored_rec.created_at == orig.created_at
+            assert restored_rec.updated_at == orig.updated_at
+            assert restored_rec.source_stage == orig.source_stage
+
     def test_to_dict_is_json_safe(self) -> None:
         bank = _make_bank()
         bank.add({"name": "flour"})
@@ -342,6 +423,19 @@ class TestMemoryBankSerialization:
         restored = MemoryBank.from_dict(d)
         assert restored.count() == 0
         assert restored.name == "items"
+
+    def test_modified_in_stage_survives_roundtrip(self) -> None:
+        bank = _make_bank()
+        rec_id = bank.add({"name": "flour"}, source_stage="collect")
+        bank.update(rec_id, {"name": "flour"}, modified_in_stage="review")
+
+        d = bank.to_dict()
+        restored = MemoryBank.from_dict(d)
+
+        record = restored.get(rec_id)
+        assert record is not None
+        assert record.source_stage == "collect"
+        assert record.modified_in_stage == "review"
 
     def test_duplicate_config_survives_roundtrip(self) -> None:
         bank = _make_bank(
@@ -478,7 +572,7 @@ class TestWizardBankIntegration:
         assert reasoning._banks["ingredients"].count() == 2
 
         # Save state
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         # Verify banks are in metadata
         wizard_meta = conversation_manager.metadata.get("wizard", {})
@@ -545,7 +639,7 @@ class TestWizardBankIntegration:
         reasoning = _make_wizard_with_banks()
         state = reasoning._get_wizard_state(conversation_manager)
         reasoning._banks["ingredients"].add({"name": "flour"})
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         # Must be JSON serializable
         import json
@@ -553,3 +647,129 @@ class TestWizardBankIntegration:
         json_str = json.dumps(conversation_manager.metadata)
         parsed = json.loads(json_str)
         assert "banks" in parsed["wizard"]
+
+
+# =====================================================================
+# Storage mode tests
+# =====================================================================
+
+class TestMemoryBankStorageMode:
+
+    def test_storage_mode_defaults_to_inline(self) -> None:
+        bank = _make_bank()
+        d = bank.to_dict()
+        assert d["storage_mode"] == "inline"
+        assert "records" in d
+
+    def test_to_dict_external_omits_records(self) -> None:
+        bank = MemoryBank(
+            name="items",
+            schema={"required": ["name"]},
+            db=SyncMemoryDatabase(),
+            storage_mode="external",
+        )
+        bank.add({"name": "flour"})
+        d = bank.to_dict()
+        assert d["storage_mode"] == "external"
+        assert "records" not in d
+
+    def test_from_dict_with_injected_db(self) -> None:
+        """Provided db is used instead of creating a fresh SyncMemoryDatabase."""
+        injected_db = SyncMemoryDatabase()
+        bank_dict = {
+            "name": "items",
+            "schema": {"required": ["name"]},
+            "storage_mode": "external",
+        }
+        bank = MemoryBank.from_dict(bank_dict, db=injected_db)
+        # Add a record through the bank and verify it lands in the injected db
+        bank.add({"name": "flour"})
+        from dataknobs_data import Query
+
+        raw_records = list(injected_db.search(Query()))
+        assert len(raw_records) == 1
+        assert raw_records[0].data["name"] == "flour"
+
+    def test_sqlite_backend_round_trip(self) -> None:
+        """Records persist in SQLite across MemoryBank instances."""
+        from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
+
+        db = SyncSQLiteDatabase({"path": ":memory:", "table": "items"})
+        db.connect()
+
+        bank = MemoryBank(
+            name="items",
+            schema={"required": ["name"]},
+            db=db,
+            storage_mode="external",
+        )
+        bank.add({"name": "flour"})
+        bank.add({"name": "sugar"})
+        assert bank.count() == 2
+
+        # to_dict in external mode has no records
+        d = bank.to_dict()
+        assert "records" not in d
+
+        # Reconstruct from same db — records are still there
+        bank2 = MemoryBank.from_dict(d, db=db)
+        assert bank2.count() == 2
+        names = {r.data["name"] for r in bank2.all()}
+        assert names == {"flour", "sugar"}
+
+        db.close()
+
+
+# =====================================================================
+# Close / cleanup tests
+# =====================================================================
+
+class TestMemoryBankClose:
+
+    def test_close_calls_db_close(self) -> None:
+        db = SyncMemoryDatabase()
+        bank = MemoryBank(
+            name="items",
+            schema={},
+            db=db,
+        )
+        # SyncMemoryDatabase.close() is a no-op — just verify no error
+        bank.close()
+
+    def test_close_on_sqlite_closes_connection(self) -> None:
+        from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
+
+        db = SyncSQLiteDatabase({"path": ":memory:", "table": "items"})
+        db.connect()
+        bank = MemoryBank(name="items", schema={}, db=db)
+        bank.add({"name": "flour"})
+
+        bank.close()
+        assert not db._connected
+
+    @pytest.mark.asyncio
+    async def test_wizard_close_closes_bank_dbs(self) -> None:
+        from dataknobs_data.backends.sqlite import SyncSQLiteDatabase
+
+        reasoning = _make_wizard_with_banks(banks_config={
+            "ingredients": {
+                "schema": {"required": ["name"]},
+                "max_records": 50,
+            },
+        })
+        # Replace the memory db with an SQLite db so we can observe close
+        sqlite_db = SyncSQLiteDatabase(
+            {"path": ":memory:", "table": "ingredients"}
+        )
+        sqlite_db.connect()
+        reasoning._banks["ingredients"] = MemoryBank(
+            name="ingredients",
+            schema={"required": ["name"]},
+            db=sqlite_db,
+            storage_mode="external",
+        )
+        reasoning._banks["ingredients"].add({"name": "flour"})
+        assert sqlite_db._connected
+
+        await reasoning.close()
+        assert not sqlite_db._connected

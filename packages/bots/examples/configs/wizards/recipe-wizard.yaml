@@ -1,0 +1,84 @@
+# Recipe Wizard: collection mode with memory banks
+#
+# Demonstrates memory bank abstraction, collection mode looping,
+# duplicate detection, and bank template access in summary.
+#
+# Stages: recipe_name -> ingredients (collection) -> summary
+
+name: recipe-wizard
+description: Recipe builder with ingredient collection via memory banks
+
+settings:
+  banks:
+    ingredients:
+      schema:
+        required: [name]
+      max_records: 30
+      duplicate_strategy: reject
+      match_fields: [name]
+
+stages:
+  - name: recipe_name
+    label: Recipe Name
+    is_start: true
+    prompt: >
+      Ask the user what recipe they'd like to build.
+    response_template: >
+      Let's build a recipe! What dish would you like to make?
+    schema:
+      type: object
+      properties:
+        recipe_name:
+          type: string
+          description: Name of the recipe
+      required:
+        - recipe_name
+    transitions:
+      - target: ingredients
+        condition: "data.get('recipe_name')"
+
+  - name: ingredients
+    label: Add Ingredients
+    prompt: >
+      Ask the user for an ingredient to add. Ask for both the
+      name and the amount.
+    response_template: >
+      Building "{{ recipe_name }}" — add an ingredient (name and amount),
+      or say "done" when finished.
+    collection_mode: collection
+    collection_config:
+      bank_name: ingredients
+      done_keywords: ["done", "finished", "that's all"]
+      done_prompt: "Added! What's the next ingredient, or say 'done' to finish."
+    schema:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Ingredient name
+        amount:
+          type: string
+          description: Amount of the ingredient
+      required:
+        - name
+    transitions:
+      - target: summary
+        condition: "bank('ingredients').count() > 0"
+
+  - name: summary
+    label: Recipe Summary
+    is_end: true
+    prompt: >
+      Display the complete recipe with all ingredients.
+    response_template: >
+      **{{ recipe_name }}**
+
+
+      Ingredients ({{ bank('ingredients').count() }}):
+
+      {% for item in bank('ingredients').all() %}
+      - {{ item.data.name }}{% if item.data.amount %}: {{ item.data.amount }}{% endif %}
+
+      {% endfor %}
+
+      Your recipe is ready!

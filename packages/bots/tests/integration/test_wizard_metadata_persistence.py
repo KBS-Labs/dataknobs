@@ -171,7 +171,7 @@ class TestWizardMetadataPersistence:
         # Seed wizard state so _generate_stage_response finds it
         state = reasoning._get_wizard_state(conversation_manager)
         state.data["topic"] = "astronomy"
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         # Add a user message (non-question, so llm_assist is not triggered)
         await conversation_manager.add_message(role="user", content="astronomy")
@@ -203,7 +203,7 @@ class TestWizardMetadataPersistence:
 
         state = reasoning._get_wizard_state(conversation_manager)
         state.data["topic"] = "biology"
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         # User asks a question — triggers llm_assist path
         await conversation_manager.add_message(
@@ -237,7 +237,7 @@ class TestWizardMetadataPersistence:
         reasoning = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
 
         state = reasoning._get_wizard_state(conversation_manager)
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         await conversation_manager.add_message(
             role="user", content="I want to learn about physics"
@@ -269,7 +269,7 @@ class TestWizardMetadataPersistence:
         reasoning = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
 
         state = reasoning._get_wizard_state(conversation_manager)
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         await conversation_manager.add_message(
             role="user", content="Look up astronomy for me"
@@ -309,7 +309,7 @@ class TestWizardMetadataPersistence:
         reasoning = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
 
         state = reasoning._get_wizard_state(conversation_manager)
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         await conversation_manager.add_message(
             role="user", content="Look up everything"
@@ -347,7 +347,7 @@ class TestWizardMetadataPersistence:
 
         state = reasoning._get_wizard_state(conversation_manager)
         state.data["topic"] = "chemistry"
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         await conversation_manager.add_message(
             role="user", content="chemistry"

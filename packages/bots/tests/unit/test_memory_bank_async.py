@@ -132,6 +132,25 @@ class TestAsyncMemoryBankValidation:
         with pytest.raises(ValueError, match="full"):
             await bank.add({"name": "c"})
 
+    @pytest.mark.asyncio
+    async def test_none_required_field_rejected(self) -> None:
+        bank = await _make_async_bank(schema={"required": ["name"]})
+        with pytest.raises(ValueError, match="missing required fields"):
+            await bank.add({"name": None})
+
+    @pytest.mark.asyncio
+    async def test_no_required_fields_accepts_anything(self) -> None:
+        bank = await _make_async_bank(schema={})
+        rid = await bank.add({"arbitrary": "value"})
+        assert await bank.get(rid) is not None
+
+    @pytest.mark.asyncio
+    async def test_no_max_records_unlimited(self) -> None:
+        bank = await _make_async_bank(max_records=None)
+        for i in range(100):
+            await bank.add({"name": f"item-{i}"})
+        assert await bank.count() == 100
+
 
 # =====================================================================
 # Duplicate detection
@@ -161,6 +180,31 @@ class TestAsyncMemoryBankDuplicates:
         assert rec is not None
         assert rec.data["amount"] == "2 cups"
 
+    @pytest.mark.asyncio
+    async def test_allow_strategy_permits_duplicates(self) -> None:
+        bank = await _make_async_bank(duplicate_strategy="allow")
+        await bank.add({"name": "flour"})
+        await bank.add({"name": "flour"})
+        assert await bank.count() == 2
+
+    @pytest.mark.asyncio
+    async def test_different_match_fields_not_duplicate(self) -> None:
+        bank = await _make_async_bank(
+            duplicate_strategy="reject",
+            match_fields=["name"],
+        )
+        await bank.add({"name": "flour"})
+        await bank.add({"name": "sugar"})
+        assert await bank.count() == 2
+
+    @pytest.mark.asyncio
+    async def test_extra_fields_on_existing_not_false_duplicate(self) -> None:
+        """Records differing by extra fields on existing are NOT duplicates."""
+        bank = await _make_async_bank(duplicate_strategy="reject")
+        await bank.add({"name": "flour", "amount": "2 cups"})
+        await bank.add({"name": "flour"})
+        assert await bank.count() == 2
+
 
 # =====================================================================
 # Find
@@ -176,6 +220,12 @@ class TestAsyncMemoryBankFind:
         results = await bank.find(cat="dry")
         assert len(results) == 1
         assert results[0].data["name"] == "flour"
+
+    @pytest.mark.asyncio
+    async def test_find_no_matches(self) -> None:
+        bank = await _make_async_bank()
+        await bank.add({"name": "flour"})
+        assert await bank.find(name="sugar") == []
 
 
 # =====================================================================
@@ -224,3 +274,52 @@ class TestAsyncMemoryBankSerialization:
         restored = await AsyncMemoryBank.from_dict(d)
         assert await restored.count() == 0
         assert restored.name == "items"
+
+    @pytest.mark.asyncio
+    async def test_roundtrip_preserves_exact_timestamps(self) -> None:
+        """Regression guard: from_dict(to_dict()) must preserve timestamps."""
+        bank = await _make_async_bank()
+        await bank.add({"name": "flour"}, source_stage="collect")
+        await bank.add({"name": "sugar"}, source_stage="collect")
+
+        original_records = await bank.all()
+        original_timestamps = [
+            (r.created_at, r.updated_at) for r in original_records
+        ]
+
+        d = await bank.to_dict()
+        restored = await AsyncMemoryBank.from_dict(d)
+        restored_records = await restored.all()
+
+        assert len(restored_records) == len(original_records)
+        for orig, restored_rec in zip(original_records, restored_records):
+            assert restored_rec.created_at == orig.created_at
+            assert restored_rec.updated_at == orig.updated_at
+            assert restored_rec.source_stage == orig.source_stage
+
+    @pytest.mark.asyncio
+    async def test_modified_in_stage_survives_roundtrip(self) -> None:
+        bank = await _make_async_bank()
+        rec_id = await bank.add({"name": "flour"}, source_stage="collect")
+        await bank.update(rec_id, {"name": "flour"}, modified_in_stage="review")
+
+        d = await bank.to_dict()
+        restored = await AsyncMemoryBank.from_dict(d)
+
+        record = await restored.get(rec_id)
+        assert record is not None
+        assert record.source_stage == "collect"
+        assert record.modified_in_stage == "review"
+
+    @pytest.mark.asyncio
+    async def test_duplicate_config_survives_roundtrip(self) -> None:
+        bank = await _make_async_bank(
+            duplicate_strategy="reject",
+            match_fields=["name"],
+        )
+        await bank.add({"name": "flour"})
+        d = await bank.to_dict()
+        restored = await AsyncMemoryBank.from_dict(d)
+        assert await restored.count() == 1
+        assert d["duplicate_strategy"] == "reject"
+        assert d["match_fields"] == ["name"]

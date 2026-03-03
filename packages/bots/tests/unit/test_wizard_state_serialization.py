@@ -95,7 +95,7 @@ class TestWizardStateSerialization:
         state.data["_corpus_id"] = "corpus-abc"
         state.data["_corpus"] = NonSerializableObject("ArtifactCorpus")
 
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         # Must NOT raise — non-serializable object stripped during save
         json_str = json.dumps(conversation_manager.metadata)
@@ -124,7 +124,7 @@ class TestWizardStateSerialization:
         state.data["_current_question_number"] = 3
         state.data["_dedup_result"] = None
 
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         saved_data = conversation_manager.metadata["wizard"]["fsm_state"]["data"]
         assert saved_data["topic"] == "Biology"
@@ -150,7 +150,7 @@ class TestWizardStateSerialization:
             content_hash="abc123",
         )
 
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         saved_data = conversation_manager.metadata["wizard"]["fsm_state"]["data"]
         dedup = saved_data["_dedup_result"]
@@ -170,7 +170,7 @@ class TestWizardStateSerialization:
         state.data["_corpus_id"] = None
         state.data["topic"] = "test"
 
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         saved_data = conversation_manager.metadata["wizard"]["fsm_state"]["data"]
         assert saved_data["_dedup_result"] is None
@@ -195,7 +195,7 @@ class TestWizardStateSerialization:
         )
         state.data["_bank_questions"] = [{"id": "q1"}]
 
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         # Must not raise
         json_str = json.dumps(conversation_manager.metadata)
@@ -225,7 +225,7 @@ class TestWizardStateSerialization:
         state.data["_bank_difficulty_counts"] = {"easy": 0, "medium": 1, "hard": 0}
 
         # Save
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         # Restore
         restored = reasoning._get_wizard_state(conversation_manager)
@@ -389,7 +389,7 @@ class TestWizardStateSharedReference:
         # Initial save with clean data
         state = reasoning._get_wizard_state(conversation_manager)
         state.data["topic"] = "English grammar"
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         # Load state back — this is where the shared reference is created
         loaded_state = reasoning._get_wizard_state(conversation_manager)
@@ -423,7 +423,7 @@ class TestWizardStateSharedReference:
         # Save clean state
         state = reasoning._get_wizard_state(conversation_manager)
         state.data["topic"] = "English grammar"
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         # Reload state (creates the shared reference)
         reloaded = reasoning._get_wizard_state(conversation_manager)
@@ -462,7 +462,7 @@ class TestWizardStateSharedReference:
         state.transitions.append(transition)
 
         # Save must sanitize transitions too
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         # json.dumps on full metadata must succeed
         json_str = json.dumps(conversation_manager.metadata)
@@ -648,7 +648,7 @@ class TestPartitionData:
         state.data["_transform_error"] = "Generation failed"
         state.data["_message"] = "user input"
 
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         # Verify persisted data excludes ephemeral keys
         saved_data = conversation_manager.metadata["wizard"]["fsm_state"]["data"]
@@ -676,7 +676,7 @@ class TestPartitionData:
         state.data["topic"] = "English grammar"
         state.data["_transform_error"] = "Generation failed"
 
-        reasoning._save_wizard_state(conversation_manager, state)
+        await reasoning._save_wizard_state(conversation_manager, state)
 
         # The top-level wizard metadata 'data' should include transient
         # (for UI display), sanitized via sanitize_for_json

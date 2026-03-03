@@ -2,6 +2,7 @@
 
 import json
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from dataknobs_llm.exceptions import ToolsNotSupportedError
@@ -55,6 +56,8 @@ class ReActReasoning(ReasoningStrategy):
         artifact_registry: Any | None = None,
         review_executor: Any | None = None,
         context_builder: Any | None = None,
+        extra_context: dict[str, Any] | None = None,
+        prompt_refresher: Callable[[], str] | None = None,
     ):
         """Initialize ReAct reasoning strategy.
 
@@ -65,6 +68,13 @@ class ReActReasoning(ReasoningStrategy):
             artifact_registry: Optional ArtifactRegistry for artifact management
             review_executor: Optional ReviewExecutor for running reviews
             context_builder: Optional ContextBuilder for building conversation context
+            extra_context: Optional extra key-value pairs to merge into the
+                ToolExecutionContext for every tool call (e.g. banks, custom state)
+            prompt_refresher: Optional callback that returns a fresh system
+                prompt string.  Called after tool execution in each iteration
+                to update ``system_prompt_override`` in the next
+                ``manager.complete()`` call.  This prevents stale context
+                when mutating tools change artifact/bank state mid-loop.
         """
         self.max_iterations = max_iterations
         self.verbose = verbose
@@ -72,6 +82,8 @@ class ReActReasoning(ReasoningStrategy):
         self._artifact_registry = artifact_registry
         self._review_executor = review_executor
         self._context_builder = context_builder
+        self._extra_context = extra_context
+        self._prompt_refresher = prompt_refresher
 
     @property
     def artifact_registry(self) -> Any | None:
@@ -225,6 +237,19 @@ class ReActReasoning(ReasoningStrategy):
                     },
                 )
 
+                # Add explanatory message so the final LLM call doesn't
+                # see dangling tool_calls with no corresponding observations.
+                tool_names = [tc.name for tc in response.tool_calls]
+                await manager.add_message(
+                    content=(
+                        f"System notice: The tools {tool_names} were already "
+                        "called with identical parameters in the previous step. "
+                        "Their results are already in the conversation above. "
+                        "Please use those results to respond to the user."
+                    ),
+                    role="system",
+                )
+
                 if trace is not None:
                     iteration_trace["status"] = "duplicate_tool_calls_detected"
                     trace.append(iteration_trace)
@@ -249,6 +274,8 @@ class ReActReasoning(ReasoningStrategy):
                     extra_context["conversation_context"] = conversation_context
                 except Exception as e:
                     logger.warning("Failed to build conversation context: %s", e)
+            if self._extra_context:
+                extra_context.update(self._extra_context)
             if extra_context:
                 tool_context = tool_context.with_extra(**extra_context)
 
@@ -282,7 +309,10 @@ class ReActReasoning(ReasoningStrategy):
                         result = await tool.execute(
                             **tool_call.parameters, _context=tool_context
                         )
-                        observation = f"Tool result: {result}"
+                        try:
+                            observation = f"Tool result: {json.dumps(result, default=str)}"
+                        except (TypeError, ValueError):
+                            observation = f"Tool result: {result}"
                         tool_trace["status"] = "success"
                         tool_trace["result"] = str(result)
 
@@ -297,14 +327,17 @@ class ReActReasoning(ReasoningStrategy):
                             },
                         )
 
-                    # Add observation to conversation
+                    # Add observation using role="tool" so providers can
+                    # pair it with the assistant's tool_calls in history.
                     await manager.add_message(
                         content=f"Observation from {tool_call.name}: {observation}",
-                        role="system",
+                        role="tool",
+                        name=tool_call.name,
                     )
 
                 except Exception as e:
-                    # Handle tool execution errors
+                    # Handle tool execution errors — use role="tool" so the
+                    # error is paired with the tool call in conversation.
                     error_msg = f"Error executing tool {tool_call.name}: {e!s}"
                     tool_trace["status"] = "error"
                     tool_trace["error"] = str(e)
@@ -320,7 +353,11 @@ class ReActReasoning(ReasoningStrategy):
                         exc_info=True,
                     )
 
-                    await manager.add_message(content=error_msg, role="system")
+                    await manager.add_message(
+                        content=error_msg,
+                        role="tool",
+                        name=tool_call.name,
+                    )
 
                 if trace is not None:
                     iteration_trace["tool_calls"].append(tool_trace)
@@ -328,6 +365,11 @@ class ReActReasoning(ReasoningStrategy):
             if trace is not None:
                 iteration_trace["status"] = "continued"
                 trace.append(iteration_trace)
+
+            # Refresh system prompt so the next iteration sees current
+            # artifact/bank state (e.g. after load_from_catalog).
+            if self._prompt_refresher is not None:
+                kwargs["system_prompt_override"] = self._prompt_refresher()
 
         else:
             # for-else: only reached when the loop exhausts all iterations
@@ -344,6 +386,10 @@ class ReActReasoning(ReasoningStrategy):
             if trace is not None:
                 trace.append({"status": "max_iterations_reached"})
                 await self._store_trace(manager, trace)
+
+        # Refresh prompt for the final complete() call as well.
+        if self._prompt_refresher is not None:
+            kwargs["system_prompt_override"] = self._prompt_refresher()
 
         return await manager.complete(**kwargs)
 
