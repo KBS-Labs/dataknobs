@@ -843,6 +843,119 @@ Each record object in templates has these properties:
 | **Operations** | store/recall | CRUD + count/find/clear |
 | **Configuration** | Top-level `memory` key | Wizard `settings.banks` |
 
+### Bank Persistence
+
+By default, memory banks use an in-memory backend and data is lost when the process
+exits. For persistent storage, configure a database backend per bank.
+
+```yaml
+settings:
+  banks:
+    ingredients:
+      schema:
+        required: [name]
+      backend: sqlite                 # "memory" (default), "sqlite", "postgres", etc.
+      backend_config:
+        path: ./wizard-data.db        # Backend-specific options
+      duplicate_detection:
+        strategy: reject              # "allow" (default), "reject", "update"
+        match_fields: [name]
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `backend` | string | `"memory"` | Database backend key (any `dataknobs-data` backend) |
+| `backend_config` | dict | `{}` | Backend-specific options (e.g. `path` for SQLite) |
+| `schema` | dict | `{}` | JSON Schema defining expected record fields |
+| `max_records` | int | *none* | Optional limit on records in the bank |
+| `duplicate_detection.strategy` | string | `"allow"` | `"allow"`, `"reject"`, or `"update"` |
+| `duplicate_detection.match_fields` | list | *none* | Fields to compare for duplicates |
+
+Storage mode is determined automatically: `"inline"` for in-memory backends,
+`"external"` for persistent backends (SQLite, PostgreSQL, etc.). The
+`MemoryBank` constructor accepts a `db: SyncDatabase` parameter — any
+`dataknobs-data` backend works transparently.
+
+### Artifact Seeding
+
+Pre-populate an artifact from a JSON or JSONL file on first initialization.
+Seeding runs once — if the artifact already has data, it is skipped.
+
+```yaml
+settings:
+  artifact:
+    name: recipe
+    fields:
+      recipe_name:
+        required: true
+    sections:
+      ingredients:
+        schema: { required: [name, amount] }
+      instructions:
+        schema: { required: [instruction] }
+    seed:
+      source: ./data/default-recipes.jsonl   # File path (required)
+      format: jsonl                          # Optional; auto-detected from extension
+      select: "Chocolate Chip Cookies"       # Optional; selects entry in JSONL book
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `seed.source` | string | *required* | Path to JSON or JSONL file |
+| `seed.format` | string | *auto* | `"json"` or `"jsonl"`; detected from file extension |
+| `seed.select` | string | *none* | For JSONL: match against `_artifact_name` or any top-level string field |
+
+**JSON format**: A single compiled artifact dict with fields and section records.
+
+**JSONL format** ("book"): One artifact per line. Use `select` to pick a specific
+entry by name. Without `select`, the first entry is loaded.
+
+Failures (missing file, parse errors, no matching entry) are logged as warnings
+and do not prevent the wizard from starting with an empty artifact.
+
+### Collection Mode Options
+
+Control how collection stages process user input.
+
+#### Capture Mode
+
+Determines whether the LLM is used to extract structured data from user messages.
+
+```yaml
+stages:
+  - name: recipe_name
+    schema:
+      required: [recipe_name]
+      properties:
+        recipe_name: { type: string }
+    collection_config:
+      capture_mode: auto            # "auto" (default), "verbatim", or "extract"
+```
+
+| Value | Behavior |
+|-------|----------|
+| `auto` | Schema-based detection: if the schema has a single required string field with no constraints, use verbatim capture; otherwise use LLM extraction |
+| `verbatim` | Always capture the raw user message as-is, skip LLM extraction |
+| `extract` | Always use LLM extraction, even for simple fields |
+
+Verbatim capture is faster and avoids LLM hallucination for simple string inputs.
+
+#### Help Detection
+
+During collection, the wizard classifies user intent before extraction:
+
+- **`data_input`** (default) — proceed to extraction or verbatim capture
+- **`help`** — the user is asking for guidance; respond with a help message instead
+
+Help is detected via keyword matching. Custom keywords can be configured per stage:
+
+```yaml
+stages:
+  - name: ingredients
+    collection_config:
+      help_keywords: ["what should I", "how do I", "help"]
+```
+
 ---
 
 ## Knowledge Base Configuration

@@ -352,3 +352,81 @@ Transforms run after a transition fires and can modify state. Derivation runs be
 ### Why include the bot response in extraction?
 
 With `extraction_scope: current_message`, the extraction model only sees the user's text. When users make referential statements ("the first one", "yes", "use that name"), the model needs the bot's output for context. Including it as a prefix keeps the extraction scope setting meaningful while solving the reference resolution problem.
+
+---
+
+## Automatic Context Injection
+
+Beyond the config-driven context features above, the wizard automatically injects
+runtime context into the system prompt. These behaviors require no configuration —
+they activate based on stage type and collected data.
+
+### Collection Progress (CD-2)
+
+During collection-mode stages (e.g. gathering ingredients), the wizard injects a
+**Collection Progress** section showing what has been collected so far:
+
+```
+## Collection Progress (ingredients)
+3 items collected so far:
+- flour, 2 cups
+- sugar, 1 cup
+- chocolate chips, 1 cup
+```
+
+This compensates for conversation tree branching. Each collection iteration starts
+a new sibling branch, so the LLM cannot see prior iterations in the conversation
+history. The injected summary provides the full picture.
+
+Up to 20 items are shown; beyond that, a "... and N more" summary appears.
+
+### Collection Summary / Boundary Snapshot (CD-3)
+
+When a stage uses ReAct reasoning (tool-driven review stages), the wizard injects a
+**Collection Summary** showing all artifact fields and section records:
+
+```
+## Collection Summary
+- recipe_name: Chocolate Chip Cookies
+
+### ingredients (3 records)
+- flour, 2 cups
+- sugar, 1 cup
+- chocolate chips, 1 cup
+
+### instructions (3 records)
+- Mix dry and wet ingredients separately
+- Combine wet and dry ingredients
+- Bake at 325 degrees for 12 minutes
+```
+
+This serves as a boundary snapshot at the guided-to-dynamic transition — the LLM
+sees the complete artifact overview without needing tool calls to discover it.
+
+The summary is refreshed between ReAct iterations via the `prompt_refresher`
+callback, so if a tool mutates the artifact mid-loop (e.g. `load_from_catalog`),
+the next iteration sees the updated data.
+
+### Non-Happy-Path Context (CD-8)
+
+Clarification, validation error, and restart-offer responses now receive the full
+stage context — the same system prompt enhancement as normal responses. Previously,
+these code paths used minimal context (~314 tokens), causing the LLM to lose track
+of what was being collected.
+
+Affected code paths:
+- Clarification responses (when extraction fails or input is ambiguous)
+- Validation error responses (when extracted data fails schema validation)
+- Restart-offer responses (when the user's input suggests they want to start over)
+
+### System Prompt Override Persistence (CD-10)
+
+Every system prompt override used for an LLM call is persisted in the assistant
+message's node metadata under the `system_prompt_override` key. This enables:
+
+- **Replay**: Reconstruct the exact prompt the LLM received for any response
+- **Debugging**: Compare prompts across iterations to diagnose context issues
+- **Auditing**: Verify that context injection is working as expected
+
+The override is stored by `ConversationManager._finalize_completion()` in the
+`dataknobs-llm` package, following the same pattern as `config_overrides_applied`.

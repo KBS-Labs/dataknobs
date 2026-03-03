@@ -962,6 +962,124 @@ class GitHubTool(Tool):
 
 ---
 
+## Data Collection Tools Reference
+
+The bots package provides built-in tools for data collection workflows. These are
+used by wizard stages with `reasoning_strategy: react` (or `reasoning: react`) to let
+the LLM manage structured data through tool calls.
+
+All tools are importable from `dataknobs_bots.tools`.
+
+### Two-Layer Tool Configuration
+
+Tools are configured in two layers:
+
+1. **Bot config** declares tool classes (via `tools` or `tool_definitions`)
+2. **Wizard stage config** filters which tools are available per stage (via `tools` list
+   of tool names)
+
+```yaml
+# Bot-level: declare tool classes
+tools:
+  - class: dataknobs_bots.tools.ListBankRecordsTool
+  - class: dataknobs_bots.tools.AddBankRecordTool
+  - class: dataknobs_bots.tools.CompileArtifactTool
+
+# Stage-level: filter by name
+stages:
+  - name: review
+    reasoning: react
+    tools:
+      - list_bank_records
+      - add_bank_record
+      - compile_artifact
+```
+
+### Constructor Injection
+
+Data collection tools receive their dependencies via constructor injection.
+The wizard injects `banks`, `catalog`, and `artifact` automatically. For
+testing or standalone use, pass overrides directly:
+
+```python
+from dataknobs_bots.tools import AddBankRecordTool
+
+tool = AddBankRecordTool(
+    banks_override=my_banks,       # dict[str, MemoryBank]
+    catalog_override=my_catalog,   # ArtifactBankCatalog
+    artifact_override=my_artifact, # ArtifactBank
+)
+```
+
+At runtime, tools also accept dependencies via `ToolExecutionContext.extra`
+(the `_context` parameter) as a fallback.
+
+### Bank CRUD Tools
+
+| Tool | Name | Parameters | Effects |
+|------|------|------------|---------|
+| `ListBankRecordsTool` | `list_bank_records` | `bank_name` | query |
+| `AddBankRecordTool` | `add_bank_record` | `bank_name`, `data` | mutating, persisting |
+| `UpdateBankRecordTool` | `update_bank_record` | `bank_name`, `record_id`, `data` | mutating, persisting |
+| `RemoveBankRecordTool` | `remove_bank_record` | `bank_name`, `record_id` | mutating, persisting |
+| `FinalizeBankTool` | `finalize_bank` | `bank_name` | locking |
+
+**`list_bank_records`** — List all records in a memory bank with their IDs and field
+values. Call this before `update_bank_record` or `remove_bank_record` to get record IDs.
+
+**`add_bank_record`** — Add a new record. Checks for duplicates using the bank's
+`match_fields` configuration. Auto-saves the artifact to the catalog on success.
+
+**`update_bank_record`** — Update an existing record by `record_id` (from
+`list_bank_records`). Pass only the fields to change. Auto-saves to catalog.
+
+**`remove_bank_record`** — Remove a record by `record_id`. Auto-saves to catalog.
+
+**`finalize_bank`** — Confirm bank contents are complete. Returns a confirmation with
+the final record count. This is a declarative signal, not a data operation.
+
+### Artifact Lifecycle Tools
+
+| Tool | Name | Parameters | Effects |
+|------|------|------------|---------|
+| `CompileArtifactTool` | `compile_artifact` | *(none)* | query |
+| `FinalizeArtifactTool` | `finalize_artifact` | *(none)* | locking |
+| `CompleteWizardTool` | `complete_wizard` | `summary` (optional) | signaling |
+| `RestartWizardTool` | `restart_wizard` | *(none)* | signaling |
+
+**`compile_artifact`** — Compile all fields and sections into a complete artifact dict.
+This is a preview — the artifact is not locked and can still be edited.
+
+**`finalize_artifact`** — Validate, compile, and lock the artifact. No further edits
+are allowed after finalization. Distinct from compile: compile = preview, finalize = commit.
+
+**`complete_wizard`** — Signal that the wizard workflow is complete. Auto-finalizes
+the artifact if not already finalized. The wizard checks for this signal after the
+ReAct loop returns and transitions to the completion state.
+
+**`restart_wizard`** — Signal a fresh start. The wizard clears all banks, resets
+the artifact, and returns to the first stage.
+
+### Catalog Tools
+
+| Tool | Name | Parameters | Effects |
+|------|------|------------|---------|
+| `ListCatalogTool` | `list_catalog` | *(none)* | query |
+| `SaveToCatalogTool` | `save_to_catalog` | *(none)* | persisting |
+| `LoadFromCatalogTool` | `load_from_catalog` | `name` | mutating |
+
+**`list_catalog`** — List all saved artifacts in the catalog. Returns each entry's
+name, artifact type, field values, and section record counts.
+
+**`save_to_catalog`** — Save the current artifact to the catalog. Note: artifacts
+are auto-saved via lifecycle hooks after mutating tool calls, so explicit saves are
+usually not needed.
+
+**`load_from_catalog`** — Load a previously saved artifact by name. Replaces the
+current artifact's fields and section data with the loaded entry.
+
+---
+
 ## Troubleshooting
 
 ### Tool Not Being Called

@@ -973,6 +973,177 @@ print(f"Correct: {session.correct_count}/{session.total_responses}")
 
 Marks the session as completed, calculates the score from correct responses, and sets `data["_assessment_score"]` and `data["_assessment_complete"]`.
 
+---
+
+## ArtifactBank
+
+`ArtifactBank` is a composition layer that ties together scalar fields and named
+`MemoryBank` sections into a single artifact with compilation, validation, and
+finalization semantics.
+
+This is **composition, not inheritance** — it owns MemoryBank sections and manages
+scalar fields alongside them.
+
+### Creating an ArtifactBank
+
+```python
+from dataknobs_data.backends.memory import SyncMemoryDatabase
+from dataknobs_bots.memory.bank import MemoryBank
+from dataknobs_bots.memory.artifact_bank import ArtifactBank
+
+ingredients = MemoryBank("ingredients", schema={"required": ["name"]},
+                         db=SyncMemoryDatabase())
+instructions = MemoryBank("instructions", schema={"required": ["instruction"]},
+                          db=SyncMemoryDatabase())
+
+artifact = ArtifactBank(
+    name="recipe",
+    field_defs={"recipe_name": {"required": True}},
+    sections={"ingredients": ingredients, "instructions": instructions},
+)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | `str` | Artifact identifier (e.g. `"recipe"`) |
+| `field_defs` | `dict[str, dict]` | Field definitions; values may contain `required: True` |
+| `sections` | `dict[str, MemoryBank]` | Named bank instances for list-type data |
+| `section_configs` | `dict[str, dict] \| None` | Per-section config dicts (preserved for serialization) |
+
+### Field Management
+
+```python
+artifact.set_field("recipe_name", "Chocolate Chip Cookies")
+name = artifact.field("recipe_name")       # "Chocolate Chip Cookies"
+all_fields = artifact.fields               # {"recipe_name": "Chocolate Chip Cookies"}
+artifact.clear_fields()                    # Resets all fields to None
+```
+
+`set_field()` raises `ValueError` if the artifact is finalized or the field is unknown.
+
+### Section Access
+
+```python
+bank = artifact.section("ingredients")     # Returns MemoryBank (or EmptyBankProxy)
+all_sections = artifact.sections           # {"ingredients": <MemoryBank>, ...}
+```
+
+`section()` returns an `EmptyBankProxy` for unknown section names, preventing crashes
+in templates and conditions.
+
+### Compilation
+
+```python
+compiled = artifact.compile()
+# {
+#     "_artifact_name": "recipe",
+#     "_compiled_at": 1709424000.0,
+#     "recipe_name": "Chocolate Chip Cookies",
+#     "ingredients": [{"name": "flour", "amount": "2 cups"}, ...],
+#     "instructions": [{"instruction": "Mix dry and wet..."}, ...],
+# }
+```
+
+### Validation
+
+```python
+errors = artifact.validate()
+# [] if valid, or ["Required field 'recipe_name' is not set.", ...]
+```
+
+Checks that all required fields are set and all sections have at least one record.
+
+### Finalization
+
+```python
+compiled = artifact.finalize()             # Validate + compile + lock
+artifact.is_finalized                      # True
+artifact.unfinalize()                      # Re-open for edits
+```
+
+`finalize()` raises `ValueError` if validation fails.
+
+### Serialization
+
+```python
+data = artifact.to_dict()                  # Full internal state (fields, sections, configs)
+restored = ArtifactBank.from_dict(data)    # Reconstruct from serialized state
+```
+
+### Population from External Data
+
+```python
+# Additive: set fields and add section records
+artifact.populate_from_compiled(compiled_dict, source_stage="import")
+
+# Destructive: clear everything, then populate
+artifact.replace_from_compiled(compiled_dict, source_stage="import")
+```
+
+---
+
+## Artifact I/O
+
+File-based save and load functions for artifacts. Supports two formats:
+
+- **JSON**: Single artifact per file (`.json`)
+- **JSONL** ("book"): One artifact per line (`.jsonl`)
+
+All functions are importable from `dataknobs_bots.memory.artifact_io`.
+
+### Saving
+
+```python
+from dataknobs_bots.memory.artifact_io import save_artifact, save_book, append_to_book
+
+# Single artifact to JSON
+save_artifact(artifact, "recipe.json")
+save_artifact(artifact, "recipe.json", compiled=False)  # Full internal state
+
+# Multiple artifacts to JSONL book
+save_book([artifact1, artifact2], "recipes.jsonl")
+
+# Append to existing JSONL book
+append_to_book(artifact, "recipes.jsonl")
+```
+
+| Function | Description |
+|----------|-------------|
+| `save_artifact(artifact, path, compiled=True)` | Write one artifact to a JSON file |
+| `save_book(artifacts, path, compiled=True)` | Write multiple artifacts to a JSONL file (atomic overwrite) |
+| `append_to_book(artifact, path, compiled=True)` | Append one artifact to a JSONL file |
+
+The `compiled` flag controls the format: `True` (default) writes the clean `compile()`
+output suitable for sharing; `False` writes full internal state with provenance data.
+
+### Loading
+
+```python
+from dataknobs_bots.memory.artifact_io import load_artifact, load_from_book, list_book
+
+# Single artifact from JSON
+artifact = load_artifact("recipe.json")
+
+# One artifact from JSONL book (by name or index)
+artifact = load_from_book("recipes.jsonl", name="Chocolate Chip Cookies")
+artifact = load_from_book("recipes.jsonl", index=0)
+
+# List entries in a book
+entries = list_book("recipes.jsonl")
+# [{"index": 0, "name": "Chocolate Chip Cookies", "format": "compiled"}, ...]
+```
+
+| Function | Description |
+|----------|-------------|
+| `load_artifact(path, artifact_config=None)` | Load from JSON; auto-detects compiled vs full-state format |
+| `load_from_book(path, name=None, index=None, artifact_config=None)` | Load one entry from JSONL by name or index |
+| `list_book(path)` | List entries with index, name, and format |
+
+Pass `artifact_config` (dict with `name`, `fields`, `sections` keys) for precise
+compiled-format import; if omitted, the artifact structure is inferred heuristically.
+
+---
+
 ## Related Documentation
 
 - [Artifact Corpus](artifact-corpus.md) — Managing collections of related artifacts with dedup

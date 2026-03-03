@@ -245,12 +245,15 @@ class WizardConfigLoader:
                         ", ".join(sorted(KNOWN_STAGE_FIELDS)),
                     )
 
-            # 2. No schema + no response_template on non-end stages
+            # 2. No schema + no response_template on non-end stages.
+            #    Suppressed for conversation-mode and tool-driven stages
+            #    (ReAct stages use tools for interaction, not extraction).
             if (
                 not stage.get("is_end")
                 and not stage.get("schema")
                 and not stage.get("response_template")
                 and stage.get("mode") != "conversation"
+                and not stage.get("tools")
             ):
                 logger.warning(
                     "Stage '%s': no 'schema' and no 'response_template'. "
@@ -350,8 +353,11 @@ class WizardConfigLoader:
             arc = self._translate_transition(stage["name"], transition, idx)
             arcs.append(arc)
 
-        # If no transitions and not end state, add default arc
-        if not arcs and not stage.get("is_end"):
+        # If no transitions and not end state, warn.
+        # Suppressed for stages with tools — lifecycle tools like
+        # complete_wizard and restart_wizard handle transitions
+        # programmatically rather than via config arcs.
+        if not arcs and not stage.get("is_end") and not stage.get("tools"):
             logger.warning(
                 "Stage '%s' has no transitions and is not an end state",
                 stage["name"],
