@@ -25,6 +25,7 @@ from .reasoning import (
     SimpleReasoning,
     create_reasoning_from_config,
 )
+from .testing import CaptureReplay, inject_providers
 from .tools import (
     AddKBResourceTool,
     CheckKnowledgeSourceTool,
@@ -48,6 +49,7 @@ __all__ = [
     "BotManager",
     "BotRegistry",
     "BufferMemory",
+    "CaptureReplay",
     "CheckKnowledgeSourceTool",
     "ConfigDraftManager",
     "ConfigTemplate",
@@ -85,5 +87,6 @@ __all__ = [
     "create_memory_from_config",
     "create_reasoning_from_config",
     "default_catalog",
+    "inject_providers",
     "normalize_wizard_state",
 ]

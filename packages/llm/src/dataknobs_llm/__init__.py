@@ -43,12 +43,20 @@ from dataknobs_llm.exceptions import ToolsNotSupportedError
 
 # Testing utilities (for test code)
 from dataknobs_llm.testing import (
+    CapturedCall,
+    CapturingProvider,
     ErrorResponse,
-    text_response,
-    tool_call_response,
-    multi_tool_response,
-    extraction_response,
     ResponseSequenceBuilder,
+    extraction_response,
+    llm_message_from_dict,
+    llm_message_to_dict,
+    llm_response_from_dict,
+    llm_response_to_dict,
+    multi_tool_response,
+    text_response,
+    tool_call_from_dict,
+    tool_call_response,
+    tool_call_to_dict,
 )
 
 __version__ = "0.5.0"
@@ -90,10 +98,18 @@ __all__ = [
     # Exceptions
     "ToolsNotSupportedError",
     # Testing utilities
+    "CapturedCall",
+    "CapturingProvider",
     "ErrorResponse",
-    "text_response",
-    "tool_call_response",
-    "multi_tool_response",
-    "extraction_response",
     "ResponseSequenceBuilder",
+    "extraction_response",
+    "llm_message_from_dict",
+    "llm_message_to_dict",
+    "llm_response_from_dict",
+    "llm_response_to_dict",
+    "multi_tool_response",
+    "text_response",
+    "tool_call_from_dict",
+    "tool_call_response",
+    "tool_call_to_dict",
 ]

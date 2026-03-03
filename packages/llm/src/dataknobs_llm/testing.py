@@ -3,6 +3,11 @@
 This module provides convenience builders for creating test LLM responses,
 designed for use with EchoProvider in unit and integration tests.
 
+It also provides:
+- Serialization helpers for LLMMessage/LLMResponse/ToolCall (to/from dict)
+- CapturingProvider for recording real LLM interactions during test capture runs
+- CapturedCall dataclass for individual captured LLM call records
+
 Example:
     ```python
     from dataknobs_llm.llm.providers import EchoProvider
@@ -14,27 +19,60 @@ Example:
         text_response("Here's your config preview!")
     ])
     ```
+
+Capture example:
+    ```python
+    from dataknobs_llm.testing import CapturingProvider
+
+    # Wrap a real provider to record all LLM calls
+    capturing = CapturingProvider(real_provider, role="main")
+    response = await capturing.complete(messages)
+
+    # Inspect captured calls
+    for call in capturing.captured_calls:
+        print(f"Role: {call.role}, Messages: {len(call.messages)}")
+    ```
 """
 
 from __future__ import annotations
 
 import json
+import logging
+import time
 import uuid
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Union
 
-from .llm.base import LLMResponse, ToolCall
+from .llm.base import (
+    AsyncLLMProvider,
+    LLMMessage,
+    LLMResponse,
+    LLMStreamResponse,
+    ModelCapability,
+    ToolCall,
+)
 from .llm.providers.echo import ErrorResponse
 
 if TYPE_CHECKING:
     from .llm.providers.echo import EchoProvider
 
+logger = logging.getLogger(__name__)
+
 __all__ = [
+    "CapturedCall",
+    "CapturingProvider",
     "ErrorResponse",
     "ResponseSequenceBuilder",
     "extraction_response",
+    "llm_message_from_dict",
+    "llm_message_to_dict",
+    "llm_response_from_dict",
+    "llm_response_to_dict",
     "multi_tool_response",
     "text_response",
+    "tool_call_from_dict",
     "tool_call_response",
+    "tool_call_to_dict",
 ]
 
 
@@ -327,3 +365,387 @@ class ResponseSequenceBuilder:
         """
         provider.set_responses(self._responses)
         return provider
+
+
+# =============================================================================
+# Serialization helpers — LLM types ↔ dict for capture/replay
+# =============================================================================
+
+
+def tool_call_to_dict(tc: ToolCall) -> dict[str, Any]:
+    """Serialize a ToolCall to a JSON-compatible dict.
+
+    Args:
+        tc: ToolCall to serialize
+
+    Returns:
+        Dictionary representation
+    """
+    d: dict[str, Any] = {"name": tc.name, "parameters": tc.parameters}
+    if tc.id is not None:
+        d["id"] = tc.id
+    return d
+
+
+def tool_call_from_dict(d: dict[str, Any]) -> ToolCall:
+    """Deserialize a ToolCall from a dict.
+
+    Args:
+        d: Dictionary representation
+
+    Returns:
+        ToolCall instance
+    """
+    return ToolCall(
+        name=d["name"],
+        parameters=d["parameters"],
+        id=d.get("id"),
+    )
+
+
+def llm_message_to_dict(msg: LLMMessage) -> dict[str, Any]:
+    """Serialize an LLMMessage to a JSON-compatible dict.
+
+    Args:
+        msg: LLMMessage to serialize
+
+    Returns:
+        Dictionary representation (only non-None optional fields included)
+    """
+    d: dict[str, Any] = {"role": msg.role, "content": msg.content}
+    if msg.name is not None:
+        d["name"] = msg.name
+    if msg.function_call is not None:
+        d["function_call"] = msg.function_call
+    if msg.tool_calls is not None:
+        d["tool_calls"] = [tool_call_to_dict(tc) for tc in msg.tool_calls]
+    if msg.metadata:
+        d["metadata"] = msg.metadata
+    return d
+
+
+def llm_message_from_dict(d: dict[str, Any]) -> LLMMessage:
+    """Deserialize an LLMMessage from a dict.
+
+    Args:
+        d: Dictionary representation
+
+    Returns:
+        LLMMessage instance
+    """
+    tool_calls = None
+    if "tool_calls" in d and d["tool_calls"] is not None:
+        tool_calls = [tool_call_from_dict(tc) for tc in d["tool_calls"]]
+
+    return LLMMessage(
+        role=d["role"],
+        content=d["content"],
+        name=d.get("name"),
+        function_call=d.get("function_call"),
+        tool_calls=tool_calls,
+        metadata=d.get("metadata", {}),
+    )
+
+
+def llm_response_to_dict(resp: LLMResponse) -> dict[str, Any]:
+    """Serialize an LLMResponse to a JSON-compatible dict.
+
+    Omits ``created_at`` and ``cumulative_cost_usd`` (runtime artifacts that
+    make captures non-deterministic). Only includes non-None optional fields.
+
+    Args:
+        resp: LLMResponse to serialize
+
+    Returns:
+        Dictionary representation
+    """
+    d: dict[str, Any] = {"content": resp.content, "model": resp.model}
+    if resp.finish_reason is not None:
+        d["finish_reason"] = resp.finish_reason
+    if resp.usage is not None:
+        d["usage"] = resp.usage
+    if resp.function_call is not None:
+        d["function_call"] = resp.function_call
+    if resp.tool_calls is not None:
+        d["tool_calls"] = [tool_call_to_dict(tc) for tc in resp.tool_calls]
+    if resp.metadata:
+        d["metadata"] = resp.metadata
+    if resp.cost_usd is not None:
+        d["cost_usd"] = resp.cost_usd
+    return d
+
+
+def llm_response_from_dict(d: dict[str, Any]) -> LLMResponse:
+    """Deserialize an LLMResponse from a dict.
+
+    Args:
+        d: Dictionary representation
+
+    Returns:
+        LLMResponse instance
+    """
+    tool_calls = None
+    if "tool_calls" in d and d["tool_calls"] is not None:
+        tool_calls = [tool_call_from_dict(tc) for tc in d["tool_calls"]]
+
+    return LLMResponse(
+        content=d["content"],
+        model=d["model"],
+        finish_reason=d.get("finish_reason"),
+        usage=d.get("usage"),
+        function_call=d.get("function_call"),
+        tool_calls=tool_calls,
+        metadata=d.get("metadata", {}),
+        cost_usd=d.get("cost_usd"),
+    )
+
+
+# =============================================================================
+# CapturingProvider — wraps a real provider, records all LLM calls
+# =============================================================================
+
+
+@dataclass
+class CapturedCall:
+    """Record of a single LLM call captured by CapturingProvider.
+
+    Attributes:
+        role: Provider role tag (e.g., "main", "extraction")
+        messages: Serialized request messages (list of dicts)
+        response: Serialized LLM response (dict)
+        config_overrides: Config overrides passed to the call, if any
+        tools: Tool definitions passed to the call, if any
+        duration_seconds: Wall-clock duration of the call
+        call_index: Per-instance call ordering (0-based)
+    """
+
+    role: str
+    messages: list[dict[str, Any]]
+    response: dict[str, Any]
+    config_overrides: dict[str, Any] | None = None
+    tools: list[Any] | None = None
+    duration_seconds: float = 0.0
+    call_index: int = 0
+
+
+class CapturingProvider(AsyncLLMProvider):
+    """Provider wrapper that records all LLM calls for capture-replay testing.
+
+    Wraps a real ``AsyncLLMProvider`` delegate, forwarding all calls while
+    recording request/response pairs as ``CapturedCall`` objects. The role
+    tag (e.g., "main" or "extraction") enables replay to route responses
+    to the correct EchoProvider.
+
+    Args:
+        delegate: Real provider to wrap
+        role: Tag identifying this provider's role (default: "main")
+
+    Example:
+        ```python
+        from dataknobs_llm.testing import CapturingProvider
+
+        real_provider = OllamaProvider(config)
+        capturing = CapturingProvider(real_provider, role="main")
+
+        # Use normally — calls pass through to the real provider
+        response = await capturing.complete(messages)
+
+        # Inspect what was captured
+        assert capturing.call_count == 1
+        call = capturing.captured_calls[0]
+        print(f"Sent {len(call.messages)} messages, got: {call.response['content'][:50]}")
+        ```
+    """
+
+    def __init__(self, delegate: AsyncLLMProvider, role: str = "main") -> None:
+        # Initialize with the delegate's config (satisfies LLMProvider.__init__)
+        super().__init__(delegate.config)
+        self._delegate = delegate
+        self._role = role
+        self._captured_calls: list[CapturedCall] = []
+
+    @property
+    def role(self) -> str:
+        """Provider role tag."""
+        return self._role
+
+    @property
+    def captured_calls(self) -> list[CapturedCall]:
+        """All captured calls (read-only copy)."""
+        return list(self._captured_calls)
+
+    @property
+    def call_count(self) -> int:
+        """Number of captured calls."""
+        return len(self._captured_calls)
+
+    # -- Delegated lifecycle methods --
+
+    async def initialize(self) -> None:
+        """Delegate initialization to the wrapped provider."""
+        if hasattr(self._delegate, "initialize"):
+            result = self._delegate.initialize()
+            if hasattr(result, "__await__"):
+                await result
+
+    async def close(self) -> None:
+        """Delegate close to the wrapped provider."""
+        if hasattr(self._delegate, "close"):
+            result = self._delegate.close()
+            if hasattr(result, "__await__"):
+                await result
+
+    async def validate_model(self) -> bool:
+        """Delegate model validation to the wrapped provider."""
+        if hasattr(self._delegate, "validate_model"):
+            result = self._delegate.validate_model()
+            if hasattr(result, "__await__"):
+                return await result
+            return result  # type: ignore[return-value]
+        return True
+
+    def get_capabilities(self) -> List[ModelCapability]:
+        """Delegate capability detection to the wrapped provider."""
+        return self._delegate.get_capabilities()
+
+    # -- Captured methods --
+
+    async def complete(
+        self,
+        messages: Union[str, List[LLMMessage]],
+        config_overrides: Dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        """Forward completion to delegate and capture the call.
+
+        Args:
+            messages: Input messages (string or list of LLMMessage)
+            config_overrides: Optional per-request config overrides
+            tools: Optional tool definitions
+            **kwargs: Additional provider-specific parameters
+
+        Returns:
+            LLMResponse from the delegate (unchanged)
+        """
+        # Serialize messages for capture
+        if isinstance(messages, str):
+            serialized_msgs = [{"role": "user", "content": messages}]
+        else:
+            serialized_msgs = [llm_message_to_dict(m) for m in messages]
+
+        start = time.monotonic()
+        response = await self._delegate.complete(
+            messages, config_overrides=config_overrides, tools=tools, **kwargs
+        )
+        duration = time.monotonic() - start
+
+        self._captured_calls.append(
+            CapturedCall(
+                role=self._role,
+                messages=serialized_msgs,
+                response=llm_response_to_dict(response),
+                config_overrides=config_overrides,
+                tools=tools,
+                duration_seconds=round(duration, 4),
+                call_index=len(self._captured_calls),
+            )
+        )
+
+        return response
+
+    async def stream_complete(
+        self,
+        messages: Union[str, List[LLMMessage]],
+        config_overrides: Dict[str, Any] | None = None,
+        tools: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[LLMStreamResponse]:
+        """Forward streaming completion to delegate and capture the assembled response.
+
+        Yields chunks to the caller in real time. After the stream completes,
+        assembles the full response content and records a CapturedCall.
+
+        Args:
+            messages: Input messages
+            config_overrides: Optional per-request config overrides
+            tools: Optional tool definitions
+            **kwargs: Additional provider-specific parameters
+
+        Yields:
+            LLMStreamResponse chunks from the delegate
+        """
+        if isinstance(messages, str):
+            serialized_msgs = [{"role": "user", "content": messages}]
+        else:
+            serialized_msgs = [llm_message_to_dict(m) for m in messages]
+
+        # Collect chunks while yielding them through
+        assembled_content = ""
+        final_chunk: LLMStreamResponse | None = None
+        start = time.monotonic()
+
+        async for chunk in self._delegate.stream_complete(
+            messages, config_overrides=config_overrides, tools=tools, **kwargs
+        ):
+            assembled_content += chunk.delta
+            if chunk.is_final:
+                final_chunk = chunk
+            yield chunk
+
+        duration = time.monotonic() - start
+
+        # Build assembled response for capture
+        assembled_response = LLMResponse(
+            content=assembled_content,
+            model=final_chunk.model or self._delegate.config.model if final_chunk else self._delegate.config.model,
+            finish_reason=final_chunk.finish_reason if final_chunk else None,
+            usage=final_chunk.usage if final_chunk else None,
+            tool_calls=final_chunk.tool_calls if final_chunk else None,
+        )
+
+        self._captured_calls.append(
+            CapturedCall(
+                role=self._role,
+                messages=serialized_msgs,
+                response=llm_response_to_dict(assembled_response),
+                config_overrides=config_overrides,
+                tools=tools,
+                duration_seconds=round(duration, 4),
+                call_index=len(self._captured_calls),
+            )
+        )
+
+    async def embed(
+        self,
+        texts: Union[str, List[str]],
+        **kwargs: Any,
+    ) -> Union[List[float], List[List[float]]]:
+        """Delegate embedding to the wrapped provider (not captured)."""
+        return await self._delegate.embed(texts, **kwargs)
+
+    async def function_call(
+        self,
+        messages: List[LLMMessage],
+        functions: List[Dict[str, Any]],
+        **kwargs: Any,
+    ) -> LLMResponse:
+        """Delegate function calling to the wrapped provider and capture the call."""
+        serialized_msgs = [llm_message_to_dict(m) for m in messages]
+
+        start = time.monotonic()
+        response = await self._delegate.function_call(messages, functions, **kwargs)
+        duration = time.monotonic() - start
+
+        self._captured_calls.append(
+            CapturedCall(
+                role=self._role,
+                messages=serialized_msgs,
+                response=llm_response_to_dict(response),
+                tools=functions,
+                duration_seconds=round(duration, 4),
+                call_index=len(self._captured_calls),
+            )
+        )
+
+        return response
