@@ -4091,12 +4091,21 @@ class WizardReasoning(ReasoningStrategy):
         restart_signal: dict[str, Any] = {"requested": False}
         extra_context["_restart_signal"] = restart_signal
 
+        # Build a prompt refresher so the ReAct loop can re-render the
+        # system prompt between iterations.  This ensures that mutating
+        # tools (load_from_catalog, add_bank_record, etc.) produce an
+        # up-to-date collection summary for the next LLM call.
+        def prompt_refresher() -> str:
+            fresh_context = self._build_stage_context(stage, state)
+            return f"{manager.system_prompt}\n\n{fresh_context}"
+
         react = ReActReasoning(
             max_iterations=max_iterations,
             artifact_registry=self._artifact_registry,
             review_executor=self._review_executor,
             context_builder=self._context_builder,
             extra_context=extra_context or None,
+            prompt_refresher=prompt_refresher,
         )
 
         response = await react.generate(

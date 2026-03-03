@@ -2,6 +2,7 @@
 
 import json
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from dataknobs_llm.exceptions import ToolsNotSupportedError
@@ -56,6 +57,7 @@ class ReActReasoning(ReasoningStrategy):
         review_executor: Any | None = None,
         context_builder: Any | None = None,
         extra_context: dict[str, Any] | None = None,
+        prompt_refresher: Callable[[], str] | None = None,
     ):
         """Initialize ReAct reasoning strategy.
 
@@ -68,6 +70,11 @@ class ReActReasoning(ReasoningStrategy):
             context_builder: Optional ContextBuilder for building conversation context
             extra_context: Optional extra key-value pairs to merge into the
                 ToolExecutionContext for every tool call (e.g. banks, custom state)
+            prompt_refresher: Optional callback that returns a fresh system
+                prompt string.  Called after tool execution in each iteration
+                to update ``system_prompt_override`` in the next
+                ``manager.complete()`` call.  This prevents stale context
+                when mutating tools change artifact/bank state mid-loop.
         """
         self.max_iterations = max_iterations
         self.verbose = verbose
@@ -76,6 +83,7 @@ class ReActReasoning(ReasoningStrategy):
         self._review_executor = review_executor
         self._context_builder = context_builder
         self._extra_context = extra_context
+        self._prompt_refresher = prompt_refresher
 
     @property
     def artifact_registry(self) -> Any | None:
@@ -358,6 +366,11 @@ class ReActReasoning(ReasoningStrategy):
                 iteration_trace["status"] = "continued"
                 trace.append(iteration_trace)
 
+            # Refresh system prompt so the next iteration sees current
+            # artifact/bank state (e.g. after load_from_catalog).
+            if self._prompt_refresher is not None:
+                kwargs["system_prompt_override"] = self._prompt_refresher()
+
         else:
             # for-else: only reached when the loop exhausts all iterations
             # without a break (i.e. not triggered by duplicate detection)
@@ -373,6 +386,10 @@ class ReActReasoning(ReasoningStrategy):
             if trace is not None:
                 trace.append({"status": "max_iterations_reached"})
                 await self._store_trace(manager, trace)
+
+        # Refresh prompt for the final complete() call as well.
+        if self._prompt_refresher is not None:
+            kwargs["system_prompt_override"] = self._prompt_refresher()
 
         return await manager.complete(**kwargs)
 
