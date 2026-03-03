@@ -95,8 +95,13 @@ class ListCatalogTool(ContextAwareTool):
         """Return catalog metadata for this tool class."""
         return {
             "name": "list_catalog",
-            "description": "List all saved artifacts in the catalog.",
+            "description": (
+                "List all saved artifacts in the catalog with their "
+                "names, sections, and field counts. "
+                "Use load_from_catalog to restore a previous artifact."
+            ),
             "tags": ("wizard", "catalog"),
+            "effects": ("query",),
         }
 
     def __init__(
@@ -116,7 +121,8 @@ class ListCatalogTool(ContextAwareTool):
             name=tool_name or "list_catalog",
             description=(
                 "List all saved artifacts in the catalog with their "
-                "names, sections, and field counts."
+                "names, sections, and field counts. "
+                "Use load_from_catalog to restore a previous artifact."
             ),
         )
 
@@ -155,10 +161,10 @@ class ListCatalogTool(ContextAwareTool):
             len(entries),
             extra={"conversation_id": context.conversation_id},
         )
-        return {
-            "entries": entries,
-            "count": len(entries),
-        }
+        return success_response(
+            entries=entries,
+            count=len(entries),
+        )
 
 
 class SaveToCatalogTool(ContextAwareTool):
@@ -174,8 +180,13 @@ class SaveToCatalogTool(ContextAwareTool):
         """Return catalog metadata for this tool class."""
         return {
             "name": "save_to_catalog",
-            "description": "Save the current artifact to the catalog.",
+            "description": (
+                "Save the current artifact to the catalog. "
+                "Auto-finalizes if not already finalized. "
+                "Use list_catalog to verify saved entries."
+            ),
             "tags": ("wizard", "catalog"),
+            "effects": ("persisting",),
         }
 
     def __init__(
@@ -197,8 +208,9 @@ class SaveToCatalogTool(ContextAwareTool):
         super().__init__(
             name=tool_name or "save_to_catalog",
             description=(
-                "Validate and save the current artifact to the catalog. "
-                "Auto-finalizes artifact if not already finalized."
+                "Save the current artifact to the catalog. "
+                "Auto-finalizes if not already finalized. "
+                "Use list_catalog to verify saved entries."
             ),
         )
 
@@ -293,6 +305,7 @@ class LoadFromCatalogTool(ContextAwareTool):
             "name": "load_from_catalog",
             "description": "Load a saved artifact from the catalog.",
             "tags": ("wizard", "catalog"),
+            "effects": ("mutating",),
         }
 
     def __init__(

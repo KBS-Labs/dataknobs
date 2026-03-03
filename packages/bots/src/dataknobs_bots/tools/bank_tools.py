@@ -203,8 +203,13 @@ class ListBankRecordsTool(ContextAwareTool):
         """Return catalog metadata for this tool class."""
         return {
             "name": "list_bank_records",
-            "description": "List all records in a memory bank.",
+            "description": (
+                "List all records in a memory bank with their current values. "
+                "Call this to see record IDs before using "
+                "update_bank_record or remove_bank_record."
+            ),
             "tags": ("wizard", "bank"),
+            "effects": ("query",),
         }
 
     def __init__(
@@ -223,7 +228,11 @@ class ListBankRecordsTool(ContextAwareTool):
         self._banks = banks
         super().__init__(
             name=tool_name or "list_bank_records",
-            description="List all records in a memory bank with their current values.",
+            description=(
+                "List all records in a memory bank with their current values. "
+                "Call this to see record IDs before using "
+                "update_bank_record or remove_bank_record."
+            ),
         )
 
     @property
@@ -274,11 +283,11 @@ class ListBankRecordsTool(ContextAwareTool):
             extra={"conversation_id": context.conversation_id},
         )
 
-        return {
-            "records": items,
-            "count": len(items),
-            "bank_name": bank_name,
-        }
+        return success_response(
+            records=items,
+            count=len(items),
+            bank_name=bank_name,
+        )
 
 
 class AddBankRecordTool(ContextAwareTool):
@@ -294,8 +303,14 @@ class AddBankRecordTool(ContextAwareTool):
         """Return catalog metadata for this tool class."""
         return {
             "name": "add_bank_record",
-            "description": "Add a new record to a memory bank. Auto-saves artifact to catalog.",
+            "description": (
+                "Add a new record to a memory bank. "
+                "Checks for duplicates; use update_bank_record to modify "
+                "existing records instead. "
+                "Auto-saves artifact to catalog on success."
+            ),
             "tags": ("wizard", "bank"),
+            "effects": ("mutating", "persisting"),
         }
 
     def __init__(
@@ -321,7 +336,8 @@ class AddBankRecordTool(ContextAwareTool):
             name=tool_name or "add_bank_record",
             description=(
                 "Add a new record to a memory bank. "
-                "Checks for duplicates by the bank's match fields. "
+                "Checks for duplicates; use update_bank_record to modify "
+                "existing records instead. "
                 "Auto-saves artifact to catalog on success."
             ),
         )
@@ -439,6 +455,7 @@ class UpdateBankRecordTool(ContextAwareTool):
             "name": "update_bank_record",
             "description": "Update an existing record in a memory bank. Auto-saves artifact to catalog.",
             "tags": ("wizard", "bank"),
+            "effects": ("mutating", "persisting"),
         }
 
     def __init__(
@@ -579,6 +596,7 @@ class RemoveBankRecordTool(ContextAwareTool):
             "name": "remove_bank_record",
             "description": "Remove a record from a memory bank. Auto-saves artifact to catalog.",
             "tags": ("wizard", "bank"),
+            "effects": ("mutating", "persisting"),
         }
 
     def __init__(
@@ -705,6 +723,7 @@ class FinalizeBankTool(ContextAwareTool):
             "name": "finalize_bank",
             "description": "Confirm and finalize the memory bank contents.",
             "tags": ("wizard", "bank"),
+            "effects": ("locking",),
         }
 
     def __init__(
@@ -793,8 +812,13 @@ class CompileArtifactTool(ContextAwareTool):
         """Return catalog metadata for this tool class."""
         return {
             "name": "compile_artifact",
-            "description": "Compile the complete artifact from fields and sections.",
+            "description": (
+                "Compile the complete artifact from all fields and sections. "
+                "Validates completeness before compiling. "
+                "Use finalize_artifact to lock, then save_to_catalog to persist."
+            ),
             "tags": ("wizard", "bank", "artifact"),
+            "effects": ("query",),
         }
 
     def __init__(
@@ -814,7 +838,9 @@ class CompileArtifactTool(ContextAwareTool):
             name=tool_name or "compile_artifact",
             description=(
                 "Compile the complete artifact from all fields and "
-                "sections. Validates completeness before compiling."
+                "sections. Validates completeness before compiling. "
+                "Use finalize_artifact to lock, then "
+                "save_to_catalog to persist."
             ),
         )
 
@@ -887,9 +913,11 @@ class FinalizeArtifactTool(ContextAwareTool):
             "name": "finalize_artifact",
             "description": (
                 "Validate, compile, and lock the artifact. "
-                "No further edits are allowed after finalization."
+                "No further edits allowed after finalization. "
+                "Use save_to_catalog to persist the finalized artifact."
             ),
             "tags": ("wizard", "bank", "artifact"),
+            "effects": ("locking",),
         }
 
     def __init__(
@@ -909,7 +937,8 @@ class FinalizeArtifactTool(ContextAwareTool):
             name=tool_name or "finalize_artifact",
             description=(
                 "Validate, compile, and lock the artifact. "
-                "No further edits are allowed after finalization."
+                "No further edits allowed after finalization. "
+                "Use save_to_catalog to persist the finalized artifact."
             ),
         )
 
@@ -999,9 +1028,11 @@ class CompleteWizardTool(ContextAwareTool):
             "name": "complete_wizard",
             "description": (
                 "Signal that the wizard workflow is complete. "
-                "Auto-finalizes the artifact if present and not yet finalized."
+                "Auto-finalizes the artifact if not already finalized. "
+                "Call save_to_catalog first to persist the artifact."
             ),
             "tags": ("wizard",),
+            "effects": ("signaling",),
         }
 
     def __init__(
@@ -1021,7 +1052,8 @@ class CompleteWizardTool(ContextAwareTool):
             name=tool_name or "complete_wizard",
             description=(
                 "Signal that the wizard workflow is complete. "
-                "Finalizes the artifact and saves to catalog."
+                "Auto-finalizes the artifact if not already finalized. "
+                "Call save_to_catalog first to persist the artifact."
             ),
         )
 
@@ -1120,6 +1152,7 @@ class RestartWizardTool(ContextAwareTool):
                 "Clears all data and returns to the first stage."
             ),
             "tags": ("wizard",),
+            "effects": ("signaling",),
         }
 
     def __init__(self, tool_name: str | None = None) -> None:
