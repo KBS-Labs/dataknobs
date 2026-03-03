@@ -5,6 +5,38 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-03-03
+
+### dataknobs-llm [0.5.0]
+
+#### Added
+- added persistence of system prompt overrides to metadata
+- added name param to add_message for tool result messages
+- added 'tool', 'assistant', and 'function' role support
+- added tool_calls to LLMMessage
+- added conversation export_to_dict
+- added accessor for collecting all conversation nodes
+
+#### Fixed
+- fixed chat -vs- chat stream code divergence
+- fixed provider tool usage bugs
+- fixed to deep-copy tc.parameters in metadata capture to prevent aliasing
+- fixed conversation storage bugs
+
+### dataknobs-bots [0.6.0]
+
+#### Added
+- added artifact bank abstractions with tools
+- added restart_wizard tool
+- added wizard artifact catalog lifecycle tools
+
+#### Fixed
+- fixed wizard and react reasoning flow, context injection, tools, and bugs
+- fixed bugs and sync/async divergences
+- fixed conversation metadata update timing
+- fix to refresh system prompt on data change through tools
+
+
 ## Release - 2026-02-26
 
 ### dataknobs-config [0.3.5]
