@@ -217,11 +217,10 @@ class AnthropicProvider(AsyncLLMProvider):
         except ImportError as e:
             raise ImportError("anthropic package not installed. Install with: pip install anthropic") from e
 
-    async def close(self) -> None:
-        """Close Anthropic client."""
+    async def _close_client(self) -> None:
+        """Close the Anthropic client."""
         if self._client:
             await self._client.close()  # type: ignore[unreachable]
-        self._is_initialized = False
 
     async def validate_model(self) -> bool:
         """Validate model availability."""

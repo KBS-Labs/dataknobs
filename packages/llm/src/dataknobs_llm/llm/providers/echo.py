@@ -416,9 +416,8 @@ class EchoProvider(AsyncLLMProvider):
         """Initialize echo provider (no-op)."""
         self._is_initialized = True
 
-    async def close(self) -> None:
-        """Close echo provider (no-op)."""
-        self._is_initialized = False
+    async def _close_client(self) -> None:
+        """Close echo provider (no-op — no HTTP client)."""
 
     async def validate_model(self) -> bool:
         """Validate model (always true for echo)."""

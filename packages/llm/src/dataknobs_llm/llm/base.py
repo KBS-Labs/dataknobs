@@ -55,14 +55,18 @@ See Also:
     - dataknobs_llm.prompts: Prompt rendering and RAG integration
 """
 
+import asyncio
 import logging
+import types
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
-    Any, Dict, List, Union, AsyncIterator, Iterator,
+    Any, Coroutine, Dict, List, Union, AsyncIterator, Iterator,
     Callable, Protocol
 )
+
+from dataknobs_common.exceptions import ResourceError
 from datetime import datetime
 
 # Import prompt builder types - clean one-way dependency (llm depends on prompts)
@@ -710,6 +714,8 @@ class LLMProvider(ABC):
         self.prompt_builder = prompt_builder
         self._client = None
         self._is_initialized = False
+        self._is_closing = False
+        self._in_flight: set[asyncio.Task[Any]] = set()
 
     def _validate_prompt_builder(self, expected_type: type) -> None:
         """Validate that prompt builder is configured and of correct type.
@@ -796,6 +802,31 @@ class LLMProvider(ABC):
                     logger.warning("Unknown capability name in config: %s", name)
             return resolved
         return detected
+
+    def _check_ready(self) -> None:
+        """Raise if provider is not ready for requests.
+
+        Raises:
+            ResourceError: If provider is not initialized or is closing.
+        """
+        if not self._is_initialized:
+            raise ResourceError("Provider not initialized. Call initialize() first.")
+        if self._is_closing:
+            raise ResourceError("Provider is closing. No new requests accepted.")
+
+    def _analyze_response(self, response: "LLMResponse") -> "LLMResponse":
+        """Post-process a response after provider builds it.
+
+        Hook for shared response analysis (e.g. thinking-mode detection).
+        Subclasses or future plans can override/extend this.
+
+        Args:
+            response: The LLM response to analyze.
+
+        Returns:
+            The (possibly annotated) response.
+        """
+        return response
 
     @property
     def is_initialized(self) -> bool:
@@ -1546,20 +1577,84 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         """
         pass
         
+    def __enter__(self) -> None:
+        """Prevent sync context manager usage on async providers."""
+        raise TypeError(
+            "Use 'async with' for AsyncLLMProvider, not 'with'"
+        )
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: types.TracebackType | None,
+    ) -> None:
+        """Sync exit — unreachable since __enter__ raises."""
+
     async def initialize(self) -> None:
         """Initialize the async LLM client."""
         self._is_initialized = True
-        
+
     async def close(self) -> None:
-        """Close the async LLM client."""
+        """Close provider, cancelling in-flight requests.
+
+        Safe to call multiple times (idempotent). Cancels any tracked
+        in-flight requests before closing the underlying HTTP client.
+        """
+        if self._is_closing:
+            return
+        self._is_closing = True
+
+        # Cancel in-flight requests
+        if self._in_flight:
+            logger.info("Cancelling %d in-flight requests", len(self._in_flight))
+            for task in self._in_flight:
+                task.cancel()
+            await asyncio.gather(*self._in_flight, return_exceptions=True)
+            self._in_flight.clear()
+
+        # Close the HTTP client (subclass hook)
+        await self._close_client()
+
         self._is_initialized = False
-        
+        self._is_closing = False
+
+    async def _close_client(self) -> None:
+        """Close the underlying HTTP client.
+
+        Override in subclasses to close provider-specific HTTP clients.
+        The base implementation is a no-op.
+        """
+
+    async def _tracked_call(self, coro: Coroutine[Any, Any, Any]) -> Any:
+        """Execute a coroutine while tracking it as in-flight.
+
+        Args:
+            coro: The coroutine to execute.
+
+        Returns:
+            The coroutine's return value.
+        """
+        task = asyncio.current_task()
+        if task:
+            self._in_flight.add(task)
+        try:
+            return await coro
+        finally:
+            if task:
+                self._in_flight.discard(task)
+
     async def __aenter__(self):
         """Async context manager entry."""
         await self.initialize()
         return self
-        
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: types.TracebackType | None,
+    ) -> None:
         """Async context manager exit."""
         await self.close()
 
@@ -1788,10 +1883,26 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
     def initialize(self) -> None:
         """Initialize the sync LLM client."""
         self._is_initialized = True
-        
+
     def close(self) -> None:
-        """Close the sync LLM client."""
+        """Close the sync LLM client.
+
+        Safe to call multiple times (idempotent). Calls ``_close_client()``
+        for subclass-specific resource cleanup.
+        """
+        if self._is_closing:
+            return
+        self._is_closing = True
+        self._close_client()
         self._is_initialized = False
+        self._is_closing = False
+
+    def _close_client(self) -> None:
+        """Close the underlying HTTP client.
+
+        Override in subclasses to close provider-specific HTTP clients.
+        The base implementation is a no-op.
+        """
 
 
 class LLMAdapter(ABC):

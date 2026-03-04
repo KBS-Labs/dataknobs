@@ -273,11 +273,10 @@ class OpenAIProvider(AsyncLLMProvider):
         except ImportError as e:
             raise ImportError("openai package not installed. Install with: pip install openai") from e
 
-    async def close(self) -> None:
-        """Close OpenAI client."""
+    async def _close_client(self) -> None:
+        """Close the OpenAI client."""
         if self._client:
             await self._client.close()  # type: ignore[unreachable]
-        self._is_initialized = False
 
     async def validate_model(self) -> bool:
         """Validate model availability."""

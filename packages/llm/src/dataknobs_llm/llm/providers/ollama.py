@@ -423,11 +423,10 @@ class OllamaProvider(AsyncLLMProvider):
         except ImportError as e:
             raise ImportError("aiohttp package not installed. Install with: pip install aiohttp") from e
 
-    async def close(self) -> None:
-        """Close Ollama client."""
+    async def _close_client(self) -> None:
+        """Close the aiohttp session."""
         if hasattr(self, '_session') and self._session:
             await self._session.close()
-        self._is_initialized = False
 
     async def validate_model(self) -> bool:
         """Validate model availability."""
