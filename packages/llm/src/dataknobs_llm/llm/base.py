@@ -817,8 +817,12 @@ class LLMProvider(ABC):
     def _analyze_response(self, response: "LLMResponse") -> "LLMResponse":
         """Post-process a response after provider builds it.
 
-        Hook for shared response analysis (e.g. thinking-mode detection).
-        Subclasses or future plans can override/extend this.
+        Detects thinking-only responses (reasoning models that consume tokens
+        on ``<think>`` blocks but return empty visible content) and annotates
+        them with ``metadata["thinking_only"] = True``.
+
+        Subclasses may override to add provider-specific analysis but should
+        call ``super()._analyze_response(response)`` to preserve base checks.
 
         Args:
             response: The LLM response to analyze.
@@ -826,6 +830,21 @@ class LLMProvider(ABC):
         Returns:
             The (possibly annotated) response.
         """
+        # Detect thinking-only: empty visible content, no tool calls,
+        # but significant completion token usage (> 50 tokens).
+        if (
+            not response.content
+            and not response.tool_calls
+            and response.usage
+            and response.usage.get("completion_tokens", 0) > 50
+        ):
+            response.metadata["thinking_only"] = True
+            logger.warning(
+                "Thinking-only response detected: %d completion tokens, "
+                "empty content (model: %s)",
+                response.usage.get("completion_tokens", 0),
+                response.model,
+            )
         return response
 
     @property

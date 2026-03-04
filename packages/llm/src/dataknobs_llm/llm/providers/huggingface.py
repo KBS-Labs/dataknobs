@@ -125,11 +125,11 @@ class HuggingFaceProvider(AsyncLLMProvider):
         else:
             text = str(data)
 
-        return LLMResponse(
+        return self._analyze_response(LLMResponse(
             content=text,
             model=runtime_config.model,
             finish_reason='stop'
-        )
+        ))
 
     async def stream_complete(
         self,

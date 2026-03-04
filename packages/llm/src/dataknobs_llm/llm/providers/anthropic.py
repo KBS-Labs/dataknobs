@@ -312,7 +312,7 @@ class AnthropicProvider(AsyncLLMProvider):
         # Make API call
         response = await self._client.messages.create(**api_kwargs)
 
-        return LLMResponse(
+        return self._analyze_response(LLMResponse(
             content=response.content[0].text,
             model=response.model,
             finish_reason=response.stop_reason,
@@ -321,7 +321,7 @@ class AnthropicProvider(AsyncLLMProvider):
                 'completion_tokens': response.usage.output_tokens,
                 'total_tokens': response.usage.input_tokens + response.usage.output_tokens
             } if hasattr(response, 'usage') else None
-        )
+        ))
 
     async def stream_complete(
         self,

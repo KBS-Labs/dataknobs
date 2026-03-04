@@ -511,6 +511,8 @@ class EchoProvider(AsyncLLMProvider):
                 } if self.mock_tokens else None
             )
 
+        response = self._analyze_response(response)
+
         # Record the call
         self._call_history.append({
             'messages': messages,

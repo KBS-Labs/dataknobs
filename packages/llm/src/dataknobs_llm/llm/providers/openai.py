@@ -365,7 +365,7 @@ class OpenAIProvider(AsyncLLMProvider):
             **params
         )
 
-        return self.adapter.adapt_response(response)
+        return self._analyze_response(self.adapter.adapt_response(response))
 
     async def stream_complete(
         self,
@@ -530,4 +530,4 @@ class OpenAIProvider(AsyncLLMProvider):
             **params
         )
 
-        return self.adapter.adapt_response(response)
+        return self._analyze_response(self.adapter.adapt_response(response))
