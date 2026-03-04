@@ -304,7 +304,12 @@ def is_deserializable(cls: Type) -> bool:
     return hasattr(cls, "from_dict")
 
 
-def sanitize_for_json(value: Any) -> Any:
+def sanitize_for_json(
+    value: Any,
+    on_drop: str = "silent",
+    _path: str = "",
+    _dropped: list[str] | None = None,
+) -> Any:
     """Recursively ensure a value is JSON-serializable.
 
     Converts known structured types (dataclasses, Serializable objects) to
@@ -318,14 +323,48 @@ def sanitize_for_json(value: Any) -> Any:
     - ``list`` / ``tuple`` → recurse on elements; filter out non-convertible items
     - dataclass instance → field-by-field recursive sanitization
     - Object with ``to_dict()`` → call ``to_dict()``
-    - Anything else → dropped (logged at debug level)
+    - Anything else → dropped (behaviour controlled by *on_drop*)
 
     Args:
         value: Any Python value to sanitize.
+        on_drop: What to do when a non-serializable value is encountered.
+            ``"silent"`` (default) — log at DEBUG (backward-compatible).
+            ``"warn"`` — log at WARNING with the key path.
+            ``"error"`` — collect all dropped paths and raise
+            :class:`SerializationError` after traversal.
+        _path: Internal — dot-delimited key path for diagnostics.
+        _dropped: Internal — accumulator for ``on_drop="error"`` mode.
 
     Returns:
         A JSON-safe version of *value*.
+
+    Raises:
+        SerializationError: When *on_drop* is ``"error"`` and at least one
+            non-serializable value is encountered.
     """
+    # For "error" mode the top-level caller owns the accumulator.
+    is_top_level = _dropped is None and on_drop == "error"
+    if is_top_level:
+        _dropped = []
+
+    result = _sanitize_recursive(value, on_drop, _path, _dropped)
+
+    if is_top_level and _dropped:
+        raise SerializationError(
+            f"Non-serializable values at: {', '.join(_dropped)}",
+            context={"dropped_paths": _dropped},
+        )
+
+    return result
+
+
+def _sanitize_recursive(
+    value: Any,
+    on_drop: str,
+    _path: str,
+    _dropped: list[str] | None,
+) -> Any:
+    """Inner recursive traversal for :func:`sanitize_for_json`."""
     # JSON primitives
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
@@ -334,7 +373,8 @@ def sanitize_for_json(value: Any) -> Any:
     if isinstance(value, dict):
         result = {}
         for k, v in value.items():
-            sanitized = sanitize_for_json(v)
+            child_path = f"{_path}.{k}" if _path else str(k)
+            sanitized = _sanitize_recursive(v, on_drop, child_path, _dropped)
             if sanitized is not _SENTINEL:
                 result[k] = sanitized
         return result
@@ -342,8 +382,9 @@ def sanitize_for_json(value: Any) -> Any:
     # Lists/tuples: recurse on elements, filter non-convertible
     if isinstance(value, (list, tuple)):
         items = []
-        for item in value:
-            sanitized = sanitize_for_json(item)
+        for i, item in enumerate(value):
+            child_path = f"{_path}[{i}]"
+            sanitized = _sanitize_recursive(item, on_drop, child_path, _dropped)
             if sanitized is not _SENTINEL:
                 items.append(sanitized)
         return items
@@ -353,12 +394,15 @@ def sanitize_for_json(value: Any) -> Any:
     # ``copy.deepcopy`` on every field value, which crashes on non-picklable
     # objects (e.g., ``asyncio.Task`` stored in wizard data snapshots).
     # Field-by-field recursion is both safer and more thorough — each field
-    # value passes through the full sanitize_for_json logic, so nested
-    # non-serializable values are dropped cleanly rather than causing a crash.
+    # value passes through the full sanitize logic, so nested non-serializable
+    # values are dropped cleanly rather than causing a crash.
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         result = {}
         for f in dataclasses.fields(value):
-            sanitized = sanitize_for_json(getattr(value, f.name))
+            child_path = f"{_path}.{f.name}" if _path else f.name
+            sanitized = _sanitize_recursive(
+                getattr(value, f.name), on_drop, child_path, _dropped
+            )
             if sanitized is not _SENTINEL:
                 result[f.name] = sanitized
         return result
@@ -366,19 +410,80 @@ def sanitize_for_json(value: Any) -> Any:
     # Serializable protocol (has to_dict)
     if hasattr(value, "to_dict") and callable(value.to_dict):
         try:
-            result = value.to_dict()
-            if isinstance(result, dict):
-                return sanitize_for_json(result)
+            dict_result = value.to_dict()
+            if isinstance(dict_result, dict):
+                return _sanitize_recursive(dict_result, on_drop, _path, _dropped)
         except Exception:
             logger.debug(
                 "to_dict() failed for %s, dropping", type(value).__name__
             )
 
-    # Not convertible
-    logger.debug(
-        "Dropping non-serializable value of type %s", type(value).__name__
-    )
+    # Not convertible — handle according to on_drop mode
+    path_label = _path or "<root>"
+    type_name = type(value).__name__
+
+    if on_drop == "warn":
+        logger.warning(
+            "Dropping non-serializable '%s' (type=%s)", path_label, type_name
+        )
+    elif on_drop == "error" and _dropped is not None:
+        _dropped.append(f"{path_label} (type={type_name})")
+    else:
+        logger.debug(
+            "Dropping non-serializable value of type %s", type_name
+        )
+
     return _SENTINEL
+
+
+def validate_json_safe(value: Any, _path: str = "") -> list[str]:
+    """Return paths of non-serializable values without modifying the input.
+
+    Uses the same traversal logic as :func:`sanitize_for_json` but is
+    read-only — the input is never modified.
+
+    Args:
+        value: Any Python value to check.
+        _path: Internal — dot-delimited key path for diagnostics.
+
+    Returns:
+        List of key paths to non-serializable values.  An empty list
+        means *value* is fully JSON-safe.
+    """
+    # JSON primitives
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return []
+
+    paths: list[str] = []
+
+    if isinstance(value, dict):
+        for k, v in value.items():
+            child_path = f"{_path}.{k}" if _path else str(k)
+            paths.extend(validate_json_safe(v, child_path))
+        return paths
+
+    if isinstance(value, (list, tuple)):
+        for i, item in enumerate(value):
+            paths.extend(validate_json_safe(item, f"{_path}[{i}]"))
+        return paths
+
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        for f in dataclasses.fields(value):
+            child_path = f"{_path}.{f.name}" if _path else f.name
+            paths.extend(validate_json_safe(getattr(value, f.name), child_path))
+        return paths
+
+    if hasattr(value, "to_dict") and callable(value.to_dict):
+        try:
+            dict_result = value.to_dict()
+            if isinstance(dict_result, dict):
+                return validate_json_safe(dict_result, _path)
+        except Exception:
+            pass
+
+    # Not convertible
+    path_label = _path or "<root>"
+    return [f"{path_label} (type={type(value).__name__})"]
 
 
 # Internal sentinel to distinguish "value was dropped" from "value is None"
@@ -388,6 +493,7 @@ _SENTINEL = object()
 __all__ = [
     "Serializable",
     "sanitize_for_json",
+    "validate_json_safe",
     "serialize",
     "deserialize",
     "serialize_list",
