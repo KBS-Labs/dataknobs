@@ -60,6 +60,7 @@ class TransformContext:
     """
 
     fsm_context: Any | None = None
+    turn: Any | None = None
     artifact_registry: Any | None = None
     rubric_registry: Any | None = None
     rubric_executor: Any | None = None

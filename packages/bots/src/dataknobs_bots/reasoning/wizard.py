@@ -46,6 +46,22 @@ DEFAULT_EPHEMERAL_KEYS: frozenset[str] = frozenset({
 })
 
 
+@dataclass
+class TurnContext:
+    """Per-turn values that travel with the FSM step but are never persisted.
+
+    Delivered to transforms via :class:`TransformContext.turn` through the
+    ``transform_context_factory`` mechanism.  Transforms can access per-turn
+    values through this context rather than reading ``state.data`` directly.
+    """
+
+    message: str | None = None
+    bank_fn: Any | None = None
+    intent: str | None = None
+    transform_error: str | None = None
+    corpus: Any | None = None
+
+
 def _is_json_safe(value: Any) -> bool:
     """Check whether a value is JSON-serializable using isinstance checks.
 
@@ -469,10 +485,23 @@ class WizardReasoning(ReasoningStrategy):
         # by generate() after response to delegate to _execute_restart.
         self._tool_restart_requested: bool = False
 
+        # Per-turn context delivered to transforms via the context factory.
+        # Set at the start of each FSM step, cleared after.
+        self._current_turn: TurnContext | None = None
+
+        # Per-turn keys: cleared at the start of each turn, suppressed
+        # in conflict detection, and treated as ephemeral (non-persistent).
+        self._per_turn_keys: frozenset[str] = frozenset(
+            wizard_fsm.settings.get("per_turn_keys", [])
+        )
+
         # Merge framework-level ephemeral keys with config-declared ones
+        # and per-turn keys (which are implicitly ephemeral).
         config_ephemeral = wizard_fsm.settings.get("ephemeral_keys", [])
         self._ephemeral_keys: frozenset[str] = (
-            DEFAULT_EPHEMERAL_KEYS | frozenset(config_ephemeral)
+            DEFAULT_EPHEMERAL_KEYS
+            | frozenset(config_ephemeral)
+            | self._per_turn_keys
         )
 
         # Initialise MemoryBank instances from wizard-level ``banks`` config
@@ -522,6 +551,7 @@ class WizardReasoning(ReasoningStrategy):
 
         return TransformContext(
             fsm_context=func_context,
+            turn=self._current_turn,
             artifact_registry=self._artifact_registry,
             rubric_executor=self._review_executor,
             config={"llm": self._current_llm} if self._current_llm else {},
@@ -1334,6 +1364,11 @@ class WizardReasoning(ReasoningStrategy):
         # Get or restore wizard state
         wizard_state = self._get_wizard_state(manager)
 
+        # Clear per-turn keys from previous turn to prevent stale values
+        for key in self._per_turn_keys:
+            wizard_state.data.pop(key, None)
+            wizard_state.transient.pop(key, None)
+
         # Get user message
         user_message = self._get_last_user_message(manager)
 
@@ -1770,8 +1805,16 @@ class WizardReasoning(ReasoningStrategy):
         wizard_state.data["_message"] = user_message
         # Inject bank accessor for condition evaluation
         wizard_state.data["_bank_fn"] = self._make_bank_accessor()
+        # Set per-turn context for transforms (parallel delivery channel).
+        # _intent is set by _detect_intent() earlier in the generate() flow.
+        self._current_turn = TurnContext(
+            message=user_message,
+            bank_fn=self._make_bank_accessor(),
+            intent=wizard_state.data.get("_intent"),
+        )
         # Execute FSM transition using active FSM (async to support async transforms)
         step_result = await active_fsm.step_async(wizard_state.data)
+        self._current_turn = None
         wizard_state.data.pop("_message", None)
         wizard_state.data.pop("_bank_fn", None)
         to_stage = active_fsm.current_stage
@@ -2159,11 +2202,11 @@ class WizardReasoning(ReasoningStrategy):
         wizard_meta["fsm_state"] = {
             "current_stage": state.current_stage,
             "history": state.history,
-            "data": sanitize_for_json(state.data),
+            "data": sanitize_for_json(state.data, on_drop="warn"),
             "completed": state.completed,
             "clarification_attempts": state.clarification_attempts,
             "transitions": [
-                sanitize_for_json(t) for t in state.transitions
+                sanitize_for_json(t, on_drop="warn") for t in state.transitions
             ],
             "stage_entry_time": state.stage_entry_time,
             "tasks": state.tasks.to_dict(),
@@ -3114,8 +3157,8 @@ class WizardReasoning(ReasoningStrategy):
         conflicts: list[dict[str, Any]] = []
 
         for field_name, new_value in new_data.items():
-            # Skip internal fields
-            if field_name.startswith("_"):
+            # Skip internal fields and per-turn keys (expected to change each turn)
+            if field_name.startswith("_") or field_name in self._per_turn_keys:
                 continue
 
             # Skip if new value is None
