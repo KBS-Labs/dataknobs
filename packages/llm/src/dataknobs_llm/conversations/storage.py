@@ -707,6 +707,27 @@ class ConversationStorage(ABC):
         """
         pass
 
+    async def count_conversations(
+        self,
+        filter_metadata: Dict[str, Any] | None = None,
+    ) -> int:
+        """Return the number of conversations matching the filter.
+
+        Default implementation fetches all matching conversations and counts
+        them.  Subclasses should override with an efficient backend query.
+
+        Args:
+            filter_metadata: Optional metadata filters (exact match).
+
+        Returns:
+            Total number of matching conversations.
+        """
+        results = await self.list_conversations(
+            filter_metadata=filter_metadata,
+            limit=100_000,
+        )
+        return len(results)
+
     @abstractmethod
     async def search_conversations(
         self,
@@ -1070,6 +1091,37 @@ class DataknobsConversationStorage(ConversationStorage):
 
         except Exception as e:
             raise StorageError(f"Failed to list conversations: {e}") from e
+
+    async def count_conversations(
+        self,
+        filter_metadata: Dict[str, Any] | None = None,
+    ) -> int:
+        """Return the number of conversations matching the filter.
+
+        Uses a backend query without deserializing full conversation states,
+        which is more efficient than the default implementation.
+        """
+        try:
+            try:
+                from dataknobs_data.query import Query
+            except ImportError:
+                raise StorageError(
+                    "dataknobs_data package not available. "
+                    "Install it to use DataknobsConversationStorage."
+                ) from None
+
+            query = Query()
+            if filter_metadata:
+                for key, value in filter_metadata.items():
+                    query.filter(f"metadata.{key}", "=", value)
+
+            results = await self.backend.search(query)
+            return len(results)
+
+        except StorageError:
+            raise
+        except Exception as e:
+            raise StorageError(f"Failed to count conversations: {e}") from e
 
     async def search_conversations(
         self,
