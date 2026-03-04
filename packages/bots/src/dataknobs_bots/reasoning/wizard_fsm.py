@@ -53,6 +53,23 @@ class WizardFSM:
         self._settings = settings or {}
         self._context: ExecutionContext | None = None
         self._subflow_registry: dict[str, WizardFSM] = subflow_registry or {}
+        self._transform_context_factory: Callable[..., Any] | None = None
+
+    def set_transform_context_factory(
+        self, factory: Callable[..., Any]
+    ) -> None:
+        """Register a factory for building transform-level context objects.
+
+        The factory receives a :class:`FunctionContext` and returns the
+        application-specific context that transforms should receive (e.g.
+        :class:`TransformContext`).  It is applied to the
+        :class:`ExecutionContext` before each step executes.
+
+        Args:
+            factory: Callable accepting a FunctionContext and returning
+                the desired transform context.
+        """
+        self._transform_context_factory = factory
 
     @property
     def settings(self) -> dict[str, Any]:
@@ -288,6 +305,10 @@ class WizardFSM:
         before_stage = self.current_stage
         if not self._context:
             self._context = self._fsm.create_context(data)
+            if self._transform_context_factory:
+                self._context.transform_context_factory = (
+                    self._transform_context_factory
+                )
         else:
             # Update context data
             if isinstance(self._context.data, dict):
@@ -357,6 +378,10 @@ class WizardFSM:
         before_stage = self.current_stage
         if not self._context:
             self._context = self._fsm.create_context(data)
+            if self._transform_context_factory:
+                self._context.transform_context_factory = (
+                    self._transform_context_factory
+                )
         else:
             # Update context data
             if isinstance(self._context.data, dict):

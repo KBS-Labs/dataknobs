@@ -497,119 +497,36 @@ class WizardReasoning(ReasoningStrategy):
             nav_settings or {}
         )
 
-        # Bridge FSM custom functions so they receive a TransformContext
-        # instead of a raw FunctionContext.  This lets transforms that
-        # need artifact_registry, rubric_executor, etc. work seamlessly.
-        self._wrap_custom_functions(wizard_fsm)
-
-    def _wrap_custom_functions(self, wizard_fsm: WizardFSM) -> None:
-        """Wrap FSM custom functions to inject TransformContext.
-
-        The FSM calls transform functions with ``(data, FunctionContext)``,
-        but artifact-aware transforms expect ``(data, TransformContext)``.
-        This method wraps each custom function so that the FSM's
-        ``FunctionContext`` is translated into a ``TransformContext``
-        carrying the artifact registry, review executor, and other
-        services stored on this WizardReasoning instance.
-
-        Args:
-            wizard_fsm: The WizardFSM whose custom functions to wrap.
-        """
-        # Functions are registered on the core FSM's function_registry
-        # (via FSMBuilder.register_function in WizardConfigLoader), not
-        # on AdvancedFSM._custom_functions.  The AdvancedFSM merges both
-        # registries in _execute_arc_transform_async, with _custom_functions
-        # taking precedence.  We wrap the core registry functions and put
-        # them into _custom_functions so the wrapped versions are used.
-        advanced_fsm = wizard_fsm._fsm
-        core_fsm = advanced_fsm.fsm
-        registry = getattr(core_fsm, "function_registry", {})
-
-        # Extract the raw function dict from the registry
-        if hasattr(registry, "functions"):
-            raw_fns: dict[str, Any] = dict(registry.functions)
-        elif isinstance(registry, dict):
-            raw_fns = dict(registry)
-        else:
-            raw_fns = {}
-
-        if not raw_fns:
-            return
-
-        try:
-            from ..artifacts import transforms as _transforms_mod
-        except ImportError:
-            # Artifact modules not available — wrapping not needed
-            return
-        del _transforms_mod
-
-        wrapped: dict[str, Any] = {}
-        for name, func in raw_fns.items():
-            wrapped[name] = self._make_context_wrapper(func)
-
-        # Store wrapped functions in AdvancedFSM._custom_functions which
-        # overrides the core registry in _execute_arc_transform_async
-        advanced_fsm._custom_functions = wrapped
-
-        logger.debug(
-            "Wrapped %d custom functions with TransformContext bridge",
-            len(wrapped),
+        # Store the factory — it will be set on the ExecutionContext
+        # before FSM steps execute (see WizardFSM._ensure_context_factory).
+        self._wizard_fsm = wizard_fsm
+        self._wizard_fsm.set_transform_context_factory(
+            self._build_transform_context
         )
 
-    def _make_context_wrapper(
-        self, func: Any
-    ) -> Any:
-        """Create a wrapper that injects TransformContext for a transform.
+    def _build_transform_context(self, func_context: Any) -> Any:
+        """Build a :class:`TransformContext` from an FSM ``FunctionContext``.
 
-        Wizard transforms follow an in-place mutation convention: they
-        modify ``data`` and return ``None``.  The FSM pipeline, however,
-        chains transforms by passing each return value as the next
-        transform's ``data``.  The wrapper preserves the original ``data``
-        dict when the transform returns ``None``.
+        Registered as the ``transform_context_factory`` on the
+        :class:`ExecutionContext`.  The FSM calls this instead of passing
+        the raw ``FunctionContext`` to transforms, giving them access to
+        the artifact registry, rubric executor, LLM, and memory banks.
 
         Args:
-            func: The original transform callable.
+            func_context: The :class:`FunctionContext` built by the FSM.
 
         Returns:
-            Wrapped callable with same signature as FSM expects.
+            ``TransformContext`` with wizard services and FSM context.
         """
-        import asyncio
-        import inspect
-
         from ..artifacts.transforms import TransformContext
 
-        async def _async_wrapper(
-            data: dict[str, Any], _func_context: Any = None, **kwargs: Any
-        ) -> Any:
-            transform_ctx = TransformContext(
-                artifact_registry=self._artifact_registry,
-                rubric_executor=self._review_executor,
-                config={"llm": self._current_llm} if self._current_llm else {},
-                banks=self._banks,
-            )
-            result = func(data, transform_ctx, **kwargs)
-            if inspect.isawaitable(result):
-                result = await result
-            # Transforms that mutate data in-place return None;
-            # preserve the data dict for the next transform in the chain.
-            return result if result is not None else data
-
-        def _sync_wrapper(
-            data: dict[str, Any], _func_context: Any = None, **kwargs: Any
-        ) -> Any:
-            transform_ctx = TransformContext(
-                artifact_registry=self._artifact_registry,
-                rubric_executor=self._review_executor,
-                config={"llm": self._current_llm} if self._current_llm else {},
-                banks=self._banks,
-            )
-            result = func(data, transform_ctx, **kwargs)
-            return result if result is not None else data
-
-        # Preserve async nature of the original function
-        if asyncio.iscoroutinefunction(func):
-            return _async_wrapper
-        return _sync_wrapper
+        return TransformContext(
+            fsm_context=func_context,
+            artifact_registry=self._artifact_registry,
+            rubric_executor=self._review_executor,
+            config={"llm": self._current_llm} if self._current_llm else {},
+            banks=self._banks,
+        )
 
     # -----------------------------------------------------------------
     # MemoryBank management
