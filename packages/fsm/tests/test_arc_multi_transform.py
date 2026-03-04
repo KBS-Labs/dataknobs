@@ -12,13 +12,8 @@ import pytest
 from dataknobs_fsm.api.advanced import AdvancedFSM, create_advanced_fsm
 from dataknobs_fsm.core.arc import ArcDefinition, ArcExecution
 from dataknobs_fsm.core.exceptions import FunctionError
+from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.functions.base import ExecutionResult, FunctionContext
-
-
-class MockContext:
-    """Minimal execution context for arc tests."""
-
-    pass
 
 
 class TestArcMultiTransform:
@@ -59,7 +54,7 @@ class TestArcMultiTransform:
         arc_def = ArcDefinition(target_state="next", transform="add_ten")
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
-        result = arc_exec.execute(MockContext(), {"value": 5})
+        result = arc_exec.execute(ExecutionContext(), {"value": 5})
         assert result["value"] == 15
 
     def test_multi_transform_chained(self) -> None:
@@ -71,7 +66,7 @@ class TestArcMultiTransform:
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
         # value=5 → add_ten → 15 → double → 30
-        result = arc_exec.execute(MockContext(), {"value": 5})
+        result = arc_exec.execute(ExecutionContext(), {"value": 5})
         assert result["value"] == 30
 
     def test_multi_transform_reverse_order(self) -> None:
@@ -83,7 +78,7 @@ class TestArcMultiTransform:
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
         # value=5 → double → 10 → add_ten → 20
-        result = arc_exec.execute(MockContext(), {"value": 5})
+        result = arc_exec.execute(ExecutionContext(), {"value": 5})
         assert result["value"] == 20
 
     def test_multi_transform_error_propagates(self) -> None:
@@ -95,7 +90,7 @@ class TestArcMultiTransform:
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
         with pytest.raises(FunctionError):
-            arc_exec.execute(MockContext(), {"value": 5})
+            arc_exec.execute(ExecutionContext(), {"value": 5})
 
     def test_transform_missing_raises(self) -> None:
         """Non-existent transform name raises FunctionError."""
@@ -106,14 +101,14 @@ class TestArcMultiTransform:
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
         with pytest.raises(FunctionError, match="not found"):
-            arc_exec.execute(MockContext(), {"value": 1})
+            arc_exec.execute(ExecutionContext(), {"value": 1})
 
     def test_transform_returns_execution_result_success(self) -> None:
         """ExecutionResult with success unwraps to .data."""
         arc_def = ArcDefinition(target_state="next", transform="return_success")
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
-        result = arc_exec.execute(MockContext(), {"value": 1})
+        result = arc_exec.execute(ExecutionContext(), {"value": 1})
         assert result == {"value": 999}
 
     def test_transform_returns_execution_result_failure(self) -> None:
@@ -122,7 +117,7 @@ class TestArcMultiTransform:
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
         with pytest.raises(FunctionError, match="deliberate failure"):
-            arc_exec.execute(MockContext(), {"value": 1})
+            arc_exec.execute(ExecutionContext(), {"value": 1})
 
     def test_no_transform_passthrough(self) -> None:
         """Null transform passes data through unchanged."""
@@ -130,7 +125,7 @@ class TestArcMultiTransform:
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
         data = {"value": 42}
-        result = arc_exec.execute(MockContext(), data)
+        result = arc_exec.execute(ExecutionContext(), data)
         assert result is data
 
     def test_multi_transform_updates_statistics(self) -> None:
@@ -141,7 +136,7 @@ class TestArcMultiTransform:
         )
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
-        arc_exec.execute(MockContext(), {"value": 1})
+        arc_exec.execute(ExecutionContext(), {"value": 1})
         assert arc_exec.execution_count == 1
         assert arc_exec.success_count == 1
         assert arc_exec.failure_count == 0
@@ -155,7 +150,7 @@ class TestArcMultiTransform:
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
         with pytest.raises(FunctionError):
-            arc_exec.execute(MockContext(), {"value": 1})
+            arc_exec.execute(ExecutionContext(), {"value": 1})
         assert arc_exec.execution_count == 1
         assert arc_exec.failure_count == 1
         assert arc_exec.success_count == 0
@@ -169,7 +164,7 @@ class TestArcMultiTransform:
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
 
         with pytest.raises(FunctionError, match="not found"):
-            arc_exec.execute(MockContext(), {"value": 5})
+            arc_exec.execute(ExecutionContext(), {"value": 5})
 
 
 class TestStepSyncMultiTransform:

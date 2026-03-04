@@ -3,6 +3,7 @@
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from collections.abc import Callable
 from typing import Any, Dict, List, Tuple, Union
 
 from dataknobs_data.database import AsyncDatabase, SyncDatabase
@@ -118,6 +119,12 @@ class ExecutionContext:
 
         # State instance tracking for debugging
         self.current_state_instance: Any = None
+
+        # Context factory — optional callable that transforms FunctionContext
+        # into an application-specific context object for transform functions.
+        # When set, _create_function_context() calls this with the built
+        # FunctionContext and returns the factory's result instead.
+        self.transform_context_factory: Callable[..., Any] | None = None
     
     def push_network(self, network_name: str, return_state: str | None = None) -> None:
         """Push a network onto the execution stack.

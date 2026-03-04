@@ -341,6 +341,10 @@ class ArcExecution:
                 to_state=self.arc_def.target_state
             )
 
+        # Transforms that mutate data in-place return None;
+        # preserve input data for the next transform in the chain.
+        if result is None:
+            return data
         return result
 
     async def can_execute_async(
@@ -548,6 +552,10 @@ class ArcExecution:
                 to_state=self.arc_def.target_state
             )
 
+        # Transforms that mutate data in-place return None;
+        # preserve input data for the next transform in the chain.
+        if result is None:
+            return data
         return result
 
     def execute_with_transaction(
@@ -648,16 +656,21 @@ class ArcExecution:
         exec_context: "ExecutionContext",
         resources: Dict[str, Any] | None = None,
         stream_enabled: bool = False
-    ) -> FunctionContext:
+    ) -> Any:
         """Create function context for execution.
-        
+
+        Builds a :class:`FunctionContext` and, if the ``ExecutionContext`` has
+        a ``transform_context_factory``, passes it through the factory so that
+        application-level context (e.g. ``TransformContext``) can be composed
+        on top of the FSM-level context.
+
         Args:
             exec_context: Execution context.
             resources: Allocated resources.
             stream_enabled: Whether streaming is enabled.
-            
+
         Returns:
-            Function context.
+            ``FunctionContext`` (default) or factory output.
         """
         # Derive a representative function name for the context
         transform = self.arc_def.transform
@@ -666,7 +679,7 @@ class ArcExecution:
         else:
             func_name = transform or self.arc_def.pre_test
 
-        return FunctionContext(
+        func_context = FunctionContext(
             state_name=self.source_state,
             function_name=func_name,
             metadata={
@@ -675,8 +688,18 @@ class ArcExecution:
                 'arc_priority': self.arc_def.priority,
                 'stream_enabled': stream_enabled
             },
-            resources=resources or {}
+            resources=resources or {},
+            variables=exec_context.variables,
+            network_name=(
+                exec_context.network_stack[-1][0]
+                if exec_context.network_stack
+                else None
+            ),
         )
+
+        if exec_context.transform_context_factory:
+            return exec_context.transform_context_factory(func_context)
+        return func_context
     
     def _allocate_resources(
         self,
