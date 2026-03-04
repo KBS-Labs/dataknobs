@@ -462,6 +462,68 @@ class AsyncElasticsearchDatabase(
 
         return records
 
+    async def count(self, query: Query | None = None) -> int:
+        """Count records matching a query using efficient Elasticsearch count.
+
+        Args:
+            query: Optional search query (counts all if None)
+
+        Returns:
+            Number of matching records
+        """
+        if not query or not query.filters:
+            return await self._count_all()
+
+        # Build Elasticsearch query from Query object (same logic as search)
+        es_query: dict[str, Any] = {"bool": {"must": []}}
+
+        for filter_obj in query.filters:
+            field_path = f"data.{filter_obj.field}"
+
+            if filter_obj.operator == Operator.EQ:
+                if isinstance(filter_obj.value, str):
+                    field_path = f"{field_path}.keyword"
+                es_query["bool"]["must"].append({"term": {field_path: filter_obj.value}})
+            elif filter_obj.operator == Operator.NEQ:
+                es_query["bool"]["must_not"] = es_query["bool"].get("must_not", [])
+                es_query["bool"]["must_not"].append({"term": {field_path: filter_obj.value}})
+            elif filter_obj.operator == Operator.GT:
+                es_query["bool"]["must"].append({"range": {field_path: {"gt": filter_obj.value}}})
+            elif filter_obj.operator == Operator.LT:
+                es_query["bool"]["must"].append({"range": {field_path: {"lt": filter_obj.value}}})
+            elif filter_obj.operator == Operator.GTE:
+                es_query["bool"]["must"].append({"range": {field_path: {"gte": filter_obj.value}}})
+            elif filter_obj.operator == Operator.LTE:
+                es_query["bool"]["must"].append({"range": {field_path: {"lte": filter_obj.value}}})
+            elif filter_obj.operator == Operator.LIKE:
+                es_query["bool"]["must"].append({"wildcard": {field_path: f"*{filter_obj.value}*"}})
+            elif filter_obj.operator == Operator.IN:
+                es_query["bool"]["must"].append({"terms": {field_path: filter_obj.value}})
+            elif filter_obj.operator == Operator.NOT_IN:
+                es_query["bool"]["must_not"] = es_query["bool"].get("must_not", [])
+                es_query["bool"]["must_not"].append({"terms": {field_path: filter_obj.value}})
+            elif filter_obj.operator == Operator.BETWEEN:
+                if isinstance(filter_obj.value, (list, tuple)) and len(filter_obj.value) == 2:
+                    lower, upper = filter_obj.value
+                    es_query["bool"]["must"].append({
+                        "range": {field_path: {"gte": lower, "lte": upper}}
+                    })
+            elif filter_obj.operator == Operator.NOT_BETWEEN:
+                if isinstance(filter_obj.value, (list, tuple)) and len(filter_obj.value) == 2:
+                    lower, upper = filter_obj.value
+                    es_query["bool"]["must_not"] = es_query["bool"].get("must_not", [])
+                    es_query["bool"]["must_not"].append({
+                        "range": {field_path: {"gte": lower, "lte": upper}}
+                    })
+
+        # If no filters were added, use match_all
+        if not es_query["bool"]["must"] and "must_not" not in es_query["bool"]:
+            es_query = {"match_all": {}}
+
+        self._check_connection()
+        response = await self._client.count(index=self.index_name, query=es_query)
+        return response["count"]
+
     async def _count_all(self) -> int:
         """Count all records in the database."""
         self._check_connection()
