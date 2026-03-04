@@ -1115,8 +1115,7 @@ class DataknobsConversationStorage(ConversationStorage):
                 for key, value in filter_metadata.items():
                     query.filter(f"metadata.{key}", "=", value)
 
-            results = await self.backend.search(query)
-            return len(results)
+            return await self.backend.count(query)
 
         except StorageError:
             raise
