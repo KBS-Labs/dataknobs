@@ -512,8 +512,8 @@ class TestConversationManager:
         assert current_node.data.metadata["model"] == "echo-model"
 
     @pytest.mark.asyncio
-    async def test_node_metadata_includes_tool_calls(self, test_components):
-        """Test that assistant node metadata captures tool calls when present."""
+    async def test_node_message_includes_tool_calls(self, test_components):
+        """Test that assistant node message preserves tool calls natively."""
         from dataknobs_llm.testing import tool_call_response
 
         # Set up EchoProvider with a tool call response
@@ -534,12 +534,12 @@ class TestConversationManager:
         await manager.complete()
 
         current_node = manager.state.get_current_node()
-        assert "tool_calls" in current_node.data.metadata
-        tool_calls = current_node.data.metadata["tool_calls"]
+        tool_calls = current_node.data.message.tool_calls
+        assert tool_calls is not None
         assert len(tool_calls) == 1
-        assert tool_calls[0]["name"] == "calculator"
-        assert tool_calls[0]["parameters"] == {"expression": "2+2"}
-        assert tool_calls[0]["id"] == "call_123"
+        assert tool_calls[0].name == "calculator"
+        assert tool_calls[0].parameters == {"expression": "2+2"}
+        assert tool_calls[0].id == "call_123"
 
     @pytest.mark.asyncio
     async def test_node_metadata_omits_tool_calls_when_none(self, test_components):

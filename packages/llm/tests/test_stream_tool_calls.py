@@ -235,7 +235,7 @@ class TestManagerStreamToolPassing:
 
 class TestManagerStreamTreePreservation:
     @pytest.mark.asyncio
-    async def test_tool_calls_in_tree_metadata(self, manager_components: dict) -> None:
+    async def test_tool_calls_on_tree_node(self, manager_components: dict) -> None:
         llm: EchoProvider = manager_components["llm"]
         llm.set_responses([
             tool_call_response("search", {"query": "python"}, content="searching"),
@@ -244,13 +244,13 @@ class TestManagerStreamTreePreservation:
 
         _ = [c async for c in mgr.stream_complete()]
 
-        # The assistant node should have tool_calls in metadata
+        # The assistant node message should carry tool_calls natively
         node = mgr.state.get_current_node()
         assert node is not None
-        meta = node.data.metadata
-        assert "tool_calls" in meta
-        assert meta["tool_calls"][0]["name"] == "search"
-        assert meta["tool_calls"][0]["parameters"] == {"query": "python"}
+        tool_calls = node.data.message.tool_calls
+        assert tool_calls is not None
+        assert tool_calls[0].name == "search"
+        assert tool_calls[0].parameters == {"query": "python"}
 
     @pytest.mark.asyncio
     async def test_tool_calls_on_assistant_message(
@@ -291,10 +291,11 @@ class TestManagerCompleteRegression:
         assert response.tool_calls is not None
         assert response.tool_calls[0].name == "search"
 
-        # Verify tree metadata
+        # Verify tool calls on message
         node = mgr.state.get_current_node()
         assert node is not None
-        assert "tool_calls" in node.data.metadata
+        assert node.data.message.tool_calls is not None
+        assert node.data.message.tool_calls[0].name == "search"
 
     @pytest.mark.asyncio
     async def test_complete_text_only(self, manager_components: dict) -> None:
@@ -316,7 +317,7 @@ class TestManagerCompleteRegression:
 class TestCompletionPathParity:
     @pytest.mark.asyncio
     async def test_tree_state_matches(self, manager_components: dict) -> None:
-        """complete() and stream_complete() should produce identical tree metadata."""
+        """complete() and stream_complete() should produce identical tree state."""
         llm: EchoProvider = manager_components["llm"]
 
         # --- complete() path ---
@@ -329,7 +330,6 @@ class TestCompletionPathParity:
         await mgr1.complete()
         node1 = mgr1.state.get_current_node()
         assert node1 is not None
-        meta1 = node1.data.metadata
 
         # --- stream_complete() path --- (fresh manager)
         llm.set_responses([
@@ -345,13 +345,15 @@ class TestCompletionPathParity:
         _ = [c async for c in mgr2.stream_complete()]
         node2 = mgr2.state.get_current_node()
         assert node2 is not None
-        meta2 = node2.data.metadata
 
-        # Compare the key metadata fields
-        assert meta1["tool_calls"] == meta2["tool_calls"]
-        assert meta1["finish_reason"] == meta2["finish_reason"]
-        assert node1.data.message.tool_calls[0].name == node2.data.message.tool_calls[0].name
-        assert node1.data.message.tool_calls[0].parameters == node2.data.message.tool_calls[0].parameters
+        # Compare tool calls on messages (the canonical location)
+        tc1 = node1.data.message.tool_calls
+        tc2 = node2.data.message.tool_calls
+        assert tc1 is not None and tc2 is not None
+        assert tc1[0].name == tc2[0].name
+        assert tc1[0].parameters == tc2[0].parameters
+        # Compare metadata
+        assert node1.data.metadata["finish_reason"] == node2.data.metadata["finish_reason"]
 
 
 # ---------------------------------------------------------------------------
