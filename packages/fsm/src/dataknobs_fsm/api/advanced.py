@@ -299,6 +299,7 @@ See Also:
 """
 
 import inspect
+import logging
 import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
@@ -322,6 +323,8 @@ from ..execution.history import ExecutionHistory
 from ..resources.base import IResourceProvider
 from ..resources.manager import ResourceManager
 from ..storage.base import IHistoryStorage
+
+logger = logging.getLogger(__name__)
 
 
 class ExecutionMode(Enum):
@@ -952,6 +955,40 @@ class AdvancedFSM:
     # ========== Shared Helper Methods ==========
     # These methods contain logic shared between sync and async implementations
 
+    def _check_transition_signal(
+        self,
+        context: ExecutionContext,
+    ) -> list | None:
+        """Check for a ``_transition_signal`` key in *context.data*.
+
+        If present, pop the signal and return a single-element list containing
+        the matching outgoing arc.  Returns ``None`` when there is no signal or
+        no matching arc (the caller should fall through to normal evaluation).
+        """
+        if not isinstance(context.data, dict):
+            return None
+
+        signal = context.data.pop("_transition_signal", None)
+        if signal is None:
+            return None
+
+        for arc in self.fsm.get_outgoing_arcs(context.current_state):
+            if arc.target_state == signal:
+                logger.debug(
+                    "Using transition signal: %s -> %s",
+                    context.current_state,
+                    signal,
+                )
+                return [arc]
+
+        logger.warning(
+            "Transition signal '%s' does not match any arc from '%s', "
+            "falling through to normal evaluation",
+            signal,
+            context.current_state,
+        )
+        return None
+
     def _get_available_transitions(
         self,
         context: ExecutionContext,
@@ -969,6 +1006,11 @@ class AdvancedFSM:
         transitions = []
         if not context.current_state:
             return transitions
+
+        # Check for transition signal from a previous transform
+        signaled = self._check_transition_signal(context)
+        if signaled is not None:
+            return signaled
 
         # Get arcs from current state
         arcs = self.fsm.get_outgoing_arcs(context.current_state)
@@ -1224,6 +1266,11 @@ class AdvancedFSM:
         transitions = []
         if not context.current_state:
             return transitions
+
+        # Check for transition signal from a previous transform
+        signaled = self._check_transition_signal(context)
+        if signaled is not None:
+            return signaled
 
         # Get arcs from current state
         arcs = self.fsm.get_outgoing_arcs(context.current_state)
