@@ -13,7 +13,7 @@ Schema Versioning:
     - MINOR: Backward-compatible additions
     - PATCH: Bug fixes, no schema changes
 
-    Current schema version: 1.0.0
+    Current schema version: 1.1.0
 
 Storage Architecture:
     Conversations are stored as trees where each node represents a message.
@@ -74,7 +74,7 @@ Serialization Format:
 
     ```python
     {
-        "schema_version": "1.0.0",
+        "schema_version": "1.1.0",
         "conversation_id": "conv-123",
         "current_node_id": "0.1",
         "metadata": {"user_id": "alice"},
@@ -85,9 +85,7 @@ Serialization Format:
                 "node_id": "",
                 "message": {
                     "role": "system",
-                    "content": "You are helpful",
-                    "name": None,
-                    "metadata": {}
+                    "content": "You are helpful"
                 },
                 "timestamp": "2024-01-01T00:00:00",
                 "prompt_name": None,
@@ -96,17 +94,21 @@ Serialization Format:
             },
             {
                 "node_id": "0",
-                "message": {"role": "user", "content": "Hello", ...},
+                "message": {"role": "user", "content": "Hello"},
                 ...
             },
             {
                 "node_id": "0.0",
-                "message": {"role": "assistant", "content": "Hi!", ...},
+                "message": {
+                    "role": "assistant",
+                    "content": "Hi!",
+                    "tool_calls": [{"name": "search", "parameters": {...}, "id": "call_1"}]
+                },
                 "metadata": {"usage": {...}, "cost_usd": 0.0001}
             },
             {
                 "node_id": "0.1",  # Alternative response branch
-                "message": {"role": "assistant", "content": "Greetings!", ...},
+                "message": {"role": "assistant", "content": "Greetings!"},
                 "branch_name": "polite-variant"
             }
         ],
@@ -134,7 +136,7 @@ from dataknobs_llm.llm.base import LLMMessage
 from dataknobs_llm.exceptions import StorageError, SchemaVersionError
 
 # Current schema version - increment when making schema changes
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"
 
 logger = logging.getLogger(__name__)
 
@@ -174,12 +176,7 @@ class ConversationNode:
     def to_dict(self) -> Dict[str, Any]:
         """Convert node to dictionary for storage."""
         return {
-            "message": {
-                "role": self.message.role,
-                "content": self.message.content,
-                "name": self.message.name,
-                "metadata": self.message.metadata or {}
-            },
+            "message": self.message.to_dict(),
             "node_id": self.node_id,
             "timestamp": self.timestamp.isoformat(),
             "prompt_name": self.prompt_name,
@@ -190,14 +187,9 @@ class ConversationNode:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ConversationNode":
         """Create node from dictionary."""
-        msg_data = data["message"]
+        msg_data = data.get("message", {})
         return cls(
-            message=LLMMessage(
-                role=msg_data["role"],
-                content=msg_data["content"],
-                name=msg_data.get("name"),
-                metadata=msg_data.get("metadata", {})
-            ),
+            message=LLMMessage.from_dict(msg_data),
             node_id=data["node_id"],
             timestamp=datetime.fromisoformat(data["timestamp"]),
             prompt_name=data.get("prompt_name"),
@@ -538,11 +530,12 @@ class ConversationState:
             schema_version=SCHEMA_VERSION  # Always use current version after migration
         )
 
-    @staticmethod
+    @classmethod
     def _migrate_schema(
+        cls,
         data: Dict[str, Any],
         from_version: str,
-        to_version: str
+        to_version: str,
     ) -> Dict[str, Any]:
         """Migrate data from one schema version to another.
 
@@ -571,36 +564,20 @@ class ConversationState:
                 "edges": [...]
             }
 
-            # After migration to 1.1.0
+            # After migration to 1.1.0 — tool_calls reconstructed in messages
             new_data = ConversationState._migrate_schema(
                 old_data,
                 from_version="1.0.0",
                 to_version="1.1.0"
             )
-            # new_data might now include: {"tags": [], ...}
             ```
 
         Note:
             **Adding New Migration Paths**:
 
-            When introducing schema changes, add a migration method:
-
-            ```python
-            @staticmethod
-            def _migrate_1_0_to_1_1(data: Dict[str, Any]) -> Dict[str, Any]:
-                '''Migrate from schema 1.0 to 1.1.'''
-                # Example: Add new optional field
-                data["tags"] = []
-                data["schema_version"] = "1.1.0"
-                return data
-            ```
-
-            Then update this method to call it:
-
-            ```python
-            if from_version == "1.0.0" and to_version >= "1.1.0":
-                data = cls._migrate_1_0_to_1_1(data)
-            ```
+            When introducing schema changes, add a migration method
+            (e.g. ``_migrate_1_1_to_1_2``) and wire it into this method's
+            sequential migration chain.
         """
         # Parse version strings
         from_major, _from_minor, _from_patch = map(int, from_version.split("."))
@@ -611,19 +588,19 @@ class ConversationState:
             return data
 
         # Apply migrations based on version transitions
-        # Future migrations will be added here as needed
 
-        # Example migration patterns:
-        # if from_version == "0.0.0" and to_version >= "1.0.0":
-        #     data = cls._migrate_0_to_1(data)
-        # if from_version < "1.1.0" and to_version >= "1.1.0":
-        #     data = cls._migrate_1_0_to_1_1(data)
-
-        # For now, version 0.0.0 (no version field) to 1.0.0 is a no-op
-        # because the schema didn't change, we just added versioning
+        # 0.0.0 → 1.0.0: no-op, just added versioning
         if from_version == "0.0.0":
             logger.debug("Migrating from unversioned schema to 1.0.0 (no changes needed)")
             data["schema_version"] = "1.0.0"
+            from_version = "1.0.0"
+
+        # 1.0.0 → 1.1.0: reconstruct tool_calls in message from metadata backup
+        if from_version == "1.0.0" and to_version >= "1.1.0":
+            data = cls._migrate_1_0_to_1_1(data)
+            from_version = "1.1.0"
+
+        if from_version == to_version:
             return data
 
         # If we get here and versions still don't match, it's unsupported
@@ -633,19 +610,35 @@ class ConversationState:
             )
 
         logger.warning(
-            f"No migration path defined from {from_version} to {to_version}. "
-            "Using data as-is."
+            "No migration path defined from %s to %s. Using data as-is.",
+            from_version, to_version,
         )
         data["schema_version"] = to_version
         return data
 
-    # Future migration methods will be added here as needed:
-    # @staticmethod
-    # def _migrate_1_0_to_1_1(data: Dict[str, Any]) -> Dict[str, Any]:
-    #     """Migrate from schema 1.0 to 1.1."""
-    #     # Add new field with default value
-    #     data["new_field"] = "default_value"
-    #     return data
+    @staticmethod
+    def _migrate_1_0_to_1_1(data: Dict[str, Any]) -> Dict[str, Any]:
+        """Migrate from schema 1.0 to 1.1.
+
+        Reconstructs ``tool_calls`` and ``function_call`` in message dicts
+        from the metadata backup that ``ConversationManager._finalize_completion``
+        stored (prior to schema 1.1, ``ConversationNode.to_dict()`` dropped these
+        fields from the message).
+        """
+        for node_data in data.get("nodes", []):
+            msg = node_data.get("message", {})
+            meta = node_data.get("metadata", {})
+
+            # Reconstruct tool_calls from metadata backup if missing
+            if "tool_calls" not in msg and "tool_calls" in meta:
+                msg["tool_calls"] = meta["tool_calls"]
+
+            # Reconstruct function_call from metadata backup if missing
+            if "function_call" not in msg and "function_call" in meta:
+                msg["function_call"] = meta["function_call"]
+
+        data["schema_version"] = "1.1.0"
+        return data
 
 
 class ConversationStorage(ABC):

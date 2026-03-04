@@ -375,20 +375,21 @@ class ResponseSequenceBuilder:
 def tool_call_to_dict(tc: ToolCall) -> dict[str, Any]:
     """Serialize a ToolCall to a JSON-compatible dict.
 
+    Delegates to :meth:`ToolCall.to_dict`. Kept for backward compatibility.
+
     Args:
         tc: ToolCall to serialize
 
     Returns:
         Dictionary representation
     """
-    d: dict[str, Any] = {"name": tc.name, "parameters": tc.parameters}
-    if tc.id is not None:
-        d["id"] = tc.id
-    return d
+    return tc.to_dict()
 
 
 def tool_call_from_dict(d: dict[str, Any]) -> ToolCall:
     """Deserialize a ToolCall from a dict.
+
+    Delegates to :meth:`ToolCall.from_dict`. Kept for backward compatibility.
 
     Args:
         d: Dictionary representation
@@ -396,15 +397,13 @@ def tool_call_from_dict(d: dict[str, Any]) -> ToolCall:
     Returns:
         ToolCall instance
     """
-    return ToolCall(
-        name=d["name"],
-        parameters=d["parameters"],
-        id=d.get("id"),
-    )
+    return ToolCall.from_dict(d)
 
 
 def llm_message_to_dict(msg: LLMMessage) -> dict[str, Any]:
     """Serialize an LLMMessage to a JSON-compatible dict.
+
+    Delegates to :meth:`LLMMessage.to_dict`. Kept for backward compatibility.
 
     Args:
         msg: LLMMessage to serialize
@@ -412,20 +411,13 @@ def llm_message_to_dict(msg: LLMMessage) -> dict[str, Any]:
     Returns:
         Dictionary representation (only non-None optional fields included)
     """
-    d: dict[str, Any] = {"role": msg.role, "content": msg.content}
-    if msg.name is not None:
-        d["name"] = msg.name
-    if msg.function_call is not None:
-        d["function_call"] = msg.function_call
-    if msg.tool_calls is not None:
-        d["tool_calls"] = [tool_call_to_dict(tc) for tc in msg.tool_calls]
-    if msg.metadata:
-        d["metadata"] = msg.metadata
-    return d
+    return msg.to_dict()
 
 
 def llm_message_from_dict(d: dict[str, Any]) -> LLMMessage:
     """Deserialize an LLMMessage from a dict.
+
+    Delegates to :meth:`LLMMessage.from_dict`. Kept for backward compatibility.
 
     Args:
         d: Dictionary representation
@@ -433,18 +425,7 @@ def llm_message_from_dict(d: dict[str, Any]) -> LLMMessage:
     Returns:
         LLMMessage instance
     """
-    tool_calls = None
-    if "tool_calls" in d and d["tool_calls"] is not None:
-        tool_calls = [tool_call_from_dict(tc) for tc in d["tool_calls"]]
-
-    return LLMMessage(
-        role=d["role"],
-        content=d["content"],
-        name=d.get("name"),
-        function_call=d.get("function_call"),
-        tool_calls=tool_calls,
-        metadata=d.get("metadata", {}),
-    )
+    return LLMMessage.from_dict(d)
 
 
 def llm_response_to_dict(resp: LLMResponse) -> dict[str, Any]:

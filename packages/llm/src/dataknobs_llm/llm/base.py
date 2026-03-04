@@ -178,6 +178,33 @@ class ToolCall:
     parameters: Dict[str, Any]
     id: str | None = None
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to canonical dictionary format for storage/interchange.
+
+        Returns:
+            Dictionary with ``name``, ``parameters``, and optionally ``id``.
+        """
+        d: Dict[str, Any] = {"name": self.name, "parameters": self.parameters}
+        if self.id is not None:
+            d["id"] = self.id
+        return d
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ToolCall":
+        """Create a ToolCall from a dictionary.
+
+        Args:
+            data: Dictionary with ``name`` (required), ``parameters``, and ``id``.
+
+        Returns:
+            ToolCall instance.
+        """
+        return cls(
+            name=data["name"],
+            parameters=data.get("parameters", {}),
+            id=data.get("id"),
+        )
+
 
 @dataclass
 class LLMMessage:
@@ -234,6 +261,54 @@ class LLMMessage:
     function_call: Dict[str, Any] | None = None  # For function calling
     tool_calls: list[ToolCall] | None = None  # Tool calls from assistant
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to canonical dictionary format for storage/interchange.
+
+        Only includes non-None/non-empty optional fields to keep output clean.
+
+        Returns:
+            Dictionary with ``role``, ``content``, and any present optional fields.
+        """
+        d: Dict[str, Any] = {
+            "role": self.role,
+            "content": self.content,
+        }
+        if self.name is not None:
+            d["name"] = self.name
+        if self.tool_calls:
+            d["tool_calls"] = [tc.to_dict() for tc in self.tool_calls]
+        if self.function_call is not None:
+            d["function_call"] = self.function_call
+        if self.metadata:
+            d["metadata"] = self.metadata
+        return d
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "LLMMessage":
+        """Create an LLMMessage from a dictionary.
+
+        Handles both the new canonical format (with ``tool_calls`` as list of
+        dicts) and the legacy format (without ``tool_calls``/``function_call``).
+
+        Args:
+            data: Dictionary with ``role`` (required), ``content``, and
+                optional ``name``, ``tool_calls``, ``function_call``, ``metadata``.
+
+        Returns:
+            LLMMessage instance.
+        """
+        tool_calls = None
+        if data.get("tool_calls"):
+            tool_calls = [ToolCall.from_dict(tc) for tc in data["tool_calls"]]
+        return cls(
+            role=data["role"],
+            content=data.get("content", ""),
+            name=data.get("name"),
+            tool_calls=tool_calls,
+            function_call=data.get("function_call"),
+            metadata=data.get("metadata", {}),
+        )
 
 
 @dataclass
