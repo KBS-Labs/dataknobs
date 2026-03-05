@@ -1227,6 +1227,56 @@ The base `_close_client()` is a no-op — only override it if your provider mana
 
 ---
 
+## Capability Detection
+
+Each provider reports its capabilities via `get_capabilities()`, which returns a
+list of `ModelCapability` values. This uses a template method pattern:
+
+1. **`_detect_capabilities()`** (abstract, implemented by each provider) —
+   auto-detects capabilities based on model name (e.g. `gpt-4o` gets
+   `FUNCTION_CALLING` and `JSON_MODE`).
+2. **`_resolve_capabilities()`** (base class) — applies `config.capabilities`
+   overrides, allowing consumers to add or remove capabilities via configuration.
+3. **`get_capabilities()`** (base class, concrete) — orchestrates the pipeline:
+   calls `_detect_capabilities()`, filters out `None` values, then calls
+   `_resolve_capabilities()`.
+
+### Config Overrides
+
+All providers respect capability overrides from `LLMConfig.capabilities`:
+
+```python
+config = LLMConfig(
+    provider="ollama",
+    model="custom-model",
+    capabilities={
+        "add": ["json_mode"],      # Add capabilities
+        "remove": ["streaming"],   # Remove capabilities
+    },
+)
+provider = OllamaProvider(config)
+caps = provider.get_capabilities()  # json_mode included, streaming excluded
+```
+
+This works for all providers (Ollama, OpenAI, Anthropic, HuggingFace, Echo) since
+the override logic is in the base class.
+
+### Implementing Custom Providers
+
+When subclassing `AsyncLLMProvider`, implement `_detect_capabilities()` to report
+what your provider supports. Config overrides are handled automatically:
+
+```python
+class MyProvider(AsyncLLMProvider):
+    def _detect_capabilities(self) -> list[ModelCapability]:
+        caps = [ModelCapability.TEXT_GENERATION, ModelCapability.CHAT]
+        if "json" in self.config.model:
+            caps.append(ModelCapability.JSON_MODE)
+        return caps
+```
+
+---
+
 ## Response Analysis Hooks
 
 ### `_analyze_response()`

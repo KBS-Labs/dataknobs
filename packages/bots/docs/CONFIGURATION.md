@@ -1106,7 +1106,13 @@ Direct LLM response without reasoning steps:
 ```yaml
 reasoning:
   strategy: simple
+  greeting_template: "Hello {{ user_name }}! How can I help?"  # Optional
 ```
+
+**Configuration Options:**
+- `greeting_template` (string, optional): Jinja2 template for bot-initiated
+  greetings. Variables from `initial_context` are available as top-level template
+  variables (e.g. `{{ user_name }}`). See [Bot Greetings](#bot-greetings).
 
 **Use Cases:**
 - Simple Q&A
@@ -1124,6 +1130,7 @@ reasoning:
   verbose: true           # Log reasoning steps
   store_trace: true       # Store reasoning trace
   early_stopping: true    # Stop when answer found
+  greeting_template: "Hi! I can help with research using tools."  # Optional
 ```
 
 **Configuration Options:**
@@ -1131,6 +1138,8 @@ reasoning:
 - `verbose` (bool): Print reasoning steps to console (default: false)
 - `store_trace` (bool): Store trace in memory for debugging (default: false)
 - `early_stopping` (bool): Stop when final answer is reached (default: true)
+- `greeting_template` (string, optional): Jinja2 template for bot-initiated
+  greetings. See [Bot Greetings](#bot-greetings).
 
 **Use Cases:**
 - Tool-using agents
@@ -2071,6 +2080,59 @@ Keep `reasoning: single` (default) for:
 - Data collection stages without tools
 - Simple single-tool stages
 - Stages where you want predictable single-call behavior
+
+---
+
+### Bot Greetings
+
+All reasoning strategies support bot-initiated greetings — a message the bot
+sends before the user speaks. This is useful for onboarding flows, wizard
+introductions, and welcome messages.
+
+**Template-based greetings** (Simple and ReAct strategies):
+
+```yaml
+reasoning:
+  strategy: simple
+  greeting_template: "Hello {{ user_name }}! Welcome to {{ app_name }}."
+```
+
+The `greeting_template` is a Jinja2 template string. Variables from
+`initial_context` (passed to `DynaBot.greet()`) are available as top-level
+template variables.
+
+```python
+result = await bot.greet(
+    context,
+    initial_context={"user_name": "Alice", "app_name": "DataKnobs"},
+)
+# result == "Hello Alice! Welcome to DataKnobs."
+```
+
+When no `greeting_template` is configured, `greet()` returns `None`.
+
+**FSM-driven greetings** (Wizard strategy):
+
+Wizard bots generate greetings from the start stage's `response_template` or LLM
+prompt. The `greeting_template` config option is not used — wizard greetings are
+controlled entirely by the FSM definition. See the wizard `response_template`
+documentation for details.
+
+```yaml
+reasoning:
+  strategy: wizard
+  wizard_config: path/to/wizard.yaml  # Start stage defines the greeting
+```
+
+**initial_context** seeds data into the strategy's state before greeting
+generation. For wizard strategies, values are merged into `wizard_state.data` and
+available to the start stage's prompt template and transforms. For simple/react
+strategies, values are available as Jinja2 template variables.
+
+**Streaming:** `stream_chat()` also supports greetings. When a reasoning strategy
+is configured, `DynaBot.stream_chat()` delegates to the strategy's
+`stream_generate()` method. `SimpleReasoning` provides true token-level streaming;
+wizard and react strategies yield a single complete response.
 
 ---
 

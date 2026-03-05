@@ -281,6 +281,92 @@ await provider.complete("Second message")
 assert provider.call_count == 2
 ```
 
+## CapturingProvider
+
+`CapturingProvider` wraps any `AsyncLLMProvider` and records every call as a
+`CapturedCall` object. Use it to inspect what was sent to and received from an
+LLM provider during tests.
+
+```python
+from dataknobs_llm import EchoProvider, LLMConfig
+from dataknobs_llm.testing import CapturingProvider, text_response
+
+config = LLMConfig(provider="echo", model="test")
+echo = EchoProvider(config)
+provider = CapturingProvider(echo, role="main")
+
+# Script responses on the delegate
+provider._delegate.set_responses([text_response("Hello")])
+
+# Use the capturing provider like any other provider
+response = await provider.complete("Hi there")
+
+# Inspect captured calls
+assert provider.call_count == 1
+call = provider.captured_calls[0]
+assert call.role == "main"
+assert call.response["content"] == "Hello"
+assert call.messages[-1]["content"] == "Hi there"
+```
+
+Each `CapturedCall` contains:
+- `role` — the provider's role label (e.g. `"main"`, `"extraction"`)
+- `messages` — the messages list sent to the LLM
+- `response` — dict with `content`, `tool_calls`, `usage`, etc.
+- `call_index` — assigned by `CallTracker` for global ordering (default: -1)
+
+## CallTracker
+
+`CallTracker` collects calls from multiple `CapturingProvider` instances and
+assigns sequential global indices. It uses cursor-based tracking so
+`collect_new_calls()` never returns duplicates.
+
+```python
+from dataknobs_llm import EchoProvider, LLMConfig
+from dataknobs_llm.testing import CallTracker, CapturingProvider, text_response
+
+# Set up providers
+config = LLMConfig(provider="echo", model="test")
+main = CapturingProvider(EchoProvider(config), role="main")
+extraction = CapturingProvider(EchoProvider(config), role="extraction")
+
+main._delegate.set_responses([text_response("Hello")])
+extraction._delegate.set_responses([text_response('{"name": "test"}')])
+
+# Create tracker with named providers
+tracker = CallTracker(main=main, extraction=extraction)
+
+# Make calls
+await main.complete("Hi")
+await extraction.complete("Extract data")
+
+# Collect all new calls with sequential indexing
+calls = tracker.collect_new_calls()
+assert len(calls) == 2
+assert calls[0].role == "main"
+assert calls[0].call_index == 0
+assert calls[1].role == "extraction"
+assert calls[1].call_index == 1
+
+# Subsequent collection returns only new calls
+empty = tracker.collect_new_calls()
+assert empty == []
+
+# Global call count
+assert tracker.total_calls == 2
+
+# Provider lookup
+assert tracker.get_provider("main") is main
+assert tracker.provider_names == ["main", "extraction"]
+```
+
+Key features:
+- **Cursor-based** — calls made before tracker creation are excluded
+- **Sequential indexing** — `call_index` continues across multiple
+  `collect_new_calls()` invocations
+- **Multi-provider** — register any number of named providers via kwargs
+- **No duplicates** — each call is returned exactly once
+
 ## Imports
 
 All testing utilities are available from the main package:
@@ -293,8 +379,17 @@ from dataknobs_llm.testing import (
     multi_tool_response,
     extraction_response,
     ResponseSequenceBuilder,
+    CapturingProvider,
+    CapturedCall,
+    CallTracker,
 )
 
 # Also available from top-level
-from dataknobs_llm import text_response, tool_call_response
+from dataknobs_llm import (
+    text_response,
+    tool_call_response,
+    CapturingProvider,
+    CapturedCall,
+    CallTracker,
+)
 ```
