@@ -5,6 +5,55 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-03-05
+
+### dataknobs-common [1.3.2]
+
+#### Added
+- added json safety functions and aids for serialization strictness
+
+### dataknobs-config [0.3.6]
+
+#### Fixed
+- fixed passing capabilities data through config
+
+### dataknobs-data [0.4.10]
+
+#### Fixed
+- fixed async elasticsearch database to override count() for filtered queries
+
+### dataknobs-fsm [0.1.11]
+
+#### Fixed
+- improved transition control and data/context management
+
+### dataknobs-llm [0.5.1]
+
+#### Added
+- added call tracker utility
+- added thinking mode detection
+- added LLM capture/replay testing harness support
+
+#### Fixed
+- improved conversation management and storage
+- improved parallel execution configuration
+- fixed provider functionality gaps
+- fixed llm message serialization
+
+### dataknobs-bots [0.6.1]
+
+#### Added
+- added wizard turn context for separating transient from persistent data
+- added greeting for non-wizard bots
+- added multi-llm capability validation (e.g., extractor -vs- main llm)
+- added bots capture/replay testing utilities
+
+#### Fixed
+- fixed fsm context management
+- fixed reasoning strategy lifecycle and streaming contracts
+- fixed greet initial context
+
+
 ## Release - 2026-03-03
 
 ### dataknobs-llm [0.5.0]
