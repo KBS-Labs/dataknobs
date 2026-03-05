@@ -25,6 +25,20 @@ logger = logging.getLogger(__name__)
 # Sentinel target for subflow transitions
 SUBFLOW_TARGET = "_subflow"
 
+
+def _default_transform_context_factory(fn_ctx: Any) -> Any:
+    """Default factory wrapping FunctionContext in a minimal TransformContext.
+
+    Ensures all transforms receive a :class:`TransformContext` (with empty
+    defaults for registries and banks) so they can access ``.banks``,
+    ``.config``, etc. without ``getattr`` guards.
+
+    Consumers can override with a richer factory that populates registries.
+    """
+    from ..artifacts.transforms import TransformContext
+
+    return TransformContext(fsm_context=fn_ctx)
+
 # Known stage fields recognized by the wizard config loader
 KNOWN_STAGE_FIELDS: frozenset[str] = frozenset({
     "name", "label", "is_start", "is_end",
@@ -114,6 +128,7 @@ class WizardConfigLoader:
         self,
         config_path: str | Path,
         custom_functions: dict[str, Callable[..., Any] | str] | None = None,
+        transform_context_factory: Callable[..., Any] | None = None,
     ) -> WizardFSM:
         """Load wizard config and create WizardFSM.
 
@@ -121,6 +136,10 @@ class WizardConfigLoader:
             config_path: Path to wizard YAML config file
             custom_functions: Optional custom functions for transitions.
                 Values can be either callables or "module:function" strings.
+            transform_context_factory: Optional callable that receives a
+                :class:`FunctionContext` and returns the application-specific
+                context for transforms. If ``None``, a default factory is
+                used.
 
         Returns:
             Configured WizardFSM instance
@@ -136,7 +155,10 @@ class WizardConfigLoader:
             wizard_config = yaml.safe_load(f)
 
         return self.load_from_dict(
-            wizard_config, custom_functions, config_base_path=config_path.parent
+            wizard_config,
+            custom_functions,
+            config_base_path=config_path.parent,
+            transform_context_factory=transform_context_factory,
         )
 
     def load_from_dict(
@@ -144,6 +166,7 @@ class WizardConfigLoader:
         wizard_config: dict[str, Any],
         custom_functions: dict[str, Callable[..., Any] | str] | None = None,
         config_base_path: Path | None = None,
+        transform_context_factory: Callable[..., Any] | None = None,
     ) -> WizardFSM:
         """Load wizard config from dict and create WizardFSM.
 
@@ -154,6 +177,12 @@ class WizardConfigLoader:
                 - Callable objects (used directly)
                 - String references in "module.path:function_name" format
             config_base_path: Base path for resolving relative subflow paths
+            transform_context_factory: Optional callable that receives a
+                :class:`FunctionContext` and returns the application-specific
+                context for transforms (e.g. :class:`TransformContext`).
+                If ``None``, a default factory is used that wraps the
+                :class:`FunctionContext` in a minimal
+                :class:`TransformContext`.
 
         Returns:
             Configured WizardFSM instance
@@ -211,8 +240,17 @@ class WizardConfigLoader:
             wizard_config, custom_functions, config_base_path
         )
 
+        # Use provided factory or default that wraps FunctionContext
+        # in a minimal TransformContext
+        if transform_context_factory is None:
+            transform_context_factory = _default_transform_context_factory
+
         return WizardFSM(
-            advanced_fsm, stage_metadata, settings=settings, subflow_registry=subflow_registry
+            advanced_fsm,
+            stage_metadata,
+            settings=settings,
+            subflow_registry=subflow_registry,
+            transform_context_factory=transform_context_factory,
         )
 
     def _validate_config(self, wizard_config: dict[str, Any]) -> None:
@@ -831,6 +869,7 @@ class WizardConfigLoader:
 def load_wizard_config(
     config_path: str | Path,
     custom_functions: dict[str, Callable[..., Any] | str] | None = None,
+    transform_context_factory: Callable[..., Any] | None = None,
 ) -> WizardFSM:
     """Convenience function to load wizard config.
 
@@ -838,9 +877,14 @@ def load_wizard_config(
         config_path: Path to wizard YAML config file
         custom_functions: Optional custom functions for transitions.
             Values can be either callables or "module:function" strings.
+        transform_context_factory: Optional callable that receives a
+            :class:`FunctionContext` and returns the application-specific
+            context for transforms. If ``None``, a default factory is used.
 
     Returns:
         Configured WizardFSM instance
     """
     loader = WizardConfigLoader()
-    return loader.load(config_path, custom_functions)
+    return loader.load(
+        config_path, custom_functions, transform_context_factory
+    )
