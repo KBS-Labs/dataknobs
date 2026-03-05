@@ -526,6 +526,8 @@ context = TransformContext(
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
+| `fsm_context` | `Any \| None` | `None` | FSM-level `FunctionContext` (carries `state_name`, `function_name`, `resources`, `variables`) |
+| `turn` | `Any \| None` | `None` | Per-turn `TurnContext` with `message`, `bank_fn`, `intent`, `transform_error`, `corpus` |
 | `artifact_registry` | `Any \| None` | `None` | Registry for artifact CRUD |
 | `rubric_registry` | `Any \| None` | `None` | Registry for rubric lookups |
 | `rubric_executor` | `Any \| None` | `None` | Executor for evaluations |
@@ -533,6 +535,37 @@ context = TransformContext(
 | `config` | `dict[str, Any]` | `{}` | Additional config for transforms |
 | `user_id` | `str \| None` | `None` | Current user identifier |
 | `session_id` | `str \| None` | `None` | Current session identifier |
+
+### TurnContext
+
+`TurnContext` is a per-turn dataclass that carries ephemeral values for the current wizard step. It is delivered to transforms via `TransformContext.turn` and is never persisted to storage.
+
+```python
+from dataknobs_bots.reasoning.wizard import TurnContext
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `message` | `str \| None` | `None` | The current turn's user message |
+| `bank_fn` | `Any \| None` | `None` | Per-step bank accessor callable (non-serializable) |
+| `intent` | `str \| None` | `None` | Detected intent for this turn |
+| `transform_error` | `str \| None` | `None` | Error from a failed transform step |
+| `corpus` | `Any \| None` | `None` | Live `ArtifactCorpus` reference (non-serializable) |
+
+**Lifecycle**: The wizard creates a `TurnContext` at the start of each `generate()` call and clears it after the FSM step completes. Transforms should read from `context.turn` rather than reaching into `state.data` for per-turn values.
+
+**Accessing in transforms**:
+
+```python
+async def my_transform(data: dict, context: TransformContext) -> dict:
+    if context.turn and context.turn.message:
+        # Use the current user message
+        data["processed_input"] = context.turn.message.strip()
+    if context.turn and context.turn.intent:
+        # Use detected intent
+        data["intent"] = context.turn.intent
+    return data
+```
 
 ### create_artifact
 

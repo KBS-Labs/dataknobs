@@ -7,6 +7,8 @@ and branching logic.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import copy
 import logging
 import time
@@ -44,6 +46,22 @@ DEFAULT_EPHEMERAL_KEYS: frozenset[str] = frozenset({
     "_transform_error",     # Per-step error (may be Exception)
     "_bank_fn",             # Per-step bank accessor (non-serializable callable)
 })
+
+
+@dataclass
+class TurnContext:
+    """Per-turn values that travel with the FSM step but are never persisted.
+
+    Delivered to transforms via :class:`TransformContext.turn` through the
+    ``transform_context_factory`` mechanism.  Transforms can access per-turn
+    values through this context rather than reading ``state.data`` directly.
+    """
+
+    message: str | None = None
+    bank_fn: Any | None = None
+    intent: str | None = None
+    transform_error: str | None = None
+    corpus: Any | None = None
 
 
 def _is_json_safe(value: Any) -> bool:
@@ -440,6 +458,7 @@ class WizardReasoning(ReasoningStrategy):
                 values (e.g., quiz_bank_ids) from the bot config into the wizard
                 data dict where transforms can access them.
         """
+        super().__init__()
         self._fsm = wizard_fsm
         self._extractor = extractor
         self._strict_validation = strict_validation
@@ -469,11 +488,27 @@ class WizardReasoning(ReasoningStrategy):
         # by generate() after response to delegate to _execute_restart.
         self._tool_restart_requested: bool = False
 
+        # Per-turn context delivered to transforms via the context factory.
+        # Set at the start of each FSM step, cleared after.
+        self._current_turn: TurnContext | None = None
+
+        # Per-turn keys: cleared at the start of each turn, suppressed
+        # in conflict detection, and treated as ephemeral (non-persistent).
+        self._per_turn_keys: frozenset[str] = frozenset(
+            wizard_fsm.settings.get("per_turn_keys", [])
+        )
+
         # Merge framework-level ephemeral keys with config-declared ones
+        # and per-turn keys (which are implicitly ephemeral).
         config_ephemeral = wizard_fsm.settings.get("ephemeral_keys", [])
         self._ephemeral_keys: frozenset[str] = (
-            DEFAULT_EPHEMERAL_KEYS | frozenset(config_ephemeral)
+            DEFAULT_EPHEMERAL_KEYS
+            | frozenset(config_ephemeral)
+            | self._per_turn_keys
         )
+
+        # Track last wizard state for cleanup in close()
+        self._last_wizard_state: WizardState | None = None
 
         # Initialise MemoryBank instances from wizard-level ``banks`` config
         self._bank_configs: dict[str, dict[str, Any]] = dict(
@@ -497,119 +532,37 @@ class WizardReasoning(ReasoningStrategy):
             nav_settings or {}
         )
 
-        # Bridge FSM custom functions so they receive a TransformContext
-        # instead of a raw FunctionContext.  This lets transforms that
-        # need artifact_registry, rubric_executor, etc. work seamlessly.
-        self._wrap_custom_functions(wizard_fsm)
-
-    def _wrap_custom_functions(self, wizard_fsm: WizardFSM) -> None:
-        """Wrap FSM custom functions to inject TransformContext.
-
-        The FSM calls transform functions with ``(data, FunctionContext)``,
-        but artifact-aware transforms expect ``(data, TransformContext)``.
-        This method wraps each custom function so that the FSM's
-        ``FunctionContext`` is translated into a ``TransformContext``
-        carrying the artifact registry, review executor, and other
-        services stored on this WizardReasoning instance.
-
-        Args:
-            wizard_fsm: The WizardFSM whose custom functions to wrap.
-        """
-        # Functions are registered on the core FSM's function_registry
-        # (via FSMBuilder.register_function in WizardConfigLoader), not
-        # on AdvancedFSM._custom_functions.  The AdvancedFSM merges both
-        # registries in _execute_arc_transform_async, with _custom_functions
-        # taking precedence.  We wrap the core registry functions and put
-        # them into _custom_functions so the wrapped versions are used.
-        advanced_fsm = wizard_fsm._fsm
-        core_fsm = advanced_fsm.fsm
-        registry = getattr(core_fsm, "function_registry", {})
-
-        # Extract the raw function dict from the registry
-        if hasattr(registry, "functions"):
-            raw_fns: dict[str, Any] = dict(registry.functions)
-        elif isinstance(registry, dict):
-            raw_fns = dict(registry)
-        else:
-            raw_fns = {}
-
-        if not raw_fns:
-            return
-
-        try:
-            from ..artifacts import transforms as _transforms_mod
-        except ImportError:
-            # Artifact modules not available — wrapping not needed
-            return
-        del _transforms_mod
-
-        wrapped: dict[str, Any] = {}
-        for name, func in raw_fns.items():
-            wrapped[name] = self._make_context_wrapper(func)
-
-        # Store wrapped functions in AdvancedFSM._custom_functions which
-        # overrides the core registry in _execute_arc_transform_async
-        advanced_fsm._custom_functions = wrapped
-
-        logger.debug(
-            "Wrapped %d custom functions with TransformContext bridge",
-            len(wrapped),
+        # Store the factory — it will be set on the ExecutionContext
+        # before FSM steps execute (see WizardFSM._ensure_context_factory).
+        self._wizard_fsm = wizard_fsm
+        self._wizard_fsm.set_transform_context_factory(
+            self._build_transform_context
         )
 
-    def _make_context_wrapper(
-        self, func: Any
-    ) -> Any:
-        """Create a wrapper that injects TransformContext for a transform.
+    def _build_transform_context(self, func_context: Any) -> Any:
+        """Build a :class:`TransformContext` from an FSM ``FunctionContext``.
 
-        Wizard transforms follow an in-place mutation convention: they
-        modify ``data`` and return ``None``.  The FSM pipeline, however,
-        chains transforms by passing each return value as the next
-        transform's ``data``.  The wrapper preserves the original ``data``
-        dict when the transform returns ``None``.
+        Registered as the ``transform_context_factory`` on the
+        :class:`ExecutionContext`.  The FSM calls this instead of passing
+        the raw ``FunctionContext`` to transforms, giving them access to
+        the artifact registry, rubric executor, LLM, and memory banks.
 
         Args:
-            func: The original transform callable.
+            func_context: The :class:`FunctionContext` built by the FSM.
 
         Returns:
-            Wrapped callable with same signature as FSM expects.
+            ``TransformContext`` with wizard services and FSM context.
         """
-        import asyncio
-        import inspect
-
         from ..artifacts.transforms import TransformContext
 
-        async def _async_wrapper(
-            data: dict[str, Any], _func_context: Any = None, **kwargs: Any
-        ) -> Any:
-            transform_ctx = TransformContext(
-                artifact_registry=self._artifact_registry,
-                rubric_executor=self._review_executor,
-                config={"llm": self._current_llm} if self._current_llm else {},
-                banks=self._banks,
-            )
-            result = func(data, transform_ctx, **kwargs)
-            if inspect.isawaitable(result):
-                result = await result
-            # Transforms that mutate data in-place return None;
-            # preserve the data dict for the next transform in the chain.
-            return result if result is not None else data
-
-        def _sync_wrapper(
-            data: dict[str, Any], _func_context: Any = None, **kwargs: Any
-        ) -> Any:
-            transform_ctx = TransformContext(
-                artifact_registry=self._artifact_registry,
-                rubric_executor=self._review_executor,
-                config={"llm": self._current_llm} if self._current_llm else {},
-                banks=self._banks,
-            )
-            result = func(data, transform_ctx, **kwargs)
-            return result if result is not None else data
-
-        # Preserve async nature of the original function
-        if asyncio.iscoroutinefunction(func):
-            return _async_wrapper
-        return _sync_wrapper
+        return TransformContext(
+            fsm_context=func_context,
+            turn=self._current_turn,
+            artifact_registry=self._artifact_registry,
+            rubric_executor=self._review_executor,
+            config={"llm": self._current_llm} if self._current_llm else {},
+            banks=self._banks,
+        )
 
     # -----------------------------------------------------------------
     # MemoryBank management
@@ -1087,14 +1040,38 @@ class WizardReasoning(ReasoningStrategy):
     async def close(self) -> None:
         """Close the reasoning strategy and release resources.
 
-        Closes the SchemaExtractor's LLM provider if present, releasing
-        HTTP connections, and closes all memory bank database connections.
+        Cancels any in-flight asyncio tasks stored in ephemeral keys,
+        closes the SchemaExtractor's LLM provider if present (releasing
+        HTTP connections), and closes all memory bank database connections.
         Should be called when the reasoning strategy is no longer needed
         (typically via DynaBot.close()).
+
+        Note:
+            Wizard state is per-conversation (stored in manager.metadata).
+            This method cancels tasks accessible via the last-used manager's
+            state. If multiple conversations are active simultaneously,
+            only the tasks from the most recently accessed state are
+            cancelled here.
         """
+        # Cancel asyncio tasks stored in ephemeral wizard state keys
+        if hasattr(self, "_last_wizard_state") and self._last_wizard_state:
+            cancelled = 0
+            for key in self._ephemeral_keys:
+                val = self._last_wizard_state.data.get(key)
+                if isinstance(val, asyncio.Task) and not val.done():
+                    val.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await val
+                    cancelled += 1
+            if cancelled:
+                logger.debug("Cancelled %d ephemeral task(s)", cancelled)
+
+        # Close extractor's LLM provider
         if self._extractor is not None and hasattr(self._extractor, "close"):
             await self._extractor.close()
             logger.debug("Closed WizardReasoning extractor")
+
+        # Close memory bank database connections
         for _name, bank in self._banks.items():
             bank.close()
         if self._banks:
@@ -1333,6 +1310,8 @@ class WizardReasoning(ReasoningStrategy):
         self,
         manager: Any,
         llm: Any,
+        *,
+        initial_context: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any | None:
         """Generate a bot-initiated greeting from the wizard's start stage.
@@ -1349,6 +1328,10 @@ class WizardReasoning(ReasoningStrategy):
         Args:
             manager: ConversationManager or compatible manager instance
             llm: LLM provider instance
+            initial_context: Optional dict of initial data to seed into
+                ``wizard_state.data`` before generating the greeting.
+                These values are available to the start stage's prompt
+                template and transforms.
             **kwargs: Additional generation parameters
 
         Returns:
@@ -1359,6 +1342,10 @@ class WizardReasoning(ReasoningStrategy):
 
         # Initialize fresh wizard state (restarts FSM to start stage)
         wizard_state = self._get_wizard_state(manager)
+
+        # Merge initial context into wizard state data
+        if initial_context:
+            wizard_state.data.update(initial_context)
 
         logger.info(
             "Wizard greet: stage='%s', history=%s",
@@ -1416,6 +1403,11 @@ class WizardReasoning(ReasoningStrategy):
 
         # Get or restore wizard state
         wizard_state = self._get_wizard_state(manager)
+
+        # Clear per-turn keys from previous turn to prevent stale values
+        for key in self._per_turn_keys:
+            wizard_state.data.pop(key, None)
+            wizard_state.transient.pop(key, None)
 
         # Get user message
         user_message = self._get_last_user_message(manager)
@@ -1853,8 +1845,16 @@ class WizardReasoning(ReasoningStrategy):
         wizard_state.data["_message"] = user_message
         # Inject bank accessor for condition evaluation
         wizard_state.data["_bank_fn"] = self._make_bank_accessor()
+        # Set per-turn context for transforms (parallel delivery channel).
+        # _intent is set by _detect_intent() earlier in the generate() flow.
+        self._current_turn = TurnContext(
+            message=user_message,
+            bank_fn=self._make_bank_accessor(),
+            intent=wizard_state.data.get("_intent"),
+        )
         # Execute FSM transition using active FSM (async to support async transforms)
         step_result = await active_fsm.step_async(wizard_state.data)
+        self._current_turn = None
         wizard_state.data.pop("_message", None)
         wizard_state.data.pop("_bank_fn", None)
         to_stage = active_fsm.current_stage
@@ -2054,6 +2054,10 @@ class WizardReasoning(ReasoningStrategy):
     def _get_wizard_state(self, manager: Any) -> WizardState:
         """Get or create wizard state from conversation manager.
 
+        Stores a reference to the returned state as ``_last_wizard_state``
+        so that ``close()`` can cancel any dangling asyncio tasks stored
+        in ephemeral keys.
+
         Args:
             manager: ConversationManager instance
 
@@ -2117,6 +2121,7 @@ class WizardReasoning(ReasoningStrategy):
                 )
                 self._banks = dict(self._artifact.sections)
 
+            self._last_wizard_state = state
             return state
 
         # Initialize new wizard state with tasks from config
@@ -2137,13 +2142,15 @@ class WizardReasoning(ReasoningStrategy):
         if output_paths:
             initial_data["_output_paths"] = dict(output_paths)
 
-        return WizardState(
+        state = WizardState(
             current_stage=start_stage,
             data=initial_data,
             history=[start_stage],
             stage_entry_time=time.time(),
             tasks=initial_tasks,
         )
+        self._last_wizard_state = state
+        return state
 
     def _build_wizard_metadata(self, state: WizardState) -> dict[str, Any]:
         """Build canonical wizard metadata from current state.
@@ -2242,11 +2249,11 @@ class WizardReasoning(ReasoningStrategy):
         wizard_meta["fsm_state"] = {
             "current_stage": state.current_stage,
             "history": state.history,
-            "data": sanitize_for_json(state.data),
+            "data": sanitize_for_json(state.data, on_drop="warn"),
             "completed": state.completed,
             "clarification_attempts": state.clarification_attempts,
             "transitions": [
-                sanitize_for_json(t.to_dict()) for t in state.transitions
+                sanitize_for_json(t, on_drop="warn") for t in state.transitions
             ],
             "stage_entry_time": state.stage_entry_time,
             "tasks": state.tasks.to_dict(),
@@ -3197,8 +3204,8 @@ class WizardReasoning(ReasoningStrategy):
         conflicts: list[dict[str, Any]] = []
 
         for field_name, new_value in new_data.items():
-            # Skip internal fields
-            if field_name.startswith("_"):
+            # Skip internal fields and per-turn keys (expected to change each turn)
+            if field_name.startswith("_") or field_name in self._per_turn_keys:
                 continue
 
             # Skip if new value is None

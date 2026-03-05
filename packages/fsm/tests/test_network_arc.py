@@ -16,6 +16,7 @@ from dataknobs_fsm.core import (
     StateNetwork,
 )
 from dataknobs_fsm.core.exceptions import FunctionError
+from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.functions.base import FunctionContext
 
 
@@ -417,14 +418,10 @@ class TestArcExecution:
         """Test can_execute with no pre-test."""
         arc_def = ArcDefinition(target_state="next")
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
-        
-        # Mock execution context
-        class MockContext:
-            pass
-        
+
         # Should always return True without pre-test
-        assert arc_exec.can_execute(MockContext(), self.test_data) is True
-    
+        assert arc_exec.can_execute(ExecutionContext(), self.test_data) is True
+
     def test_can_execute_with_pretest(self):
         """Test can_execute with pre-test function."""
         # Arc with pre-test that returns True
@@ -433,21 +430,18 @@ class TestArcExecution:
             pre_test="always_true"
         )
         arc_exec1 = ArcExecution(arc_def1, "current", self.function_registry)
-        
-        class MockContext:
-            pass
-        
-        assert arc_exec1.can_execute(MockContext(), self.test_data) is True
-        
+
+        assert arc_exec1.can_execute(ExecutionContext(), self.test_data) is True
+
         # Arc with pre-test that returns False
         arc_def2 = ArcDefinition(
             target_state="next",
             pre_test="always_false"
         )
         arc_exec2 = ArcExecution(arc_def2, "current", self.function_registry)
-        
-        assert arc_exec2.can_execute(MockContext(), self.test_data) is False
-    
+
+        assert arc_exec2.can_execute(ExecutionContext(), self.test_data) is False
+
     def test_can_execute_missing_function(self):
         """Test can_execute with missing pre-test function."""
         arc_def = ArcDefinition(
@@ -455,30 +449,24 @@ class TestArcExecution:
             pre_test="nonexistent"
         )
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
-        
-        class MockContext:
-            pass
-        
+
         with pytest.raises(FunctionError, match="not found"):
-            arc_exec.can_execute(MockContext(), self.test_data)
-    
+            arc_exec.can_execute(ExecutionContext(), self.test_data)
+
     def test_execute_no_transform(self):
         """Test execute with no transform function."""
         arc_def = ArcDefinition(target_state="next")
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
-        
-        class MockContext:
-            pass
-        
+
         # Should pass data through unchanged
-        result = arc_exec.execute(MockContext(), self.test_data)
+        result = arc_exec.execute(ExecutionContext(), self.test_data)
         assert result == self.test_data
-        
+
         # Check statistics
         assert arc_exec.execution_count == 1
         assert arc_exec.success_count == 1
         assert arc_exec.failure_count == 0
-    
+
     def test_execute_with_transform(self):
         """Test execute with transform function."""
         arc_def = ArcDefinition(
@@ -486,17 +474,14 @@ class TestArcExecution:
             transform="double_value"
         )
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
-        
-        class MockContext:
-            pass
-        
+
         data = {"value": 10}
-        result = arc_exec.execute(MockContext(), data)
-        
+        result = arc_exec.execute(ExecutionContext(), data)
+
         assert result["value"] == 20
         assert arc_exec.execution_count == 1
         assert arc_exec.success_count == 1
-    
+
     def test_execute_with_failure(self):
         """Test execute with failing transform."""
         arc_def = ArcDefinition(
@@ -504,13 +489,10 @@ class TestArcExecution:
             transform="fail_function"
         )
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
-        
-        class MockContext:
-            pass
-        
+
         with pytest.raises(FunctionError, match="Arc execution failed"):
-            arc_exec.execute(MockContext(), self.test_data)
-        
+            arc_exec.execute(ExecutionContext(), self.test_data)
+
         assert arc_exec.execution_count == 1
         assert arc_exec.success_count == 0
         assert arc_exec.failure_count == 1
@@ -552,13 +534,10 @@ class TestArcExecution:
             transform="double_value"
         )
         arc_exec = ArcExecution(arc_def, "current", self.function_registry)
-        
-        class MockContext:
-            pass
-        
+
         # Execute multiple times
         for i in range(5):
-            arc_exec.execute(MockContext(), {"value": i})
+            arc_exec.execute(ExecutionContext(), {"value": i})
         
         stats = arc_exec.get_statistics()
         

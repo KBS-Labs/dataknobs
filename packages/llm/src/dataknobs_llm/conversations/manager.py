@@ -82,7 +82,6 @@ See Also:
     - AsyncPromptBuilder: Prompt rendering with RAG integration
 """
 
-import copy
 import logging
 import uuid
 from typing import List, Dict, Any, AsyncIterator
@@ -693,17 +692,6 @@ class ConversationManager:
             "provider": self.llm.config.provider,
             "finish_reason": response.finish_reason,
         })
-
-        # Capture tool calls in metadata for persistence/inspection
-        if response.tool_calls:
-            assistant_metadata["tool_calls"] = [
-                {
-                    "name": tc.name,
-                    "parameters": copy.deepcopy(tc.parameters),
-                    "id": tc.id,
-                }
-                for tc in response.tool_calls
-            ]
 
         # Track config overrides if they were applied
         if llm_config_overrides:

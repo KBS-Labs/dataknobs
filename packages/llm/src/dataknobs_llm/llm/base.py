@@ -55,14 +55,18 @@ See Also:
     - dataknobs_llm.prompts: Prompt rendering and RAG integration
 """
 
+import asyncio
 import logging
+import types
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
-    Any, Dict, List, Union, AsyncIterator, Iterator,
+    Any, Coroutine, Dict, List, Union, AsyncIterator, Iterator,
     Callable, Protocol
 )
+
+from dataknobs_common.exceptions import ResourceError
 from datetime import datetime
 
 # Import prompt builder types - clean one-way dependency (llm depends on prompts)
@@ -178,6 +182,33 @@ class ToolCall:
     parameters: Dict[str, Any]
     id: str | None = None
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to canonical dictionary format for storage/interchange.
+
+        Returns:
+            Dictionary with ``name``, ``parameters``, and optionally ``id``.
+        """
+        d: Dict[str, Any] = {"name": self.name, "parameters": self.parameters}
+        if self.id is not None:
+            d["id"] = self.id
+        return d
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "ToolCall":
+        """Create a ToolCall from a dictionary.
+
+        Args:
+            data: Dictionary with ``name`` (required), ``parameters``, and ``id``.
+
+        Returns:
+            ToolCall instance.
+        """
+        return cls(
+            name=data["name"],
+            parameters=data.get("parameters", {}),
+            id=data.get("id"),
+        )
+
 
 @dataclass
 class LLMMessage:
@@ -234,6 +265,54 @@ class LLMMessage:
     function_call: Dict[str, Any] | None = None  # For function calling
     tool_calls: list[ToolCall] | None = None  # Tool calls from assistant
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to canonical dictionary format for storage/interchange.
+
+        Only includes non-None/non-empty optional fields to keep output clean.
+
+        Returns:
+            Dictionary with ``role``, ``content``, and any present optional fields.
+        """
+        d: Dict[str, Any] = {
+            "role": self.role,
+            "content": self.content,
+        }
+        if self.name is not None:
+            d["name"] = self.name
+        if self.tool_calls:
+            d["tool_calls"] = [tc.to_dict() for tc in self.tool_calls]
+        if self.function_call is not None:
+            d["function_call"] = self.function_call
+        if self.metadata:
+            d["metadata"] = self.metadata
+        return d
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "LLMMessage":
+        """Create an LLMMessage from a dictionary.
+
+        Handles both the new canonical format (with ``tool_calls`` as list of
+        dicts) and the legacy format (without ``tool_calls``/``function_call``).
+
+        Args:
+            data: Dictionary with ``role`` (required), ``content``, and
+                optional ``name``, ``tool_calls``, ``function_call``, ``metadata``.
+
+        Returns:
+            LLMMessage instance.
+        """
+        tool_calls = None
+        if data.get("tool_calls"):
+            tool_calls = [ToolCall.from_dict(tc) for tc in data["tool_calls"]]
+        return cls(
+            role=data["role"],
+            content=data.get("content", ""),
+            name=data.get("name"),
+            tool_calls=tool_calls,
+            function_call=data.get("function_call"),
+            metadata=data.get("metadata", {}),
+        )
 
 
 @dataclass
@@ -635,6 +714,8 @@ class LLMProvider(ABC):
         self.prompt_builder = prompt_builder
         self._client = None
         self._is_initialized = False
+        self._is_closing = False
+        self._in_flight: set[asyncio.Task[Any]] = set()
 
     def _validate_prompt_builder(self, expected_type: type) -> None:
         """Validate that prompt builder is configured and of correct type.
@@ -691,14 +772,26 @@ class LLMProvider(ABC):
         """Validate that the model is available."""
         pass
 
-    @abstractmethod
     def get_capabilities(self) -> List[ModelCapability]:
         """Get model capabilities.
 
-        If ``config.capabilities`` is set, those values override the
-        provider's auto-detected capabilities.  Subclasses should call
-        :meth:`_resolve_capabilities` with their detected list to
-        honour this override.
+        Template method: calls :meth:`_detect_capabilities` (subclass hook),
+        filters out ``None`` values, then applies config overrides via
+        :meth:`_resolve_capabilities`.
+
+        Subclasses override :meth:`_detect_capabilities` instead of this
+        method.
+        """
+        detected = self._detect_capabilities()
+        detected = [c for c in detected if c is not None]
+        return self._resolve_capabilities(detected)
+
+    @abstractmethod
+    def _detect_capabilities(self) -> List[ModelCapability]:
+        """Auto-detect capabilities for this provider/model.
+
+        Subclasses return their best-effort capability list.
+        The base class handles config overrides and None filtering.
         """
         pass
 
@@ -721,6 +814,50 @@ class LLMProvider(ABC):
                     logger.warning("Unknown capability name in config: %s", name)
             return resolved
         return detected
+
+    def _check_ready(self) -> None:
+        """Raise if provider is not ready for requests.
+
+        Raises:
+            ResourceError: If provider is not initialized or is closing.
+        """
+        if not self._is_initialized:
+            raise ResourceError("Provider not initialized. Call initialize() first.")
+        if self._is_closing:
+            raise ResourceError("Provider is closing. No new requests accepted.")
+
+    def _analyze_response(self, response: "LLMResponse") -> "LLMResponse":
+        """Post-process a response after provider builds it.
+
+        Detects thinking-only responses (reasoning models that consume tokens
+        on ``<think>`` blocks but return empty visible content) and annotates
+        them with ``metadata["thinking_only"] = True``.
+
+        Subclasses may override to add provider-specific analysis but should
+        call ``super()._analyze_response(response)`` to preserve base checks.
+
+        Args:
+            response: The LLM response to analyze.
+
+        Returns:
+            The (possibly annotated) response.
+        """
+        # Detect thinking-only: empty visible content, no tool calls,
+        # but significant completion token usage (> 50 tokens).
+        if (
+            not response.content
+            and not response.tool_calls
+            and response.usage
+            and response.usage.get("completion_tokens", 0) > 50
+        ):
+            response.metadata["thinking_only"] = True
+            logger.warning(
+                "Thinking-only response detected: %d completion tokens, "
+                "empty content (model: %s)",
+                response.usage.get("completion_tokens", 0),
+                response.model,
+            )
+        return response
 
     @property
     def is_initialized(self) -> bool:
@@ -1471,20 +1608,84 @@ class AsyncLLMProvider(LLMProvider, ConfigOverrideMixin):
         """
         pass
         
+    def __enter__(self) -> None:
+        """Prevent sync context manager usage on async providers."""
+        raise TypeError(
+            "Use 'async with' for AsyncLLMProvider, not 'with'"
+        )
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: types.TracebackType | None,
+    ) -> None:
+        """Sync exit — unreachable since __enter__ raises."""
+
     async def initialize(self) -> None:
         """Initialize the async LLM client."""
         self._is_initialized = True
-        
+
     async def close(self) -> None:
-        """Close the async LLM client."""
+        """Close provider, cancelling in-flight requests.
+
+        Safe to call multiple times (idempotent). Cancels any tracked
+        in-flight requests before closing the underlying HTTP client.
+        """
+        if self._is_closing:
+            return
+        self._is_closing = True
+
+        # Cancel in-flight requests
+        if self._in_flight:
+            logger.info("Cancelling %d in-flight requests", len(self._in_flight))
+            for task in self._in_flight:
+                task.cancel()
+            await asyncio.gather(*self._in_flight, return_exceptions=True)
+            self._in_flight.clear()
+
+        # Close the HTTP client (subclass hook)
+        await self._close_client()
+
         self._is_initialized = False
-        
+        self._is_closing = False
+
+    async def _close_client(self) -> None:
+        """Close the underlying HTTP client.
+
+        Override in subclasses to close provider-specific HTTP clients.
+        The base implementation is a no-op.
+        """
+
+    async def _tracked_call(self, coro: Coroutine[Any, Any, Any]) -> Any:
+        """Execute a coroutine while tracking it as in-flight.
+
+        Args:
+            coro: The coroutine to execute.
+
+        Returns:
+            The coroutine's return value.
+        """
+        task = asyncio.current_task()
+        if task:
+            self._in_flight.add(task)
+        try:
+            return await coro
+        finally:
+            if task:
+                self._in_flight.discard(task)
+
     async def __aenter__(self):
         """Async context manager entry."""
         await self.initialize()
         return self
-        
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: types.TracebackType | None,
+    ) -> None:
         """Async context manager exit."""
         await self.close()
 
@@ -1713,10 +1914,26 @@ class SyncLLMProvider(LLMProvider, ConfigOverrideMixin):
     def initialize(self) -> None:
         """Initialize the sync LLM client."""
         self._is_initialized = True
-        
+
     def close(self) -> None:
-        """Close the sync LLM client."""
+        """Close the sync LLM client.
+
+        Safe to call multiple times (idempotent). Calls ``_close_client()``
+        for subclass-specific resource cleanup.
+        """
+        if self._is_closing:
+            return
+        self._is_closing = True
+        self._close_client()
         self._is_initialized = False
+        self._is_closing = False
+
+    def _close_client(self) -> None:
+        """Close the underlying HTTP client.
+
+        Override in subclasses to close provider-specific HTTP clients.
+        The base implementation is a no-op.
+        """
 
 
 class LLMAdapter(ABC):

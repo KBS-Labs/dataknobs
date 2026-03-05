@@ -45,11 +45,10 @@ class HuggingFaceProvider(AsyncLLMProvider):
         except ImportError as e:
             raise ImportError("aiohttp package not installed. Install with: pip install aiohttp") from e
 
-    async def close(self) -> None:
-        """Close HuggingFace client."""
+    async def _close_client(self) -> None:
+        """Close the aiohttp session."""
         if hasattr(self, '_session') and self._session:
             await self._session.close()
-        self._is_initialized = False
 
     async def validate_model(self) -> bool:
         """Validate model availability."""
@@ -60,13 +59,19 @@ class HuggingFaceProvider(AsyncLLMProvider):
         except Exception:
             return False
 
-    def get_capabilities(self) -> List[ModelCapability]:
-        """Get HuggingFace model capabilities."""
-        # Basic capabilities for text generation models
-        return [
-            ModelCapability.TEXT_GENERATION,
-            ModelCapability.EMBEDDINGS if 'embedding' in self.config.model else None  # type: ignore
-        ]
+    def _detect_capabilities(self) -> List[ModelCapability]:
+        """Auto-detect HuggingFace model capabilities."""
+        model = self.config.model.lower()
+        capabilities = [ModelCapability.TEXT_GENERATION]
+
+        if 'embedding' in model:
+            capabilities.append(ModelCapability.EMBEDDINGS)
+
+        # Chat-capable models
+        if any(m in model for m in ['chat', 'instruct', 'conversational']):
+            capabilities.append(ModelCapability.CHAT)
+
+        return capabilities
 
     async def complete(
         self,
@@ -126,11 +131,11 @@ class HuggingFaceProvider(AsyncLLMProvider):
         else:
             text = str(data)
 
-        return LLMResponse(
+        return self._analyze_response(LLMResponse(
             content=text,
             model=runtime_config.model,
             finish_reason='stop'
-        )
+        ))
 
     async def stream_complete(
         self,

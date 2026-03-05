@@ -576,3 +576,73 @@ class TestSubflowLoading:
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(config)
         assert wizard_fsm._subflow_registry == {}
+
+
+class TestTransformContextFactory:
+    """Tests for transform_context_factory passthrough."""
+
+    def test_factory_provided_at_construction(
+        self, simple_wizard_config: dict
+    ) -> None:
+        """Factory provided to load_from_dict flows through to WizardFSM."""
+        called_with = []
+
+        def my_factory(fn_ctx):
+            called_with.append(fn_ctx)
+            return {"custom": True, "fsm_context": fn_ctx}
+
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(
+            simple_wizard_config, transform_context_factory=my_factory,
+        )
+        assert wizard_fsm._transform_context_factory is my_factory
+
+    def test_set_transform_context_factory_still_works(
+        self, simple_wizard_config: dict
+    ) -> None:
+        """Backward compat: set_transform_context_factory() post-construction."""
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(simple_wizard_config)
+
+        def my_factory(fn_ctx):
+            return {"custom": True}
+
+        wizard_fsm.set_transform_context_factory(my_factory)
+        assert wizard_fsm._transform_context_factory is my_factory
+
+    def test_default_factory_produces_transform_context(
+        self, simple_wizard_config: dict
+    ) -> None:
+        """Default factory wraps FunctionContext in TransformContext."""
+        from dataknobs_bots.artifacts.transforms import TransformContext
+
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(simple_wizard_config)
+
+        # The default factory should be set
+        factory = wizard_fsm._transform_context_factory
+        assert factory is not None
+
+        # Call it with a mock FunctionContext-like object
+        fake_fn_ctx = {"state_name": "test", "function_name": "fn"}
+        result = factory(fake_fn_ctx)
+
+        assert isinstance(result, TransformContext)
+        assert result.fsm_context == fake_fn_ctx
+        # Default empty values
+        assert result.banks == {}
+        assert result.config == {}
+        assert result.artifact_registry is None
+
+    def test_factory_passed_through_load_file(
+        self, wizard_config_file: Path
+    ) -> None:
+        """Factory flows through the load() file path too."""
+        def my_factory(fn_ctx):
+            return {"from_file": True}
+
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load(
+            wizard_config_file, transform_context_factory=my_factory,
+        )
+        assert wizard_fsm._transform_context_factory is my_factory

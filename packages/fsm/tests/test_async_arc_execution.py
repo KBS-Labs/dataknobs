@@ -9,13 +9,8 @@ import pytest
 
 from dataknobs_fsm.core.arc import ArcDefinition, ArcExecution
 from dataknobs_fsm.core.exceptions import FunctionError
+from dataknobs_fsm.execution.context import ExecutionContext
 from dataknobs_fsm.functions.base import ExecutionResult, FunctionContext
-
-
-class StubContext:
-    """Minimal execution context for arc tests."""
-
-    pass
 
 
 def sync_add_ten(data: dict, context: FunctionContext) -> dict:
@@ -66,7 +61,7 @@ class TestExecuteAsyncWithSyncTransform:
         arc_def = ArcDefinition(target_state="next", transform="add_ten")
         arc_exec = ArcExecution(arc_def, "current", registry)
 
-        result = await arc_exec.execute_async(StubContext(), {"value": 5})
+        result = await arc_exec.execute_async(ExecutionContext(), {"value": 5})
         assert result["value"] == 15
 
     @pytest.mark.asyncio
@@ -75,7 +70,7 @@ class TestExecuteAsyncWithSyncTransform:
         arc_def = ArcDefinition(target_state="next", transform="add_ten")
         arc_exec = ArcExecution(arc_def, "current", registry)
 
-        await arc_exec.execute_async(StubContext(), {"value": 0})
+        await arc_exec.execute_async(ExecutionContext(), {"value": 0})
         assert arc_exec.execution_count == 1
         assert arc_exec.success_count == 1
         assert arc_exec.failure_count == 0
@@ -90,7 +85,7 @@ class TestExecuteAsyncWithAsyncTransform:
         arc_def = ArcDefinition(target_state="next", transform="double")
         arc_exec = ArcExecution(arc_def, "current", registry)
 
-        result = await arc_exec.execute_async(StubContext(), {"value": 7})
+        result = await arc_exec.execute_async(ExecutionContext(), {"value": 7})
         assert result["value"] == 14
 
     @pytest.mark.asyncio
@@ -100,7 +95,7 @@ class TestExecuteAsyncWithAsyncTransform:
         arc_exec = ArcExecution(arc_def, "current", registry)
 
         with pytest.raises(FunctionError, match="Arc execution failed"):
-            await arc_exec.execute_async(StubContext(), {"value": 0})
+            await arc_exec.execute_async(ExecutionContext(), {"value": 0})
 
         assert arc_exec.failure_count == 1
 
@@ -121,7 +116,7 @@ class TestExecuteAsyncWithMixedChain:
         arc_exec = ArcExecution(arc_def, "current", registry)
 
         # value=5 -> +10=15 -> *2=30 -> +10=40
-        result = await arc_exec.execute_async(StubContext(), {"value": 5})
+        result = await arc_exec.execute_async(ExecutionContext(), {"value": 5})
         assert result["value"] == 40
 
 
@@ -134,7 +129,7 @@ class TestCanExecuteAsyncWithSyncPretest:
         arc_def = ArcDefinition(target_state="next", pre_test="check")
         arc_exec = ArcExecution(arc_def, "current", registry)
 
-        assert await arc_exec.can_execute_async(StubContext(), {}) is True
+        assert await arc_exec.can_execute_async(ExecutionContext(), {}) is True
 
     @pytest.mark.asyncio
     async def test_sync_pretest_false(self) -> None:
@@ -142,7 +137,7 @@ class TestCanExecuteAsyncWithSyncPretest:
         arc_def = ArcDefinition(target_state="next", pre_test="check")
         arc_exec = ArcExecution(arc_def, "current", registry)
 
-        assert await arc_exec.can_execute_async(StubContext(), {}) is False
+        assert await arc_exec.can_execute_async(ExecutionContext(), {}) is False
 
 
 class TestCanExecuteAsyncWithAsyncPretest:
@@ -154,7 +149,7 @@ class TestCanExecuteAsyncWithAsyncPretest:
         arc_def = ArcDefinition(target_state="next", pre_test="check")
         arc_exec = ArcExecution(arc_def, "current", registry)
 
-        assert await arc_exec.can_execute_async(StubContext(), {}) is True
+        assert await arc_exec.can_execute_async(ExecutionContext(), {}) is True
 
     @pytest.mark.asyncio
     async def test_async_pretest_false(self) -> None:
@@ -162,14 +157,14 @@ class TestCanExecuteAsyncWithAsyncPretest:
         arc_def = ArcDefinition(target_state="next", pre_test="check")
         arc_exec = ArcExecution(arc_def, "current", registry)
 
-        assert await arc_exec.can_execute_async(StubContext(), {}) is False
+        assert await arc_exec.can_execute_async(ExecutionContext(), {}) is False
 
     @pytest.mark.asyncio
     async def test_no_pretest_returns_true(self) -> None:
         arc_def = ArcDefinition(target_state="next")
         arc_exec = ArcExecution(arc_def, "current", {})
 
-        assert await arc_exec.can_execute_async(StubContext(), {}) is True
+        assert await arc_exec.can_execute_async(ExecutionContext(), {}) is True
 
 
 class TestExecuteAsyncNoTransform:
@@ -180,7 +175,7 @@ class TestExecuteAsyncNoTransform:
         arc_def = ArcDefinition(target_state="next")
         arc_exec = ArcExecution(arc_def, "current", {})
 
-        result = await arc_exec.execute_async(StubContext(), {"key": "value"})
+        result = await arc_exec.execute_async(ExecutionContext(), {"key": "value"})
         assert result == {"key": "value"}
 
 
@@ -196,7 +191,7 @@ class TestExecuteAsyncExecutionResult:
         arc_def = ArcDefinition(target_state="next", transform="wrapped")
         arc_exec = ArcExecution(arc_def, "current", registry)
 
-        result = await arc_exec.execute_async(StubContext(), {})
+        result = await arc_exec.execute_async(ExecutionContext(), {})
         assert result == {"answer": 42}
 
     @pytest.mark.asyncio
@@ -209,4 +204,4 @@ class TestExecuteAsyncExecutionResult:
         arc_exec = ArcExecution(arc_def, "current", registry)
 
         with pytest.raises(FunctionError, match="bad input"):
-            await arc_exec.execute_async(StubContext(), {})
+            await arc_exec.execute_async(ExecutionContext(), {})

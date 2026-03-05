@@ -45,6 +45,7 @@ executor = ParallelLLMExecutor(
 | `provider` | `AsyncLLMProvider` | required | The LLM provider for executing tasks |
 | `max_concurrency` | `int` | `5` | Maximum concurrent tasks (semaphore limit) |
 | `default_retry` | `RetryConfig \| None` | `None` | Default retry policy for tasks without their own |
+| `default_config_overrides` | `dict[str, Any] \| None` | `None` | Config overrides applied to all tasks (task-level overrides take precedence) |
 
 ### execute()
 

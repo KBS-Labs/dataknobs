@@ -261,6 +261,32 @@ The engine selects from valid arcs using a deterministic priority-based approach
 
 This ensures predictable, deterministic behavior where the best available path is always taken, with automatic fallback to alternative paths if the primary choice leads to failure downstream.
 
+#### Transition Signal Override
+
+Before evaluating arc pre-test conditions, the engine checks for a `_transition_signal` key in `context.data`. This allows a transform function from a previous state to pre-select the next transition, bypassing normal arc evaluation.
+
+**How it works**:
+
+1. A state transform sets `context.data["_transition_signal"] = "target_state_name"`
+2. On the next arc evaluation, the engine pops `_transition_signal` from data
+3. If an outgoing arc exists with that target state, it is selected immediately
+4. If no matching arc exists, a warning is logged and normal arc evaluation proceeds
+
+```python
+# In a state transform function:
+def my_transform(data: dict, context: FunctionContext) -> dict:
+    if data.get("needs_special_handling"):
+        data["_transition_signal"] = "special_handler"
+    return data
+```
+
+**Use cases**:
+- Transform functions that determine the next state based on LLM output or business logic
+- Skipping conditional arc evaluation when the destination is already known
+- Wizard-style flows where a processing step decides the next step
+
+**Important**: The signal is consumed (popped) on use, so it only affects the immediately following transition. The signal key is not persisted — it is a single-use, per-step mechanism.
+
 ### 4. Arc Execution
 
 Once selected, arc execution proceeds:
@@ -1293,6 +1319,38 @@ class FunctionContext:
 - `is_end_state`: Boolean end state flag (when applicable)
 - Custom metadata from state configuration
 - Additional execution context metadata
+
+### Transform Context Factory
+
+By default, transform and validation functions receive a `FunctionContext`. Applications that need richer context (e.g., application-level state, per-turn data, logging handles) can set a **transform context factory** on the `ExecutionContext`.
+
+When `ExecutionContext.transform_context_factory` is set, the engine calls it with the built `FunctionContext` and passes the factory's return value to transforms instead:
+
+```python
+from dataknobs_fsm.execution.context import ExecutionContext
+
+# Define an application-specific context
+@dataclass
+class MyAppContext:
+    fsm_context: FunctionContext
+    user_session: UserSession
+    metrics: MetricsCollector
+
+# Set the factory on the execution context
+def my_factory(func_context: FunctionContext) -> MyAppContext:
+    return MyAppContext(
+        fsm_context=func_context,
+        user_session=current_session,
+        metrics=collector,
+    )
+
+exec_context = ExecutionContext(data=input_data)
+exec_context.transform_context_factory = my_factory
+```
+
+With this factory set, all transform and arc transform functions receive `MyAppContext` as their `context` parameter instead of `FunctionContext`. This allows clean composition of application concerns on top of FSM mechanics without modifying FSM internals.
+
+**Important**: The factory is called for every function invocation (state transforms, arc transforms, validators). Ensure it is lightweight — avoid expensive operations in the factory itself.
 
 ## Execution Modes
 

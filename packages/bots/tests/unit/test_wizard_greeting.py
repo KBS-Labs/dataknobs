@@ -137,6 +137,78 @@ class TestWizardReasoningGreet:
         assert "Welcome to the wizard" in assistant_msgs[0]["content"]
 
     @pytest.mark.asyncio
+    async def test_greet_with_initial_context(
+        self,
+        greeting_wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
+    ) -> None:
+        """greet() merges initial_context into wizard_state.data."""
+        await greeting_wizard_reasoning.greet(
+            conversation_manager,
+            llm=None,
+            initial_context={"tenant_id": "acme", "locale": "en-US"},
+        )
+
+        wizard_meta = conversation_manager.metadata.get("wizard", {})
+        fsm_data = wizard_meta.get("fsm_state", {}).get("data", {})
+        assert fsm_data.get("tenant_id") == "acme"
+        assert fsm_data.get("locale") == "en-US"
+
+    @pytest.mark.asyncio
+    async def test_greet_with_initial_context_in_template(
+        self,
+        conversation_manager: ConversationManager,
+    ) -> None:
+        """initial_context values are available in response_template rendering."""
+        config: dict[str, Any] = {
+            "name": "ctx-template-wizard",
+            "version": "1.0",
+            "stages": [
+                {
+                    "name": "greeting",
+                    "is_start": True,
+                    "prompt": "Greet the user",
+                    "response_template": "Hello {{ user_name }}! Welcome.",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"user_name": {"type": "string"}},
+                    },
+                    "transitions": [{"target": "done"}],
+                },
+                {
+                    "name": "done",
+                    "is_end": True,
+                    "prompt": "Done",
+                },
+            ],
+        }
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict(config)
+        reasoning = WizardReasoning(wizard_fsm=fsm, strict_validation=False)
+
+        response = await reasoning.greet(
+            conversation_manager,
+            llm=None,
+            initial_context={"user_name": "Alice"},
+        )
+
+        assert response is not None
+        assert response.content == "Hello Alice! Welcome."
+
+    @pytest.mark.asyncio
+    async def test_greet_without_initial_context_still_works(
+        self,
+        greeting_wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
+    ) -> None:
+        """greet() without initial_context works as before (backward compat)."""
+        response = await greeting_wizard_reasoning.greet(
+            conversation_manager, llm=None
+        )
+        assert response is not None
+        assert "Welcome to the wizard" in response.content
+
+    @pytest.mark.asyncio
     async def test_greet_without_template_uses_llm(
         self,
         wizard_reasoning: WizardReasoning,
@@ -266,6 +338,56 @@ class TestDynaBotGreet:
             greeting = await bot.greet(context)
 
             assert greeting is None
+        finally:
+            await bot.close()
+
+    @pytest.mark.asyncio
+    async def test_greet_with_initial_context_integration(self) -> None:
+        """DynaBot.greet() passes initial_context through to wizard state."""
+        from dataknobs_bots.bot.base import DynaBot
+        from dataknobs_bots.bot.context import BotContext
+
+        config: dict[str, Any] = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "reasoning": {
+                "strategy": "wizard",
+                "wizard_config": {
+                    "name": "ctx-test",
+                    "stages": [
+                        {
+                            "name": "welcome",
+                            "is_start": True,
+                            "prompt": "Welcome the user",
+                            "response_template": "Hello {{ user_name }}!",
+                            "transitions": [{"target": "done"}],
+                        },
+                        {
+                            "name": "done",
+                            "is_end": True,
+                            "prompt": "Done",
+                        },
+                    ],
+                },
+            },
+        }
+        bot = await DynaBot.from_config(config)
+        try:
+            context = BotContext(
+                conversation_id="test-greet-ctx",
+                client_id="test",
+            )
+
+            greeting = await bot.greet(
+                context, initial_context={"user_name": "Bob"}
+            )
+
+            assert greeting == "Hello Bob!"
+
+            # Verify context persisted in wizard state
+            wizard_state = await bot.get_wizard_state("test-greet-ctx")
+            assert wizard_state is not None
+            assert wizard_state.get("data", {}).get("user_name") == "Bob"
         finally:
             await bot.close()
 

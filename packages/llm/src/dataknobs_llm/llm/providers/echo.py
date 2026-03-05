@@ -416,23 +416,22 @@ class EchoProvider(AsyncLLMProvider):
         """Initialize echo provider (no-op)."""
         self._is_initialized = True
 
-    async def close(self) -> None:
-        """Close echo provider (no-op)."""
-        self._is_initialized = False
+    async def _close_client(self) -> None:
+        """Close echo provider (no-op — no HTTP client)."""
 
     async def validate_model(self) -> bool:
         """Validate model (always true for echo)."""
         return True
 
-    def get_capabilities(self) -> List[ModelCapability]:
-        """Get echo provider capabilities."""
+    def _detect_capabilities(self) -> List[ModelCapability]:
+        """Auto-detect echo provider capabilities (reports all)."""
         return [
             ModelCapability.TEXT_GENERATION,
             ModelCapability.CHAT,
             ModelCapability.EMBEDDINGS,
             ModelCapability.FUNCTION_CALLING,
             ModelCapability.STREAMING,
-            ModelCapability.JSON_MODE
+            ModelCapability.JSON_MODE,
         ]
 
     async def complete(
@@ -511,6 +510,8 @@ class EchoProvider(AsyncLLMProvider):
                     'total_tokens': prompt_tokens + completion_tokens
                 } if self.mock_tokens else None
             )
+
+        response = self._analyze_response(response)
 
         # Record the call
         self._call_history.append({

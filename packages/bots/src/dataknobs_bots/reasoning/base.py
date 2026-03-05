@@ -1,7 +1,12 @@
 """Base reasoning strategy for DynaBot."""
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from typing import Any, Protocol, runtime_checkable
+
+import jinja2
+
+from dataknobs_llm import LLMResponse
 
 
 @runtime_checkable
@@ -66,6 +71,20 @@ class ReasoningManagerProtocol(Protocol):
         """
         ...
 
+    def stream_complete(
+        self,
+        *,
+        tools: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[Any]:
+        """Stream an LLM completion.
+
+        Args:
+            tools: Optional list of tools available for this completion
+            **kwargs: Additional parameters (branch_name, metadata, etc.)
+        """
+        ...
+
 
 class ReasoningStrategy(ABC):
     """Abstract base class for reasoning strategies.
@@ -74,35 +93,69 @@ class ReasoningStrategy(ABC):
     and generates responses. Different strategies can implement
     different levels of reasoning complexity.
 
+    All strategies support an optional ``greeting_template`` — a Jinja2
+    template string rendered with ``initial_context`` variables when
+    ``greet()`` is called.  Strategies that need richer greeting behavior
+    (e.g. ``WizardReasoning`` with FSM-driven stage responses) override
+    ``greet()`` entirely.
+
+    Args:
+        greeting_template: Optional Jinja2 template for bot-initiated
+            greetings.  Variables from ``initial_context`` are available
+            as top-level template variables (e.g. ``{{ user_name }}``).
+
     Examples:
         - Simple: Direct LLM call
         - Chain-of-Thought: Break down reasoning into steps
         - ReAct: Reason and act in a loop with tools
     """
 
+    def __init__(self, *, greeting_template: str | None = None) -> None:
+        self._greeting_template = greeting_template
+
     async def greet(
         self,
         manager: ReasoningManagerProtocol,
         llm: Any,
+        *,
+        initial_context: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any | None:
         """Generate an initial bot greeting before the user speaks.
 
-        Override in strategies that support bot-initiated greetings (e.g.
-        wizard flows with a ``response_template`` on the start stage).
+        The default implementation renders ``greeting_template`` (if set)
+        with ``initial_context`` variables using Jinja2 and returns the
+        result as an ``LLMResponse``.  Returns ``None`` when no template
+        is configured.
 
-        The default implementation returns ``None``, indicating the strategy
-        does not support greetings.
+        ``WizardReasoning`` fully overrides this with FSM-driven greeting
+        generation from the wizard's start stage.
 
         Args:
             manager: ConversationManager or compatible manager instance
             llm: LLM provider instance
+            initial_context: Optional dict of data available as Jinja2
+                template variables (e.g. ``{"user_name": "Alice"}``
+                makes ``{{ user_name }}`` resolve to ``"Alice"``).
             **kwargs: Additional generation parameters
 
         Returns:
-            LLM response object if a greeting was generated, or None
+            LLMResponse if a greeting was generated, or None
         """
-        return None
+        if self._greeting_template is None:
+            return None
+        context = initial_context or {}
+        env = jinja2.Environment(undefined=jinja2.Undefined)
+        text = env.from_string(self._greeting_template).render(**context)
+        return LLMResponse(content=text, model="template", finish_reason="stop")
+
+    async def close(self) -> None:  # noqa: B027
+        """Release resources held by this strategy.
+
+        Default no-op. Subclasses that hold resources (LLM providers,
+        database connections, asyncio tasks) should override to release
+        them. Called by ``DynaBot.close()``.
+        """
 
     @abstractmethod
     async def generate(
@@ -135,3 +188,29 @@ class ReasoningStrategy(ABC):
             ```
         """
         pass
+
+    async def stream_generate(
+        self,
+        manager: ReasoningManagerProtocol,
+        llm: Any,
+        tools: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[Any]:
+        """Stream response using this reasoning strategy.
+
+        The default implementation wraps ``generate()`` and yields the
+        complete response as a single item.  Subclasses that support true
+        token-level streaming (e.g. ``SimpleReasoning``) should override
+        this to yield incremental chunks.
+
+        Args:
+            manager: ConversationManager or compatible manager instance
+            llm: LLM provider instance
+            tools: Optional list of available tools
+            **kwargs: Additional generation parameters
+
+        Yields:
+            LLM response or stream chunk objects
+        """
+        result = await self.generate(manager, llm, tools=tools, **kwargs)
+        yield result

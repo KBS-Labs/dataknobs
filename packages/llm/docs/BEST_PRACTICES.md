@@ -18,6 +18,8 @@
 8. [Error Handling](#error-handling)
 9. [Testing](#testing)
 10. [Production Deployment](#production-deployment)
+11. [Provider Lifecycle](#provider-lifecycle)
+12. [Response Analysis Hooks](#response-analysis-hooks)
 
 ---
 
@@ -1168,6 +1170,154 @@ class ConversationService:
 
 ---
 
+## Provider Lifecycle
+
+### Context Manager Usage
+
+LLM providers support context managers for automatic initialization and cleanup:
+
+**Async providers** (recommended):
+```python
+async with OllamaProvider(config={"model": "llama3.2"}) as provider:
+    response = await provider.complete([
+        LLMMessage(role="user", content="Hello")
+    ])
+# Provider is automatically closed on exit
+```
+
+**Sync providers**:
+```python
+with SyncLLMProvider(config={"model": "llama3.2"}) as provider:
+    response = provider.complete([
+        LLMMessage(role="user", content="Hello")
+    ])
+```
+
+Using `async with` on an `AsyncLLMProvider` calls `initialize()` on entry and `close()` on exit. Using `with` on an async provider raises `TypeError` — always use `async with`.
+
+### Provider Close Behavior
+
+`close()` is idempotent and safe to call multiple times. On close:
+
+1. In-flight requests are cancelled via `asyncio.Task.cancel()`
+2. The `_close_client()` hook is called (subclass extension point)
+3. Provider state is reset (`_is_initialized = False`)
+
+### Readiness Guard
+
+All completion and embedding methods call `_check_ready()` before processing. This raises `ResourceError` if the provider is not initialized or is in the process of closing. You do not need to call this yourself — it is automatic.
+
+### Implementing Custom Providers
+
+When subclassing `AsyncLLMProvider`, override `_close_client()` to clean up provider-specific HTTP clients:
+
+```python
+class MyProvider(AsyncLLMProvider):
+    async def initialize(self) -> None:
+        await super().initialize()
+        self._client = httpx.AsyncClient(timeout=30.0)
+
+    async def _close_client(self) -> None:
+        """Close the httpx client."""
+        if hasattr(self, "_client"):
+            await self._client.aclose()
+```
+
+The base `_close_client()` is a no-op — only override it if your provider manages an HTTP client or other closeable resource.
+
+---
+
+## Capability Detection
+
+Each provider reports its capabilities via `get_capabilities()`, which returns a
+list of `ModelCapability` values. This uses a template method pattern:
+
+1. **`_detect_capabilities()`** (abstract, implemented by each provider) —
+   auto-detects capabilities based on model name (e.g. `gpt-4o` gets
+   `FUNCTION_CALLING` and `JSON_MODE`).
+2. **`_resolve_capabilities()`** (base class) — applies `config.capabilities`
+   overrides, allowing consumers to add or remove capabilities via configuration.
+3. **`get_capabilities()`** (base class, concrete) — orchestrates the pipeline:
+   calls `_detect_capabilities()`, filters out `None` values, then calls
+   `_resolve_capabilities()`.
+
+### Config Overrides
+
+All providers respect capability overrides from `LLMConfig.capabilities`:
+
+```python
+config = LLMConfig(
+    provider="ollama",
+    model="custom-model",
+    capabilities={
+        "add": ["json_mode"],      # Add capabilities
+        "remove": ["streaming"],   # Remove capabilities
+    },
+)
+provider = OllamaProvider(config)
+caps = provider.get_capabilities()  # json_mode included, streaming excluded
+```
+
+This works for all providers (Ollama, OpenAI, Anthropic, HuggingFace, Echo) since
+the override logic is in the base class.
+
+### Implementing Custom Providers
+
+When subclassing `AsyncLLMProvider`, implement `_detect_capabilities()` to report
+what your provider supports. Config overrides are handled automatically:
+
+```python
+class MyProvider(AsyncLLMProvider):
+    def _detect_capabilities(self) -> list[ModelCapability]:
+        caps = [ModelCapability.TEXT_GENERATION, ModelCapability.CHAT]
+        if "json" in self.config.model:
+            caps.append(ModelCapability.JSON_MODE)
+        return caps
+```
+
+---
+
+## Response Analysis Hooks
+
+### `_analyze_response()`
+
+Every response built by a provider passes through `_analyze_response()` before being returned. The base implementation detects **thinking-only responses** — a pattern where reasoning models (e.g., o1, o3) consume significant completion tokens on internal `<think>` blocks but return empty visible content.
+
+**Detection criteria** (all must be true):
+- `response.content` is empty
+- `response.tool_calls` is empty
+- `response.usage["completion_tokens"]` exceeds 50
+
+When detected, the response is annotated with `response.metadata["thinking_only"] = True` and a warning is logged.
+
+### Handling Thinking-Only Responses
+
+```python
+response = await provider.complete(messages)
+
+if response.metadata.get("thinking_only"):
+    # Model consumed tokens but produced no visible output.
+    # Common causes: reasoning model spent all tokens on internal
+    # deliberation, or the prompt triggered a think-only path.
+    logger.warning("Thinking-only response — consider adjusting prompt")
+```
+
+### Extending in Subclasses
+
+Override `_analyze_response()` to add provider-specific analysis. Always call `super()` to preserve the base thinking-only detection:
+
+```python
+class MyProvider(AsyncLLMProvider):
+    def _analyze_response(self, response: LLMResponse) -> LLMResponse:
+        response = super()._analyze_response(response)
+        # Add custom analysis
+        if response.usage and response.usage.get("total_tokens", 0) > 10000:
+            response.metadata["high_token_usage"] = True
+        return response
+```
+
+---
+
 ## Summary
 
 ### Quick Reference
@@ -1214,6 +1364,16 @@ class ConversationService:
 - Monitor token usage
 - Secure credentials
 - Graceful shutdown
+
+**Provider Lifecycle**:
+- Use `async with` for automatic init/close
+- Override `_close_client()` for custom resource cleanup
+- `close()` is idempotent and cancels in-flight requests
+
+**Response Analysis**:
+- `_analyze_response()` detects thinking-only responses automatically
+- Check `response.metadata["thinking_only"]` for reasoning model edge cases
+- Override with `super()` call for custom post-processing
 
 ---
 

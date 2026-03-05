@@ -342,11 +342,6 @@ class EnvironmentAwareConfig:
                                     f"Declared: {declared}"
                                 )
 
-                    # Strip capabilities metadata from resolved config
-                    # (it's validation metadata, not a provider parameter)
-                    if isinstance(resolved, dict):
-                        resolved.pop("capabilities", None)
-
                     # Recursively resolve any nested references in the resolved config
                     return self._resolve_resource_refs(resolved)
                 except KeyError:

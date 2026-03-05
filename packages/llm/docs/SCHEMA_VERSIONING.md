@@ -1,8 +1,8 @@
 # Conversation Storage Schema Versioning
 
 **Package**: `dataknobs_llm.conversations`
-**Current Schema Version**: 1.0.0
-**Last Updated**: 2025-10-29
+**Current Schema Version**: 1.1.0
+**Last Updated**: 2026-03-04
 
 ---
 
@@ -67,6 +67,22 @@ state = ConversationState.from_dict(old_data)
 
 ## Version History
 
+### Version 1.1.0 (2026-03-04)
+
+**Native tool_calls and function_call serialization**
+
+- `ConversationNode.to_dict()` now preserves `tool_calls` and `function_call` fields from `LLMMessage` natively (via `LLMMessage.to_dict()`)
+- Previously these fields were dropped during serialization and only stored as metadata backups by `ConversationManager._finalize_completion()`
+- The metadata backup write-path has been removed — tool calls are preserved on the message itself
+
+**Migration from 1.0.0**:
+- Reconstructs `tool_calls` and `function_call` in message dicts from metadata backups created by the old write-path
+- If `msg["tool_calls"]` is missing but `metadata["tool_calls"]` exists, copies it to the message
+- Same for `function_call`
+- Conversations without tool calls are unaffected
+
+**Note on metadata backup removal**: Prior to 1.1.0, `ConversationManager._finalize_completion()` copied `response.tool_calls` into node metadata as a backup for persistence. This write-path backup is no longer produced. The read-path migration (`_migrate_1_0_to_1_1`) is retained to handle conversations saved under schema 1.0.0.
+
 ### Version 1.0.0 (2025-10-29)
 
 **Initial versioned schema**
@@ -99,10 +115,10 @@ Update `SCHEMA_VERSION` in `storage.py`:
 
 ```python
 # Before
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"
 
 # After (example: adding optional field)
-SCHEMA_VERSION = "1.1.0"
+SCHEMA_VERSION = "1.2.0"
 ```
 
 ### 2. Add Migration Method

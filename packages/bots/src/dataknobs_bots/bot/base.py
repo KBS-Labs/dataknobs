@@ -250,9 +250,11 @@ class DynaBot:
         from ..memory import create_memory_from_config
 
         # Validate capability requirements (Layer 2 — startup check)
-        from .validation import infer_capability_requirements
+        # Only check main LLM requirements here; extraction LLM requirements
+        # are validated when WizardReasoning sets up its extractor.
+        from .validation import infer_main_capability_requirements
 
-        requirements = infer_capability_requirements(config)
+        requirements = infer_main_capability_requirements(config)
         if requirements:
             capabilities = llm.get_capabilities()
             capability_values = {cap.value for cap in capabilities}
@@ -703,7 +705,12 @@ class DynaBot:
 
         return response_content
 
-    async def greet(self, context: BotContext) -> str | None:
+    async def greet(
+        self,
+        context: BotContext,
+        *,
+        initial_context: dict[str, Any] | None = None,
+    ) -> str | None:
         """Generate a bot-initiated greeting before the user speaks.
 
         Delegates to the reasoning strategy's ``greet()`` method. Returns
@@ -715,6 +722,11 @@ class DynaBot:
 
         Args:
             context: Bot execution context
+            initial_context: Optional dict of initial data to seed into
+                the reasoning strategy's state before generating the
+                greeting. For wizard strategies, these values are merged
+                into ``wizard_state.data`` so they are available to the
+                start stage's prompt template and transforms.
 
         Returns:
             Greeting string, or None if the bot does not support greetings
@@ -722,7 +734,7 @@ class DynaBot:
         Example:
             ```python
             context = BotContext(conversation_id="conv-123", client_id="harness")
-            greeting = await bot.greet(context)
+            greeting = await bot.greet(context, initial_context={"user_name": "Alice"})
             if greeting:
                 print(f"Bot says: {greeting}")
             ```
@@ -742,6 +754,7 @@ class DynaBot:
         response = await self.reasoning_strategy.greet(
             manager=manager,
             llm=self.llm,
+            initial_context=initial_context,
         )
 
         if response is None:
@@ -832,16 +845,28 @@ class DynaBot:
 
         try:
             if self.reasoning_strategy:
-                # Reasoning strategies produce complete responses.  Run the
-                # strategy, then emit the result as a single stream chunk.
-                response = await self._generate_response(
-                    manager, temperature, max_tokens, llm_config_overrides
-                )
-                content = self._extract_response_content(response)
-                full_response_chunks.append(content)
-                yield LLMStreamResponse(
-                    delta=content, is_final=True, finish_reason="stop"
-                )
+                # Delegate to the strategy's stream_generate().
+                # Strategies with true streaming (SimpleReasoning) yield
+                # LLMStreamResponse chunks; others yield a single complete
+                # response that we wrap as a stream chunk.
+                async for chunk in self.reasoning_strategy.stream_generate(
+                    manager=manager,
+                    llm=self.llm,
+                    tools=list(self.tool_registry),
+                    temperature=temperature or self.default_temperature,
+                    max_tokens=max_tokens or self.default_max_tokens,
+                    llm_config_overrides=llm_config_overrides,
+                ):
+                    if isinstance(chunk, LLMStreamResponse):
+                        full_response_chunks.append(chunk.delta)
+                        yield chunk
+                    else:
+                        # Strategy yielded a complete LLMResponse — wrap it
+                        content = self._extract_response_content(chunk)
+                        full_response_chunks.append(content)
+                        yield LLMStreamResponse(
+                            delta=content, is_final=True, finish_reason="stop"
+                        )
             else:
                 # No reasoning strategy — stream directly from LLM
                 async for chunk in manager.stream_complete(
@@ -1063,7 +1088,7 @@ class DynaBot:
                 logger.exception("Error closing knowledge base")
 
         # Close reasoning strategy (releases extractor's LLM provider sessions)
-        if self.reasoning_strategy and hasattr(self.reasoning_strategy, 'close'):
+        if self.reasoning_strategy:
             try:
                 await self.reasoning_strategy.close()
             except Exception:

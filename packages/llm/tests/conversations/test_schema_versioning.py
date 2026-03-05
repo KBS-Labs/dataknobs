@@ -94,8 +94,8 @@ class TestSchemaVersioning:
         assert state2.schema_version == SCHEMA_VERSION
         assert state2.conversation_id == "test-123"
 
-    def test_migration_from_0_0_0_to_1_0_0(self):
-        """Test migration from unversioned to version 1.0.0."""
+    def test_migration_from_0_0_0_to_current(self):
+        """Test migration from unversioned to current version."""
         data = {
             "conversation_id": "test-123",
             "nodes": [
@@ -121,10 +121,10 @@ class TestSchemaVersioning:
             # No schema_version field - represents legacy data
         }
 
-        # Should migrate successfully
+        # Should migrate successfully through 0.0.0 → 1.0.0 → 1.1.0
         state = ConversationState.from_dict(data)
 
-        assert state.schema_version == "1.0.0"
+        assert state.schema_version == SCHEMA_VERSION
         assert state.conversation_id == "test-123"
 
     def test_migration_logs_version_change(self, caplog):

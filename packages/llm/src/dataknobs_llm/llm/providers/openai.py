@@ -273,11 +273,10 @@ class OpenAIProvider(AsyncLLMProvider):
         except ImportError as e:
             raise ImportError("openai package not installed. Install with: pip install openai") from e
 
-    async def close(self) -> None:
-        """Close OpenAI client."""
+    async def _close_client(self) -> None:
+        """Close the OpenAI client."""
         if self._client:
             await self._client.close()  # type: ignore[unreachable]
-        self._is_initialized = False
 
     async def validate_model(self) -> bool:
         """Validate model availability."""
@@ -289,24 +288,32 @@ class OpenAIProvider(AsyncLLMProvider):
         except Exception:
             return False
 
-    def get_capabilities(self) -> List[ModelCapability]:
-        """Get OpenAI model capabilities."""
+    def _detect_capabilities(self) -> List[ModelCapability]:
+        """Auto-detect OpenAI model capabilities."""
+        model = self.config.model.lower()
         capabilities = [
             ModelCapability.TEXT_GENERATION,
             ModelCapability.CHAT,
-            ModelCapability.STREAMING
+            ModelCapability.STREAMING,
         ]
 
-        if 'gpt-4' in self.config.model or 'gpt-3.5' in self.config.model:
+        # GPT and O-series models support function calling and JSON mode
+        tool_capable = [
+            'gpt-4', 'gpt-3.5', 'gpt-4o', 'gpt-4-turbo', 'o1', 'o3', 'o4',
+        ]
+        if any(m in model for m in tool_capable):
             capabilities.extend([
                 ModelCapability.FUNCTION_CALLING,
-                ModelCapability.JSON_MODE
+                ModelCapability.JSON_MODE,
             ])
 
-        if 'vision' in self.config.model:
-            capabilities.append(ModelCapability.VISION)
+        # Vision models
+        if 'vision' in model or 'gpt-4o' in model:
+            if ModelCapability.VISION not in capabilities:
+                capabilities.append(ModelCapability.VISION)
 
-        if 'embedding' in self.config.model:
+        # Embedding models
+        if 'embedding' in model or model.startswith('text-embedding-'):
             capabilities.append(ModelCapability.EMBEDDINGS)
 
         return capabilities
@@ -366,7 +373,7 @@ class OpenAIProvider(AsyncLLMProvider):
             **params
         )
 
-        return self.adapter.adapt_response(response)
+        return self._analyze_response(self.adapter.adapt_response(response))
 
     async def stream_complete(
         self,
@@ -531,4 +538,4 @@ class OpenAIProvider(AsyncLLMProvider):
             **params
         )
 
-        return self.adapter.adapt_response(response)
+        return self._analyze_response(self.adapter.adapt_response(response))

@@ -86,8 +86,10 @@ See Also:
     - Ollama GitHub: https://github.com/ollama/ollama
 """
 
-import os
 import json
+import logging
+import os
+import re
 import warnings
 from typing import TYPE_CHECKING, Any, Dict, List, Union, AsyncIterator
 
@@ -100,6 +102,12 @@ from dataknobs_llm.prompts import AsyncPromptBuilder
 
 if TYPE_CHECKING:
     from dataknobs_config.config import Config
+
+logger = logging.getLogger(__name__)
+
+# Regex for <think>...</think> blocks emitted by reasoning models.
+# DOTALL so '.' matches newlines inside the tag.
+_THINK_TAG_RE = re.compile(r"^<think>(.*?)</think>\s*(.*)", re.DOTALL)
 
 
 class OllamaProvider(AsyncLLMProvider):
@@ -309,6 +317,37 @@ class OllamaProvider(AsyncLLMProvider):
 
         return options
 
+    def _analyze_response(self, response: LLMResponse) -> LLMResponse:
+        """Parse ``<think>`` tags and run base-class thinking-only detection.
+
+        Reasoning models (DeepSeek-R1, Qwen3) wrap their chain-of-thought in
+        ``<think>...</think>`` tags.  This method extracts the thinking text
+        into ``metadata["thinking"]`` and leaves only the visible answer in
+        ``content``.  After extraction, the base-class heuristic
+        (empty content + high token usage) fires if the model produced *only*
+        thinking and no visible answer.
+        """
+        if response.content:
+            match = _THINK_TAG_RE.match(response.content)
+            if match:
+                thinking_text = match.group(1).strip()
+                visible_text = match.group(2).strip()
+                if thinking_text:
+                    response.metadata["thinking"] = thinking_text
+                response = LLMResponse(
+                    content=visible_text,
+                    model=response.model,
+                    finish_reason=response.finish_reason,
+                    usage=response.usage,
+                    function_call=response.function_call,
+                    tool_calls=response.tool_calls,
+                    metadata=response.metadata,
+                    created_at=response.created_at,
+                    cost_usd=response.cost_usd,
+                    cumulative_cost_usd=response.cumulative_cost_usd,
+                )
+        return super()._analyze_response(response)
+
     def _messages_to_ollama(self, messages: List[LLMMessage]) -> List[Dict[str, Any]]:
         """Convert LLMMessage list to Ollama chat format.
 
@@ -423,11 +462,10 @@ class OllamaProvider(AsyncLLMProvider):
         except ImportError as e:
             raise ImportError("aiohttp package not installed. Install with: pip install aiohttp") from e
 
-    async def close(self) -> None:
-        """Close Ollama client."""
+    async def _close_client(self) -> None:
+        """Close the aiohttp session."""
         if hasattr(self, '_session') and self._session:
             await self._session.close()
-        self._is_initialized = False
 
     async def validate_model(self) -> bool:
         """Validate model availability."""
@@ -448,35 +486,41 @@ class OllamaProvider(AsyncLLMProvider):
             return False
         return False
 
-    def get_capabilities(self) -> List[ModelCapability]:
-        """Get Ollama model capabilities.
-
-        If ``config.capabilities`` is set, those values are used instead of
-        the auto-detected list below.
-        """
-        # Auto-detect capabilities based on model name
+    def _detect_capabilities(self) -> List[ModelCapability]:
+        """Auto-detect Ollama model capabilities."""
         detected = [
             ModelCapability.TEXT_GENERATION,
             ModelCapability.CHAT,
-            ModelCapability.STREAMING
+            ModelCapability.STREAMING,
+            ModelCapability.EMBEDDINGS,  # Ollama supports embed() for all models
         ]
 
-        # Most recent Ollama models support function calling
+        model = self.config.model.lower()
+
+        # Models that support function calling
         tool_capable_models = [
             'llama3', 'mistral', 'mixtral', 'qwen',
             'command-r', 'phi3', 'phi4', 'nemotron',
             'firefunction', 'hermes',
         ]
-        if any(model in self.config.model.lower() for model in tool_capable_models):
+        if any(m in model for m in tool_capable_models):
             detected.append(ModelCapability.FUNCTION_CALLING)
 
-        if 'llava' in self.config.model.lower():
+        # JSON mode: tool-capable models + gemma, deepseek support structured output
+        json_capable_models = [
+            *tool_capable_models,
+            'gemma', 'deepseek',
+        ]
+        if any(m in model for m in json_capable_models):
+            detected.append(ModelCapability.JSON_MODE)
+
+        if 'llava' in model:
             detected.append(ModelCapability.VISION)
 
-        if 'codellama' in self.config.model.lower() or 'codegemma' in self.config.model.lower():
+        if 'codellama' in model or 'codegemma' in model:
             detected.append(ModelCapability.CODE)
 
-        return self._resolve_capabilities(detected)
+        return detected
 
     async def complete(
         self,
@@ -536,6 +580,12 @@ class OllamaProvider(AsyncLLMProvider):
             ollama_tools = self._adapt_tools(tool_dicts)
             payload['tools'] = ollama_tools
 
+        # Forward 'think' parameter for reasoning models (e.g. qwen3, deepseek-r1).
+        # When True, the model emits <think>...</think> blocks before the answer.
+        think = runtime_config.options.get('think')
+        if think is not None:
+            payload['think'] = bool(think)
+
         async with self._session.post(f"{self.base_url}/api/chat", json=payload) as response:
             if response.status != 200:
                 error_text = await response.text()
@@ -578,7 +628,7 @@ class OllamaProvider(AsyncLLMProvider):
                     id=tc.get('id')
                 ))
 
-        return LLMResponse(
+        return self._analyze_response(LLMResponse(
             content=content,
             model=runtime_config.model,
             finish_reason='tool_calls' if tool_calls else ('stop' if data.get('done') else 'length'),
@@ -593,7 +643,7 @@ class OllamaProvider(AsyncLLMProvider):
                 'total_duration': data.get('total_duration'),
                 'model_info': data.get('model', '')
             }
-        )
+        ))
 
     async def stream_complete(
         self,
@@ -654,6 +704,11 @@ class OllamaProvider(AsyncLLMProvider):
                     'parameters': tool.schema if hasattr(tool, 'schema') else {}
                 })
             payload['tools'] = self._adapt_tools(tool_dicts)
+
+        # Forward 'think' parameter for reasoning models (mirrors complete())
+        think = runtime_config.options.get('think')
+        if think is not None:
+            payload['think'] = bool(think)
 
         async with self._session.post(f"{self.base_url}/api/chat", json=payload) as response:
             response.raise_for_status()

@@ -107,6 +107,7 @@ class ParallelLLMExecutor:
         provider: AsyncLLMProvider,
         max_concurrency: int = 5,
         default_retry: RetryConfig | None = None,
+        default_config_overrides: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the executor.
 
@@ -115,10 +116,14 @@ class ParallelLLMExecutor:
             max_concurrency: Maximum number of concurrent tasks.
             default_retry: Default retry policy applied to tasks that do not
                 specify their own.
+            default_config_overrides: Config overrides applied to every LLM
+                task.  Per-task ``config_overrides`` take precedence over
+                these defaults when both are set.
         """
         self._provider = provider
         self._max_concurrency = max_concurrency
         self._default_retry = default_retry
+        self._default_config_overrides = default_config_overrides
 
     async def execute(
         self,
@@ -246,18 +251,26 @@ class ParallelLLMExecutor:
         start = time.monotonic()
         logger.debug("Starting LLM task '%s'", tag)
         try:
+            # Merge config overrides: executor defaults < task-level
+            effective_overrides: dict[str, Any] | None = None
+            if self._default_config_overrides or task.config_overrides:
+                effective_overrides = {
+                    **(self._default_config_overrides or {}),
+                    **(task.config_overrides or {}),
+                }
+
             retry_config = task.retry or self._default_retry
             if retry_config:
                 executor = RetryExecutor(retry_config)
                 response = await executor.execute(
                     self._provider.complete,
                     task.messages,
-                    config_overrides=task.config_overrides,
+                    config_overrides=effective_overrides,
                 )
             else:
                 response = await self._provider.complete(
                     task.messages,
-                    config_overrides=task.config_overrides,
+                    config_overrides=effective_overrides,
                 )
             duration = (time.monotonic() - start) * 1000
             logger.debug("LLM task '%s' completed in %.1fms", tag, duration)

@@ -1,5 +1,6 @@
 """Simple reasoning strategy - direct LLM call."""
 
+from collections.abc import AsyncIterator
 from typing import Any
 
 from .base import ReasoningStrategy
@@ -28,6 +29,9 @@ class SimpleReasoning(ReasoningStrategy):
         ```
     """
 
+    def __init__(self, *, greeting_template: str | None = None) -> None:
+        super().__init__(greeting_template=greeting_template)
+
     async def generate(
         self,
         manager: Any,
@@ -49,3 +53,27 @@ class SimpleReasoning(ReasoningStrategy):
         # Use the conversation manager's generate method
         # which handles the LLM call with the conversation history
         return await manager.complete(tools=tools, **kwargs)
+
+    async def stream_generate(
+        self,
+        manager: Any,
+        llm: Any,
+        tools: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[Any]:
+        """Stream response with true token-level streaming.
+
+        Delegates to ``manager.stream_complete()`` which yields
+        ``LLMStreamResponse`` chunks as they arrive from the provider.
+
+        Args:
+            manager: ConversationManager instance
+            llm: LLM provider instance (not used directly)
+            tools: Optional list of tools
+            **kwargs: Generation parameters
+
+        Yields:
+            LLM stream response chunks
+        """
+        async for chunk in manager.stream_complete(tools=tools, **kwargs):
+            yield chunk

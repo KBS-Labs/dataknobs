@@ -42,7 +42,14 @@ class TransformContext:
     registry without requiring transforms to have direct dependencies on
     wizard infrastructure.
 
+    When created via the :attr:`ExecutionContext.transform_context_factory`
+    mechanism, ``fsm_context`` carries the FSM-level
+    :class:`~dataknobs_fsm.functions.base.FunctionContext` (state name,
+    function name, resources, variables) so that transforms can access
+    FSM execution metadata alongside wizard services.
+
     Attributes:
+        fsm_context: FSM-level FunctionContext (state_name, resources, etc.).
         artifact_registry: Registry for artifact CRUD operations.
         rubric_registry: Registry for looking up rubric definitions.
         rubric_executor: Executor for running rubric evaluations.
@@ -52,6 +59,8 @@ class TransformContext:
         session_id: Identifier of the current session.
     """
 
+    fsm_context: Any | None = None
+    turn: Any | None = None
     artifact_registry: Any | None = None
     rubric_registry: Any | None = None
     rubric_executor: Any | None = None

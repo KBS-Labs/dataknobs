@@ -58,6 +58,7 @@ class ReActReasoning(ReasoningStrategy):
         context_builder: Any | None = None,
         extra_context: dict[str, Any] | None = None,
         prompt_refresher: Callable[[], str] | None = None,
+        greeting_template: str | None = None,
     ):
         """Initialize ReAct reasoning strategy.
 
@@ -75,7 +76,10 @@ class ReActReasoning(ReasoningStrategy):
                 to update ``system_prompt_override`` in the next
                 ``manager.complete()`` call.  This prevents stale context
                 when mutating tools change artifact/bank state mid-loop.
+            greeting_template: Optional Jinja2 template for bot-initiated
+                greetings (inherited from ReasoningStrategy).
         """
+        super().__init__(greeting_template=greeting_template)
         self.max_iterations = max_iterations
         self.verbose = verbose
         self.store_trace = store_trace
