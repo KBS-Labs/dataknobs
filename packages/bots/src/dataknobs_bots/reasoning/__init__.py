@@ -90,6 +90,8 @@ def create_reasoning_from_config(config: dict[str, Any]) -> ReasoningStrategy:
     Args:
         config: Reasoning configuration with:
             - strategy: Strategy type ('simple', 'react', 'wizard')
+            - greeting_template: Optional Jinja2 template for bot-initiated
+              greetings (simple/react only; wizard uses FSM start stage)
             - max_iterations: For ReAct, max reasoning loops (default: 5)
             - verbose: Enable debug logging for reasoning steps (default: False)
             - store_trace: Store reasoning trace in conversation metadata (default: False)
@@ -134,13 +136,16 @@ def create_reasoning_from_config(config: dict[str, Any]) -> ReasoningStrategy:
     strategy_type = config.get("strategy", "simple").lower()
 
     if strategy_type == "simple":
-        return SimpleReasoning()
+        return SimpleReasoning(
+            greeting_template=config.get("greeting_template"),
+        )
 
     elif strategy_type == "react":
         return ReActReasoning(
             max_iterations=config.get("max_iterations", 5),
             verbose=config.get("verbose", False),
             store_trace=config.get("store_trace", False),
+            greeting_template=config.get("greeting_template"),
         )
 
     elif strategy_type == "wizard":

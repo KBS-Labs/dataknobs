@@ -29,6 +29,9 @@ class SimpleReasoning(ReasoningStrategy):
         ```
     """
 
+    def __init__(self, *, greeting_template: str | None = None) -> None:
+        super().__init__(greeting_template=greeting_template)
+
     async def generate(
         self,
         manager: Any,

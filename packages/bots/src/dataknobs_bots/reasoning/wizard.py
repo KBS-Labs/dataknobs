@@ -458,6 +458,7 @@ class WizardReasoning(ReasoningStrategy):
                 values (e.g., quiz_bank_ids) from the bot config into the wizard
                 data dict where transforms can access them.
         """
+        super().__init__()
         self._fsm = wizard_fsm
         self._extractor = extractor
         self._strict_validation = strict_validation

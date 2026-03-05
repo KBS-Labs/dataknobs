@@ -4,6 +4,10 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from typing import Any, Protocol, runtime_checkable
 
+import jinja2
+
+from dataknobs_llm import LLMResponse
+
 
 @runtime_checkable
 class ReasoningManagerProtocol(Protocol):
@@ -89,11 +93,25 @@ class ReasoningStrategy(ABC):
     and generates responses. Different strategies can implement
     different levels of reasoning complexity.
 
+    All strategies support an optional ``greeting_template`` — a Jinja2
+    template string rendered with ``initial_context`` variables when
+    ``greet()`` is called.  Strategies that need richer greeting behavior
+    (e.g. ``WizardReasoning`` with FSM-driven stage responses) override
+    ``greet()`` entirely.
+
+    Args:
+        greeting_template: Optional Jinja2 template for bot-initiated
+            greetings.  Variables from ``initial_context`` are available
+            as top-level template variables (e.g. ``{{ user_name }}``).
+
     Examples:
         - Simple: Direct LLM call
         - Chain-of-Thought: Break down reasoning into steps
         - ReAct: Reason and act in a loop with tools
     """
+
+    def __init__(self, *, greeting_template: str | None = None) -> None:
+        self._greeting_template = greeting_template
 
     async def greet(
         self,
@@ -105,26 +123,31 @@ class ReasoningStrategy(ABC):
     ) -> Any | None:
         """Generate an initial bot greeting before the user speaks.
 
-        Override in strategies that support bot-initiated greetings (e.g.
-        wizard flows with a ``response_template`` on the start stage).
+        The default implementation renders ``greeting_template`` (if set)
+        with ``initial_context`` variables using Jinja2 and returns the
+        result as an ``LLMResponse``.  Returns ``None`` when no template
+        is configured.
 
-        The default implementation returns ``None``, indicating the strategy
-        does not support greetings.
+        ``WizardReasoning`` fully overrides this with FSM-driven greeting
+        generation from the wizard's start stage.
 
         Args:
             manager: ConversationManager or compatible manager instance
             llm: LLM provider instance
-            initial_context: Optional dict of initial data to seed into
-                the strategy's state before generating the greeting.
-                For wizard strategies, these values are merged into
-                ``wizard_state.data`` so they are available to the start
-                stage's prompt template and transforms.
+            initial_context: Optional dict of data available as Jinja2
+                template variables (e.g. ``{"user_name": "Alice"}``
+                makes ``{{ user_name }}`` resolve to ``"Alice"``).
             **kwargs: Additional generation parameters
 
         Returns:
-            LLM response object if a greeting was generated, or None
+            LLMResponse if a greeting was generated, or None
         """
-        return None
+        if self._greeting_template is None:
+            return None
+        context = initial_context or {}
+        env = jinja2.Environment(undefined=jinja2.Undefined)
+        text = env.from_string(self._greeting_template).render(**context)
+        return LLMResponse(content=text, model="template", finish_reason="stop")
 
     async def close(self) -> None:  # noqa: B027
         """Release resources held by this strategy.
