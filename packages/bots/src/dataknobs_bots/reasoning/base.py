@@ -104,6 +104,14 @@ class ReasoningStrategy(ABC):
         """
         return None
 
+    async def close(self) -> None:  # noqa: B027
+        """Release resources held by this strategy.
+
+        Default no-op. Subclasses that hold resources (LLM providers,
+        database connections, asyncio tasks) should override to release
+        them. Called by ``DynaBot.close()``.
+        """
+
     @abstractmethod
     async def generate(
         self,

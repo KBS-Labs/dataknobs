@@ -1065,7 +1065,7 @@ class DynaBot:
                 logger.exception("Error closing knowledge base")
 
         # Close reasoning strategy (releases extractor's LLM provider sessions)
-        if self.reasoning_strategy and hasattr(self.reasoning_strategy, 'close'):
+        if self.reasoning_strategy:
             try:
                 await self.reasoning_strategy.close()
             except Exception:

@@ -7,6 +7,8 @@ and branching logic.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import copy
 import logging
 import time
@@ -503,6 +505,9 @@ class WizardReasoning(ReasoningStrategy):
             | frozenset(config_ephemeral)
             | self._per_turn_keys
         )
+
+        # Track last wizard state for cleanup in close()
+        self._last_wizard_state: WizardState | None = None
 
         # Initialise MemoryBank instances from wizard-level ``banks`` config
         self._bank_configs: dict[str, dict[str, Any]] = dict(
@@ -1034,14 +1039,38 @@ class WizardReasoning(ReasoningStrategy):
     async def close(self) -> None:
         """Close the reasoning strategy and release resources.
 
-        Closes the SchemaExtractor's LLM provider if present, releasing
-        HTTP connections, and closes all memory bank database connections.
+        Cancels any in-flight asyncio tasks stored in ephemeral keys,
+        closes the SchemaExtractor's LLM provider if present (releasing
+        HTTP connections), and closes all memory bank database connections.
         Should be called when the reasoning strategy is no longer needed
         (typically via DynaBot.close()).
+
+        Note:
+            Wizard state is per-conversation (stored in manager.metadata).
+            This method cancels tasks accessible via the last-used manager's
+            state. If multiple conversations are active simultaneously,
+            only the tasks from the most recently accessed state are
+            cancelled here.
         """
+        # Cancel asyncio tasks stored in ephemeral wizard state keys
+        if hasattr(self, "_last_wizard_state") and self._last_wizard_state:
+            cancelled = 0
+            for key in self._ephemeral_keys:
+                val = self._last_wizard_state.data.get(key)
+                if isinstance(val, asyncio.Task) and not val.done():
+                    val.cancel()
+                    with contextlib.suppress(asyncio.CancelledError, Exception):
+                        await val
+                    cancelled += 1
+            if cancelled:
+                logger.debug("Cancelled %d ephemeral task(s)", cancelled)
+
+        # Close extractor's LLM provider
         if self._extractor is not None and hasattr(self._extractor, "close"):
             await self._extractor.close()
             logger.debug("Closed WizardReasoning extractor")
+
+        # Close memory bank database connections
         for _name, bank in self._banks.items():
             bank.close()
         if self._banks:
@@ -2014,6 +2043,10 @@ class WizardReasoning(ReasoningStrategy):
     def _get_wizard_state(self, manager: Any) -> WizardState:
         """Get or create wizard state from conversation manager.
 
+        Stores a reference to the returned state as ``_last_wizard_state``
+        so that ``close()`` can cancel any dangling asyncio tasks stored
+        in ephemeral keys.
+
         Args:
             manager: ConversationManager instance
 
@@ -2077,6 +2110,7 @@ class WizardReasoning(ReasoningStrategy):
                 )
                 self._banks = dict(self._artifact.sections)
 
+            self._last_wizard_state = state
             return state
 
         # Initialize new wizard state with tasks from config
@@ -2097,13 +2131,15 @@ class WizardReasoning(ReasoningStrategy):
         if output_paths:
             initial_data["_output_paths"] = dict(output_paths)
 
-        return WizardState(
+        state = WizardState(
             current_stage=start_stage,
             data=initial_data,
             history=[start_stage],
             stage_entry_time=time.time(),
             tasks=initial_tasks,
         )
+        self._last_wizard_state = state
+        return state
 
     def _build_wizard_metadata(self, state: WizardState) -> dict[str, Any]:
         """Build canonical wizard metadata from current state.
