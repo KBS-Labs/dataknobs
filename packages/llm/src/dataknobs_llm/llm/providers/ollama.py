@@ -486,35 +486,41 @@ class OllamaProvider(AsyncLLMProvider):
             return False
         return False
 
-    def get_capabilities(self) -> List[ModelCapability]:
-        """Get Ollama model capabilities.
-
-        If ``config.capabilities`` is set, those values are used instead of
-        the auto-detected list below.
-        """
-        # Auto-detect capabilities based on model name
+    def _detect_capabilities(self) -> List[ModelCapability]:
+        """Auto-detect Ollama model capabilities."""
         detected = [
             ModelCapability.TEXT_GENERATION,
             ModelCapability.CHAT,
-            ModelCapability.STREAMING
+            ModelCapability.STREAMING,
+            ModelCapability.EMBEDDINGS,  # Ollama supports embed() for all models
         ]
 
-        # Most recent Ollama models support function calling
+        model = self.config.model.lower()
+
+        # Models that support function calling
         tool_capable_models = [
             'llama3', 'mistral', 'mixtral', 'qwen',
             'command-r', 'phi3', 'phi4', 'nemotron',
             'firefunction', 'hermes',
         ]
-        if any(model in self.config.model.lower() for model in tool_capable_models):
+        if any(m in model for m in tool_capable_models):
             detected.append(ModelCapability.FUNCTION_CALLING)
 
-        if 'llava' in self.config.model.lower():
+        # JSON mode: tool-capable models + gemma, deepseek support structured output
+        json_capable_models = [
+            *tool_capable_models,
+            'gemma', 'deepseek',
+        ]
+        if any(m in model for m in json_capable_models):
+            detected.append(ModelCapability.JSON_MODE)
+
+        if 'llava' in model:
             detected.append(ModelCapability.VISION)
 
-        if 'codellama' in self.config.model.lower() or 'codegemma' in self.config.model.lower():
+        if 'codellama' in model or 'codegemma' in model:
             detected.append(ModelCapability.CODE)
 
-        return self._resolve_capabilities(detected)
+        return detected
 
     async def complete(
         self,

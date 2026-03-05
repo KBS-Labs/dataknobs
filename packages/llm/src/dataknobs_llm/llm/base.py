@@ -772,14 +772,26 @@ class LLMProvider(ABC):
         """Validate that the model is available."""
         pass
 
-    @abstractmethod
     def get_capabilities(self) -> List[ModelCapability]:
         """Get model capabilities.
 
-        If ``config.capabilities`` is set, those values override the
-        provider's auto-detected capabilities.  Subclasses should call
-        :meth:`_resolve_capabilities` with their detected list to
-        honour this override.
+        Template method: calls :meth:`_detect_capabilities` (subclass hook),
+        filters out ``None`` values, then applies config overrides via
+        :meth:`_resolve_capabilities`.
+
+        Subclasses override :meth:`_detect_capabilities` instead of this
+        method.
+        """
+        detected = self._detect_capabilities()
+        detected = [c for c in detected if c is not None]
+        return self._resolve_capabilities(detected)
+
+    @abstractmethod
+    def _detect_capabilities(self) -> List[ModelCapability]:
+        """Auto-detect capabilities for this provider/model.
+
+        Subclasses return their best-effort capability list.
+        The base class handles config overrides and None filtering.
         """
         pass
 

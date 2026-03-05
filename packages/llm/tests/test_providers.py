@@ -115,7 +115,7 @@ class TestLLMProviderFactory:
             async def validate_model(self):
                 return True
 
-            def get_capabilities(self):
+            def _detect_capabilities(self):
                 return []
 
         # Register the custom provider

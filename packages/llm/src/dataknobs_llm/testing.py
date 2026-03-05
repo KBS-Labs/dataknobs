@@ -585,6 +585,10 @@ class CapturingProvider(AsyncLLMProvider):
             return result  # type: ignore[return-value]
         return True
 
+    def _detect_capabilities(self) -> List[ModelCapability]:
+        """Delegate to the wrapped provider's full get_capabilities()."""
+        return self._delegate.get_capabilities()
+
     def get_capabilities(self) -> List[ModelCapability]:
         """Delegate capability detection to the wrapped provider."""
         return self._delegate.get_capabilities()

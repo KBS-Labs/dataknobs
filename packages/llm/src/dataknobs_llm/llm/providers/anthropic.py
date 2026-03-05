@@ -230,20 +230,26 @@ class AnthropicProvider(AsyncLLMProvider):
         ]
         return any(m in self.config.model for m in valid_models)
 
-    def get_capabilities(self) -> List[ModelCapability]:
-        """Get Anthropic model capabilities."""
+    def _detect_capabilities(self) -> List[ModelCapability]:
+        """Auto-detect Anthropic model capabilities."""
+        model = self.config.model.lower()
         capabilities = [
             ModelCapability.TEXT_GENERATION,
             ModelCapability.CHAT,
             ModelCapability.STREAMING,
-            ModelCapability.CODE
+            ModelCapability.CODE,
         ]
 
-        # Claude 3+ models support vision and tools
-        if 'claude-3' in self.config.model or 'claude-sonnet' in self.config.model or 'claude-opus' in self.config.model:
+        # Claude 3+ models support vision, tools, and JSON mode
+        modern_models = [
+            'claude-3', 'claude-3.5', 'claude-4',
+            'claude-sonnet', 'claude-opus', 'claude-haiku',
+        ]
+        if any(m in model for m in modern_models):
             capabilities.extend([
                 ModelCapability.VISION,
-                ModelCapability.FUNCTION_CALLING
+                ModelCapability.FUNCTION_CALLING,
+                ModelCapability.JSON_MODE,
             ])
 
         return capabilities

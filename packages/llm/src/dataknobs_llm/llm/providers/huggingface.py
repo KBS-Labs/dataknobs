@@ -59,13 +59,19 @@ class HuggingFaceProvider(AsyncLLMProvider):
         except Exception:
             return False
 
-    def get_capabilities(self) -> List[ModelCapability]:
-        """Get HuggingFace model capabilities."""
-        # Basic capabilities for text generation models
-        return [
-            ModelCapability.TEXT_GENERATION,
-            ModelCapability.EMBEDDINGS if 'embedding' in self.config.model else None  # type: ignore
-        ]
+    def _detect_capabilities(self) -> List[ModelCapability]:
+        """Auto-detect HuggingFace model capabilities."""
+        model = self.config.model.lower()
+        capabilities = [ModelCapability.TEXT_GENERATION]
+
+        if 'embedding' in model:
+            capabilities.append(ModelCapability.EMBEDDINGS)
+
+        # Chat-capable models
+        if any(m in model for m in ['chat', 'instruct', 'conversational']):
+            capabilities.append(ModelCapability.CHAT)
+
+        return capabilities
 
     async def complete(
         self,

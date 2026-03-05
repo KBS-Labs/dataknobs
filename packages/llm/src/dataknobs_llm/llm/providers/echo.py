@@ -423,15 +423,15 @@ class EchoProvider(AsyncLLMProvider):
         """Validate model (always true for echo)."""
         return True
 
-    def get_capabilities(self) -> List[ModelCapability]:
-        """Get echo provider capabilities."""
+    def _detect_capabilities(self) -> List[ModelCapability]:
+        """Auto-detect echo provider capabilities (reports all)."""
         return [
             ModelCapability.TEXT_GENERATION,
             ModelCapability.CHAT,
             ModelCapability.EMBEDDINGS,
             ModelCapability.FUNCTION_CALLING,
             ModelCapability.STREAMING,
-            ModelCapability.JSON_MODE
+            ModelCapability.JSON_MODE,
         ]
 
     async def complete(
