@@ -59,6 +59,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "CallTracker",
     "CapturedCall",
     "CapturingProvider",
     "ErrorResponse",
@@ -734,3 +735,100 @@ class CapturingProvider(AsyncLLMProvider):
         )
 
         return response
+
+
+# =============================================================================
+# CallTracker — collect calls across multiple CapturingProviders
+# =============================================================================
+
+
+class CallTracker:
+    """Collect new LLM calls across multiple CapturingProviders per turn.
+
+    In multi-LLM bot scenarios (e.g. a main LLM and an extraction LLM),
+    a single user turn may trigger calls to several providers.
+    ``CallTracker`` collects calls from all registered providers since the
+    last collection, assigns sequential global indices, and returns them
+    in registration order.
+
+    Args:
+        **providers: Named ``CapturingProvider`` instances.  The keyword
+            name is used only for ``get_provider()`` lookups.
+
+    Example:
+        ```python
+        main = CapturingProvider(real_main, role="main")
+        extraction = CapturingProvider(real_extraction, role="extraction")
+        tracker = CallTracker(main=main, extraction=extraction)
+
+        # ... run a bot turn that triggers LLM calls ...
+
+        new_calls = tracker.collect_new_calls()
+        for call in new_calls:
+            print(f"[{call.call_index}] {call.role}: {call.response['content'][:40]}")
+        ```
+    """
+
+    def __init__(self, **providers: CapturingProvider) -> None:
+        self._providers: dict[str, CapturingProvider] = dict(providers)
+        # Track how many calls we've already seen per provider
+        self._cursors: dict[str, int] = {
+            name: p.call_count for name, p in self._providers.items()
+        }
+        self._global_index: int = 0
+
+    def get_provider(self, name: str) -> CapturingProvider | None:
+        """Get a registered provider by name.
+
+        Args:
+            name: Provider registration name
+
+        Returns:
+            CapturingProvider or None if not found
+        """
+        return self._providers.get(name)
+
+    @property
+    def provider_names(self) -> list[str]:
+        """Get list of registered provider names."""
+        return list(self._providers.keys())
+
+    @property
+    def total_calls(self) -> int:
+        """Total number of calls collected across all providers."""
+        return self._global_index
+
+    def collect_new_calls(self) -> list[CapturedCall]:
+        """Collect calls made since the last collection.
+
+        Returns new calls from all providers, sorted by provider
+        registration order.  Each call receives a sequential
+        ``call_index`` relative to all previously collected calls.
+
+        Returns:
+            List of new CapturedCall objects with global call_index values
+        """
+        new_calls: list[CapturedCall] = []
+
+        for name, provider in self._providers.items():
+            cursor = self._cursors[name]
+            all_calls = provider.captured_calls
+            provider_new = all_calls[cursor:]
+
+            for call in provider_new:
+                new_calls.append(
+                    CapturedCall(
+                        role=call.role,
+                        messages=call.messages,
+                        response=call.response,
+                        config_overrides=call.config_overrides,
+                        tools=call.tools,
+                        duration_seconds=call.duration_seconds,
+                        call_index=self._global_index,
+                    )
+                )
+                self._global_index += 1
+
+            self._cursors[name] = len(all_calls)
+
+        return new_calls

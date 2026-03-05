@@ -43,6 +43,7 @@ from dataknobs_llm.exceptions import ToolsNotSupportedError
 
 # Testing utilities (for test code)
 from dataknobs_llm.testing import (
+    CallTracker,
     CapturedCall,
     CapturingProvider,
     ErrorResponse,
@@ -98,6 +99,7 @@ __all__ = [
     # Exceptions
     "ToolsNotSupportedError",
     # Testing utilities
+    "CallTracker",
     "CapturedCall",
     "CapturingProvider",
     "ErrorResponse",
