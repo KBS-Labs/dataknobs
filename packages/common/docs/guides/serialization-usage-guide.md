@@ -9,7 +9,8 @@
 6. [Advanced Patterns](#advanced-patterns)
 7. [Integration with Existing Code](#integration-with-existing-code)
 8. [Testing Serialization](#testing-serialization)
-9. [Best Practices](#best-practices)
+9. [JSON Safety Utilities](#json-safety-utilities)
+10. [Best Practices](#best-practices)
 
 ---
 
@@ -743,6 +744,68 @@ def to_dict(self) -> dict:
         "computed": computed_value  # This belongs elsewhere
     }
 ```
+
+---
+
+## JSON Safety Utilities
+
+The serialization module also provides utilities for preparing arbitrary data structures
+for JSON serialization — useful when persisting state that may contain non-serializable
+values (functions, asyncio tasks, custom objects).
+
+### sanitize_for_json()
+
+Recursively traverses a value and drops anything that isn't JSON-serializable
+(dicts, lists, strings, numbers, booleans, None). Handles dataclasses, sets,
+tuples, bytes, datetime, Enum, and objects with `to_dict()`.
+
+```python
+from dataknobs_common.serialization import sanitize_for_json
+
+# Basic usage — silently drops non-serializable values (DEBUG log)
+data = {"name": "Alice", "callback": some_function, "count": 42}
+safe = sanitize_for_json(data)
+# {"name": "Alice", "count": 42}
+
+# Warn mode — WARNING log with full key path for each drop
+safe = sanitize_for_json(data, on_drop="warn")
+# WARNING: Dropping non-serializable 'callback' (type=function)
+
+# Error mode — raises SerializationError listing all dropped paths
+from dataknobs_common.exceptions import SerializationError
+
+try:
+    safe = sanitize_for_json(data, on_drop="error")
+except SerializationError as e:
+    print(e.context["dropped_paths"])
+    # ["callback (type=function)"]
+```
+
+**Parameters:**
+- `value` (Any): The value to sanitize
+- `on_drop` (str): `"silent"` (default), `"warn"`, or `"error"`
+
+**Returns:** A JSON-safe copy of the input with non-serializable values removed.
+
+### validate_json_safe()
+
+Read-only traversal that reports non-serializable paths without modifying the input.
+
+```python
+from dataknobs_common.serialization import validate_json_safe
+
+data = {"name": "Alice", "callback": some_function, "nested": {"task": asyncio_task}}
+problems = validate_json_safe(data)
+# ["callback (type=function)", "nested.task (type=Task)"]
+
+if not problems:
+    print("Fully JSON-safe")
+```
+
+**Parameters:**
+- `value` (Any): The value to check
+
+**Returns:** `list[str]` of paths to non-serializable values. Empty list means fully safe.
 
 ---
 

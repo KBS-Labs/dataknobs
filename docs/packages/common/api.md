@@ -731,6 +731,63 @@ if is_deserializable(User):
     user = deserialize(User, data)
 ```
 
+### JSON Safety Functions
+
+#### `sanitize_for_json(value: Any, on_drop: str = "silent") -> Any`
+
+Recursively traverse a value and drop anything not JSON-serializable. Handles
+dicts, lists, dataclasses, sets, tuples, bytes, datetime, Enum, and objects
+with `to_dict()`.
+
+**Parameters:**
+- `value` (Any): The value to sanitize
+- `on_drop` (str): Drop behavior — `"silent"` (DEBUG log, default), `"warn"` (WARNING log with key path), `"error"` (raises `SerializationError` listing all dropped paths)
+
+**Returns:**
+- `Any`: JSON-safe copy with non-serializable values removed
+
+**Raises:**
+- `SerializationError`: When `on_drop="error"` and non-serializable values are found
+
+**Example:**
+```python
+from dataknobs_common.serialization import sanitize_for_json
+
+data = {"name": "Alice", "callback": some_function, "count": 42}
+
+# Silent mode (default) — drops with DEBUG log
+safe = sanitize_for_json(data)
+# {"name": "Alice", "count": 42}
+
+# Warn mode — WARNING log with key path
+safe = sanitize_for_json(data, on_drop="warn")
+
+# Error mode — raises SerializationError
+safe = sanitize_for_json(data, on_drop="error")
+# SerializationError: Non-serializable values at: callback (type=function)
+```
+
+#### `validate_json_safe(value: Any) -> list[str]`
+
+Read-only traversal returning paths to non-serializable values. Does not modify the input.
+
+**Parameters:**
+- `value` (Any): The value to check
+
+**Returns:**
+- `list[str]`: Paths to non-serializable values. Empty list means fully JSON-safe.
+
+**Example:**
+```python
+from dataknobs_common.serialization import validate_json_safe
+
+problems = validate_json_safe({"name": "ok", "fn": some_function})
+# ["fn (type=function)"]
+
+if not problems:
+    print("Fully JSON-safe")
+```
+
 ## Retry Module
 
 ### `BackoffStrategy`
@@ -1072,6 +1129,9 @@ from dataknobs_common import (
     is_serializable,
     is_deserializable,
 )
+
+# JSON Safety
+from dataknobs_common.serialization import sanitize_for_json, validate_json_safe
 
 # Retry
 from dataknobs_common import (

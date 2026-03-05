@@ -1590,6 +1590,25 @@ transparent. At save time, ephemeral keys are separated into `WizardState.transi
 As a safety net, any value that fails a JSON-serializability check is automatically
 moved to transient (with a warning log), even if not declared in `ephemeral_keys`.
 
+**Per-Turn Keys:**
+
+Some fields change value every turn (e.g., `action` cycling through `accept`,
+`view_bank`, `generate_more`). These should be cleared at the start of each turn
+to prevent stale values from persisting when extraction fails. Declare them in
+`settings.per_turn_keys`:
+
+```yaml
+settings:
+  per_turn_keys:
+    - action               # User action per turn (accept, skip, edit, etc.)
+    - feedback             # User feedback text (only relevant for current turn)
+```
+
+Per-turn keys are:
+- **Cleared** from `state.data` and `state.transient` at the start of each `generate()` call
+- **Merged** into ephemeral keys (never persisted to storage)
+- **Suppressed** in conflict detection (no "Data conflict detected" warnings)
+
 **Post-Completion Amendments:**
 
 Allow users to make changes after the wizard has completed. When enabled, the wizard

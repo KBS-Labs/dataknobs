@@ -700,6 +700,12 @@ customer_convs = await storage.list_conversations(
     limit=50,
 )
 
+# Count conversations (efficient backend-level count)
+total = await storage.count_conversations()
+customer_count = await storage.count_conversations(
+    filter_metadata={"customer_id": "12345"}
+)
+
 # Load specific conversation
 state = await storage.load_conversation(conversation_id)
 if state:

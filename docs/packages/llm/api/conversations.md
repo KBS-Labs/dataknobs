@@ -63,6 +63,7 @@ The conversations API provides a powerful system for managing multi-turn convers
         - load_conversation
         - delete_conversation
         - list_conversations
+        - count_conversations
 
 ### Implementations
 
