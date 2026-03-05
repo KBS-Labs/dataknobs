@@ -1309,6 +1309,8 @@ class WizardReasoning(ReasoningStrategy):
         self,
         manager: Any,
         llm: Any,
+        *,
+        initial_context: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any | None:
         """Generate a bot-initiated greeting from the wizard's start stage.
@@ -1325,6 +1327,10 @@ class WizardReasoning(ReasoningStrategy):
         Args:
             manager: ConversationManager or compatible manager instance
             llm: LLM provider instance
+            initial_context: Optional dict of initial data to seed into
+                ``wizard_state.data`` before generating the greeting.
+                These values are available to the start stage's prompt
+                template and transforms.
             **kwargs: Additional generation parameters
 
         Returns:
@@ -1335,6 +1341,10 @@ class WizardReasoning(ReasoningStrategy):
 
         # Initialize fresh wizard state (restarts FSM to start stage)
         wizard_state = self._get_wizard_state(manager)
+
+        # Merge initial context into wizard state data
+        if initial_context:
+            wizard_state.data.update(initial_context)
 
         logger.info(
             "Wizard greet: stage='%s', history=%s",

@@ -705,7 +705,12 @@ class DynaBot:
 
         return response_content
 
-    async def greet(self, context: BotContext) -> str | None:
+    async def greet(
+        self,
+        context: BotContext,
+        *,
+        initial_context: dict[str, Any] | None = None,
+    ) -> str | None:
         """Generate a bot-initiated greeting before the user speaks.
 
         Delegates to the reasoning strategy's ``greet()`` method. Returns
@@ -717,6 +722,11 @@ class DynaBot:
 
         Args:
             context: Bot execution context
+            initial_context: Optional dict of initial data to seed into
+                the reasoning strategy's state before generating the
+                greeting. For wizard strategies, these values are merged
+                into ``wizard_state.data`` so they are available to the
+                start stage's prompt template and transforms.
 
         Returns:
             Greeting string, or None if the bot does not support greetings
@@ -724,7 +734,7 @@ class DynaBot:
         Example:
             ```python
             context = BotContext(conversation_id="conv-123", client_id="harness")
-            greeting = await bot.greet(context)
+            greeting = await bot.greet(context, initial_context={"user_name": "Alice"})
             if greeting:
                 print(f"Bot says: {greeting}")
             ```
@@ -744,6 +754,7 @@ class DynaBot:
         response = await self.reasoning_strategy.greet(
             manager=manager,
             llm=self.llm,
+            initial_context=initial_context,
         )
 
         if response is None:

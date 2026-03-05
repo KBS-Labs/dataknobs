@@ -84,6 +84,8 @@ class ReasoningStrategy(ABC):
         self,
         manager: ReasoningManagerProtocol,
         llm: Any,
+        *,
+        initial_context: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> Any | None:
         """Generate an initial bot greeting before the user speaks.
@@ -97,6 +99,11 @@ class ReasoningStrategy(ABC):
         Args:
             manager: ConversationManager or compatible manager instance
             llm: LLM provider instance
+            initial_context: Optional dict of initial data to seed into
+                the strategy's state before generating the greeting.
+                For wizard strategies, these values are merged into
+                ``wizard_state.data`` so they are available to the start
+                stage's prompt template and transforms.
             **kwargs: Additional generation parameters
 
         Returns:
