@@ -845,16 +845,28 @@ class DynaBot:
 
         try:
             if self.reasoning_strategy:
-                # Reasoning strategies produce complete responses.  Run the
-                # strategy, then emit the result as a single stream chunk.
-                response = await self._generate_response(
-                    manager, temperature, max_tokens, llm_config_overrides
-                )
-                content = self._extract_response_content(response)
-                full_response_chunks.append(content)
-                yield LLMStreamResponse(
-                    delta=content, is_final=True, finish_reason="stop"
-                )
+                # Delegate to the strategy's stream_generate().
+                # Strategies with true streaming (SimpleReasoning) yield
+                # LLMStreamResponse chunks; others yield a single complete
+                # response that we wrap as a stream chunk.
+                async for chunk in self.reasoning_strategy.stream_generate(
+                    manager=manager,
+                    llm=self.llm,
+                    tools=list(self.tool_registry),
+                    temperature=temperature or self.default_temperature,
+                    max_tokens=max_tokens or self.default_max_tokens,
+                    llm_config_overrides=llm_config_overrides,
+                ):
+                    if isinstance(chunk, LLMStreamResponse):
+                        full_response_chunks.append(chunk.delta)
+                        yield chunk
+                    else:
+                        # Strategy yielded a complete LLMResponse — wrap it
+                        content = self._extract_response_content(chunk)
+                        full_response_chunks.append(content)
+                        yield LLMStreamResponse(
+                            delta=content, is_final=True, finish_reason="stop"
+                        )
             else:
                 # No reasoning strategy — stream directly from LLM
                 async for chunk in manager.stream_complete(

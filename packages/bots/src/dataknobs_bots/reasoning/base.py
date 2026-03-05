@@ -1,6 +1,7 @@
 """Base reasoning strategy for DynaBot."""
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from typing import Any, Protocol, runtime_checkable
 
 
@@ -61,6 +62,20 @@ class ReasoningManagerProtocol(Protocol):
 
         Args:
             system_prompt_override: Override system prompt for this call only
+            tools: Optional list of tools available for this completion
+            **kwargs: Additional parameters (branch_name, metadata, etc.)
+        """
+        ...
+
+    def stream_complete(
+        self,
+        *,
+        tools: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[Any]:
+        """Stream an LLM completion.
+
+        Args:
             tools: Optional list of tools available for this completion
             **kwargs: Additional parameters (branch_name, metadata, etc.)
         """
@@ -150,3 +165,29 @@ class ReasoningStrategy(ABC):
             ```
         """
         pass
+
+    async def stream_generate(
+        self,
+        manager: ReasoningManagerProtocol,
+        llm: Any,
+        tools: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[Any]:
+        """Stream response using this reasoning strategy.
+
+        The default implementation wraps ``generate()`` and yields the
+        complete response as a single item.  Subclasses that support true
+        token-level streaming (e.g. ``SimpleReasoning``) should override
+        this to yield incremental chunks.
+
+        Args:
+            manager: ConversationManager or compatible manager instance
+            llm: LLM provider instance
+            tools: Optional list of available tools
+            **kwargs: Additional generation parameters
+
+        Yields:
+            LLM response or stream chunk objects
+        """
+        result = await self.generate(manager, llm, tools=tools, **kwargs)
+        yield result

@@ -864,7 +864,7 @@ class TestStreamChatWithReasoningStrategy:
 
     @pytest.mark.asyncio
     async def test_stream_chat_with_simple_reasoning(self):
-        """stream_chat() with a reasoning strategy yields a single chunk from the strategy."""
+        """stream_chat() with SimpleReasoning yields true streaming chunks."""
         from dataknobs_llm import LLMStreamResponse
         from dataknobs_llm.testing import text_response
 
@@ -885,11 +885,11 @@ class TestStreamChatWithReasoningStrategy:
         async for chunk in bot.stream_chat("Hello", context):
             chunks.append(chunk)
 
-        # Reasoning strategy produces a single complete chunk
-        assert len(chunks) == 1
-        assert chunks[0].delta == "Strategy response"
-        assert chunks[0].is_final is True
-        assert chunks[0].finish_reason == "stop"
+        # SimpleReasoning now streams via stream_generate()
+        assert len(chunks) >= 1
+        assert all(isinstance(c, LLMStreamResponse) for c in chunks)
+        full_text = "".join(c.delta for c in chunks)
+        assert full_text == "Strategy response"
 
     @pytest.mark.asyncio
     async def test_stream_chat_without_reasoning_streams_normally(self):
