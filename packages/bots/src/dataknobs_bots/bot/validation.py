@@ -6,18 +6,27 @@ validates them against environment resources. Provides defense-in-depth:
 - **Pre-deployment** (Layer 1): Warn during registration
 - **Startup** (Layer 2): Reject at bot creation time
 
+Capabilities are assigned to **roles** so multi-LLM bots (e.g. wizard with
+a separate extraction LLM) validate each requirement against the correct
+provider.
+
 Usage:
     ```python
     from dataknobs_bots.bot.validation import (
         infer_capability_requirements,
+        infer_main_capability_requirements,
         validate_bot_capabilities,
     )
 
-    # Infer from config structure
-    requirements = infer_capability_requirements(bot_config)
-    # => ["function_calling"] for react + tools
+    # Per-role requirements
+    role_reqs = infer_capability_requirements(bot_config)
+    # => {"main": ["function_calling"], "extraction": ["json_mode"]}
 
-    # Validate against environment
+    # Main-only (for startup check against instantiated LLM)
+    main_reqs = infer_main_capability_requirements(bot_config)
+    # => ["function_calling"]
+
+    # Full validation against environment resources
     warnings = validate_bot_capabilities(bot_config, environment)
     for w in warnings:
         logger.warning(w)
@@ -35,7 +44,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Models known to support tool/function calling (shared heuristic).
-# Keep in sync with OllamaProvider.get_capabilities().
+# Keep in sync with OllamaProvider._detect_capabilities().
 TOOL_CAPABLE_MODEL_FRAGMENTS: list[str] = [
     "llama3",
     "mistral",
@@ -50,36 +59,69 @@ TOOL_CAPABLE_MODEL_FRAGMENTS: list[str] = [
 ]
 
 
-def infer_capability_requirements(bot_config: dict[str, Any]) -> list[str]:
-    """Infer required LLM capabilities from bot config structure.
+def infer_capability_requirements(
+    bot_config: dict[str, Any],
+) -> dict[str, list[str]]:
+    """Infer required LLM capabilities per role from bot config structure.
 
     Examines the reasoning strategy and tool declarations to determine
-    what the bot needs from its LLM provider, even without explicit
+    what each LLM role needs from its provider, even without explicit
     ``$requires`` declarations.
+
+    Roles:
+        - ``"main"``: The primary LLM (natural-language generation).
+        - ``"extraction"``: The extraction LLM used by wizard strategy
+          for JSON schema extraction.
 
     Args:
         bot_config: Bot configuration dictionary (the "bot" section).
 
     Returns:
-        Deduplicated list of required capability names.
+        Dict mapping role name to deduplicated list of required capability
+        names. Only roles with requirements are included.
     """
-    requirements: list[str] = []
+    main_reqs: list[str] = []
+    extraction_reqs: list[str] = []
 
     strategy = bot_config.get("reasoning", {}).get("strategy")
     has_tools = bool(bot_config.get("tools"))
 
     if strategy == "react" and has_tools:
-        requirements.append("function_calling")
+        main_reqs.append("function_calling")
     if strategy == "wizard":
-        requirements.append("json_mode")
+        # json_mode is needed by the extraction LLM, not the main LLM
+        extraction_reqs.append("json_mode")
 
-    # Merge with explicit $requires if present
+    # Merge with explicit $requires if present (applies to main LLM)
     llm_config = bot_config.get("llm", {})
     explicit = llm_config.get("$requires", [])
     if isinstance(explicit, list):
-        requirements.extend(explicit)
+        main_reqs.extend(explicit)
 
-    return list(set(requirements))
+    result: dict[str, list[str]] = {}
+    if main_reqs:
+        result["main"] = list(set(main_reqs))
+    if extraction_reqs:
+        result["extraction"] = list(set(extraction_reqs))
+    return result
+
+
+def infer_main_capability_requirements(
+    bot_config: dict[str, Any],
+) -> list[str]:
+    """Infer capability requirements for the main LLM only.
+
+    Convenience wrapper for the startup check in ``_build_from_config()``,
+    which has the main LLM instance available but not the extraction LLM.
+
+    Args:
+        bot_config: Bot configuration dictionary (the "bot" section).
+
+    Returns:
+        Deduplicated list of required capability names for the main LLM.
+    """
+    role_reqs = infer_capability_requirements(bot_config)
+    return role_reqs.get("main", [])
 
 
 def _model_supports_capability(
@@ -105,15 +147,64 @@ def _model_supports_capability(
     return None
 
 
+def _validate_resource_capabilities(
+    requirements: list[str],
+    resource_name: str,
+    resolved: dict[str, Any],
+    role_label: str,
+) -> list[str]:
+    """Check requirements against a resolved resource.
+
+    Args:
+        requirements: Capability names required.
+        resource_name: Name of the resource for messages.
+        resolved: Resolved resource config dict.
+        role_label: Human-readable role label for messages (e.g. "main LLM").
+
+    Returns:
+        List of warning messages.
+    """
+    warnings: list[str] = []
+    declared_capabilities = resolved.get("capabilities")
+    model_name = resolved.get("model", "")
+
+    for req in requirements:
+        if declared_capabilities is not None:
+            if req not in declared_capabilities:
+                warnings.append(
+                    f"{role_label} requires '{req}' but resource "
+                    f"'{resource_name}' declares capabilities: "
+                    f"{declared_capabilities}"
+                )
+        else:
+            supports = _model_supports_capability(model_name, req)
+            if supports is False:
+                warnings.append(
+                    f"{role_label} requires '{req}' but model '{model_name}' "
+                    f"on resource '{resource_name}' is not known to support it"
+                )
+            elif supports is None:
+                warnings.append(
+                    f"{role_label} requires '{req}' — unable to verify for "
+                    f"model '{model_name}' on resource '{resource_name}'"
+                )
+
+    return warnings
+
+
 def validate_bot_capabilities(
     bot_config: dict[str, Any],
     environment: EnvironmentConfig,
 ) -> list[str]:
     """Validate bot capability requirements against environment resources.
 
-    Checks both inferred and explicit requirements against the resolved
-    LLM resource. Uses capability metadata on the resource if available,
-    falling back to model-name heuristics.
+    Checks per-role requirements against the correct LLM resource:
+    - ``"main"`` requirements are checked against ``bot_config["llm"]``
+    - ``"extraction"`` requirements are checked against
+      ``bot_config["reasoning"]["config"]["extraction_config"]``
+
+    Uses capability metadata on the resource if available, falling back
+    to model-name heuristics.
 
     Args:
         bot_config: Bot configuration dictionary (the "bot" section).
@@ -122,54 +213,65 @@ def validate_bot_capabilities(
     Returns:
         List of warning/error messages. Empty list means valid.
     """
-    requirements = infer_capability_requirements(bot_config)
-    if not requirements:
+    role_reqs = infer_capability_requirements(bot_config)
+    if not role_reqs:
         return []
 
     warnings: list[str] = []
 
-    # Resolve the LLM resource
-    llm_config = bot_config.get("llm", {})
-    resource_name = llm_config.get("$resource")
-    resource_type = llm_config.get("type", "llm_providers")
+    # --- Main LLM validation ---
+    main_reqs = role_reqs.get("main", [])
+    if main_reqs:
+        llm_config = bot_config.get("llm", {})
+        resource_name = llm_config.get("$resource")
+        resource_type = llm_config.get("type", "llm_providers")
 
-    if not resource_name:
-        # No resource reference — can't validate statically
-        return []
-
-    try:
-        resolved = environment.get_resource(resource_type, resource_name)
-    except KeyError:
-        warnings.append(
-            f"LLM resource '{resource_name}' not found in environment "
-            f"'{environment.name}' — cannot validate capabilities"
-        )
-        return warnings
-
-    # Check against explicit capabilities metadata on the resource
-    declared_capabilities = resolved.get("capabilities")
-    model_name = resolved.get("model", "")
-
-    for req in requirements:
-        if declared_capabilities is not None:
-            # Resource declares its capabilities — authoritative check
-            if req not in declared_capabilities:
+        if resource_name:
+            try:
+                resolved = environment.get_resource(resource_type, resource_name)
+                warnings.extend(_validate_resource_capabilities(
+                    main_reqs, resource_name, resolved, "Main LLM",
+                ))
+            except KeyError:
                 warnings.append(
-                    f"Requires '{req}' but resource '{resource_name}' "
-                    f"declares capabilities: {declared_capabilities}"
+                    f"LLM resource '{resource_name}' not found in environment "
+                    f"'{environment.name}' — cannot validate main LLM capabilities"
                 )
-        else:
-            # Fall back to model-name heuristic
-            supports = _model_supports_capability(model_name, req)
-            if supports is False:
+
+    # --- Extraction LLM validation ---
+    extraction_reqs = role_reqs.get("extraction", [])
+    if extraction_reqs:
+        reasoning_config = bot_config.get("reasoning", {}).get("config", {})
+        extraction_config = reasoning_config.get("extraction_config", {})
+
+        # extraction_config may use $resource or inline provider/model
+        resource_name = extraction_config.get("$resource")
+        if resource_name:
+            resource_type = extraction_config.get("type", "llm_providers")
+            try:
+                resolved = environment.get_resource(resource_type, resource_name)
+                warnings.extend(_validate_resource_capabilities(
+                    extraction_reqs, resource_name, resolved, "Extraction LLM",
+                ))
+            except KeyError:
                 warnings.append(
-                    f"Requires '{req}' but model '{model_name}' on resource "
-                    f"'{resource_name}' is not known to support it"
+                    f"Extraction LLM resource '{resource_name}' not found in "
+                    f"environment '{environment.name}' — cannot validate "
+                    f"extraction capabilities"
                 )
-            elif supports is None:
-                warnings.append(
-                    f"Requires '{req}' — unable to verify for model "
-                    f"'{model_name}' on resource '{resource_name}'"
-                )
+        elif extraction_config.get("model"):
+            # Inline config — validate against model name directly
+            inline_resolved = {
+                "model": extraction_config.get("model", ""),
+                "capabilities": extraction_config.get("capabilities"),
+            }
+            warnings.extend(_validate_resource_capabilities(
+                extraction_reqs,
+                f"inline:{extraction_config.get('model', 'unknown')}",
+                inline_resolved,
+                "Extraction LLM",
+            ))
+        # If no extraction_config at all, skip — the wizard strategy will
+        # handle extraction with its own defaults
 
     return warnings

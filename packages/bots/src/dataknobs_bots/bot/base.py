@@ -250,9 +250,11 @@ class DynaBot:
         from ..memory import create_memory_from_config
 
         # Validate capability requirements (Layer 2 — startup check)
-        from .validation import infer_capability_requirements
+        # Only check main LLM requirements here; extraction LLM requirements
+        # are validated when WizardReasoning sets up its extractor.
+        from .validation import infer_main_capability_requirements
 
-        requirements = infer_capability_requirements(config)
+        requirements = infer_main_capability_requirements(config)
         if requirements:
             capabilities = llm.get_capabilities()
             capability_values = {cap.value for cap in capabilities}
