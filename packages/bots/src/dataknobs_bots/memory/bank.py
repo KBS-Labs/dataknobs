@@ -49,6 +49,7 @@ class BankRecord:
     record_id: str
     data: dict[str, Any]
     source_stage: str = ""
+    source_node_id: str = ""
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     modified_in_stage: str | None = None
@@ -59,6 +60,7 @@ class BankRecord:
             "record_id": self.record_id,
             "data": dict(self.data),
             "source_stage": self.source_stage,
+            "source_node_id": self.source_node_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "modified_in_stage": self.modified_in_stage,
@@ -90,6 +92,7 @@ class BankRecord:
             record_id=d["record_id"],
             data=dict(d.get("data", {})),
             source_stage=d.get("source_stage", ""),
+            source_node_id=d.get("source_node_id", ""),
             created_at=d.get("created_at", time.time()),
             updated_at=d.get("updated_at", time.time()),
             modified_in_stage=d.get("modified_in_stage"),
@@ -134,7 +137,12 @@ class SyncBankProtocol(Protocol):
     @property
     def match_fields(self) -> list[str] | None: ...
 
-    def add(self, data: dict[str, Any], source_stage: str = "") -> str: ...
+    def add(
+        self,
+        data: dict[str, Any],
+        source_stage: str = "",
+        source_node_id: str = "",
+    ) -> str: ...
 
     def get(self, record_id: str) -> BankRecord | None: ...
 
@@ -181,7 +189,10 @@ class AsyncBankProtocol(Protocol):
     def match_fields(self) -> list[str] | None: ...
 
     async def add(
-        self, data: dict[str, Any], source_stage: str = ""
+        self,
+        data: dict[str, Any],
+        source_stage: str = "",
+        source_node_id: str = "",
     ) -> str: ...
 
     async def get(self, record_id: str) -> BankRecord | None: ...
@@ -336,10 +347,16 @@ class _BankCore:
         self,
         data: dict[str, Any],
         source_stage: str = "",
+        source_node_id: str = "",
     ) -> tuple[BankRecord, Record]:
         """Create a ``BankRecord`` and its corresponding DB ``Record``.
 
         Generates a unique record ID and current timestamps.
+
+        Args:
+            data: Field values for the new record.
+            source_stage: Wizard stage that created this record.
+            source_node_id: Conversation tree node that created this record.
 
         Returns:
             Tuple of ``(BankRecord, Record)`` ready for DB insertion.
@@ -350,6 +367,7 @@ class _BankCore:
             record_id=record_id,
             data=dict(data),
             source_stage=source_stage,
+            source_node_id=source_node_id,
             created_at=now,
             updated_at=now,
         )
@@ -358,6 +376,7 @@ class _BankCore:
             metadata={
                 "record_id": record_id,
                 "source_stage": source_stage,
+                "source_node_id": source_node_id,
                 "created_at": now,
                 "updated_at": now,
             },
@@ -401,6 +420,7 @@ class _BankCore:
             record_id=meta.get("record_id", ""),
             data=dict(db_record.data) if db_record.data else {},
             source_stage=meta.get("source_stage", ""),
+            source_node_id=meta.get("source_node_id", ""),
             created_at=meta.get("created_at", 0.0),
             updated_at=meta.get("updated_at", 0.0),
             modified_in_stage=meta.get("modified_in_stage"),
@@ -417,12 +437,28 @@ class _BankCore:
             metadata={
                 "record_id": bank_record.record_id,
                 "source_stage": bank_record.source_stage,
+                "source_node_id": bank_record.source_node_id,
                 "created_at": bank_record.created_at,
                 "updated_at": bank_record.updated_at,
                 "modified_in_stage": bank_record.modified_in_stage,
             },
             storage_id=bank_record.record_id,
         )
+
+    # -- Node ancestry (pure) --
+
+    @staticmethod
+    def is_ancestor_or_equal(node_id: str, checkpoint_id: str) -> bool:
+        """Check if ``node_id`` is an ancestor of (or equal to) ``checkpoint_id``.
+
+        Uses dot-notation node IDs from the conversation tree.
+        The root node (``""``) is an ancestor of everything.
+        """
+        if node_id == checkpoint_id:
+            return True
+        if node_id == "":
+            return True
+        return checkpoint_id.startswith(node_id + ".")
 
     # -- Serialization helpers (pure) --
 
@@ -523,12 +559,19 @@ class MemoryBank:
     # CRUD
     # -----------------------------------------------------------------
 
-    def add(self, data: dict[str, Any], source_stage: str = "") -> str:
+    def add(
+        self,
+        data: dict[str, Any],
+        source_stage: str = "",
+        source_node_id: str = "",
+    ) -> str:
         """Add a record to the bank.
 
         Args:
             data: Field values for the new record.
             source_stage: Name of the wizard stage that produced this record.
+            source_node_id: Conversation tree node that created this record.
+                Used for checkpoint-based undo.
 
         Returns:
             The generated record ID.
@@ -562,7 +605,7 @@ class MemoryBank:
                     return existing.record_id
 
         bank_record, db_record = self._core.create_bank_record(
-            data, source_stage
+            data, source_stage, source_node_id
         )
         self._db.create(db_record)
         logger.debug(
@@ -665,6 +708,41 @@ class MemoryBank:
         for db_record in self._db_records():
             self._db.delete(db_record.storage_id)
         logger.debug("Cleared bank '%s'", self._core.name)
+
+    def undo_to_checkpoint(self, checkpoint_node_id: str) -> int:
+        """Remove records added after the checkpoint node.
+
+        Identifies records whose ``source_node_id`` is NOT an ancestor of
+        (or equal to) the checkpoint node, and removes them.
+
+        v1 scope: append-only undo. Records that were MODIFIED after
+        the checkpoint are NOT reverted to their pre-modification state.
+        Only records ADDED after the checkpoint are removed.
+
+        Args:
+            checkpoint_node_id: Node ID to revert to.
+
+        Returns:
+            Number of records removed.
+        """
+        removed = 0
+        for record in self.all():
+            if not record.source_node_id:
+                continue
+            if not _BankCore.is_ancestor_or_equal(
+                record.source_node_id, checkpoint_node_id
+            ):
+                self._db.delete(record.record_id)
+                removed += 1
+        if removed:
+            logger.debug(
+                "Undo checkpoint in bank '%s': removed %d records "
+                "(checkpoint=%s)",
+                self._core.name,
+                removed,
+                checkpoint_node_id,
+            )
+        return removed
 
     # -----------------------------------------------------------------
     # Search / filter
@@ -837,7 +915,12 @@ class EmptyBankProxy:
     def match_fields(self) -> list[str] | None:
         return None
 
-    def add(self, data: dict[str, Any], source_stage: str = "") -> str:
+    def add(
+        self,
+        data: dict[str, Any],
+        source_stage: str = "",
+        source_node_id: str = "",
+    ) -> str:
         logger.warning("add() called on EmptyBankProxy '%s'", self._name)
         return ""
 
@@ -950,8 +1033,20 @@ class AsyncMemoryBank:
     # CRUD
     # -----------------------------------------------------------------
 
-    async def add(self, data: dict[str, Any], source_stage: str = "") -> str:
-        """Add a record to the bank."""
+    async def add(
+        self,
+        data: dict[str, Any],
+        source_stage: str = "",
+        source_node_id: str = "",
+    ) -> str:
+        """Add a record to the bank.
+
+        Args:
+            data: Field values for the new record.
+            source_stage: Wizard stage that produced this record.
+            source_node_id: Conversation tree node that created this record.
+                Used for checkpoint-based undo.
+        """
         self._core.validate(data)
         self._core.check_capacity(await self.count())
 
@@ -967,7 +1062,7 @@ class AsyncMemoryBank:
                     return existing.record_id
 
         bank_record, db_record = self._core.create_bank_record(
-            data, source_stage
+            data, source_stage, source_node_id
         )
         await self._db.create(db_record)
         logger.debug(
@@ -1048,6 +1143,31 @@ class AsyncMemoryBank:
     async def clear(self) -> None:
         for db_record in await self._db_records():
             await self._db.delete(db_record.storage_id)
+
+    async def undo_to_checkpoint(self, checkpoint_node_id: str) -> int:
+        """Remove records added after the checkpoint node.
+
+        Async version of ``MemoryBank.undo_to_checkpoint()``.
+        See that method for full documentation.
+        """
+        removed = 0
+        for record in await self.all():
+            if not record.source_node_id:
+                continue
+            if not _BankCore.is_ancestor_or_equal(
+                record.source_node_id, checkpoint_node_id
+            ):
+                await self._db.delete(record.record_id)
+                removed += 1
+        if removed:
+            logger.debug(
+                "Undo checkpoint in async bank '%s': removed %d records "
+                "(checkpoint=%s)",
+                self._core.name,
+                removed,
+                checkpoint_node_id,
+            )
+        return removed
 
     async def find(self, **field_values: Any) -> list[BankRecord]:
         if not field_values:
