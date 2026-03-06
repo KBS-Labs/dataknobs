@@ -56,3 +56,27 @@ class BufferMemory(Memory):
     async def clear(self) -> None:
         """Clear all messages from buffer."""
         self.messages.clear()
+
+    async def pop_messages(self, count: int = 2) -> list[dict[str, Any]]:
+        """Remove and return the last N messages from the buffer.
+
+        Args:
+            count: Number of messages to remove from the end.
+
+        Returns:
+            The removed messages in the order they were stored.
+
+        Raises:
+            ValueError: If count exceeds available messages or is < 1.
+        """
+        if count < 1:
+            raise ValueError(f"count must be >= 1, got {count}")
+        if count > len(self.messages):
+            raise ValueError(
+                f"Cannot pop {count} messages, only {len(self.messages)} available"
+            )
+        removed = []
+        for _ in range(count):
+            removed.append(self.messages.pop())
+        removed.reverse()
+        return removed

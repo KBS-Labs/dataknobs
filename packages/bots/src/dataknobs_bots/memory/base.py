@@ -36,3 +36,22 @@ class Memory(ABC):
     async def clear(self) -> None:
         """Clear all memory."""
         pass
+
+    async def pop_messages(self, count: int = 2) -> list[dict[str, Any]]:
+        """Remove and return the last N messages from memory.
+
+        Used for conversation undo. The count is determined by the caller
+        based on node depth difference (not a fixed 2).
+
+        Args:
+            count: Number of messages to remove from the end.
+
+        Returns:
+            The removed messages in the order they were stored.
+
+        Raises:
+            NotImplementedError: If the implementation does not support undo.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support pop_messages"
+        )
