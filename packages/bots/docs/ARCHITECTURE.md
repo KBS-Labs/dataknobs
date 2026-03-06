@@ -108,13 +108,17 @@ DynaBot (Orchestrator)
 **Key Methods**:
 - `from_config()`: Creates bot from configuration
 - `chat()`: Processes user messages
+- `stream_chat()`: Streams responses token-by-token
+- `undo_last_turn()`: Undoes the last turn (user message + bot response), rolling back memory, wizard state, and banks
+- `rewind_to_turn()`: Rewinds to a specific turn number by calling `undo_last_turn()` repeatedly
 - `_get_or_create_conversation()`: Manages conversation lifecycle
 - `_build_message_with_context()`: Augments messages with context
 
 **State Management**:
 - Stateless per request
 - Caches ConversationManager instances per conversation_id
-- No shared mutable state
+- Maintains per-conversation turn checkpoints (`_turn_checkpoints`) for undo support
+- No shared mutable state between different conversations
 
 **Concurrency**: Fully async, supports concurrent requests
 
@@ -179,6 +183,10 @@ Messages: [M1, M2, M3, M4, M5, M6, M7, M8, M9, M10]
 New message comes in → M1 is evicted
 ```
 
+**SummaryMemory** (Summarize + Recent Window):
+Combines a running summary of older messages with a recent message window.
+Supports `pop_messages()` only for messages still in the recent window.
+
 **VectorMemory** (Semantic Search):
 ```
 Query: "What did we discuss about pricing?"
@@ -187,6 +195,11 @@ Query: "What did we discuss about pricing?"
           ↓ Similarity Search
     Top K similar messages from history
 ```
+
+**Undo Support** (`pop_messages()`):
+All memory types define `pop_messages(count)` for conversation undo. BufferMemory
+and SummaryMemory implement it; VectorMemory raises `NotImplementedError` because
+vector-indexed messages cannot be selectively removed.
 
 ### 5. KnowledgeBase (RAG)
 

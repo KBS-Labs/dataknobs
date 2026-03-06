@@ -821,6 +821,7 @@ Each record object in templates has these properties:
 | `record_id` | string | Unique record identifier |
 | `data` | dict | The record's field values (e.g. `m.data.name`) |
 | `source_stage` | string | Name of the stage that produced this record |
+| `source_node_id` | string | Conversation tree node that created this record (used for undo) |
 | `created_at` | float | Unix timestamp of record creation |
 | `updated_at` | float | Unix timestamp of last update |
 
@@ -832,6 +833,7 @@ Each record object in templates has these properties:
 | Back | Banks preserved (records are not removed on back navigation) |
 | Skip | Banks preserved, `_collection_done` may be set |
 | Restart | **Banks cleared** (all records removed, same as `state.data = {}`) |
+| Undo (`undo_last_turn`) | Records whose `source_node_id` is not an ancestor of the checkpoint node are removed via `undo_to_checkpoint()` |
 
 #### Memory Banks vs Memory (Conversation Context)
 

@@ -10,6 +10,7 @@ Complete guide to using DataKnobs Bots with tutorials and how-to guides.
   - [Tutorial 2: Adding Memory](#tutorial-2-adding-memory)
   - [Tutorial 3: Streaming Responses](#tutorial-3-streaming-responses)
   - [Per-Request Config Overrides](#per-request-config-overrides)
+  - [Conversation Undo & Rewind](#conversation-undo-rewind)
   - [Tutorial 4: Building a RAG Chatbot](#tutorial-4-building-a-rag-chatbot)
   - [Tutorial 5: Creating Tool-Using Agents](#tutorial-5-creating-tool-using-agents)
   - [Tutorial 6: Building Guided Wizard Flows](#tutorial-6-building-guided-wizard-flows)
@@ -500,6 +501,79 @@ factual_response = await bot.chat(
     llm_config_overrides={"temperature": 0.1}
 )
 ```
+
+---
+
+### Conversation Undo & Rewind
+
+DynaBot supports undoing turns and rewinding conversations to earlier points.
+Undo navigates the conversation tree to a checkpoint recorded before the turn,
+creating a new branch. The original path is preserved.
+
+#### Undo the Last Turn
+
+```python
+from dataknobs_bots import DynaBot, BotContext
+
+bot = await DynaBot.from_config(config)
+context = BotContext(conversation_id="undo-demo", client_id="my-app")
+
+await bot.chat("Hello", context)
+await bot.chat("Tell me about Python", context)
+
+# Undo the last turn (removes "Tell me about Python" + its response)
+result = await bot.undo_last_turn(context)
+print(f"Undid: {result.undone_user_message}")
+print(f"Remaining turns: {result.remaining_turns}")
+
+# Next chat() creates a new branch from the checkpoint
+await bot.chat("Tell me about Rust instead", context)
+```
+
+#### Rewind to a Specific Turn
+
+```python
+await bot.chat("First message", context)   # Turn 0
+await bot.chat("Second message", context)  # Turn 1
+await bot.chat("Third message", context)   # Turn 2
+
+# Rewind to after turn 0 (removes turns 1 and 2)
+result = await bot.rewind_to_turn(context, 0)
+
+# Rewind to start (removes all turns)
+result = await bot.rewind_to_turn(context, -1)
+```
+
+#### UndoResult
+
+Both methods return an `UndoResult` dataclass:
+
+```python
+from dataknobs_bots import UndoResult
+
+# Fields:
+#   undone_user_message: str   - The user message that was undone
+#   undone_bot_response: str   - The bot response that was undone
+#   remaining_turns: int       - Number of user turns remaining
+#   branching: bool            - Whether the undo created a branch
+```
+
+#### What Gets Rolled Back
+
+Undo coordinates rollback across all DynaBot subsystems:
+
+| Component | Rollback behavior |
+|-----------|-------------------|
+| Conversation tree | Navigates to checkpoint node; next message branches |
+| Memory (Buffer/Summary) | Pops messages added since checkpoint |
+| Wizard FSM state | Restores from per-node metadata |
+| Memory banks | Removes records whose `source_node_id` is not an ancestor of the checkpoint |
+
+#### Limitations
+
+- **VectorMemory** does not support undo (`pop_messages` raises `NotImplementedError`)
+- **SummaryMemory** can only undo messages still in its recent window; summarized messages cannot be individually undone
+- Undo does not reverse external side effects (tool calls that wrote to a database, sent emails, etc.)
 
 ---
 

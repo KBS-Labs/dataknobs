@@ -16,6 +16,7 @@ For convenience, here are direct links to key classes in the complete reference:
 - [DynaBot](../../../api/reference/bots.md#dataknobs_bots.DynaBot) - Main bot class
 - [BotContext](../../../api/reference/bots.md#dataknobs_bots.BotContext) - Execution context
 - [BotRegistry](../../../api/reference/bots.md#dataknobs_bots.BotRegistry) - Multi-tenant registry
+- [UndoResult](../../../api/reference/bots.md#dataknobs_bots.UndoResult) - Result of undo/rewind operations
 
 ### Memory
 - [Memory](../../../api/reference/bots.md#dataknobs_bots.Memory) - Base memory class
