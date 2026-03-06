@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.serialization import sanitize_for_json
-from dataknobs_llm.conversations.storage import ConversationNode
+from dataknobs_llm.conversations.storage import ConversationNode, get_node_by_id
 
 from .base import ReasoningStrategy
 from .observability import (
@@ -2268,6 +2268,21 @@ class WizardReasoning(ReasoningStrategy):
         if self._artifact:
             wizard_meta["artifact"] = self._artifact.to_dict()
         manager.metadata["wizard"] = wizard_meta
+
+        # Also store fsm_state on the current tree node so any node can
+        # serve as an undo restoration point.  The FSM state is small
+        # (stage, history, data, transitions) and fits naturally as
+        # per-node metadata.
+        if hasattr(manager, "state") and manager.state is not None:
+            current_node = get_node_by_id(
+                manager.state.message_tree, manager.state.current_node_id
+            )
+            if current_node is not None and hasattr(current_node, "data"):
+                node_data = current_node.data
+                if isinstance(node_data, ConversationNode):
+                    node_data.metadata["wizard_fsm_state"] = wizard_meta[
+                        "fsm_state"
+                    ]
 
         # Persist so conversation-level metadata is up to date in storage.
         # Without this, the metadata written by manager.complete() /
