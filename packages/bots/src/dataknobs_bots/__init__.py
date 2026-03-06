@@ -1,6 +1,6 @@
 """DataKnobs Bots - Configuration-driven AI agents."""
 
-from .bot import BotContext, BotManager, BotRegistry, DynaBot, normalize_wizard_state
+from .bot import BotContext, BotManager, BotRegistry, DynaBot, UndoResult, normalize_wizard_state
 from .config import (
     ConfigDraftManager,
     ConfigTemplate,
@@ -78,6 +78,7 @@ __all__ = [
     "SimpleReasoning",
     "SummaryMemory",
     "TemplateVariable",
+    "UndoResult",
     "ToolCatalog",
     "ToolEntry",
     "ValidationResult",

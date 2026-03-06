@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 from typing import TYPE_CHECKING, Any
@@ -12,6 +13,7 @@ from typing_extensions import Self
 
 from dataknobs_llm import LLMStreamResponse
 from dataknobs_llm.conversations import ConversationManager, DataknobsConversationStorage
+from dataknobs_llm.conversations.storage import get_node_by_id, ConversationNode
 from dataknobs_llm.llm import AsyncLLMProvider
 from dataknobs_llm.prompts import AsyncPromptBuilder
 from dataknobs_llm.tools import ToolRegistry
@@ -64,6 +66,21 @@ def normalize_wizard_state(wizard_meta: dict[str, Any]) -> dict[str, Any]:
         "history": wizard_meta.get("history") or fsm_state.get("history", []),
         "stages": wizard_meta.get("stages", []),
     }
+
+
+@dataclass
+class UndoResult:
+    """Result of an undo operation."""
+
+    undone_user_message: str
+    undone_bot_response: str
+    remaining_turns: int
+    branching: bool
+
+
+def _node_depth(node_id: str) -> int:
+    """Depth of a node in the conversation tree. Root ("") is 0."""
+    return len(node_id.split(".")) if node_id else 0
 
 
 class DynaBot:
@@ -135,6 +152,7 @@ class DynaBot:
         self.default_temperature = default_temperature
         self.default_max_tokens = default_max_tokens
         self._conversation_managers: dict[str, ConversationManager] = {}
+        self._turn_checkpoints: dict[str, list[str]] = {}
 
     @classmethod
     async def from_config(cls, config: dict[str, Any]) -> DynaBot:
@@ -579,6 +597,23 @@ class DynaBot:
 
         # Get or create conversation manager
         manager = await self._get_or_create_conversation(context)
+
+        # Record tree position before the turn for undo support.
+        # Store (node_id, memory_count) — node_id for tree navigation,
+        # memory_count for accurate memory rollback (node depth is unreliable).
+        conv_id = context.conversation_id
+        if conv_id not in self._turn_checkpoints:
+            self._turn_checkpoints[conv_id] = []
+        mem_count = 0
+        if self.memory:
+            try:
+                mem_count = len(await self.memory.get_context(""))
+            except Exception:
+                mem_count = 0
+        self._turn_checkpoints[conv_id].append((
+            manager.state.current_node_id if manager.state else "",
+            mem_count,
+        ))
 
         # Add user message
         await manager.add_message(content=full_message, role="user")
@@ -1388,3 +1423,186 @@ class DynaBot:
             return middleware_class(**config.get("params", {}))
         except Exception:
             return None
+
+    # -----------------------------------------------------------------
+    # Undo / Rewind
+    # -----------------------------------------------------------------
+
+    async def undo_last_turn(self, context: BotContext) -> UndoResult:
+        """Undo the last conversational turn (user message + bot response).
+
+        Navigates the conversation tree back to the node_id recorded before
+        the last turn started. The next chat() call will create a new branch
+        from that point. The original branch is preserved in the tree.
+
+        Also rolls back:
+        - Memory layer (pop N messages based on node depth difference)
+        - Wizard FSM state (restored from per-node metadata)
+        - Memory banks (reverted via backend-managed checkpointing)
+
+        Args:
+            context: Bot execution context (identifies the conversation).
+
+        Returns:
+            UndoResult with details about what was undone.
+
+        Raises:
+            ValueError: If there's nothing to undo (at start of conversation).
+        """
+        conv_id = context.conversation_id
+        manager = self._conversation_managers.get(conv_id)
+        if manager is None or manager.state is None:
+            raise ValueError("No active conversation")
+
+        checkpoints = self._turn_checkpoints.get(conv_id, [])
+        if not checkpoints:
+            raise ValueError("Nothing to undo")
+
+        checkpoint_node_id, checkpoint_mem_count = checkpoints.pop()
+
+        # Identify what we're undoing (last user message + last bot response)
+        messages = manager.messages
+        undone_user = ""
+        undone_bot = ""
+        for msg in reversed(messages):
+            content = msg.get("content", "") if isinstance(msg, dict) else (
+                msg.content if hasattr(msg, "content") else str(msg)
+            )
+            role = msg.get("role", "") if isinstance(msg, dict) else (
+                msg.role if hasattr(msg, "role") else ""
+            )
+            if role == "assistant" and not undone_bot:
+                undone_bot = content
+            elif role == "user" and not undone_user:
+                undone_user = content
+                break
+
+        # Navigate back — next add_message() creates a sibling branch
+        await manager.switch_to_node(checkpoint_node_id)
+
+        # Roll back memory — use stored message count for accuracy
+        current_mem_count = 0
+        if self.memory:
+            try:
+                current_mem_count = len(await self.memory.get_context(""))
+            except Exception:
+                current_mem_count = 0
+        messages_to_pop = current_mem_count - checkpoint_mem_count
+        if self.memory and messages_to_pop > 0:
+            try:
+                await self.memory.pop_messages(messages_to_pop)
+            except (ValueError, NotImplementedError):
+                logger.warning(
+                    "Memory pop_messages failed for %d messages",
+                    messages_to_pop,
+                    exc_info=True,
+                )
+
+        # Restore wizard FSM state from checkpoint node's metadata
+        self._restore_wizard_from_node(manager, checkpoint_node_id)
+
+        # Revert banks via backend-managed checkpointing
+        self._undo_banks_to_checkpoint(checkpoint_node_id)
+
+        # Count remaining turns
+        remaining_messages = manager.messages
+        user_count = sum(
+            1 for m in remaining_messages
+            if (m.get("role") if isinstance(m, dict) else getattr(m, "role", "")) == "user"
+        )
+
+        return UndoResult(
+            undone_user_message=undone_user,
+            undone_bot_response=undone_bot,
+            remaining_turns=user_count,
+            branching=True,
+        )
+
+    async def rewind_to_turn(
+        self, context: BotContext, turn: int
+    ) -> UndoResult:
+        """Rewind conversation to after the given turn number.
+
+        Turn 0 is the first user-bot exchange. Rewinding to turn -1
+        means back to the start (before any user messages).
+
+        Args:
+            context: Bot execution context.
+            turn: Turn number to rewind to (-1 for conversation start).
+
+        Returns:
+            UndoResult with details about what was undone.
+
+        Raises:
+            ValueError: If turn number is invalid.
+        """
+        conv_id = context.conversation_id
+        checkpoints = self._turn_checkpoints.get(conv_id, [])
+        target_count = turn + 1  # checkpoints[0] is before turn 0
+
+        if target_count < 0 or target_count > len(checkpoints):
+            raise ValueError(
+                f"Invalid turn {turn}: conversation has "
+                f"{len(checkpoints)} turns"
+            )
+
+        turns_to_undo = len(checkpoints) - target_count
+        result = None
+        for _ in range(turns_to_undo):
+            result = await self.undo_last_turn(context)
+
+        if result is None:
+            raise ValueError("Nothing to undo")
+        return result
+
+    def _restore_wizard_from_node(
+        self, manager: ConversationManager, node_id: str
+    ) -> None:
+        """Restore wizard FSM state from a checkpoint node's metadata.
+
+        Reads ``wizard_fsm_state`` from the node's metadata and restores
+        the wizard reasoning strategy to that state.
+
+        Args:
+            manager: ConversationManager with the conversation tree.
+            node_id: Node ID to restore FSM state from.
+        """
+        if not self.reasoning_strategy:
+            return
+        if not hasattr(self.reasoning_strategy, "_get_wizard_state"):
+            return
+        if manager.state is None:
+            return
+
+        node = get_node_by_id(manager.state.message_tree, node_id)
+        if node is None:
+            return
+
+        node_data = node.data
+        if not isinstance(node_data, ConversationNode):
+            return
+
+        fsm_state = node_data.metadata.get("wizard_fsm_state")
+        if not fsm_state:
+            return
+
+        # Write the FSM state to conversation-level metadata so
+        # _get_wizard_state() can pick it up on the next generate() call.
+        wizard_meta = manager.metadata.get("wizard", {})
+        wizard_meta["fsm_state"] = fsm_state
+        manager.metadata["wizard"] = wizard_meta
+
+    def _undo_banks_to_checkpoint(self, checkpoint_node_id: str) -> None:
+        """Revert memory banks to the checkpoint via undo_to_checkpoint().
+
+        Args:
+            checkpoint_node_id: Node ID to revert banks to.
+        """
+        if not self.reasoning_strategy:
+            return
+        banks = getattr(self.reasoning_strategy, "_banks", None)
+        if not banks:
+            return
+        for bank in banks.values():
+            if hasattr(bank, "undo_to_checkpoint"):
+                bank.undo_to_checkpoint(checkpoint_node_id)

@@ -88,10 +88,12 @@ class PostgresEventBus:
         self._connected = False
 
     def _topic_to_channel(self, topic: str) -> str:
-        """Convert a topic name to a Postgres channel name.
+        """Convert a topic name to a safe Postgres channel name.
 
-        Postgres channel names must be valid identifiers, so we:
-        - Replace : and . with _
+        Postgres channel names must be valid identifiers. We:
+        - Replace common separators (: . -) with _
+        - Strip any remaining non-alphanumeric/underscore characters
+        - Validate the result is non-empty
         - Add the channel prefix
 
         Args:
@@ -99,8 +101,19 @@ class PostgresEventBus:
 
         Returns:
             Valid Postgres channel name
+
+        Raises:
+            ValueError: If the topic produces an empty channel name
         """
+        import re
+
         safe_topic = topic.replace(":", "_").replace(".", "_").replace("-", "_")
+        # Strip any characters that are not valid in a Postgres identifier
+        safe_topic = re.sub(r"[^a-zA-Z0-9_]", "", safe_topic)
+        if not safe_topic:
+            raise ValueError(
+                f"Topic {topic!r} produces an empty channel name after sanitization"
+            )
         return f"{self._channel_prefix}_{safe_topic}"
 
     async def connect(self) -> None:
@@ -128,9 +141,6 @@ class PostgresEventBus:
             # Listener connection (separate to avoid blocking)
             self._listen_conn = await asyncpg.connect(self._connection_string)
 
-            # Add notification handler
-            self._listen_conn.add_listener("*", self._notification_handler)
-
             self._connected = True
             logger.info("PostgresEventBus connected")
 
@@ -144,10 +154,13 @@ class PostgresEventBus:
                 except asyncio.CancelledError:
                     pass
 
-            # Unlisten from all channels
+            # Unlisten from all channels and remove listeners
             for channel in self._channel_topics:
                 try:
                     if self._listen_conn:
+                        self._listen_conn.remove_listener(
+                            channel, self._notification_handler
+                        )
                         await self._listen_conn.execute(f"UNLISTEN {channel}")
                 except Exception:
                     pass
@@ -191,7 +204,11 @@ class PostgresEventBus:
                 len(payload),
             )
 
-        await self._conn.execute(f"NOTIFY {channel}, $1", payload)
+        # Use pg_notify() function instead of NOTIFY statement because
+        # NOTIFY is a utility statement that does not support parameterized
+        # queries ($1). Using NOTIFY with $1 sends the literal string "$1"
+        # as the payload, causing silent event loss.
+        await self._conn.execute("SELECT pg_notify($1, $2)", channel, payload)
         logger.debug("Published event %s to channel %s", event.event_id[:8], channel)
 
     async def subscribe(
@@ -233,6 +250,9 @@ class PostgresEventBus:
             # Start listening on this channel if not already
             if channel not in self._channel_topics:
                 await self._listen_conn.execute(f"LISTEN {channel}")
+                self._listen_conn.add_listener(
+                    channel, self._notification_handler
+                )
                 self._channel_topics[channel] = topic
                 self._topic_channels[topic] = channel
                 logger.debug("Started listening on channel %s", channel)
@@ -267,6 +287,9 @@ class PostgresEventBus:
             if not has_other_subs and channel in self._channel_topics:
                 try:
                     if self._listen_conn:
+                        self._listen_conn.remove_listener(
+                            channel, self._notification_handler
+                        )
                         await self._listen_conn.execute(f"UNLISTEN {channel}")
                 except Exception:
                     pass

@@ -79,6 +79,126 @@ class TestBufferMemory:
         assert context[0]["metadata"] == metadata
 
 
+class TestBufferMemoryPopMessages:
+    """Tests for BufferMemory.pop_messages()."""
+
+    @pytest.mark.asyncio
+    async def test_pop_single_message(self):
+        """Pop the last message from the buffer."""
+        memory = BufferMemory(max_messages=10)
+        await memory.add_message("Hello", "user")
+        await memory.add_message("Hi!", "assistant")
+
+        removed = await memory.pop_messages(1)
+        assert len(removed) == 1
+        assert removed[0]["content"] == "Hi!"
+        assert removed[0]["role"] == "assistant"
+
+        context = await memory.get_context("test")
+        assert len(context) == 1
+        assert context[0]["content"] == "Hello"
+
+    @pytest.mark.asyncio
+    async def test_pop_multiple_messages(self):
+        """Pop N messages from the buffer."""
+        memory = BufferMemory(max_messages=10)
+        await memory.add_message("Msg 1", "user")
+        await memory.add_message("Msg 2", "assistant")
+        await memory.add_message("Msg 3", "user")
+        await memory.add_message("Msg 4", "assistant")
+
+        removed = await memory.pop_messages(2)
+        assert len(removed) == 2
+        assert removed[0]["content"] == "Msg 3"
+        assert removed[1]["content"] == "Msg 4"
+
+        context = await memory.get_context("test")
+        assert len(context) == 2
+        assert context[0]["content"] == "Msg 1"
+        assert context[1]["content"] == "Msg 2"
+
+    @pytest.mark.asyncio
+    async def test_pop_all_messages(self):
+        """Pop all messages from the buffer."""
+        memory = BufferMemory(max_messages=10)
+        await memory.add_message("Hello", "user")
+        await memory.add_message("Hi!", "assistant")
+
+        removed = await memory.pop_messages(2)
+        assert len(removed) == 2
+
+        context = await memory.get_context("test")
+        assert len(context) == 0
+
+    @pytest.mark.asyncio
+    async def test_pop_preserves_order(self):
+        """Removed messages are returned in chronological order."""
+        memory = BufferMemory(max_messages=10)
+        await memory.add_message("First", "user")
+        await memory.add_message("Second", "assistant")
+        await memory.add_message("Third", "user")
+
+        removed = await memory.pop_messages(3)
+        assert [m["content"] for m in removed] == ["First", "Second", "Third"]
+
+    @pytest.mark.asyncio
+    async def test_pop_preserves_metadata(self):
+        """Popped messages include their metadata."""
+        memory = BufferMemory(max_messages=10)
+        await memory.add_message("Hello", "user", metadata={"turn": 1})
+
+        removed = await memory.pop_messages(1)
+        assert removed[0]["metadata"] == {"turn": 1}
+
+    @pytest.mark.asyncio
+    async def test_pop_more_than_available_raises(self):
+        """ValueError when trying to pop more messages than available."""
+        memory = BufferMemory(max_messages=10)
+        await memory.add_message("Hello", "user")
+
+        with pytest.raises(ValueError, match="Cannot pop 5 messages"):
+            await memory.pop_messages(5)
+
+    @pytest.mark.asyncio
+    async def test_pop_from_empty_raises(self):
+        """ValueError when popping from empty memory."""
+        memory = BufferMemory(max_messages=10)
+
+        with pytest.raises(ValueError, match="Cannot pop 1 messages"):
+            await memory.pop_messages(1)
+
+    @pytest.mark.asyncio
+    async def test_pop_zero_raises(self):
+        """ValueError when count is 0."""
+        memory = BufferMemory(max_messages=10)
+        await memory.add_message("Hello", "user")
+
+        with pytest.raises(ValueError, match="count must be >= 1"):
+            await memory.pop_messages(0)
+
+    @pytest.mark.asyncio
+    async def test_pop_negative_raises(self):
+        """ValueError when count is negative."""
+        memory = BufferMemory(max_messages=10)
+
+        with pytest.raises(ValueError, match="count must be >= 1"):
+            await memory.pop_messages(-1)
+
+    @pytest.mark.asyncio
+    async def test_pop_then_add(self):
+        """After popping, new messages can be added normally."""
+        memory = BufferMemory(max_messages=10)
+        await memory.add_message("Original", "user")
+        await memory.add_message("Response", "assistant")
+
+        await memory.pop_messages(2)
+        await memory.add_message("Retry", "user")
+
+        context = await memory.get_context("test")
+        assert len(context) == 1
+        assert context[0]["content"] == "Retry"
+
+
 class TestVectorMemory:
     """Tests for VectorMemory."""
 
@@ -322,6 +442,99 @@ class TestSummaryMemory:
 
         context = await memory.get_context("test")
         assert any("custom summary result" in m["content"] for m in context)
+
+
+class TestSummaryMemoryPopMessages:
+    """Tests for SummaryMemory.pop_messages()."""
+
+    @staticmethod
+    def _create_echo_provider(
+        responses: list[str] | None = None,
+    ) -> EchoProvider:
+        factory = LLMProviderFactory(is_async=True)
+        provider = factory.create({"provider": "echo", "model": "test"})
+        if responses:
+            provider.set_responses(responses, cycle=True)
+        return provider
+
+    @pytest.mark.asyncio
+    async def test_pop_within_window(self):
+        """Pop messages that are still in the recent window."""
+        provider = self._create_echo_provider()
+        memory = SummaryMemory(llm_provider=provider, recent_window=10)
+
+        await memory.add_message("Hello", "user")
+        await memory.add_message("Hi!", "assistant")
+        await memory.add_message("How are you?", "user")
+
+        removed = await memory.pop_messages(2)
+        assert len(removed) == 2
+        assert removed[0]["content"] == "Hi!"
+        assert removed[1]["content"] == "How are you?"
+
+        context = await memory.get_context("test")
+        assert len(context) == 1
+        assert context[0]["content"] == "Hello"
+
+    @pytest.mark.asyncio
+    async def test_pop_beyond_window_raises(self):
+        """Cannot pop more messages than remain in the recent window."""
+        provider = self._create_echo_provider(responses=["Summary"])
+        await provider.initialize()
+        memory = SummaryMemory(llm_provider=provider, recent_window=2)
+
+        # Add 3 messages — first gets summarized, 2 remain in window
+        await memory.add_message("Msg 1", "user")
+        await memory.add_message("Msg 2", "assistant")
+        await memory.add_message("Msg 3", "user")  # Triggers summarization
+
+        # Only 2 messages in window — can't pop 3
+        with pytest.raises(ValueError, match="unsummarized messages"):
+            await memory.pop_messages(3)
+
+    @pytest.mark.asyncio
+    async def test_pop_preserves_summary(self):
+        """Popping from window does not affect the existing summary."""
+        provider = self._create_echo_provider(responses=["Conversation summary"])
+        await provider.initialize()
+        memory = SummaryMemory(llm_provider=provider, recent_window=2)
+
+        await memory.add_message("Msg 1", "user")
+        await memory.add_message("Msg 2", "assistant")
+        await memory.add_message("Msg 3", "user")  # Triggers summarization
+
+        # Pop 1 from the window
+        removed = await memory.pop_messages(1)
+        assert removed[0]["content"] == "Msg 3"
+
+        # Summary should still be present
+        context = await memory.get_context("test")
+        assert context[0]["role"] == "system"
+        assert "Conversation summary" in context[0]["content"]
+        assert len(context) == 2  # summary + 1 remaining message
+
+
+class TestVectorMemoryPopMessages:
+    """Tests for VectorMemory.pop_messages()."""
+
+    @pytest.mark.asyncio
+    async def test_pop_raises_not_implemented(self):
+        """VectorMemory does not support pop_messages."""
+        factory = VectorStoreFactory()
+        vector_store = factory.create(backend="memory", dimensions=384)
+        await vector_store.initialize()
+
+        llm_factory = LLMProviderFactory(is_async=True)
+        embedding_provider = llm_factory.create({"provider": "echo", "model": "test"})
+        await embedding_provider.initialize()
+
+        memory = VectorMemory(
+            vector_store=vector_store,
+            embedding_provider=embedding_provider,
+        )
+
+        with pytest.raises(NotImplementedError, match="VectorMemory"):
+            await memory.pop_messages(1)
 
 
 class TestMemoryFactory:

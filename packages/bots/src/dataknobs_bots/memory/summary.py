@@ -113,6 +113,36 @@ class SummaryMemory(Memory):
         self._messages.clear()
         self._summary = ""
 
+    async def pop_messages(self, count: int = 2) -> list[dict[str, Any]]:
+        """Remove and return the last N messages from the recent window.
+
+        Only messages still in the recent buffer can be popped. Messages that
+        have already been summarized are irreversibly compressed and cannot be
+        individually removed.
+
+        Args:
+            count: Number of messages to remove from the end.
+
+        Returns:
+            The removed messages in the order they were stored.
+
+        Raises:
+            ValueError: If count exceeds available (unsummarized) messages
+                or is < 1.
+        """
+        if count < 1:
+            raise ValueError(f"count must be >= 1, got {count}")
+        if count > len(self._messages):
+            raise ValueError(
+                f"Cannot pop {count} messages, only {len(self._messages)} "
+                f"unsummarized messages available in the recent window"
+            )
+        removed = []
+        for _ in range(count):
+            removed.append(self._messages.pop())
+        removed.reverse()
+        return removed
+
     async def _summarize_oldest(self) -> None:
         """Compress the oldest messages into the running summary.
 
