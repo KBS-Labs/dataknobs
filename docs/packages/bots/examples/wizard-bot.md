@@ -422,6 +422,18 @@ stages:
         condition: "data.get('level') == 'advanced'"
 ```
 
+Condition expressions are Python code with access to `data`, `bank()`, and
+`artifact`. Both Python (`True`/`False`/`None`) and YAML/JSON
+(`true`/`false`/`null`) boolean literals are accepted:
+
+```yaml
+transitions:
+  - target: summary
+    condition: "true"          # YAML convention — works
+  - target: summary
+    condition: "True"          # Python convention — also works
+```
+
 ## Best Practices
 
 ### Stage Design
