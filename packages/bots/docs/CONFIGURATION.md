@@ -1334,6 +1334,37 @@ global_tasks:
 
 For full task tracking API, see the Wizard Observability guide in the documentation.
 
+**Transition Condition Expressions:**
+
+Transition conditions are Python expressions evaluated in a restricted namespace.
+Available variables:
+
+| Variable | Description |
+|----------|-------------|
+| `data` | Wizard state data dict — use `data.get('field')` to access values |
+| `bank` | Memory bank accessor — use `bank('name').count()` etc. |
+| `artifact` | ArtifactBank instance (if configured) |
+| `true` / `false` | Aliases for Python `True` / `False` (for YAML/JSON convention) |
+| `null` / `none` | Aliases for Python `None` |
+
+Examples:
+
+```yaml
+transitions:
+  - target: next_stage
+    condition: "data.get('name')"           # truthy check
+  - target: review
+    condition: "data.get('confirmed') == True"  # explicit boolean
+  - target: summary
+    condition: "true"                       # unconditional (YAML convention)
+  - target: done
+    condition: "bank('items').count() >= 3" # bank count check
+```
+
+Both Python (`True`/`False`/`None`) and YAML/JSON (`true`/`false`/`null`)
+boolean literals are accepted. Python builtins like `len`, `str`, `int` are
+also available.
+
 **Navigation Commands:**
 
 Users can navigate the wizard with natural language. The default keywords are:

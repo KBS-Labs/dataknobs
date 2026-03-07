@@ -718,6 +718,12 @@ class WizardConfigLoader:
                                     "bank": data.get(
                                         "_bank_fn", _null_bank
                                     ),
+                                    # Common aliases for YAML/JSON boolean
+                                    # literals
+                                    "true": True,
+                                    "false": False,
+                                    "null": None,
+                                    "none": None,
                                 }
                                 exec_code = f"def _test():\n    {code}\n_result = _test()"
                                 exec(exec_code, exec_globals)  # nosec B102

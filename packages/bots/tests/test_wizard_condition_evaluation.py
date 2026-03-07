@@ -465,3 +465,132 @@ class TestWizardTransitionLogic:
         # Should immediately transition
         fsm.step({})
         assert fsm.current_stage == "end"
+
+
+class TestYamlBooleanLiterals:
+    """Tests for YAML/JSON boolean literal support in conditions.
+
+    Config authors naturally write ``condition: "true"`` (lowercase) since
+    that's the YAML/JSON convention. The condition evaluator must accept
+    both Python (True/False/None) and YAML/JSON (true/false/null)
+    conventions.
+    """
+
+    @pytest.mark.parametrize(
+        "condition,expected_stage",
+        [
+            ("True", "end"),
+            ("true", "end"),
+            ("False", "start"),
+            ("false", "start"),
+        ],
+    )
+    def test_boolean_literal_variants(self, condition, expected_stage):
+        """Both Python and YAML boolean literals work in conditions."""
+        wizard_config = {
+            "name": "test-wizard",
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "prompt": "Start",
+                    "transitions": [
+                        {"target": "end", "condition": condition}
+                    ],
+                },
+                {"name": "end", "is_end": True, "prompt": "Done"},
+            ],
+        }
+
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict(wizard_config)
+        fsm.step({})
+        assert fsm.current_stage == expected_stage
+
+    @pytest.mark.parametrize(
+        "condition,expected_stage",
+        [
+            ("null", "start"),  # null is None, which is falsy
+            ("none", "start"),  # none is None, which is falsy
+            ("None", "start"),  # Python None, which is falsy
+        ],
+    )
+    def test_null_none_literal_variants(self, condition, expected_stage):
+        """null/none/None all evaluate to Python None (falsy)."""
+        wizard_config = {
+            "name": "test-wizard",
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "prompt": "Start",
+                    "transitions": [
+                        {"target": "end", "condition": condition}
+                    ],
+                },
+                {"name": "end", "is_end": True, "prompt": "Done"},
+            ],
+        }
+
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict(wizard_config)
+        fsm.step({})
+        assert fsm.current_stage == expected_stage
+
+    def test_lowercase_true_with_data_expression(self):
+        """Lowercase true works in compound expressions."""
+        wizard_config = {
+            "name": "test-wizard",
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "prompt": "Start",
+                    "transitions": [
+                        {
+                            "target": "end",
+                            "condition": "data.get('ready') == true",
+                        }
+                    ],
+                },
+                {"name": "end", "is_end": True, "prompt": "Done"},
+            ],
+        }
+
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict(wizard_config)
+
+        # ready=False should not match `== true`
+        fsm.step({"ready": False})
+        assert fsm.current_stage == "start"
+
+        # ready=True should match `== true`
+        fsm.restart()
+        fsm.step({"ready": True})
+        assert fsm.current_stage == "end"
+
+    def test_no_collision_with_variable_names(self):
+        """Variables like 'is_true' are not affected by the aliases."""
+        wizard_config = {
+            "name": "test-wizard",
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "prompt": "Start",
+                    "transitions": [
+                        {
+                            "target": "end",
+                            "condition": "data.get('is_true') == 'yes'",
+                        }
+                    ],
+                },
+                {"name": "end", "is_end": True, "prompt": "Done"},
+            ],
+        }
+
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict(wizard_config)
+
+        fsm.step({"is_true": "yes"})
+        assert fsm.current_stage == "end"
