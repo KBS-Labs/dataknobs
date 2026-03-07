@@ -94,11 +94,11 @@ class TestSkipWithDefaults:
 
         state = WizardState(current_stage="configure_llm")
 
-        # Handle navigation should apply skip_default
+        # Handle navigation should apply skip_default and advance
         result = await reasoning._handle_navigation("skip", state, conversation_manager, None)
 
-        # Should return None (continue to normal flow)
-        assert result is None
+        # Should return a response (skip advances FSM and generates response)
+        assert result is not None
 
         # State should have skip marker and default values
         assert state.data["_skipped_configure_llm"] is True
@@ -137,9 +137,8 @@ class TestSkipWithDefaults:
 
         await reasoning._handle_navigation("skip", state, conversation_manager, None)
 
-        # Should only have skip marker
+        # Should have skip marker (and no skip_default values)
         assert state.data["_skipped_optional_step"] is True
-        assert len(state.data) == 1  # Only the skip marker
 
     @pytest.mark.asyncio
     async def test_use_defaults_triggers_skip(

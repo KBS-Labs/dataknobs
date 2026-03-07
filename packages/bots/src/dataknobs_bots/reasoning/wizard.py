@@ -2696,7 +2696,7 @@ class WizardReasoning(ReasoningStrategy):
             return await self._execute_back(message, state, manager, llm)
 
         if nav.skip.enabled and lower in nav.skip.keywords:
-            return await self._execute_skip(state, manager)
+            return await self._execute_skip(message, state, manager, llm)
 
         if nav.restart.enabled and lower in nav.restart.keywords:
             return await self._execute_restart(message, state, manager, llm)
@@ -2770,35 +2770,83 @@ class WizardReasoning(ReasoningStrategy):
 
     async def _execute_skip(
         self,
+        message: str,
         state: WizardState,
         manager: Any,
-    ) -> Any | None:
+        llm: Any,
+    ) -> Any:
         """Execute skip navigation.
 
+        Advances the FSM directly and generates the next stage's response,
+        bypassing the extraction pipeline entirely.  This is consistent with
+        ``_execute_back()`` and ``_execute_restart()``, which also generate
+        their own responses rather than falling through.
+
         Args:
+            message: Original user message
             state: Current wizard state
             manager: ConversationManager instance
+            llm: LLM provider
 
         Returns:
-            ``None`` on success (falls through to transition evaluation),
-            or an explanation response if skip is not allowed.
+            Response for the next stage, or an explanation if skip is
+            not allowed.
         """
-        if self._fsm.can_skip():
-            state.data[f"_skipped_{state.current_stage}"] = True
-            # Apply skip_default values if configured
-            skip_default = self._fsm.current_metadata.get("skip_default")
-            if skip_default and isinstance(skip_default, dict):
-                state.data.update(skip_default)
-            state.clarification_attempts = 0
-            return None  # Continue to normal flow, triggering transition
-        return await manager.complete(
-            system_prompt_override=(
-                manager.system_prompt
-                + "\n\nThe user asked to skip this step but it's required. "
-                "Kindly explain the step cannot be skipped and ask for the "
-                "information needed."
-            ),
+        if not self._fsm.can_skip():
+            return await manager.complete(
+                system_prompt_override=(
+                    manager.system_prompt
+                    + "\n\nThe user asked to skip this step but it's required. "
+                    "Kindly explain the step cannot be skipped and ask for the "
+                    "information needed."
+                ),
+            )
+
+        from_stage = state.current_stage
+        duration_ms = (time.time() - state.stage_entry_time) * 1000
+
+        state.data[f"_skipped_{state.current_stage}"] = True
+        # Apply skip_default values if configured
+        skip_default = self._fsm.current_metadata.get("skip_default")
+        if skip_default and isinstance(skip_default, dict):
+            state.data.update(skip_default)
+        state.clarification_attempts = 0
+
+        # Advance FSM directly — bypass extraction entirely.
+        # Inject context needed for condition evaluation.
+        active_fsm = self._get_active_fsm()
+        state.data["_message"] = message
+        state.data["_bank_fn"] = self._make_bank_accessor()
+        step_result = await active_fsm.step_async(state.data)
+        state.data.pop("_message", None)
+        state.data.pop("_bank_fn", None)
+        to_stage = active_fsm.current_stage
+
+        if to_stage != from_stage:
+            transition = create_transition_record(
+                from_stage=from_stage,
+                to_stage=to_stage,
+                trigger="navigation_skip",
+                duration_in_stage_ms=duration_ms,
+                user_input=message,
+            )
+            state.transitions.append(transition)
+            state.stage_entry_time = time.time()
+
+        state.current_stage = to_stage
+        if state.current_stage not in state.history:
+            state.history.append(state.current_stage)
+        state.completed = step_result.is_complete
+
+        stage = active_fsm.current_metadata
+        response = await self._generate_stage_response(
+            manager, llm, stage, state, None
         )
+        if stage.get("response_template"):
+            state.increment_render_count(
+                stage.get("name", "unknown")
+            )
+        return response
 
     async def _restart_cleanup(
         self,
@@ -4647,6 +4695,11 @@ class WizardReasoning(ReasoningStrategy):
                 "data": data,
                 "bank": self._make_bank_accessor(),
                 "artifact": self._artifact,
+                # Common aliases for YAML/JSON boolean literals
+                "true": True,
+                "false": False,
+                "null": None,
+                "none": None,
             }
             local_vars: dict[str, Any] = {}
             exec_code = f"def _test():\n    {code}\n_result = _test()"
