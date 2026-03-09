@@ -669,6 +669,25 @@ class DynaBot:
         """
         return response.content if hasattr(response, "content") else str(response)
 
+    def _middleware_kwargs(self, response: Any) -> dict[str, Any]:
+        """Build kwargs for middleware after_message/post_stream hooks.
+
+        Extracts token usage, model, and provider info from the LLM
+        response and the bot's provider for middleware consumption.
+        """
+        kwargs: dict[str, Any] = {}
+        if hasattr(response, "usage") and response.usage:
+            kwargs["tokens_used"] = response.usage
+        if hasattr(response, "model") and response.model:
+            kwargs["model"] = response.model
+        if hasattr(self, "llm") and self.llm is not None:
+            provider_name = getattr(self.llm, "provider_name", None)
+            if provider_name:
+                kwargs["provider"] = provider_name
+            elif hasattr(self.llm, "__class__"):
+                kwargs["provider"] = type(self.llm).__name__
+        return kwargs
+
     async def chat(
         self,
         message: str,
@@ -734,9 +753,10 @@ class DynaBot:
             await self.memory.add_message(response_content, role="assistant")
 
         # Apply middleware (after)
+        mw_kwargs = self._middleware_kwargs(response)
         for mw in self.middleware:
             if hasattr(mw, "after_message"):
-                await mw.after_message(response, context)
+                await mw.after_message(response_content, context, **mw_kwargs)
 
         return response_content
 
@@ -803,9 +823,10 @@ class DynaBot:
             await self.memory.add_message(response_content, role="assistant")
 
         # Apply middleware (after)
+        mw_kwargs = self._middleware_kwargs(response)
         for mw in self.middleware:
             if hasattr(mw, "after_message"):
-                await mw.after_message(response, context)
+                await mw.after_message(response_content, context, **mw_kwargs)
 
         return response_content
 
