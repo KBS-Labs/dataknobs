@@ -6,6 +6,8 @@ recording, and coordinated undo across tree, memory, wizard state, and banks.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from dataknobs_bots import BotContext, DynaBot
@@ -298,3 +300,93 @@ class TestNonInterference:
         # Redo again
         r = await bot.chat("Second v3", ctx)
         assert isinstance(r, str)
+
+
+# =====================================================================
+# Wizard undo (greet → chat → undo)
+# =====================================================================
+
+
+def _wizard_config() -> dict[str, Any]:
+    """Minimal wizard config: greeting stage → collect_info → done."""
+    return {
+        "name": "undo-test-wizard",
+        "version": "1.0",
+        "stages": [
+            {
+                "name": "greeting",
+                "is_start": True,
+                "prompt": "Greet the user and ask for their name",
+                "response_template": "Hello! What is your name?",
+                "schema": {
+                    "type": "object",
+                    "properties": {"user_name": {"type": "string"}},
+                    "required": ["user_name"],
+                },
+                "transitions": [
+                    {"target": "done", "condition": "data.get('user_name')"},
+                ],
+            },
+            {
+                "name": "done",
+                "is_end": True,
+                "prompt": "All done!",
+            },
+        ],
+    }
+
+
+async def _make_wizard_bot() -> DynaBot:
+    """Create a DynaBot with EchoProvider + wizard reasoning for testing."""
+    config: dict[str, Any] = {
+        "llm": {"provider": "echo", "model": "test"},
+        "conversation_storage": {"backend": "memory"},
+        "memory": {"type": "buffer", "max_messages": 50},
+        "reasoning": {
+            "strategy": "wizard",
+            "wizard_config": _wizard_config(),
+            "strict_validation": False,
+        },
+    }
+    return await DynaBot.from_config(config)
+
+
+class TestWizardUndo:
+    """Undo in a wizard conversation after greet → chat.
+
+    Bug: _restore_wizard_from_node reads wizard_fsm_state from the
+    checkpoint node's metadata. If the checkpoint node is a greeting
+    node and wizard FSM state wasn't saved on it, restore silently
+    does nothing — leaving wizard state at the post-chat stage instead
+    of reverting to the greeting stage.
+    """
+
+    @pytest.mark.asyncio
+    async def test_undo_after_greet_restores_wizard_stage(self):
+        """After greet→chat→undo, wizard stage should revert to greeting."""
+        bot = await _make_wizard_bot()
+        ctx = _ctx("conv-wizard-undo")
+
+        # Greet — wizard starts at "greeting" stage
+        greeting = await bot.greet(ctx)
+        assert greeting is not None
+
+        state_after_greet = await bot.get_wizard_state(ctx.conversation_id)
+        assert state_after_greet is not None
+        assert state_after_greet["current_stage"] == "greeting"
+
+        # Chat — EchoProvider echoes the message; wizard may extract data
+        # and transition to next stage
+        await bot.chat("My name is Alice", ctx)
+
+        # Undo — should revert wizard state to greeting stage
+        result = await bot.undo_last_turn(ctx)
+        assert isinstance(result, UndoResult)
+
+        state_after_undo = await bot.get_wizard_state(ctx.conversation_id)
+        assert state_after_undo is not None
+        assert state_after_undo["current_stage"] == "greeting", (
+            f"Expected wizard stage 'greeting' after undo, "
+            f"got '{state_after_undo['current_stage']}'. "
+            f"Wizard FSM state was not restored from the greeting node."
+        )

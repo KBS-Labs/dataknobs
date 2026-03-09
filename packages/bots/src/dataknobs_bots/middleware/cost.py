@@ -250,13 +250,7 @@ class CostTrackingMiddleware(Middleware):
 
         # Update stats
         if client_id not in self._usage_stats:
-            self._usage_stats[client_id] = {
-                "total_requests": 0,
-                "total_input_tokens": 0,
-                "total_output_tokens": 0,
-                "total_cost_usd": 0.0,
-                "by_provider": {},
-            }
+            self._usage_stats[client_id] = self._new_client_stats(client_id)
 
         stats = self._usage_stats[client_id]
         stats["total_requests"] += 1

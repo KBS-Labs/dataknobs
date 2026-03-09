@@ -1611,6 +1611,15 @@ class DynaBot:
         # _get_wizard_state() can pick it up on the next generate() call.
         wizard_meta = manager.metadata.get("wizard", {})
         wizard_meta["fsm_state"] = fsm_state
+
+        # Also update top-level keys that normalize_wizard_state() reads
+        # with higher priority than fsm_state.  Without this, stale values
+        # from the pre-undo turn would shadow the restored fsm_state.
+        wizard_meta["current_stage"] = fsm_state.get("current_stage")
+        wizard_meta["data"] = fsm_state.get("data", {})
+        wizard_meta["completed"] = fsm_state.get("completed", False)
+        wizard_meta["history"] = fsm_state.get("history", [])
+
         manager.metadata["wizard"] = wizard_meta
 
     def _undo_banks_to_checkpoint(self, checkpoint_node_id: str) -> None:
