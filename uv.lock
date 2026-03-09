@@ -1373,7 +1373,7 @@ requires-dist = [
 
 [[package]]
 name = "dataknobs-bots"
-version = "0.6.2"
+version = "0.6.3"
 source = { editable = "packages/bots" }
 dependencies = [
     { name = "dataknobs-common" },
@@ -1827,7 +1827,7 @@ requires-dist = [
 
 [[package]]
 name = "dataknobs-utils"
-version = "1.2.4"
+version = "1.2.5"
 source = { editable = "packages/utils" }
 dependencies = [
     { name = "beautifulsoup4" },

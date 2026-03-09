@@ -308,9 +308,9 @@ dataknobs-config>=0.3.6
 dataknobs-data>=0.4.10
 dataknobs-fsm>=0.1.11
 dataknobs-llm>=0.5.1
-dataknobs-bots>=0.6.2
+dataknobs-bots>=0.6.3
 dataknobs-structures>=1.0.5
-dataknobs-utils>=1.2.4
+dataknobs-utils>=1.2.5
 dataknobs-xization>=1.2.5
 
 # Optional dependencies

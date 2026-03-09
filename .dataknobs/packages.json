@@ -5,7 +5,7 @@
       "name": "bots",
       "pypi_name": "dataknobs-bots",
       "description": "Configuration-driven AI agents with RAG, memory, and reasoning strategies",
-      "version": "0.6.2",
+      "version": "0.6.3",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
@@ -68,7 +68,7 @@
       "name": "utils",
       "pypi_name": "dataknobs-utils",
       "description": "Utilities for file I/O, JSON processing, HTTP requests, and integrations",
-      "version": "1.2.4",
+      "version": "1.2.5",
       "category": "core",
       "requires_docs_build": true,
       "deprecated": false
