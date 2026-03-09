@@ -5,6 +5,8 @@ and processing search results with Pandas integration.
 """
 
 import json
+import logging
+import time
 from collections.abc import Generator
 from typing import Any, Dict, List, TextIO, Union
 
@@ -13,6 +15,8 @@ import pandas as pd
 
 import dataknobs_utils.pandas_utils as pd_utils
 from dataknobs_utils import requests_utils
+
+logger = logging.getLogger(__name__)
 
 
 def build_field_query_dict(
@@ -661,25 +665,54 @@ class SimplifiedElasticsearchIndex:
             response = self.request_helper.request("delete", self.index_name)
             return response.succeeded
 
-    def index(self, body: Dict[str, Any], doc_id: str | None = None, refresh: bool = False) -> Dict[str, Any]:
-        """Index a document.
-        
+    def index(
+        self,
+        body: Dict[str, Any],
+        doc_id: str | None = None,
+        refresh: bool = False,
+        max_retries: int = 3,
+        initial_delay: float = 0.5,
+    ) -> Dict[str, Any]:
+        """Index a document with retry for transient server errors.
+
         Args:
             body: Document to index
             doc_id: Optional document ID (will be auto-generated if not provided)
             refresh: Whether to refresh immediately for search visibility
-            
+            max_retries: Maximum retry attempts for 5xx errors
+            initial_delay: Initial backoff delay in seconds (doubles each retry)
+
         Returns:
             Response with created document ID
         """
         path = f"_doc/{doc_id}" if doc_id else "_doc"
         params = {"refresh": "true"} if refresh else None
+        method = "put" if doc_id else "post"
 
-        response = self._request("put" if doc_id else "post", path, body, params)
+        delay = initial_delay
+        for attempt in range(max_retries + 1):
+            response = self._request(method, path, body, params)
 
-        if response.succeeded and response.json:
-            return response.json
-        return {"_id": None, "result": "error"}
+            if response.succeeded and response.json:
+                return response.json
+
+            status = response.status
+            is_server_error = status is not None and status >= 500
+            has_retries_left = attempt < max_retries
+
+            if is_server_error and has_retries_left:
+                logger.warning(
+                    "Transient server error %s indexing document (attempt %d/%d), "
+                    "retrying in %.1fs",
+                    status, attempt + 1, max_retries + 1, delay,
+                )
+                time.sleep(delay)
+                delay *= 2
+                continue
+
+            return {"_id": None, "result": "error"}
+
+        return {"_id": None, "result": "error"}  # pragma: no cover
 
     def get(self, doc_id: str) -> Dict[str, Any] | None:
         """Get a document by ID.

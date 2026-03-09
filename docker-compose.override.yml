@@ -44,7 +44,7 @@ services:
       - "9300:9300"
     volumes:
       - ~/data:/data
-      - ~/.dataknobs/data/elasticsearch:/usr/share/elasticsearch/data
+      - elasticsearch_data:/usr/share/elasticsearch/data
     networks:
       - devnet
 
@@ -64,4 +64,6 @@ services:
 
 volumes:
   postgres_data:
+    driver: local
+  elasticsearch_data:
     driver: local
