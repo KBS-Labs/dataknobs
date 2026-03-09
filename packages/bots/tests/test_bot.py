@@ -860,3 +860,150 @@ Remember to always verify customer identity before sharing sensitive information
         assert call["conversation_id"] == "conv-post-stream"
 
         await bot.close()
+
+    async def test_chat_after_message_receives_string_not_llm_response(self):
+        """Bug: DynaBot.chat() passes raw LLMResponse to after_message instead of str.
+
+        The Middleware.after_message signature is (response: str, context, **kwargs),
+        but DynaBot.chat() was passing the LLMResponse object. This caused
+        CostTrackingMiddleware to crash with 'TypeError: object of type
+        LLMResponse has no len()' when estimating output tokens.
+        """
+        from dataknobs_bots.middleware.base import Middleware
+        from typing import Any
+
+        class ResponseTypeTracker(Middleware):
+            def __init__(self) -> None:
+                self.received_response: Any = None
+                self.received_kwargs: dict[str, Any] = {}
+
+            async def before_message(
+                self, message: str, context: BotContext
+            ) -> None:
+                pass
+
+            async def after_message(
+                self, response: str, context: BotContext, **kwargs: Any
+            ) -> None:
+                self.received_response = response
+                self.received_kwargs = kwargs
+
+            async def post_stream(
+                self, message: str, response: str, context: BotContext
+            ) -> None:
+                pass
+
+            async def on_error(
+                self, error: Exception, message: str, context: BotContext
+            ) -> None:
+                pass
+
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+        }
+        bot = await DynaBot.from_config(config)
+
+        tracker = ResponseTypeTracker()
+        bot.middleware.append(tracker)
+
+        context = BotContext(
+            conversation_id="conv-mw-type", client_id="test-client"
+        )
+        await bot.chat("Hello", context)
+
+        # The response passed to after_message must be a string
+        assert isinstance(tracker.received_response, str), (
+            f"after_message received {type(tracker.received_response).__name__} "
+            f"instead of str"
+        )
+
+        await bot.close()
+
+    async def test_chat_after_message_receives_token_kwargs(self):
+        """DynaBot.chat() should pass token usage and provider info to after_message.
+
+        The after_message(**kwargs) should include tokens_used, model, and
+        provider so middleware like CostTrackingMiddleware can track costs
+        without estimating from response length.
+        """
+        from dataknobs_bots.middleware.base import Middleware
+        from typing import Any
+
+        class KwargsTracker(Middleware):
+            def __init__(self) -> None:
+                self.received_kwargs: dict[str, Any] = {}
+
+            async def before_message(
+                self, message: str, context: BotContext
+            ) -> None:
+                pass
+
+            async def after_message(
+                self, response: str, context: BotContext, **kwargs: Any
+            ) -> None:
+                self.received_kwargs = kwargs
+
+            async def post_stream(
+                self, message: str, response: str, context: BotContext
+            ) -> None:
+                pass
+
+            async def on_error(
+                self, error: Exception, message: str, context: BotContext
+            ) -> None:
+                pass
+
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+        }
+        bot = await DynaBot.from_config(config)
+
+        tracker = KwargsTracker()
+        bot.middleware.append(tracker)
+
+        context = BotContext(
+            conversation_id="conv-mw-kwargs", client_id="test-client"
+        )
+        await bot.chat("Hello", context)
+
+        # Should include provider info
+        assert "provider" in tracker.received_kwargs, (
+            "after_message kwargs missing 'provider'"
+        )
+
+        await bot.close()
+
+    async def test_chat_cost_tracking_middleware_no_crash(self):
+        """CostTrackingMiddleware must not crash when used with DynaBot.chat().
+
+        Reproduces the original bug: CostTrackingMiddleware.after_message
+        calls len(response) to estimate output tokens. When response is an
+        LLMResponse instead of a str, this raises TypeError.
+        """
+        from dataknobs_bots.middleware.cost import CostTrackingMiddleware
+
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+        }
+        bot = await DynaBot.from_config(config)
+
+        cost_mw = CostTrackingMiddleware(track_tokens=True)
+        bot.middleware.append(cost_mw)
+
+        context = BotContext(
+            conversation_id="conv-cost-mw", client_id="test-client"
+        )
+
+        # This should not raise TypeError
+        response = await bot.chat("What is 2 plus 2?", context)
+        assert isinstance(response, str)
+
+        # Stats should have been recorded
+        stats = cost_mw.get_client_stats("test-client")
+        assert stats is not None
+        assert stats["total_requests"] >= 1
+
+        await bot.close()
