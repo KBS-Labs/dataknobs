@@ -51,6 +51,7 @@ KNOWN_STAGE_FIELDS: frozenset[str] = frozenset({
     "context_generation", "mode", "intent_detection",
     "tasks", "navigation",
     "collection_mode", "collection_config",
+    "capture_mode",
 })
 
 # Patterns that suggest a condition is natural language rather than Python
@@ -607,6 +608,8 @@ class WizardConfigLoader:
                 # Collection mode (multi-record collection via MemoryBank)
                 "collection_mode": stage.get("collection_mode"),
                 "collection_config": stage.get("collection_config"),
+                # Extraction control — "auto", "verbatim", or "extract"
+                "capture_mode": stage.get("capture_mode"),
             }
 
         # Add global tasks to the first stage's metadata

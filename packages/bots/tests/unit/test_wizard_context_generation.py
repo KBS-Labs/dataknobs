@@ -772,10 +772,191 @@ class TestExtractionBotResponseContext:
         )
         assert result is not None
 
+    @pytest.mark.asyncio
+    async def test_verbatim_capture_does_not_bypass_bot_response_context(
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
+    ) -> None:
+        """Verbatim capture for trivial schemas must not bypass deictic resolution.
+
+        Bug: When a stage schema is a single required string field with no
+        constraints, _needs_llm_extraction() returns False and _extract_data()
+        takes the verbatim capture fast path (returning the raw user message).
+        This early return happens BEFORE the bot-response prepending code at
+        wizard.py:3136, so deictic references like "the first one" are stored
+        literally instead of being resolved against the bot's prior response.
+
+        This test uses a trivial schema (single required string field) with a
+        deictic user message. The bot's prior response presents options. The
+        extraction should NOT store the raw deictic reference — it should
+        either route through LLM extraction (so the bot response context
+        enables resolution) or at minimum not return a verbatim capture when
+        the bot's prior response is available for context.
+
+        See: sandbox dataknobs-fixes/04-verbatim-capture-deictic.md
+        """
+        # Bot presented options in its last response
+        await conversation_manager.add_message(
+            role="assistant",
+            content=(
+                "Welcome to Support! How can I help you today?\n\n"
+                "I can assist with:\n"
+                "- **Billing** questions (accounts, payments, invoices)\n"
+                "- **Technical** issues (errors, setup, troubleshooting)\n\n"
+                "What type of issue do you have?"
+            ),
+        )
+        await conversation_manager.add_message(
+            role="user", content="The first one"
+        )
+
+        state = WizardState(current_stage="welcome", data={})
+
+        # Trivial schema: single required string field, no constraints.
+        # This triggers verbatim capture in the current code.
+        stage = {
+            "name": "welcome",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "issue_type": {
+                        "type": "string",
+                        "description": "The type of support issue",
+                    },
+                },
+                "required": ["issue_type"],
+            },
+        }
+
+        result = await wizard_reasoning._extract_data(
+            "The first one",
+            stage,
+            _make_echo_llm(),
+            conversation_manager,
+            state,
+        )
+
+        # The raw deictic reference should NOT be stored verbatim.
+        # If verbatim capture is used, issue_type will be "The first one"
+        # instead of something resolved like "billing".
+        assert result is not None
+        extracted_value = result.data.get("issue_type", "")
+
+        # The extraction should NOT return the raw deictic reference.
+        # It should either go through LLM extraction (which has the bot
+        # response context for resolution) or signal that verbatim capture
+        # is inappropriate when a bot response is available.
+        assert extracted_value != "The first one", (
+            f"Verbatim capture stored raw deictic reference '{extracted_value}' "
+            f"instead of routing through LLM extraction with bot response context. "
+            f"The bot's prior response presented options (Billing, Technical) but "
+            f"the verbatim capture fast path bypassed the bot-response prepending "
+            f"code entirely."
+        )
+
 
 # =========================================================================
 # Tests for loader metadata extraction of new fields
 # =========================================================================
+
+
+class TestCaptureModeStageField:
+    """Tests for capture_mode as a top-level stage field."""
+
+    def test_capture_mode_extract_forces_llm_extraction(
+        self,
+        wizard_reasoning: WizardReasoning,
+    ) -> None:
+        """capture_mode: extract on a trivial schema forces LLM extraction."""
+        # Trivial schema that would normally trigger verbatim capture
+        stage = {
+            "name": "welcome",
+            "capture_mode": "extract",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "issue_type": {"type": "string"},
+                },
+                "required": ["issue_type"],
+            },
+        }
+
+        # _needs_llm_extraction should return True due to capture_mode
+        assert wizard_reasoning._needs_llm_extraction(
+            stage["schema"], stage,
+        ) is True
+
+    def test_capture_mode_verbatim_forces_verbatim(
+        self,
+        wizard_reasoning: WizardReasoning,
+    ) -> None:
+        """capture_mode: verbatim forces verbatim capture even for complex schemas."""
+        stage = {
+            "name": "welcome",
+            "capture_mode": "verbatim",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "age": {"type": "integer"},
+                },
+                "required": ["name", "age"],
+            },
+        }
+
+        # _needs_llm_extraction should return False due to capture_mode
+        assert wizard_reasoning._needs_llm_extraction(
+            stage["schema"], stage,
+        ) is False
+
+    def test_stage_capture_mode_overrides_collection_config(
+        self,
+        wizard_reasoning: WizardReasoning,
+    ) -> None:
+        """Top-level capture_mode takes precedence over collection_config."""
+        stage = {
+            "name": "welcome",
+            "capture_mode": "extract",
+            "collection_config": {"capture_mode": "verbatim"},
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "issue_type": {"type": "string"},
+                },
+                "required": ["issue_type"],
+            },
+        }
+
+        # Stage-level "extract" should win over collection_config "verbatim"
+        assert wizard_reasoning._needs_llm_extraction(
+            stage["schema"], stage,
+        ) is True
+
+    def test_loader_accepts_capture_mode(self) -> None:
+        """WizardConfigLoader does not warn on capture_mode field."""
+        config: dict[str, Any] = {
+            "name": "test",
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "is_end": True,
+                    "prompt": "Hello",
+                    "capture_mode": "extract",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"x": {"type": "string"}},
+                        "required": ["x"],
+                    },
+                },
+            ],
+        }
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(config)
+
+        meta = wizard_fsm.stages["start"]
+        assert meta.get("capture_mode") == "extract"
 
 
 class TestLoaderContextGeneration:

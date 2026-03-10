@@ -19,6 +19,8 @@ LLM-generated template variables, transition data derivation, dynamic suggestion
   - [Jinja2 in Suggestions](#jinja2-in-suggestions)
 - [Extraction Context](#extraction-context)
   - [Bot Response in Extraction](#bot-response-in-extraction)
+  - [Verbatim Capture and Deictic Resolution](#verbatim-capture-and-deictic-resolution)
+  - [capture_mode Stage Field](#capture_mode-stage-field)
 - [Complete Example](#complete-example)
 - [Design Rationale](#design-rationale)
 
@@ -251,6 +253,49 @@ Use the first suggestion
 This allows the extraction model to resolve deictic references ("the first one", "yes to that", "use suggestion #2") against the actual content that was shown.
 
 Bot responses longer than 1500 characters are truncated to avoid overwhelming the extraction model. When no previous bot response exists (e.g., the first stage), no prepend occurs.
+
+### Verbatim Capture and Deictic Resolution
+
+For trivial schemas (a single required string field with no `enum`, `pattern`, or `format` constraints), the wizard uses **verbatim capture** — the user's raw input is stored directly without calling the extraction LLM. This is a performance optimization that avoids an unnecessary LLM round-trip for simple inputs.
+
+However, verbatim capture is automatically skipped when the bot's prior response is available in the conversation. This ensures that deictic references like "the first one", "yes to that", or "use suggestion #2" are routed through LLM extraction, where the bot's response provides the context needed to resolve them.
+
+For example, if the bot presents:
+
+```
+I can assist with:
+- **Billing** questions
+- **Technical** issues
+```
+
+And the user responds "The first one", verbatim capture would store the literal string `"The first one"`. Instead, the wizard detects the bot response and routes through LLM extraction, which resolves the reference to `"billing"`.
+
+### capture_mode Stage Field
+
+The `capture_mode` field gives stage authors explicit control over the extraction strategy, overriding the automatic detection described above.
+
+```yaml
+stages:
+  - name: welcome
+    capture_mode: extract    # Force LLM extraction despite trivial schema
+    schema:
+      type: object
+      properties:
+        issue_type:
+          type: string
+      required:
+        - issue_type
+```
+
+| Value | Behavior |
+|-------|----------|
+| `"auto"` (default) | Schema-based detection: trivial schemas use verbatim capture unless a bot response is available |
+| `"verbatim"` | Always use verbatim capture (skip LLM extraction) |
+| `"extract"` | Always use LLM extraction |
+
+`capture_mode` can be set as a top-level stage field or nested under `collection_config`. The top-level field takes precedence when both are set.
+
+Use `capture_mode: extract` when a stage has a trivial schema but the user's input may contain references that need resolution. Use `capture_mode: verbatim` to force the fast path even when a bot response is present (e.g., when the stage prompt never presents options).
 
 ## Complete Example
 

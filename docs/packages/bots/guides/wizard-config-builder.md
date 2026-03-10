@@ -448,6 +448,7 @@ All fields available on `StageConfig`:
 | `mode` | `str \| None` | `None` | `"conversation"` for chat stages |
 | `intent_detection` | `IntentDetectionConfig \| None` | `None` | Intent detection settings |
 | `tasks` | `tuple[dict, ...]` | `()` | Stage-level tasks |
+| `capture_mode` | `str \| None` | `None` | Extraction control: `"auto"`, `"verbatim"`, or `"extract"` |
 
 ## TransitionConfig Reference
 

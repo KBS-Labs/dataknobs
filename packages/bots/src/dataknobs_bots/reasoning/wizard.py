@@ -3097,7 +3097,18 @@ class WizardReasoning(ReasoningStrategy):
         # Verbatim capture: skip LLM extraction for trivial schemas
         # (single required string field, no constraints) or when
         # capture_mode is explicitly set to "verbatim".
-        if not self._needs_llm_extraction(schema, stage):
+        #
+        # However, when a bot response is available in the conversation,
+        # verbatim capture is unsafe: the user may be using deictic
+        # references like "the first one" that require the bot's prior
+        # response as context to resolve.  In that case, fall through to
+        # LLM extraction so the bot-response prepending code can provide
+        # the necessary context.
+        has_bot_response = False
+        if manager is not None:
+            has_bot_response = bool(self._get_last_bot_response(manager))
+
+        if not self._needs_llm_extraction(schema, stage) and not has_bot_response:
             field_name = next(iter(schema.get("properties", {})))
             logger.debug(
                 "Verbatim capture: stage='%s', field='%s'",
@@ -4093,8 +4104,12 @@ class WizardReasoning(ReasoningStrategy):
             ``True`` if LLM extraction should be used, ``False`` for
             verbatim capture.
         """
-        col_config = stage.get("collection_config") or {}
-        capture_mode = col_config.get("capture_mode", "auto")
+        # capture_mode can be set as a top-level stage field or nested
+        # under collection_config.  Top-level takes precedence.
+        capture_mode = stage.get("capture_mode")
+        if capture_mode is None:
+            col_config = stage.get("collection_config") or {}
+            capture_mode = col_config.get("capture_mode", "auto")
 
         if capture_mode == "verbatim":
             return False
