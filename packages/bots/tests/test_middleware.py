@@ -76,6 +76,74 @@ class TestCostTrackingMiddleware:
         assert stats is None
 
     @pytest.mark.asyncio
+    async def test_post_stream_tracks_usage(self, bot_context: BotContext):
+        """Test that post_stream tracks token usage on a fresh client.
+
+        Bug: post_stream on a client with no prior after_message call used
+        to create an inline stats dict missing the hook counter keys
+        (after_message_calls, post_stream_calls, on_error_calls), causing
+        a KeyError when incrementing post_stream_calls.
+        """
+        middleware = CostTrackingMiddleware()
+
+        # Call post_stream directly — no prior after_message for this client
+        await middleware.post_stream(
+            "Hello, world!",
+            "Hi there! How can I help you?",
+            bot_context,
+        )
+
+        stats = middleware.get_client_stats("test-client")
+        assert stats is not None
+        assert stats["total_requests"] == 1
+        assert stats["post_stream_calls"] == 1
+        assert stats["after_message_calls"] == 0
+        assert stats["on_error_calls"] == 0
+        assert stats["total_input_tokens"] > 0
+        assert stats["total_output_tokens"] > 0
+
+    @pytest.mark.asyncio
+    async def test_on_error_tracks_call_count(self, bot_context: BotContext):
+        """Test that on_error increments error counter on a fresh client.
+
+        Bug: on_error on a client with no prior calls used to create an
+        inline stats dict missing the hook counter keys.
+        """
+        middleware = CostTrackingMiddleware()
+        error = ValueError("Test error")
+        await middleware.on_error(error, "Test message", bot_context)
+
+        stats = middleware.get_client_stats("test-client")
+        assert stats is not None
+        assert stats["on_error_calls"] == 1
+        assert stats["after_message_calls"] == 0
+        assert stats["post_stream_calls"] == 0
+
+    @pytest.mark.asyncio
+    async def test_hook_call_counters_accumulate(self, bot_context: BotContext):
+        """Test that hook call counters track calls across all hooks."""
+        middleware = CostTrackingMiddleware()
+
+        await middleware.after_message(
+            "Response 1", bot_context,
+            tokens_used={"input": 10, "output": 15},
+            provider="ollama", model="llama3.2",
+        )
+        await middleware.post_stream(
+            "Hello", "Response 2", bot_context,
+        )
+        await middleware.on_error(
+            ValueError("err"), "msg", bot_context,
+        )
+
+        stats = middleware.get_client_stats("test-client")
+        assert stats is not None
+        assert stats["after_message_calls"] == 1
+        assert stats["post_stream_calls"] == 1
+        assert stats["on_error_calls"] == 1
+        assert stats["total_requests"] == 2  # after_message + post_stream
+
+    @pytest.mark.asyncio
     async def test_on_error(self, bot_context: BotContext):
         """Test on_error hook runs without error."""
         middleware = CostTrackingMiddleware()

@@ -440,7 +440,7 @@ All fields available on `StageConfig`:
 | `can_skip` | `bool` | `False` | Whether the user can skip this stage |
 | `skip_default` | `Any` | `None` | Default value if skipped |
 | `can_go_back` | `bool` | `True` | Whether the user can go back |
-| `auto_advance` | `bool` | `False` | Auto-advance when data is collected |
+| `auto_advance` | `bool` | `False` | Auto-advance past this stage (see [Message Stages](CONTEXT_AWARE_WIZARDS.md#message-stages)) |
 | `confirm_on_new_data` | `bool` | `False` | Re-render confirmation when schema values change |
 | `label` | `str \| None` | `None` | Display label |
 | `suggestions` | `tuple[str, ...]` | `()` | Quick-reply suggestions |
@@ -458,6 +458,7 @@ All fields available on `StageConfig`:
 | `mode` | `str \| None` | `None` | `"conversation"` for chat stages |
 | `intent_detection` | `IntentDetectionConfig \| None` | `None` | Intent detection settings |
 | `tasks` | `tuple[dict, ...]` | `()` | Stage-level tasks |
+| `capture_mode` | `str \| None` | `None` | Extraction control: `"auto"`, `"verbatim"`, or `"extract"` |
 
 ## TransitionConfig Reference
 

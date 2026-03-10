@@ -100,6 +100,21 @@ class CostTrackingMiddleware(Middleware):
         self._usage_stats: dict[str, dict[str, Any]] = {}
         self._logger = logging.getLogger(f"{__name__}.CostTracker")
 
+    @staticmethod
+    def _new_client_stats(client_id: str) -> dict[str, Any]:
+        """Create a fresh stats dict for a client."""
+        return {
+            "client_id": client_id,
+            "total_requests": 0,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_cost_usd": 0.0,
+            "after_message_calls": 0,
+            "post_stream_calls": 0,
+            "on_error_calls": 0,
+            "by_provider": {},
+        }
+
     async def before_message(self, message: str, context: BotContext) -> None:
         """Track message before processing (mainly for logging).
 
@@ -158,17 +173,11 @@ class CostTrackingMiddleware(Middleware):
 
         # Update stats
         if client_id not in self._usage_stats:
-            self._usage_stats[client_id] = {
-                "client_id": client_id,
-                "total_requests": 0,
-                "total_input_tokens": 0,
-                "total_output_tokens": 0,
-                "total_cost_usd": 0.0,
-                "by_provider": {},
-            }
+            self._usage_stats[client_id] = self._new_client_stats(client_id)
 
         stats = self._usage_stats[client_id]
         stats["total_requests"] += 1
+        stats["after_message_calls"] += 1
         stats["total_input_tokens"] += input_tokens
         stats["total_output_tokens"] += output_tokens
         stats["total_cost_usd"] += cost
@@ -241,16 +250,11 @@ class CostTrackingMiddleware(Middleware):
 
         # Update stats
         if client_id not in self._usage_stats:
-            self._usage_stats[client_id] = {
-                "total_requests": 0,
-                "total_input_tokens": 0,
-                "total_output_tokens": 0,
-                "total_cost_usd": 0.0,
-                "by_provider": {},
-            }
+            self._usage_stats[client_id] = self._new_client_stats(client_id)
 
         stats = self._usage_stats[client_id]
         stats["total_requests"] += 1
+        stats["post_stream_calls"] += 1
         stats["total_input_tokens"] += input_tokens
         stats["total_output_tokens"] += output_tokens
         stats["total_cost_usd"] += cost
@@ -286,8 +290,13 @@ class CostTrackingMiddleware(Middleware):
             message: User message that caused the error
             context: Bot context
         """
+        client_id = context.client_id
+        if client_id not in self._usage_stats:
+            self._usage_stats[client_id] = self._new_client_stats(client_id)
+        self._usage_stats[client_id]["on_error_calls"] += 1
+
         self._logger.warning(
-            f"Error during request for client {context.client_id}: {error}"
+            f"Error during request for client {client_id}: {error}"
         )
 
     def _calculate_cost(

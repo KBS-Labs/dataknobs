@@ -431,7 +431,7 @@ All fields available on `StageConfig`:
 | `can_skip` | `bool` | `False` | Whether the user can skip this stage |
 | `skip_default` | `Any` | `None` | Default value if skipped |
 | `can_go_back` | `bool` | `True` | Whether the user can go back |
-| `auto_advance` | `bool` | `False` | Auto-advance when data is collected |
+| `auto_advance` | `bool` | `False` | Auto-advance past this stage (see [Message Stages](context-aware-wizards.md#message-stages)) |
 | `label` | `str \| None` | `None` | Display label |
 | `suggestions` | `tuple[str, ...]` | `()` | Quick-reply suggestions |
 | `help_text` | `str \| None` | `None` | Help message |
@@ -448,6 +448,7 @@ All fields available on `StageConfig`:
 | `mode` | `str \| None` | `None` | `"conversation"` for chat stages |
 | `intent_detection` | `IntentDetectionConfig \| None` | `None` | Intent detection settings |
 | `tasks` | `tuple[dict, ...]` | `()` | Stage-level tasks |
+| `capture_mode` | `str \| None` | `None` | Extraction control: `"auto"`, `"verbatim"`, or `"extract"` |
 
 ## TransitionConfig Reference
 

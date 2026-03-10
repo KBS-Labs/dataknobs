@@ -152,6 +152,8 @@ class StageConfig:
     tasks: tuple[dict[str, Any], ...] = ()
     # Per-stage navigation keyword overrides
     navigation: dict[str, Any] | None = None
+    # Extraction control — "auto" (default), "verbatim", or "extract"
+    capture_mode: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dict compatible with WizardConfigLoader."""
@@ -204,6 +206,8 @@ class StageConfig:
             d["tasks"] = [dict(t) for t in self.tasks]
         if self.navigation is not None:
             d["navigation"] = self.navigation
+        if self.capture_mode is not None:
+            d["capture_mode"] = self.capture_mode
         return d
 
 
