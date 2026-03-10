@@ -1354,7 +1354,8 @@ class WizardReasoning(ReasoningStrategy):
         )
 
         # Get start stage metadata and generate the response
-        stage = self._get_active_fsm().current_metadata
+        active_fsm = self._get_active_fsm()
+        stage = active_fsm.current_metadata
         await self._branch_for_revisited_stage(manager, stage.get("name", ""))
         response = await self._generate_stage_response(
             manager, llm, stage, wizard_state, tools=[],
@@ -1365,6 +1366,93 @@ class WizardReasoning(ReasoningStrategy):
         # the user's first message arrives with extracted data.
         if stage.get("response_template"):
             wizard_state.increment_render_count(stage.get("name", "unknown"))
+
+        # Auto-advance through message stages (same logic as generate()).
+        # If the start stage is a message stage with auto_advance: true,
+        # collect its content and advance to the next stage.
+        auto_advance_messages: list[str] = []
+        if self._can_auto_advance(wizard_state, stage):
+            # The start stage response becomes the first collected message
+            auto_advance_messages.append(response.content)
+
+            auto_advance_count = 0
+            max_auto_advances = 10
+            new_stage = stage
+
+            while (
+                auto_advance_count < max_auto_advances
+                and not wizard_state.completed
+                and self._can_auto_advance(wizard_state, new_stage)
+            ):
+                auto_advance_count += 1
+                old_stage_name = wizard_state.current_stage
+                duration_ms = (
+                    (time.time() - wizard_state.stage_entry_time) * 1000
+                )
+
+                # Render template of the stage being advanced past
+                # (skip on first iteration — already captured above)
+                if auto_advance_count > 1:
+                    rendered = self._render_auto_advance_template(
+                        new_stage, wizard_state
+                    )
+                    if rendered:
+                        auto_advance_messages.append(rendered)
+
+                auto_step_result = await active_fsm.step_async(
+                    wizard_state.data
+                )
+                new_stage_name = active_fsm.current_stage
+
+                if new_stage_name == old_stage_name:
+                    break
+
+                condition_expr = active_fsm.get_transition_condition(
+                    old_stage_name, new_stage_name
+                )
+                transition = create_transition_record(
+                    from_stage=old_stage_name,
+                    to_stage=new_stage_name,
+                    trigger="auto_advance",
+                    duration_in_stage_ms=duration_ms,
+                    data_snapshot=wizard_state.data.copy(),
+                    condition_evaluated=condition_expr,
+                    condition_result=True if condition_expr else None,
+                    subflow_depth=wizard_state.subflow_depth,
+                )
+                wizard_state.transitions.append(transition)
+
+                wizard_state.current_stage = new_stage_name
+                if new_stage_name not in wizard_state.history:
+                    wizard_state.history.append(new_stage_name)
+                wizard_state.completed = auto_step_result.is_complete
+                wizard_state.stage_entry_time = time.time()
+
+                logger.info(
+                    "Greet auto-advanced from %s to %s",
+                    old_stage_name,
+                    new_stage_name,
+                )
+
+                new_stage = active_fsm.current_metadata
+
+            # Generate the landing stage's response and prepend
+            # the collected messages from auto-advanced stages.
+            landing_stage = active_fsm.current_metadata
+            if landing_stage.get("name") != stage.get("name"):
+                await self._branch_for_revisited_stage(
+                    manager, landing_stage.get("name", "")
+                )
+                response = await self._generate_stage_response(
+                    manager, llm, landing_stage, wizard_state, tools=[],
+                )
+                if landing_stage.get("response_template"):
+                    wizard_state.increment_render_count(
+                        landing_stage.get("name", "unknown")
+                    )
+                self._prepend_messages_to_response(
+                    response, auto_advance_messages
+                )
 
         # Persist wizard state
         await self._save_wizard_state(manager, wizard_state)
@@ -1940,8 +2028,11 @@ class WizardReasoning(ReasoningStrategy):
             # Not completed since we returned to parent flow
             wizard_state.completed = False
 
-        # Auto-advance through stages where all required fields are filled
+        # Auto-advance through stages where all required fields are filled.
+        # Collect rendered templates from intermediate message stages so
+        # their content is visible in the final response.
         new_stage = active_fsm.current_metadata
+        auto_advance_messages: list[str] = []
         auto_advance_count = 0
         max_auto_advances = 10  # Safety limit to prevent infinite loops
 
@@ -1950,6 +2041,13 @@ class WizardReasoning(ReasoningStrategy):
             and not wizard_state.completed
             and self._can_auto_advance(wizard_state, new_stage)
         ):
+            # Render message stage template before advancing past it
+            rendered = self._render_auto_advance_template(
+                new_stage, wizard_state
+            )
+            if rendered:
+                auto_advance_messages.append(rendered)
+
             auto_advance_count += 1
             old_stage_name = wizard_state.current_stage
             duration_ms = (time.time() - wizard_state.stage_entry_time) * 1000
@@ -2020,6 +2118,10 @@ class WizardReasoning(ReasoningStrategy):
         response = await self._generate_stage_response(
             manager, llm, new_stage, wizard_state, tools
         )
+
+        # Prepend any messages collected from intermediate auto-advance stages
+        if auto_advance_messages:
+            self._prepend_messages_to_response(response, auto_advance_messages)
 
         # Check for tool-initiated restart (RestartWizardTool signal).
         # Restart takes priority over completion — if both are set, restart
@@ -4656,8 +4758,13 @@ class WizardReasoning(ReasoningStrategy):
         if not required_fields:
             required_fields = list(properties.keys())
 
-        # If no fields at all, can't auto-advance based on data
-        if not required_fields:
+        # If no fields at all:
+        # - Per-stage auto_advance: true → can advance (message/display stage)
+        #   Still requires a satisfied transition condition (checked below).
+        # - Global auto_advance_filled_stages only → cannot advance
+        #   (that setting means "skip stages whose fields are already filled",
+        #   not "skip stages that have no fields to fill").
+        if not required_fields and not stage_auto_advance:
             return False
 
         # Check if all required fields have non-empty values
@@ -4684,6 +4791,57 @@ class WizardReasoning(ReasoningStrategy):
                 return True
 
         return False
+
+    def _render_auto_advance_template(
+        self, stage: dict[str, Any], state: WizardState
+    ) -> str | None:
+        """Render a stage's response_template for auto-advance collection.
+
+        Used during auto-advance to capture message stage content before
+        the stage is advanced past. Only renders if the stage has a
+        response_template.
+
+        Args:
+            stage: Stage metadata dict
+            state: Current wizard state
+
+        Returns:
+            Rendered template string, or None if the stage has no template
+        """
+        template = stage.get("response_template")
+        if not template:
+            return None
+
+        rendered = self._render_response_template(template, stage, state)
+        stage_name = stage.get("name", "unknown")
+        logger.debug(
+            "Rendered message stage '%s' template during auto-advance "
+            "(%d chars)",
+            stage_name,
+            len(rendered),
+        )
+        # Track render count so re-visiting won't re-confirm
+        state.increment_render_count(stage_name)
+        return rendered
+
+    @staticmethod
+    def _prepend_messages_to_response(
+        response: Any, messages: list[str]
+    ) -> None:
+        """Prepend collected auto-advance messages to a response.
+
+        Modifies the response object in place, inserting message stage
+        content before the landing stage's response. Messages are joined
+        with double newlines.
+
+        Args:
+            response: Response object with a ``content`` attribute
+            messages: List of rendered template strings to prepend
+        """
+        if not messages:
+            return
+        prefix = "\n\n".join(messages) + "\n\n"
+        response.content = prefix + response.content
 
     def _evaluate_condition(self, condition: str, data: dict[str, Any]) -> bool:
         """Safely evaluate a transition condition.

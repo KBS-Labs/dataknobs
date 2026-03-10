@@ -21,6 +21,7 @@ LLM-generated template variables, transition data derivation, dynamic suggestion
   - [Bot Response in Extraction](#bot-response-in-extraction)
   - [Verbatim Capture and Deictic Resolution](#verbatim-capture-and-deictic-resolution)
   - [capture_mode Stage Field](#capture_mode-stage-field)
+- [Message Stages](#message-stages)
 - [Complete Example](#complete-example)
 - [Design Rationale](#design-rationale)
 
@@ -50,9 +51,10 @@ Wizard stages support several response modes. Choose the **simplest mode** that 
 | Priority | Mode | Config Fields | Use When |
 |----------|------|---------------|----------|
 | 1 (default) | **Template-only** | `response_template` + `schema` | Data collection — most stages |
-| 2 | **Template + context** | `response_template` + `context_generation` | Dynamic flavor (personalized remarks, creative content) |
-| 3 | **Template + LLM assist** | `response_template` + `llm_assist: true` | User may ask help questions during a stage |
-| 4 | **LLM-driven** | `prompt` only (no template) | Open-ended conversation stages (`mode: conversation`) |
+| 2 | **Message stage** | `response_template` + `auto_advance: true` (no schema) | Display-only — confirmations, status updates, transitions |
+| 3 | **Template + context** | `response_template` + `context_generation` | Dynamic flavor (personalized remarks, creative content) |
+| 4 | **Template + LLM assist** | `response_template` + `llm_assist: true` | User may ask help questions during a stage |
+| 5 | **LLM-driven** | `prompt` only (no template) | Open-ended conversation stages (`mode: conversation`) |
 
 **Template-first is strongly recommended.** LLM-driven data-collection stages are unreliable — the LLM may ignore stage instructions, ask for different fields, or hallucinate data. The `response_template` produces consistent, deterministic output while the `schema` handles extraction.
 
@@ -296,6 +298,119 @@ stages:
 `capture_mode` can be set as a top-level stage field or nested under `collection_config`. The top-level field takes precedence when both are set.
 
 Use `capture_mode: extract` when a stage has a trivial schema but the user's input may contain references that need resolution. Use `capture_mode: verbatim` to force the fast path even when a bot response is present (e.g., when the stage prompt never presents options).
+
+## Message Stages
+
+Message stages display informational content to the user without collecting data, then auto-advance to the next stage — all within a single user turn. They are configured using existing fields: `auto_advance: true` + `response_template`, with no `schema`.
+
+### Configuration
+
+```yaml
+stages:
+  - name: confirmation
+    prompt: "Confirmation"
+    auto_advance: true
+    response_template: |
+      Your ticket for {{ department }} has been submitted.
+      Reference number: {{ ticket_id }}
+    transitions:
+      - target: next_stage
+        condition: "true"
+```
+
+The stage needs:
+
+| Field | Required | Purpose |
+|-------|----------|---------|
+| `auto_advance: true` | Yes | Tells the wizard to advance immediately |
+| `response_template` | Yes | The message to display (Jinja2 with wizard state data) |
+| `transitions` | Yes | Where to go next (supports conditions for routing) |
+| `schema` | No | Omit — message stages don't collect data |
+
+### How It Works
+
+When the wizard arrives at a message stage (during `generate()` or `greet()`):
+
+1. The `response_template` is rendered with current wizard state data
+2. The rendered message is collected
+3. The wizard transitions to the next stage
+4. The collected message is prepended to the next stage's response
+
+The user sees the message and the next stage's prompt combined in a single bot response.
+
+### Per-Stage vs Global Auto-Advance
+
+Message stages use **per-stage** `auto_advance: true`, which is distinct from the **global** `auto_advance_filled_stages` setting:
+
+| Setting | Scope | Schema-less stages? | Use case |
+|---------|-------|---------------------|----------|
+| `auto_advance: true` | Single stage | Yes | Message stages, always-skip stages |
+| `auto_advance_filled_stages` | All stages | No | Skip stages whose required fields are already filled |
+
+The global setting means "skip stages whose required fields are satisfied" — it requires fields to check. Per-stage `auto_advance` means "always advance past this stage" and works with or without a schema.
+
+### Chained Message Stages
+
+Multiple consecutive message stages are supported. Each template is rendered and collected, then all messages are prepended to the final landing stage's response:
+
+```yaml
+stages:
+  - name: step1_complete
+    prompt: "Step 1"
+    auto_advance: true
+    response_template: "Step 1 complete: {{ item }} registered."
+    transitions:
+      - target: step2_info
+
+  - name: step2_info
+    prompt: "Step 2"
+    auto_advance: true
+    response_template: "Moving to final review..."
+    transitions:
+      - target: review
+```
+
+The user sees both messages followed by the review stage's prompt. The existing `max_auto_advances = 10` safety limit prevents infinite loops from misconfigured chains.
+
+### Conditional Routing
+
+Message stages support normal transition conditions for routing based on previously collected data:
+
+```yaml
+- name: routing_message
+  prompt: "Routing"
+  auto_advance: true
+  response_template: "Taking you to the {{ department }} department."
+  transitions:
+    - target: billing_intake
+      condition: "data.get('department') == 'billing'"
+    - target: tech_support
+      condition: "data.get('department') == 'technical'"
+    - target: general_help
+      condition: "true"
+```
+
+### Builder API
+
+Use `add_structured_stage()` with `auto_advance=True` and `response_template`:
+
+```python
+builder.add_structured_stage(
+    "confirmation",
+    "Confirmation",
+    response_template="Your ticket for {{ department }} has been submitted.",
+    auto_advance=True,
+)
+builder.add_transition("confirmation", "next_stage", condition="true")
+```
+
+### Use Cases
+
+- **Confirmations**: "Your order has been placed. Order #{{ order_id }}."
+- **Informational transitions**: "Now let's set up your profile."
+- **Conditional messages**: Different messages based on routing decisions
+- **Status updates**: "Processing complete. {{ count }} items imported."
+- **Greetings**: A start stage that displays a welcome message before advancing to the first data-collection stage
 
 ## Complete Example
 
