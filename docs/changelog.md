@@ -5,6 +5,20 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-03-10
+
+### dataknobs-bots [0.6.4]
+
+#### Added
+- added post-stream middleware hook
+
+#### Fixed
+- fixed flow to enable wizard message mode behavior (skip states w/out requiring a user response)
+- fixed deictic resolution bug
+- fixed bug in wizard undo fsm state restoration
+- fixed middleware bugs
+
+
 ## Release - 2026-03-09
 
 ### dataknobs-utils [1.2.5]
