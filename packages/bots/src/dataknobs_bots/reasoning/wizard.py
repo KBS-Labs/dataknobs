@@ -1367,74 +1367,18 @@ class WizardReasoning(ReasoningStrategy):
         if stage.get("response_template"):
             wizard_state.increment_render_count(stage.get("name", "unknown"))
 
-        # Auto-advance through message stages (same logic as generate()).
-        # If the start stage is a message stage with auto_advance: true,
-        # collect its content and advance to the next stage.
-        auto_advance_messages: list[str] = []
+        # Auto-advance through message stages if the start stage has
+        # auto_advance: true. The start stage response is already captured,
+        # so skip_first_render=True avoids re-rendering it.
         if self._can_auto_advance(wizard_state, stage):
-            # The start stage response becomes the first collected message
-            auto_advance_messages.append(response.content)
+            auto_advance_messages = [response.content]
+            loop_messages = await self._run_auto_advance_loop(
+                wizard_state, active_fsm, stage, skip_first_render=True,
+            )
+            auto_advance_messages.extend(loop_messages)
 
-            auto_advance_count = 0
-            max_auto_advances = 10
-            new_stage = stage
-
-            while (
-                auto_advance_count < max_auto_advances
-                and not wizard_state.completed
-                and self._can_auto_advance(wizard_state, new_stage)
-            ):
-                auto_advance_count += 1
-                old_stage_name = wizard_state.current_stage
-                duration_ms = (
-                    (time.time() - wizard_state.stage_entry_time) * 1000
-                )
-
-                # Render template of the stage being advanced past
-                # (skip on first iteration — already captured above)
-                if auto_advance_count > 1:
-                    rendered = self._render_auto_advance_template(
-                        new_stage, wizard_state
-                    )
-                    if rendered:
-                        auto_advance_messages.append(rendered)
-
-                auto_step_result = await active_fsm.step_async(
-                    wizard_state.data
-                )
-                new_stage_name = active_fsm.current_stage
-
-                if new_stage_name == old_stage_name:
-                    break
-
-                condition_expr = active_fsm.get_transition_condition(
-                    old_stage_name, new_stage_name
-                )
-                transition = create_transition_record(
-                    from_stage=old_stage_name,
-                    to_stage=new_stage_name,
-                    trigger="auto_advance",
-                    duration_in_stage_ms=duration_ms,
-                    data_snapshot=wizard_state.data.copy(),
-                    condition_evaluated=condition_expr,
-                    condition_result=True if condition_expr else None,
-                    subflow_depth=wizard_state.subflow_depth,
-                )
-                wizard_state.transitions.append(transition)
-
-                wizard_state.current_stage = new_stage_name
-                if new_stage_name not in wizard_state.history:
-                    wizard_state.history.append(new_stage_name)
-                wizard_state.completed = auto_step_result.is_complete
-                wizard_state.stage_entry_time = time.time()
-
-                logger.info(
-                    "Greet auto-advanced from %s to %s",
-                    old_stage_name,
-                    new_stage_name,
-                )
-
-                new_stage = active_fsm.current_metadata
+            # Re-fetch active_fsm in case a subflow pop occurred
+            active_fsm = self._get_active_fsm()
 
             # Generate the landing stage's response and prepend
             # the collected messages from auto-advanced stages.
@@ -2032,71 +1976,12 @@ class WizardReasoning(ReasoningStrategy):
         # Collect rendered templates from intermediate message stages so
         # their content is visible in the final response.
         new_stage = active_fsm.current_metadata
-        auto_advance_messages: list[str] = []
-        auto_advance_count = 0
-        max_auto_advances = 10  # Safety limit to prevent infinite loops
+        auto_advance_messages = await self._run_auto_advance_loop(
+            wizard_state, active_fsm, new_stage,
+        )
 
-        while (
-            auto_advance_count < max_auto_advances
-            and not wizard_state.completed
-            and self._can_auto_advance(wizard_state, new_stage)
-        ):
-            # Render message stage template before advancing past it
-            rendered = self._render_auto_advance_template(
-                new_stage, wizard_state
-            )
-            if rendered:
-                auto_advance_messages.append(rendered)
-
-            auto_advance_count += 1
-            old_stage_name = wizard_state.current_stage
-            duration_ms = (time.time() - wizard_state.stage_entry_time) * 1000
-
-            # Execute FSM transition for auto-advance (async to support async transforms)
-            auto_step_result = await active_fsm.step_async(wizard_state.data)
-            new_stage_name = active_fsm.current_stage
-
-            if new_stage_name == old_stage_name:
-                # No transition occurred, stop auto-advancing
-                break
-
-            # Record the auto-advance transition
-            condition_expr = active_fsm.get_transition_condition(
-                old_stage_name, new_stage_name
-            )
-            transition = create_transition_record(
-                from_stage=old_stage_name,
-                to_stage=new_stage_name,
-                trigger="auto_advance",
-                duration_in_stage_ms=duration_ms,
-                data_snapshot=wizard_state.data.copy(),
-                condition_evaluated=condition_expr,
-                condition_result=True if condition_expr else None,
-                subflow_depth=wizard_state.subflow_depth,
-            )
-            wizard_state.transitions.append(transition)
-
-            # Update wizard state
-            wizard_state.current_stage = new_stage_name
-            if new_stage_name not in wizard_state.history:
-                wizard_state.history.append(new_stage_name)
-            wizard_state.completed = auto_step_result.is_complete
-            wizard_state.stage_entry_time = time.time()
-
-            logger.info(
-                "Auto-advanced from %s to %s (all required fields present)",
-                old_stage_name,
-                new_stage_name,
-            )
-
-            # Check for subflow pop during auto-advance
-            if self._should_pop_subflow(wizard_state):
-                self._handle_subflow_pop(wizard_state)
-                active_fsm = self._get_active_fsm()
-                wizard_state.completed = False
-
-            # Get new stage metadata for next iteration
-            new_stage = active_fsm.current_metadata
+        # Re-fetch active_fsm in case a subflow pop occurred
+        active_fsm = self._get_active_fsm()
 
         # Trigger stage entry hook if configured
         if self._hooks:
@@ -4791,6 +4676,100 @@ class WizardReasoning(ReasoningStrategy):
                 return True
 
         return False
+
+    async def _run_auto_advance_loop(
+        self,
+        wizard_state: WizardState,
+        active_fsm: WizardFSM,
+        initial_stage: dict[str, Any],
+        *,
+        skip_first_render: bool = False,
+    ) -> list[str]:
+        """Run the auto-advance loop, collecting rendered templates.
+
+        Advances through consecutive stages that satisfy
+        ``_can_auto_advance``, rendering each stage's
+        ``response_template`` before moving past it.
+
+        Args:
+            wizard_state: Current wizard state (mutated in place)
+            active_fsm: The currently active FSM instance
+            initial_stage: Stage metadata to start advancing from
+            skip_first_render: If True, skip the template render on
+                the first iteration (used by greet when the start
+                stage response is already captured)
+
+        Returns:
+            List of rendered template strings from auto-advanced stages
+        """
+        messages: list[str] = []
+        count = 0
+        max_advances = 10
+        stage = initial_stage
+
+        while (
+            count < max_advances
+            and not wizard_state.completed
+            and self._can_auto_advance(wizard_state, stage)
+        ):
+            # Render template of the stage being advanced past
+            if not (skip_first_render and count == 0):
+                rendered = self._render_auto_advance_template(
+                    stage, wizard_state
+                )
+                if rendered:
+                    messages.append(rendered)
+
+            count += 1
+            old_stage_name = wizard_state.current_stage
+            duration_ms = (
+                (time.time() - wizard_state.stage_entry_time) * 1000
+            )
+
+            auto_step_result = await active_fsm.step_async(
+                wizard_state.data
+            )
+            new_stage_name = active_fsm.current_stage
+
+            if new_stage_name == old_stage_name:
+                break
+
+            condition_expr = active_fsm.get_transition_condition(
+                old_stage_name, new_stage_name
+            )
+            transition = create_transition_record(
+                from_stage=old_stage_name,
+                to_stage=new_stage_name,
+                trigger="auto_advance",
+                duration_in_stage_ms=duration_ms,
+                data_snapshot=wizard_state.data.copy(),
+                condition_evaluated=condition_expr,
+                condition_result=True if condition_expr else None,
+                subflow_depth=wizard_state.subflow_depth,
+            )
+            wizard_state.transitions.append(transition)
+
+            wizard_state.current_stage = new_stage_name
+            if new_stage_name not in wizard_state.history:
+                wizard_state.history.append(new_stage_name)
+            wizard_state.completed = auto_step_result.is_complete
+            wizard_state.stage_entry_time = time.time()
+
+            logger.info(
+                "Auto-advanced from %s to %s",
+                old_stage_name,
+                new_stage_name,
+            )
+
+            # Handle subflow pop if needed (no-op when no subflow is active)
+            if self._should_pop_subflow(wizard_state):
+                self._handle_subflow_pop(wizard_state)
+                active_fsm = self._get_active_fsm()
+                wizard_state.completed = False
+
+            stage = active_fsm.current_metadata
+
+        return messages
 
     def _render_auto_advance_template(
         self, stage: dict[str, Any], state: WizardState
