@@ -407,6 +407,66 @@ Remember to always verify customer identity before sharing sensitive information
         assert message == "Test message"
 
     @pytest.mark.asyncio
+    async def test_kb_auto_context_disabled(self):
+        """KB remains available for tools but auto-context injection is skipped."""
+        from pathlib import Path
+
+        test_docs_dir = Path(__file__).parent / "test_docs"
+
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "knowledge_base": {
+                "enabled": True,
+                "auto_context": False,
+                "type": "rag",
+                "vector_store": {"backend": "memory", "dimensions": 384},
+                "embedding_provider": "echo",
+                "embedding_model": "test",
+                "documents_path": str(test_docs_dir),
+            },
+        }
+
+        bot = await DynaBot.from_config(config)
+
+        # KB should be initialized (available for tools)
+        assert bot.knowledge_base is not None
+
+        # But auto-context should NOT inject KB results
+        message = await bot._build_message_with_context("How do I configure memory?")
+        assert "<knowledge_base>" not in message
+        assert message == "How do I configure memory?"
+
+    @pytest.mark.asyncio
+    async def test_kb_auto_context_enabled_by_default(self):
+        """KB auto-context is enabled by default for backward compatibility."""
+        from pathlib import Path
+
+        test_docs_dir = Path(__file__).parent / "test_docs"
+
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "knowledge_base": {
+                "enabled": True,
+                "type": "rag",
+                "vector_store": {"backend": "memory", "dimensions": 384},
+                "embedding_provider": "echo",
+                "embedding_model": "test",
+                "documents_path": str(test_docs_dir),
+            },
+        }
+
+        bot = await DynaBot.from_config(config)
+
+        # KB auto-context should be on by default
+        assert bot._kb_auto_context is True
+
+        # Context should include KB results
+        message = await bot._build_message_with_context("How do I configure memory?")
+        assert "<question>" in message
+
+    @pytest.mark.asyncio
     async def test_conversation_persistence(self):
         """Test that conversations can be resumed."""
         config = {

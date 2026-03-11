@@ -379,6 +379,16 @@ class DynaBotConfigSchema:
                         "type": "boolean",
                         "description": "Whether knowledge base is enabled",
                     },
+                    "auto_context": {
+                        "type": "boolean",
+                        "description": (
+                            "Whether to auto-inject KB search results into "
+                            "every message. When false, the KB is still "
+                            "available for tool-based access but not "
+                            "automatically queried. Defaults to true."
+                        ),
+                        "default": True,
+                    },
                     "type": {
                         "type": "string",
                         "description": "Knowledge base type",

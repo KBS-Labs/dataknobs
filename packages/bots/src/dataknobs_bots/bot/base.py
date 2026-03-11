@@ -124,6 +124,7 @@ class DynaBot:
         tool_registry: ToolRegistry | None = None,
         memory: Memory | None = None,
         knowledge_base: Any | None = None,
+        kb_auto_context: bool = True,
         reasoning_strategy: Any | None = None,
         middleware: list[Any] | None = None,
         system_prompt_name: str | None = None,
@@ -141,6 +142,9 @@ class DynaBot:
             tool_registry: Optional tool registry
             memory: Optional memory implementation
             knowledge_base: Optional knowledge base
+            kb_auto_context: Whether to auto-inject KB results into messages.
+                When False, the KB is still available for tool-based access
+                but not automatically queried on every message.
             reasoning_strategy: Optional reasoning strategy
             middleware: Optional middleware list
             system_prompt_name: Name of system prompt template (mutually exclusive with content)
@@ -155,6 +159,7 @@ class DynaBot:
         self.tool_registry = tool_registry or ToolRegistry()
         self.memory = memory
         self.knowledge_base = knowledge_base
+        self._kb_auto_context = kb_auto_context
         self.reasoning_strategy = reasoning_strategy
         self.middleware = middleware or []
         self.system_prompt_name = system_prompt_name
@@ -353,11 +358,10 @@ class DynaBot:
         # dependency on knowledge_base via catalog_metadata().requires
         knowledge_base = None
         kb_config = config.get("knowledge_base", {})
+        kb_auto_context = kb_config.get("auto_context", True)
         if kb_config.get("enabled"):
-            import logging
-
             from ..knowledge import create_knowledge_base_from_config
-            logger = logging.getLogger(__name__)
+
             logger.info("Initializing knowledge base with config: %s", kb_config.get("type", "unknown"))
             knowledge_base = await create_knowledge_base_from_config(kb_config)
             logger.info("Knowledge base initialized successfully")
@@ -424,6 +428,7 @@ class DynaBot:
             tool_registry=tool_registry,
             memory=memory,
             knowledge_base=knowledge_base,
+            kb_auto_context=kb_auto_context,
             reasoning_strategy=reasoning_strategy,
             middleware=middleware,
             system_prompt_name=system_prompt_name,
@@ -1274,8 +1279,9 @@ class DynaBot:
         """
         contexts = []
 
-        # Add knowledge context
-        if self.knowledge_base:
+        # Add knowledge context (skip when auto_context is disabled —
+        # KB remains available for tool-based access)
+        if self.knowledge_base and self._kb_auto_context:
             # Use explicit rag_query if provided, otherwise use message
             search_query = rag_query if rag_query else message
             kb_results = await self.knowledge_base.query(search_query, k=5)
