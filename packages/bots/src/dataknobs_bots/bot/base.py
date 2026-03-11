@@ -39,7 +39,8 @@ def normalize_wizard_state(wizard_meta: dict[str, Any]) -> dict[str, Any]:
     Returns:
         Normalized wizard state dict with canonical fields:
         current_stage, stage_index, total_stages, progress, completed,
-        data, can_skip, can_go_back, suggestions, history, stages.
+        data, can_skip, can_go_back, suggestions, history, stages,
+        subflow_depth, and (when in a subflow) subflow_stage.
     """
     # Handle nested fsm_state format (legacy)
     fsm_state = wizard_meta.get("fsm_state", {})
@@ -51,7 +52,7 @@ def normalize_wizard_state(wizard_meta: dict[str, Any]) -> dict[str, Any]:
         or fsm_state.get("current_stage")
     )
 
-    return {
+    result: dict[str, Any] = {
         "current_stage": current_stage,
         "stage_index": (
             wizard_meta.get("stage_index") or fsm_state.get("stage_index", 0)
@@ -66,6 +67,16 @@ def normalize_wizard_state(wizard_meta: dict[str, Any]) -> dict[str, Any]:
         "history": wizard_meta.get("history") or fsm_state.get("history", []),
         "stages": wizard_meta.get("stages", []),
     }
+
+    # Subflow context: present when wizard is executing a subflow
+    subflow_stage = wizard_meta.get("subflow_stage")
+    if subflow_stage:
+        result["subflow_stage"] = subflow_stage
+        result["subflow_depth"] = 1  # _build_wizard_metadata exposes top subflow
+    else:
+        result["subflow_depth"] = 0
+
+    return result
 
 
 @dataclass

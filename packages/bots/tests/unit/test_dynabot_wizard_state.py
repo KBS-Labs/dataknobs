@@ -131,6 +131,7 @@ class TestNormalizeWizardState:
             "suggestions",
             "history",
             "stages",
+            "subflow_depth",
         }
         assert set(result.keys()) == expected_keys
 
