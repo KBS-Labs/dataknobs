@@ -3,7 +3,11 @@
 import pytest
 
 from dataknobs_bots import DynaBot
-from tests.fixtures.test_tools import SimpleTestTool, ParameterizedTestTool
+from tests.fixtures.test_tools import (
+    KBDependentTestTool,
+    ParameterizedTestTool,
+    SimpleTestTool,
+)
 
 
 class TestToolResolution:
@@ -318,3 +322,85 @@ class TestToolResolution:
         # Execute the tool
         result = await tool.execute(value="test")
         assert result == "exec:testexec:test"  # multiplier=2
+
+    def test_resolve_tool_with_kb_dependency_injection(self):
+        """Bug: tools declaring requires=('knowledge_base',) fail to instantiate.
+
+        _resolve_tool does not inject dependencies declared in
+        catalog_metadata().requires, so KBDependentTestTool (and
+        KnowledgeSearchTool) raises TypeError because knowledge_base
+        is a required constructor argument.
+        """
+        sentinel_kb = object()  # stand-in for a real knowledge base
+        tool_config = {
+            "class": "tests.fixtures.test_tools.KBDependentTestTool",
+            "params": {},
+        }
+        config = {}
+        dependencies = {"knowledge_base": sentinel_kb}
+
+        tool = DynaBot._resolve_tool(tool_config, config, dependencies=dependencies)
+
+        assert tool is not None
+        assert isinstance(tool, KBDependentTestTool)
+        assert tool.knowledge_base is sentinel_kb
+
+    def test_resolve_tool_without_dependency_still_works(self):
+        """Tools that do NOT declare requires should be unaffected."""
+        tool_config = {
+            "class": "tests.fixtures.test_tools.SimpleTestTool",
+            "params": {},
+        }
+        config = {}
+        dependencies = {"knowledge_base": object()}
+
+        tool = DynaBot._resolve_tool(tool_config, config, dependencies=dependencies)
+
+        assert tool is not None
+        assert isinstance(tool, SimpleTestTool)
+
+    @pytest.mark.asyncio
+    async def test_from_config_injects_kb_into_tool(self):
+        """Bug: from_config creates tools before KB, so KB-dependent tools fail.
+
+        After fix, from_config should:
+        1. Create KB before tools
+        2. Inject KB into tools that declare the dependency
+        """
+        config = {
+            "llm": {
+                "provider": "echo",
+                "model": "test",
+            },
+            "conversation_storage": {
+                "backend": "memory",
+            },
+            "knowledge_base": {
+                "enabled": True,
+                "type": "rag",
+                "vector_store": {
+                    "backend": "memory",
+                    "dimensions": 384,
+                },
+                "embedding_provider": "echo",
+                "embedding_model": "test",
+            },
+            "tools": [
+                {
+                    "class": "tests.fixtures.test_tools.KBDependentTestTool",
+                    "params": {},
+                },
+            ],
+        }
+
+        bot = await DynaBot.from_config(config)
+
+        # Tool should have been created and registered
+        tools = list(bot.tool_registry)
+        assert len(tools) == 1
+
+        tool = tools[0]
+        assert isinstance(tool, KBDependentTestTool)
+        # Tool should have received the knowledge base
+        assert tool.knowledge_base is not None
+        assert tool.knowledge_base is bot.knowledge_base
