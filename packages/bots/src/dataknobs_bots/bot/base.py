@@ -331,14 +331,6 @@ class DynaBot:
         library = CompositePromptLibrary(libraries=prompt_libraries)
         prompt_builder = AsyncPromptBuilder(library)
 
-        # Create tools
-        tool_registry = ToolRegistry()
-        if "tools" in config:
-            for tool_config in config["tools"]:
-                tool = cls._resolve_tool(tool_config, config)
-                if tool:
-                    tool_registry.register_tool(tool)
-
         # Create memory (pass llm so summary memory can use it)
         memory = None
         if "memory" in config:
@@ -346,7 +338,8 @@ class DynaBot:
                 config["memory"], llm_provider=llm
             )
 
-        # Create knowledge base
+        # Create knowledge base BEFORE tools — tools may declare a
+        # dependency on knowledge_base via catalog_metadata().requires
         knowledge_base = None
         kb_config = config.get("knowledge_base", {})
         if kb_config.get("enabled"):
@@ -354,9 +347,22 @@ class DynaBot:
 
             from ..knowledge import create_knowledge_base_from_config
             logger = logging.getLogger(__name__)
-            logger.info(f"Initializing knowledge base with config: {kb_config.get('type', 'unknown')}")
+            logger.info("Initializing knowledge base with config: %s", kb_config.get("type", "unknown"))
             knowledge_base = await create_knowledge_base_from_config(kb_config)
             logger.info("Knowledge base initialized successfully")
+
+        # Build dependency map for tool injection
+        tool_dependencies: dict[str, Any] = {}
+        if knowledge_base is not None:
+            tool_dependencies["knowledge_base"] = knowledge_base
+
+        # Create tools (after KB so dependencies can be injected)
+        tool_registry = ToolRegistry()
+        if "tools" in config:
+            for tool_config in config["tools"]:
+                tool = cls._resolve_tool(tool_config, config, tool_dependencies or None)
+                if tool:
+                    tool_registry.register_tool(tool)
 
         # Create reasoning strategy
         reasoning_strategy = None
@@ -1299,7 +1305,11 @@ class DynaBot:
         return message
 
     @staticmethod
-    def _resolve_tool(tool_config: dict[str, Any] | str, config: dict[str, Any]) -> Any | None:
+    def _resolve_tool(
+        tool_config: dict[str, Any] | str,
+        config: dict[str, Any],
+        dependencies: dict[str, Any] | None = None,
+    ) -> Any | None:
         """Resolve tool from configuration.
 
         Supports two patterns:
@@ -1312,9 +1322,15 @@ class DynaBot:
         This allows tools to construct complex internal dependencies
         from simple YAML-compatible parameters.
 
+        If the tool class defines ``catalog_metadata()`` with a ``requires``
+        tuple, matching entries from ``dependencies`` are injected into
+        the constructor parameters (unless already provided in ``params``).
+
         Args:
             tool_config: Tool configuration (dict or string xref)
             config: Full bot configuration for xref resolution
+            dependencies: Optional resource dependencies to inject into tools
+                that declare them via catalog_metadata().requires
 
         Returns:
             Tool instance or None if resolution fails
@@ -1368,14 +1384,14 @@ class DynaBot:
                         return None
 
                     # Recursively resolve the referenced config
-                    return DynaBot._resolve_tool(tool_definitions[tool_name], config)
+                    return DynaBot._resolve_tool(tool_definitions[tool_name], config, dependencies)
                 else:
                     logger.error(f"String tool config must be xref format: {tool_config}")
                     return None
 
             # Handle dict with xref key
             if isinstance(tool_config, dict) and "xref" in tool_config:
-                return DynaBot._resolve_tool(tool_config["xref"], config)
+                return DynaBot._resolve_tool(tool_config["xref"], config, dependencies)
 
             # Handle dict with class key (direct instantiation)
             if isinstance(tool_config, dict) and "class" in tool_config:
@@ -1386,6 +1402,15 @@ class DynaBot:
                 module_path, class_name = class_path.rsplit(".", 1)
                 module = importlib.import_module(module_path)
                 tool_class = getattr(module, class_name)
+
+                # Inject dependencies declared in catalog_metadata().requires
+                if dependencies:
+                    meta_fn = getattr(tool_class, "catalog_metadata", None)
+                    if meta_fn and callable(meta_fn):
+                        requires = meta_fn().get("requires") or ()
+                        for dep_name in requires:
+                            if dep_name in dependencies and dep_name not in params:
+                                params[dep_name] = dependencies[dep_name]
 
                 # Instantiate the tool — prefer from_config() if available,
                 # which allows tools to construct complex internal
