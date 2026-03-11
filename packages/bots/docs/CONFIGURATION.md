@@ -978,11 +978,54 @@ knowledge_base:
   embedding_model: nomic-embed-text
 ```
 
+### Context Injection Control
+
+By default, when the knowledge base is enabled, search results are automatically
+injected into every user message before it reaches the LLM. This is controlled
+by the `auto_context` setting:
+
+| Value | Behavior |
+|-------|----------|
+| `true` (default) | KB results are automatically injected into every message |
+| `false` | KB is available only through tools (e.g., `KnowledgeSearchTool`) |
+
+```yaml
+# Auto-context mode (default) — KB results injected into every message
+knowledge_base:
+  enabled: true
+  auto_context: true       # default, can be omitted
+  # ...
+```
+
+```yaml
+# Tool-only mode — LLM decides when to search via KnowledgeSearchTool
+knowledge_base:
+  enabled: true
+  auto_context: false
+  # ...
+
+tools:
+  - class: dataknobs_bots.tools.KnowledgeSearchTool
+```
+
+Use `auto_context: false` when:
+
+- The bot uses a **ReAct reasoning strategy** and should decide when to search
+- You want the LLM to call `knowledge_search` explicitly rather than always
+  receiving pre-injected context
+- You need to **test tool-based KB access** without auto-injected results
+  masking tool usage
+
+When `auto_context: false`, the knowledge base is still created and injected
+into any tool that declares `requires: ("knowledge_base",)` in its catalog
+metadata.
+
 ### Advanced Configuration
 
 ```yaml
 knowledge_base:
   enabled: true
+  auto_context: true       # Auto-inject KB results (default: true)
   documents_path: ./docs
 
   # Vector store configuration
