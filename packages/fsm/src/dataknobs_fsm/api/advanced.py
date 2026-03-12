@@ -387,8 +387,8 @@ class AdvancedFSM:
         self._async_engine = AsyncExecutionEngine(fsm, custom_functions=custom_functions)
         self._resource_manager = ResourceManager()
         self._transaction_manager = None
-        self._history = None
-        self._storage = None
+        self._history: ExecutionHistory | None = None
+        self._storage: IHistoryStorage | None = None
         self._hooks = ExecutionHook()
         self._breakpoints = set()
         self._trace_buffer = []
@@ -928,25 +928,26 @@ class AdvancedFSM:
 
     async def save_history(self) -> bool:
         """Save execution history to storage.
-        
+
         Returns:
             True if saved successfully
         """
-        if self._history and self._storage:  # type: ignore[unreachable]
-            return await self._storage.save(self._history)  # type: ignore[unreachable]
+        if self._history and self._storage:
+            await self._storage.save_history(self._history)
+            return True
         return False
 
     async def load_history(self, history_id: str) -> bool:
         """Load execution history from storage.
-        
+
         Args:
             history_id: History identifier
-            
+
         Returns:
             True if loaded successfully
         """
         if self._storage:
-            history = await self._storage.load(history_id)  # type: ignore[unreachable]
+            history = await self._storage.load_history(history_id)
             if history:
                 self._history = history
                 return True
