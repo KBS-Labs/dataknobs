@@ -6,6 +6,7 @@ dataknobs_data's memory backend.
 
 from __future__ import annotations
 
+import copy
 from typing import TYPE_CHECKING
 
 from dataknobs_fsm.core.data_modes import DataHandlingMode
@@ -41,6 +42,11 @@ class InMemoryStorage(UnifiedDatabaseStorage):
             database: Optional pre-built AsyncDatabase instance.
             steps_database: Optional separate AsyncDatabase for step records.
         """
+        # Copy config to avoid mutating the caller's object
+        config = copy.copy(config)
+        config.connection_params = dict(config.connection_params)
+        config.mode_specific_config = dict(config.mode_specific_config)
+
         # Ensure we use the memory backend
         if 'type' not in config.connection_params:
             config.connection_params['type'] = 'memory'

@@ -15,8 +15,9 @@ from dataknobs_data.backends.memory import AsyncMemoryDatabase
 
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.execution.history import ExecutionHistory, ExecutionStep
-from dataknobs_fsm.storage.base import StorageBackend, StorageConfig
+from dataknobs_fsm.storage.base import StorageBackend, StorageConfig, StorageFactory
 from dataknobs_fsm.storage.database import UnifiedDatabaseStorage
+from dataknobs_fsm.storage.file import FileStorage
 from dataknobs_fsm.storage.memory import InMemoryStorage
 
 
@@ -149,6 +150,144 @@ class TestDatabaseInjection:
         assert storage._steps_db is db
 
     @pytest.mark.asyncio
+    async def test_cleanup_does_not_close_injected_database(
+        self, config: StorageConfig
+    ) -> None:
+        """cleanup() must NOT close an injected (externally-owned) database.
+
+        Bug: cleanup() unconditionally calls self._db.close(), which breaks
+        sibling components sharing the same connection pool.
+        """
+        shared_db = AsyncMemoryDatabase()
+        storage_a = UnifiedDatabaseStorage(config, database=shared_db)
+        storage_b = UnifiedDatabaseStorage(config, database=shared_db)
+        await storage_a.initialize()
+        await storage_b.initialize()
+
+        # Save a recent history via storage_b (won't be deleted by retention)
+        recent_history = ExecutionHistory(
+            fsm_name="test_fsm",
+            execution_id="exec_recent",
+            data_mode=DataHandlingMode.DIRECT,
+        )
+        recent_history.start_time = time.time()
+        recent_history.add_step(
+            state_name="state_a", network_name="main", data=None,
+        )
+        recent_history.end_time = time.time()
+        await storage_b.save_history(recent_history)
+
+        # Cleanup storage_a — should NOT close the shared database
+        await storage_a.cleanup()
+
+        # storage_b must still be fully functional (db not closed)
+        loaded = await storage_b.load_history("exec_recent")
+        assert loaded is not None, (
+            "Shared database was closed by cleanup() on a sibling storage"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cleanup_closes_factory_created_database(
+        self, config: StorageConfig
+    ) -> None:
+        """cleanup() SHOULD close a database the storage created itself."""
+        storage = UnifiedDatabaseStorage(config)
+        await storage.initialize()
+
+        db = storage._db
+        assert db is not None
+
+        await storage.cleanup()
+
+        # After cleanup, internal db reference should still exist but
+        # a factory-owned database should have been closed
+        # (AsyncMemoryDatabase.close() clears internal state)
+        if hasattr(db, '_closed'):
+            assert db._closed is True
+
+    @pytest.mark.asyncio
+    async def test_cleanup_does_not_close_injected_steps_database(
+        self, config: StorageConfig, sample_history: ExecutionHistory
+    ) -> None:
+        """cleanup() must NOT close an injected steps_database either."""
+        main_db = AsyncMemoryDatabase()
+        steps_db = AsyncMemoryDatabase()
+        storage = UnifiedDatabaseStorage(
+            config, database=main_db, steps_database=steps_db
+        )
+        await storage.initialize()
+
+        step = ExecutionStep(
+            step_id="s1",
+            state_name="state_a",
+            network_name="main",
+            timestamp=time.time(),
+        )
+        step.complete("to_next")
+        await storage.save_step("exec_1", step)
+
+        await storage.cleanup()
+
+        # The injected steps_db should still be usable
+        # Create a second storage using the same steps_db
+        storage2 = UnifiedDatabaseStorage(
+            config, database=main_db, steps_database=steps_db
+        )
+        await storage2.initialize()
+        loaded_steps = await storage2.load_steps("exec_1")
+        assert len(loaded_steps) == 1, (
+            "Injected steps_database was closed by cleanup()"
+        )
+
+    @pytest.mark.asyncio
+    async def test_steps_database_only_injection_preserved(
+        self, config: StorageConfig
+    ) -> None:
+        """Passing steps_database without database must persist through init.
+
+        Bug: _setup_backend() unconditionally sets self._steps_db = self._db,
+        overwriting an injected steps_database when no main database was given.
+        """
+        steps_db = AsyncMemoryDatabase()
+        storage = UnifiedDatabaseStorage(config, steps_database=steps_db)
+
+        # Before initialize, the injected steps_db should be in place
+        assert storage._steps_db is steps_db
+
+        # After initialize (factory creates main db), steps_db must survive
+        await storage.initialize()
+        assert storage._steps_db is steps_db, (
+            "Injected steps_database was overwritten by _setup_backend()"
+        )
+        # Main db should have been created by factory
+        assert storage._db is not None
+        assert storage._db is not steps_db
+
+    @pytest.mark.asyncio
+    async def test_steps_database_only_injection_functional(
+        self, config: StorageConfig, sample_history: ExecutionHistory
+    ) -> None:
+        """Steps saved with steps_database-only injection use the injected db."""
+        steps_db = AsyncMemoryDatabase()
+        storage = UnifiedDatabaseStorage(config, steps_database=steps_db)
+        await storage.initialize()
+
+        step = ExecutionStep(
+            step_id="s1",
+            state_name="state_a",
+            network_name="main",
+            timestamp=time.time(),
+        )
+        step.complete("to_next")
+
+        await storage.save_step("exec_1", step)
+
+        # Verify the step was saved to the injected steps_db, not the main db
+        loaded = await storage.load_steps("exec_1")
+        assert len(loaded) == 1
+        assert loaded[0].step_id == "s1"
+
+    @pytest.mark.asyncio
     async def test_save_step_with_injected_steps_database(
         self, config: StorageConfig, sample_history: ExecutionHistory
     ) -> None:
@@ -175,3 +314,64 @@ class TestDatabaseInjection:
         loaded_steps = await storage.load_steps("exec_1")
         assert len(loaded_steps) == 1
         assert loaded_steps[0].step_id == "s1"
+
+
+class TestConfigMutationProtection:
+    """Subclasses must not mutate the caller's StorageConfig."""
+
+    def test_inmemory_storage_does_not_mutate_config(self) -> None:
+        """InMemoryStorage copies config before setting defaults."""
+        config = StorageConfig(backend=StorageBackend.MEMORY)
+        original_params = dict(config.connection_params)
+
+        InMemoryStorage(config, database=AsyncMemoryDatabase())
+
+        assert config.connection_params == original_params, (
+            "InMemoryStorage mutated caller's connection_params"
+        )
+        assert config.mode_specific_config == {}, (
+            "InMemoryStorage mutated caller's mode_specific_config"
+        )
+
+    def test_file_storage_does_not_mutate_config(self) -> None:
+        """FileStorage copies config before setting defaults."""
+        config = StorageConfig(backend=StorageBackend.FILE)
+        original_params = dict(config.connection_params)
+
+        FileStorage(config, database=AsyncMemoryDatabase())
+
+        assert config.connection_params == original_params, (
+            "FileStorage mutated caller's connection_params"
+        )
+
+
+class TestStorageFactoryInjection:
+    """StorageFactory.create() forwards kwargs to constructors."""
+
+    def test_factory_create_forwards_database(self) -> None:
+        """Factory passes database kwarg through to storage constructor."""
+        db = AsyncMemoryDatabase()
+        config = StorageConfig(backend=StorageBackend.MEMORY)
+        storage = StorageFactory.create(config, database=db)
+
+        assert storage._db is db  # type: ignore[attr-defined]
+        assert storage._steps_db is db  # type: ignore[attr-defined]
+
+    def test_factory_create_forwards_both_databases(self) -> None:
+        """Factory passes both database and steps_database kwargs."""
+        main_db = AsyncMemoryDatabase()
+        steps_db = AsyncMemoryDatabase()
+        config = StorageConfig(backend=StorageBackend.MEMORY)
+        storage = StorageFactory.create(
+            config, database=main_db, steps_database=steps_db
+        )
+
+        assert storage._db is main_db  # type: ignore[attr-defined]
+        assert storage._steps_db is steps_db  # type: ignore[attr-defined]
+
+    def test_factory_create_backward_compatible(self) -> None:
+        """Factory without kwargs works as before."""
+        config = StorageConfig(backend=StorageBackend.MEMORY)
+        storage = StorageFactory.create(config)
+
+        assert storage._db is None  # type: ignore[attr-defined]

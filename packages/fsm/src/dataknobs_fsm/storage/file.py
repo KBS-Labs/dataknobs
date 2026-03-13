@@ -6,6 +6,7 @@ dataknobs_data's file backend.
 
 from __future__ import annotations
 
+import copy
 from typing import TYPE_CHECKING
 
 from dataknobs_fsm.storage.base import StorageBackend, StorageConfig, StorageFactory
@@ -40,6 +41,10 @@ class FileStorage(UnifiedDatabaseStorage):
             database: Optional pre-built AsyncDatabase instance.
             steps_database: Optional separate AsyncDatabase for step records.
         """
+        # Copy config to avoid mutating the caller's object
+        config = copy.copy(config)
+        config.connection_params = dict(config.connection_params)
+
         # Ensure we use the file backend
         if 'type' not in config.connection_params:
             config.connection_params['type'] = 'file'

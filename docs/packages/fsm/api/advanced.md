@@ -353,6 +353,12 @@ The `database` and `steps_database` parameters are keyword-only:
 When both parameters are `None` (the default), the storage creates its own
 database via the factory — identical to pre-injection behavior.
 
+The factory also supports injection via keyword arguments:
+
+```python
+storage = StorageFactory.create(config, database=shared_db)
+```
+
 ## Resource Management
 
 Register and manage external resources:

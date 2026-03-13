@@ -15,7 +15,8 @@ This guide provides comprehensive documentation for creating FSM configurations 
 10. [Complete Examples](#complete-examples)
 11. [Configuration Formats](#configuration-formats)
 12. [Environment Variables](#environment-variables)
-13. [Best Practices](#best-practices)
+13. [History Storage](#history-storage)
+14. [Best Practices](#best-practices)
 
 ## Basic Structure
 
@@ -1050,6 +1051,71 @@ Environment variables can be used in configurations:
 ```
 
 The loader will also check for variables with the `FSM_` prefix automatically.
+
+## History Storage
+
+Execution history is persisted via pluggable storage backends. All backends use
+the `UnifiedDatabaseStorage` implementation, which works with any `dataknobs_data`
+`AsyncDatabase` backend.
+
+### Storage Backends
+
+```python
+from dataknobs_fsm.storage.base import StorageConfig, StorageBackend, StorageFactory
+
+# Config-driven creation (factory selects the backend)
+config = StorageConfig(
+    backend=StorageBackend.MEMORY,
+    connection_params={'type': 'memory'}
+)
+storage = StorageFactory.create(config)
+await storage.initialize()
+
+advanced_fsm.enable_history(storage=storage)
+```
+
+Available backends: `MEMORY`, `FILE`, `SQLITE`, `POSTGRES`, `MONGODB`,
+`ELASTICSEARCH`, `S3`.
+
+Convenience subclasses `InMemoryStorage` and `FileStorage` apply
+backend-specific defaults automatically.
+
+### Database Injection
+
+`UnifiedDatabaseStorage` (and its subclasses `InMemoryStorage`, `FileStorage`)
+accept pre-built `AsyncDatabase` instances. This enables connection pool
+sharing across components and simplifies testing.
+
+```python
+from dataknobs_data.backends.memory import AsyncMemoryDatabase
+from dataknobs_fsm.storage.database import UnifiedDatabaseStorage
+from dataknobs_fsm.storage.base import StorageConfig, StorageBackend
+
+# Share an existing database instance with FSM storage
+shared_db = AsyncMemoryDatabase()  # or any AsyncDatabase from a pool
+
+config = StorageConfig(backend=StorageBackend.MEMORY)
+storage = UnifiedDatabaseStorage(config, database=shared_db)
+await storage.initialize()  # skips factory creation, uses shared_db
+
+advanced_fsm.enable_history(storage=storage)
+```
+
+The `database` and `steps_database` parameters are keyword-only:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `database` | `None` | Pre-built `AsyncDatabase` for history records. When provided, `_setup_backend()` skips factory creation. |
+| `steps_database` | `None` | Separate `AsyncDatabase` for step records. Defaults to `database` when omitted. |
+
+When both parameters are `None` (the default), the storage creates its own
+database via the factory — identical to pre-injection behavior.
+
+The factory also supports injection via keyword arguments:
+
+```python
+storage = StorageFactory.create(config, database=shared_db)
+```
 
 ## Best Practices
 

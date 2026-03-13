@@ -56,6 +56,8 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
                 Defaults to ``database`` when only ``database`` is provided.
         """
         super().__init__(config)
+        self._owns_db = database is None
+        self._owns_steps_db = steps_database is None and database is None
         self._db: AsyncDatabase | None = database
         self._steps_db: AsyncDatabase | None = steps_database or database
     
@@ -67,8 +69,6 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         """
         if self._db is not None:
             # Database was injected — skip factory creation
-            if self._steps_db is None:
-                self._steps_db = self._db
             return
 
         # Extract backend type from config
@@ -96,9 +96,9 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         if hasattr(self._db, 'connect'):
             await self._db.connect()
         
-        # For steps, use the same database instance
-        # Different backends handle collections/tables differently
-        self._steps_db = self._db
+        # Use the same database for steps unless one was injected
+        if self._steps_db is None:
+            self._steps_db = self._db
     
     def _create_history_schema(self) -> DatabaseSchema:
         """Create schema for history records."""
@@ -519,10 +519,15 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
             if await self.delete_history(history_id):
                 deleted += 1
         
-        # Close database connection if supported
-        if hasattr(self._db, 'close'):
+        # Only close database connections we created ourselves.
+        # Injected databases are externally owned — closing them would break
+        # sibling components sharing the same connection pool.
+        if self._owns_steps_db and self._steps_db is not self._db:
+            if hasattr(self._steps_db, 'close'):
+                await self._steps_db.close()
+        if self._owns_db and hasattr(self._db, 'close'):
             await self._db.close()
-        
+
         return deleted
 
 
