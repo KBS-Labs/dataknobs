@@ -104,17 +104,10 @@ class ExecutionEngine(BaseExecutionEngine):
         if context.resource_manager is None and self.fsm.resource_manager is not None:
             context.resource_manager = self.fsm.resource_manager
 
-        # Initialize state if needed
-        if not context.current_state:
-            initial_state = self._find_initial_state()
-            if not initial_state:
-                return False, "No initial state found"
-
-            # Use the common state entry method
-            if not self.enter_state(context, initial_state):
-                # Return specific error if available, otherwise generic message
-                error_msg = getattr(context, 'last_error', "Failed to enter initial state")
-                return False, error_msg
+        # Enter initial state (handles both pre-set and not-set cases)
+        success, error = self._enter_initial_state(context)
+        if not success:
+            return False, error
         
         # Execute based on data mode
         if context.data_mode == ProcessingMode.SINGLE:
@@ -1176,6 +1169,35 @@ class ExecutionEngine(BaseExecutionEngine):
             strategy=self.strategy
         )
     
+    def _enter_initial_state(
+        self, context: ExecutionContext
+    ) -> tuple[bool, str | None]:
+        """Ensure the initial state is entered and its transforms executed.
+
+        Handles both cases:
+        - current_state not set: find and enter initial state
+        - current_state pre-set (by ContextFactory): enter it (runs transforms)
+
+        Uses enter_state() which correctly handles transforms, validators,
+        and resource allocation.
+
+        Returns:
+            (True, None) on success, (False, error_message) on failure.
+        """
+        if not context.current_state:
+            initial_state = self._find_initial_state()
+            if not initial_state:
+                return False, "No initial state found"
+        else:
+            initial_state = context.current_state
+
+        if not self.enter_state(context, initial_state):
+            error_msg = getattr(
+                context, 'last_error', "Failed to enter initial state"
+            )
+            return False, error_msg
+        return True, None
+
     def _find_initial_state(self) -> str | None:
         """Find the initial state in the FSM.
 

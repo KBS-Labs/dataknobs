@@ -6,9 +6,13 @@ instances from configuration objects, including:
 - Function resolution and registration
 - Network and state construction
 - Validation of completeness
+
+It also provides :func:`build_fsm`, the standard way to create an FSM from
+raw configuration with optional custom functions.
 """
 
 import importlib
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Type
 
 
@@ -740,3 +744,45 @@ class FSMBuilder:
 # FSM wrapper class removed - functionality moved to core FSM
 # The FSMBuilder now returns the core FSM directly with all
 # execution capabilities integrated
+
+
+def build_fsm(
+    config: str | Path | dict[str, Any],
+    custom_functions: dict[str, Callable] | None = None,
+) -> CoreFSMClass:
+    """Build an FSM from configuration with custom functions registered.
+
+    This is the standard way to create an FSM when custom functions are
+    needed.  Functions are registered with both the
+    :class:`~dataknobs_fsm.config.loader.ConfigLoader` and
+    :class:`FSMBuilder` before building so that all string references
+    in state definitions and arcs resolve correctly.
+
+    All three public FSM APIs (SimpleFSM, AsyncSimpleFSM, AdvancedFSM)
+    delegate to this function for consistent build behaviour.
+
+    Args:
+        config: Path to a YAML/JSON config file, or a config dictionary.
+        custom_functions: Optional mapping of function name to callable.
+
+    Returns:
+        A fully-built :class:`~dataknobs_fsm.core.fsm.FSM` instance.
+    """
+    from dataknobs_fsm.config.loader import ConfigLoader
+
+    custom_functions = custom_functions or {}
+
+    loader = ConfigLoader()
+    for name in custom_functions:
+        loader.add_registered_function(name)
+
+    if isinstance(config, (str, Path)):
+        fsm_config = loader.load_from_file(Path(config))
+    else:
+        fsm_config = loader.load_from_dict(config)
+
+    builder = FSMBuilder()
+    for name, func in custom_functions.items():
+        builder.register_function(name, func)
+
+    return builder.build(fsm_config)

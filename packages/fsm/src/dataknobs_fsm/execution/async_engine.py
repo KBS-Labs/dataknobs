@@ -146,14 +146,10 @@ class AsyncExecutionEngine(BaseExecutionEngine):
         if data is not None:
             context.data = data
         
-        # Initialize state if needed
-        if not context.current_state:
-            initial_state = await self._find_initial_state()
-            if not initial_state:
-                return False, "No initial state found"
-            context.set_state(initial_state)
-            # Execute transforms for the initial state
-            await self._execute_state_transforms(context)
+        # Enter initial state (handles both pre-set and not-set cases)
+        success, error = await self._enter_initial_state(context)
+        if not success:
+            return False, error
         
         try:
             # Execute based on data mode
@@ -670,6 +666,28 @@ class AsyncExecutionEngine(BaseExecutionEngine):
                 # Handle error using base class logic
                 self.handle_transform_error(e, context, state_name)
     
+    async def _enter_initial_state(
+        self, context: ExecutionContext
+    ) -> tuple[bool, str | None]:
+        """Ensure the initial state is entered and its transforms executed.
+
+        Handles both cases:
+        - current_state not set: find initial state, set it, run transforms
+        - current_state pre-set (by ContextFactory): run transforms for it
+
+        Returns:
+            (True, None) on success, (False, error_message) on failure.
+        """
+        if not context.current_state:
+            initial_state = await self._find_initial_state()
+            if not initial_state:
+                return False, "No initial state found"
+            context.set_state(initial_state)
+
+        # Always run transforms for the start state
+        await self._execute_state_transforms(context)
+        return True, None
+
     async def _find_initial_state(self) -> str | None:
         """Find initial state in FSM.
 

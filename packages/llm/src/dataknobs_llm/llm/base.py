@@ -453,11 +453,18 @@ class LLMConfig:
     - Rate limiting and retry logic
     - Provider-specific options via options dict
 
+    Note:
+        Generation parameters (``temperature``, ``top_p``, ``max_tokens``,
+        etc.) default to ``None``, meaning "not set — let the provider API
+        apply its own default."  Only explicitly supplied values are sent
+        to the provider (see :meth:`generation_params`).
+
     Example:
         ```python
         from dataknobs_llm.llm.base import LLMConfig, CompletionMode
 
-        # Basic configuration
+        # Basic configuration — temperature is explicitly set here;
+        # omitting it would let the provider use its own default.
         config = LLMConfig(
             provider="openai",
             model="gpt-4",
@@ -529,12 +536,12 @@ class LLMConfig:
     api_key: str | None = None
     api_base: str | None = None  # Custom API endpoint
 
-    # Generation parameters
-    temperature: float = 0.7
+    # Generation parameters — None means "not set, use provider default"
+    temperature: float | None = None
     max_tokens: int | None = None
-    top_p: float = 1.0
-    frequency_penalty: float = 0.0
-    presence_penalty: float = 0.0
+    top_p: float | None = None
+    frequency_penalty: float | None = None
+    presence_penalty: float | None = None
     stop_sequences: List[str] | None = None
 
     # Mode settings
@@ -648,6 +655,34 @@ class LLMConfig:
         """
         from dataclasses import replace
         return replace(self, **overrides)
+
+    def generation_params(self) -> Dict[str, Any]:
+        """Return only explicitly-set generation parameters.
+
+        Providers use this to build API requests without sending
+        unnecessary defaults. Parameters left as None are omitted,
+        letting each provider API apply its own default.
+
+        Returns:
+            Dictionary of generation parameter names to their values.
+            Only includes parameters that were explicitly set (non-None).
+        """
+        params: Dict[str, Any] = {}
+        if self.temperature is not None:
+            params["temperature"] = self.temperature
+        if self.top_p is not None:
+            params["top_p"] = self.top_p
+        if self.max_tokens is not None:
+            params["max_tokens"] = self.max_tokens
+        if self.frequency_penalty is not None:
+            params["frequency_penalty"] = self.frequency_penalty
+        if self.presence_penalty is not None:
+            params["presence_penalty"] = self.presence_penalty
+        if self.stop_sequences is not None:
+            params["stop_sequences"] = self.stop_sequences
+        if self.seed is not None:
+            params["seed"] = self.seed
+        return params
 
 
 def normalize_llm_config(config: Union["LLMConfig", Config, Dict[str, Any]]) -> "LLMConfig":

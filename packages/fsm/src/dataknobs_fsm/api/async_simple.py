@@ -289,7 +289,6 @@ from typing import Any
 from dataknobs_data import Record
 
 from ..config.builder import FSMBuilder
-from ..config.loader import ConfigLoader
 from ..core.context_factory import ContextFactory
 from ..core.data_modes import DataHandlingMode
 from ..core.result_formatter import ResultFormatter
@@ -526,28 +525,11 @@ class AsyncSimpleFSM:
         self._resources = resources or {}
         self._custom_functions = custom_functions or {}
 
-        # Create loader with knowledge of custom functions
-        loader = ConfigLoader()
-
-        # Tell the loader about registered function names
-        if self._custom_functions:
-            for name in self._custom_functions.keys():
-                loader.add_registered_function(name)
-
-        # Load configuration
-        if isinstance(config, (str, Path)):
-            self._config = loader.load_from_file(Path(config))
-        else:
-            self._config = loader.load_from_dict(config)
-
-        # Build FSM with custom functions
-        builder = FSMBuilder()
-
-        # Register custom functions with the builder
-        for name, func in self._custom_functions.items():
-            builder.register_function(name, func)
-
-        self._fsm = builder.build(self._config)
+        # Build FSM using shared build logic (registers custom functions
+        # with both ConfigLoader and FSMBuilder before building)
+        from dataknobs_fsm.config.builder import build_fsm
+        self._fsm = build_fsm(config, custom_functions)
+        self._config = self._fsm.config
 
         # Initialize resource manager
         self._resource_manager = ResourceManager()
@@ -580,7 +562,6 @@ class AsyncSimpleFSM:
     def _create_resource_provider(self, resource_config):
         """Create a resource provider from ResourceConfig."""
         # Use the same logic as FSMBuilder
-        from ..config.builder import FSMBuilder
         builder = FSMBuilder()
         return builder._create_resource(resource_config)
 
@@ -841,7 +822,7 @@ class AsyncSimpleFSM:
 
     def get_resources(self) -> list[str]:
         """Get list of registered resource names."""
-        return list(self._resource_manager._resources.keys())
+        return list(self._resource_manager._providers.keys())
 
     @property
     def config(self) -> Any:
