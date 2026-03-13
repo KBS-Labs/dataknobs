@@ -107,8 +107,10 @@ llm:
 
 # Required: Conversation Storage
 conversation_storage:
-  backend: string
-  # ... backend-specific options
+  backend: string              # For default DataknobsConversationStorage
+  storage_class: string        # OR import path to custom ConversationStorage class
+                               # ("module:Class" recommended; "module.Class" also works)
+  # ... backend-specific or class-specific options
 
 # Optional: Memory
 memory:
@@ -555,6 +557,59 @@ docker run -d \
 - `pool_size`: Connection pool size
 - `max_overflow`: Extra connections beyond pool_size
 - `pool_timeout`: Connection timeout in seconds
+
+### Custom Storage Class
+
+For full control over conversation persistence (e.g., tenant-scoped PostgreSQL,
+per-message metadata, relational schemas), provide a custom `ConversationStorage`
+implementation via `storage_class`:
+
+```yaml
+conversation_storage:
+  storage_class: "myapp.storage:AcmeConversationStorage"
+  db_url: "postgres://user:pass@host/db"
+  tenant_id: "acme-corp"
+```
+
+Both `"module.path:ClassName"` (recommended, matches Python entry-point syntax)
+and `"module.path.ClassName"` formats are supported for the import path.
+
+When `storage_class` is set, the `backend` key is ignored. The referenced class
+must:
+
+1. **Implement `ConversationStorage`** (from `dataknobs_llm.conversations`)
+2. **Implement the abstract `create(config)` classmethod** — receives the
+   remaining config dict (with `storage_class` already removed) and returns an
+   initialized instance
+3. **Optionally override `close()`** — called by `DynaBot.close()` for resource
+   cleanup (the default is a no-op)
+
+```python
+from dataknobs_llm.conversations import ConversationStorage
+
+class AcmeConversationStorage(ConversationStorage):
+    @classmethod
+    async def create(cls, config: dict) -> "AcmeConversationStorage":
+        db_url = config["db_url"]
+        tenant_id = config.get("tenant_id")
+        # Set up connection pool, run migrations, etc.
+        instance = cls(db_url=db_url, tenant_id=tenant_id)
+        await instance.initialize()
+        return instance
+
+    async def close(self) -> None:
+        await self._pool.close()
+
+    async def save_conversation(self, state): ...
+    async def load_conversation(self, conversation_id): ...
+    async def delete_conversation(self, conversation_id): ...
+    async def list_conversations(self, **kwargs): ...
+    async def search_conversations(self, **kwargs): ...
+    async def delete_conversations(self, **kwargs): ...
+```
+
+The class is resolved using the same dotted import path convention as tools and
+middleware (`"module.path:ClassName"` or `"module.path.ClassName"`).
 
 ---
 

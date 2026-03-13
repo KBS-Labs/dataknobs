@@ -162,6 +162,29 @@ class DynaBotConfigBuilder:
         self._config["conversation_storage"] = storage_config
         return self
 
+    def set_conversation_storage_class(
+        self,
+        storage_class: str,
+        **kwargs: Any,
+    ) -> Self:
+        """Set conversation storage using a custom ConversationStorage class.
+
+        The class must implement ``ConversationStorage`` and provide an async
+        ``create(config: dict) -> ConversationStorage`` classmethod.
+
+        Args:
+            storage_class: Dotted import path to the storage class
+                (e.g., ``"myapp.storage:AcmeConversationStorage"``).
+            **kwargs: Additional config passed to ``create()``.
+
+        Returns:
+            self for method chaining.
+        """
+        storage_config: dict[str, Any] = {"storage_class": storage_class}
+        storage_config.update(kwargs)
+        self._config["conversation_storage"] = storage_config
+        return self
+
     # -- Components --
 
     def set_memory(self, memory_type: str, **kwargs: Any) -> Self:

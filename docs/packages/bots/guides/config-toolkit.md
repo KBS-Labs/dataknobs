@@ -129,6 +129,29 @@ Two output formats:
 - `build()` — flat format compatible with `DynaBot.from_config()`
 - `build_portable()` — environment-aware format with `$resource` refs and `bot` wrapper
 
+#### Custom Storage Classes
+
+Use `set_conversation_storage_class()` to configure a custom `ConversationStorage`
+implementation instead of the default `DataknobsConversationStorage`:
+
+```python
+config = (
+    DynaBotConfigBuilder()
+    .set_llm("ollama", model="llama3.2")
+    .set_conversation_storage_class(
+        "myapp.storage:AcmeConversationStorage",
+        db_url="postgres://...",
+        tenant_id="acme-corp",
+    )
+    .build()
+)
+```
+
+The import path supports both `"module.path:ClassName"` (recommended) and
+`"module.path.ClassName"` formats. The class must implement `ConversationStorage`
+and provide an async `create(config: dict)` classmethod. When `storage_class` is
+set, the `backend` key is ignored and the class handles its own initialization.
+
 ### Draft Management
 
 `ConfigDraftManager` provides file-based draft persistence for interactive config creation with automatic cleanup of stale drafts.
