@@ -384,10 +384,12 @@ class AdvancedFSM:
                 ensures custom functions are properly registered before
                 building.
             execution_mode: Execution mode for advanced control.
-            custom_functions: Optional custom functions to register.  Only
-                used when *config* is a path or dict (custom functions must be
-                registered before building).  Ignored when *config* is an
-                already-built :class:`FSM`.
+            custom_functions: Optional custom functions to register.  When
+                *config* is a path or dict, these are registered before
+                building the FSM.  In all cases (including pre-built
+                :class:`FSM` instances), they are forwarded to the
+                execution engines and merged into the function registry
+                at execution time.
         """
         if isinstance(config, FSM):
             fsm = config
@@ -940,16 +942,16 @@ class AdvancedFSM:
         """
         return self._history
 
-    async def save_history(self) -> bool:
+    async def save_history(self) -> str | None:
         """Save execution history to storage.
 
         Returns:
-            True if saved successfully
+            Storage ID for the saved history, or None if no storage
+            is configured or no history exists.
         """
         if self._history and self._storage:
-            await self._storage.save_history(self._history)
-            return True
-        return False
+            return await self._storage.save_history(self._history)
+        return None
 
     async def load_history(self, history_id: str) -> bool:
         """Load execution history from storage.
@@ -995,12 +997,11 @@ class AdvancedFSM:
             self._update_state_instance(context, initial_state)
 
         # Run transforms exactly once for the initial state
-        if not getattr(context, '_initial_transforms_executed', False):
-            if hasattr(self._engine, '_execute_state_transforms'):
-                self._engine._execute_state_transforms(
-                    context, context.current_state
-                )
-            context._initial_transforms_executed = True  # type: ignore[attr-defined]
+        if not context._initial_transforms_executed:
+            self._engine._execute_state_transforms(
+                context, context.current_state
+            )
+            context._initial_transforms_executed = True
 
         return None  # Success
 
@@ -1026,11 +1027,11 @@ class AdvancedFSM:
             self._update_state_instance(context, initial_state)
 
         # Run transforms exactly once for the initial state
-        if not getattr(context, '_initial_transforms_executed', False):
+        if not context._initial_transforms_executed:
             await self._execute_state_transforms_async(
                 context, context.current_state
             )
-            context._initial_transforms_executed = True  # type: ignore[attr-defined]
+            context._initial_transforms_executed = True
 
         return None  # Success
 
@@ -1567,8 +1568,7 @@ class AdvancedFSM:
 
             # Execute state transforms when entering the new state
             # This is critical for sync execution to match async behavior
-            if hasattr(self._engine, '_execute_state_transforms'):
-                self._engine._execute_state_transforms(context, arc.target_state)
+            self._engine._execute_state_transforms(context, arc.target_state)
 
             # Check if we hit a breakpoint
             at_breakpoint = arc.target_state in self._breakpoints

@@ -190,6 +190,10 @@ class AnthropicProvider(AsyncLLMProvider):
         Anthropic API Docs: https://docs.anthropic.com/
     """
 
+    # Anthropic's API requires max_tokens on every request.  When the
+    # caller hasn't set it explicitly we fall back to this value.
+    DEFAULT_MAX_TOKENS: int = 1024
+
     def __init__(
         self,
         config: Union[LLMConfig, "Config", Dict[str, Any]],
@@ -266,11 +270,13 @@ class AnthropicProvider(AsyncLLMProvider):
         Returns:
             Dictionary of API parameters.
         """
+        gen = config.generation_params()
+        # Anthropic requires max_tokens on every request, so fall back to
+        # DEFAULT_MAX_TOKENS when the caller hasn't set it explicitly.
         params: Dict[str, Any] = {
             "model": config.model,
-            "max_tokens": config.max_tokens or 1024,
+            "max_tokens": gen.get("max_tokens", self.DEFAULT_MAX_TOKENS),
         }
-        gen = config.generation_params()
         if "temperature" in gen:
             params["temperature"] = gen["temperature"]
         if "top_p" in gen:

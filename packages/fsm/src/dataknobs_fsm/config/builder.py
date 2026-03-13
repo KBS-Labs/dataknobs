@@ -13,7 +13,7 @@ raw configuration with optional custom functions.
 
 import importlib
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Type, Union
+from typing import Any, Callable, Dict, List, Type
 
 
 from dataknobs_fsm.config.schema import (
@@ -747,8 +747,8 @@ class FSMBuilder:
 
 
 def build_fsm(
-    config: Union[str, Path, Dict[str, Any]],
-    custom_functions: Dict[str, Callable] | None = None,
+    config: str | Path | dict[str, Any],
+    custom_functions: dict[str, Callable] | None = None,
 ) -> CoreFSMClass:
     """Build an FSM from configuration with custom functions registered.
 

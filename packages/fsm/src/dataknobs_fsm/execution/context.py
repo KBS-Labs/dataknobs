@@ -125,6 +125,12 @@ class ExecutionContext:
         # When set, _create_function_context() calls this with the built
         # FunctionContext and returns the factory's result instead.
         self.transform_context_factory: Callable[..., Any] | None = None
+
+        # Idempotency flag — tracks whether initial-state transforms have
+        # already been executed, preventing duplicate execution when the
+        # AdvancedFSM sync/async entry points call _execute_state_transforms
+        # directly (bypassing the engine's own enter_state logic).
+        self._initial_transforms_executed: bool = False
     
     def push_network(self, network_name: str, return_state: str | None = None) -> None:
         """Push a network onto the execution stack.
@@ -459,7 +465,8 @@ class ExecutionContext:
         clone.data = self.data
         clone.metadata = self.metadata.copy()
         clone.variables = self.variables.copy()
-        
+        clone._initial_transforms_executed = self._initial_transforms_executed
+
         return clone
     
     def is_complete(self) -> bool:

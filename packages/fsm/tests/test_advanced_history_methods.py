@@ -37,7 +37,7 @@ def _build_simple_fsm():
 
 @pytest.mark.asyncio
 async def test_save_history_calls_storage():
-    """save_history() should call storage.save_history() and return True."""
+    """save_history() should call storage.save_history() and return a storage ID."""
     config = StorageConfig(backend=StorageBackend.MEMORY)
     storage = StorageFactory.create(config)
     await storage.initialize()
@@ -52,9 +52,10 @@ async def test_save_history_calls_storage():
     history.add_step("start", "main")
     history.finalize()
 
-    # Save — should succeed
-    result = await advanced.save_history()
-    assert result is True
+    # Save — should return a storage ID string
+    storage_id = await advanced.save_history()
+    assert isinstance(storage_id, str)
+    assert len(storage_id) > 0
 
     # Verify it was actually persisted
     loaded = await storage.load_history(history.execution_id)
@@ -92,13 +93,13 @@ async def test_load_history_calls_storage():
 
 @pytest.mark.asyncio
 async def test_save_history_no_storage():
-    """save_history() returns False when no storage is configured."""
+    """save_history() returns None when no storage is configured."""
     fsm = _build_simple_fsm()
     advanced = AdvancedFSM(fsm)
     advanced.enable_history()  # No storage
 
     result = await advanced.save_history()
-    assert result is False
+    assert result is None
 
 
 @pytest.mark.asyncio

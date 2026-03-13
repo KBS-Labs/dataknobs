@@ -822,7 +822,7 @@ class AsyncSimpleFSM:
 
     def get_resources(self) -> list[str]:
         """Get list of registered resource names."""
-        return list(self._resource_manager._resources.keys())
+        return list(self._resource_manager._providers.keys())
 
     @property
     def config(self) -> Any:

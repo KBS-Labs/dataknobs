@@ -453,11 +453,18 @@ class LLMConfig:
     - Rate limiting and retry logic
     - Provider-specific options via options dict
 
+    Note:
+        Generation parameters (``temperature``, ``top_p``, ``max_tokens``,
+        etc.) default to ``None``, meaning "not set — let the provider API
+        apply its own default."  Only explicitly supplied values are sent
+        to the provider (see :meth:`generation_params`).
+
     Example:
         ```python
         from dataknobs_llm.llm.base import LLMConfig, CompletionMode
 
-        # Basic configuration
+        # Basic configuration — temperature is explicitly set here;
+        # omitting it would let the provider use its own default.
         config = LLMConfig(
             provider="openai",
             model="gpt-4",
