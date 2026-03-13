@@ -5,6 +5,8 @@ database backend (SQLite, PostgreSQL, MongoDB, Elasticsearch, S3, etc.) through
 the common AsyncDatabase interface.
 """
 
+from __future__ import annotations
+
 import time
 import uuid
 from typing import Any, Dict, List, TYPE_CHECKING
@@ -36,18 +38,39 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
     All through the same AsyncDatabase interface from dataknobs_data.
     """
     
-    def __init__(self, config: StorageConfig):
+    def __init__(
+        self,
+        config: StorageConfig,
+        *,
+        database: AsyncDatabase | None = None,
+        steps_database: AsyncDatabase | None = None,
+    ):
         """Initialize database storage.
-        
+
         Args:
             config: Storage configuration with backend type in connection_params.
+            database: Optional pre-built AsyncDatabase instance. When provided,
+                ``_setup_backend()`` skips factory creation and uses this instance
+                directly. Enables connection pool sharing across components.
+            steps_database: Optional separate AsyncDatabase for step records.
+                Defaults to ``database`` when only ``database`` is provided.
         """
         super().__init__(config)
-        self._db: AsyncDatabase | None = None
-        self._steps_db: AsyncDatabase | None = None  # Separate DB for steps if needed
+        self._db: AsyncDatabase | None = database
+        self._steps_db: AsyncDatabase | None = steps_database or database
     
     async def _setup_backend(self) -> None:
-        """Set up the database backend using dataknobs_data factory."""
+        """Set up the database backend using dataknobs_data factory.
+
+        If a database was injected via ``__init__()``, this method reuses
+        it instead of creating a new instance through the factory.
+        """
+        if self._db is not None:
+            # Database was injected — skip factory creation
+            if self._steps_db is None:
+                self._steps_db = self._db
+            return
+
         # Extract backend type from config
         backend_type = self.config.connection_params.get('type', 'memory')
         

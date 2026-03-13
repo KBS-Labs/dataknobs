@@ -4,14 +4,21 @@ This is a thin wrapper around UnifiedDatabaseStorage that uses
 dataknobs_data's memory backend.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.storage.base import StorageBackend, StorageConfig, StorageFactory
 from dataknobs_fsm.storage.database import UnifiedDatabaseStorage
 
+if TYPE_CHECKING:
+    from dataknobs_data.database import AsyncDatabase
+
 
 class InMemoryStorage(UnifiedDatabaseStorage):
     """In-memory storage implementation using dataknobs_data's memory backend.
-    
+
     This storage backend uses dataknobs_data's AsyncMemoryDatabase which
     provides in-memory storage with support for:
     - LRU eviction based on max_size
@@ -19,29 +26,37 @@ class InMemoryStorage(UnifiedDatabaseStorage):
     - Fast queries with in-memory indexing
     - Automatic cleanup of old entries
     """
-    
-    def __init__(self, config: StorageConfig):
+
+    def __init__(
+        self,
+        config: StorageConfig,
+        *,
+        database: AsyncDatabase | None = None,
+        steps_database: AsyncDatabase | None = None,
+    ):
         """Initialize in-memory storage.
-        
+
         Args:
             config: Storage configuration.
+            database: Optional pre-built AsyncDatabase instance.
+            steps_database: Optional separate AsyncDatabase for step records.
         """
         # Ensure we use the memory backend
         if 'type' not in config.connection_params:
             config.connection_params['type'] = 'memory'
-        
+
         # Set memory-specific defaults
         if 'max_size' not in config.connection_params:
             config.connection_params['max_size'] = 1000
-        
+
         # Enable indexing for fast queries
         if 'enable_indexing' not in config.connection_params:
             config.connection_params['enable_indexing'] = True
-        
+
         # Configure mode-specific optimizations
         self._configure_mode_optimizations(config)
-        
-        super().__init__(config)
+
+        super().__init__(config, database=database, steps_database=steps_database)
     
     def _configure_mode_optimizations(self, config: StorageConfig) -> None:
         """Configure mode-specific optimizations for memory storage.

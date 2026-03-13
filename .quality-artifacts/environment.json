@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-03-13T13:40:57Z",
+  "timestamp": "2026-03-13T14:11:39Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.10.9 (Homebrew 2026-03-06)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/public-wizard-advance-api",
-  "git_commit": "7cec57e70526c9ccc8cf959cfce8cdc735205aae",
+  "git_branch": "sbk/enable-fsm-storage-injection",
+  "git_commit": "fd9bb8ea999a23f88511745e17d26d50662e61bd",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
