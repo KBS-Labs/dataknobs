@@ -78,6 +78,7 @@ async def advance(
 | `completed` | `bool` | Whether the wizard has reached its end state. |
 | `transitioned` | `bool` | Whether a stage transition occurred. |
 | `from_stage` | `str \| None` | Stage before the advance (None if no transition). |
+| `auto_advance_messages` | `list[str]` | Rendered templates from auto-advanced intermediate stages. Empty when no auto-advance occurred. |
 | `metadata` | `dict` | Full wizard metadata dict for UI rendering. |
 
 ### `WizardReasoning.initial_stage`
@@ -103,46 +104,63 @@ result = await reasoning.advance({}, state, navigation="restart")
 
 ## State Persistence
 
-The caller is responsible for persisting `WizardState` between calls. The state object is a dataclass that can be serialized:
+The caller is responsible for persisting `WizardState` between calls. Use `to_dict()` / `from_dict()` for safe round-trip serialization:
 
 ```python
-import dataclasses, json
+import json
 
 # Save
-state_dict = dataclasses.asdict(state)
-json.dumps(state_dict)
+state_dict = state.to_dict()
+json_str = json.dumps(state_dict)
 
 # Restore
-state = WizardState(**state_dict)
+state = WizardState.from_dict(json.loads(json_str))
 ```
 
 ## Hooks
 
-Lifecycle hooks (`WizardHooks`) fire during `advance()` the same way as `generate()`:
-
-- **Exit hook**: fires before leaving the current stage (normal advance only)
-- **Enter hook**: fires after arriving at the new stage
-- **Complete hook**: fires when the wizard reaches an end state
-- **Restart hook**: fires on `navigation="restart"`
+Lifecycle hooks (`WizardHooks`) fire during `advance()`. The hooks that fire depend on the type of advance:
 
 ```python
 from dataknobs_bots.reasoning import WizardHooks
 
 hooks = WizardHooks()
+hooks.on_exit(lambda stage, data: print(f"Left {stage}"))
 hooks.on_enter(lambda stage, data: print(f"Entered {stage}"))
 hooks.on_complete(lambda data: print("Wizard complete"))
+hooks.on_restart(lambda data: print("Wizard restarted"))
 
 reasoning = WizardReasoning(wizard_fsm=wizard_fsm, hooks=hooks)
 ```
 
+### Hooks by navigation type
+
+| Hook | Forward | Back | Skip | Restart |
+|------|---------|------|------|---------|
+| Exit | Yes | No | No | No |
+| Enter | Yes (if transitioned) | Yes\* | Yes\* | No |
+| Complete | Yes (if end stage) | No | Yes\* (if end stage) | No |
+| Auto-advance | Yes (if transitioned) | No | Yes\* | No |
+| Subflow pop | Yes (if transitioned) | No | Yes\* | No |
+| Restart | No | No | No | Yes |
+
+\* Requires `consistent_navigation_lifecycle=True` (the default).
+
+**Design rationale:**
+
+- **Forward** fires exit before attempting the transition and full post-transition lifecycle (enter, auto-advance, subflow pop) when a transition occurs. No hooks fire when the FSM stays at the same stage.
+- **Back** fires only the enter hook — you are returning to a known previous stage, not completing the current one, so exit hooks do not apply. Auto-advance and subflow pop are not run because back navigation targets an explicit history entry.
+- **Skip** runs the full post-transition lifecycle (matching forward) because skipping moves forward through the wizard, just without user-provided data.
+- **Restart** fires only the restart hook via `_restart_cleanup()`. Enter/exit hooks do not fire because restart is a full state reset, not a stage-to-stage transition.
+
 ## Navigation Lifecycle Flag
 
-The `consistent_navigation_lifecycle` parameter controls whether back and skip navigation fire the same lifecycle hooks as forward transitions.
+The `consistent_navigation_lifecycle` parameter controls whether back and skip navigation fire lifecycle hooks (marked with \* in the table above).
 
 | Value | Back behavior | Skip behavior |
 |-------|--------------|---------------|
 | `True` (default) | Fires enter hook on destination stage | Runs full post-transition lifecycle (subflow pop, auto-advance, enter/complete hooks) |
-| `False` | No enter hook (original behavior) | FSM step only, no lifecycle hooks (original behavior) |
+| `False` | No hooks (original behavior) | FSM step only, no lifecycle hooks (original behavior) |
 
 ```python
 # New behavior (default): back/skip fire lifecycle hooks
@@ -180,7 +198,7 @@ async def advance_wizard(
     state: dict,
     navigation: str | None = None,
 ):
-    wizard_state = WizardState(**state)
+    wizard_state = WizardState.from_dict(state)
 
     result = await reasoning.advance(
         user_input=user_input,
@@ -196,6 +214,6 @@ async def advance_wizard(
         "can_skip": result.can_skip,
         "can_go_back": result.can_go_back,
         "completed": result.completed,
-        "state": dataclasses.asdict(result.state),
+        "state": result.state.to_dict(),
     }
 ```

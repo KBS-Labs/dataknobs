@@ -508,6 +508,15 @@ class WizardFSM:
             self._context = self._fsm.create_context(data)
             self._context.set_state(current_stage)
 
+    @property
+    def start_stage(self) -> str:
+        """Name of the wizard's start stage (``is_start`` or first-defined).
+
+        Returns:
+            Name of the start stage
+        """
+        return self._find_start_stage()
+
     def _find_start_stage(self) -> str:
         """Find the start stage.
 

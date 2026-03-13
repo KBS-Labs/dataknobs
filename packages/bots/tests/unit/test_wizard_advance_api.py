@@ -11,7 +11,13 @@ from typing import Any
 
 import pytest
 
-from dataknobs_bots.reasoning.wizard import WizardAdvanceResult, WizardReasoning, WizardState
+from dataknobs_bots.reasoning.observability import TransitionRecord
+from dataknobs_bots.reasoning.wizard import (
+    SubflowContext,
+    WizardAdvanceResult,
+    WizardReasoning,
+    WizardState,
+)
 from dataknobs_bots.reasoning.wizard_hooks import WizardHooks
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 
@@ -183,6 +189,20 @@ class TestAdvanceNavigation:
         assert result.completed is False
         assert result.transitioned is True
 
+    @pytest.mark.asyncio
+    async def test_advance_restart_from_initial_stage_not_transitioned(
+        self, simple_wizard_config: dict[str, Any],
+    ) -> None:
+        """Restart from initial stage sets transitioned=False."""
+        reasoning = _make_reasoning(simple_wizard_config)
+        state = _make_state(reasoning)  # already at initial stage
+
+        result = await reasoning.advance({}, state, navigation="restart")
+
+        assert result.stage_name == "welcome"
+        assert result.transitioned is False
+        assert result.from_stage is None
+
 
 class TestAdvanceHooks:
     """Test hook lifecycle through advance()."""
@@ -222,6 +242,30 @@ class TestAdvanceHooks:
         assert len(enter_calls) == 1
         assert enter_calls[0][0] == "complete"
         assert len(complete_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_advance_no_transition_does_not_fire_enter_hook(
+        self, simple_wizard_config: dict[str, Any],
+    ) -> None:
+        """advance() must NOT fire enter hook when FSM stays at same stage."""
+        enter_calls: list[tuple[str, dict[str, Any]]] = []
+        exit_calls: list[tuple[str, dict[str, Any]]] = []
+
+        hooks = WizardHooks()
+        hooks.on_enter(lambda s, d: enter_calls.append((s, dict(d))))
+        hooks.on_exit(lambda s, d: exit_calls.append((s, dict(d))))
+
+        reasoning = _make_reasoning(simple_wizard_config, hooks=hooks)
+        state = _make_state(reasoning)
+
+        # Advance with no data — condition not met, no transition
+        result = await reasoning.advance({}, state)
+
+        assert result.transitioned is False
+        # Exit hook fires before attempting transition (expected)
+        assert len(exit_calls) == 1
+        # Enter hook must NOT fire — we never entered a new stage
+        assert len(enter_calls) == 0
 
 
 class TestAdvanceTransitionRecords:
@@ -312,6 +356,135 @@ class TestInitialStageProperty:
         reasoning = _make_reasoning(simple_wizard_config)
         assert reasoning.initial_stage == "welcome"
 
+    def test_initial_stage_respects_is_start_marker(self) -> None:
+        """initial_stage returns the is_start stage, not the first-defined."""
+        config: dict[str, Any] = {
+            "name": "non-first-start",
+            "version": "1.0",
+            "stages": [
+                {
+                    "name": "setup",
+                    "prompt": "Setup step",
+                    "transitions": [{"target": "done"}],
+                },
+                {
+                    "name": "greeting",
+                    "is_start": True,
+                    "prompt": "Hello!",
+                    "transitions": [{"target": "setup"}],
+                },
+                {
+                    "name": "done",
+                    "is_end": True,
+                    "prompt": "Done",
+                },
+            ],
+        }
+        reasoning = _make_reasoning(config)
+        assert reasoning.initial_stage == "greeting"
+
+
+class TestWizardStateHistoryInit:
+    """Test WizardState auto-initializes history from current_stage."""
+
+    def test_empty_history_seeded_from_current_stage(self) -> None:
+        """WizardState() with no history gets history=[current_stage]."""
+        state = WizardState(current_stage="welcome")
+        assert state.history == ["welcome"]
+
+    def test_explicit_history_preserved(self) -> None:
+        """Explicit history is not overwritten by __post_init__."""
+        state = WizardState(
+            current_stage="configure",
+            history=["welcome", "configure"],
+        )
+        assert state.history == ["welcome", "configure"]
+
+    @pytest.mark.asyncio
+    async def test_back_navigation_works_with_simple_constructor(
+        self, simple_wizard_config: dict[str, Any],
+    ) -> None:
+        """Back navigation works when state is created with simple constructor."""
+        reasoning = _make_reasoning(simple_wizard_config)
+        # Simple constructor — no explicit history
+        state = WizardState(current_stage=reasoning.initial_stage)
+
+        # Advance to second stage
+        result = await reasoning.advance({"intent": "create"}, state)
+        assert result.stage_name == "configure"
+
+        # Back should work — history was auto-seeded with initial stage
+        result = await reasoning.advance({}, state, navigation="back")
+        assert result.transitioned is True
+        assert result.stage_name == "welcome"
+
+
+class TestWizardStateSerialization:
+    """Test WizardState.to_dict() / from_dict() round-trip."""
+
+    def test_round_trip_with_nested_types(self) -> None:
+        """to_dict/from_dict preserves nested dataclass fields."""
+        original = WizardState(
+            current_stage="configure",
+            data={"name": "Alice"},
+            history=["welcome", "configure"],
+            completed=False,
+            clarification_attempts=1,
+            transitions=[
+                TransitionRecord(
+                    from_stage="welcome",
+                    to_stage="configure",
+                    timestamp=1000.0,
+                    trigger="user_input",
+                    duration_in_stage_ms=500.0,
+                    condition_evaluated="data.get('name')",
+                    condition_result=True,
+                ),
+            ],
+            stage_entry_time=1000.0,
+        )
+
+        restored = WizardState.from_dict(original.to_dict())
+
+        assert restored.current_stage == "configure"
+        assert restored.data == {"name": "Alice"}
+        assert restored.history == ["welcome", "configure"]
+        assert restored.clarification_attempts == 1
+        assert len(restored.transitions) == 1
+        assert isinstance(restored.transitions[0], TransitionRecord)
+        assert restored.transitions[0].from_stage == "welcome"
+        assert restored.transitions[0].condition_result is True
+        assert restored.stage_entry_time == 1000.0
+
+    def test_round_trip_json_compatible(self) -> None:
+        """to_dict output survives json.dumps/json.loads."""
+        import json
+
+        state = WizardState(
+            current_stage="start",
+            data={"key": "value"},
+            history=["start"],
+            stage_entry_time=2000.0,
+        )
+
+        json_str = json.dumps(state.to_dict())
+        restored = WizardState.from_dict(json.loads(json_str))
+
+        assert restored.current_stage == "start"
+        assert restored.data == {"key": "value"}
+
+    def test_from_dict_defaults(self) -> None:
+        """from_dict fills defaults for missing optional fields."""
+        minimal = {"current_stage": "welcome"}
+        restored = WizardState.from_dict(minimal)
+
+        assert restored.current_stage == "welcome"
+        assert restored.data == {}
+        assert restored.history == ["welcome"]  # __post_init__ seeds from current_stage
+        assert restored.completed is False
+        assert restored.transitions == []
+        assert restored.subflow_stack == []
+
 
 class TestGetWizardMetadata:
     """Test get_wizard_metadata()."""
@@ -339,6 +512,186 @@ class TestGetWizardMetadata:
         assert "can_go_back" in metadata
 
 
+class TestAdvanceSubflowRestore:
+    """Test that advance() correctly restores subflow FSM from state."""
+
+    @pytest.fixture
+    def subflow_wizard_config(self) -> dict[str, Any]:
+        """Wizard config with a multi-stage subflow network."""
+        return {
+            "name": "subflow-wizard",
+            "version": "1.0",
+            "stages": [
+                {
+                    "name": "welcome",
+                    "is_start": True,
+                    "prompt": "Welcome!",
+                    "transitions": [{"target": "configure"}],
+                },
+                {
+                    "name": "configure",
+                    "prompt": "Configure",
+                    "transitions": [
+                        {
+                            "target": "_subflow",
+                            "condition": "data.get('use_subflow')",
+                            "subflow": {
+                                "network": "detail_flow",
+                                "return_stage": "complete",
+                                "data_mapping": {},
+                                "result_mapping": {"detail": "detail"},
+                            },
+                        },
+                        {"target": "complete"},
+                    ],
+                },
+                {
+                    "name": "complete",
+                    "is_end": True,
+                    "prompt": "Done!",
+                },
+            ],
+            "subflows": {
+                "detail_flow": {
+                    "stages": [
+                        {
+                            "name": "detail_start",
+                            "is_start": True,
+                            "prompt": "Enter details",
+                            "schema": {
+                                "type": "object",
+                                "properties": {"detail": {"type": "string"}},
+                                "required": ["detail"],
+                            },
+                            "transitions": [
+                                {
+                                    "target": "detail_confirm",
+                                    "condition": "data.get('detail')",
+                                },
+                            ],
+                        },
+                        {
+                            "name": "detail_confirm",
+                            "prompt": "Confirm details",
+                            "transitions": [{"target": "detail_end"}],
+                        },
+                        {
+                            "name": "detail_end",
+                            "is_end": True,
+                            "prompt": "Details complete",
+                        },
+                    ],
+                },
+            },
+        }
+
+    @pytest.mark.asyncio
+    async def test_advance_restores_subflow_fsm(
+        self, subflow_wizard_config: dict[str, Any],
+    ) -> None:
+        """advance() sets up _active_subflow_fsm when state has subflow_stack.
+
+        Simulates a stateless server: fresh WizardReasoning receives a
+        WizardState that is mid-subflow.  The advance call must operate
+        on the subflow FSM, not the main FSM.
+
+        Uses a 3-stage subflow so the first advance stays within the
+        subflow (detail_start -> detail_confirm) rather than popping
+        back to the parent.
+        """
+        reasoning = _make_reasoning(subflow_wizard_config)
+
+        # Build a state as if we're mid-subflow at detail_start
+        state = WizardState(
+            current_stage="detail_start",
+            data={"use_subflow": True},
+            history=["detail_start"],
+            stage_entry_time=1000.0,
+            subflow_stack=[
+                SubflowContext(
+                    parent_stage="configure",
+                    parent_data={"use_subflow": True},
+                    parent_history=["welcome", "configure"],
+                    return_stage="complete",
+                    result_mapping={"detail": "detail"},
+                    subflow_network="detail_flow",
+                ),
+            ],
+        )
+
+        # Advance within the subflow — should transition to detail_confirm
+        # (not to a main-flow stage like "complete")
+        result = await reasoning.advance({"detail": "some value"}, state)
+
+        assert result.stage_name == "detail_confirm"
+        # Still in the subflow
+        assert result.state.is_in_subflow is True
+
+    @pytest.mark.asyncio
+    async def test_get_wizard_metadata_restores_subflow_fsm(
+        self, subflow_wizard_config: dict[str, Any],
+    ) -> None:
+        """get_wizard_metadata() returns correct info for subflow states."""
+        reasoning = _make_reasoning(subflow_wizard_config)
+
+        state = WizardState(
+            current_stage="detail_start",
+            data={"use_subflow": True},
+            history=["detail_start"],
+            stage_entry_time=1000.0,
+            subflow_stack=[
+                SubflowContext(
+                    parent_stage="configure",
+                    parent_data={"use_subflow": True},
+                    parent_history=["welcome", "configure"],
+                    return_stage="complete",
+                    result_mapping={"detail": "detail"},
+                    subflow_network="detail_flow",
+                ),
+            ],
+        )
+
+        metadata = reasoning.get_wizard_metadata(state)
+
+        # Should reflect the subflow stage, not the main flow
+        assert metadata["current_stage"] == "detail_start"
+
+    @pytest.mark.asyncio
+    async def test_back_navigation_within_subflow(
+        self, subflow_wizard_config: dict[str, Any],
+    ) -> None:
+        """Back navigation within a subflow operates on the subflow FSM.
+
+        Start at detail_confirm (mid-subflow), navigate back — should
+        return to detail_start within the subflow, not a main-flow stage.
+        """
+        reasoning = _make_reasoning(subflow_wizard_config)
+
+        # Build state as if we're at detail_confirm in the subflow
+        state = WizardState(
+            current_stage="detail_confirm",
+            data={"use_subflow": True, "detail": "some value"},
+            history=["detail_start", "detail_confirm"],
+            stage_entry_time=1000.0,
+            subflow_stack=[
+                SubflowContext(
+                    parent_stage="configure",
+                    parent_data={"use_subflow": True},
+                    parent_history=["welcome", "configure"],
+                    return_stage="complete",
+                    result_mapping={"detail": "detail"},
+                    subflow_network="detail_flow",
+                ),
+            ],
+        )
+
+        result = await reasoning.advance({}, state, navigation="back")
+
+        assert result.transitioned is True
+        assert result.stage_name == "detail_start"
+        assert result.state.is_in_subflow is True
+
+
 class TestGenerateBackwardCompatibility:
     """Verify generate() still works after refactoring."""
 
@@ -362,6 +715,249 @@ class TestGenerateBackwardCompatibility:
         response = await reasoning.generate(manager, llm=None)
 
         assert response is not None
+
+
+class TestAutoAdvanceMessages:
+    """Test that auto_advance_messages are captured in WizardAdvanceResult."""
+
+    @pytest.fixture
+    def auto_advance_wizard_config(self) -> dict[str, Any]:
+        """Wizard where skipping stage 1 lands on an auto-advance stage.
+
+        Flow: ask_name (skippable) -> greeting (auto_advance) -> done (end)
+
+        The greeting stage has auto_advance: true, a response_template, and
+        its required field ('name') is pre-filled via skip_default.  So
+        skipping ask_name lands on greeting, which auto-advances through to
+        done, producing a rendered template message.
+        """
+        return {
+            "name": "auto-advance-wizard",
+            "version": "1.0",
+            "stages": [
+                {
+                    "name": "ask_name",
+                    "is_start": True,
+                    "prompt": "What is your name?",
+                    "can_skip": True,
+                    "skip_default": {"name": "Anonymous"},
+                    "schema": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                        "required": ["name"],
+                    },
+                    "transitions": [
+                        {
+                            "target": "greeting",
+                            "condition": "data.get('name')",
+                        },
+                    ],
+                },
+                {
+                    "name": "greeting",
+                    "prompt": "Hello!",
+                    "auto_advance": True,
+                    "response_template": "Welcome, {{ name }}!",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                        "required": ["name"],
+                    },
+                    "transitions": [{"target": "done"}],
+                },
+                {
+                    "name": "done",
+                    "is_end": True,
+                    "prompt": "All done.",
+                },
+            ],
+        }
+
+    @pytest.mark.asyncio
+    async def test_skip_captures_auto_advance_messages(
+        self, auto_advance_wizard_config: dict[str, Any],
+    ) -> None:
+        """Skip through auto-advance stages populates auto_advance_messages."""
+        reasoning = _make_reasoning(auto_advance_wizard_config)
+        state = _make_state(reasoning)
+
+        result = await reasoning.advance({}, state, navigation="skip")
+
+        assert result.transitioned is True
+        assert result.completed is True
+        assert len(result.auto_advance_messages) > 0
+        assert "Welcome, Anonymous!" in result.auto_advance_messages[0]
+
+    @pytest.mark.asyncio
+    async def test_normal_advance_captures_auto_advance_messages(
+        self, auto_advance_wizard_config: dict[str, Any],
+    ) -> None:
+        """Normal advance through auto-advance stages populates auto_advance_messages."""
+        reasoning = _make_reasoning(auto_advance_wizard_config)
+        state = _make_state(reasoning)
+
+        # Provide name to satisfy condition — transitions to greeting,
+        # which auto-advances through to done
+        result = await reasoning.advance({"name": "Alice"}, state)
+
+        assert result.completed is True
+        assert len(result.auto_advance_messages) > 0
+        assert "Welcome, Alice!" in result.auto_advance_messages[0]
+
+    @pytest.mark.asyncio
+    async def test_no_auto_advance_gives_empty_messages(
+        self, simple_wizard_config: dict[str, Any],
+    ) -> None:
+        """auto_advance_messages is empty when no auto-advance occurs."""
+        reasoning = _make_reasoning(simple_wizard_config)
+        state = _make_state(reasoning)
+
+        result = await reasoning.advance({"intent": "create"}, state)
+
+        assert result.transitioned is True
+        assert result.auto_advance_messages == []
+
+
+class TestNavigationHookCoverage:
+    """Assert documented hook coverage for each navigation type.
+
+    See the 'Hooks by navigation type' table in WIZARD_ADVANCE_API.md.
+    """
+
+    @pytest.mark.asyncio
+    async def test_forward_fires_exit_and_enter(
+        self, simple_wizard_config: dict[str, Any],
+    ) -> None:
+        """Forward advance fires exit before transition, enter after."""
+        exit_calls: list[str] = []
+        enter_calls: list[str] = []
+        hooks = WizardHooks()
+        hooks.on_exit(lambda s, d: exit_calls.append(s))
+        hooks.on_enter(lambda s, d: enter_calls.append(s))
+
+        reasoning = _make_reasoning(simple_wizard_config, hooks=hooks)
+        state = _make_state(reasoning)
+
+        await reasoning.advance({"intent": "create"}, state)
+
+        assert exit_calls == ["welcome"]
+        assert enter_calls == ["configure"]
+
+    @pytest.mark.asyncio
+    async def test_back_fires_enter_but_not_exit(
+        self, simple_wizard_config: dict[str, Any],
+    ) -> None:
+        """Back fires enter on destination but NOT exit on source."""
+        reasoning = _make_reasoning(simple_wizard_config)
+        state = _make_state(reasoning)
+
+        # Advance to configure first
+        await reasoning.advance({"intent": "create"}, state)
+        assert state.current_stage == "configure"
+
+        # Now track hooks for back
+        exit_calls: list[str] = []
+        enter_calls: list[str] = []
+        hooks = WizardHooks()
+        hooks.on_exit(lambda s, d: exit_calls.append(s))
+        hooks.on_enter(lambda s, d: enter_calls.append(s))
+        reasoning._hooks = hooks
+
+        await reasoning.advance({}, state, navigation="back")
+
+        assert exit_calls == []  # No exit hook on back
+        assert enter_calls == ["welcome"]
+
+    @pytest.mark.asyncio
+    async def test_skip_fires_enter_but_not_exit(
+        self, auto_advance_wizard_config: dict[str, Any],
+    ) -> None:
+        """Skip fires post-transition lifecycle (enter) but NOT exit."""
+        exit_calls: list[str] = []
+        enter_calls: list[str] = []
+        hooks = WizardHooks()
+        hooks.on_exit(lambda s, d: exit_calls.append(s))
+        hooks.on_enter(lambda s, d: enter_calls.append(s))
+
+        reasoning = _make_reasoning(auto_advance_wizard_config, hooks=hooks)
+        state = _make_state(reasoning)
+
+        await reasoning.advance({}, state, navigation="skip")
+
+        assert exit_calls == []  # No exit hook on skip
+        assert len(enter_calls) > 0  # Enter hook fires
+
+    @pytest.mark.asyncio
+    async def test_restart_fires_restart_hook_only(
+        self, simple_wizard_config: dict[str, Any],
+    ) -> None:
+        """Restart fires restart hook but NOT enter or exit."""
+        exit_calls: list[str] = []
+        enter_calls: list[str] = []
+        restart_calls: list[bool] = []
+        hooks = WizardHooks()
+        hooks.on_exit(lambda s, d: exit_calls.append(s))
+        hooks.on_enter(lambda s, d: enter_calls.append(s))
+        hooks.on_restart(lambda: restart_calls.append(True))
+
+        reasoning = _make_reasoning(simple_wizard_config, hooks=hooks)
+        state = _make_state(reasoning)
+
+        # Advance first so restart has somewhere to go back from
+        await reasoning.advance({"intent": "create"}, state)
+        exit_calls.clear()
+        enter_calls.clear()
+
+        await reasoning.advance({}, state, navigation="restart")
+
+        assert exit_calls == []  # No exit hook on restart
+        assert enter_calls == []  # No enter hook on restart
+        assert len(restart_calls) == 1
+
+    @pytest.fixture
+    def auto_advance_wizard_config(self) -> dict[str, Any]:
+        """Wizard with a skippable stage leading to auto-advance."""
+        return {
+            "name": "auto-advance-wizard",
+            "version": "1.0",
+            "stages": [
+                {
+                    "name": "ask_name",
+                    "is_start": True,
+                    "prompt": "What is your name?",
+                    "can_skip": True,
+                    "skip_default": {"name": "Anonymous"},
+                    "schema": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                        "required": ["name"],
+                    },
+                    "transitions": [
+                        {
+                            "target": "greeting",
+                            "condition": "data.get('name')",
+                        },
+                    ],
+                },
+                {
+                    "name": "greeting",
+                    "prompt": "Hello!",
+                    "auto_advance": True,
+                    "response_template": "Welcome, {{ name }}!",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                        "required": ["name"],
+                    },
+                    "transitions": [{"target": "done"}],
+                },
+                {
+                    "name": "done",
+                    "is_end": True,
+                    "prompt": "All done.",
+                },
+            ],
+        }
 
 
 class TestConsistentNavigationLifecycleFlag:

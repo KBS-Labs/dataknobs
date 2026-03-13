@@ -63,7 +63,7 @@ class TestWizardState:
 
         assert state.current_stage == "start"
         assert state.data == {}
-        assert state.history == []
+        assert state.history == ["start"]  # __post_init__ seeds from current_stage
         assert state.completed is False
         assert state.clarification_attempts == 0
         assert state.transitions == []
