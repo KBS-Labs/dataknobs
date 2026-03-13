@@ -396,7 +396,7 @@ class FSM:
             
             return True
         return False
-    
+
     def get_network(self, network_name: str | None = None) -> StateNetwork | None:
         """Get a network by name.
         

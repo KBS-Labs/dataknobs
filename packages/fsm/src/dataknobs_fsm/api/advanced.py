@@ -370,17 +370,31 @@ class AdvancedFSM:
 
     def __init__(
         self,
-        fsm: FSM,
+        config: FSM | str | Path | dict[str, Any],
         execution_mode: ExecutionMode = ExecutionMode.STEP_BY_STEP,
         custom_functions: dict[str, Callable] | None = None
     ):
         """Initialize AdvancedFSM.
-        
+
         Args:
-            fsm: Core FSM instance
-            execution_mode: Execution mode for advanced control
-            custom_functions: Optional custom functions to register
+            config: Either a pre-built :class:`FSM` instance, a path to a
+                YAML/JSON config file, or a configuration dictionary.  When a
+                config path or dict is provided the FSM is built internally
+                using :func:`~dataknobs_fsm.config.builder.build_fsm`, which
+                ensures custom functions are properly registered before
+                building.
+            execution_mode: Execution mode for advanced control.
+            custom_functions: Optional custom functions to register.  Only
+                used when *config* is a path or dict (custom functions must be
+                registered before building).  Ignored when *config* is an
+                already-built :class:`FSM`.
         """
+        if isinstance(config, FSM):
+            fsm = config
+        else:
+            from dataknobs_fsm.config.builder import build_fsm
+            fsm = build_fsm(config, custom_functions)
+
         self.fsm = fsm
         self.execution_mode = execution_mode
         self._engine = ExecutionEngine(fsm, custom_functions=custom_functions)
@@ -956,6 +970,70 @@ class AdvancedFSM:
     # ========== Shared Helper Methods ==========
     # These methods contain logic shared between sync and async implementations
 
+    def _enter_initial_state_sync(
+        self, context: ExecutionContext
+    ) -> StepResult | None:
+        """Ensure initial state is entered with transforms (sync).
+
+        Called at the start of execute_step_sync(). Returns None on
+        success, or a StepResult error if initial state can't be found.
+
+        Idempotent: uses context flag to run transforms exactly once.
+        """
+        if not context.current_state:
+            initial_state = self._find_initial_state()
+            if not initial_state:
+                return StepResult(
+                    from_state="initial", to_state="initial",
+                    transition="error",
+                    data_before=context.get_data_snapshot(),
+                    data_after=context.get_data_snapshot(),
+                    duration=0.0, success=False,
+                    error="No initial state found",
+                )
+            context.set_state(initial_state)
+            self._update_state_instance(context, initial_state)
+
+        # Run transforms exactly once for the initial state
+        if not getattr(context, '_initial_transforms_executed', False):
+            if hasattr(self._engine, '_execute_state_transforms'):
+                self._engine._execute_state_transforms(
+                    context, context.current_state
+                )
+            context._initial_transforms_executed = True  # type: ignore[attr-defined]
+
+        return None  # Success
+
+    async def _enter_initial_state_async(
+        self, context: ExecutionContext
+    ) -> StepResult | None:
+        """Ensure initial state is entered with transforms (async).
+
+        Async mirror of _enter_initial_state_sync().
+        """
+        if not context.current_state:
+            initial_state = self._find_initial_state()
+            if not initial_state:
+                return StepResult(
+                    from_state="initial", to_state="initial",
+                    transition="error",
+                    data_before=context.get_data_snapshot(),
+                    data_after=context.get_data_snapshot(),
+                    duration=0.0, success=False,
+                    error="No initial state found",
+                )
+            context.set_state(initial_state)
+            self._update_state_instance(context, initial_state)
+
+        # Run transforms exactly once for the initial state
+        if not getattr(context, '_initial_transforms_executed', False):
+            await self._execute_state_transforms_async(
+                context, context.current_state
+            )
+            context._initial_transforms_executed = True  # type: ignore[attr-defined]
+
+        return None  # Success
+
     def _check_transition_signal(
         self,
         context: ExecutionContext,
@@ -1442,26 +1520,11 @@ class AdvancedFSM:
         data_before = context.get_data_snapshot()
 
         try:
-            # Initialize state if needed
-            if not context.current_state:
-                initial_state = self._find_initial_state()
-                if initial_state:
-                    context.set_state(initial_state)
-                    self._update_state_instance(context, initial_state)
-                    # Execute transforms for initial state
-                    if hasattr(self._engine, '_execute_state_transforms'):
-                        self._engine._execute_state_transforms(context, initial_state)
-                else:
-                    return StepResult(
-                        from_state=from_state,
-                        to_state=from_state,
-                        transition="error",
-                        data_before=data_before,
-                        data_after=context.get_data_snapshot(),
-                        duration=time.time() - start_time,
-                        success=False,
-                        error="No initial state found"
-                    )
+            # Enter initial state (handles pre-set case, runs transforms once)
+            error_result = self._enter_initial_state_sync(context)
+            if error_result is not None:
+                return error_result
+            from_state = context.current_state or from_state
 
             # Use shared logic to get transitions
             transitions = self._get_available_transitions(context, arc_name)
@@ -1568,25 +1631,11 @@ class AdvancedFSM:
         data_before = context.get_data_snapshot()
 
         try:
-            # Initialize state if needed
-            if not context.current_state:
-                initial_state = self._find_initial_state()
-                if initial_state:
-                    context.set_state(initial_state)
-                    self._update_state_instance(context, initial_state)
-                    # Execute transforms for initial state
-                    await self._execute_state_transforms_async(context, initial_state)
-                else:
-                    return StepResult(
-                        from_state=from_state,
-                        to_state=from_state,
-                        transition="error",
-                        data_before=data_before,
-                        data_after=context.get_data_snapshot(),
-                        duration=time.time() - start_time,
-                        success=False,
-                        error="No initial state found"
-                    )
+            # Enter initial state (handles pre-set case, runs transforms once)
+            error_result = await self._enter_initial_state_async(context)
+            if error_result is not None:
+                return error_result
+            from_state = context.current_state or from_state
 
             # Use async logic to get transitions
             transitions = await self._get_available_transitions_async(context, arc_name)
@@ -2066,36 +2115,17 @@ def create_advanced_fsm(
     **kwargs: Any
 ) -> AdvancedFSM:
     """Factory function to create an AdvancedFSM instance.
-    
+
+    Delegates to :class:`AdvancedFSM` which handles both pre-built FSM
+    instances and raw config (path or dict) using
+    :func:`~dataknobs_fsm.config.builder.build_fsm`.
+
     Args:
-        config: Configuration, FSM instance, or path
-        custom_functions: Optional custom functions to register
-        **kwargs: Additional arguments
-        
+        config: Configuration dict, file path, or pre-built FSM instance.
+        custom_functions: Optional custom functions to register.
+        **kwargs: Additional arguments forwarded to AdvancedFSM.
+
     Returns:
-        Configured AdvancedFSM instance
+        Configured AdvancedFSM instance.
     """
-    if isinstance(config, FSM):
-        fsm = config
-    else:
-        from ..config.builder import FSMBuilder
-        from ..config.loader import ConfigLoader
-
-        loader = ConfigLoader()
-
-        if isinstance(config, (str, Path)):
-            config_obj = loader.load_from_file(str(config))
-        else:
-            # Load from dict
-            config_obj = loader.load_from_dict(config)
-
-        builder = FSMBuilder()
-
-        # Register custom functions if provided
-        if custom_functions:
-            for name, func in custom_functions.items():
-                builder.register_function(name, func)
-
-        fsm = builder.build(config_obj)
-
-    return AdvancedFSM(fsm, **kwargs)
+    return AdvancedFSM(config, custom_functions=custom_functions, **kwargs)
