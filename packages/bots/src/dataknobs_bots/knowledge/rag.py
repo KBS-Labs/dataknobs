@@ -17,6 +17,7 @@ from dataknobs_xization.ingestion import (
     DirectoryProcessor,
     KnowledgeBaseConfig,
 )
+from dataknobs_bots.knowledge.base import KnowledgeBase
 from dataknobs_bots.knowledge.retrieval import (
     ChunkMerger,
     ContextFormatter,
@@ -25,7 +26,7 @@ from dataknobs_bots.knowledge.retrieval import (
 )
 
 
-class RAGKnowledgeBase:
+class RAGKnowledgeBase(KnowledgeBase):
     """RAG knowledge base using dataknobs-xization for chunking and vector search.
 
     This implementation:

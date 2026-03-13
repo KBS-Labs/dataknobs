@@ -51,10 +51,11 @@ def inject_providers(
 ) -> None:
     """Inject LLM providers into a DynaBot instance for testing.
 
-    Replaces the main LLM, extraction LLM, and/or additional role-based
-    providers on a live DynaBot.  Updates both the provider registry
-    catalog and the actual subsystem wiring so that subsequent calls
-    use the injected providers.
+    For ``main_provider``, directly replaces ``bot.llm`` (the ``"main"``
+    role is always served from this attribute, not the registry catalog).
+
+    For ``extraction_provider`` and ``**role_providers``, updates both the
+    registry catalog and the actual subsystem wiring via ``set_provider()``.
 
     **Lifecycle contract:** Injected providers are NOT owned by the bot.
     The caller retains responsibility for closing both the injected
@@ -111,7 +112,7 @@ def inject_providers(
                     "skipping extraction provider injection"
                 )
             else:
-                extractor._provider = extraction_provider
+                extractor.provider = extraction_provider
 
     # Wire role-based providers into catalog AND subsystems
     for role, provider in role_providers.items():

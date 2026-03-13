@@ -1149,9 +1149,7 @@ class WizardReasoning(ReasoningStrategy):
         from dataknobs_bots.bot.base import PROVIDER_ROLE_EXTRACTION
 
         if self._extractor is not None:
-            provider = getattr(self._extractor, "_provider", None)
-            if provider is not None:
-                return {PROVIDER_ROLE_EXTRACTION: provider}
+            return {PROVIDER_ROLE_EXTRACTION: self._extractor.provider}
         return {}
 
     def set_provider(self, role: str, provider: Any) -> bool:
@@ -1159,7 +1157,7 @@ class WizardReasoning(ReasoningStrategy):
         from dataknobs_bots.bot.base import PROVIDER_ROLE_EXTRACTION
 
         if role == PROVIDER_ROLE_EXTRACTION and self._extractor is not None:
-            self._extractor._provider = provider
+            self._extractor.provider = provider
             return True
         return False
 

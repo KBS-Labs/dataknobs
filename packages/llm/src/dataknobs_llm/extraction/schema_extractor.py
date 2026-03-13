@@ -280,7 +280,7 @@ class SchemaExtractor:
         ```
 
     Attributes:
-        _provider: LLM provider for extraction
+        provider: LLM provider for extraction (public property)
         _extraction_prompt: Template for extraction prompts
         _json_extractor: Utility for parsing JSON from responses
     """
@@ -299,6 +299,16 @@ class SchemaExtractor:
         self._provider = provider
         self._extraction_prompt = extraction_prompt or DEFAULT_EXTRACTION_PROMPT
         self._json_extractor = JSONExtractor()
+
+    @property
+    def provider(self) -> "AsyncLLMProvider":
+        """The LLM provider used for schema extraction."""
+        return self._provider
+
+    @provider.setter
+    def provider(self, value: "AsyncLLMProvider") -> None:
+        """Replace the LLM provider."""
+        self._provider = value
 
     @classmethod
     def from_config(cls, config: dict[str, Any]) -> "SchemaExtractor":

@@ -215,10 +215,10 @@ class TestCaptureReplayFromFile:
 
 
 class _FakeExtractor:
-    """Minimal extractor stub with _provider attribute."""
+    """Minimal extractor stub with provider property."""
 
     def __init__(self):
-        self._provider = EchoProvider({"provider": "echo", "model": "original-ext"})
+        self.provider = EchoProvider({"provider": "echo", "model": "original-ext"})
 
 
 class _FakeStrategy:
@@ -266,7 +266,7 @@ class TestInjectProviders:
         bot = _FakeBot()
         new_ext = EchoProvider({"provider": "echo", "model": "new-ext"})
         inject_providers(bot, extraction_provider=new_ext)
-        assert bot.reasoning_strategy._extractor._provider is new_ext
+        assert bot.reasoning_strategy._extractor.provider is new_ext
 
     def test_injects_both(self):
         bot = _FakeBot()
@@ -274,15 +274,15 @@ class TestInjectProviders:
         new_ext = EchoProvider({"provider": "echo", "model": "new-ext"})
         inject_providers(bot, new_main, new_ext)
         assert bot.llm is new_main
-        assert bot.reasoning_strategy._extractor._provider is new_ext
+        assert bot.reasoning_strategy._extractor.provider is new_ext
 
     def test_none_keeps_existing(self):
         bot = _FakeBot()
         original_main = bot.llm
-        original_ext = bot.reasoning_strategy._extractor._provider
+        original_ext = bot.reasoning_strategy._extractor.provider
         inject_providers(bot)
         assert bot.llm is original_main
-        assert bot.reasoning_strategy._extractor._provider is original_ext
+        assert bot.reasoning_strategy._extractor.provider is original_ext
 
     def test_no_strategy_logs_warning(self):
         """Bot without reasoning_strategy skips extraction injection."""
@@ -378,7 +378,7 @@ class TestCaptureReplayInjectIntoBot:
         # Main provider should be replaced with replay provider
         assert bot.llm.config.model == "capture-replay"
         # Extraction provider should be replaced
-        assert bot.reasoning_strategy._extractor._provider.config.model == "capture-replay"
+        assert bot.reasoning_strategy._extractor.provider.config.model == "capture-replay"
 
     def test_skips_extraction_when_no_extraction_calls(self):
         turns = [
@@ -388,10 +388,10 @@ class TestCaptureReplayInjectIntoBot:
         ]
         replay = CaptureReplay.from_dict(_make_capture_data(turns=turns))
         bot = _FakeBot()
-        original_ext = bot.reasoning_strategy._extractor._provider
+        original_ext = bot.reasoning_strategy._extractor.provider
         replay.inject_into_bot(bot)
 
         # Main should be replaced
         assert bot.llm.config.model == "capture-replay"
         # Extraction should be unchanged (no extraction calls in capture)
-        assert bot.reasoning_strategy._extractor._provider is original_ext
+        assert bot.reasoning_strategy._extractor.provider is original_ext

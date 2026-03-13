@@ -111,21 +111,23 @@ Detection rules for `_build_from_config()`:
 - **memory_embedding**: Registered if the memory object has an `embedding_provider` attribute (VectorMemory).
 - **summary_llm**: Registered if the memory object has an `llm_provider` attribute that is a different instance than the bot's primary LLM (dedicated SummaryMemory provider).
 - **kb_embedding**: Registered if the knowledge base has an `embedding_provider` attribute.
-- **extraction**: Registered if the reasoning strategy has an `_extractor` with a `_provider` attribute (WizardReasoning with extraction).
+- **extraction**: Registered if the reasoning strategy has an `_extractor` with a `provider` property (WizardReasoning with extraction).
 
 ## Resource Management
 
-`bot.close()` iterates `all_providers` to close every registered provider:
+`bot.close()` closes each subsystem (memory, knowledge base, reasoning
+strategy) and the main LLM provider.  Each subsystem closes the providers
+it created (originator-owns-lifecycle).  The registry catalog is for
+observability — it does not manage provider lifecycle.
 
 ```python
 async with bot:
     response = await bot.chat("Hello", context)
-# All providers closed automatically via __aexit__ → close()
+# Subsystems + main provider closed via __aexit__ → close()
 ```
 
-This fixes a resource leak where VectorMemory and SummaryMemory providers
-were previously never closed.  `AsyncLLMProvider.close()` is idempotent,
-so double-close from subsystem cleanup calls is safe.
+`AsyncLLMProvider.close()` is idempotent, so overlapping close calls
+from subsystem cleanup are safe.
 
 ## Testing
 
@@ -175,5 +177,6 @@ bot.register_provider("translation", translation_provider)
 translator = bot.get_provider("translation")
 ```
 
-Custom roles appear in `all_providers` and are closed by `bot.close()` like
-any other registered provider.
+Custom roles appear in `all_providers` for observability and enumeration.
+The registry does not manage their lifecycle — the originator is
+responsible for closing them.

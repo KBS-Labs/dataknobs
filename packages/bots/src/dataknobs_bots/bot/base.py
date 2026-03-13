@@ -22,6 +22,7 @@ from dataknobs_llm.llm import AsyncLLMProvider
 from dataknobs_llm.prompts import AsyncPromptBuilder
 from dataknobs_llm.tools import ToolRegistry
 
+from ..knowledge.base import KnowledgeBase
 from ..memory.base import Memory
 from .context import BotContext
 
@@ -134,7 +135,7 @@ class DynaBot:
         conversation_storage: ConversationStorage,
         tool_registry: ToolRegistry | None = None,
         memory: Memory | None = None,
-        knowledge_base: Any | None = None,
+        knowledge_base: KnowledgeBase | None = None,
         kb_auto_context: bool = True,
         reasoning_strategy: Any | None = None,
         middleware: list[Any] | None = None,
@@ -185,9 +186,13 @@ class DynaBot:
     def register_provider(self, role: str, provider: AsyncLLMProvider) -> None:
         """Register an auxiliary LLM/embedding provider by role.
 
-        Providers registered here are included in ``all_providers`` and
-        will be closed when ``close()`` is called.  The ``"main"`` role
-        is reserved for ``self.llm`` and cannot be overwritten.
+        Providers registered here are included in ``all_providers`` for
+        observability and enumeration.  The registry is a catalog — it
+        does not manage provider lifecycle.  Each subsystem closes the
+        providers it created (originator-owns-lifecycle).
+
+        The ``"main"`` role is reserved for ``self.llm`` and cannot be
+        overwritten.
 
         Args:
             role: Unique role identifier (e.g. ``"memory_embedding"``).
@@ -517,7 +522,7 @@ class DynaBot:
         if memory is not None:
             subsystem_providers.update(memory.providers())
 
-        if knowledge_base is not None and hasattr(knowledge_base, "providers"):
+        if knowledge_base is not None:
             subsystem_providers.update(knowledge_base.providers())
 
         if reasoning_strategy is not None:
@@ -1255,7 +1260,7 @@ class DynaBot:
         # provider it created).
 
         # Close subsystems — each closes its own providers and resources.
-        if self.knowledge_base and hasattr(self.knowledge_base, "close"):
+        if self.knowledge_base:
             try:
                 await self.knowledge_base.close()
             except Exception:
@@ -1394,27 +1399,10 @@ class DynaBot:
             search_query = rag_query if rag_query else message
             kb_results = await self.knowledge_base.query(search_query, k=5)
             if kb_results:
-                # Use format_context if available (new RAG utilities)
-                if hasattr(self.knowledge_base, "format_context"):
-                    kb_context = self.knowledge_base.format_context(
-                        kb_results, wrap_in_tags=True
-                    )
-                    contexts.append(kb_context)
-                else:
-                    # Fallback to legacy formatting
-                    formatted_chunks = []
-                    for i, r in enumerate(kb_results, 1):
-                        text = r["text"]
-                        source = r.get("source", "")
-                        heading = r.get("heading_path", "")
-
-                        chunk_text = f"[{i}] {heading}\n{text}"
-                        if source:
-                            chunk_text += f"\n(Source: {source})"
-                        formatted_chunks.append(chunk_text)
-
-                    kb_context = "\n\n---\n\n".join(formatted_chunks)
-                    contexts.append(f"<knowledge_base>\n{kb_context}\n</knowledge_base>")
+                kb_context = self.knowledge_base.format_context(
+                    kb_results, wrap_in_tags=True
+                )
+                contexts.append(kb_context)
 
         # Add memory context
         if self.memory:
