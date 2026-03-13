@@ -111,6 +111,10 @@ class TestConversationStorageDefaultCount:
             def __init__(self) -> None:
                 self._states: list[ConversationState] = []
 
+            @classmethod
+            async def create(cls, config: dict) -> "_MinimalStorage":
+                return cls()
+
             async def save_conversation(self, state: ConversationState) -> None:
                 self._states = [
                     s for s in self._states

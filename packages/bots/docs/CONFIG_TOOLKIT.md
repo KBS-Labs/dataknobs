@@ -204,8 +204,10 @@ config = (
 )
 ```
 
-The class must implement `ConversationStorage` and provide an async
-`create(config: dict)` classmethod. See [CONFIGURATION.md](CONFIGURATION.md#custom-storage-class) for details.
+The import path supports both `"module.path:ClassName"` (recommended) and
+`"module.path.ClassName"` formats. The class must implement `ConversationStorage`
+and provide an async `create(config: dict)` classmethod. See
+[CONFIGURATION.md](CONFIGURATION.md#custom-storage-class) for details.
 
 ### Extension Point: `set_custom_section()`
 

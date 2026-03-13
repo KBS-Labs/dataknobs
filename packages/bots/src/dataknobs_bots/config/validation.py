@@ -198,7 +198,9 @@ class ConfigValidator:
             result = result.merge(
                 ValidationResult.error(
                     "Missing required 'conversation_storage' configuration. "
-                    "Set conversation_storage.backend, or use a $resource reference."
+                    "Set conversation_storage.backend, "
+                    "conversation_storage.storage_class, "
+                    "or use a $resource reference."
                 )
             )
 

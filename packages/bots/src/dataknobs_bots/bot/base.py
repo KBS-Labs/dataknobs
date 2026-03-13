@@ -181,7 +181,15 @@ class DynaBot:
         Args:
             config: Configuration dictionary containing:
                 - llm: LLM configuration (provider, model, etc.)
-                - conversation_storage: Storage configuration
+                - conversation_storage: Storage configuration.  Two modes:
+                    - ``backend``: Database backend key for the default
+                      DataknobsConversationStorage (e.g. ``"memory"``,
+                      ``"sqlite"``, ``"postgres"``).
+                    - ``storage_class``: Dotted import path to a custom
+                      ConversationStorage class (e.g.
+                      ``"myapp.storage:AcmeStorage"``).  The class must
+                      implement ``ConversationStorage`` including the
+                      async ``create(config)`` classmethod.
                 - tools: Optional list of tool configurations
                 - memory: Optional memory configuration
                 - knowledge_base: Optional knowledge base configuration
@@ -281,7 +289,6 @@ class DynaBot:
         Separated from from_config() so the caller can guarantee cleanup
         of the LLM provider if anything here raises.
         """
-        from dataknobs_data.factory import AsyncDatabaseFactory
         from dataknobs_llm.prompts import AsyncPromptBuilder
         from dataknobs_llm.prompts.implementations import CompositePromptLibrary
 
@@ -312,6 +319,23 @@ class DynaBot:
         # Create conversation storage
         storage_config = config["conversation_storage"].copy()
         storage_class_path = storage_config.pop("storage_class", None)
+        has_backend = "backend" in storage_config
+
+        if storage_class_path and has_backend:
+            logger.warning(
+                "Both 'backend' and 'storage_class' specified in "
+                "conversation_storage. 'storage_class' takes precedence; "
+                "'backend' will be ignored."
+            )
+        if not storage_class_path and not has_backend:
+            from dataknobs_common.exceptions import ConfigurationError
+
+            raise ConfigurationError(
+                "conversation_storage requires either 'backend' or "
+                "'storage_class'. Use 'backend' for the default "
+                "DataknobsConversationStorage, or 'storage_class' for a "
+                "custom ConversationStorage implementation."
+            )
 
         if storage_class_path:
             from dataknobs_bots.tools.resolve import resolve_callable
@@ -322,10 +346,9 @@ class DynaBot:
             )
         else:
             # Default: use DataknobsConversationStorage with database backend
-            db_factory = AsyncDatabaseFactory()
-            backend = db_factory.create(**storage_config)
-            await backend.connect()
-            conversation_storage = DataknobsConversationStorage(backend)
+            conversation_storage = await DataknobsConversationStorage.create(
+                storage_config
+            )
 
         # Create prompt builder
         # Support optional prompts configuration
@@ -1162,14 +1185,12 @@ class DynaBot:
             except Exception:
                 logger.exception("Error closing LLM provider")
 
-        # Close conversation storage backend
-        if self.conversation_storage and hasattr(self.conversation_storage, 'backend'):
-            backend = self.conversation_storage.backend
-            if backend and hasattr(backend, 'close'):
-                try:
-                    await backend.close()
-                except Exception:
-                    logger.exception("Error closing conversation storage backend")
+        # Close conversation storage
+        if self.conversation_storage:
+            try:
+                await self.conversation_storage.close()
+            except Exception:
+                logger.exception("Error closing conversation storage")
 
         # Close knowledge base (releases embedding provider HTTP sessions)
         if self.knowledge_base and hasattr(self.knowledge_base, 'close'):

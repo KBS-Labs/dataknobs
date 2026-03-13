@@ -147,9 +147,10 @@ config = (
 )
 ```
 
-The class must implement `ConversationStorage` and provide an async
-`create(config: dict)` classmethod. When `storage_class` is set, the `backend`
-key is ignored and the class handles its own initialization.
+The import path supports both `"module.path:ClassName"` (recommended) and
+`"module.path.ClassName"` formats. The class must implement `ConversationStorage`
+and provide an async `create(config: dict)` classmethod. When `storage_class` is
+set, the `backend` key is ignored and the class handles its own initialization.
 
 ### Draft Management
 

@@ -21,10 +21,9 @@ from dataknobs_llm.conversations.storage import ConversationState
 class InMemoryTestStorage(ConversationStorage):
     """Minimal real ConversationStorage for testing pluggable storage."""
 
-    _created_with_config: dict[str, Any] | None = None
-
     def __init__(self) -> None:
         self._conversations: dict[str, ConversationState] = {}
+        self._created_with_config: dict[str, Any] | None = None
 
     @classmethod
     async def create(cls, config: dict[str, Any]) -> InMemoryTestStorage:
@@ -132,8 +131,8 @@ def test_builder_storage_class_config() -> None:
 
 
 @pytest.mark.asyncio
-async def test_invalid_storage_class_raises() -> None:
-    """from_config() with bad storage_class raises ImportError."""
+async def test_invalid_storage_class_module_not_found() -> None:
+    """from_config() with non-existent module raises ImportError."""
     config = (
         DynaBotConfigBuilder()
         .set_llm(provider="echo", model="echo-test")
@@ -141,6 +140,55 @@ async def test_invalid_storage_class_raises() -> None:
         .build()
     )
     with pytest.raises((ImportError, ModuleNotFoundError)):
+        await DynaBot.from_config(config)
+
+
+@pytest.mark.asyncio
+async def test_invalid_storage_class_attr_not_found() -> None:
+    """from_config() with valid module but missing class raises AttributeError."""
+    config = (
+        DynaBotConfigBuilder()
+        .set_llm(provider="echo", model="echo-test")
+        .set_conversation_storage_class(
+            "dataknobs_llm.conversations:NonExistentClass"
+        )
+        .build()
+    )
+    with pytest.raises(AttributeError):
+        await DynaBot.from_config(config)
+
+
+@pytest.mark.asyncio
+async def test_invalid_storage_class_not_callable() -> None:
+    """from_config() with non-callable attribute raises ValueError."""
+    config = (
+        DynaBotConfigBuilder()
+        .set_llm(provider="echo", model="echo-test")
+        .set_conversation_storage_class(
+            "dataknobs_llm.conversations.storage:SCHEMA_VERSION"
+        )
+        .build()
+    )
+    with pytest.raises(ValueError, match="not callable"):
+        await DynaBot.from_config(config)
+
+
+@pytest.mark.asyncio
+async def test_missing_backend_and_storage_class_raises() -> None:
+    """from_config() with neither backend nor storage_class raises."""
+    from dataknobs_common.exceptions import ConfigurationError
+
+    # Build a valid config first, then strip storage keys to bypass builder
+    # validation and exercise the _build_from_config guard.
+    config = (
+        DynaBotConfigBuilder()
+        .set_llm(provider="echo", model="echo-test")
+        .set_conversation_storage("memory")
+        .build()
+    )
+    # Replace with empty storage config (no backend, no storage_class)
+    config["conversation_storage"] = {}
+    with pytest.raises(ConfigurationError, match="requires either"):
         await DynaBot.from_config(config)
 
 

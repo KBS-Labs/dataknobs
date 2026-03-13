@@ -646,7 +646,51 @@ class ConversationStorage(ABC):
 
     This interface defines the contract for persisting conversation state.
     Implementations can use any backend (SQL, NoSQL, file, etc.).
+
+    Lifecycle:
+        Implementations must provide a ``create()`` classmethod for
+        configuration-driven instantiation, and may override ``close()``
+        to release resources such as connections or pools.
+
+    Example::
+
+        class MyStorage(ConversationStorage):
+            @classmethod
+            async def create(cls, config: dict[str, Any]) -> "MyStorage":
+                instance = cls(...)
+                return instance
+
+            async def close(self) -> None:
+                await self._pool.close()
     """
+
+    @classmethod
+    @abstractmethod
+    async def create(cls, config: dict[str, Any]) -> "ConversationStorage":
+        """Create a storage instance from configuration.
+
+        This factory classmethod is the primary entry point for
+        configuration-driven instantiation (e.g., from bot config files).
+        Direct construction via ``__init__`` is still valid for programmatic
+        use.
+
+        Args:
+            config: Backend-specific configuration dict.  For the default
+                ``DataknobsConversationStorage`` this contains keys like
+                ``backend``, ``path``, etc.  Custom implementations define
+                their own keys.
+
+        Returns:
+            Initialized storage instance, ready for use.
+        """
+        ...
+
+    async def close(self) -> None:  # noqa: B027
+        """Release resources held by this storage instance.
+
+        Default implementation is a no-op.  Override in implementations
+        that manage connections, pools, or other closeable resources.
+        """
 
     @abstractmethod
     async def save_conversation(self, state: ConversationState) -> None:
@@ -881,6 +925,34 @@ class DataknobsConversationStorage(ConversationStorage):
             backend: Dataknobs async database backend (AsyncMemoryDatabase, etc.)
         """
         self.backend = backend
+
+    @classmethod
+    async def create(cls, config: dict[str, Any]) -> "DataknobsConversationStorage":
+        """Create storage from configuration dict.
+
+        Creates the database backend via ``AsyncDatabaseFactory``, connects
+        it, and returns an initialized storage instance.
+
+        Args:
+            config: Database backend configuration.  Must include a
+                ``backend`` key (e.g. ``"memory"``, ``"sqlite"``,
+                ``"postgres"``).  Additional keys are passed through to
+                the factory (e.g. ``path``, ``host``).
+
+        Returns:
+            Connected ``DataknobsConversationStorage`` instance.
+        """
+        from dataknobs_data.factory import AsyncDatabaseFactory
+
+        db_factory = AsyncDatabaseFactory()
+        backend = db_factory.create(**config)
+        await backend.connect()
+        return cls(backend)
+
+    async def close(self) -> None:
+        """Close the underlying database backend."""
+        if self.backend and hasattr(self.backend, "close"):
+            await self.backend.close()
 
     def _state_to_record(self, state: ConversationState) -> Any:
         """Convert ConversationState to Record.
