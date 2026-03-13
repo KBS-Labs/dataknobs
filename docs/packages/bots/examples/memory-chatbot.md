@@ -152,6 +152,51 @@ Semantic search over conversation history:
 **Pros**: Finds relevant messages regardless of recency
 **Cons**: Slower, requires embedding model
 
+**Tenant scoping**: Use `default_metadata` and `default_filter` for multi-tenant isolation:
+
+```python
+"memory": {
+    "type": "vector",
+    "backend": "pgvector",
+    "dimension": 768,
+    "embedding_provider": "ollama",
+    "embedding_model": "nomic-embed-text",
+    "default_metadata": {"user_id": "u123"},   # Tagged on writes
+    "default_filter": {"user_id": "u123"},     # Scoped on reads
+}
+```
+
+### Composite Memory
+
+Combine multiple strategies for best-of-both-worlds context:
+
+```python
+"memory": {
+    "type": "composite",
+    "primary": 0,         # Index of primary strategy
+    "strategies": [
+        {
+            "type": "summary",
+            "recent_window": 10
+        },
+        {
+            "type": "vector",
+            "backend": "memory",
+            "dimension": 384,
+            "embedding_provider": "ollama",
+            "embedding_model": "nomic-embed-text"
+        }
+    ]
+}
+```
+
+All strategies receive every message. On read, primary results appear first,
+then deduplicated secondary results. If any strategy fails, the composite
+continues with the remaining ones.
+
+**Pros**: Combines recent-context awareness with semantic recall
+**Cons**: Uses more resources (multiple stores, possible embedding calls)
+
 ## Choosing max_messages
 
 | max_messages | Use Case | Token Usage |
@@ -198,6 +243,24 @@ Semantic search over conversation history:
     "max_messages": 100,
     "embedding_provider": "ollama",
     "embedding_model": "nomic-embed-text"
+}
+```
+
+### Composite Memory (Summary + Vector)
+
+```python
+"memory": {
+    "type": "composite",
+    "strategies": [
+        {"type": "summary", "recent_window": 10},
+        {
+            "type": "vector",
+            "backend": "memory",
+            "dimension": 384,
+            "embedding_provider": "ollama",
+            "embedding_model": "nomic-embed-text"
+        }
+    ]
 }
 ```
 

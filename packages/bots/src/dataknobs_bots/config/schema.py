@@ -355,7 +355,7 @@ class DynaBotConfigSchema:
                     "type": {
                         "type": "string",
                         "description": "Memory type",
-                        "enum": ["buffer", "vector"],
+                        "enum": ["buffer", "composite", "summary", "vector"],
                     },
                     "max_messages": {
                         "type": "integer",

@@ -239,17 +239,44 @@ Bot: I'm an AI assistant designed to have helpful, harmless conversations...
 - Fast and simple
 - Good for most use cases
 
-**Vector Memory** (For advanced use):
+**Summary Memory** (LLM-based compression):
+```python
+"memory": {
+    "type": "summary",
+    "recent_window": 10  # Keep last 10 messages verbatim, summarize older
+}
+```
+
+**Vector Memory** (Semantic recall):
 ```python
 "memory": {
     "type": "vector",
-    "max_messages": 100,
     "embedding_provider": "ollama",
     "embedding_model": "nomic-embed-text",
     "backend": "faiss",
     "dimension": 384
 }
 ```
+
+**Composite Memory** (Combine strategies):
+```python
+"memory": {
+    "type": "composite",
+    "strategies": [
+        {"type": "summary", "recent_window": 10},
+        {
+            "type": "vector",
+            "backend": "memory",
+            "dimension": 384,
+            "embedding_provider": "ollama",
+            "embedding_model": "nomic-embed-text"
+        }
+    ]
+}
+```
+
+See [CONFIGURATION.md](configuration.md#composite-memory) for full details on
+composite memory and vector memory tenant scoping.
 
 ---
 

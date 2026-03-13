@@ -707,6 +707,100 @@ memory:
 - Need to recall specific information
 - Complex context requirements
 
+**Tenant/Domain Scoping:**
+
+VectorMemory supports `default_metadata` and `default_filter` for multi-tenant
+isolation. Default metadata is merged into every stored vector, and default
+filters scope every search to matching vectors:
+
+```yaml
+memory:
+  type: vector
+  backend: pgvector
+  dimension: 768
+  embedding_provider: ollama
+  embedding_model: nomic-embed-text
+  default_metadata:
+    user_id: "u123"       # Tagged on every stored message
+  default_filter:
+    user_id: "u123"       # Only this user's messages are returned
+```
+
+Both keys are optional. Caller-supplied metadata in `add_message()` overrides
+defaults for the same keys. These work with any metadata key — the framework
+does not prescribe a specific tenancy model.
+
+### Composite Memory
+
+Combine multiple memory strategies for best-of-both-worlds context:
+
+```yaml
+memory:
+  type: composite
+  primary: 0              # Index of the primary strategy (default: 0)
+  strategies:
+    - type: summary
+      recent_window: 10
+    - type: vector
+      backend: memory
+      dimension: 384
+      embedding_provider: ollama
+      embedding_model: nomic-embed-text
+      max_results: 5
+```
+
+Each entry in `strategies` is a complete memory configuration (same format as
+a standalone memory config). The `primary` field selects which strategy's
+results appear first in `get_context()`.
+
+**How it works:**
+
+- **Writes:** Every `add_message()` is forwarded to all strategies.
+- **Reads:** Primary results appear first, then deduplicated secondary results.
+- **Deduplication:** Messages with identical content are not repeated.
+- **Graceful degradation:** If a strategy fails, the composite logs a warning
+  and continues with the remaining strategies.
+- **`pop_messages()`:** Delegated to the primary strategy only.
+- **`close()`:** Propagated to all strategies.
+
+**Common Patterns:**
+
+```yaml
+# Summary + Vector: session compression + cross-session recall
+memory:
+  type: composite
+  primary: 0
+  strategies:
+    - type: summary
+      recent_window: 10
+    - type: vector
+      backend: pgvector
+      dimension: 768
+      embedding_provider: ollama
+      embedding_model: nomic-embed-text
+      default_metadata:
+        user_id: "u123"
+      default_filter:
+        user_id: "u123"
+
+# Buffer + Vector: simple recent context + semantic recall
+memory:
+  type: composite
+  strategies:
+    - type: buffer
+      max_messages: 20
+    - type: vector
+      backend: faiss
+      dimension: 384
+      embedding_provider: ollama
+      embedding_model: all-minilm
+```
+
+**When to Use:**
+- Need both recent-context awareness and long-term semantic recall
+- Multi-session bots that should remember past conversations
+- Any case where a single memory strategy is insufficient
+
 ### Memory Banks (Wizard Data Collection)
 
 Memory Banks are a separate concept from conversation memory. While the memory types above

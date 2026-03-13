@@ -22,6 +22,7 @@ from .bank import (
 )
 from .base import Memory
 from .buffer import BufferMemory
+from .composite import CompositeMemory
 from .summary import SummaryMemory
 from .vector import VectorMemory
 
@@ -32,6 +33,7 @@ __all__ = [
     "AsyncMemoryBank",
     "BankRecord",
     "BufferMemory",
+    "CompositeMemory",
     "EmptyBankProxy",
     "Memory",
     "MemoryBank",
@@ -122,10 +124,26 @@ async def create_memory_from_config(
             owns_llm_provider=has_dedicated_llm,
         )
 
+    elif memory_type == "composite":
+        strategy_configs = config.get("strategies", [])
+        strategies = []
+        for strategy_config in strategy_configs:
+            strategy = await create_memory_from_config(strategy_config, llm_provider)
+            strategies.append(strategy)
+        if not strategies:
+            raise ValueError(
+                "Composite memory requires at least one strategy "
+                "in 'strategies' list"
+            )
+        return CompositeMemory(
+            strategies=strategies,
+            primary_index=config.get("primary", 0),
+        )
+
     else:
         raise ValueError(
             f"Unknown memory type: {memory_type}. "
-            f"Available types: buffer, summary, vector"
+            f"Available types: buffer, composite, summary, vector"
         )
 
 

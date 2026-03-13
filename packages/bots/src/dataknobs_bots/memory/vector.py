@@ -31,6 +31,8 @@ class VectorMemory(Memory):
         embedding_provider: Any,
         max_results: int = 5,
         similarity_threshold: float = 0.7,
+        default_metadata: dict[str, Any] | None = None,
+        default_filter: dict[str, Any] | None = None,
     ):
         """Initialize vector memory.
 
@@ -39,11 +41,19 @@ class VectorMemory(Memory):
             embedding_provider: LLM provider with embed() method
             max_results: Maximum number of similar messages to return
             similarity_threshold: Minimum similarity score (0-1)
+            default_metadata: Metadata merged into every ``add_message()``
+                call. Caller-supplied metadata overrides these defaults.
+                Use for tenant scoping, e.g. ``{"user_id": "u123"}``.
+            default_filter: Filter merged into every ``get_context()``
+                search call. Use to scope reads to a tenant, e.g.
+                ``{"user_id": "u123"}``.
         """
         self.vector_store = vector_store
         self.embedding_provider = embedding_provider
         self.max_results = max_results
         self.similarity_threshold = similarity_threshold
+        self._default_metadata = default_metadata or {}
+        self._default_filter = default_filter or {}
 
     @classmethod
     async def from_config(cls, config: dict[str, Any]) -> "VectorMemory":
@@ -98,6 +108,8 @@ class VectorMemory(Memory):
             embedding_provider=embedding_provider,
             max_results=config.get("max_results", 5),
             similarity_threshold=config.get("similarity_threshold", 0.7),
+            default_metadata=config.get("default_metadata"),
+            default_filter=config.get("default_filter"),
         )
 
     async def add_message(
@@ -117,13 +129,14 @@ class VectorMemory(Memory):
         if not isinstance(embedding, np.ndarray):
             embedding = np.array(embedding, dtype=np.float32)
 
-        # Prepare metadata
+        # Prepare metadata: base fields, then defaults, then caller (caller wins)
         msg_metadata = {
             "content": content,
             "role": role,
             "timestamp": datetime.now().isoformat(),
             "id": str(uuid4()),
         }
+        msg_metadata.update(self._default_metadata)
         if metadata:
             msg_metadata.update(metadata)
 
@@ -149,11 +162,15 @@ class VectorMemory(Memory):
             query_embedding = np.array(query_embedding, dtype=np.float32)
 
         # Search for similar vectors
-        results = await self.vector_store.search(
-            query_vector=query_embedding,
-            k=self.max_results,
-            include_metadata=True,
-        )
+        search_kwargs: dict[str, Any] = {
+            "query_vector": query_embedding,
+            "k": self.max_results,
+            "include_metadata": True,
+        }
+        if self._default_filter:
+            search_kwargs["filter"] = dict(self._default_filter)
+
+        results = await self.vector_store.search(**search_kwargs)
 
         # Format results
         context = []
