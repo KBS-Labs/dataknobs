@@ -30,6 +30,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Provider role constants for the provider registry.
+PROVIDER_ROLE_MAIN = "main"
+PROVIDER_ROLE_EXTRACTION = "extraction"
+PROVIDER_ROLE_MEMORY_EMBEDDING = "memory_embedding"
+PROVIDER_ROLE_SUMMARY_LLM = "summary_llm"
+PROVIDER_ROLE_KB_EMBEDDING = "kb_embedding"
+
 
 def normalize_wizard_state(wizard_meta: dict[str, Any]) -> dict[str, Any]:
     """Normalize wizard metadata to canonical structure.
@@ -173,6 +180,52 @@ class DynaBot:
         self.default_max_tokens = default_max_tokens
         self._conversation_managers: dict[str, ConversationManager] = {}
         self._turn_checkpoints: dict[str, list[str]] = {}
+        self._providers: dict[str, AsyncLLMProvider] = {}
+
+    def register_provider(self, role: str, provider: AsyncLLMProvider) -> None:
+        """Register an auxiliary LLM/embedding provider by role.
+
+        Providers registered here are included in ``all_providers`` and
+        will be closed when ``close()`` is called.  The ``"main"`` role
+        is reserved for ``self.llm`` and cannot be overwritten.
+
+        Args:
+            role: Unique role identifier (e.g. ``"memory_embedding"``).
+            provider: The provider instance.
+        """
+        if role == PROVIDER_ROLE_MAIN:
+            logger.warning(
+                "Cannot register provider with reserved role %r — "
+                "use the 'llm' constructor parameter instead",
+                PROVIDER_ROLE_MAIN,
+            )
+            return
+        self._providers[role] = provider
+
+    def get_provider(self, role: str) -> AsyncLLMProvider | None:
+        """Get a registered provider by role.
+
+        Args:
+            role: Provider role identifier.
+
+        Returns:
+            The provider, or ``None`` if not registered.
+        """
+        if role == PROVIDER_ROLE_MAIN:
+            return self.llm
+        return self._providers.get(role)
+
+    @property
+    def all_providers(self) -> dict[str, AsyncLLMProvider]:
+        """All registered providers keyed by role.
+
+        Always includes ``"main"`` (``self.llm``).  Subsystems add
+        their own entries during construction.  Returns a fresh dict
+        (snapshot) on each call.
+        """
+        result: dict[str, AsyncLLMProvider] = {PROVIDER_ROLE_MAIN: self.llm}
+        result.update(self._providers)
+        return result
 
     @classmethod
     async def from_config(cls, config: dict[str, Any]) -> DynaBot:
@@ -457,7 +510,31 @@ class DynaBot:
                 else:
                     system_prompt_content = system_prompt_config
 
-        return cls(
+        # Collect subsystem providers for registration
+        subsystem_providers: dict[str, AsyncLLMProvider] = {}
+
+        if memory is not None:
+            if hasattr(memory, "embedding_provider") and memory.embedding_provider is not None:
+                subsystem_providers[PROVIDER_ROLE_MEMORY_EMBEDDING] = memory.embedding_provider
+            if (
+                hasattr(memory, "llm_provider")
+                and memory.llm_provider is not None
+                and memory.llm_provider is not llm
+            ):
+                subsystem_providers[PROVIDER_ROLE_SUMMARY_LLM] = memory.llm_provider
+
+        if knowledge_base is not None and hasattr(knowledge_base, "embedding_provider"):
+            if knowledge_base.embedding_provider is not None:
+                subsystem_providers[PROVIDER_ROLE_KB_EMBEDDING] = knowledge_base.embedding_provider
+
+        if reasoning_strategy is not None:
+            extractor = getattr(reasoning_strategy, "_extractor", None)
+            if extractor is not None:
+                extractor_provider = getattr(extractor, "_provider", None)
+                if extractor_provider is not None:
+                    subsystem_providers[PROVIDER_ROLE_EXTRACTION] = extractor_provider
+
+        bot = cls(
             llm=llm,
             prompt_builder=prompt_builder,
             conversation_storage=conversation_storage,
@@ -473,6 +550,11 @@ class DynaBot:
             default_temperature=llm_config.get("temperature", 0.7),
             default_max_tokens=llm_config.get("max_tokens", 1000),
         )
+
+        for role, provider in subsystem_providers.items():
+            bot.register_provider(role, provider)
+
+        return bot
 
     @classmethod
     async def from_environment_aware_config(
@@ -1178,12 +1260,15 @@ class DynaBot:
             After calling close(), the bot should not be used for further operations.
             Create a new bot instance if needed.
         """
-        # Close LLM provider
-        if self.llm and hasattr(self.llm, 'close'):
-            try:
-                await self.llm.close()
-            except Exception:
-                logger.exception("Error closing LLM provider")
+        # Close all registered providers (includes main + subsystem providers).
+        # AsyncLLMProvider.close() is idempotent, so double-close from
+        # subsystem close() calls below is safe.
+        for role, provider in self.all_providers.items():
+            if provider and hasattr(provider, "close"):
+                try:
+                    await provider.close()
+                except Exception:
+                    logger.exception("Error closing %s provider", role)
 
         # Close conversation storage
         if self.conversation_storage:
@@ -1192,19 +1277,26 @@ class DynaBot:
             except Exception:
                 logger.exception("Error closing conversation storage")
 
-        # Close knowledge base (releases embedding provider HTTP sessions)
-        if self.knowledge_base and hasattr(self.knowledge_base, 'close'):
+        # Close knowledge base (non-provider cleanup: save vector store, etc.)
+        if self.knowledge_base and hasattr(self.knowledge_base, "close"):
             try:
                 await self.knowledge_base.close()
             except Exception:
                 logger.exception("Error closing knowledge base")
 
-        # Close reasoning strategy (releases extractor's LLM provider sessions)
+        # Close reasoning strategy (non-provider cleanup: cancel tasks, close banks)
         if self.reasoning_strategy:
             try:
                 await self.reasoning_strategy.close()
             except Exception:
                 logger.exception("Error closing reasoning strategy")
+
+        # Close memory store (non-provider cleanup if any)
+        if self.memory and hasattr(self.memory, "close"):
+            try:
+                await self.memory.close()
+            except Exception:
+                logger.exception("Error closing memory store")
 
         # Close memory store
         if self.memory and hasattr(self.memory, 'close'):

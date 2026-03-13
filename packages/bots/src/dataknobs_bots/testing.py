@@ -47,13 +47,14 @@ def inject_providers(
     bot: Any,
     main_provider: AsyncLLMProvider | None = None,
     extraction_provider: AsyncLLMProvider | None = None,
+    **role_providers: AsyncLLMProvider,
 ) -> None:
     """Inject LLM providers into a DynaBot instance.
 
-    Replaces the main LLM and/or the extraction LLM on a live DynaBot.
-    This centralizes the private-attribute access needed for extraction
-    provider injection, so only one location needs updating if DynaBot
-    internals change.
+    Replaces the main LLM, extraction LLM, and/or additional role-based
+    providers on a live DynaBot.  Uses the provider registry when
+    available, falling back to direct attribute access for backward
+    compatibility.
 
     Args:
         bot: A DynaBot instance (or any object with ``llm`` and
@@ -62,38 +63,48 @@ def inject_providers(
             the existing provider is kept.
         extraction_provider: Provider to use for schema extraction.
             If None, the existing provider is kept.
+        **role_providers: Additional providers keyed by role name
+            (e.g. ``memory_embedding=echo_provider``).  Registered
+            via the bot's provider registry.
 
     Example:
         ```python
-        from dataknobs_llm import CapturingProvider
+        from dataknobs_llm import EchoProvider
         from dataknobs_bots.testing import inject_providers
 
-        main_cap = CapturingProvider(bot.llm, role="main")
-        ext_cap = CapturingProvider(
-            bot.reasoning_strategy._extractor._provider, role="extraction"
-        )
-        inject_providers(bot, main_cap, ext_cap)
+        main = EchoProvider()
+        extraction = EchoProvider()
+        inject_providers(bot, main, extraction)
         ```
     """
     if main_provider is not None:
         bot.llm = main_provider
 
     if extraction_provider is not None:
+        # Update the registry entry
+        if hasattr(bot, "register_provider"):
+            bot.register_provider("extraction", extraction_provider)
+
+        # Also update the actual extractor so subsystem calls use it
         strategy = getattr(bot, "reasoning_strategy", None)
         if strategy is None:
             logger.warning(
                 "Bot has no reasoning_strategy — skipping extraction provider injection"
             )
-            return
+        else:
+            extractor = getattr(strategy, "_extractor", None)
+            if extractor is None:
+                logger.warning(
+                    "Reasoning strategy has no _extractor — "
+                    "skipping extraction provider injection"
+                )
+            else:
+                extractor._provider = extraction_provider
 
-        extractor = getattr(strategy, "_extractor", None)
-        if extractor is None:
-            logger.warning(
-                "Reasoning strategy has no _extractor — skipping extraction provider injection"
-            )
-            return
-
-        extractor._provider = extraction_provider
+    # Additional role-based injection via **kwargs
+    for role, provider in role_providers.items():
+        if hasattr(bot, "register_provider"):
+            bot.register_provider(role, provider)
 
 
 class CaptureReplay:

@@ -193,6 +193,7 @@ nav:
         - packages/bots/guides/dynamic-registration.md
         - packages/bots/guides/migration.md
         - packages/bots/guides/architecture.md
+        - packages/bots/guides/provider-registry.md
         - packages/bots/guides/tools.md
         - packages/bots/guides/middleware.md
         - packages/bots/guides/bot-manager.md
