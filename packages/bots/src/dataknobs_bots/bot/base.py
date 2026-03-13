@@ -1298,13 +1298,6 @@ class DynaBot:
             except Exception:
                 logger.exception("Error closing memory store")
 
-        # Close memory store
-        if self.memory and hasattr(self.memory, 'close'):
-            try:
-                await self.memory.close()
-            except Exception:
-                logger.exception("Error closing memory store")
-
     async def __aenter__(self) -> Self:
         """Async context manager entry.
 
