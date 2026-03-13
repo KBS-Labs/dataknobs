@@ -1144,6 +1144,25 @@ class WizardReasoning(ReasoningStrategy):
 
         return "data_input"
 
+    def providers(self) -> dict[str, Any]:
+        """Return the extraction provider if an extractor is configured."""
+        from dataknobs_bots.bot.base import PROVIDER_ROLE_EXTRACTION
+
+        if self._extractor is not None:
+            provider = getattr(self._extractor, "_provider", None)
+            if provider is not None:
+                return {PROVIDER_ROLE_EXTRACTION: provider}
+        return {}
+
+    def set_provider(self, role: str, provider: Any) -> bool:
+        """Replace the extraction provider if the role matches."""
+        from dataknobs_bots.bot.base import PROVIDER_ROLE_EXTRACTION
+
+        if role == PROVIDER_ROLE_EXTRACTION and self._extractor is not None:
+            self._extractor._provider = provider
+            return True
+        return False
+
     async def close(self) -> None:
         """Close the reasoning strategy and release resources.
 

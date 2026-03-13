@@ -228,12 +228,29 @@ class _FakeStrategy:
         self._extractor = _FakeExtractor()
 
 
+class _FakeMemory:
+    """Minimal memory stub with set_provider support."""
+
+    def __init__(self):
+        self.embedding_provider = EchoProvider({"provider": "echo", "model": "original-mem"})
+
+    def set_provider(self, role: str, provider: object) -> bool:
+        from dataknobs_bots.bot.base import PROVIDER_ROLE_MEMORY_EMBEDDING
+
+        if role == PROVIDER_ROLE_MEMORY_EMBEDDING:
+            self.embedding_provider = provider
+            return True
+        return False
+
+
 class _FakeBot:
     """Minimal DynaBot stub for testing inject_providers."""
 
-    def __init__(self):
+    def __init__(self, *, with_memory: bool = False):
         self.llm = EchoProvider({"provider": "echo", "model": "original-main"})
         self.reasoning_strategy = _FakeStrategy()
+        self.memory = _FakeMemory() if with_memory else None
+        self.knowledge_base = None
 
 
 class TestInjectProviders:
@@ -292,6 +309,56 @@ class TestInjectProviders:
         new_ext = EchoProvider({"provider": "echo", "model": "new"})
         # Should not raise
         inject_providers(bot, extraction_provider=new_ext)
+
+    def test_role_provider_wired_into_memory_subsystem(self):
+        """Role provider injection updates the actual memory subsystem."""
+        from dataknobs_bots.bot.base import PROVIDER_ROLE_MEMORY_EMBEDDING
+
+        bot = _FakeBot(with_memory=True)
+        original = bot.memory.embedding_provider
+        new_embed = EchoProvider({"provider": "echo", "model": "injected-embed"})
+
+        inject_providers(bot, **{PROVIDER_ROLE_MEMORY_EMBEDDING: new_embed})
+
+        # Subsystem should use the injected provider
+        assert bot.memory.embedding_provider is new_embed
+        assert bot.memory.embedding_provider is not original
+
+    def test_role_provider_unclaimed_does_not_raise(self):
+        """Injecting a role no subsystem claims succeeds silently."""
+        bot = _FakeBot()
+        extra = EchoProvider({"provider": "echo", "model": "orphan"})
+        # Should not raise — just logs a debug message
+        inject_providers(bot, custom_role=extra)
+
+    def test_extraction_uses_set_provider_on_strategy(self):
+        """Extraction provider injection uses set_provider when available."""
+        from dataknobs_bots.bot.base import PROVIDER_ROLE_EXTRACTION
+        from dataknobs_bots.reasoning.base import ReasoningStrategy
+
+        class StubStrategy(ReasoningStrategy):
+            def __init__(self):
+                super().__init__()
+                self.provider_for_role: dict[str, object] = {}
+
+            def set_provider(self, role: str, provider: object) -> bool:
+                if role == PROVIDER_ROLE_EXTRACTION:
+                    self.provider_for_role[role] = provider
+                    return True
+                return False
+
+            async def generate(self, manager, llm, tools=None, **kwargs):
+                pass
+
+        class BotWithStrategy:
+            llm = EchoProvider({"provider": "echo", "model": "test"})
+            reasoning_strategy = StubStrategy()
+
+        bot = BotWithStrategy()
+        new_ext = EchoProvider({"provider": "echo", "model": "new-ext"})
+        inject_providers(bot, extraction_provider=new_ext)
+
+        assert bot.reasoning_strategy.provider_for_role[PROVIDER_ROLE_EXTRACTION] is new_ext
 
 
 class TestCaptureReplayInjectIntoBot:

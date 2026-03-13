@@ -141,11 +141,36 @@ class TestProviderRegistryBasics:
 
 
 class TestProviderRegistryClose:
-    """Verify close() uses the registry for comprehensive shutdown."""
+    """Verify close() follows originator-owns-lifecycle.
+
+    The provider registry is a catalog — it does NOT close providers.
+    DynaBot closes self.llm (the main provider it owns). Subsystems
+    close their own providers in their own close() methods.
+    """
 
     @pytest.mark.asyncio
-    async def test_close_closes_all_providers(self):
-        """close() calls close on every registered provider."""
+    async def test_close_closes_main_provider(self):
+        """close() closes the main LLM provider (owned by DynaBot)."""
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+        }
+        bot = await DynaBot.from_config(config)
+
+        main_llm = bot.llm
+        assert isinstance(main_llm, EchoProvider)
+
+        await bot.close()
+
+        assert main_llm.close_count == 1, "Main provider should be closed exactly once"
+
+    @pytest.mark.asyncio
+    async def test_close_does_not_close_catalog_only_providers(self):
+        """Providers only in the registry catalog are NOT closed by bot.
+
+        The registry is for observability. Lifecycle is the originator's
+        responsibility.
+        """
         config = {
             "llm": {"provider": "echo", "model": "test"},
             "conversation_storage": {"backend": "memory"},
@@ -156,31 +181,16 @@ class TestProviderRegistryClose:
         await extra.initialize()
         bot.register_provider(PROVIDER_ROLE_MEMORY_EMBEDDING, extra)
 
-        # Track close calls
-        closed_roles: list[str] = []
-        main_llm = bot.llm
-        original_main_close = main_llm.close
-        original_extra_close = extra.close
-
-        async def tracking_main_close():
-            closed_roles.append(PROVIDER_ROLE_MAIN)
-            await original_main_close()
-
-        async def tracking_extra_close():
-            closed_roles.append(PROVIDER_ROLE_MEMORY_EMBEDDING)
-            await original_extra_close()
-
-        main_llm.close = tracking_main_close  # type: ignore[assignment]
-        extra.close = tracking_extra_close  # type: ignore[assignment]
-
         await bot.close()
 
-        assert PROVIDER_ROLE_MAIN in closed_roles
-        assert PROVIDER_ROLE_MEMORY_EMBEDDING in closed_roles
+        assert extra.close_count == 0, (
+            "Catalog-only provider should not be closed by bot — "
+            "originator owns lifecycle"
+        )
 
     @pytest.mark.asyncio
-    async def test_close_handles_provider_errors(self):
-        """One provider error doesn't prevent others from closing."""
+    async def test_close_handles_main_provider_error(self):
+        """Main provider close error doesn't prevent subsystem cleanup."""
         config = {
             "llm": {"provider": "echo", "model": "test"},
             "conversation_storage": {"backend": "memory"},
@@ -193,25 +203,8 @@ class TestProviderRegistryClose:
 
         bot.llm.close = failing_close  # type: ignore[assignment]
 
-        # Register another provider and track its close
-        extra = EchoProvider({"provider": "echo", "model": "extra"})
-        await extra.initialize()
-        bot.register_provider(PROVIDER_ROLE_MEMORY_EMBEDDING, extra)
-
-        extra_closed = False
-        original_extra_close = extra.close
-
-        async def tracking_extra_close():
-            nonlocal extra_closed
-            extra_closed = True
-            await original_extra_close()
-
-        extra.close = tracking_extra_close  # type: ignore[assignment]
-
         # close() should not raise despite main provider failure
         await bot.close()
-
-        assert extra_closed, "Extra provider was not closed after main provider failure"
 
 
 class TestInjectProvidersRegistry:

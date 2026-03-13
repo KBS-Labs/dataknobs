@@ -111,11 +111,15 @@ async def create_memory_from_config(
         return await VectorMemory.from_config(config)
 
     elif memory_type == "summary":
+        # Track whether a dedicated provider was created (owns lifecycle)
+        # vs reusing the bot's main LLM (bot owns lifecycle)
+        has_dedicated_llm = "llm" in config
         summary_llm = await _resolve_summary_llm(config, llm_provider)
         return SummaryMemory(
             llm_provider=summary_llm,
             recent_window=config.get("recent_window", 10),
             summary_prompt=config.get("summary_prompt"),
+            owns_llm_provider=has_dedicated_llm,
         )
 
     else:

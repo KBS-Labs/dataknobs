@@ -49,12 +49,18 @@ def inject_providers(
     extraction_provider: AsyncLLMProvider | None = None,
     **role_providers: AsyncLLMProvider,
 ) -> None:
-    """Inject LLM providers into a DynaBot instance.
+    """Inject LLM providers into a DynaBot instance for testing.
 
     Replaces the main LLM, extraction LLM, and/or additional role-based
-    providers on a live DynaBot.  Uses the provider registry when
-    available, falling back to direct attribute access for backward
-    compatibility.
+    providers on a live DynaBot.  Updates both the provider registry
+    catalog and the actual subsystem wiring so that subsequent calls
+    use the injected providers.
+
+    **Lifecycle contract:** Injected providers are NOT owned by the bot.
+    The caller retains responsibility for closing both the injected
+    provider and any displaced provider.  This follows the
+    originator-owns-lifecycle principle — ``bot.close()`` will not close
+    providers it did not create.
 
     Args:
         bot: A DynaBot instance (or any object with ``llm`` and
@@ -64,8 +70,9 @@ def inject_providers(
         extraction_provider: Provider to use for schema extraction.
             If None, the existing provider is kept.
         **role_providers: Additional providers keyed by role name
-            (e.g. ``memory_embedding=echo_provider``).  Registered
-            via the bot's provider registry.
+            (e.g. ``memory_embedding=echo_provider``).  Each provider
+            is registered in the catalog AND wired into the owning
+            subsystem via ``set_provider()``.
 
     Example:
         ```python
@@ -81,9 +88,11 @@ def inject_providers(
         bot.llm = main_provider
 
     if extraction_provider is not None:
+        from dataknobs_bots.bot.base import PROVIDER_ROLE_EXTRACTION
+
         # Update the registry entry
         if hasattr(bot, "register_provider"):
-            bot.register_provider("extraction", extraction_provider)
+            bot.register_provider(PROVIDER_ROLE_EXTRACTION, extraction_provider)
 
         # Also update the actual extractor so subsystem calls use it
         strategy = getattr(bot, "reasoning_strategy", None)
@@ -91,7 +100,10 @@ def inject_providers(
             logger.warning(
                 "Bot has no reasoning_strategy — skipping extraction provider injection"
             )
+        elif hasattr(strategy, "set_provider"):
+            strategy.set_provider(PROVIDER_ROLE_EXTRACTION, extraction_provider)
         else:
+            # Fallback for strategies without set_provider (e.g. test stubs)
             extractor = getattr(strategy, "_extractor", None)
             if extractor is None:
                 logger.warning(
@@ -101,10 +113,39 @@ def inject_providers(
             else:
                 extractor._provider = extraction_provider
 
-    # Additional role-based injection via **kwargs
+    # Wire role-based providers into catalog AND subsystems
     for role, provider in role_providers.items():
         if hasattr(bot, "register_provider"):
             bot.register_provider(role, provider)
+
+        # Wire into the actual subsystem that owns this role
+        _wire_role_provider(bot, role, provider)
+
+
+def _wire_role_provider(bot: Any, role: str, provider: AsyncLLMProvider) -> None:
+    """Wire a role provider into the subsystem that owns it.
+
+    Iterates over the bot's subsystems (memory, knowledge_base,
+    reasoning_strategy) and calls ``set_provider(role, provider)``
+    on the first one that claims the role.
+
+    Args:
+        bot: DynaBot instance (or compatible stub).
+        role: Provider role name.
+        provider: Replacement provider instance.
+    """
+    subsystems = [
+        getattr(bot, "memory", None),
+        getattr(bot, "knowledge_base", None),
+        getattr(bot, "reasoning_strategy", None),
+    ]
+    for subsystem in subsystems:
+        if subsystem is not None and hasattr(subsystem, "set_provider"):
+            if subsystem.set_provider(role, provider):
+                return
+    logger.debug(
+        "Role %r registered in catalog but no subsystem claimed it", role
+    )
 
 
 class CaptureReplay:

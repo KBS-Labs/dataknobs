@@ -510,29 +510,18 @@ class DynaBot:
                 else:
                     system_prompt_content = system_prompt_config
 
-        # Collect subsystem providers for registration
+        # Collect subsystem providers for catalog registration.
+        # Each subsystem declares its own providers via providers().
         subsystem_providers: dict[str, AsyncLLMProvider] = {}
 
         if memory is not None:
-            if hasattr(memory, "embedding_provider") and memory.embedding_provider is not None:
-                subsystem_providers[PROVIDER_ROLE_MEMORY_EMBEDDING] = memory.embedding_provider
-            if (
-                hasattr(memory, "llm_provider")
-                and memory.llm_provider is not None
-                and memory.llm_provider is not llm
-            ):
-                subsystem_providers[PROVIDER_ROLE_SUMMARY_LLM] = memory.llm_provider
+            subsystem_providers.update(memory.providers())
 
-        if knowledge_base is not None and hasattr(knowledge_base, "embedding_provider"):
-            if knowledge_base.embedding_provider is not None:
-                subsystem_providers[PROVIDER_ROLE_KB_EMBEDDING] = knowledge_base.embedding_provider
+        if knowledge_base is not None and hasattr(knowledge_base, "providers"):
+            subsystem_providers.update(knowledge_base.providers())
 
         if reasoning_strategy is not None:
-            extractor = getattr(reasoning_strategy, "_extractor", None)
-            if extractor is not None:
-                extractor_provider = getattr(extractor, "_provider", None)
-                if extractor_provider is not None:
-                    subsystem_providers[PROVIDER_ROLE_EXTRACTION] = extractor_provider
+            subsystem_providers.update(reasoning_strategy.providers())
 
         bot = cls(
             llm=llm,
@@ -1260,15 +1249,29 @@ class DynaBot:
             After calling close(), the bot should not be used for further operations.
             Create a new bot instance if needed.
         """
-        # Close all registered providers (includes main + subsystem providers).
-        # AsyncLLMProvider.close() is idempotent, so double-close from
-        # subsystem close() calls below is safe.
-        for role, provider in self.all_providers.items():
-            if provider and hasattr(provider, "close"):
-                try:
-                    await provider.close()
-                except Exception:
-                    logger.exception("Error closing %s provider", role)
+        # Each subsystem owns the lifecycle of the providers it created.
+        # The provider registry is a catalog for observability — it does
+        # not manage lifecycle.  DynaBot only closes self.llm (the main
+        # provider it created).
+
+        # Close subsystems — each closes its own providers and resources.
+        if self.knowledge_base and hasattr(self.knowledge_base, "close"):
+            try:
+                await self.knowledge_base.close()
+            except Exception:
+                logger.exception("Error closing knowledge base")
+
+        if self.reasoning_strategy:
+            try:
+                await self.reasoning_strategy.close()
+            except Exception:
+                logger.exception("Error closing reasoning strategy")
+
+        if self.memory and hasattr(self.memory, "close"):
+            try:
+                await self.memory.close()
+            except Exception:
+                logger.exception("Error closing memory store")
 
         # Close conversation storage
         if self.conversation_storage:
@@ -1277,26 +1280,12 @@ class DynaBot:
             except Exception:
                 logger.exception("Error closing conversation storage")
 
-        # Close knowledge base (non-provider cleanup: save vector store, etc.)
-        if self.knowledge_base and hasattr(self.knowledge_base, "close"):
+        # Close main LLM provider (DynaBot is the originator)
+        if self.llm and hasattr(self.llm, "close"):
             try:
-                await self.knowledge_base.close()
+                await self.llm.close()
             except Exception:
-                logger.exception("Error closing knowledge base")
-
-        # Close reasoning strategy (non-provider cleanup: cancel tasks, close banks)
-        if self.reasoning_strategy:
-            try:
-                await self.reasoning_strategy.close()
-            except Exception:
-                logger.exception("Error closing reasoning strategy")
-
-        # Close memory store (non-provider cleanup if any)
-        if self.memory and hasattr(self.memory, "close"):
-            try:
-                await self.memory.close()
-            except Exception:
-                logger.exception("Error closing memory store")
+                logger.exception("Error closing main LLM provider")
 
     async def __aenter__(self) -> Self:
         """Async context manager entry.
