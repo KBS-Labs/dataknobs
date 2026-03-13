@@ -283,6 +283,40 @@ class WizardState:
         return self.data.get("_stage_rendered_snapshot", {}).get(stage_name, {})
 
 
+@dataclass
+class WizardAdvanceResult:
+    """Result from a non-conversational wizard advance.
+
+    Returned by :meth:`WizardReasoning.advance` to give callers all
+    the information they need to render their own UI and persist state.
+
+    Attributes:
+        state: Updated wizard state (caller should persist this).
+        stage_name: Name of the current stage after advance.
+        stage_prompt: Prompt text for the current stage.
+        stage_schema: JSON Schema for the current stage (if any).
+        suggestions: Quick-reply suggestions for the current stage.
+        can_skip: Whether the current stage can be skipped.
+        can_go_back: Whether back navigation is allowed.
+        completed: Whether the wizard has reached its end state.
+        transitioned: Whether a stage transition occurred.
+        from_stage: Stage before the advance (None if no transition).
+        metadata: Full wizard metadata dict for UI rendering.
+    """
+
+    state: WizardState
+    stage_name: str
+    stage_prompt: str
+    stage_schema: dict[str, Any] | None
+    suggestions: list[str]
+    can_skip: bool
+    can_go_back: bool
+    completed: bool
+    transitioned: bool
+    from_stage: str | None
+    metadata: dict[str, Any]
+
+
 # ---------------------------------------------------------------------------
 # Navigation keyword configuration
 # ---------------------------------------------------------------------------
@@ -424,6 +458,7 @@ class WizardReasoning(ReasoningStrategy):
         conflict_strategy: str = "latest_wins",
         log_conflicts: bool = True,
         initial_data: dict[str, Any] | None = None,
+        consistent_navigation_lifecycle: bool = True,
     ):
         """Initialize WizardReasoning.
 
@@ -457,6 +492,11 @@ class WizardReasoning(ReasoningStrategy):
                 when a new conversation starts. Useful for passing configuration
                 values (e.g., quiz_bank_ids) from the bot config into the wizard
                 data dict where transforms can access them.
+            consistent_navigation_lifecycle: When True (default), back and skip
+                navigation fire the same lifecycle hooks (enter, complete) and
+                run auto-advance/subflow-pop as forward transitions do.  Set to
+                False to restore the original behavior where back/skip only
+                performed the FSM operation without lifecycle hooks.
         """
         super().__init__()
         self._fsm = wizard_fsm
@@ -476,6 +516,7 @@ class WizardReasoning(ReasoningStrategy):
         self._conflict_strategy = conflict_strategy
         self._log_conflicts = log_conflicts
         self._initial_data: dict[str, Any] = initial_data or {}
+        self._consistent_navigation_lifecycle = consistent_navigation_lifecycle
         # Active subflow FSM (None when in main flow)
         self._active_subflow_fsm: WizardFSM | None = None
         # LLM provider set by generate() for transform context access
@@ -1139,6 +1180,9 @@ class WizardReasoning(ReasoningStrategy):
                 - hooks: Optional hooks configuration dict
                 - artifacts: Optional artifact configuration with definitions
                 - review_protocols: Optional review protocol definitions
+                - consistent_navigation_lifecycle: Whether back/skip fire
+                  the same lifecycle hooks as forward transitions
+                  (default: True)
 
         Returns:
             Configured WizardReasoning instance
@@ -1304,6 +1348,9 @@ class WizardReasoning(ReasoningStrategy):
             conflict_strategy=conflict_strategy,
             log_conflicts=log_conflicts,
             initial_data=config.get("initial_data"),
+            consistent_navigation_lifecycle=config.get(
+                "consistent_navigation_lifecycle", True
+            ),
         )
 
     async def greet(
@@ -1857,98 +1904,29 @@ class WizardReasoning(ReasoningStrategy):
                 await self._save_wizard_state(manager, wizard_state)
                 return response
 
-        # Capture state before transition
-        from_stage = wizard_state.current_stage
-        duration_ms = (time.time() - wizard_state.stage_entry_time) * 1000
-
         # Apply data derivations from transition configs before evaluating
         # conditions.  This lets transitions fill in values that enable their
         # own conditions and subsequent auto-advance checks.
         self._apply_transition_derivations(stage, wizard_state)
 
         # Log pre-transition state
+        from_stage = wizard_state.current_stage
         logger.debug(
             "FSM transition attempt: from_stage='%s', data_keys=%s",
             from_stage,
             list(wizard_state.data.keys()),
         )
 
-        # Inject raw message for condition evaluation (prefixed with _ per convention)
-        wizard_state.data["_message"] = user_message
-        # Inject bank accessor for condition evaluation
-        wizard_state.data["_bank_fn"] = self._make_bank_accessor()
-        # Set per-turn context for transforms (parallel delivery channel).
-        # _intent is set by _detect_intent() earlier in the generate() flow.
-        self._current_turn = TurnContext(
-            message=user_message,
-            bank_fn=self._make_bank_accessor(),
-            intent=wizard_state.data.get("_intent"),
+        # Execute FSM step (shared method: inject keys, step, record, update)
+        from_stage, _step_result = await self._execute_fsm_step(
+            wizard_state, user_message=user_message,
         )
-        # Execute FSM transition using active FSM (async to support async transforms)
-        step_result = await active_fsm.step_async(wizard_state.data)
-        self._current_turn = None
-        wizard_state.data.pop("_message", None)
-        wizard_state.data.pop("_bank_fn", None)
-        to_stage = active_fsm.current_stage
-
-        # Log transition result
-        if to_stage != from_stage:
-            logger.info(
-                "FSM transition: '%s' -> '%s' (is_complete=%s, depth=%d)",
-                from_stage,
-                to_stage,
-                step_result.is_complete,
-                wizard_state.subflow_depth,
-            )
-        elif not step_result.success:
-            # A transition condition matched but the transform failed.
-            # Log the error prominently so it's visible in server logs.
-            # Don't return early — fall through to normal stage response
-            # generation (template rendering) so the user sees their
-            # collected data.  Store the error in wizard state so the UI
-            # can surface it via metadata.
-            logger.warning(
-                "FSM transition transform failed at '%s': %s",
-                from_stage,
-                step_result.error,
-            )
-            wizard_state.data["_transform_error"] = step_result.error
-        else:
-            logger.debug(
-                "FSM no transition: stayed at '%s' (is_complete=%s)",
-                from_stage,
-                step_result.is_complete,
-            )
-
-        # Record the transition if stage changed
-        if to_stage != from_stage:
-            # Look up the condition that was evaluated for this transition
-            condition_expr = active_fsm.get_transition_condition(from_stage, to_stage)
-
-            transition = create_transition_record(
-                from_stage=from_stage,
-                to_stage=to_stage,
-                trigger="user_input",
-                duration_in_stage_ms=duration_ms,
-                data_snapshot=wizard_state.data.copy(),
-                user_input=user_message,
-                condition_evaluated=condition_expr,
-                condition_result=True if condition_expr else None,
-                subflow_depth=wizard_state.subflow_depth,
-            )
-            wizard_state.transitions.append(transition)
-            wizard_state.stage_entry_time = time.time()
-
-        wizard_state.current_stage = to_stage
-        if wizard_state.current_stage not in wizard_state.history:
-            wizard_state.history.append(wizard_state.current_stage)
-        wizard_state.completed = step_result.is_complete
 
         # Auto-save artifact to catalog on stage transition.  Collection
         # stages add records via bank.add() directly (not through tools),
         # so tool-level auto-save won't capture them.  Saving here ensures
         # the catalog stays current as the wizard progresses.
-        if to_stage != from_stage and self._catalog and self._artifact:
+        if wizard_state.current_stage != from_stage and self._catalog and self._artifact:
             try:
                 errors = self._artifact.validate()
                 if not errors:
@@ -1956,7 +1934,7 @@ class WizardReasoning(ReasoningStrategy):
                     logger.debug(
                         "Auto-saved artifact on stage transition %s -> %s",
                         from_stage,
-                        to_stage,
+                        wizard_state.current_stage,
                     )
             except Exception:
                 logger.warning(
@@ -1964,34 +1942,13 @@ class WizardReasoning(ReasoningStrategy):
                     exc_info=True,
                 )
 
-        # Check for subflow pop (reached end state in subflow)
-        if self._should_pop_subflow(wizard_state):
-            self._handle_subflow_pop(wizard_state)
-            # Update active FSM reference after pop
-            active_fsm = self._get_active_fsm()
-            # Not completed since we returned to parent flow
-            wizard_state.completed = False
-
-        # Auto-advance through stages where all required fields are filled.
-        # Collect rendered templates from intermediate message stages so
-        # their content is visible in the final response.
-        new_stage = active_fsm.current_metadata
-        auto_advance_messages = await self._run_auto_advance_loop(
-            wizard_state, active_fsm, new_stage,
+        # Post-transition lifecycle (shared method: subflow pop, auto-advance, hooks)
+        auto_advance_messages = await self._run_post_transition_lifecycle(
+            wizard_state,
         )
 
-        # Re-fetch active_fsm in case a subflow pop occurred
+        # Re-fetch active FSM for response generation
         active_fsm = self._get_active_fsm()
-
-        # Trigger stage entry hook if configured
-        if self._hooks:
-            await self._hooks.trigger_enter(
-                wizard_state.current_stage, wizard_state.data
-            )
-
-        # Trigger completion hook if wizard is complete
-        if wizard_state.completed and self._hooks:
-            await self._hooks.trigger_complete(wizard_state.data)
 
         # Generate stage-aware response
         new_stage = active_fsm.current_metadata
@@ -2037,6 +1994,162 @@ class WizardReasoning(ReasoningStrategy):
         await self._save_wizard_state(manager, wizard_state)
 
         return response
+
+    # =========================================================================
+    # Non-Conversational (Advance) API
+    # =========================================================================
+
+    @property
+    def initial_stage(self) -> str:
+        """Name of the wizard's initial (start) stage."""
+        return self._fsm.stage_names[0]
+
+    def get_wizard_metadata(self, state: WizardState) -> dict[str, Any]:
+        """Build wizard metadata from state without advancing.
+
+        Useful for initial page renders or status checks.  Restores the
+        FSM to match the given state before building metadata so that
+        stage-level queries (prompt, suggestions, etc.) are accurate.
+
+        Args:
+            state: Current wizard state.
+
+        Returns:
+            Wizard metadata dict with progress, stage info, etc.
+        """
+        # Restore FSM to match caller-provided state
+        self._fsm.restore({
+            "current_stage": state.current_stage,
+            "data": state.data,
+        })
+        return self._build_wizard_metadata(state)
+
+    async def advance(
+        self,
+        user_input: dict[str, Any],
+        state: WizardState,
+        *,
+        navigation: str | None = None,
+    ) -> WizardAdvanceResult:
+        """Advance the wizard one step without DynaBot infrastructure.
+
+        This is the non-conversational counterpart to ``generate()``.  It
+        performs the same FSM operations and hook lifecycle but without LLM
+        calls, conversation storage, or message formatting.
+
+        The caller manages state persistence — pass in the current state,
+        receive the updated state in the result, and persist it however
+        you choose.
+
+        Args:
+            user_input: Structured data for the current stage.  Merged into
+                ``state.data`` before evaluating transitions.
+            state: Current wizard state.  Mutated in place and also returned
+                in the result for convenience.
+            navigation: Optional navigation command.  One of:
+
+                - ``"back"`` — go to previous stage
+                - ``"skip"`` — skip current stage (must be skippable)
+                - ``"restart"`` — reset to initial state
+
+        Returns:
+            :class:`WizardAdvanceResult` with updated state, current stage
+            info, and completion status.
+
+        Example::
+
+            # Initial state
+            state = WizardState(current_stage=reasoning.initial_stage)
+
+            # Advance through wizard stages
+            result = await reasoning.advance(
+                user_input={"name": "Alice"},
+                state=state,
+            )
+            print(result.stage_prompt)  # Next stage's prompt
+
+            # Navigate back
+            result = await reasoning.advance(
+                user_input={},
+                state=result.state,
+                navigation="back",
+            )
+        """
+        # Clear per-turn keys from previous turn
+        for key in self._per_turn_keys:
+            state.data.pop(key, None)
+            state.transient.pop(key, None)
+
+        # Restore FSM to match caller-provided state
+        active_fsm = self._get_active_fsm()
+        active_fsm.restore({
+            "current_stage": state.current_stage,
+            "data": state.data,
+        })
+
+        from_stage = state.current_stage
+
+        # Handle navigation
+        if navigation == "back":
+            transitioned = await self._navigate_back(state)
+        elif navigation == "skip":
+            transitioned = await self._navigate_skip(state)
+        elif navigation == "restart":
+            await self._navigate_restart(state)
+            transitioned = True
+        else:
+            # Normal advance: merge user input and step FSM
+            state.data.update(user_input)
+
+            # Exit hook
+            if self._hooks:
+                await self._hooks.trigger_exit(
+                    state.current_stage, state.data
+                )
+            self._update_stage_exit_tasks(state, state.current_stage)
+
+            # Apply transition derivations
+            active_fsm = self._get_active_fsm()
+            stage = active_fsm.current_metadata
+            self._apply_transition_derivations(stage, state)
+
+            # Execute FSM step (shared method)
+            await self._execute_fsm_step(state)
+
+            transitioned = state.current_stage != from_stage
+
+            # Artifact auto-save on transition
+            if transitioned and self._catalog and self._artifact:
+                try:
+                    errors = self._artifact.validate()
+                    if not errors:
+                        self._catalog.save(self._artifact)
+                except Exception:
+                    logger.warning(
+                        "Auto-save on transition failed", exc_info=True
+                    )
+
+            # Post-transition lifecycle (shared method)
+            await self._run_post_transition_lifecycle(state)
+
+        # Build result
+        active_fsm = self._get_active_fsm()
+        stage_meta = active_fsm.current_metadata
+        metadata = self._build_wizard_metadata(state)
+
+        return WizardAdvanceResult(
+            state=state,
+            stage_name=state.current_stage,
+            stage_prompt=active_fsm.get_stage_prompt(),
+            stage_schema=stage_meta.get("schema"),
+            suggestions=active_fsm.get_stage_suggestions(),
+            can_skip=active_fsm.can_skip(),
+            can_go_back=active_fsm.can_go_back() and len(state.history) > 1,
+            completed=state.completed,
+            transitioned=transitioned,
+            from_stage=from_stage if transitioned else None,
+            metadata=metadata,
+        )
 
     def _get_wizard_state(self, manager: Any) -> WizardState:
         """Get or create wizard state from conversation manager.
@@ -2290,6 +2403,250 @@ class WizardReasoning(ReasoningStrategy):
             The active WizardFSM instance
         """
         return self._active_subflow_fsm if self._active_subflow_fsm else self._fsm
+
+    # =========================================================================
+    # Shared Wizard Lifecycle Methods
+    # =========================================================================
+    # These methods consolidate the core wizard lifecycle operations used by
+    # both generate() (conversational path) and advance() (non-conversational
+    # path).  Each was extracted from inline code that was duplicated across
+    # generate(), _execute_skip(), and _execute_back().
+
+    async def _execute_fsm_step(
+        self,
+        state: WizardState,
+        *,
+        user_message: str | None = None,
+        trigger: str = "user_input",
+    ) -> tuple[str, Any]:
+        """Execute an FSM step with standard runtime key injection and state update.
+
+        Injects runtime keys (``_bank_fn``, ``_message``), executes the FSM
+        step, cleans up runtime keys, and updates wizard state
+        (``current_stage``, ``history``, ``completed``).  Records the
+        transition if the stage changed.
+
+        This is the shared core used by ``generate()``, ``advance()``,
+        and ``_execute_skip()``.
+
+        Args:
+            state: Wizard state (mutated in place).
+            user_message: Optional message for condition evaluation.
+            trigger: Transition trigger label for audit trail.
+
+        Returns:
+            Tuple of (from_stage, step_result).
+        """
+        active_fsm = self._get_active_fsm()
+        from_stage = state.current_stage
+        duration_ms = (time.time() - state.stage_entry_time) * 1000
+
+        # Inject runtime keys for condition/transform evaluation
+        if user_message is not None:
+            state.data["_message"] = user_message
+        state.data["_bank_fn"] = self._make_bank_accessor()
+        self._current_turn = TurnContext(
+            message=user_message,
+            bank_fn=self._make_bank_accessor(),
+            intent=state.data.get("_intent"),
+        )
+
+        # Execute FSM step
+        step_result = await active_fsm.step_async(state.data)
+
+        # Clean up runtime keys
+        self._current_turn = None
+        state.data.pop("_message", None)
+        state.data.pop("_bank_fn", None)
+
+        to_stage = active_fsm.current_stage
+
+        # Log transition result
+        if to_stage != from_stage:
+            logger.info(
+                "FSM transition: '%s' -> '%s' (is_complete=%s, depth=%d)",
+                from_stage,
+                to_stage,
+                step_result.is_complete,
+                state.subflow_depth,
+            )
+        elif not step_result.success:
+            logger.warning(
+                "FSM transition transform failed at '%s': %s",
+                from_stage,
+                step_result.error,
+            )
+            state.data["_transform_error"] = step_result.error
+        else:
+            logger.debug(
+                "FSM no transition: stayed at '%s' (is_complete=%s)",
+                from_stage,
+                step_result.is_complete,
+            )
+
+        # Record transition if stage changed
+        if to_stage != from_stage:
+            condition_expr = active_fsm.get_transition_condition(
+                from_stage, to_stage
+            )
+            transition = create_transition_record(
+                from_stage=from_stage,
+                to_stage=to_stage,
+                trigger=trigger,
+                duration_in_stage_ms=duration_ms,
+                data_snapshot=state.data.copy(),
+                user_input=user_message,
+                condition_evaluated=condition_expr,
+                condition_result=True if condition_expr else None,
+                subflow_depth=state.subflow_depth,
+            )
+            state.transitions.append(transition)
+            state.stage_entry_time = time.time()
+
+        # Update wizard state from FSM result
+        state.current_stage = to_stage
+        if to_stage not in state.history:
+            state.history.append(to_stage)
+        state.completed = step_result.is_complete
+
+        return from_stage, step_result
+
+    async def _run_post_transition_lifecycle(
+        self,
+        state: WizardState,
+    ) -> list[str]:
+        """Run post-transition lifecycle: subflow pop, auto-advance, hooks.
+
+        Called after ``_execute_fsm_step()`` to handle the standard
+        post-transition sequence.  Shared by ``generate()`` and
+        ``advance()``.
+
+        Args:
+            state: Wizard state (mutated in place).
+
+        Returns:
+            List of rendered template strings from auto-advanced stages.
+        """
+        # Subflow pop check
+        if self._should_pop_subflow(state):
+            self._handle_subflow_pop(state)
+            state.completed = False
+
+        # Auto-advance through stages with all required fields filled
+        active_fsm = self._get_active_fsm()
+        stage = active_fsm.current_metadata
+        auto_advance_messages = await self._run_auto_advance_loop(
+            state, active_fsm, stage,
+        )
+
+        # Re-fetch in case subflow pop occurred during auto-advance
+        active_fsm = self._get_active_fsm()
+
+        # Stage entry hook
+        if self._hooks:
+            await self._hooks.trigger_enter(
+                state.current_stage, state.data
+            )
+
+        # Completion hook
+        if state.completed and self._hooks:
+            await self._hooks.trigger_complete(state.data)
+
+        return auto_advance_messages
+
+    async def _navigate_back(
+        self,
+        state: WizardState,
+        *,
+        user_message: str | None = None,
+    ) -> bool:
+        """Execute back navigation on the FSM.
+
+        Performs the FSM-level back operation without generating a
+        response.  Used by both ``_execute_back()`` (conversational)
+        and ``advance()`` (non-conversational).
+
+        Args:
+            state: Wizard state (mutated in place).
+            user_message: Optional user message for the transition record.
+
+        Returns:
+            True if navigation succeeded, False if at beginning.
+        """
+        if not self._fsm.can_go_back() or len(state.history) <= 1:
+            return False
+
+        from_stage = state.current_stage
+        duration_ms = (time.time() - state.stage_entry_time) * 1000
+
+        state.history.pop()
+        state.current_stage = state.history[-1]
+        self._fsm.restore(
+            {"current_stage": state.current_stage, "data": state.data}
+        )
+        state.clarification_attempts = 0
+
+        transition = create_transition_record(
+            from_stage=from_stage,
+            to_stage=state.current_stage,
+            trigger="navigation_back",
+            duration_in_stage_ms=duration_ms,
+            user_input=user_message,
+        )
+        state.transitions.append(transition)
+        state.stage_entry_time = time.time()
+
+        if self._consistent_navigation_lifecycle and self._hooks:
+            await self._hooks.trigger_enter(state.current_stage, state.data)
+
+        return True
+
+    async def _navigate_skip(
+        self,
+        state: WizardState,
+        *,
+        user_message: str | None = None,
+    ) -> bool:
+        """Execute skip navigation on the FSM.
+
+        Performs the skip operation (mark skipped, apply defaults, step
+        FSM, run post-transition lifecycle) without generating a response.
+
+        Args:
+            state: Wizard state (mutated in place).
+            user_message: Optional user message for condition evaluation
+                and transition record.
+
+        Returns:
+            True if skip succeeded, False if stage cannot be skipped.
+        """
+        active_fsm = self._get_active_fsm()
+        if not active_fsm.can_skip():
+            return False
+
+        state.data[f"_skipped_{state.current_stage}"] = True
+        skip_default = active_fsm.current_metadata.get("skip_default")
+        if skip_default and isinstance(skip_default, dict):
+            state.data.update(skip_default)
+        state.clarification_attempts = 0
+
+        await self._execute_fsm_step(
+            state, user_message=user_message, trigger="navigation_skip",
+        )
+        if self._consistent_navigation_lifecycle:
+            await self._run_post_transition_lifecycle(state)
+        return True
+
+    async def _navigate_restart(
+        self, state: WizardState, user_message: str = "",
+    ) -> None:
+        """Execute restart navigation on the FSM.
+
+        Args:
+            state: Wizard state (mutated in place).
+            user_message: User message that triggered the restart.
+        """
+        await self._restart_cleanup(state, user_message, trigger="api_restart")
 
     def _should_push_subflow(
         self, wizard_state: WizardState, user_message: str
@@ -2709,28 +3066,7 @@ class WizardReasoning(ReasoningStrategy):
             Response for the previous stage, or an explanation if
             back navigation is not possible.
         """
-        if self._fsm.can_go_back() and len(state.history) > 1:
-            from_stage = state.current_stage
-            duration_ms = (time.time() - state.stage_entry_time) * 1000
-
-            state.history.pop()
-            state.current_stage = state.history[-1]
-            self._fsm.restore(
-                {"current_stage": state.current_stage, "data": state.data}
-            )
-            state.clarification_attempts = 0
-
-            # Record the back navigation transition
-            transition = create_transition_record(
-                from_stage=from_stage,
-                to_stage=state.current_stage,
-                trigger="navigation_back",
-                duration_in_stage_ms=duration_ms,
-                user_input=message,
-            )
-            state.transitions.append(transition)
-            state.stage_entry_time = time.time()
-
+        if await self._navigate_back(state, user_message=message):
             stage = self._fsm.current_metadata
             await self._branch_for_revisited_stage(
                 manager, state.current_stage
@@ -2789,43 +3125,9 @@ class WizardReasoning(ReasoningStrategy):
                 ),
             )
 
-        from_stage = state.current_stage
-        duration_ms = (time.time() - state.stage_entry_time) * 1000
+        await self._navigate_skip(state, user_message=message)
 
-        state.data[f"_skipped_{state.current_stage}"] = True
-        # Apply skip_default values if configured
-        skip_default = self._fsm.current_metadata.get("skip_default")
-        if skip_default and isinstance(skip_default, dict):
-            state.data.update(skip_default)
-        state.clarification_attempts = 0
-
-        # Advance FSM directly — bypass extraction entirely.
-        # Inject context needed for condition evaluation.
-        active_fsm = self._get_active_fsm()
-        state.data["_message"] = message
-        state.data["_bank_fn"] = self._make_bank_accessor()
-        step_result = await active_fsm.step_async(state.data)
-        state.data.pop("_message", None)
-        state.data.pop("_bank_fn", None)
-        to_stage = active_fsm.current_stage
-
-        if to_stage != from_stage:
-            transition = create_transition_record(
-                from_stage=from_stage,
-                to_stage=to_stage,
-                trigger="navigation_skip",
-                duration_in_stage_ms=duration_ms,
-                user_input=message,
-            )
-            state.transitions.append(transition)
-            state.stage_entry_time = time.time()
-
-        state.current_stage = to_stage
-        if state.current_stage not in state.history:
-            state.history.append(state.current_stage)
-        state.completed = step_result.is_complete
-
-        stage = active_fsm.current_metadata
+        stage = self._get_active_fsm().current_metadata
         response = await self._generate_stage_response(
             manager, llm, stage, state, None
         )
