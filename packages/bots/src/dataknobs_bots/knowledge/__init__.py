@@ -2,6 +2,7 @@
 
 from typing import Any
 
+from .base import KnowledgeBase
 from .rag import RAGKnowledgeBase
 from .retrieval import (
     ChunkMerger,
@@ -56,6 +57,7 @@ from dataknobs_data.vector.hybrid import (
 
 __all__ = [
     # Main knowledge base
+    "KnowledgeBase",
     "RAGKnowledgeBase",
     "create_knowledge_base_from_config",
     # Retrieval utilities
@@ -114,7 +116,7 @@ def __getattr__(name: str) -> Any:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-async def create_knowledge_base_from_config(config: dict[str, Any]) -> RAGKnowledgeBase:
+async def create_knowledge_base_from_config(config: dict[str, Any]) -> KnowledgeBase:
     """Create knowledge base from configuration.
 
     Args:

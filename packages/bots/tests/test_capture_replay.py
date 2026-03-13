@@ -215,10 +215,10 @@ class TestCaptureReplayFromFile:
 
 
 class _FakeExtractor:
-    """Minimal extractor stub with _provider attribute."""
+    """Minimal extractor stub with provider property."""
 
     def __init__(self):
-        self._provider = EchoProvider({"provider": "echo", "model": "original-ext"})
+        self.provider = EchoProvider({"provider": "echo", "model": "original-ext"})
 
 
 class _FakeStrategy:
@@ -228,12 +228,29 @@ class _FakeStrategy:
         self._extractor = _FakeExtractor()
 
 
+class _FakeMemory:
+    """Minimal memory stub with set_provider support."""
+
+    def __init__(self):
+        self.embedding_provider = EchoProvider({"provider": "echo", "model": "original-mem"})
+
+    def set_provider(self, role: str, provider: object) -> bool:
+        from dataknobs_bots.bot.base import PROVIDER_ROLE_MEMORY_EMBEDDING
+
+        if role == PROVIDER_ROLE_MEMORY_EMBEDDING:
+            self.embedding_provider = provider
+            return True
+        return False
+
+
 class _FakeBot:
     """Minimal DynaBot stub for testing inject_providers."""
 
-    def __init__(self):
+    def __init__(self, *, with_memory: bool = False):
         self.llm = EchoProvider({"provider": "echo", "model": "original-main"})
         self.reasoning_strategy = _FakeStrategy()
+        self.memory = _FakeMemory() if with_memory else None
+        self.knowledge_base = None
 
 
 class TestInjectProviders:
@@ -249,7 +266,7 @@ class TestInjectProviders:
         bot = _FakeBot()
         new_ext = EchoProvider({"provider": "echo", "model": "new-ext"})
         inject_providers(bot, extraction_provider=new_ext)
-        assert bot.reasoning_strategy._extractor._provider is new_ext
+        assert bot.reasoning_strategy._extractor.provider is new_ext
 
     def test_injects_both(self):
         bot = _FakeBot()
@@ -257,15 +274,15 @@ class TestInjectProviders:
         new_ext = EchoProvider({"provider": "echo", "model": "new-ext"})
         inject_providers(bot, new_main, new_ext)
         assert bot.llm is new_main
-        assert bot.reasoning_strategy._extractor._provider is new_ext
+        assert bot.reasoning_strategy._extractor.provider is new_ext
 
     def test_none_keeps_existing(self):
         bot = _FakeBot()
         original_main = bot.llm
-        original_ext = bot.reasoning_strategy._extractor._provider
+        original_ext = bot.reasoning_strategy._extractor.provider
         inject_providers(bot)
         assert bot.llm is original_main
-        assert bot.reasoning_strategy._extractor._provider is original_ext
+        assert bot.reasoning_strategy._extractor.provider is original_ext
 
     def test_no_strategy_logs_warning(self):
         """Bot without reasoning_strategy skips extraction injection."""
@@ -293,6 +310,56 @@ class TestInjectProviders:
         # Should not raise
         inject_providers(bot, extraction_provider=new_ext)
 
+    def test_role_provider_wired_into_memory_subsystem(self):
+        """Role provider injection updates the actual memory subsystem."""
+        from dataknobs_bots.bot.base import PROVIDER_ROLE_MEMORY_EMBEDDING
+
+        bot = _FakeBot(with_memory=True)
+        original = bot.memory.embedding_provider
+        new_embed = EchoProvider({"provider": "echo", "model": "injected-embed"})
+
+        inject_providers(bot, **{PROVIDER_ROLE_MEMORY_EMBEDDING: new_embed})
+
+        # Subsystem should use the injected provider
+        assert bot.memory.embedding_provider is new_embed
+        assert bot.memory.embedding_provider is not original
+
+    def test_role_provider_unclaimed_does_not_raise(self):
+        """Injecting a role no subsystem claims succeeds silently."""
+        bot = _FakeBot()
+        extra = EchoProvider({"provider": "echo", "model": "orphan"})
+        # Should not raise — just logs a debug message
+        inject_providers(bot, custom_role=extra)
+
+    def test_extraction_uses_set_provider_on_strategy(self):
+        """Extraction provider injection uses set_provider when available."""
+        from dataknobs_bots.bot.base import PROVIDER_ROLE_EXTRACTION
+        from dataknobs_bots.reasoning.base import ReasoningStrategy
+
+        class StubStrategy(ReasoningStrategy):
+            def __init__(self):
+                super().__init__()
+                self.provider_for_role: dict[str, object] = {}
+
+            def set_provider(self, role: str, provider: object) -> bool:
+                if role == PROVIDER_ROLE_EXTRACTION:
+                    self.provider_for_role[role] = provider
+                    return True
+                return False
+
+            async def generate(self, manager, llm, tools=None, **kwargs):
+                pass
+
+        class BotWithStrategy:
+            llm = EchoProvider({"provider": "echo", "model": "test"})
+            reasoning_strategy = StubStrategy()
+
+        bot = BotWithStrategy()
+        new_ext = EchoProvider({"provider": "echo", "model": "new-ext"})
+        inject_providers(bot, extraction_provider=new_ext)
+
+        assert bot.reasoning_strategy.provider_for_role[PROVIDER_ROLE_EXTRACTION] is new_ext
+
 
 class TestCaptureReplayInjectIntoBot:
     """CaptureReplay.inject_into_bot integrates with inject_providers."""
@@ -311,7 +378,7 @@ class TestCaptureReplayInjectIntoBot:
         # Main provider should be replaced with replay provider
         assert bot.llm.config.model == "capture-replay"
         # Extraction provider should be replaced
-        assert bot.reasoning_strategy._extractor._provider.config.model == "capture-replay"
+        assert bot.reasoning_strategy._extractor.provider.config.model == "capture-replay"
 
     def test_skips_extraction_when_no_extraction_calls(self):
         turns = [
@@ -321,10 +388,10 @@ class TestCaptureReplayInjectIntoBot:
         ]
         replay = CaptureReplay.from_dict(_make_capture_data(turns=turns))
         bot = _FakeBot()
-        original_ext = bot.reasoning_strategy._extractor._provider
+        original_ext = bot.reasoning_strategy._extractor.provider
         replay.inject_into_bot(bot)
 
         # Main should be replaced
         assert bot.llm.config.model == "capture-replay"
         # Extraction should be unchanged (no extraction calls in capture)
-        assert bot.reasoning_strategy._extractor._provider is original_ext
+        assert bot.reasoning_strategy._extractor.provider is original_ext

@@ -80,6 +80,12 @@ DynaBot is designed as a **stateless, configuration-driven framework** for build
 ```
 DynaBot (Orchestrator)
 ├── AsyncLLMProvider (LLM Interface)
+├── ProviderRegistry (All LLM/Embedding Providers)
+│   ├── "main" → Primary LLM
+│   ├── "extraction" → Schema Extraction LLM
+│   ├── "memory_embedding" → VectorMemory Embeddings
+│   ├── "summary_llm" → SummaryMemory LLM
+│   └── "kb_embedding" → KnowledgeBase Embeddings
 ├── AsyncPromptBuilder (Prompt Management)
 ├── DataknobsConversationStorage (Storage)
 │   └── Database Backend (PostgreSQL/Memory)
@@ -312,6 +318,56 @@ Middleware 2 (after)
 Middleware 1 (after)
   ↓
 Response
+```
+
+### 9. Provider Registry
+
+**Responsibility**: Central catalog of all LLM and embedding providers used by a bot instance.
+
+DynaBot creates multiple providers across subsystems (primary LLM, extraction,
+memory embedding, summary LLM, knowledge base embedding).  Without the registry,
+these providers are scattered across private attributes with no way to enumerate
+them — making comprehensive shutdown, cost tracking, and test injection fragile.
+
+**Role Constants** (importable from `dataknobs_bots.bot.base`):
+
+| Constant | Role | Subsystem |
+|----------|------|-----------|
+| `PROVIDER_ROLE_MAIN` | `"main"` | Primary LLM (`bot.llm`) |
+| `PROVIDER_ROLE_EXTRACTION` | `"extraction"` | Schema extraction (wizard reasoning) |
+| `PROVIDER_ROLE_MEMORY_EMBEDDING` | `"memory_embedding"` | VectorMemory embedding provider |
+| `PROVIDER_ROLE_SUMMARY_LLM` | `"summary_llm"` | SummaryMemory dedicated LLM |
+| `PROVIDER_ROLE_KB_EMBEDDING` | `"kb_embedding"` | KnowledgeBase embedding provider |
+
+**Key Methods**:
+
+```python
+# Register a subsystem provider
+bot.register_provider("memory_embedding", embedding_provider)
+
+# Retrieve by role
+provider = bot.get_provider("extraction")
+
+# Enumerate all providers (always includes "main")
+for role, provider in bot.all_providers.items():
+    print(f"{role}: {provider}")
+```
+
+**Automatic Registration**: When using `DynaBot.from_config()`, subsystem providers
+are automatically discovered and registered.  No manual registration is needed for
+standard configurations.
+
+**Comprehensive Shutdown**: `bot.close()` iterates `all_providers` to close every
+registered provider, fixing resource leaks for memory and knowledge base embedding
+providers that were previously missed.
+
+**Testing**: `inject_providers()` accepts `**role_providers` kwargs for injecting
+providers by role:
+
+```python
+from dataknobs_bots.testing import inject_providers
+
+inject_providers(bot, main_provider=echo, memory_embedding=embed_echo)
 ```
 
 ---

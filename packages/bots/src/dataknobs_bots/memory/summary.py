@@ -42,6 +42,8 @@ class SummaryMemory(Memory):
         llm_provider: AsyncLLMProvider,
         recent_window: int = 10,
         summary_prompt: str | None = None,
+        *,
+        owns_llm_provider: bool = False,
     ) -> None:
         """Initialize summary memory.
 
@@ -53,10 +55,14 @@ class SummaryMemory(Memory):
             summary_prompt: Custom summarization prompt template. Must
                            contain ``{existing_summary}`` and
                            ``{new_messages}`` placeholders.
+            owns_llm_provider: Whether this instance owns the provider's
+                lifecycle. True when a dedicated provider was created for
+                this memory; False when reusing the bot's main LLM.
         """
         self.llm_provider = llm_provider
         self.recent_window = recent_window
         self.summary_prompt = summary_prompt or DEFAULT_SUMMARY_PROMPT
+        self._owns_llm_provider = owns_llm_provider
         self._messages: deque[dict[str, Any]] = deque()
         self._summary: str = ""
 
@@ -107,6 +113,41 @@ class SummaryMemory(Memory):
 
         context.extend(self._messages)
         return context
+
+    def providers(self) -> dict[str, Any]:
+        """Return the summary LLM provider if this instance owns it.
+
+        When the bot's main LLM is reused (``owns_llm_provider=False``),
+        it is not reported here — the bot already knows about its own
+        main provider.
+        """
+        from dataknobs_bots.bot.base import PROVIDER_ROLE_SUMMARY_LLM
+
+        if self._owns_llm_provider and self.llm_provider is not None:
+            return {PROVIDER_ROLE_SUMMARY_LLM: self.llm_provider}
+        return {}
+
+    def set_provider(self, role: str, provider: Any) -> bool:
+        """Replace the summary LLM provider if the role matches."""
+        from dataknobs_bots.bot.base import PROVIDER_ROLE_SUMMARY_LLM
+
+        if role == PROVIDER_ROLE_SUMMARY_LLM:
+            self.llm_provider = provider
+            return True
+        return False
+
+    async def close(self) -> None:
+        """Close the LLM provider if this instance owns it.
+
+        When a dedicated provider was created for this memory (via the
+        ``llm`` config key), this instance owns its lifecycle. When the
+        bot's main LLM was passed in as a fallback, the bot owns it.
+        """
+        if self._owns_llm_provider and self.llm_provider and hasattr(self.llm_provider, "close"):
+            try:
+                await self.llm_provider.close()
+            except Exception:
+                logger.exception("Error closing summary LLM provider")
 
     async def clear(self) -> None:
         """Clear both the running summary and the message buffer."""

@@ -1,5 +1,6 @@
 """Vector-based semantic memory implementation."""
 
+import logging
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
@@ -7,6 +8,8 @@ from uuid import uuid4
 import numpy as np
 
 from .base import Memory
+
+logger = logging.getLogger(__name__)
 
 
 class VectorMemory(Memory):
@@ -166,6 +169,41 @@ class VectorMemory(Memory):
                 )
 
         return context
+
+    def providers(self) -> dict[str, Any]:
+        """Return the embedding provider, keyed by role."""
+        from dataknobs_bots.bot.base import PROVIDER_ROLE_MEMORY_EMBEDDING
+
+        if self.embedding_provider is not None:
+            return {PROVIDER_ROLE_MEMORY_EMBEDDING: self.embedding_provider}
+        return {}
+
+    def set_provider(self, role: str, provider: Any) -> bool:
+        """Replace the embedding provider if the role matches."""
+        from dataknobs_bots.bot.base import PROVIDER_ROLE_MEMORY_EMBEDDING
+
+        if role == PROVIDER_ROLE_MEMORY_EMBEDDING:
+            self.embedding_provider = provider
+            return True
+        return False
+
+    async def close(self) -> None:
+        """Close the embedding provider and vector store.
+
+        VectorMemory owns both resources (created in ``from_config``),
+        so it is responsible for their lifecycle.
+        """
+        if self.embedding_provider and hasattr(self.embedding_provider, "close"):
+            try:
+                await self.embedding_provider.close()
+            except Exception:
+                logger.exception("Error closing embedding provider")
+
+        if self.vector_store and hasattr(self.vector_store, "close"):
+            try:
+                await self.vector_store.close()
+            except Exception:
+                logger.exception("Error closing vector store")
 
     async def clear(self) -> None:
         """Clear all vectors from memory.

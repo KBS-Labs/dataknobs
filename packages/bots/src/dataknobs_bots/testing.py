@@ -47,13 +47,25 @@ def inject_providers(
     bot: Any,
     main_provider: AsyncLLMProvider | None = None,
     extraction_provider: AsyncLLMProvider | None = None,
+    **role_providers: AsyncLLMProvider,
 ) -> None:
-    """Inject LLM providers into a DynaBot instance.
+    """Inject LLM providers into a DynaBot instance for testing.
 
-    Replaces the main LLM and/or the extraction LLM on a live DynaBot.
-    This centralizes the private-attribute access needed for extraction
-    provider injection, so only one location needs updating if DynaBot
-    internals change.
+    For ``main_provider``, directly replaces ``bot.llm`` (the ``"main"``
+    role is always served from this attribute, not the registry catalog).
+
+    For ``extraction_provider`` and ``**role_providers``, updates both the
+    registry catalog and the actual subsystem wiring via ``set_provider()``.
+
+    **Lifecycle contract:** Injected providers are NOT owned by the bot.
+    The caller retains responsibility for closing both the injected
+    provider and any displaced provider.  This follows the
+    originator-owns-lifecycle principle — ``bot.close()`` will not close
+    providers it did not create.
+
+    If ``bot`` does not implement ``register_provider``, catalog
+    registration is skipped; only subsystem wiring via ``set_provider()``
+    is performed.
 
     Args:
         bot: A DynaBot instance (or any object with ``llm`` and
@@ -62,38 +74,83 @@ def inject_providers(
             the existing provider is kept.
         extraction_provider: Provider to use for schema extraction.
             If None, the existing provider is kept.
+        **role_providers: Additional providers keyed by role name
+            (e.g. ``memory_embedding=echo_provider``).  Each provider
+            is registered in the catalog AND wired into the owning
+            subsystem via ``set_provider()``.
 
     Example:
         ```python
-        from dataknobs_llm import CapturingProvider
+        from dataknobs_llm import EchoProvider
         from dataknobs_bots.testing import inject_providers
 
-        main_cap = CapturingProvider(bot.llm, role="main")
-        ext_cap = CapturingProvider(
-            bot.reasoning_strategy._extractor._provider, role="extraction"
-        )
-        inject_providers(bot, main_cap, ext_cap)
+        main = EchoProvider()
+        extraction = EchoProvider()
+        inject_providers(bot, main, extraction)
         ```
     """
     if main_provider is not None:
         bot.llm = main_provider
 
     if extraction_provider is not None:
+        from dataknobs_bots.bot.base import PROVIDER_ROLE_EXTRACTION
+
+        # Update the registry entry
+        if hasattr(bot, "register_provider"):
+            bot.register_provider(PROVIDER_ROLE_EXTRACTION, extraction_provider)
+
+        # Also update the actual extractor so subsystem calls use it
         strategy = getattr(bot, "reasoning_strategy", None)
         if strategy is None:
             logger.warning(
                 "Bot has no reasoning_strategy — skipping extraction provider injection"
             )
-            return
+        elif hasattr(strategy, "set_provider"):
+            strategy.set_provider(PROVIDER_ROLE_EXTRACTION, extraction_provider)
+        else:
+            # Fallback for strategies without set_provider (e.g. test stubs)
+            extractor = getattr(strategy, "_extractor", None)
+            if extractor is None:
+                logger.warning(
+                    "Reasoning strategy has no _extractor — "
+                    "skipping extraction provider injection"
+                )
+            else:
+                extractor.provider = extraction_provider
 
-        extractor = getattr(strategy, "_extractor", None)
-        if extractor is None:
-            logger.warning(
-                "Reasoning strategy has no _extractor — skipping extraction provider injection"
-            )
-            return
+    # Wire role-based providers into catalog AND subsystems
+    for role, provider in role_providers.items():
+        if hasattr(bot, "register_provider"):
+            bot.register_provider(role, provider)
 
-        extractor._provider = extraction_provider
+        # Wire into the actual subsystem that owns this role
+        _wire_role_provider(bot, role, provider)
+
+
+def _wire_role_provider(bot: Any, role: str, provider: AsyncLLMProvider) -> None:
+    """Wire a role provider into the subsystem that owns it.
+
+    Iterates over the bot's subsystems (memory, knowledge_base,
+    reasoning_strategy) and calls ``set_provider(role, provider)``
+    on the first one that claims the role.
+
+    Args:
+        bot: DynaBot instance (or compatible stub).
+        role: Provider role name.
+        provider: Replacement provider instance.
+    """
+    subsystems = [
+        getattr(bot, "memory", None),
+        getattr(bot, "knowledge_base", None),
+        getattr(bot, "reasoning_strategy", None),
+    ]
+    for subsystem in subsystems:
+        if subsystem is not None and hasattr(subsystem, "set_provider"):
+            if subsystem.set_provider(role, provider):
+                return
+    logger.debug(
+        "Role %r registered in catalog but no subsystem claimed it", role
+    )
 
 
 class CaptureReplay:

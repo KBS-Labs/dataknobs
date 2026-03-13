@@ -1,6 +1,18 @@
 """DataKnobs Bots - Configuration-driven AI agents."""
 
-from .bot import BotContext, BotManager, BotRegistry, DynaBot, UndoResult, normalize_wizard_state
+from .bot import (
+    PROVIDER_ROLE_EXTRACTION,
+    PROVIDER_ROLE_KB_EMBEDDING,
+    PROVIDER_ROLE_MAIN,
+    PROVIDER_ROLE_MEMORY_EMBEDDING,
+    PROVIDER_ROLE_SUMMARY_LLM,
+    BotContext,
+    BotManager,
+    BotRegistry,
+    DynaBot,
+    UndoResult,
+    normalize_wizard_state,
+)
 from .config import (
     ConfigDraftManager,
     ConfigTemplate,
@@ -69,6 +81,11 @@ __all__ = [
     "LoggingMiddleware",
     "Memory",
     "Middleware",
+    "PROVIDER_ROLE_EXTRACTION",
+    "PROVIDER_ROLE_KB_EMBEDDING",
+    "PROVIDER_ROLE_MAIN",
+    "PROVIDER_ROLE_MEMORY_EMBEDDING",
+    "PROVIDER_ROLE_SUMMARY_LLM",
     "PreviewConfigTool",
     "RAGKnowledgeBase",
     "ReActReasoning",

@@ -115,6 +115,7 @@ class EchoProvider(AsyncLLMProvider):
         ] = []
         self._call_history: List[Dict[str, Any]] = []
         self._cycle_responses: bool = llm_config.options.get('cycle_responses', False)
+        self._close_count: int = 0
 
     # =========================================================================
     # Scripted Response API
@@ -213,18 +214,24 @@ class EchoProvider(AsyncLLMProvider):
         return self
 
     def reset(self) -> "EchoProvider":
-        """Reset all state (responses and history).
+        """Reset all state (responses, history, and close count).
 
         Returns:
             Self for chaining
         """
         self.clear_responses()
         self.clear_history()
+        self._close_count = 0
         return self
 
     # =========================================================================
     # Call History API
     # =========================================================================
+
+    @property
+    def close_count(self) -> int:
+        """Get number of close() calls made."""
+        return self._close_count
 
     @property
     def call_count(self) -> int:
@@ -415,6 +422,15 @@ class EchoProvider(AsyncLLMProvider):
     async def initialize(self) -> None:
         """Initialize echo provider (no-op)."""
         self._is_initialized = True
+
+    async def close(self) -> None:
+        """Close echo provider, tracking the call.
+
+        Increments ``close_count`` on every call (even redundant ones)
+        so tests can verify exactly how many times close was invoked.
+        """
+        self._close_count += 1
+        await super().close()
 
     async def _close_client(self) -> None:
         """Close echo provider (no-op — no HTTP client)."""

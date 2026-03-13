@@ -17,6 +17,7 @@ from dataknobs_xization.ingestion import (
     DirectoryProcessor,
     KnowledgeBaseConfig,
 )
+from dataknobs_bots.knowledge.base import KnowledgeBase
 from dataknobs_bots.knowledge.retrieval import (
     ChunkMerger,
     ContextFormatter,
@@ -25,7 +26,7 @@ from dataknobs_bots.knowledge.retrieval import (
 )
 
 
-class RAGKnowledgeBase:
+class RAGKnowledgeBase(KnowledgeBase):
     """RAG knowledge base using dataknobs-xization for chunking and vector search.
 
     This implementation:
@@ -1104,6 +1105,23 @@ class RAGKnowledgeBase:
         """
         if hasattr(self.vector_store, "save"):
             await self.vector_store.save()
+
+    def providers(self) -> dict[str, Any]:
+        """Return the embedding provider, keyed by role."""
+        from dataknobs_bots.bot.base import PROVIDER_ROLE_KB_EMBEDDING
+
+        if self.embedding_provider is not None:
+            return {PROVIDER_ROLE_KB_EMBEDDING: self.embedding_provider}
+        return {}
+
+    def set_provider(self, role: str, provider: Any) -> bool:
+        """Replace the embedding provider if the role matches."""
+        from dataknobs_bots.bot.base import PROVIDER_ROLE_KB_EMBEDDING
+
+        if role == PROVIDER_ROLE_KB_EMBEDDING:
+            self.embedding_provider = provider
+            return True
+        return False
 
     async def close(self) -> None:
         """Close the knowledge base and release resources.

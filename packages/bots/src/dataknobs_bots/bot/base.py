@@ -22,6 +22,7 @@ from dataknobs_llm.llm import AsyncLLMProvider
 from dataknobs_llm.prompts import AsyncPromptBuilder
 from dataknobs_llm.tools import ToolRegistry
 
+from ..knowledge.base import KnowledgeBase
 from ..memory.base import Memory
 from .context import BotContext
 
@@ -29,6 +30,13 @@ if TYPE_CHECKING:
     from dataknobs_config import EnvironmentAwareConfig, EnvironmentConfig
 
 logger = logging.getLogger(__name__)
+
+# Provider role constants for the provider registry.
+PROVIDER_ROLE_MAIN = "main"
+PROVIDER_ROLE_EXTRACTION = "extraction"
+PROVIDER_ROLE_MEMORY_EMBEDDING = "memory_embedding"
+PROVIDER_ROLE_SUMMARY_LLM = "summary_llm"
+PROVIDER_ROLE_KB_EMBEDDING = "kb_embedding"
 
 
 def normalize_wizard_state(wizard_meta: dict[str, Any]) -> dict[str, Any]:
@@ -127,7 +135,7 @@ class DynaBot:
         conversation_storage: ConversationStorage,
         tool_registry: ToolRegistry | None = None,
         memory: Memory | None = None,
-        knowledge_base: Any | None = None,
+        knowledge_base: KnowledgeBase | None = None,
         kb_auto_context: bool = True,
         reasoning_strategy: Any | None = None,
         middleware: list[Any] | None = None,
@@ -173,6 +181,56 @@ class DynaBot:
         self.default_max_tokens = default_max_tokens
         self._conversation_managers: dict[str, ConversationManager] = {}
         self._turn_checkpoints: dict[str, list[str]] = {}
+        self._providers: dict[str, AsyncLLMProvider] = {}
+
+    def register_provider(self, role: str, provider: AsyncLLMProvider) -> None:
+        """Register an auxiliary LLM/embedding provider by role.
+
+        Providers registered here are included in ``all_providers`` for
+        observability and enumeration.  The registry is a catalog — it
+        does not manage provider lifecycle.  Each subsystem closes the
+        providers it created (originator-owns-lifecycle).
+
+        The ``"main"`` role is reserved for ``self.llm`` and cannot be
+        overwritten.
+
+        Args:
+            role: Unique role identifier (e.g. ``"memory_embedding"``).
+            provider: The provider instance.
+        """
+        if role == PROVIDER_ROLE_MAIN:
+            logger.warning(
+                "Cannot register provider with reserved role %r — "
+                "use the 'llm' constructor parameter instead",
+                PROVIDER_ROLE_MAIN,
+            )
+            return
+        self._providers[role] = provider
+
+    def get_provider(self, role: str) -> AsyncLLMProvider | None:
+        """Get a registered provider by role.
+
+        Args:
+            role: Provider role identifier.
+
+        Returns:
+            The provider, or ``None`` if not registered.
+        """
+        if role == PROVIDER_ROLE_MAIN:
+            return self.llm
+        return self._providers.get(role)
+
+    @property
+    def all_providers(self) -> dict[str, AsyncLLMProvider]:
+        """All registered providers keyed by role.
+
+        Always includes ``"main"`` (``self.llm``).  Subsystems add
+        their own entries during construction.  Returns a fresh dict
+        (snapshot) on each call.
+        """
+        result: dict[str, AsyncLLMProvider] = {PROVIDER_ROLE_MAIN: self.llm}
+        result.update(self._providers)
+        return result
 
     @classmethod
     async def from_config(cls, config: dict[str, Any]) -> DynaBot:
@@ -457,7 +515,20 @@ class DynaBot:
                 else:
                     system_prompt_content = system_prompt_config
 
-        return cls(
+        # Collect subsystem providers for catalog registration.
+        # Each subsystem declares its own providers via providers().
+        subsystem_providers: dict[str, AsyncLLMProvider] = {}
+
+        if memory is not None:
+            subsystem_providers.update(memory.providers())
+
+        if knowledge_base is not None:
+            subsystem_providers.update(knowledge_base.providers())
+
+        if reasoning_strategy is not None:
+            subsystem_providers.update(reasoning_strategy.providers())
+
+        bot = cls(
             llm=llm,
             prompt_builder=prompt_builder,
             conversation_storage=conversation_storage,
@@ -473,6 +544,11 @@ class DynaBot:
             default_temperature=llm_config.get("temperature", 0.7),
             default_max_tokens=llm_config.get("max_tokens", 1000),
         )
+
+        for role, provider in subsystem_providers.items():
+            bot.register_provider(role, provider)
+
+        return bot
 
     @classmethod
     async def from_environment_aware_config(
@@ -1178,12 +1254,29 @@ class DynaBot:
             After calling close(), the bot should not be used for further operations.
             Create a new bot instance if needed.
         """
-        # Close LLM provider
-        if self.llm and hasattr(self.llm, 'close'):
+        # Each subsystem owns the lifecycle of the providers it created.
+        # The provider registry is a catalog for observability — it does
+        # not manage lifecycle.  DynaBot only closes self.llm (the main
+        # provider it created).
+
+        # Close subsystems — each closes its own providers and resources.
+        if self.knowledge_base:
             try:
-                await self.llm.close()
+                await self.knowledge_base.close()
             except Exception:
-                logger.exception("Error closing LLM provider")
+                logger.exception("Error closing knowledge base")
+
+        if self.reasoning_strategy:
+            try:
+                await self.reasoning_strategy.close()
+            except Exception:
+                logger.exception("Error closing reasoning strategy")
+
+        if self.memory:
+            try:
+                await self.memory.close()
+            except Exception:
+                logger.exception("Error closing memory store")
 
         # Close conversation storage
         if self.conversation_storage:
@@ -1192,26 +1285,12 @@ class DynaBot:
             except Exception:
                 logger.exception("Error closing conversation storage")
 
-        # Close knowledge base (releases embedding provider HTTP sessions)
-        if self.knowledge_base and hasattr(self.knowledge_base, 'close'):
+        # Close main LLM provider (DynaBot is the originator)
+        if self.llm and hasattr(self.llm, "close"):
             try:
-                await self.knowledge_base.close()
+                await self.llm.close()
             except Exception:
-                logger.exception("Error closing knowledge base")
-
-        # Close reasoning strategy (releases extractor's LLM provider sessions)
-        if self.reasoning_strategy:
-            try:
-                await self.reasoning_strategy.close()
-            except Exception:
-                logger.exception("Error closing reasoning strategy")
-
-        # Close memory store
-        if self.memory and hasattr(self.memory, 'close'):
-            try:
-                await self.memory.close()
-            except Exception:
-                logger.exception("Error closing memory store")
+                logger.exception("Error closing main LLM provider")
 
     async def __aenter__(self) -> Self:
         """Async context manager entry.
@@ -1320,27 +1399,10 @@ class DynaBot:
             search_query = rag_query if rag_query else message
             kb_results = await self.knowledge_base.query(search_query, k=5)
             if kb_results:
-                # Use format_context if available (new RAG utilities)
-                if hasattr(self.knowledge_base, "format_context"):
-                    kb_context = self.knowledge_base.format_context(
-                        kb_results, wrap_in_tags=True
-                    )
-                    contexts.append(kb_context)
-                else:
-                    # Fallback to legacy formatting
-                    formatted_chunks = []
-                    for i, r in enumerate(kb_results, 1):
-                        text = r["text"]
-                        source = r.get("source", "")
-                        heading = r.get("heading_path", "")
-
-                        chunk_text = f"[{i}] {heading}\n{text}"
-                        if source:
-                            chunk_text += f"\n(Source: {source})"
-                        formatted_chunks.append(chunk_text)
-
-                    kb_context = "\n\n---\n\n".join(formatted_chunks)
-                    contexts.append(f"<knowledge_base>\n{kb_context}\n</knowledge_base>")
+                kb_context = self.knowledge_base.format_context(
+                    kb_results, wrap_in_tags=True
+                )
+                contexts.append(kb_context)
 
         # Add memory context
         if self.memory:

@@ -37,6 +37,45 @@ class Memory(ABC):
         """Clear all memory."""
         pass
 
+    def providers(self) -> dict[str, Any]:
+        """Return LLM providers managed by this memory, keyed by role.
+
+        Subsystems declare the providers they own so that the bot can
+        register them in the provider catalog without reaching into
+        private attributes.  The default returns an empty dict (no
+        providers).
+
+        Returns:
+            Dict mapping provider role names to provider instances.
+        """
+        return {}
+
+    def set_provider(self, role: str, provider: Any) -> bool:
+        """Replace a provider managed by this memory.
+
+        Called by ``inject_providers`` to wire a test provider into the
+        actual subsystem, not just the registry catalog.  The default
+        returns ``False`` (role not recognized).  Concrete subclasses
+        override to accept their known roles.
+
+        Args:
+            role: Provider role name (e.g. ``PROVIDER_ROLE_MEMORY_EMBEDDING``).
+            provider: Replacement provider instance.
+
+        Returns:
+            ``True`` if the role was recognized and the provider updated,
+            ``False`` otherwise.
+        """
+        return False
+
+    async def close(self) -> None:  # noqa: B027 — intentional no-op default
+        """Release resources held by this memory implementation.
+
+        The default is a no-op.  Subclasses that create providers or open
+        connections (e.g. ``VectorMemory``, ``SummaryMemory``) should
+        override to clean up.
+        """
+
     async def pop_messages(self, count: int = 2) -> list[dict[str, Any]]:
         """Remove and return the last N messages from memory.
 
