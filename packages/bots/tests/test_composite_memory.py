@@ -122,17 +122,38 @@ class TestVectorMemoryScoping:
         assert mem._default_filter == {"tenant": "t1"}
 
     @pytest.mark.asyncio
-    async def test_default_filter_passed_to_search(self):
-        """default_filter is threaded through to the vector store search."""
-        mem = await _make_vector_memory(
+    async def test_default_filter_scopes_get_context(self):
+        """default_filter isolates reads so each tenant sees only its own data."""
+        # Use a shared store for both tenants, with threshold=-1.0 so
+        # deterministic EchoProvider embeddings always pass the score check.
+        mem_u1 = await _make_vector_memory(
+            similarity_threshold=-1.0,
             default_filter={"user_id": "u1"},
+            default_metadata={"user_id": "u1"},
         )
-        await mem.add_message("hello", "user")
+        mem_u2 = await _make_vector_memory(
+            similarity_threshold=-1.0,
+            default_filter={"user_id": "u2"},
+            default_metadata={"user_id": "u2"},
+        )
 
-        # The MemoryVectorStore may not filter by metadata, but we verify
-        # the code path doesn't error and the filter is constructed.
-        context = await mem.get_context("hello")
-        assert isinstance(context, list)
+        # Both share the same backing store so filtering is meaningful
+        mem_u2.vector_store = mem_u1.vector_store
+
+        await mem_u1.add_message("user one message", "user")
+        await mem_u2.add_message("user two message", "user")
+
+        # u1 should only see its own message
+        ctx_u1 = await mem_u1.get_context("query")
+        contents_u1 = [m["content"] for m in ctx_u1]
+        assert "user one message" in contents_u1
+        assert "user two message" not in contents_u1
+
+        # u2 should only see its own message
+        ctx_u2 = await mem_u2.get_context("query")
+        contents_u2 = [m["content"] for m in ctx_u2]
+        assert "user two message" in contents_u2
+        assert "user one message" not in contents_u2
 
 
 # ===========================================================================
@@ -288,6 +309,21 @@ class TestCompositeMemoryDegradation:
         context = await composite.get_context("x")
         assert len(context) == 1
         assert context[0]["content"] == "buffered"
+
+    @pytest.mark.asyncio
+    async def test_clear_continues_on_strategy_failure(self):
+        """One strategy's clear fails, others still cleared."""
+        buf = BufferMemory(max_messages=10)
+        failing = _FailingMemory()
+        composite = CompositeMemory([buf, failing])
+
+        await composite.add_message("hello", "user")
+
+        # Should not raise even though failing.clear() throws
+        await composite.clear()
+
+        ctx = await buf.get_context("x")
+        assert len(ctx) == 0
 
     @pytest.mark.asyncio
     async def test_close_continues_on_strategy_failure(self):

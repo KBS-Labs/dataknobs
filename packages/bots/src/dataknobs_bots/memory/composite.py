@@ -82,19 +82,19 @@ class CompositeMemory(Memory):
         """Collect context from all strategies, primary first.
 
         Results from the primary strategy appear first. Secondary results
-        are deduplicated by content string — if a message already appeared
-        in the primary results, it is not repeated.
+        are deduplicated by ``(role, content)`` — if a message with the same
+        role and content already appeared, it is not repeated.
         """
         results: list[dict[str, Any]] = []
-        seen_content: set[str] = set()
+        seen: set[tuple[str, str]] = set()
 
         # Primary first
         try:
             primary_results = await self.primary.get_context(current_message)
             for msg in primary_results:
-                content = msg.get("content", "")
+                key = (msg.get("role", ""), msg.get("content", ""))
                 results.append(msg)
-                seen_content.add(content)
+                seen.add(key)
         except Exception:
             logger.warning(
                 "Primary memory strategy (%s) failed on get_context",
@@ -102,17 +102,17 @@ class CompositeMemory(Memory):
                 exc_info=True,
             )
 
-        # Secondaries — skip primary, dedup by content
+        # Secondaries — skip primary, dedup by (role, content)
         for i, strategy in enumerate(self._strategies):
             if i == self._primary_index:
                 continue
             try:
                 secondary_results = await strategy.get_context(current_message)
                 for msg in secondary_results:
-                    content = msg.get("content", "")
-                    if content not in seen_content:
+                    key = (msg.get("role", ""), msg.get("content", ""))
+                    if key not in seen:
                         results.append(msg)
-                        seen_content.add(content)
+                        seen.add(key)
             except Exception:
                 logger.warning(
                     "Memory strategy %d (%s) failed on get_context",

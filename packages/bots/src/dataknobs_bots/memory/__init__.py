@@ -79,9 +79,9 @@ async def create_memory_from_config(
         config = {
             "type": "vector",
             "backend": "faiss",
-            "dimension": 1536,
-            "embedding_provider": "openai",
-            "embedding_model": "text-embedding-3-small"
+            "dimension": 768,
+            "embedding_provider": "ollama",
+            "embedding_model": "nomic-embed-text"
         }
         memory = await create_memory_from_config(config)
 

@@ -98,8 +98,8 @@ class VectorMemory(Memory):
         # Create embedding provider
         llm_factory = LLMProviderFactory(is_async=True)
         embedding_provider = llm_factory.create({
-            "provider": config.get("embedding_provider", "openai"),
-            "model": config.get("embedding_model", "text-embedding-ada-002"),
+            "provider": config.get("embedding_provider", "ollama"),
+            "model": config.get("embedding_model", "nomic-embed-text"),
         })
         await embedding_provider.initialize()
 
@@ -225,18 +225,16 @@ class VectorMemory(Memory):
     async def clear(self) -> None:
         """Clear all vectors from memory.
 
-        Note: This deletes all vectors in the store. Use with caution
+        Delegates to the vector store's ``clear()`` method. Use with caution
         if the store is shared across multiple memory instances.
+
+        Raises:
+            NotImplementedError: If the backing vector store does not
+                support ``clear()``.
         """
-        # Get all vector IDs and delete them
-        # Note: This is a simplified implementation
-        # In production, you might want to track IDs separately
-        # or use collection-level clearing if supported
         if hasattr(self.vector_store, "clear"):
             await self.vector_store.clear()
         else:
-            # Fallback: delete individual vectors if we track them
-            # For now, we'll raise an error suggesting to use a new instance
             raise NotImplementedError(
                 "Vector store does not support clearing. "
                 "Consider creating a new VectorMemory instance with a fresh collection."
