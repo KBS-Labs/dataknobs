@@ -34,7 +34,7 @@ from .task_injection import (
     TaskInjectionResult,
     TaskInjector,
 )
-from .wizard import WizardReasoning, WizardStageContext, WizardState
+from .wizard import WizardAdvanceResult, WizardReasoning, WizardStageContext, WizardState
 from .wizard_fsm import WizardFSM
 from .wizard_hooks import WizardHooks
 from .wizard_loader import WizardConfigLoader, load_wizard_config
@@ -44,6 +44,7 @@ __all__ = [
     "ReasoningStrategy",
     "SimpleReasoning",
     "ReActReasoning",
+    "WizardAdvanceResult",
     "WizardReasoning",
     "WizardStageContext",
     "WizardState",
@@ -98,6 +99,9 @@ def create_reasoning_from_config(config: dict[str, Any]) -> ReasoningStrategy:
             - wizard_config: For wizard, path to wizard YAML config
             - extraction_config: For wizard, extraction configuration dict
             - strict_validation: For wizard, enforce schema validation (default: True)
+            - consistent_navigation_lifecycle: For wizard, whether back/skip
+              navigation fires the same lifecycle hooks as forward transitions
+              (default: True)
 
     Returns:
         Configured reasoning strategy instance
