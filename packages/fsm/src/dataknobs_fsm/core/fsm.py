@@ -338,8 +338,10 @@ class FSM:
         # Resource requirements
         self.resource_requirements: Dict[str, Any] = {}
         
-        # Configuration
-        self.config: Dict[str, Any] = {}
+        # Configuration — set to the FSMConfig (Pydantic model) by
+        # FSMBuilder.build(); typed as Any because callers may also
+        # assign a plain dict.
+        self.config: Any = {}
         
         # Metadata
         self.metadata: Dict[str, Any] = {}
@@ -396,7 +398,7 @@ class FSM:
             
             return True
         return False
-    
+
     def get_network(self, network_name: str | None = None) -> StateNetwork | None:
         """Get a network by name.
         

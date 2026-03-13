@@ -295,25 +295,20 @@ class OllamaProvider(AsyncLLMProvider):
             Dictionary of options for the API request.
         """
         cfg = config or self.config
+        gen = cfg.generation_params()
         options: Dict[str, Any] = {}
 
-        # Only add temperature if it's not the default to avoid issues
-        if cfg.temperature != 1.0:
-            options['temperature'] = float(cfg.temperature)
-
-        # Only add top_p if explicitly set and different from default
-        if cfg.top_p != 1.0:
-            options['top_p'] = float(cfg.top_p)
-
-        if cfg.seed is not None:
-            options['seed'] = int(cfg.seed)
-
-        if cfg.max_tokens:
-            # Ensure it's an integer
-            options['num_predict'] = int(cfg.max_tokens)
-
-        if cfg.stop_sequences:
-            options['stop'] = list(cfg.stop_sequences)
+        # Map canonical names to Ollama names
+        if 'temperature' in gen:
+            options['temperature'] = float(gen['temperature'])
+        if 'top_p' in gen:
+            options['top_p'] = float(gen['top_p'])
+        if 'seed' in gen:
+            options['seed'] = int(gen['seed'])
+        if 'max_tokens' in gen:
+            options['num_predict'] = int(gen['max_tokens'])
+        if 'stop_sequences' in gen:
+            options['stop'] = list(gen['stop_sequences'])
 
         return options
 

@@ -190,6 +190,10 @@ class AnthropicProvider(AsyncLLMProvider):
         Anthropic API Docs: https://docs.anthropic.com/
     """
 
+    # Anthropic's API requires max_tokens on every request.  When the
+    # caller hasn't set it explicitly we fall back to this value.
+    DEFAULT_MAX_TOKENS: int = 1024
+
     def __init__(
         self,
         config: Union[LLMConfig, "Config", Dict[str, Any]],
@@ -254,6 +258,34 @@ class AnthropicProvider(AsyncLLMProvider):
 
         return capabilities
 
+    def _build_api_params(self, config: LLMConfig) -> Dict[str, Any]:
+        """Build Anthropic API parameters from config.
+
+        Shared by complete(), stream_complete(), and function_call()
+        to prevent parameter drift between methods.
+
+        Args:
+            config: LLMConfig to extract parameters from.
+
+        Returns:
+            Dictionary of API parameters.
+        """
+        gen = config.generation_params()
+        # Anthropic requires max_tokens on every request, so fall back to
+        # DEFAULT_MAX_TOKENS when the caller hasn't set it explicitly.
+        params: Dict[str, Any] = {
+            "model": config.model,
+            "max_tokens": gen.get("max_tokens", self.DEFAULT_MAX_TOKENS),
+        }
+        if "temperature" in gen:
+            params["temperature"] = gen["temperature"]
+        if "top_p" in gen:
+            params["top_p"] = gen["top_p"]
+        if "stop_sequences" in gen:
+            params["stop_sequences"] = gen["stop_sequences"]
+        # Anthropic doesn't support frequency_penalty/presence_penalty
+        return params
+
     async def complete(
         self,
         messages: Union[str, List[LLMMessage]],
@@ -295,14 +327,8 @@ class AnthropicProvider(AsyncLLMProvider):
             prompt += "\n\nAssistant:"
 
         # Build API call kwargs
-        api_kwargs: Dict[str, Any] = {
-            "model": runtime_config.model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": runtime_config.max_tokens or 1024,
-            "temperature": runtime_config.temperature,
-            "top_p": runtime_config.top_p,
-            "stop_sequences": runtime_config.stop_sequences,
-        }
+        api_kwargs = self._build_api_params(runtime_config)
+        api_kwargs["messages"] = [{"role": "user", "content": prompt}]
 
         # Handle tools if provided
         if tools:
@@ -358,12 +384,8 @@ class AnthropicProvider(AsyncLLMProvider):
             prompt = self._build_prompt(messages)
 
         # Build stream kwargs
-        stream_kwargs: Dict[str, Any] = {
-            "model": runtime_config.model,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": runtime_config.max_tokens or 1024,
-            "temperature": runtime_config.temperature,
-        }
+        stream_kwargs = self._build_api_params(runtime_config)
+        stream_kwargs["messages"] = [{"role": "user", "content": prompt}]
 
         # Handle tools if provided (same as complete())
         if tools:
@@ -491,15 +513,12 @@ class AnthropicProvider(AsyncLLMProvider):
 
         # Make API call with tools
         try:
-            response = await self._client.messages.create(
-                model=self.config.model,
-                messages=anthropic_messages,
-                system=system_content if system_content else None,
-                tools=tools,
-                max_tokens=self.config.max_tokens or 1024,
-                temperature=self.config.temperature,
-                top_p=self.config.top_p
-            )
+            fc_kwargs = self._build_api_params(self.config)
+            fc_kwargs["messages"] = anthropic_messages
+            fc_kwargs["tools"] = tools
+            if system_content:
+                fc_kwargs["system"] = system_content
+            response = await self._client.messages.create(**fc_kwargs)
 
             # Extract response content and tool use
             content = ''

@@ -111,14 +111,18 @@ class HuggingFaceProvider(AsyncLLMProvider):
 
         # Make API call
         url = f"{self.base_url}/{runtime_config.model}"
+        gen = runtime_config.generation_params()
+        parameters: Dict[str, Any] = {
+            'max_new_tokens': gen.get('max_tokens', 100),
+            'return_full_text': False,
+        }
+        if 'temperature' in gen:
+            parameters['temperature'] = gen['temperature']
+        if 'top_p' in gen:
+            parameters['top_p'] = gen['top_p']
         payload = {
             'inputs': prompt,
-            'parameters': {
-                'temperature': runtime_config.temperature,
-                'top_p': runtime_config.top_p,
-                'max_new_tokens': runtime_config.max_tokens or 100,
-                'return_full_text': False
-            }
+            'parameters': parameters,
         }
 
         async with self._session.post(url, json=payload) as response:

@@ -120,20 +120,18 @@ class OpenAIAdapter(LLMAdapter):
 
     def adapt_config(self, config: LLMConfig) -> Dict[str, Any]:
         """Convert config to OpenAI parameters."""
-        params = {
+        gen = config.generation_params()
+        params: Dict[str, Any] = {
             'model': config.model,
-            'temperature': config.temperature,
-            'top_p': config.top_p,
-            'frequency_penalty': config.frequency_penalty,
-            'presence_penalty': config.presence_penalty,
         }
-
-        if config.max_tokens:
-            params['max_tokens'] = config.max_tokens
-        if config.stop_sequences:
-            params['stop'] = config.stop_sequences
-        if config.seed:
-            params['seed'] = config.seed
+        # Map canonical names to OpenAI names (most are 1:1)
+        for key in ('temperature', 'top_p', 'frequency_penalty',
+                    'presence_penalty', 'max_tokens', 'seed'):
+            if key in gen:
+                params[key] = gen[key]
+        # OpenAI uses 'stop' instead of 'stop_sequences'
+        if 'stop_sequences' in gen:
+            params['stop'] = gen['stop_sequences']
         if config.logit_bias:
             params['logit_bias'] = config.logit_bias
         if config.user_id:

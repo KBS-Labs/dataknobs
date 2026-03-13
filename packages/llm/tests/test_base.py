@@ -122,7 +122,7 @@ def test_llm_config_basic():
     )
     assert config.provider == "openai"
     assert config.model == "gpt-4"
-    assert config.temperature == 0.7
+    assert config.temperature is None
     assert config.mode == CompletionMode.CHAT
     assert config.stream is False
 
