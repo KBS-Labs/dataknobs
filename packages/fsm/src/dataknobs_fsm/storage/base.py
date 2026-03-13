@@ -327,24 +327,27 @@ class StorageFactory:
     @classmethod
     def create(
         cls,
-        config: StorageConfig
+        config: StorageConfig,
+        **kwargs: Any,
     ) -> IHistoryStorage:
         """Create a storage instance.
-        
+
         Args:
             config: Storage configuration.
-            
+            **kwargs: Additional keyword arguments forwarded to the storage
+                constructor (e.g. ``database``, ``steps_database``).
+
         Returns:
             Storage instance.
-            
+
         Raises:
             ValueError: If backend not registered.
         """
         storage_class = cls._registry.get(config.backend)
         if not storage_class:
             raise ValueError(f"Unknown storage backend: {config.backend}")
-        
-        return storage_class(config)  # type: ignore
+
+        return storage_class(config, **kwargs)  # type: ignore
     
     @classmethod
     def get_available_backends(cls) -> List[StorageBackend]:

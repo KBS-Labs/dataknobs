@@ -296,6 +296,69 @@ await advanced_fsm.save_history()
 await advanced_fsm.load_history("history_id")
 ```
 
+### Storage Backends
+
+History is persisted via pluggable storage backends. All backends use the
+`UnifiedDatabaseStorage` implementation, which works with any `dataknobs_data`
+`AsyncDatabase` backend.
+
+```python
+from dataknobs_fsm.storage.base import StorageConfig, StorageBackend, StorageFactory
+
+# Config-driven creation (factory selects the backend)
+config = StorageConfig(
+    backend=StorageBackend.MEMORY,
+    connection_params={'type': 'memory'}
+)
+storage = StorageFactory.create(config)
+await storage.initialize()
+
+advanced_fsm.enable_history(storage=storage)
+```
+
+Available backends: `MEMORY`, `FILE`, `SQLITE`, `POSTGRES`, `MONGODB`,
+`ELASTICSEARCH`, `S3`.
+
+Convenience subclasses `InMemoryStorage` and `FileStorage` apply
+backend-specific defaults automatically.
+
+### Database Injection
+
+`UnifiedDatabaseStorage` (and its subclasses `InMemoryStorage`, `FileStorage`)
+accept pre-built `AsyncDatabase` instances. This enables connection pool
+sharing across components and simplifies testing.
+
+```python
+from dataknobs_data.backends.memory import AsyncMemoryDatabase
+from dataknobs_fsm.storage.database import UnifiedDatabaseStorage
+from dataknobs_fsm.storage.base import StorageConfig, StorageBackend
+
+# Share an existing database instance with FSM storage
+shared_db = AsyncMemoryDatabase()  # or any AsyncDatabase from a pool
+
+config = StorageConfig(backend=StorageBackend.MEMORY)
+storage = UnifiedDatabaseStorage(config, database=shared_db)
+await storage.initialize()  # skips factory creation, uses shared_db
+
+advanced_fsm.enable_history(storage=storage)
+```
+
+The `database` and `steps_database` parameters are keyword-only:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `database` | `None` | Pre-built `AsyncDatabase` for history records. When provided, `_setup_backend()` skips factory creation. |
+| `steps_database` | `None` | Separate `AsyncDatabase` for step records. Defaults to `database` when omitted. |
+
+When both parameters are `None` (the default), the storage creates its own
+database via the factory — identical to pre-injection behavior.
+
+The factory also supports injection via keyword arguments:
+
+```python
+storage = StorageFactory.create(config, database=shared_db)
+```
+
 ## Resource Management
 
 Register and manage external resources:

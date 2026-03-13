@@ -5,6 +5,8 @@ database backend (SQLite, PostgreSQL, MongoDB, Elasticsearch, S3, etc.) through
 the common AsyncDatabase interface.
 """
 
+from __future__ import annotations
+
 import time
 import uuid
 from typing import Any, Dict, List, TYPE_CHECKING
@@ -36,18 +38,39 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
     All through the same AsyncDatabase interface from dataknobs_data.
     """
     
-    def __init__(self, config: StorageConfig):
+    def __init__(
+        self,
+        config: StorageConfig,
+        *,
+        database: AsyncDatabase | None = None,
+        steps_database: AsyncDatabase | None = None,
+    ):
         """Initialize database storage.
-        
+
         Args:
             config: Storage configuration with backend type in connection_params.
+            database: Optional pre-built AsyncDatabase instance. When provided,
+                ``_setup_backend()`` skips factory creation and uses this instance
+                directly. Enables connection pool sharing across components.
+            steps_database: Optional separate AsyncDatabase for step records.
+                Defaults to ``database`` when only ``database`` is provided.
         """
         super().__init__(config)
-        self._db: AsyncDatabase | None = None
-        self._steps_db: AsyncDatabase | None = None  # Separate DB for steps if needed
+        self._owns_db = database is None
+        self._owns_steps_db = steps_database is None and database is None
+        self._db: AsyncDatabase | None = database
+        self._steps_db: AsyncDatabase | None = steps_database or database
     
     async def _setup_backend(self) -> None:
-        """Set up the database backend using dataknobs_data factory."""
+        """Set up the database backend using dataknobs_data factory.
+
+        If a database was injected via ``__init__()``, this method reuses
+        it instead of creating a new instance through the factory.
+        """
+        if self._db is not None:
+            # Database was injected — skip factory creation
+            return
+
         # Extract backend type from config
         backend_type = self.config.connection_params.get('type', 'memory')
         
@@ -73,9 +96,9 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         if hasattr(self._db, 'connect'):
             await self._db.connect()
         
-        # For steps, use the same database instance
-        # Different backends handle collections/tables differently
-        self._steps_db = self._db
+        # Use the same database for steps unless one was injected
+        if self._steps_db is None:
+            self._steps_db = self._db
     
     def _create_history_schema(self) -> DatabaseSchema:
         """Create schema for history records."""
@@ -496,10 +519,15 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
             if await self.delete_history(history_id):
                 deleted += 1
         
-        # Close database connection if supported
-        if hasattr(self._db, 'close'):
+        # Only close database connections we created ourselves.
+        # Injected databases are externally owned — closing them would break
+        # sibling components sharing the same connection pool.
+        if self._owns_steps_db and self._steps_db is not self._db:
+            if hasattr(self._steps_db, 'close'):
+                await self._steps_db.close()
+        if self._owns_db and hasattr(self._db, 'close'):
             await self._db.close()
-        
+
         return deleted
 
 
