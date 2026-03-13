@@ -1272,7 +1272,7 @@ class DynaBot:
             except Exception:
                 logger.exception("Error closing reasoning strategy")
 
-        if self.memory and hasattr(self.memory, "close"):
+        if self.memory:
             try:
                 await self.memory.close()
             except Exception:

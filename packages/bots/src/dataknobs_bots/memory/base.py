@@ -68,6 +68,14 @@ class Memory(ABC):
         """
         return False
 
+    async def close(self) -> None:  # noqa: B027 — intentional no-op default
+        """Release resources held by this memory implementation.
+
+        The default is a no-op.  Subclasses that create providers or open
+        connections (e.g. ``VectorMemory``, ``SummaryMemory``) should
+        override to clean up.
+        """
+
     async def pop_messages(self, count: int = 2) -> list[dict[str, Any]]:
         """Remove and return the last N messages from memory.
 

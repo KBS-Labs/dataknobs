@@ -63,6 +63,10 @@ def inject_providers(
     originator-owns-lifecycle principle — ``bot.close()`` will not close
     providers it did not create.
 
+    If ``bot`` does not implement ``register_provider``, catalog
+    registration is skipped; only subsystem wiring via ``set_provider()``
+    is performed.
+
     Args:
         bot: A DynaBot instance (or any object with ``llm`` and
             ``reasoning_strategy`` attributes).

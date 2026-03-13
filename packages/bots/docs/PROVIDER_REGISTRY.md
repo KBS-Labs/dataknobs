@@ -108,10 +108,14 @@ print(bot.all_providers.keys())
 
 Detection rules for `_build_from_config()`:
 
-- **memory_embedding**: Registered if the memory object has an `embedding_provider` attribute (VectorMemory).
-- **summary_llm**: Registered if the memory object has an `llm_provider` attribute that is a different instance than the bot's primary LLM (dedicated SummaryMemory provider).
-- **kb_embedding**: Registered if the knowledge base has an `embedding_provider` attribute.
-- **extraction**: Registered if the reasoning strategy has an `_extractor` with a `provider` property (WizardReasoning with extraction).
+Providers are registered by calling ``subsystem.providers()`` on each configured
+subsystem (memory, knowledge_base, reasoning_strategy).  Each subsystem returns
+a dict of role -> provider for the providers it owns.
+
+- **memory_embedding**: Returned by ``VectorMemory.providers()``.
+- **summary_llm**: Returned by ``SummaryMemory.providers()`` when a dedicated provider was created.
+- **kb_embedding**: Returned by ``RAGKnowledgeBase.providers()``.
+- **extraction**: Returned by ``WizardReasoning.providers()`` when extraction is configured.
 
 ## Resource Management
 
@@ -126,8 +130,10 @@ async with bot:
 # Subsystems + main provider closed via __aexit__ → close()
 ```
 
-`AsyncLLMProvider.close()` is idempotent, so overlapping close calls
-from subsystem cleanup are safe.
+`AsyncLLMProvider.close()` should be idempotent so that overlapping
+close calls from subsystem cleanup are safe.  Note that ``EchoProvider``
+intentionally counts every ``close()`` call (via ``close_count``) for
+test assertions, so test code should be precise about close expectations.
 
 ## Testing
 
