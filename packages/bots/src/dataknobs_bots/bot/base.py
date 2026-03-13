@@ -12,7 +12,11 @@ from typing import TYPE_CHECKING, Any
 from typing_extensions import Self
 
 from dataknobs_llm import LLMStreamResponse
-from dataknobs_llm.conversations import ConversationManager, DataknobsConversationStorage
+from dataknobs_llm.conversations import (
+    ConversationManager,
+    ConversationStorage,
+    DataknobsConversationStorage,
+)
 from dataknobs_llm.conversations.storage import get_node_by_id, ConversationNode
 from dataknobs_llm.llm import AsyncLLMProvider
 from dataknobs_llm.prompts import AsyncPromptBuilder
@@ -120,7 +124,7 @@ class DynaBot:
         self,
         llm: AsyncLLMProvider,
         prompt_builder: AsyncPromptBuilder,
-        conversation_storage: DataknobsConversationStorage,
+        conversation_storage: ConversationStorage,
         tool_registry: ToolRegistry | None = None,
         memory: Memory | None = None,
         knowledge_base: Any | None = None,
@@ -307,12 +311,21 @@ class DynaBot:
 
         # Create conversation storage
         storage_config = config["conversation_storage"].copy()
+        storage_class_path = storage_config.pop("storage_class", None)
 
-        # Create database backend using factory
-        db_factory = AsyncDatabaseFactory()
-        backend = db_factory.create(**storage_config)
-        await backend.connect()
-        conversation_storage = DataknobsConversationStorage(backend)
+        if storage_class_path:
+            from dataknobs_bots.tools.resolve import resolve_callable
+
+            storage_class = resolve_callable(storage_class_path)
+            conversation_storage: ConversationStorage = await storage_class.create(
+                storage_config
+            )
+        else:
+            # Default: use DataknobsConversationStorage with database backend
+            db_factory = AsyncDatabaseFactory()
+            backend = db_factory.create(**storage_config)
+            await backend.connect()
+            conversation_storage = DataknobsConversationStorage(backend)
 
         # Create prompt builder
         # Support optional prompts configuration

@@ -318,7 +318,10 @@ class DynaBotConfigSchema:
                 "properties": {
                     "backend": {
                         "type": "string",
-                        "description": "Storage backend type",
+                        "description": (
+                            "Storage backend type "
+                            "(for default DataknobsConversationStorage)"
+                        ),
                         "enum": [
                             "memory",
                             "sqlite",
@@ -328,6 +331,15 @@ class DynaBotConfigSchema:
                             "duckdb",
                             "file",
                         ],
+                    },
+                    "storage_class": {
+                        "type": "string",
+                        "description": (
+                            "Dotted import path to a custom "
+                            "ConversationStorage class. When set, "
+                            "'backend' is ignored and the class's "
+                            "create(config) classmethod is called instead."
+                        ),
                     },
                 },
             },

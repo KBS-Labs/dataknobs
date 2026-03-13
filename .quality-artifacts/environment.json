@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-03-11T02:10:43Z",
+  "timestamp": "2026-03-13T09:27:06Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.10.9 (Homebrew 2026-03-06)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/misc-fixes-2",
-  "git_commit": "694ba2b6c96a1fc7b71b7d5c65450d72eb97f451",
+  "git_branch": "sbk/pluggable-convo-storage",
+  "git_commit": "5bf595b7a06be8de3fa72c2200de8104b841b07d",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
