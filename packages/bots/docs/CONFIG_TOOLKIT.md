@@ -186,6 +186,27 @@ Three built-in templates are included:
 
 `DynaBotConfigBuilder` provides fluent methods for all DynaBot components plus an extension point for domain-specific sections.
 
+### Custom Storage Classes
+
+Use `set_conversation_storage_class()` to configure a custom `ConversationStorage`
+implementation instead of the default `DataknobsConversationStorage`:
+
+```python
+config = (
+    DynaBotConfigBuilder()
+    .set_llm("ollama", model="llama3.2")
+    .set_conversation_storage_class(
+        "myapp.storage:AcmeConversationStorage",
+        db_url="postgres://...",
+        tenant_id="acme-corp",
+    )
+    .build()
+)
+```
+
+The class must implement `ConversationStorage` and provide an async
+`create(config: dict)` classmethod. See [CONFIGURATION.md](CONFIGURATION.md#custom-storage-class) for details.
+
 ### Extension Point: `set_custom_section()`
 
 ```python

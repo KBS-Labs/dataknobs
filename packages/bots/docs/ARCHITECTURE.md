@@ -156,19 +156,36 @@ class AsyncLLMProvider(ABC):
 
 **Interface** (from dataknobs-llm):
 ```python
-class DataknobsConversationStorage(ABC):
+class ConversationStorage(ABC):
     @abstractmethod
-    async def save_message(self, conversation_id: str, message: Dict) -> None:
-        """Save a message."""
+    async def save_conversation(self, state: ConversationState) -> None: ...
 
     @abstractmethod
-    async def load_conversation(self, conversation_id: str) -> List[Dict]:
-        """Load conversation history."""
+    async def load_conversation(self, conversation_id: str) -> ConversationState | None: ...
+
+    @abstractmethod
+    async def delete_conversation(self, conversation_id: str) -> bool: ...
+
+    @abstractmethod
+    async def list_conversations(self, ...) -> list[ConversationState]: ...
+
+    @abstractmethod
+    async def search_conversations(self, ...) -> list[ConversationState]: ...
+
+    @abstractmethod
+    async def delete_conversations(self, ...) -> list[str]: ...
 ```
 
-**Backends**:
+**Default implementation**: `DataknobsConversationStorage` wraps any dataknobs
+`AsyncDatabase` backend (memory, SQLite, PostgreSQL, S3, etc.).
+
+**Pluggable**: Custom implementations can be provided via the `storage_class`
+config key. The class must implement `ConversationStorage` and provide an async
+`create(config)` classmethod.
+
+**Backends** (via default DataknobsConversationStorage):
 - Memory (in-process dictionary)
-- PostgreSQL (persistent database)
+- SQLite, PostgreSQL, Elasticsearch, S3, DuckDB, File
 
 ### 4. Memory
 
