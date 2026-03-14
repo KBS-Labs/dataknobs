@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-03-14T00:44:34Z",
+  "timestamp": "2026-03-14T01:14:24Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.10.9 (Homebrew 2026-03-06)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/composite-memory",
-  "git_commit": "72ae175e4914c61f94f8d4e7aa5c96870c049e0e",
+  "git_branch": "sbk/metadata-query-history-filtering",
+  "git_commit": "4c977e29573a8769f61b7888c8efce649c5d75cf",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
