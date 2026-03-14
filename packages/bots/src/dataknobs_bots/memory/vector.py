@@ -72,11 +72,15 @@ class VectorMemory(Memory):
         Args:
             config: Configuration dictionary with:
                 - backend: Vector store backend type
-                - dimension: Vector dimension (optional, depends on backend)
+                - dimension: Vector store dimension (singular; default 1536)
                 - collection: Collection/index name (optional)
                 - embedding: Nested embedding config dict (preferred), e.g.
-                  ``{"provider": "ollama", "model": "nomic-embed-text"}``
-                - embedding_provider / embedding_model: Legacy flat keys
+                  ``{"provider": "ollama", "model": "nomic-embed-text",
+                  "dimensions": 768}``
+                - embedding_provider / embedding_model: Legacy flat keys.
+                  Note: ``dimensions`` (plural) at the top level is forwarded
+                  to the embedding provider, not the vector store.  Use
+                  ``dimension`` (singular) for the vector store size.
                 - max_results: Max results to return (default 5)
                 - similarity_threshold: Min similarity score (default 0.7)
 

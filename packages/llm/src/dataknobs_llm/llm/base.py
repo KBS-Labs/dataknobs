@@ -448,6 +448,7 @@ class LLMConfig:
     This class supports:
     - All major LLM providers (OpenAI, Anthropic, Ollama, HuggingFace)
     - Generation parameters (temperature, max_tokens, top_p, etc.)
+    - Embedding configuration (dimensions)
     - Function/tool calling configuration
     - Streaming with callbacks
     - Rate limiting and retry logic

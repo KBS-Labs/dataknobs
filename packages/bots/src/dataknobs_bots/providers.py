@@ -73,7 +73,7 @@ async def create_embedding_provider(
         provider = factory.create(provider_config)
         await provider.initialize()
     except Exception:
-        logger.error(
+        logger.exception(
             "Failed to create embedding provider: %s/%s",
             provider_name,
             model_name,

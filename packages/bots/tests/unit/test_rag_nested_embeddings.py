@@ -8,6 +8,7 @@ Uses EchoProvider (registered as "echo") instead of mocks.
 from typing import Any
 
 import pytest
+from dataknobs_common.testing import requires_ollama
 
 from dataknobs_bots.knowledge.rag import RAGKnowledgeBase
 
@@ -43,5 +44,23 @@ class TestRAGEmbeddingsConfig:
         try:
             assert kb.embedding_provider.config.provider == "echo"
             assert kb.embedding_provider.config.model == "test-embed-legacy"
+        finally:
+            await kb.close()
+
+    @requires_ollama
+    @pytest.mark.asyncio
+    async def test_defaults_when_no_embedding_config(self) -> None:
+        """Default Ollama provider used when no embedding config given."""
+        config: dict[str, Any] = {
+            "vector_store": {"backend": "memory", "dimensions": 768},
+        }
+        kb = await RAGKnowledgeBase.from_config(config)
+        try:
+            assert kb.embedding_provider.config.provider == "ollama"
+            # Ollama normalizes model names to include ":latest" tag
+            assert kb.embedding_provider.config.model in (
+                "nomic-embed-text",
+                "nomic-embed-text:latest",
+            )
         finally:
             await kb.close()

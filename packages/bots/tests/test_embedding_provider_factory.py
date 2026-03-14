@@ -72,17 +72,19 @@ class TestCreateEmbeddingProvider:
 
     @pytest.mark.asyncio
     async def test_extra_keys_forwarded_from_legacy(self) -> None:
-        """api_base and dimensions from top-level config pass through."""
+        """api_base, api_key, and dimensions from top-level config pass through."""
         provider = await create_embedding_provider({
             "embedding_provider": "echo",
             "embedding_model": "test-embed",
             "dimensions": 768,
             "api_base": "http://custom:8080",
+            "api_key": "test-key-123",
         })
         try:
             assert provider.config.provider == "echo"
             assert provider.config.api_base == "http://custom:8080"
             assert provider.config.dimensions == 768
+            assert provider.config.api_key == "test-key-123"
         finally:
             await provider.close()
 
@@ -110,7 +112,7 @@ class TestCreateEmbeddingProvider:
             "embedding_model": "test-embed",
         })
         try:
-            assert provider._is_initialized is True
+            assert provider.is_initialized is True
         finally:
             await provider.close()
 
