@@ -139,14 +139,33 @@ class IHistoryStorage(ABC):
         offset: int = 0
     ) -> List[Dict[str, Any]]:
         """Query execution histories.
-        
+
         Args:
-            filters: Query filters.
+            filters: Query filters. Supported keys:
+
+                - ``fsm_name`` — exact match on FSM name
+                - ``data_mode`` — exact match on data handling mode
+                - ``status`` — exact match on status string
+                - ``start_time_after`` — histories started at or after this time
+                - ``start_time_before`` — histories started at or before this time
+                - ``failed`` — if ``True``, only histories with failed steps;
+                  if ``False``, only histories with no failures
+                - ``metadata.<key>`` — exact match on a metadata field, e.g.
+                  ``{"metadata.work_order_id": "WO-001"}``. Uses
+                  ``Record.get_value()`` dot-notation traversal.  Only
+                  supported on backends whose ``search()`` evaluates filters
+                  via ``Record.get_value()`` (currently ``memory`` and
+                  ``file``).  Raises ``NotImplementedError`` on other
+                  backends.
+
+                Unknown keys are logged as warnings and ignored.
             limit: Maximum results to return.
             offset: Result offset for pagination.
-            
+
         Returns:
-            List of history summaries.
+            List of history summary dicts, each containing: ``id``,
+            ``fsm_name``, ``data_mode``, ``status``, ``start_time``,
+            ``end_time``, ``total_steps``, ``failed_steps``, ``metadata``.
         """
         pass
     
@@ -196,6 +215,17 @@ class IHistoryStorage(ABC):
             Number of histories deleted.
         """
         pass
+
+    async def close(self) -> None:  # noqa: B027 — intentionally non-abstract; most backends are no-op
+        """Close the storage backend and release resources.
+
+        Implementations that own their database connections should close
+        them here.  Injected (externally owned) connections must NOT be
+        closed — the originator is responsible for their lifecycle.
+
+        The default implementation is a no-op so that subclasses only
+        need to override when they manage connections.
+        """
 
 
 class BaseHistoryStorage(IHistoryStorage):

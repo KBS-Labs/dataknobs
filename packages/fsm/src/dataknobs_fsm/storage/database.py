@@ -7,6 +7,7 @@ the common AsyncDatabase interface.
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from typing import Any, Dict, List, TYPE_CHECKING
@@ -21,6 +22,18 @@ if TYPE_CHECKING:
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.execution.history import ExecutionHistory, ExecutionStep, ExecutionStatus
 from dataknobs_fsm.storage.base import BaseHistoryStorage, StorageBackend, StorageConfig, StorageFactory
+
+logger = logging.getLogger(__name__)
+
+# Backends whose search() evaluates filters via Record.get_value(),
+# which supports dot-notation traversal into nested fields (e.g.
+# "metadata.work_order_id").  Other backends use native query engines
+# (SQL, Elasticsearch DSL, etc.) and silently ignore dot-notation
+# filter fields — producing incorrect (unfiltered) results.
+_DOT_NOTATION_BACKENDS: frozenset[StorageBackend] = frozenset({
+    StorageBackend.MEMORY,
+    StorageBackend.FILE,
+})
 
 
 class UnifiedDatabaseStorage(BaseHistoryStorage):
@@ -394,7 +407,21 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
                     query = query.filter('failed_steps', '>', 0)
                 else:
                     query = query.filter('failed_steps', '=', 0)
-        
+            elif key.startswith('metadata.'):
+                if self.config.backend not in _DOT_NOTATION_BACKENDS:
+                    raise NotImplementedError(
+                        f"Metadata filtering (key {key!r}) is not supported "
+                        f"on the {self.config.backend.value!r} backend. "
+                        f"Supported backends: "
+                        f"{', '.join(b.value for b in sorted(_DOT_NOTATION_BACKENDS, key=lambda b: b.value))}."
+                    )
+                query = query.filter(key, '=', value)
+            else:
+                logger.warning(
+                    "Unknown filter key %r in query_histories(), ignoring",
+                    key,
+                )
+
         # Apply pagination
         query = query.sort_by('start_time', 'desc').limit(limit).offset(offset)
         
@@ -519,16 +546,20 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
             if await self.delete_history(history_id):
                 deleted += 1
         
-        # Only close database connections we created ourselves.
-        # Injected databases are externally owned — closing them would break
-        # sibling components sharing the same connection pool.
+        return deleted
+
+    async def close(self) -> None:
+        """Close owned database connections.
+
+        Only closes connections that this instance created via the
+        factory.  Injected databases are externally owned — closing
+        them would break sibling components sharing the same pool.
+        """
         if self._owns_steps_db and self._steps_db is not self._db:
             if hasattr(self._steps_db, 'close'):
                 await self._steps_db.close()
         if self._owns_db and hasattr(self._db, 'close'):
             await self._db.close()
-
-        return deleted
 
 
 # Register all backends with the same implementation

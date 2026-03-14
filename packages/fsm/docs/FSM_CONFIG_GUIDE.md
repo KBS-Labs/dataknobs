@@ -1117,6 +1117,92 @@ The factory also supports injection via keyword arguments:
 storage = StorageFactory.create(config, database=shared_db)
 ```
 
+### Querying Histories
+
+Use `query_histories()` to search execution histories with filters:
+
+```python
+# Filter by builtin keys
+results = await storage.query_histories({"fsm_name": "my_fsm"})
+results = await storage.query_histories({"status": "completed"})
+results = await storage.query_histories({"failed": True})
+
+# Time range filtering
+results = await storage.query_histories({
+    "start_time_after": 1710000000.0,
+    "start_time_before": 1710100000.0,
+})
+
+# Pagination
+results = await storage.query_histories({"fsm_name": "my_fsm"}, limit=10, offset=20)
+```
+
+#### Supported Filter Keys
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `fsm_name` | `str` | Exact match on FSM name |
+| `data_mode` | `str` | Exact match on data handling mode |
+| `status` | `str` | Exact match on status string |
+| `start_time_after` | `float` | Histories started at or after this timestamp |
+| `start_time_before` | `float` | Histories started at or before this timestamp |
+| `failed` | `bool` | `True` for histories with failures, `False` for clean runs |
+| `metadata.<key>` | `Any` | Exact match on a metadata field (see below) |
+
+Unknown filter keys are logged as warnings and ignored.
+
+#### Metadata Filtering
+
+When saving a history with metadata, those metadata fields become queryable
+using dot-notation filter keys:
+
+```python
+# Save histories with domain-specific metadata
+await storage.save_history(history_a, metadata={"work_order_id": "WO-001", "scope_id": "S-A"})
+await storage.save_history(history_b, metadata={"work_order_id": "WO-002", "scope_id": "S-B"})
+
+# Filter by a single metadata field
+results = await storage.query_histories({"metadata.work_order_id": "WO-001"})
+
+# Filter by multiple metadata fields (AND semantics)
+results = await storage.query_histories({
+    "metadata.work_order_id": "WO-001",
+    "metadata.scope_id": "S-A",
+})
+
+# Combine metadata filters with builtin filters
+results = await storage.query_histories({
+    "fsm_name": "order_processor",
+    "metadata.work_order_id": "WO-001",
+})
+```
+
+Metadata filtering uses query-level filtering (not post-filtering), so
+pagination with `limit` and `offset` works correctly — the limit applies
+to matched results, not to pre-filtered results.
+
+> **Backend compatibility:** Metadata filtering delegates to `Record.get_value()`
+> dot-notation traversal and is only supported on backends whose `search()`
+> evaluates filters via `Record.get_value()` — currently **memory** and **file**.
+> Using `metadata.*` filters on other backends (e.g. PostgreSQL, SQLite,
+> Elasticsearch) raises `NotImplementedError`.
+
+#### Return Value
+
+Each result dict contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `str` | Execution ID |
+| `fsm_name` | `str` | FSM name |
+| `data_mode` | `str` | Data handling mode |
+| `status` | `str` | Execution status |
+| `start_time` | `float \| None` | Start timestamp |
+| `end_time` | `float \| None` | End timestamp (None if in progress) |
+| `total_steps` | `int` | Total steps executed |
+| `failed_steps` | `int` | Number of failed steps |
+| `metadata` | `dict` | Metadata dict passed to `save_history()` |
+
 ## Best Practices
 
 ### 1. State Design
