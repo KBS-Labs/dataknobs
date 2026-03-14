@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import datetime
 from typing import Any, TYPE_CHECKING
 
-from ..query import Operator, Query, SortOrder
+from ..query import Filter, Operator, Query, SortOrder
 from ..records import Record
+
+# Field name segments must be valid identifiers to prevent SQL injection.
+_FIELD_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 if TYPE_CHECKING:
     from ..query_logic import ComplexQuery
@@ -282,12 +286,15 @@ class SQLQueryBuilder:
 
     def build_complex_search_query(self, query: ComplexQuery) -> tuple[str, list[Any]]:
         """Build a SELECT query from a ComplexQuery object with boolean logic.
-        
+
         Args:
             query: The ComplexQuery object
-            
+
         Returns:
             Tuple of (SQL query, parameters)
+
+        Raises:
+            ValueError: If any filter field contains invalid characters.
         """
         sql_parts = [f"SELECT * FROM {self.qualified_table}"]
         params = []
@@ -304,14 +311,8 @@ class SQLQueryBuilder:
             order_parts = []
             for sort_spec in query.sort_specs:
                 direction = "DESC" if sort_spec.order == SortOrder.DESC else "ASC"
-                if self.dialect == "postgres":
-                    order_parts.append(f"data->'{sort_spec.field}' {direction}")
-                elif self.dialect == "sqlite":
-                    order_parts.append(f"json_extract(data, '$.{sort_spec.field}') {direction}")
-                elif self.dialect == "duckdb":
-                    order_parts.append(f"json_extract_string(data, '$.{sort_spec.field}') {direction}")
-                else:
-                    order_parts.append(f"data {direction}")
+                sort_expr = self._build_sort_expr(sort_spec.field)
+                order_parts.append(f"{sort_expr} {direction}")
             sql_parts.append("ORDER BY " + ", ".join(order_parts))
 
         # Add LIMIT and OFFSET
@@ -403,12 +404,15 @@ class SQLQueryBuilder:
 
     def build_search_query(self, query: Query) -> tuple[str, list[Any]]:
         """Build a SELECT query from a Query object.
-        
+
         Args:
             query: The Query object
-            
+
         Returns:
             Tuple of (SQL query, parameters)
+
+        Raises:
+            ValueError: If any filter field contains invalid characters.
         """
         sql_parts = [f"SELECT * FROM {self.qualified_table}"]
         params = []
@@ -431,18 +435,8 @@ class SQLQueryBuilder:
             order_parts = []
             for sort_spec in query.sort_specs:
                 direction = "DESC" if sort_spec.order == SortOrder.DESC else "ASC"
-                # Special handling for 'id' field - it's in a separate column
-                if sort_spec.field == 'id':
-                    order_parts.append(f"id {direction}")
-                # Use JSON extraction based on dialect
-                elif self.dialect == "postgres":
-                    order_parts.append(f"data->'{sort_spec.field}' {direction}")
-                elif self.dialect == "sqlite":
-                    order_parts.append(f"json_extract(data, '$.{sort_spec.field}') {direction}")
-                elif self.dialect == "duckdb":
-                    order_parts.append(f"json_extract_string(data, '$.{sort_spec.field}') {direction}")
-                else:
-                    order_parts.append(f"data {direction}")  # Fallback
+                sort_expr = self._build_sort_expr(sort_spec.field)
+                order_parts.append(f"{sort_expr} {direction}")
             sql_parts.append("ORDER BY " + ", ".join(order_parts))
 
         # Add LIMIT and OFFSET
@@ -617,90 +611,162 @@ class SQLQueryBuilder:
         else:
             return f"SELECT COUNT(*) FROM {self.qualified_table}", []
 
-    def _build_filter_clause(self, filter_spec: Any, param_start: int) -> tuple[str, list[Any]]:
-        """Build a WHERE clause for a filter.
-        
+    def _build_sort_expr(self, field: str) -> str:
+        """Build a SQL expression for ORDER BY, supporting dot-notation.
+
+        Routes ``id`` to the ``id`` column, ``metadata.*`` fields to the
+        ``metadata`` column, and everything else to ``data``.  Uses the
+        JSON-preserving extraction operator (``->`` in Postgres) so that
+        sorting preserves JSON type ordering.
+
         Args:
-            filter_spec: The filter specification
-            param_start: Starting parameter number
-            
+            field: Field name, optionally dot-separated.
+
         Returns:
-            Tuple of (SQL clause, parameters)
+            A SQL expression suitable for ORDER BY.
         """
-        field = filter_spec.field
-        op = filter_spec.operator
-        value = filter_spec.value
+        if field == "id":
+            return "id"
 
-        # Special handling for 'id' field - it's in a separate column
-        if field == 'id':
-            field_expr = 'id'
-            param_placeholder = self._get_param_placeholder(param_start)
-        # JSON field extraction with type casting for PostgreSQL
-        elif self.dialect == "postgres":
-            # For PostgreSQL, we need to cast JSONB text to appropriate types for comparisons
-            base_field_expr = f"data->>'{field}'"
-
-            # Determine if we need type casting based on operator and value type
-            if op in [Operator.GT, Operator.GTE, Operator.LT, Operator.LTE, Operator.BETWEEN, Operator.NOT_BETWEEN]:
-                # These operators need numeric comparison
-                if isinstance(value, (int, float)) or (isinstance(value, (list, tuple)) and len(value) > 0 and isinstance(value[0], (int, float))):
-                    field_expr = f"({base_field_expr})::numeric"
-                elif isinstance(value, datetime) or (isinstance(value, (list, tuple)) and len(value) > 0 and isinstance(value[0], datetime)):
-                    field_expr = f"({base_field_expr})::timestamp"
-                else:
-                    field_expr = base_field_expr
-            elif op in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
-                # For equality and IN operations, cast based on value type
-                if isinstance(value, bool):
-                    field_expr = f"({base_field_expr})::boolean"
-                elif isinstance(value, (int, float)):
-                    field_expr = f"({base_field_expr})::numeric"
-                elif isinstance(value, list) and value and isinstance(value[0], (int, float)):
-                    # IN/NOT_IN with numeric values
-                    field_expr = f"({base_field_expr})::numeric"
-                else:
-                    field_expr = base_field_expr
-            else:
-                field_expr = base_field_expr
-
-            param_placeholder = self._get_param_placeholder(param_start)
-        # JSON field extraction with type casting for DuckDB
-        elif self.dialect == "duckdb":
-            # DuckDB uses json_extract_string for text extraction, with CAST for type conversion
-            base_field_expr = f"json_extract_string(data, '$.{field}')"
-
-            # Determine if we need type casting based on operator and value type
-            if op in [Operator.GT, Operator.GTE, Operator.LT, Operator.LTE, Operator.BETWEEN, Operator.NOT_BETWEEN]:
-                # These operators need numeric comparison
-                if isinstance(value, (int, float)) or (isinstance(value, (list, tuple)) and len(value) > 0 and isinstance(value[0], (int, float))):
-                    field_expr = f"CAST({base_field_expr} AS DOUBLE)"
-                elif isinstance(value, datetime) or (isinstance(value, (list, tuple)) and len(value) > 0 and isinstance(value[0], datetime)):
-                    field_expr = f"CAST({base_field_expr} AS TIMESTAMP)"
-                else:
-                    field_expr = base_field_expr
-            elif op in [Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN]:
-                # For equality and IN operations, cast based on value type
-                if isinstance(value, bool):
-                    field_expr = f"CAST({base_field_expr} AS BOOLEAN)"
-                elif isinstance(value, (int, float)):
-                    field_expr = f"CAST({base_field_expr} AS DOUBLE)"
-                elif isinstance(value, list) and value and isinstance(value[0], (int, float)):
-                    # IN/NOT_IN with numeric values
-                    field_expr = f"CAST({base_field_expr} AS DOUBLE)"
-                else:
-                    field_expr = base_field_expr
-            else:
-                field_expr = base_field_expr
-
-            param_placeholder = self._get_param_placeholder(param_start)
-        elif self.dialect == "sqlite":
-            field_expr = f"json_extract(data, '$.{field}')"
-            param_placeholder = self._get_param_placeholder(param_start)
+        if field.startswith("metadata."):
+            nested_path = field[len("metadata."):]
+            column = "metadata"
         else:
-            field_expr = field
-            param_placeholder = self._get_param_placeholder(param_start)
+            nested_path = field
+            column = "data"
 
-        # Build clause based on operator
+        return self._build_json_field_expr(nested_path, column=column, as_text=False)
+
+    def _build_json_field_expr(
+        self, field: str, column: str = "data", *, as_text: bool = True,
+    ) -> str:
+        """Build a SQL expression to extract a value from a JSON/JSONB column.
+
+        Supports dot-notation for nested field access. For example,
+        ``"config.timeout"`` extracts the nested path ``data->'config'->>'timeout'``
+        in PostgreSQL, ``json_extract(data, '$.config.timeout')`` in SQLite, etc.
+
+        .. important::
+
+           Dot-notation is a **path separator** — a dot in a field name is
+           *always* interpreted as nesting.  If a JSON key literally contains a
+           dot (e.g. ``{"my.field": 1}``), it **cannot** be addressed through
+           this query interface.  This matches the semantics of
+           ``Record.get_value()``, which applies the same convention.
+
+        Args:
+            field: Field name, optionally dot-separated for nested access.
+            column: The SQL column to extract from — must be ``"data"`` or
+                ``"metadata"``.  Other values raise ``ValueError``.
+            as_text: If ``True`` (default), extract the leaf value as text
+                (``->>`` in Postgres).  If ``False``, preserve the JSON type
+                (``->`` in Postgres) — useful for ORDER BY.
+
+        Returns:
+            A SQL expression that extracts the field value.
+
+        Raises:
+            ValueError: If *column* is not an allowed column name, or if any
+                field name segment contains characters outside
+                ``[A-Za-z_][A-Za-z0-9_]*``.
+        """
+        _allowed_columns = {"data", "metadata"}
+        if column not in _allowed_columns:
+            raise ValueError(
+                f"column must be one of {_allowed_columns!r}, got {column!r}"
+            )
+
+        # Validate field path segments to prevent SQL injection
+        parts = field.split(".")
+        for part in parts:
+            if not _FIELD_NAME_RE.match(part):
+                raise ValueError(
+                    f"Invalid field name segment {part!r} in {field!r}. "
+                    f"Field segments must match [A-Za-z_][A-Za-z0-9_]*."
+                )
+
+        if self.dialect == "postgres":
+            # Build chained extraction operators
+            chain = column
+            for part in parts[:-1]:
+                chain += f"->'{part}'"
+            # Final segment: ->> for text, -> for jsonb
+            leaf_op = "->>" if as_text else "->"
+            return f"{chain}{leaf_op}'{parts[-1]}'"
+        elif self.dialect == "sqlite":
+            # json_extract returns typed values in SQLite — as_text has no effect
+            return f"json_extract({column}, '$.{field}')"
+        elif self.dialect == "duckdb":
+            func = "json_extract_string" if as_text else "json_extract"
+            return f"{func}({column}, '$.{field}')"
+        else:
+            return field
+
+    def _apply_type_cast(self, base_expr: str, op: Operator, value: Any) -> str:
+        """Wrap a SQL expression with a type cast appropriate for the operator and value.
+
+        Args:
+            base_expr: The raw field-extraction SQL expression.
+            op: The filter ``Operator``.
+            value: The filter value (used to infer the target type).
+
+        Returns:
+            The expression, potentially wrapped with a dialect-specific cast.
+        """
+        needs_ordered_cast = op in [
+            Operator.GT, Operator.GTE, Operator.LT, Operator.LTE,
+            Operator.BETWEEN, Operator.NOT_BETWEEN,
+        ]
+        needs_equality_cast = op in [
+            Operator.EQ, Operator.NEQ, Operator.IN, Operator.NOT_IN,
+        ]
+
+        # Determine target type from the value
+        first_value = value
+        if isinstance(value, (list, tuple)) and len(value) > 0:
+            first_value = value[0]
+
+        target_type: str | None = None
+        if needs_ordered_cast or needs_equality_cast:
+            # bool must be checked before int — bool is a subclass of int
+            if isinstance(first_value, bool):
+                target_type = "boolean"
+            elif isinstance(first_value, (int, float)):
+                target_type = "numeric"
+            elif isinstance(first_value, datetime):
+                target_type = "timestamp"
+
+        if target_type is None:
+            return base_expr
+
+        if self.dialect == "postgres":
+            return f"({base_expr})::{target_type}"
+        elif self.dialect == "duckdb":
+            duckdb_types = {
+                "boolean": "BOOLEAN",
+                "numeric": "DOUBLE",
+                "timestamp": "TIMESTAMP",
+            }
+            return f"CAST({base_expr} AS {duckdb_types[target_type]})"
+        # SQLite: json_extract already returns typed values, no cast needed
+        return base_expr
+
+    def _build_operator_clause(
+        self, field_expr: str, op: Operator, value: Any, param_start: int,
+    ) -> tuple[str, list[Any]]:
+        """Build the comparison clause for a given operator.
+
+        Args:
+            field_expr: The fully-qualified, possibly cast, SQL field expression.
+            op: The filter ``Operator``.
+            value: The filter value.
+            param_start: Starting parameter number for placeholders.
+
+        Returns:
+            Tuple of (SQL clause, parameters).
+        """
+        param_placeholder = self._get_param_placeholder(param_start)
+
         if op == Operator.EQ:
             return f"{field_expr} = {param_placeholder}", [value]
         elif op == Operator.NEQ:
@@ -718,10 +784,16 @@ class SQLQueryBuilder:
         elif op == Operator.NOT_LIKE:
             return f"{field_expr} NOT LIKE {param_placeholder}", [value]
         elif op == Operator.IN:
-            placeholders = ", ".join([self._get_param_placeholder(i) for i in range(param_start, param_start + len(value))])
+            placeholders = ", ".join([
+                self._get_param_placeholder(i)
+                for i in range(param_start, param_start + len(value))
+            ])
             return f"{field_expr} IN ({placeholders})", list(value)
         elif op == Operator.NOT_IN:
-            placeholders = ", ".join([self._get_param_placeholder(i) for i in range(param_start, param_start + len(value))])
+            placeholders = ", ".join([
+                self._get_param_placeholder(i)
+                for i in range(param_start, param_start + len(value))
+            ])
             return f"{field_expr} NOT IN ({placeholders})", list(value)
         elif op == Operator.BETWEEN:
             placeholder1 = self._get_param_placeholder(param_start)
@@ -736,7 +808,6 @@ class SQLQueryBuilder:
         elif op == Operator.NOT_EXISTS:
             return f"{field_expr} IS NULL", []
         elif op == Operator.REGEX:
-            # PostgreSQL uses ~ for regex, SQLite and DuckDB use REGEXP
             if self.dialect == "postgres":
                 return f"{field_expr} ~ {param_placeholder}", [value]
             elif self.dialect == "duckdb":
@@ -745,6 +816,50 @@ class SQLQueryBuilder:
                 return f"{field_expr} REGEXP {param_placeholder}", [value]
         else:
             raise ValueError(f"Unsupported operator: {op}")
+
+    def _build_filter_clause(self, filter_spec: Filter, param_start: int) -> tuple[str, list[Any]]:
+        """Build a WHERE clause for a single filter.
+
+        Supports dot-notation for nested JSON field access.  A field name
+        like ``"metadata.work_order_id"`` is routed to the ``metadata`` JSONB
+        column with proper nested path extraction, while a field like
+        ``"config.timeout"`` is routed to the ``data`` column.
+
+        .. important::
+
+           Dots in field names are **always** interpreted as path separators,
+           matching the semantics of ``Record.get_value()``.  JSON keys that
+           literally contain a dot cannot be queried through this interface.
+
+        Args:
+            filter_spec: The filter specification (has ``.field``, ``.operator``,
+                ``.value`` attributes).
+            param_start: Starting parameter number for placeholders.
+
+        Returns:
+            Tuple of (SQL clause, parameters).
+
+        Raises:
+            ValueError: If a field name segment contains invalid characters.
+        """
+        field = filter_spec.field
+        op = filter_spec.operator
+        value = filter_spec.value
+
+        # Special handling for 'id' field — it's a real column, not inside JSON
+        if field == 'id':
+            field_expr = 'id'
+        # Route metadata.* fields to the metadata JSONB column
+        elif field.startswith("metadata."):
+            nested_path = field[len("metadata."):]
+            base_expr = self._build_json_field_expr(nested_path, column="metadata")
+            field_expr = self._apply_type_cast(base_expr, op, value)
+        else:
+            # Everything else targets the data JSONB column (supports dot-notation)
+            base_expr = self._build_json_field_expr(field, column="data")
+            field_expr = self._apply_type_cast(base_expr, op, value)
+
+        return self._build_operator_clause(field_expr, op, value, param_start)
 
     def _record_to_json(self, record: Record) -> str:
         """Convert a Record to JSON string for storage."""

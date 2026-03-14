@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import uuid
 from typing import TYPE_CHECKING
 
 import pytest
@@ -239,6 +241,114 @@ class TestFileBackendMetadataFiltering:
         assert results[0]["metadata"]["tenant"] == "A"
 
 
+class TestLegacyMetadataFallback:
+    """Tests for backward compatibility with records that stored metadata in data column."""
+
+    @pytest.mark.asyncio
+    async def test_legacy_metadata_in_data_column_still_readable(
+        self, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Records stored under the old schema should still return metadata."""
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
+        from dataknobs_data.records import Record
+
+        db = AsyncMemoryDatabase()
+        config = StorageConfig(backend=StorageBackend.MEMORY)
+        storage = UnifiedDatabaseStorage(config, database=db)
+        await storage.initialize()
+
+        # Simulate a legacy record with metadata in the data column
+        legacy_record = Record({
+            'id': str(uuid.uuid4()),
+            'execution_id': 'exec-legacy',
+            'fsm_name': 'test_fsm',
+            'data_mode': 'copy',
+            'status': 'completed',
+            'start_time': 1_000_000.0,
+            'end_time': 1_000_001.0,
+            'total_steps': 1,
+            'failed_steps': 0,
+            'skipped_steps': 0,
+            'history_data': '{}',
+            'created_at': 1_000_000.0,
+            'updated_at': 1_000_000.0,
+            'metadata': {'work_order_id': 'WO-LEGACY'},
+        })
+        await db.upsert(legacy_record)
+
+        with caplog.at_level(logging.WARNING):
+            results = await storage.query_histories({})
+
+        # Legacy metadata should be readable via fallback
+        legacy_results = [r for r in results if r['id'] == 'exec-legacy']
+        assert len(legacy_results) == 1
+        assert legacy_results[0]['metadata']['work_order_id'] == 'WO-LEGACY'
+
+        # Should log a warning about legacy location
+        assert any("legacy" in r.message.lower() for r in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_new_metadata_takes_precedence_over_legacy(self) -> None:
+        """New-style metadata in Record.metadata is used when present."""
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
+
+        db = AsyncMemoryDatabase()
+        config = StorageConfig(backend=StorageBackend.MEMORY)
+        storage = UnifiedDatabaseStorage(config, database=db)
+        await storage.initialize()
+
+        # Save with the new storage model
+        await storage.save_history(
+            _make_history("exec_new"),
+            metadata={"work_order_id": "WO-NEW"},
+        )
+
+        results = await storage.query_histories({})
+        new_results = [r for r in results if r['id'] == 'exec_new']
+        assert len(new_results) == 1
+        assert new_results[0]['metadata']['work_order_id'] == 'WO-NEW'
+
+
+class TestMetadataNotPollutedByRecordId:
+    """Tests that Record internals do not pollute caller metadata."""
+
+    @pytest.mark.asyncio
+    async def test_metadata_does_not_contain_internal_id(self) -> None:
+        """query_histories metadata should not contain Record's internal 'id' key."""
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
+
+        db = AsyncMemoryDatabase()
+        config = StorageConfig(backend=StorageBackend.MEMORY)
+        storage = UnifiedDatabaseStorage(config, database=db)
+        await storage.initialize()
+
+        await storage.save_history(
+            _make_history("exec_1"),
+            metadata={"work_order_id": "WO-001"},
+        )
+
+        results = await storage.query_histories({})
+        assert len(results) == 1
+        # Metadata should contain only what was passed, not internal Record id
+        assert results[0]["metadata"] == {"work_order_id": "WO-001"}
+
+    @pytest.mark.asyncio
+    async def test_empty_metadata_stays_empty(self) -> None:
+        """Empty metadata should remain empty after save/load."""
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
+
+        db = AsyncMemoryDatabase()
+        config = StorageConfig(backend=StorageBackend.MEMORY)
+        storage = UnifiedDatabaseStorage(config, database=db)
+        await storage.initialize()
+
+        await storage.save_history(_make_history("exec_1"), metadata={})
+
+        results = await storage.query_histories({})
+        assert len(results) == 1
+        assert results[0]["metadata"] == {}
+
+
 class TestUnknownFilterWarning:
     """Tests for warning on unknown filter keys."""
 
@@ -283,16 +393,23 @@ class TestUnknownFilterWarning:
         assert len(warning_records) == 0
 
 
-class TestUnsupportedBackendMetadataFilter:
-    """Tests for NotImplementedError on non-dot-notation backends."""
+class TestMetadataFilterNoBackendRestriction:
+    """Verify the backend restriction guard was removed.
+
+    These tests use ``AsyncMemoryDatabase`` regardless of config backend type.
+    SQL query generation is tested separately in
+    ``test_sql_query_builder_dot_notation.py``.  Real SQL backend integration
+    tests are in ``TestSQLiteMetadataFilterIntegration`` and
+    ``TestPostgresMetadataFilterIntegration`` below.
+    """
 
     @pytest.mark.asyncio
-    async def test_metadata_filter_raises_on_unsupported_backend(self) -> None:
-        """config.backend not in _DOT_NOTATION_BACKENDS raises NotImplementedError."""
+    async def test_metadata_filter_works_with_sqlite_config(self) -> None:
+        """No NotImplementedError when config says sqlite (memory backend)."""
         from dataknobs_data.backends.memory import AsyncMemoryDatabase
 
         config = StorageConfig(backend=StorageBackend.SQLITE)
-        db = AsyncMemoryDatabase()  # real db, but config says sqlite
+        db = AsyncMemoryDatabase()
         storage = UnifiedDatabaseStorage(config, database=db)
         await storage.initialize()
 
@@ -301,12 +418,16 @@ class TestUnsupportedBackendMetadataFilter:
             metadata={"work_order_id": "WO-001"},
         )
 
-        with pytest.raises(NotImplementedError, match="not supported"):
-            await storage.query_histories({"metadata.work_order_id": "WO-001"})
+        results = await storage.query_histories(
+            {"metadata.work_order_id": "WO-001"}
+        )
+        assert len(results) == 1
+        assert results[0]["id"] == "exec_1"
+        assert results[0]["metadata"]["work_order_id"] == "WO-001"
 
     @pytest.mark.asyncio
-    async def test_builtin_filters_work_on_unsupported_backend(self) -> None:
-        """Non-metadata filters work regardless of backend type."""
+    async def test_builtin_and_metadata_filters_combined(self) -> None:
+        """Builtin and metadata filters work together (memory backend)."""
         from dataknobs_data.backends.memory import AsyncMemoryDatabase
 
         config = StorageConfig(backend=StorageBackend.SQLITE)
@@ -318,7 +439,152 @@ class TestUnsupportedBackendMetadataFilter:
             _make_history("exec_1", fsm_name="alpha"),
             metadata={"work_order_id": "WO-001"},
         )
+        await storage.save_history(
+            _make_history("exec_2", fsm_name="beta"),
+            metadata={"work_order_id": "WO-001"},
+        )
 
-        results = await storage.query_histories({"fsm_name": "alpha"})
+        results = await storage.query_histories(
+            {"fsm_name": "alpha", "metadata.work_order_id": "WO-001"}
+        )
         assert len(results) == 1
         assert results[0]["id"] == "exec_1"
+
+
+class TestSQLiteMetadataFilterIntegration:
+    """End-to-end metadata filtering through a real SQLite backend."""
+
+    @pytest.mark.asyncio
+    async def test_metadata_filter_through_sqlite(self, tmp_path: Path) -> None:
+        """Save and query with metadata through a real AsyncSQLiteDatabase."""
+        from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
+
+        db = AsyncSQLiteDatabase({"path": str(tmp_path / "test.db")})
+        await db.connect()
+        try:
+            config = StorageConfig(backend=StorageBackend.SQLITE)
+            storage = UnifiedDatabaseStorage(config, database=db)
+            await storage.initialize()
+
+            await storage.save_history(
+                _make_history("exec_1"),
+                metadata={"tenant_id": "T-1"},
+            )
+            await storage.save_history(
+                _make_history("exec_2"),
+                metadata={"tenant_id": "T-2"},
+            )
+
+            results = await storage.query_histories(
+                {"metadata.tenant_id": "T-1"}
+            )
+            assert len(results) == 1
+            assert results[0]["id"] == "exec_1"
+            assert results[0]["metadata"]["tenant_id"] == "T-1"
+        finally:
+            await db.close()
+
+    @pytest.mark.asyncio
+    async def test_metadata_filter_combined_with_builtin_sqlite(
+        self, tmp_path: Path,
+    ) -> None:
+        """Metadata + builtin filters work through real SQLite."""
+        from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
+
+        db = AsyncSQLiteDatabase({"path": str(tmp_path / "test.db")})
+        await db.connect()
+        try:
+            config = StorageConfig(backend=StorageBackend.SQLITE)
+            storage = UnifiedDatabaseStorage(config, database=db)
+            await storage.initialize()
+
+            await storage.save_history(
+                _make_history("exec_1", fsm_name="alpha"),
+                metadata={"work_order_id": "WO-001"},
+            )
+            await storage.save_history(
+                _make_history("exec_2", fsm_name="beta"),
+                metadata={"work_order_id": "WO-001"},
+            )
+
+            results = await storage.query_histories(
+                {"fsm_name": "alpha", "metadata.work_order_id": "WO-001"}
+            )
+            assert len(results) == 1
+            assert results[0]["id"] == "exec_1"
+        finally:
+            await db.close()
+
+    @pytest.mark.asyncio
+    async def test_metadata_no_match_returns_empty_sqlite(
+        self, tmp_path: Path,
+    ) -> None:
+        """Non-matching metadata filter returns empty through real SQLite."""
+        from dataknobs_data.backends.sqlite_async import AsyncSQLiteDatabase
+
+        db = AsyncSQLiteDatabase({"path": str(tmp_path / "test.db")})
+        await db.connect()
+        try:
+            config = StorageConfig(backend=StorageBackend.SQLITE)
+            storage = UnifiedDatabaseStorage(config, database=db)
+            await storage.initialize()
+
+            await storage.save_history(
+                _make_history("exec_1"),
+                metadata={"tenant_id": "T-1"},
+            )
+
+            results = await storage.query_histories(
+                {"metadata.tenant_id": "T-999"}
+            )
+            assert results == []
+        finally:
+            await db.close()
+
+
+_skip_no_postgres = pytest.mark.skipif(
+    not os.environ.get("TEST_POSTGRES", "").lower() == "true",
+    reason="PostgreSQL tests require TEST_POSTGRES=true and a running PostgreSQL instance",
+)
+
+
+@_skip_no_postgres
+class TestPostgresMetadataFilterIntegration:
+    """End-to-end metadata filtering through a real PostgreSQL backend."""
+
+    @pytest.mark.asyncio
+    async def test_metadata_filter_through_postgres(self) -> None:
+        """Save and query with metadata through a real AsyncPostgresDatabase."""
+        from dataknobs_data.backends.postgres import AsyncPostgresDatabase
+
+        db = AsyncPostgresDatabase({
+            "host": os.getenv("POSTGRES_HOST", "localhost"),
+            "port": int(os.getenv("POSTGRES_PORT", "5432")),
+            "database": os.getenv("POSTGRES_DB", "dataknobs_test"),
+            "user": os.getenv("POSTGRES_USER", "postgres"),
+            "password": os.getenv("POSTGRES_PASSWORD", "postgres"),
+            "table": f"test_histories_{uuid.uuid4().hex[:8]}",
+        })
+        await db.connect()
+        try:
+            config = StorageConfig(backend=StorageBackend.POSTGRES)
+            storage = UnifiedDatabaseStorage(config, database=db)
+            await storage.initialize()
+
+            await storage.save_history(
+                _make_history("exec_1"),
+                metadata={"tenant_id": "T-1"},
+            )
+            await storage.save_history(
+                _make_history("exec_2"),
+                metadata={"tenant_id": "T-2"},
+            )
+
+            results = await storage.query_histories(
+                {"metadata.tenant_id": "T-1"}
+            )
+            assert len(results) == 1
+            assert results[0]["id"] == "exec_1"
+            assert results[0]["metadata"]["tenant_id"] == "T-1"
+        finally:
+            await db.close()

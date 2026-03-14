@@ -351,3 +351,58 @@ class TestRecord:
         assert record["_private"] == "secret"
         with pytest.raises(AttributeError):
             _ = record._private
+
+
+class TestRecordMetadataNotPolluted:
+    """Record.__init__ must not write internal bookkeeping into caller metadata."""
+
+    def test_data_id_does_not_pollute_metadata(self) -> None:
+        """An 'id' field in data must NOT appear in metadata."""
+        record = Record(
+            data={"id": "abc-123", "name": "test"},
+            metadata={"tenant_id": "T-1"},
+        )
+        assert record.metadata == {"tenant_id": "T-1"}
+        # id should still be accessible via the property
+        assert record.id == "abc-123"
+
+    def test_empty_metadata_stays_empty_with_data_id(self) -> None:
+        """Empty metadata must not gain an 'id' key from data."""
+        record = Record(
+            data={"id": "abc-123", "name": "test"},
+            metadata={},
+        )
+        assert record.metadata == {}
+        assert record.id == "abc-123"
+
+    def test_record_id_does_not_pollute_metadata(self) -> None:
+        """A 'record_id' field in data must NOT appear in metadata."""
+        record = Record(
+            data={"record_id": "rec-456", "name": "test"},
+            metadata={"source": "api"},
+        )
+        assert record.metadata == {"source": "api"}
+        assert record.id == "rec-456"
+
+    def test_caller_metadata_id_not_overwritten(self) -> None:
+        """Caller's metadata 'id' must not be overwritten by data 'id'."""
+        record = Record(
+            data={"id": "data-id", "name": "test"},
+            metadata={"id": "caller-id"},
+        )
+        # Caller explicitly put 'id' in metadata — it should be preserved
+        assert record.metadata["id"] == "caller-id"
+
+    def test_id_setter_does_not_pollute_metadata(self) -> None:
+        """Setting record.id must not write to metadata."""
+        record = Record(data={"name": "test"}, metadata={"tenant": "T-1"})
+        record.id = "new-id"
+        assert record.id == "new-id"
+        assert record.metadata == {"tenant": "T-1"}
+
+    def test_generate_id_does_not_pollute_metadata(self) -> None:
+        """generate_id() must not write to metadata."""
+        record = Record(data={"name": "test"}, metadata={})
+        generated = record.generate_id()
+        assert record.id == generated
+        assert record.metadata == {}

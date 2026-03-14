@@ -168,6 +168,42 @@ if "temperature" in record:
     print(f"Temperature: {record.temperature}°C")
 ```
 
+### Nested Value Access (Dot-Notation)
+
+`get_value()` supports dot-notation for accessing nested values within
+fields and metadata.  The same convention is used by the Query/Filter system
+across all backends, so what you can access with `get_value()` you can also
+filter on.
+
+```python
+record = Record(
+    data={
+        "name": "Alice",
+        "config": {"timeout": 30, "retry": {"max_attempts": 3}},
+    },
+    metadata={"tenant_id": "T-1", "tags": {"priority": "high"}},
+)
+
+# Access nested data fields
+record.get_value("config.timeout")                # 30
+record.get_value("config.retry.max_attempts")     # 3
+
+# Access metadata fields
+record.get_value("metadata.tenant_id")            # "T-1"
+record.get_value("metadata.tags.priority")         # "high"
+
+# Safe traversal — returns default when path doesn't exist
+record.get_value("config.missing.key", default=0)  # 0
+```
+
+!!! warning "Literal dots in key names"
+
+    Dots are **always** interpreted as path separators.  A JSON key like
+    `"my.field"` cannot be accessed via `get_value("my.field")` — that
+    would look for `record["my"]["field"]` instead.  This convention is
+    shared with the query/filter system: what works in `get_value()` works
+    in `Filter()`, and vice versa.
+
 ### Traditional Field Access (Still Supported)
 
 For backward compatibility and when you need access to Field objects:

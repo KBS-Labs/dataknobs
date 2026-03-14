@@ -1181,11 +1181,10 @@ Metadata filtering uses query-level filtering (not post-filtering), so
 pagination with `limit` and `offset` works correctly — the limit applies
 to matched results, not to pre-filtered results.
 
-> **Backend compatibility:** Metadata filtering delegates to `Record.get_value()`
-> dot-notation traversal and is only supported on backends whose `search()`
-> evaluates filters via `Record.get_value()` — currently **memory** and **file**.
-> Using `metadata.*` filters on other backends (e.g. PostgreSQL, SQLite,
-> Elasticsearch) raises `NotImplementedError`.
+> **Backend compatibility:** Metadata filtering is supported on **all** backends.
+> SQL backends (PostgreSQL, SQLite, DuckDB) use native JSON path extraction
+> in the query layer, while memory and file backends use `Record.get_value()`
+> dot-notation traversal.
 
 #### Return Value
 

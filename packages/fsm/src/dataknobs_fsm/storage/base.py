@@ -150,13 +150,13 @@ class IHistoryStorage(ABC):
                 - ``start_time_before`` — histories started at or before this time
                 - ``failed`` — if ``True``, only histories with failed steps;
                   if ``False``, only histories with no failures
-                - ``metadata.<key>`` — exact match on a metadata field, e.g.
-                  ``{"metadata.work_order_id": "WO-001"}``. Uses
-                  ``Record.get_value()`` dot-notation traversal.  Only
-                  supported on backends whose ``search()`` evaluates filters
-                  via ``Record.get_value()`` (currently ``memory`` and
-                  ``file``).  Raises ``NotImplementedError`` on other
-                  backends.
+                - ``metadata.<key>`` — exact match on a metadata field stored
+                  in the ``Record.metadata`` dict, e.g.
+                  ``{"metadata.work_order_id": "WO-001"}``.  Dot-notation
+                  paths are supported (e.g. ``metadata.tenant.region``).
+                  All backends support this: SQL backends use native JSON
+                  path extraction, memory/file backends use
+                  ``Record.get_value()``.
 
                 Unknown keys are logged as warnings and ignored.
             limit: Maximum results to return.

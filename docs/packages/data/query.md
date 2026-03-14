@@ -75,23 +75,53 @@ query = Query().not_(
 )
 ```
 
-### Nested Field Queries
+### Nested Field Queries (Dot-Notation)
 
-Query nested fields using dot notation:
+Query nested fields using dot notation.  Dots in field names are **always**
+interpreted as JSON path separators — this convention is consistent across
+`Record.get_value()`, in-memory filtering, and all SQL backends (PostgreSQL,
+SQLite, DuckDB).
 
 ```python
-# Query metadata fields
+# Query metadata fields (routes to the "metadata" JSONB column in SQL)
 query = Query(filters=[
     Filter("metadata.type", Operator.EQ, "sensor_reading"),
     Filter("metadata.version", Operator.GTE, 2)
 ])
 
-# Query nested JSON fields
+# Query nested JSON fields within record data
 query = Query(filters=[
     Filter("config.features.auth", Operator.EQ, True),
     Filter("address.city", Operator.EQ, "New York")
 ])
+
+# Mix flat, nested data, and metadata fields
+query = Query(filters=[
+    Filter("status", Operator.EQ, "active"),
+    Filter("config.timeout", Operator.GT, 30),
+    Filter("metadata.tenant_id", Operator.EQ, "T-1")
+])
 ```
+
+#### How It Works Across Backends
+
+| Backend | `metadata.version` | `config.timeout` |
+|---------|---------------------|-------------------|
+| Memory / File | `record.get_value("metadata.version")` | `record.get_value("config.timeout")` |
+| PostgreSQL | `metadata->>'version'` | `data->'config'->>'timeout'` |
+| SQLite | `json_extract(metadata, '$.version')` | `json_extract(data, '$.config.timeout')` |
+| DuckDB | `json_extract_string(metadata, '$.version')` | `json_extract_string(data, '$.config.timeout')` |
+
+Type casting is applied automatically for numeric, boolean, and datetime
+comparisons on PostgreSQL and DuckDB.
+
+!!! warning "Literal dots in JSON keys"
+
+    Because dots are **always** path separators, JSON keys that literally
+    contain a dot (e.g. `{"my.field": 1}`) **cannot** be queried through
+    the filter interface.  This matches the behaviour of
+    `Record.get_value()`, which uses the same convention.  If your data
+    uses dots in key names, flatten or rename them before storage.
 
 ### Range Queries
 

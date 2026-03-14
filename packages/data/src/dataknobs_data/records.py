@@ -123,15 +123,11 @@ class Record:
                 value = self.get_value("id")
                 if value is not None:
                     self._id = str(value)
-                    # Sync to metadata
-                    self.metadata["id"] = self._id
             # Check fields for record_id
             elif "record_id" in self.fields:
                 value = self.get_value("record_id")
                 if value is not None:
                     self._id = str(value)
-                    # Sync to metadata
-                    self.metadata["id"] = self._id
 
     @property
     def storage_id(self) -> str | None:
@@ -188,16 +184,10 @@ class Record:
         """Set the record ID.
 
         This sets the storage_id, which is the database-assigned ID.
-        It does NOT modify user data fields.
+        It does NOT modify user data fields or caller-supplied metadata.
         """
         self._storage_id = value
         self._id = value  # Backwards compatibility
-
-        # Update metadata for backward compatibility
-        if value is not None:
-            self.metadata["id"] = value
-        elif "id" in self.metadata:
-            del self.metadata["id"]
 
     def generate_id(self) -> str:
         """Generate and set a new UUID for this record.
