@@ -558,11 +558,16 @@ class TestPostgresMetadataFilterIntegration:
         from dataknobs_data.backends.postgres import AsyncPostgresDatabase
 
         db = AsyncPostgresDatabase({
+            "host": os.getenv("POSTGRES_HOST", "localhost"),
+            "port": int(os.getenv("POSTGRES_PORT", "5432")),
+            "database": os.getenv("POSTGRES_DB", "dataknobs_test"),
+            "user": os.getenv("POSTGRES_USER", "postgres"),
+            "password": os.getenv("POSTGRES_PASSWORD", "postgres"),
             "table": f"test_histories_{uuid.uuid4().hex[:8]}",
         })
         await db.connect()
         try:
-            config = StorageConfig(backend=StorageBackend.POSTGRESQL)
+            config = StorageConfig(backend=StorageBackend.POSTGRES)
             storage = UnifiedDatabaseStorage(config, database=db)
             await storage.initialize()
 
