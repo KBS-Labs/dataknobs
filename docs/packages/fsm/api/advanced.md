@@ -131,11 +131,11 @@ breakpoints = advanced_fsm.breakpoints  # Returns set of state names
 ### Running to Breakpoint
 
 ```python
-# Synchronous execution (returns StateInstance | None)
+# Synchronous execution (returns StepResult | None)
 context = advanced_fsm.create_context(data)
-state = advanced_fsm.run_until_breakpoint_sync(context, max_steps=1000)
-if state:
-    print(f"Stopped at: {state.definition.name}")
+result = advanced_fsm.run_until_breakpoint_sync(context, max_steps=1000)
+if result:
+    print(f"Stopped at: {result.to_state}")
 
 # Asynchronous execution (returns StepResult | None)
 async with advanced_fsm.execution_context(data) as context:
@@ -847,7 +847,7 @@ for entry in trace:
 | `execute_step_sync(context, arc_name)` | Execute single step (sync) | StepResult |
 | `step(context, arc_name)` | Execute single step (async) | StepResult |
 | `run_until_breakpoint(context, max_steps)` | Run to breakpoint (async) | StepResult \| None |
-| `run_until_breakpoint_sync(context, max_steps)` | Run to breakpoint (sync) | StateInstance \| None |
+| `run_until_breakpoint_sync(context, max_steps)` | Run to breakpoint (sync) | StepResult \| None |
 | `trace_execution(data, initial_state)` | Trace execution (async) | List[Dict] |
 | `trace_execution_sync(data, initial_state, max_steps)` | Trace execution (sync) | List[Dict] |
 | `profile_execution(data, initial_state)` | Profile execution (async) | Dict |
@@ -871,7 +871,7 @@ for entry in trace:
 |--------|-------------|---------|
 | `start(data, initial_state)` | Start debug session | None |
 | `step()` | Execute single step | StepResult |
-| `continue_to_breakpoint()` | Continue to breakpoint | StateInstance \| None |
+| `continue_to_breakpoint()` | Continue to breakpoint | StepResult \| None |
 | `inspect(path)` | Inspect data at path | Any |
 | `watch(name, path)` | Add watch expression | None |
 | `unwatch(name)` | Remove watch | None |

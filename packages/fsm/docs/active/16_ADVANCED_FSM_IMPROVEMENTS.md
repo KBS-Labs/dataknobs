@@ -93,7 +93,7 @@ def steps(self) -> List[ExecutionStep]:
 def execute_step_sync(self, context, arc_name=None) -> StepResult:
     """Execute a single transition step synchronously."""
 
-def run_until_breakpoint_sync(self, context, max_steps=1000) -> StateInstance:
+def run_until_breakpoint_sync(self, context, max_steps=1000) -> StepResult | None:
     """Run execution until a breakpoint is hit (synchronous)."""
 
 def trace_execution_sync(self, data, initial_state=None, max_steps=1000) -> List[Dict]:
@@ -141,7 +141,7 @@ class FSMDebugger:
     def step(self) -> StepResult:
         """Execute single step and return detailed result."""
 
-    def continue_to_breakpoint(self) -> StateInstance:
+    def continue_to_breakpoint(self) -> StepResult | None:
         """Continue execution until a breakpoint is hit."""
 
     def inspect(self, path="") -> Any:
