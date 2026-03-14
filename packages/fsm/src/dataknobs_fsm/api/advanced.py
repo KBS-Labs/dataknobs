@@ -686,6 +686,7 @@ class AdvancedFSM:
             StepResult where execution stopped, or None if no steps taken
         """
         last_result: StepResult | None = None
+        data_before = context.get_data_snapshot()
         for _ in range(max_steps):
             # Check if current state is a breakpoint before stepping
             if context.current_state in self._breakpoints:
@@ -693,6 +694,7 @@ class AdvancedFSM:
                     from_state=context.current_state or "unknown",
                     to_state=context.current_state or "unknown",
                     transition="none",
+                    data_before=data_before,
                     data_after=context.get_data_snapshot(),
                     success=True,
                     at_breakpoint=True,
@@ -702,6 +704,7 @@ class AdvancedFSM:
             # Step to next state
             result = await self.step(context)
             last_result = result
+            data_before = context.get_data_snapshot()
 
             # Check if we reached an end state or no transition occurred
             if not result.success or result.is_complete or result.transition == "none":
@@ -782,21 +785,9 @@ class AdvancedFSM:
         total_time = time.time() - start_time
 
         # Compute statistics
-        self._profile_data = {
-            'total_time': total_time,
-            'transitions': transitions,
-            'avg_transition_time': total_time / transitions if transitions > 0 else 0,
-            'state_times': {
-                state: {
-                    'count': len(times),
-                    'total': sum(times),
-                    'avg': sum(times) / len(times),
-                    'min': min(times),
-                    'max': max(times)
-                }
-                for state, times in state_times.items()
-            }
-        }
+        self._profile_data = self._compute_profile_stats(
+            total_time, transitions, state_times, context,
+        )
 
         return self._profile_data
 
@@ -972,15 +963,14 @@ class AdvancedFSM:
     # ========== Shared Helper Methods ==========
     # These methods contain logic shared between sync and async implementations
 
-    def _enter_initial_state_sync(
+    def _prepare_initial_state(
         self, context: ExecutionContext
     ) -> StepResult | None:
-        """Ensure initial state is entered with transforms (sync).
+        """Find and set the initial state if needed.
 
-        Called at the start of execute_step_sync(). Returns None on
-        success, or a StepResult error if initial state can't be found.
-
-        Idempotent: uses context flag to run transforms exactly once.
+        Returns a ``StepResult`` error when no initial state can be
+        found, or ``None`` on success.  Does **not** run state
+        transforms — callers handle that (sync vs async).
         """
         if not context.current_state:
             initial_state = self._find_initial_state()
@@ -995,45 +985,35 @@ class AdvancedFSM:
                 )
             context.set_state(initial_state)
             self._update_state_instance(context, initial_state)
+        return None
 
-        # Run transforms exactly once for the initial state
+    def _enter_initial_state_sync(
+        self, context: ExecutionContext
+    ) -> StepResult | None:
+        """Ensure initial state is entered with transforms (sync)."""
+        error = self._prepare_initial_state(context)
+        if error is not None:
+            return error
         if not context._initial_transforms_executed:
             self._engine._execute_state_transforms(
                 context, context.current_state
             )
             context._initial_transforms_executed = True
-
-        return None  # Success
+        return None
 
     async def _enter_initial_state_async(
         self, context: ExecutionContext
     ) -> StepResult | None:
-        """Ensure initial state is entered with transforms (async).
-
-        Async mirror of _enter_initial_state_sync().
-        """
-        if not context.current_state:
-            initial_state = self._find_initial_state()
-            if not initial_state:
-                return StepResult(
-                    from_state="initial", to_state="initial",
-                    transition="error",
-                    data_before=context.get_data_snapshot(),
-                    data_after=context.get_data_snapshot(),
-                    duration=0.0, success=False,
-                    error="No initial state found",
-                )
-            context.set_state(initial_state)
-            self._update_state_instance(context, initial_state)
-
-        # Run transforms exactly once for the initial state
+        """Ensure initial state is entered with transforms (async)."""
+        error = self._prepare_initial_state(context)
+        if error is not None:
+            return error
         if not context._initial_transforms_executed:
             await self._execute_state_transforms_async(
                 context, context.current_state
             )
             context._initial_transforms_executed = True
-
-        return None  # Success
+        return None
 
     def _check_transition_signal(
         self,
@@ -1069,62 +1049,70 @@ class AdvancedFSM:
         )
         return None
 
+    def _resolve_test_function(self, pre_test_name: str) -> Callable | None:
+        """Look up a pre-test function by name in the FSM registry."""
+        registry = getattr(self.fsm, 'function_registry', {})
+        if hasattr(registry, 'functions'):
+            functions = registry.functions
+        else:
+            functions = registry
+        return functions.get(pre_test_name) or self._custom_functions.get(pre_test_name)
+
+    @staticmethod
+    def _test_result_is_truthy(result: Any) -> bool:
+        """Normalize pre-test result (handles ``(bool, reason)`` tuples)."""
+        if isinstance(result, tuple):
+            result = result[0]
+        return bool(result)
+
+    def _get_candidate_arcs(
+        self,
+        context: ExecutionContext,
+        arc_name: str | None = None,
+    ) -> list | None:
+        """Shared preamble for transition discovery.
+
+        Returns ``None`` when callers should proceed to arc evaluation,
+        or a (possibly empty) list when the result is already known
+        (no current state, or a transition signal was found).
+        """
+        if not context.current_state:
+            return []
+        signaled = self._check_transition_signal(context)
+        if signaled is not None:
+            return signaled
+        return None
+
     def _get_available_transitions(
         self,
         context: ExecutionContext,
         arc_name: str | None = None
     ) -> list:
-        """Get available transitions from current state (shared logic).
+        """Get available transitions from current state (sync)."""
+        early = self._get_candidate_arcs(context, arc_name)
+        if early is not None:
+            return early
 
-        Args:
-            context: Execution context
-            arc_name: Optional specific arc to filter for
-
-        Returns:
-            List of available arcs
-        """
-        transitions = []
-        if not context.current_state:
-            return transitions
-
-        # Check for transition signal from a previous transform
-        signaled = self._check_transition_signal(context)
-        if signaled is not None:
-            return signaled
-
-        # Get arcs from current state
         arcs = self.fsm.get_outgoing_arcs(context.current_state)
-
+        transitions: list[Any] = []
         for arc in arcs:
-            # Filter by arc name if specified
             if arc_name and arc.name != arc_name:
                 continue
-
-            # Check arc condition
             if arc.pre_test:
-                # Get function registry
-                registry = getattr(self.fsm, 'function_registry', {})
-                if hasattr(registry, 'functions'):
-                    functions = registry.functions
-                else:
-                    functions = registry
-
-                # Check in registry and custom functions
-                test_func = functions.get(arc.pre_test) or self._custom_functions.get(arc.pre_test)
+                test_func = self._resolve_test_function(arc.pre_test)
                 if test_func:
                     try:
                         result = test_func(context.data, context)
-                        # Handle tuple return from test functions (bool, reason)
-                        if isinstance(result, tuple):
-                            result = result[0]
-                        if result:
-                            transitions.append(arc)
                     except Exception:
-                        pass
+                        logger.debug(
+                            "Pre-test '%s' for arc '%s' raised — arc skipped",
+                            arc.pre_test, arc.name, exc_info=True,
+                        )
+                        continue
+                    if self._test_result_is_truthy(result):
+                        transitions.append(arc)
             else:
-                # No condition, arc is always available
                 transitions.append(arc)
-
         return transitions
 
     @staticmethod
@@ -1159,29 +1147,22 @@ class AdvancedFSM:
             return [transform]
         return []
 
-    def _execute_arc_transform(
+    def _prepare_arc_execution(
         self,
         arc: Any,
         context: ExecutionContext,
-    ) -> tuple[bool, Any]:
-        """Execute arc transform function by delegating to ArcExecution.
+    ) -> Any:
+        """Build an ``ArcExecution`` from an arc and context.
 
-        Args:
-            arc: Arc with potential transform.
-            context: Execution context.
+        Handles transform name normalization, ``ArcDefinition``
+        construction, and function registry merging.
 
-        Returns:
-            Tuple of (success, result_or_error).
+        Callers must check ``arc.transform`` before calling — this
+        method always returns an ``ArcExecution`` instance.
         """
-        if not arc.transform:
-            return True, context.data
-
         from ..core.arc import ArcDefinition, ArcExecution
 
-        # Normalize transform names (handles stringified lists from old builders)
         normalized = self._normalize_transform_names(arc.transform)
-
-        # Build ArcDefinition from network Arc
         arc_def = ArcDefinition(
             target_state=arc.target_state,
             pre_test=arc.pre_test,
@@ -1190,7 +1171,6 @@ class AdvancedFSM:
         )
         source_state = getattr(arc, "source_state", context.current_state or "")
 
-        # Merge FSM function registry with custom functions
         registry = getattr(self.fsm, "function_registry", {})
         if hasattr(registry, "functions"):
             functions = dict(registry.functions)
@@ -1198,7 +1178,17 @@ class AdvancedFSM:
             functions = dict(registry)
         functions.update(self._custom_functions)
 
-        arc_exec = ArcExecution(arc_def, source_state, functions)
+        return ArcExecution(arc_def, source_state, functions)
+
+    def _execute_arc_transform(
+        self,
+        arc: Any,
+        context: ExecutionContext,
+    ) -> tuple[bool, Any]:
+        """Execute arc transform (sync)."""
+        if not arc.transform:
+            return True, context.data
+        arc_exec = self._prepare_arc_execution(arc, context)
         try:
             result = arc_exec.execute(context, context.data)
             return True, result
@@ -1288,6 +1278,24 @@ class AdvancedFSM:
             )
             step.complete(arc_taken=arc_name or 'transition')
 
+    def _apply_transition(
+        self,
+        from_state: str,
+        arc: Any,
+        context: ExecutionContext,
+    ) -> bool:
+        """Post-transition bookkeeping shared by sync and async paths.
+
+        Updates state, state instance, records trace and history.
+        Returns whether the new state is a breakpoint.
+        """
+        context.set_state(arc.target_state)
+        self._update_state_instance(context, arc.target_state)
+        at_breakpoint = arc.target_state in self._breakpoints
+        self._record_trace_entry(from_state, arc.target_state, arc.name, context)
+        self._record_history_step(arc.target_state, arc.name, context)
+        return at_breakpoint
+
     def _call_hook_sync(
         self,
         hook_name: str,
@@ -1331,62 +1339,33 @@ class AdvancedFSM:
         context: ExecutionContext,
         arc_name: str | None = None
     ) -> list:
-        """Get available transitions, awaiting async pre-tests.
+        """Get available transitions, awaiting async pre-tests."""
+        early = self._get_candidate_arcs(context, arc_name)
+        if early is not None:
+            return early
 
-        Mirrors _get_available_transitions() but awaits the result
-        when a pre-test function returns a coroutine.
-
-        Args:
-            context: Execution context
-            arc_name: Optional specific arc to filter for
-
-        Returns:
-            List of available arcs
-        """
-        transitions = []
-        if not context.current_state:
-            return transitions
-
-        # Check for transition signal from a previous transform
-        signaled = self._check_transition_signal(context)
-        if signaled is not None:
-            return signaled
-
-        # Get arcs from current state
         arcs = self.fsm.get_outgoing_arcs(context.current_state)
-
+        transitions: list[Any] = []
         for arc in arcs:
-            # Filter by arc name if specified
             if arc_name and arc.name != arc_name:
                 continue
-
-            # Check arc condition
             if arc.pre_test:
-                # Get function registry
-                registry = getattr(self.fsm, 'function_registry', {})
-                if hasattr(registry, 'functions'):
-                    functions = registry.functions
-                else:
-                    functions = registry
-
-                # Check in registry and custom functions
-                test_func = functions.get(arc.pre_test) or self._custom_functions.get(arc.pre_test)
+                test_func = self._resolve_test_function(arc.pre_test)
                 if test_func:
                     try:
                         result = test_func(context.data, context)
                         if inspect.isawaitable(result):
                             result = await result
-                        # Handle tuple return from test functions (bool, reason)
-                        if isinstance(result, tuple):
-                            result = result[0]
-                        if result:
-                            transitions.append(arc)
                     except Exception:
-                        pass
+                        logger.debug(
+                            "Pre-test '%s' for arc '%s' raised — arc skipped",
+                            arc.pre_test, arc.name, exc_info=True,
+                        )
+                        continue
+                    if self._test_result_is_truthy(result):
+                        transitions.append(arc)
             else:
-                # No condition, arc is always available
                 transitions.append(arc)
-
         return transitions
 
     async def _execute_arc_transform_async(
@@ -1394,43 +1373,10 @@ class AdvancedFSM:
         arc: Any,
         context: ExecutionContext,
     ) -> tuple[bool, Any]:
-        """Execute arc transform, awaiting async transforms.
-
-        Mirrors _execute_arc_transform() but uses ArcExecution.execute_async().
-
-        Args:
-            arc: Arc with potential transform.
-            context: Execution context.
-
-        Returns:
-            Tuple of (success, result_or_error).
-        """
+        """Execute arc transform (async)."""
         if not arc.transform:
             return True, context.data
-
-        from ..core.arc import ArcDefinition, ArcExecution
-
-        # Normalize transform names (handles stringified lists from old builders)
-        normalized = self._normalize_transform_names(arc.transform)
-
-        # Build ArcDefinition from network Arc
-        arc_def = ArcDefinition(
-            target_state=arc.target_state,
-            pre_test=arc.pre_test,
-            transform=normalized if len(normalized) != 1 else normalized[0],
-            metadata=getattr(arc, "metadata", {}),
-        )
-        source_state = getattr(arc, "source_state", context.current_state or "")
-
-        # Merge FSM function registry with custom functions
-        registry = getattr(self.fsm, "function_registry", {})
-        if hasattr(registry, "functions"):
-            functions = dict(registry.functions)
-        else:
-            functions = dict(registry)
-        functions.update(self._custom_functions)
-
-        arc_exec = ArcExecution(arc_def, source_state, functions)
+        arc_exec = self._prepare_arc_execution(arc, context)
         try:
             result = await arc_exec.execute_async(context, context.data)
             return True, result
@@ -1521,92 +1467,57 @@ class AdvancedFSM:
         data_before = context.get_data_snapshot()
 
         try:
-            # Enter initial state (handles pre-set case, runs transforms once)
             error_result = self._enter_initial_state_sync(context)
             if error_result is not None:
                 return error_result
             from_state = context.current_state or from_state
 
-            # Use shared logic to get transitions
             transitions = self._get_available_transitions(context, arc_name)
-
             if not transitions:
-                # No transitions available
                 return StepResult(
-                    from_state=from_state,
-                    to_state=from_state,
-                    transition="none",
-                    data_before=data_before,
+                    from_state=from_state, to_state=from_state,
+                    transition="none", data_before=data_before,
                     data_after=context.get_data_snapshot(),
-                    duration=time.time() - start_time,
-                    success=True,
-                    is_complete=self._is_at_end_state(context)
+                    duration=time.time() - start_time, success=True,
+                    is_complete=self._is_at_end_state(context),
                 )
 
-            # Take first valid transition (could be enhanced with strategy selection)
             arc = transitions[0]
-
-            # Execute arc transform using shared logic
             success, result = self._execute_arc_transform(arc, context)
             if success:
                 context.data = result
             else:
                 return StepResult(
-                    from_state=from_state,
-                    to_state=from_state,
-                    transition=arc.name or "error",
-                    data_before=data_before,
+                    from_state=from_state, to_state=from_state,
+                    transition=arc.name or "error", data_before=data_before,
                     data_after=context.get_data_snapshot(),
                     duration=time.time() - start_time,
-                    success=False,
-                    error=result
+                    success=False, error=result,
                 )
 
-            # Update state
-            context.set_state(arc.target_state)
-            self._update_state_instance(context, arc.target_state)
-
-            # Execute state transforms when entering the new state
-            # This is critical for sync execution to match async behavior
+            at_breakpoint = self._apply_transition(from_state, arc, context)
             self._engine._execute_state_transforms(context, arc.target_state)
-
-            # Check if we hit a breakpoint
-            at_breakpoint = arc.target_state in self._breakpoints
-
-            # Record in trace buffer if in trace mode
-            self._record_trace_entry(from_state, arc.target_state, arc.name, context)
-
-            # Record in history if enabled
-            self._record_history_step(arc.target_state, arc.name, context)
-
-            # Call hooks if configured
             self._call_hook_sync('on_state_exit', from_state)
             self._call_hook_sync('on_state_enter', arc.target_state)
 
             return StepResult(
-                from_state=from_state,
-                to_state=arc.target_state,
+                from_state=from_state, to_state=arc.target_state,
                 transition=arc.name or f"{from_state}->{arc.target_state}",
                 data_before=data_before,
                 data_after=context.get_data_snapshot(),
-                duration=time.time() - start_time,
-                success=True,
+                duration=time.time() - start_time, success=True,
                 at_breakpoint=at_breakpoint,
-                is_complete=self._is_at_end_state(context)
+                is_complete=self._is_at_end_state(context),
             )
 
         except Exception as e:
             self._call_hook_sync('on_error', e)
-
             return StepResult(
-                from_state=from_state,
-                to_state=from_state,
-                transition="error",
-                data_before=data_before,
+                from_state=from_state, to_state=from_state,
+                transition="error", data_before=data_before,
                 data_after=context.get_data_snapshot(),
                 duration=time.time() - start_time,
-                success=False,
-                error=str(e)
+                success=False, error=str(e),
             )
 
     async def execute_step_async(
@@ -1615,9 +1526,6 @@ class AdvancedFSM:
         arc_name: str | None = None
     ) -> StepResult:
         """Execute a single transition step asynchronously.
-
-        Mirrors execute_step_sync() but awaits async pre-tests,
-        transforms, state transforms, and hooks.
 
         Args:
             context: Execution context
@@ -1631,98 +1539,64 @@ class AdvancedFSM:
         data_before = context.get_data_snapshot()
 
         try:
-            # Enter initial state (handles pre-set case, runs transforms once)
             error_result = await self._enter_initial_state_async(context)
             if error_result is not None:
                 return error_result
             from_state = context.current_state or from_state
 
-            # Use async logic to get transitions
             transitions = await self._get_available_transitions_async(context, arc_name)
-
             if not transitions:
-                # No transitions available
                 return StepResult(
-                    from_state=from_state,
-                    to_state=from_state,
-                    transition="none",
-                    data_before=data_before,
+                    from_state=from_state, to_state=from_state,
+                    transition="none", data_before=data_before,
                     data_after=context.get_data_snapshot(),
-                    duration=time.time() - start_time,
-                    success=True,
-                    is_complete=self._is_at_end_state(context)
+                    duration=time.time() - start_time, success=True,
+                    is_complete=self._is_at_end_state(context),
                 )
 
-            # Take first valid transition
             arc = transitions[0]
-
-            # Execute arc transform using async logic
             success, result = await self._execute_arc_transform_async(arc, context)
             if success:
                 context.data = result
             else:
                 return StepResult(
-                    from_state=from_state,
-                    to_state=from_state,
-                    transition=arc.name or "error",
-                    data_before=data_before,
+                    from_state=from_state, to_state=from_state,
+                    transition=arc.name or "error", data_before=data_before,
                     data_after=context.get_data_snapshot(),
                     duration=time.time() - start_time,
-                    success=False,
-                    error=result
+                    success=False, error=result,
                 )
 
-            # Update state
-            context.set_state(arc.target_state)
-            self._update_state_instance(context, arc.target_state)
-
-            # Execute state transforms asynchronously
+            at_breakpoint = self._apply_transition(from_state, arc, context)
             await self._execute_state_transforms_async(context, arc.target_state)
-
-            # Check if we hit a breakpoint
-            at_breakpoint = arc.target_state in self._breakpoints
-
-            # Record in trace buffer if in trace mode
-            self._record_trace_entry(from_state, arc.target_state, arc.name, context)
-
-            # Record in history if enabled
-            self._record_history_step(arc.target_state, arc.name, context)
-
-            # Call hooks asynchronously
             await self._call_hook_async('on_state_exit', from_state)
             await self._call_hook_async('on_state_enter', arc.target_state)
 
             return StepResult(
-                from_state=from_state,
-                to_state=arc.target_state,
+                from_state=from_state, to_state=arc.target_state,
                 transition=arc.name or f"{from_state}->{arc.target_state}",
                 data_before=data_before,
                 data_after=context.get_data_snapshot(),
-                duration=time.time() - start_time,
-                success=True,
+                duration=time.time() - start_time, success=True,
                 at_breakpoint=at_breakpoint,
-                is_complete=self._is_at_end_state(context)
+                is_complete=self._is_at_end_state(context),
             )
 
         except Exception as e:
             await self._call_hook_async('on_error', e)
-
             return StepResult(
-                from_state=from_state,
-                to_state=from_state,
-                transition="error",
-                data_before=data_before,
+                from_state=from_state, to_state=from_state,
+                transition="error", data_before=data_before,
                 data_after=context.get_data_snapshot(),
                 duration=time.time() - start_time,
-                success=False,
-                error=str(e)
+                success=False, error=str(e),
             )
 
     def run_until_breakpoint_sync(
         self,
         context: ExecutionContext,
         max_steps: int = 1000
-    ) -> StateInstance | None:
+    ) -> StepResult | None:
         """Run execution until a breakpoint is hit (synchronous).
 
         Args:
@@ -1730,25 +1604,31 @@ class AdvancedFSM:
             max_steps: Maximum steps to execute
 
         Returns:
-            State instance where execution stopped
+            StepResult where execution stopped, or None if no steps taken
         """
+        last_result: StepResult | None = None
+        data_before = context.get_data_snapshot()
         for _ in range(max_steps):
-            # Check if at breakpoint
             if context.current_state in self._breakpoints:
-                return context.current_state_instance
+                return StepResult(
+                    from_state=context.current_state or "unknown",
+                    to_state=context.current_state or "unknown",
+                    transition="none",
+                    data_before=data_before,
+                    data_after=context.get_data_snapshot(),
+                    success=True,
+                    at_breakpoint=True,
+                    is_complete=self._is_at_end_state(context),
+                )
 
-            # Execute step
             result = self.execute_step_sync(context)
+            last_result = result
+            data_before = context.get_data_snapshot()
 
-            # Check for completion or error
-            if not result.success or result.is_complete:
-                return context.current_state_instance
+            if not result.success or result.is_complete or result.transition == "none":
+                return result
 
-            # Check if stuck
-            if result.from_state == result.to_state and result.transition == "none":
-                return context.current_state_instance
-
-        return context.current_state_instance
+        return last_result
 
     def trace_execution_sync(
         self,
@@ -1834,27 +1714,57 @@ class AdvancedFSM:
             if result.from_state == result.to_state and result.transition == "none":
                 break
 
-        # Calculate statistics
-        self._profile_data = {
-            'total_time': time.time() - start_time,
+        total_time = time.time() - start_time
+        self._profile_data = self._compute_profile_stats(
+            total_time, transitions, state_times, context,
+            transition_times=transition_times,
+        )
+
+        return self._profile_data
+
+    @staticmethod
+    def _compute_profile_stats(
+        total_time: float,
+        transitions: int,
+        state_times: dict[str, list[float]],
+        context: ExecutionContext,
+        transition_times: list[float] | None = None,
+    ) -> dict[str, Any]:
+        """Compute profiling statistics shared by sync and async paths.
+
+        Args:
+            total_time: Total wall-clock time for the execution.
+            transitions: Number of successful state-to-state transitions.
+            state_times: Per-state timing lists (time around each step call).
+            context: Execution context (for states_visited count).
+            transition_times: Per-transition durations from ``StepResult.duration``.
+                When provided (sync path), used for ``avg_transition_time``
+                as it measures time inside the step itself.  When ``None``
+                (async path), falls back to flattened ``state_times``.
+        """
+        all_durations = transition_times or [
+            d for times in state_times.values() for d in times
+        ]
+        return {
+            'total_time': total_time,
             'transitions': transitions,
             'states_visited': len(state_times),
-            'avg_transition_time': sum(transition_times) / len(transition_times) if transition_times else 0,
+            'avg_transition_time': (
+                sum(all_durations) / len(all_durations) if all_durations else 0
+            ),
             'state_times': {
                 state: {
                     'count': len(times),
                     'total': sum(times),
                     'avg': sum(times) / len(times),
                     'min': min(times),
-                    'max': max(times)
+                    'max': max(times),
                 }
                 for state, times in state_times.items()
             },
             'final_state': context.current_state,
-            'final_data': context.get_data_snapshot()
+            'final_data': context.get_data_snapshot(),
         }
-
-        return self._profile_data
 
 
 class FSMDebugger:
@@ -1943,27 +1853,50 @@ class FSMDebugger:
 
         return result
 
-    def continue_to_breakpoint(self) -> StateInstance | None:
+    def continue_to_breakpoint(self, max_steps: int = 1000) -> StepResult | None:
         """Continue execution until a breakpoint is hit.
 
+        Steps are recorded in ``execution_history`` and counted in
+        ``step_count``, keeping the debugger state consistent with
+        the actual execution path.
+
+        Args:
+            max_steps: Safety limit to prevent infinite loops.
+
         Returns:
-            State instance where execution stopped
+            StepResult where execution stopped, or None if no session
         """
         if not self.context:
             print("No active debugging session")
             return None
 
         print(f"Continuing from state: {self.context.current_state}")
-        final_state = self.fsm.run_until_breakpoint_sync(self.context)
-
-        if final_state:
-            print(f"Stopped at: {self.context.current_state}")
+        last_result: StepResult | None = None
+        for _ in range(max_steps):
             if self.context.current_state in self.fsm._breakpoints:
+                print(f"Stopped at: {self.context.current_state}")
                 print("*** At breakpoint ***")
-            if self.context.is_complete():
-                print("*** Execution complete ***")
+                if last_result is not None:
+                    return last_result
+                # Already at breakpoint before any step — synthesize result
+                return StepResult(
+                    from_state=self.context.current_state or "unknown",
+                    to_state=self.context.current_state or "unknown",
+                    transition="none",
+                    data_before=self.context.get_data_snapshot(),
+                    data_after=self.context.get_data_snapshot(),
+                    success=True,
+                    at_breakpoint=True,
+                    is_complete=self.fsm._is_at_end_state(self.context),
+                )
 
-        return final_state
+            result = self.step()
+            last_result = result
+
+            if not result.success or result.is_complete or result.transition == "none":
+                return result
+
+        return last_result
 
     def inspect(self, path: str = "") -> Any:
         """Inspect data at path.

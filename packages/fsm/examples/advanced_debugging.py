@@ -351,7 +351,7 @@ def demonstrate_execution_with_breakpoints():
         state = fsm.run_until_breakpoint_sync(context)
 
         if state:
-            current = state.definition.name
+            current = state.to_state
 
             # Check if we're at a breakpoint
             if current in fsm.breakpoints:

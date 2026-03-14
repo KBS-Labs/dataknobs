@@ -10,7 +10,7 @@ the FSMDebugger class.
 import pytest
 import time
 from typing import Dict, Any, List
-from unittest.mock import Mock, patch
+
 
 from dataknobs_fsm.api.advanced import (
     AdvancedFSM,
@@ -176,9 +176,10 @@ class TestBreakpointExecution:
         context = fsm.create_context(valid_test_data)
 
         # Run until first breakpoint
-        state = fsm.run_until_breakpoint_sync(context)
-        assert state is not None
-        assert state.definition.name == 'process'
+        result = fsm.run_until_breakpoint_sync(context)
+        assert result is not None
+        assert result.at_breakpoint is True
+        assert result.to_state == 'process'
 
         # Verify we're at the breakpoint
         assert context.get_current_state() == 'process'
@@ -188,9 +189,10 @@ class TestBreakpointExecution:
         assert result.to_state == 'enrich'
 
         # Run until next breakpoint
-        state = fsm.run_until_breakpoint_sync(context)
-        assert state is not None
-        assert state.definition.name == 'format'
+        result = fsm.run_until_breakpoint_sync(context)
+        assert result is not None
+        assert result.at_breakpoint is True
+        assert result.to_state == 'format'
 
         # Continue to completion - step once more to finish
         result = fsm.execute_step_sync(context)  # format -> success
@@ -393,18 +395,18 @@ class TestFSMDebugger:
         debugger.start(valid_test_data)
 
         # Continue to first breakpoint
-        state = debugger.continue_to_breakpoint()
-        assert state is not None
-        assert state.definition.name == 'process'
+        result = debugger.continue_to_breakpoint()
+        assert result is not None
+        assert result.at_breakpoint is True
         assert debugger.current_state == 'process'
 
         # Step once to move past process breakpoint
         debugger.step()  # process -> enrich
 
         # Continue to next breakpoint
-        state = debugger.continue_to_breakpoint()
-        assert state is not None
-        assert state.definition.name == 'format'
+        result = debugger.continue_to_breakpoint()
+        assert result is not None
+        assert result.at_breakpoint is True
         assert debugger.current_state == 'format'
 
     def test_debugger_history(self, fsm, valid_test_data):
