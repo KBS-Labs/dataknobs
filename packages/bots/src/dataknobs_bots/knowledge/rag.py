@@ -82,8 +82,9 @@ class RAGKnowledgeBase(KnowledgeBase):
         Args:
             config: Configuration dictionary with:
                 - vector_store: Vector store configuration
-                - embedding_provider: LLM provider name
-                - embedding_model: Model for embeddings
+                - embedding: Nested embedding config dict (preferred), e.g.
+                  ``{"provider": "ollama", "model": "nomic-embed-text"}``
+                - embedding_provider / embedding_model: Legacy flat keys
                 - chunking: Optional chunking configuration
                 - documents_path: Optional path to load documents from
                 - document_pattern: Optional glob pattern for documents
@@ -96,11 +97,13 @@ class RAGKnowledgeBase(KnowledgeBase):
             config = {
                 "vector_store": {
                     "backend": "faiss",
-                    "dimensions": 1536,
+                    "dimensions": 768,
                     "collection": "docs"
                 },
-                "embedding_provider": "openai",
-                "embedding_model": "text-embedding-3-small",
+                "embedding": {
+                    "provider": "ollama",
+                    "model": "nomic-embed-text",
+                },
                 "chunking": {
                     "max_chunk_size": 500,
                     "chunk_overlap": 50

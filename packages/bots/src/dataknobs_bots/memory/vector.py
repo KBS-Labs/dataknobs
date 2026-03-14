@@ -74,8 +74,9 @@ class VectorMemory(Memory):
                 - backend: Vector store backend type
                 - dimension: Vector dimension (optional, depends on backend)
                 - collection: Collection/index name (optional)
-                - embedding_provider: LLM provider name for embeddings
-                - embedding_model: Model to use for embeddings
+                - embedding: Nested embedding config dict (preferred), e.g.
+                  ``{"provider": "ollama", "model": "nomic-embed-text"}``
+                - embedding_provider / embedding_model: Legacy flat keys
                 - max_results: Max results to return (default 5)
                 - similarity_threshold: Min similarity score (default 0.7)
 
