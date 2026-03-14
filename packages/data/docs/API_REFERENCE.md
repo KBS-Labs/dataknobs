@@ -87,6 +87,14 @@ record = Record(
 name = record.get_value("name")
 age = record.get_value("age", default=0)
 
+# Dot-notation for nested fields and metadata
+record2 = Record(
+    data={"config": {"timeout": 30}},
+    metadata={"tenant_id": "T-1"}
+)
+record2.get_value("config.timeout")          # 30
+record2.get_value("metadata.tenant_id")      # "T-1"
+
 # Set values
 record.set_value("email", "alice@example.com")
 
@@ -97,6 +105,11 @@ if record.has_field("email"):
 # Convert to dict
 data_dict = record.to_dict()
 ```
+
+> **Note:** Dots in field names are always interpreted as path separators.
+> JSON keys that literally contain a dot (e.g. `"my.field"`) cannot be
+> accessed via `get_value()` or filtered on.  This convention is consistent
+> across `Record.get_value()` and the Query/Filter system on all backends.
 
 ### Query
 
@@ -116,6 +129,11 @@ query = (Query()
     .sort("age", SortOrder.DESC)
     .limit(10)
     .offset(20))
+
+# Dot-notation for nested and metadata fields (works on all backends)
+query = (Query()
+    .filter("metadata.tenant_id", Operator.EQ, "T-1")
+    .filter("config.timeout", Operator.GT, 30))
 
 # Available operators
 # Operator.EQ - equals

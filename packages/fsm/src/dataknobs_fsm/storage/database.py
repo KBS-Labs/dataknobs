@@ -25,17 +25,6 @@ from dataknobs_fsm.storage.base import BaseHistoryStorage, StorageBackend, Stora
 
 logger = logging.getLogger(__name__)
 
-# Backends whose search() evaluates filters via Record.get_value(),
-# which supports dot-notation traversal into nested fields (e.g.
-# "metadata.work_order_id").  Other backends use native query engines
-# (SQL, Elasticsearch DSL, etc.) and silently ignore dot-notation
-# filter fields — producing incorrect (unfiltered) results.
-_DOT_NOTATION_BACKENDS: frozenset[StorageBackend] = frozenset({
-    StorageBackend.MEMORY,
-    StorageBackend.FILE,
-})
-
-
 class UnifiedDatabaseStorage(BaseHistoryStorage):
     """Unified database storage that works with any dataknobs_data backend.
     
@@ -180,11 +169,6 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
             name='history_data',
             type=FieldType.JSON
         ))
-        schema.add_field(FieldSchema(
-            name='metadata',
-            type=FieldType.JSON
-        ))
-        
         # Timestamps
         schema.add_field(FieldSchema(
             name='created_at',
@@ -263,23 +247,29 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         # Serialize history based on data mode
         history_data = self._serialize_history(history)
         
-        # Create record using dataknobs_data Record
-        record = Record({
-            'id': str(uuid.uuid4()),
-            'execution_id': history_id,
-            'fsm_name': history.fsm_name,
-            'data_mode': history.data_mode.value,
-            'status': 'completed' if history.end_time else 'in_progress',
-            'start_time': history.start_time,
-            'end_time': history.end_time,
-            'total_steps': history.total_steps,
-            'failed_steps': history.failed_steps,
-            'skipped_steps': history.skipped_steps,
-            'history_data': history_data,
-            'metadata': metadata or {},
-            'created_at': time.time(),
-            'updated_at': time.time()
-        })
+        # Create record using dataknobs_data Record.
+        # Caller-supplied metadata is stored in Record.metadata (the SQL
+        # 'metadata' column) so that dot-notation filters like
+        # "metadata.work_order_id" route to the correct column on all
+        # backends.
+        record = Record(
+            data={
+                'id': str(uuid.uuid4()),
+                'execution_id': history_id,
+                'fsm_name': history.fsm_name,
+                'data_mode': history.data_mode.value,
+                'status': 'completed' if history.end_time else 'in_progress',
+                'start_time': history.start_time,
+                'end_time': history.end_time,
+                'total_steps': history.total_steps,
+                'failed_steps': history.failed_steps,
+                'skipped_steps': history.skipped_steps,
+                'history_data': history_data,
+                'created_at': time.time(),
+                'updated_at': time.time(),
+            },
+            metadata=metadata or {},
+        )
         
         # Save using dataknobs_data interface - just pass the record
         await self._db.upsert(record)
@@ -408,13 +398,6 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
                 else:
                     query = query.filter('failed_steps', '=', 0)
             elif key.startswith('metadata.'):
-                if self.config.backend not in _DOT_NOTATION_BACKENDS:
-                    raise NotImplementedError(
-                        f"Metadata filtering (key {key!r}) is not supported "
-                        f"on the {self.config.backend.value!r} backend. "
-                        f"Supported backends: "
-                        f"{', '.join(b.value for b in sorted(_DOT_NOTATION_BACKENDS, key=lambda b: b.value))}."
-                    )
                 query = query.filter(key, '=', value)
             else:
                 logger.warning(
@@ -438,7 +421,7 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
                 'end_time': record.get_value('end_time'),
                 'total_steps': record['total_steps'],
                 'failed_steps': record['failed_steps'],
-                'metadata': record.get_value('metadata', {})
+                'metadata': record.metadata or {}
             })
         
         return results

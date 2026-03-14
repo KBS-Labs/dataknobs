@@ -283,16 +283,25 @@ class TestUnknownFilterWarning:
         assert len(warning_records) == 0
 
 
-class TestUnsupportedBackendMetadataFilter:
-    """Tests for NotImplementedError on non-dot-notation backends."""
+class TestAllBackendsMetadataFilter:
+    """Tests that metadata filtering works on all backend types.
+
+    SQL backends now handle dot-notation natively via JSONB/JSON path
+    extraction in SQLQueryBuilder, so no backend restriction exists.
+    """
 
     @pytest.mark.asyncio
-    async def test_metadata_filter_raises_on_unsupported_backend(self) -> None:
-        """config.backend not in _DOT_NOTATION_BACKENDS raises NotImplementedError."""
+    async def test_metadata_filter_works_on_sqlite_backend(self) -> None:
+        """Metadata filtering works even when config says sqlite.
+
+        The memory database's search() supports dot-notation via
+        Record.get_value(), and SQL backends now generate correct
+        nested JSON path queries. Either way, no NotImplementedError.
+        """
         from dataknobs_data.backends.memory import AsyncMemoryDatabase
 
         config = StorageConfig(backend=StorageBackend.SQLITE)
-        db = AsyncMemoryDatabase()  # real db, but config says sqlite
+        db = AsyncMemoryDatabase()  # real db, config says sqlite
         storage = UnifiedDatabaseStorage(config, database=db)
         await storage.initialize()
 
@@ -301,12 +310,16 @@ class TestUnsupportedBackendMetadataFilter:
             metadata={"work_order_id": "WO-001"},
         )
 
-        with pytest.raises(NotImplementedError, match="not supported"):
-            await storage.query_histories({"metadata.work_order_id": "WO-001"})
+        results = await storage.query_histories(
+            {"metadata.work_order_id": "WO-001"}
+        )
+        assert len(results) == 1
+        assert results[0]["id"] == "exec_1"
+        assert results[0]["metadata"]["work_order_id"] == "WO-001"
 
     @pytest.mark.asyncio
-    async def test_builtin_filters_work_on_unsupported_backend(self) -> None:
-        """Non-metadata filters work regardless of backend type."""
+    async def test_builtin_and_metadata_filters_combined(self) -> None:
+        """Builtin and metadata filters work together on any backend."""
         from dataknobs_data.backends.memory import AsyncMemoryDatabase
 
         config = StorageConfig(backend=StorageBackend.SQLITE)
@@ -318,7 +331,13 @@ class TestUnsupportedBackendMetadataFilter:
             _make_history("exec_1", fsm_name="alpha"),
             metadata={"work_order_id": "WO-001"},
         )
+        await storage.save_history(
+            _make_history("exec_2", fsm_name="beta"),
+            metadata={"work_order_id": "WO-001"},
+        )
 
-        results = await storage.query_histories({"fsm_name": "alpha"})
+        results = await storage.query_histories(
+            {"fsm_name": "alpha", "metadata.work_order_id": "WO-001"}
+        )
         assert len(results) == 1
         assert results[0]["id"] == "exec_1"
