@@ -57,11 +57,11 @@ def inject_providers(
     For ``extraction_provider`` and ``**role_providers``, updates both the
     registry catalog and the actual subsystem wiring via ``set_provider()``.
 
-    **Lifecycle contract:** Injected providers are NOT owned by the bot.
-    The caller retains responsibility for closing both the injected
-    provider and any displaced provider.  This follows the
-    originator-owns-lifecycle principle — ``bot.close()`` will not close
-    providers it did not create.
+    **Lifecycle note:** ``bot.close()`` will close ``self.llm`` (the main
+    provider) unconditionally — the caller should be aware that an
+    injected ``main_provider`` will be closed when the bot is closed.
+    For subsystem providers (memory embedding, extraction), ownership
+    flags control whether ``close()`` acts on them.
 
     If ``bot`` does not implement ``register_provider``, catalog
     registration is skipped; only subsystem wiring via ``set_provider()``
@@ -117,6 +117,8 @@ def inject_providers(
                 )
             else:
                 extractor.provider = extraction_provider
+                if hasattr(extractor, "_owns_provider"):
+                    extractor._owns_provider = False
 
     # Wire role-based providers into catalog AND subsystems
     for role, provider in role_providers.items():
@@ -132,7 +134,11 @@ def _wire_role_provider(bot: Any, role: str, provider: AsyncLLMProvider) -> None
 
     Iterates over the bot's subsystems (memory, knowledge_base,
     reasoning_strategy) and calls ``set_provider(role, provider)``
-    on the first one that claims the role.
+    on the first one that claims the role (first-wins).
+
+    This is safe for ``CompositeMemory`` because its ``set_provider()``
+    delegates to all sub-strategies internally and returns ``True``,
+    so the early return after ``CompositeMemory`` accepts is correct.
 
     Args:
         bot: DynaBot instance (or compatible stub).
@@ -145,9 +151,12 @@ def _wire_role_provider(bot: Any, role: str, provider: AsyncLLMProvider) -> None
         getattr(bot, "reasoning_strategy", None),
     ]
     for subsystem in subsystems:
-        if subsystem is not None and hasattr(subsystem, "set_provider"):
-            if subsystem.set_provider(role, provider):
-                return
+        if (
+            subsystem is not None
+            and hasattr(subsystem, "set_provider")
+            and subsystem.set_provider(role, provider)
+        ):
+            return
     logger.debug(
         "Role %r registered in catalog but no subsystem claimed it", role
     )

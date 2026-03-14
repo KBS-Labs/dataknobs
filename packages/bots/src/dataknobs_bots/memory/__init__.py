@@ -1,9 +1,9 @@
 """Memory implementations for DynaBot."""
 
+import logging
 from typing import Any
 
 from .artifact_bank import ArtifactBank
-from .catalog import ArtifactBankCatalog
 from .artifact_io import (
     append_to_book,
     list_book,
@@ -22,9 +22,12 @@ from .bank import (
 )
 from .base import Memory
 from .buffer import BufferMemory
+from .catalog import ArtifactBankCatalog
 from .composite import CompositeMemory
 from .summary import SummaryMemory
 from .vector import VectorMemory
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "ArtifactBank",
@@ -37,8 +40,8 @@ __all__ = [
     "EmptyBankProxy",
     "Memory",
     "MemoryBank",
-    "SyncBankProtocol",
     "SummaryMemory",
+    "SyncBankProtocol",
     "VectorMemory",
     "append_to_book",
     "create_memory_from_config",
@@ -143,19 +146,34 @@ async def create_memory_from_config(
 
     elif memory_type == "composite":
         strategy_configs = config.get("strategies", [])
-        strategies = []
-        for strategy_config in strategy_configs:
-            strategy = await create_memory_from_config(strategy_config, llm_provider)
-            strategies.append(strategy)
-        if not strategies:
-            raise ValueError(
-                "Composite memory requires at least one strategy "
-                "in 'strategies' list"
+        strategies: list[Memory] = []
+        try:
+            for strategy_config in strategy_configs:
+                strategy = await create_memory_from_config(
+                    strategy_config, llm_provider
+                )
+                strategies.append(strategy)
+            if not strategies:
+                raise ValueError(
+                    "Composite memory requires at least one strategy "
+                    "in 'strategies' list"
+                )
+            return CompositeMemory(
+                strategies=strategies,
+                primary_index=config.get("primary", 0),
             )
-        return CompositeMemory(
-            strategies=strategies,
-            primary_index=config.get("primary", 0),
-        )
+        except Exception:
+            # Clean up any already-initialized strategies
+            for s in strategies:
+                try:
+                    await s.close()
+                except Exception:
+                    logger.warning(
+                        "Failed to close strategy during cleanup: %s",
+                        type(s).__name__,
+                        exc_info=True,
+                    )
+            raise
 
     else:
         raise ValueError(

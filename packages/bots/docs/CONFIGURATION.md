@@ -757,7 +757,7 @@ results appear first in `get_context()`.
 
 - **Writes:** Every `add_message()` is forwarded to all strategies.
 - **Reads:** Primary results appear first, then deduplicated secondary results.
-- **Deduplication:** Messages with identical content are not repeated.
+- **Deduplication:** Messages with identical role and content are not repeated.
 - **Graceful degradation:** If a strategy fails, the composite logs a warning
   and continues with the remaining strategies.
 - **`pop_messages()`:** Delegated to the primary strategy only.

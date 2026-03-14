@@ -33,6 +33,8 @@ class VectorMemory(Memory):
         similarity_threshold: float = 0.7,
         default_metadata: dict[str, Any] | None = None,
         default_filter: dict[str, Any] | None = None,
+        owns_embedding_provider: bool = False,
+        owns_vector_store: bool = False,
     ):
         """Initialize vector memory.
 
@@ -47,6 +49,12 @@ class VectorMemory(Memory):
             default_filter: Filter merged into every ``get_context()``
                 search call. Use to scope reads to a tenant, e.g.
                 ``{"user_id": "u123"}``.
+            owns_embedding_provider: If True, ``close()`` will close the
+                embedding provider. Set by ``from_config`` for resources
+                it creates. Default False for externally-injected providers.
+            owns_vector_store: If True, ``close()`` will close the vector
+                store. Set by ``from_config`` for resources it creates.
+                Default False for externally-injected stores.
         """
         self.vector_store = vector_store
         self.embedding_provider = embedding_provider
@@ -54,6 +62,8 @@ class VectorMemory(Memory):
         self.similarity_threshold = similarity_threshold
         self._default_metadata = default_metadata or {}
         self._default_filter = default_filter or {}
+        self._owns_embedding_provider = owns_embedding_provider
+        self._owns_vector_store = owns_vector_store
 
     @classmethod
     async def from_config(cls, config: dict[str, Any]) -> "VectorMemory":
@@ -110,6 +120,8 @@ class VectorMemory(Memory):
             similarity_threshold=config.get("similarity_threshold", 0.7),
             default_metadata=config.get("default_metadata"),
             default_filter=config.get("default_filter"),
+            owns_embedding_provider=True,
+            owns_vector_store=True,
         )
 
     async def add_message(
@@ -120,7 +132,10 @@ class VectorMemory(Memory):
         Args:
             content: Message content
             role: Message role
-            metadata: Optional metadata
+            metadata: Optional caller-supplied metadata. Merged after
+                ``default_metadata`` (from init) and system base fields
+                (``content``, ``role``, ``timestamp``, ``id``).
+                Caller metadata has highest precedence.
         """
         # Generate embedding
         embedding = await self.embedding_provider.embed(content)
@@ -205,18 +220,27 @@ class VectorMemory(Memory):
         return False
 
     async def close(self) -> None:
-        """Close the embedding provider and vector store.
+        """Close owned resources.
 
-        VectorMemory owns both resources (created in ``from_config``),
-        so it is responsible for their lifecycle.
+        Only closes resources that this instance owns (created in
+        ``from_config``). Externally-injected resources are left open
+        for the caller to manage.
         """
-        if self.embedding_provider and hasattr(self.embedding_provider, "close"):
+        if (
+            self._owns_embedding_provider
+            and self.embedding_provider
+            and hasattr(self.embedding_provider, "close")
+        ):
             try:
                 await self.embedding_provider.close()
             except Exception:
                 logger.exception("Error closing embedding provider")
 
-        if self.vector_store and hasattr(self.vector_store, "close"):
+        if (
+            self._owns_vector_store
+            and self.vector_store
+            and hasattr(self.vector_store, "close")
+        ):
             try:
                 await self.vector_store.close()
             except Exception:

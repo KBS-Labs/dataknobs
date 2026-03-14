@@ -1158,6 +1158,7 @@ class WizardReasoning(ReasoningStrategy):
 
         if role == PROVIDER_ROLE_EXTRACTION and self._extractor is not None:
             self._extractor.provider = provider
+            self._extractor._owns_provider = False
             return True
         return False
 
