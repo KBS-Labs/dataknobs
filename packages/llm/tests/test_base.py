@@ -356,3 +356,39 @@ def test_llm_config_with_stop_sequences():
         stop_sequences=stop_sequences
     )
     assert config.stop_sequences == stop_sequences
+
+
+def test_llm_config_dimensions_field():
+    """Test LLMConfig dimensions field for embedding models."""
+    config = LLMConfig(
+        provider="ollama",
+        model="nomic-embed-text",
+        dimensions=768,
+    )
+    assert config.dimensions == 768
+
+    # Round-trip through dict
+    config_dict = config.to_dict()
+    assert config_dict["dimensions"] == 768
+
+    restored = LLMConfig.from_dict(config_dict)
+    assert restored.dimensions == 768
+
+
+def test_llm_config_dimensions_default_none():
+    """Test LLMConfig dimensions defaults to None."""
+    config = LLMConfig(provider="echo", model="test")
+    assert config.dimensions is None
+
+
+def test_llm_config_dimensions_not_in_generation_params():
+    """Test that dimensions is excluded from generation_params()."""
+    config = LLMConfig(
+        provider="ollama",
+        model="nomic-embed-text",
+        dimensions=768,
+        temperature=0.5,
+    )
+    params = config.generation_params()
+    assert "dimensions" not in params
+    assert params["temperature"] == 0.5

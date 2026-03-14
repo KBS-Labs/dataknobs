@@ -448,6 +448,7 @@ class LLMConfig:
     This class supports:
     - All major LLM providers (OpenAI, Anthropic, Ollama, HuggingFace)
     - Generation parameters (temperature, max_tokens, top_p, etc.)
+    - Embedding configuration (dimensions)
     - Function/tool calling configuration
     - Streaming with callbacks
     - Rate limiting and retry logic
@@ -570,6 +571,9 @@ class LLMConfig:
 
     # Provider-specific options
     options: Dict[str, Any] = field(default_factory=dict)
+
+    # Embedding-specific settings
+    dimensions: int | None = None  # Vector dimensions for embedding models
 
     # Capability overrides — when set, these override the provider's
     # auto-detected capabilities.  Accepts string values matching

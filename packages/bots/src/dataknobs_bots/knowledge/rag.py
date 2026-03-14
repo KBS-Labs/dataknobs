@@ -82,8 +82,9 @@ class RAGKnowledgeBase(KnowledgeBase):
         Args:
             config: Configuration dictionary with:
                 - vector_store: Vector store configuration
-                - embedding_provider: LLM provider name
-                - embedding_model: Model for embeddings
+                - embedding: Nested embedding config dict (preferred), e.g.
+                  ``{"provider": "ollama", "model": "nomic-embed-text"}``
+                - embedding_provider / embedding_model: Legacy flat keys
                 - chunking: Optional chunking configuration
                 - documents_path: Optional path to load documents from
                 - document_pattern: Optional glob pattern for documents
@@ -96,11 +97,13 @@ class RAGKnowledgeBase(KnowledgeBase):
             config = {
                 "vector_store": {
                     "backend": "faiss",
-                    "dimensions": 1536,
+                    "dimensions": 768,
                     "collection": "docs"
                 },
-                "embedding_provider": "openai",
-                "embedding_model": "text-embedding-3-small",
+                "embedding": {
+                    "provider": "ollama",
+                    "model": "nomic-embed-text",
+                },
                 "chunking": {
                     "max_chunk_size": 500,
                     "chunk_overlap": 50
@@ -111,7 +114,8 @@ class RAGKnowledgeBase(KnowledgeBase):
             ```
         """
         from dataknobs_data.vector.stores import VectorStoreFactory
-        from dataknobs_llm.llm import LLMProviderFactory
+
+        from ..providers import create_embedding_provider
 
         # Create vector store
         vs_config = config["vector_store"]
@@ -120,20 +124,7 @@ class RAGKnowledgeBase(KnowledgeBase):
         await vector_store.initialize()
 
         # Create embedding provider
-        # Handle both nested format (from $resource resolution) and legacy flat format
-        embedding_config = config.get("embedding", {})
-        if embedding_config:
-            # New nested format: embedding.provider, embedding.model
-            provider = embedding_config.get("provider", "openai")
-            model = embedding_config.get("model", "text-embedding-ada-002")
-        else:
-            # Legacy flat format: embedding_provider, embedding_model
-            provider = config.get("embedding_provider", "openai")
-            model = config.get("embedding_model", "text-embedding-ada-002")
-
-        llm_factory = LLMProviderFactory(is_async=True)
-        embedding_provider = llm_factory.create({"provider": provider, "model": model})
-        await embedding_provider.initialize()
+        embedding_provider = await create_embedding_provider(config)
 
         # Create merger config if specified
         merger_config = None

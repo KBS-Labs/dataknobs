@@ -72,10 +72,15 @@ class VectorMemory(Memory):
         Args:
             config: Configuration dictionary with:
                 - backend: Vector store backend type
-                - dimension: Vector dimension (optional, depends on backend)
+                - dimension: Vector store dimension (singular; default 1536)
                 - collection: Collection/index name (optional)
-                - embedding_provider: LLM provider name for embeddings
-                - embedding_model: Model to use for embeddings
+                - embedding: Nested embedding config dict (preferred), e.g.
+                  ``{"provider": "ollama", "model": "nomic-embed-text",
+                  "dimensions": 768}``
+                - embedding_provider / embedding_model: Legacy flat keys.
+                  Note: ``dimensions`` (plural) at the top level is forwarded
+                  to the embedding provider, not the vector store.  Use
+                  ``dimension`` (singular) for the vector store size.
                 - max_results: Max results to return (default 5)
                 - similarity_threshold: Min similarity score (default 0.7)
 
@@ -83,7 +88,8 @@ class VectorMemory(Memory):
             Configured VectorMemory instance
         """
         from dataknobs_data.vector.stores import VectorStoreFactory
-        from dataknobs_llm.llm import LLMProviderFactory
+
+        from ..providers import create_embedding_provider
 
         # Create vector store
         store_config = {
@@ -106,12 +112,7 @@ class VectorMemory(Memory):
         await vector_store.initialize()
 
         # Create embedding provider
-        llm_factory = LLMProviderFactory(is_async=True)
-        embedding_provider = llm_factory.create({
-            "provider": config.get("embedding_provider", "ollama"),
-            "model": config.get("embedding_model", "nomic-embed-text"),
-        })
-        await embedding_provider.initialize()
+        embedding_provider = await create_embedding_provider(config)
 
         return cls(
             vector_store=vector_store,
