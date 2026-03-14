@@ -571,6 +571,9 @@ class LLMConfig:
     # Provider-specific options
     options: Dict[str, Any] = field(default_factory=dict)
 
+    # Embedding-specific settings
+    dimensions: int | None = None  # Vector dimensions for embedding models
+
     # Capability overrides — when set, these override the provider's
     # auto-detected capabilities.  Accepts string values matching
     # ModelCapability enum names (e.g. "json_mode", "function_calling").

@@ -83,7 +83,8 @@ class VectorMemory(Memory):
             Configured VectorMemory instance
         """
         from dataknobs_data.vector.stores import VectorStoreFactory
-        from dataknobs_llm.llm import LLMProviderFactory
+
+        from ..providers import create_embedding_provider
 
         # Create vector store
         store_config = {
@@ -106,12 +107,7 @@ class VectorMemory(Memory):
         await vector_store.initialize()
 
         # Create embedding provider
-        llm_factory = LLMProviderFactory(is_async=True)
-        embedding_provider = llm_factory.create({
-            "provider": config.get("embedding_provider", "ollama"),
-            "model": config.get("embedding_model", "nomic-embed-text"),
-        })
-        await embedding_provider.initialize()
+        embedding_provider = await create_embedding_provider(config)
 
         return cls(
             vector_store=vector_store,
