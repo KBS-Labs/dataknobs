@@ -9,6 +9,7 @@ import pytest
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.execution.history import ExecutionHistory
 from dataknobs_fsm.storage import InMemoryStorage, StorageBackend, StorageConfig
+from dataknobs_fsm.storage.database import UnifiedDatabaseStorage
 
 
 def _make_history(
@@ -171,6 +172,32 @@ class TestMetadataFiltering:
             assert r["metadata"]["group"] == "A"
 
 
+    @pytest.mark.asyncio
+    async def test_metadata_filter_respects_offset(
+        self, storage: InMemoryStorage
+    ) -> None:
+        """Offset applies to filtered results, not the pre-filter set."""
+        await storage.initialize()
+        # Use distinct start_times to make ordering deterministic
+        for i in range(5):
+            h = _make_history(f"match_{i}", fsm_name="target")
+            h.start_time = 1_000_000.0 + i
+            await storage.save_history(h, metadata={"group": "A"})
+        # Non-matching histories should not affect offset
+        for i in range(3):
+            h = _make_history(f"other_{i}", fsm_name="target")
+            h.start_time = 2_000_000.0 + i
+            await storage.save_history(h, metadata={"group": "B"})
+
+        results = await storage.query_histories(
+            {"metadata.group": "A"}, limit=3, offset=2
+        )
+
+        assert len(results) == 3
+        for r in results:
+            assert r["metadata"]["group"] == "A"
+
+
 class TestUnknownFilterWarning:
     """Tests for warning on unknown filter keys."""
 
@@ -185,7 +212,7 @@ class TestUnknownFilterWarning:
             metadata={"work_order_id": "WO-001"},
         )
 
-        with caplog.at_level(logging.WARNING, logger="dataknobs_fsm.storage.database"):
+        with caplog.at_level(logging.WARNING):
             results = await storage.query_histories(
                 {"fsm_name": "test_fsm", "bogus": "value"}
             )
@@ -204,14 +231,53 @@ class TestUnknownFilterWarning:
             metadata={"work_order_id": "WO-001"},
         )
 
-        with caplog.at_level(logging.WARNING, logger="dataknobs_fsm.storage.database"):
+        with caplog.at_level(logging.WARNING):
             await storage.query_histories(
                 {"fsm_name": "test_fsm", "metadata.work_order_id": "WO-001"}
             )
 
         warning_records = [
-            r for r in caplog.records
-            if r.levelno >= logging.WARNING
-            and "dataknobs_fsm.storage.database" in r.name
+            r for r in caplog.records if r.levelno >= logging.WARNING
         ]
         assert len(warning_records) == 0
+
+
+class TestUnsupportedBackendMetadataFilter:
+    """Tests for NotImplementedError on non-dot-notation backends."""
+
+    @pytest.mark.asyncio
+    async def test_metadata_filter_raises_on_unsupported_backend(self) -> None:
+        """Metadata filters raise NotImplementedError on backends like sqlite."""
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
+
+        config = StorageConfig(backend=StorageBackend.SQLITE)
+        db = AsyncMemoryDatabase()  # real db, but config says sqlite
+        storage = UnifiedDatabaseStorage(config, database=db)
+        await storage.initialize()
+
+        await storage.save_history(
+            _make_history("exec_1"),
+            metadata={"work_order_id": "WO-001"},
+        )
+
+        with pytest.raises(NotImplementedError, match="not supported"):
+            await storage.query_histories({"metadata.work_order_id": "WO-001"})
+
+    @pytest.mark.asyncio
+    async def test_builtin_filters_work_on_unsupported_backend(self) -> None:
+        """Non-metadata filters work regardless of backend type."""
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
+
+        config = StorageConfig(backend=StorageBackend.SQLITE)
+        db = AsyncMemoryDatabase()
+        storage = UnifiedDatabaseStorage(config, database=db)
+        await storage.initialize()
+
+        await storage.save_history(
+            _make_history("exec_1", fsm_name="alpha"),
+            metadata={"work_order_id": "WO-001"},
+        )
+
+        results = await storage.query_histories({"fsm_name": "alpha"})
+        assert len(results) == 1
+        assert results[0]["id"] == "exec_1"

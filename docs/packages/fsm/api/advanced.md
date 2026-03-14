@@ -425,10 +425,11 @@ to matched results, not to pre-filtered results.
 
 !!! note "Backend compatibility"
     Metadata filtering delegates to `Record.get_value()` dot-notation
-    traversal. This works with any backend whose `search()` uses
-    `Record.get_value()` for filter evaluation (including the memory
-    backend). Backends with native JSON query support (e.g. PostgreSQL
-    JSONB) may implement optimized filtering in the future.
+    traversal and is only supported on backends whose `search()`
+    evaluates filters via `Record.get_value()` — currently **memory**
+    and **file**.  Using `metadata.*` filters on other backends (e.g.
+    PostgreSQL, SQLite, Elasticsearch) raises `NotImplementedError`.
+    Support for additional backends is tracked separately.
 
 #### Return Value
 

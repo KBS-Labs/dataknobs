@@ -25,6 +25,16 @@ from dataknobs_fsm.storage.base import BaseHistoryStorage, StorageBackend, Stora
 
 logger = logging.getLogger(__name__)
 
+# Backends whose search() evaluates filters via Record.get_value(),
+# which supports dot-notation traversal into nested fields (e.g.
+# "metadata.work_order_id").  Other backends use native query engines
+# (SQL, Elasticsearch DSL, etc.) and silently ignore dot-notation
+# filter fields — producing incorrect (unfiltered) results.
+_DOT_NOTATION_BACKENDS: frozenset[StorageBackend] = frozenset({
+    StorageBackend.MEMORY,
+    StorageBackend.FILE,
+})
+
 
 class UnifiedDatabaseStorage(BaseHistoryStorage):
     """Unified database storage that works with any dataknobs_data backend.
@@ -398,10 +408,13 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
                 else:
                     query = query.filter('failed_steps', '=', 0)
             elif key.startswith('metadata.'):
-                # Dot-notation filter — delegates to Record.get_value()
-                # which supports nested path traversal into JSON fields.
-                # Works with any backend whose search() uses
-                # Record.get_value() for filter evaluation (e.g. memory).
+                if self.config.backend not in _DOT_NOTATION_BACKENDS:
+                    raise NotImplementedError(
+                        f"Metadata filtering (key {key!r}) is not supported "
+                        f"on the {self.config.backend.value!r} backend. "
+                        f"Supported backends: "
+                        f"{', '.join(b.value for b in sorted(_DOT_NOTATION_BACKENDS, key=lambda b: b.value))}."
+                    )
                 query = query.filter(key, '=', value)
             else:
                 logger.warning(

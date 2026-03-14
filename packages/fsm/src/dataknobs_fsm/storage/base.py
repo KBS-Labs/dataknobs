@@ -152,9 +152,11 @@ class IHistoryStorage(ABC):
                   if ``False``, only histories with no failures
                 - ``metadata.<key>`` — exact match on a metadata field, e.g.
                   ``{"metadata.work_order_id": "WO-001"}``. Uses
-                  ``Record.get_value()`` dot-notation traversal; works with
-                  any backend whose ``search()`` delegates to
-                  ``Record.get_value()`` for filter evaluation.
+                  ``Record.get_value()`` dot-notation traversal.  Only
+                  supported on backends whose ``search()`` evaluates filters
+                  via ``Record.get_value()`` (currently ``memory`` and
+                  ``file``).  Raises ``NotImplementedError`` on other
+                  backends.
 
                 Unknown keys are logged as warnings and ignored.
             limit: Maximum results to return.
