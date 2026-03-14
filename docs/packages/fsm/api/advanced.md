@@ -871,7 +871,7 @@ for entry in trace:
 |--------|-------------|---------|
 | `start(data, initial_state)` | Start debug session | None |
 | `step()` | Execute single step | StepResult |
-| `continue_to_breakpoint()` | Continue to breakpoint | StateInstance \| None |
+| `continue_to_breakpoint()` | Continue to breakpoint | StepResult \| None |
 | `inspect(path)` | Inspect data at path | Any |
 | `watch(name, path)` | Add watch expression | None |
 | `unwatch(name)` | Remove watch | None |

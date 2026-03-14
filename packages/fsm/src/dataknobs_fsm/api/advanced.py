@@ -72,9 +72,9 @@ Common Debugging Patterns:
     advanced = AdvancedFSM(fsm, execution_mode=ExecutionMode.STEP_BY_STEP)
 
     # Execute one step at a time
-    data = {'input': 'test data'}
+    context = advanced.create_context({'input': 'test data'})
     while True:
-        result = advanced.step(data)
+        result = advanced.execute_step_sync(context)
 
         print(f"Step: {result.from_state} -> {result.to_state}")
         print(f"Data before: {result.data_before}")
@@ -86,8 +86,6 @@ Common Debugging Patterns:
         if not result.success:
             print(f"Error: {result.error}")
             break
-
-        data = result.data_after
     ```
 
     **Breakpoint Debugging:**
@@ -98,15 +96,15 @@ Common Debugging Patterns:
     advanced.add_breakpoint('validate_state')
 
     # Run until breakpoint
-    result = advanced.run_until_breakpoint({'input': 'data'})
+    context = advanced.create_context({'input': 'data'})
+    result = advanced.run_until_breakpoint_sync(context)
 
-    if result.at_breakpoint:
+    if result and result.at_breakpoint:
         print(f"Stopped at: {result.to_state}")
         print(f"Current data: {result.data_after}")
 
-        # Inspect, modify data, then continue
-        result.data_after['debug_flag'] = True
-        final = advanced.run_until_breakpoint(result.data_after)
+        # Continue to next breakpoint (context tracks state)
+        final = advanced.run_until_breakpoint_sync(context)
     ```
 
     **Performance Profiling:**
@@ -115,36 +113,33 @@ Common Debugging Patterns:
     advanced = AdvancedFSM(fsm, execution_mode=ExecutionMode.PROFILE)
 
     # Execute with profiling
-    profile_data = advanced.profile_execution({'input': 'data'})
+    profile_data = advanced.profile_execution_sync({'input': 'data'})
 
     # Analyze results
     print("Performance Profile:")
-    for state, metrics in profile_data['states'].items():
+    for state, metrics in profile_data['state_times'].items():
         print(f"{state}:")
-        print(f"  Time: {metrics['duration']:.3f}s")
-        print(f"  Calls: {metrics['call_count']}")
-        print(f"  Avg: {metrics['avg_duration']:.3f}s")
+        print(f"  Time: {metrics['total']:.3f}s")
+        print(f"  Calls: {metrics['count']}")
+        print(f"  Avg: {metrics['avg']:.3f}s")
 
     # Find slowest state
-    slowest = max(profile_data['states'].items(),
-                 key=lambda x: x[1]['duration'])
-    print(f"\nBottleneck: {slowest[0]} ({slowest[1]['duration']:.2f}s)")
+    slowest = max(profile_data['state_times'].items(),
+                 key=lambda x: x[1]['total'])
+    print(f"\nBottleneck: {slowest[0]} ({slowest[1]['total']:.2f}s)")
     ```
 
     **Execution Tracing:**
     ```python
     # Record full execution trace
     advanced = AdvancedFSM(fsm, execution_mode=ExecutionMode.TRACE)
-    trace = advanced.trace_execution({'input': 'data'})
+    trace = advanced.trace_execution_sync({'input': 'data'})
 
-    # Analyze trace
-    print(f"Total steps: {len(trace['steps'])}")
-    print(f"Total time: {trace['total_duration']:.2f}s")
+    # Analyze trace (returns list of dicts)
+    print(f"Total steps: {len(trace)}")
     print(f"\nExecution path:")
-    for step in trace['steps']:
-        print(f"  {step['timestamp']}: {step['from']} -> {step['to']}")
-        if step.get('error'):
-            print(f"    ERROR: {step['error']}")
+    for entry in trace:
+        print(f"  {entry['from_state']} -> {entry['to_state']}")
     ```
 
 Execution Hooks:
@@ -175,7 +170,7 @@ Execution Hooks:
     advanced.set_hooks(hooks)
 
     # Hooks will be called during execution
-    result = advanced.execute({'input': 'data'})
+    result = advanced.trace_execution_sync({'input': 'data'})
     ```
 
 Advanced Use Cases:
@@ -210,7 +205,7 @@ Advanced Use Cases:
 
     # Execution will use transactions
     try:
-        result = advanced.execute(data)
+        result = advanced.trace_execution_sync(data)
     except Exception:
         # Automatic rollback on error
         pass
@@ -265,16 +260,16 @@ Example:
 
     # Execute with monitoring
     try:
-        profile_data = advanced.profile_execution({
+        profile_data = advanced.profile_execution_sync({
             'input_file': 'data.json',
             'config': {'mode': 'strict'}
         })
 
         # Analyze performance
         print("Performance Analysis:")
-        for state, metrics in profile_data['states'].items():
-            if metrics['duration'] > 1.0:  # Slow states
-                print(f"⚠️  {state}: {metrics['duration']:.2f}s")
+        for state, metrics in profile_data['state_times'].items():
+            if metrics['total'] > 1.0:  # Slow states
+                print(f"  {state}: {metrics['total']:.2f}s")
 
         # Check for errors
         if errors:
@@ -284,9 +279,6 @@ Example:
 
     except Exception as e:
         print(f"Fatal error: {e}")
-        # Get trace for debugging
-        trace = advanced.get_trace()
-        print(f"Failed at: {trace['steps'][-1]}")
     ```
 
 See Also:
@@ -306,7 +298,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from dataknobs_data import Record
 
@@ -320,6 +312,9 @@ from ..execution.async_engine import AsyncExecutionEngine
 from ..execution.context import ExecutionContext
 from ..execution.engine import ExecutionEngine, TraversalStrategy
 from ..execution.history import ExecutionHistory
+
+if TYPE_CHECKING:
+    from ..core.arc import ArcExecution
 from ..resources.base import IResourceProvider
 from ..resources.manager import ResourceManager
 from ..storage.base import IHistoryStorage
@@ -760,8 +755,9 @@ class AdvancedFSM:
             start_time = time.time()
             transitions = 0
 
-            # Track per-state timing
+            # Track per-state timing and per-transition durations
             state_times: dict[str, list[float]] = {}
+            transition_times: list[float] = []
             state_start = time.time()
 
             while True:
@@ -775,6 +771,7 @@ class AdvancedFSM:
                 if current_state_name not in state_times:
                     state_times[current_state_name] = []
                 state_times[current_state_name].append(state_duration)
+                transition_times.append(result.duration)
 
                 if not result.success or result.is_complete or result.transition == "none":
                     break
@@ -787,6 +784,7 @@ class AdvancedFSM:
         # Compute statistics
         self._profile_data = self._compute_profile_stats(
             total_time, transitions, state_times, context,
+            transition_times=transition_times,
         )
 
         return self._profile_data
@@ -1068,7 +1066,6 @@ class AdvancedFSM:
     def _get_candidate_arcs(
         self,
         context: ExecutionContext,
-        arc_name: str | None = None,
     ) -> list | None:
         """Shared preamble for transition discovery.
 
@@ -1089,7 +1086,7 @@ class AdvancedFSM:
         arc_name: str | None = None
     ) -> list:
         """Get available transitions from current state (sync)."""
-        early = self._get_candidate_arcs(context, arc_name)
+        early = self._get_candidate_arcs(context)
         if early is not None:
             return early
 
@@ -1151,7 +1148,7 @@ class AdvancedFSM:
         self,
         arc: Any,
         context: ExecutionContext,
-    ) -> Any:
+    ) -> "ArcExecution":
         """Build an ``ArcExecution`` from an arc and context.
 
         Handles transform name normalization, ``ArcDefinition``
@@ -1284,17 +1281,31 @@ class AdvancedFSM:
         arc: Any,
         context: ExecutionContext,
     ) -> bool:
-        """Post-transition bookkeeping shared by sync and async paths.
+        """Pre-transform transition bookkeeping shared by sync and async paths.
 
-        Updates state, state instance, records trace and history.
+        Updates state and state instance, checks breakpoints.
         Returns whether the new state is a breakpoint.
+
+        Callers must call :meth:`_record_transition` AFTER executing
+        state transforms so that trace/history capture post-transform data.
         """
         context.set_state(arc.target_state)
         self._update_state_instance(context, arc.target_state)
-        at_breakpoint = arc.target_state in self._breakpoints
+        return arc.target_state in self._breakpoints
+
+    def _record_transition(
+        self,
+        from_state: str,
+        arc: Any,
+        context: ExecutionContext,
+    ) -> None:
+        """Record trace and history for a completed transition.
+
+        Must be called AFTER state transforms so that data snapshots
+        reflect post-transform state.
+        """
         self._record_trace_entry(from_state, arc.target_state, arc.name, context)
         self._record_history_step(arc.target_state, arc.name, context)
-        return at_breakpoint
 
     def _call_hook_sync(
         self,
@@ -1340,7 +1351,7 @@ class AdvancedFSM:
         arc_name: str | None = None
     ) -> list:
         """Get available transitions, awaiting async pre-tests."""
-        early = self._get_candidate_arcs(context, arc_name)
+        early = self._get_candidate_arcs(context)
         if early is not None:
             return early
 
@@ -1497,6 +1508,7 @@ class AdvancedFSM:
 
             at_breakpoint = self._apply_transition(from_state, arc, context)
             self._engine._execute_state_transforms(context, arc.target_state)
+            self._record_transition(from_state, arc, context)
             self._call_hook_sync('on_state_exit', from_state)
             self._call_hook_sync('on_state_enter', arc.target_state)
 
@@ -1569,6 +1581,7 @@ class AdvancedFSM:
 
             at_breakpoint = self._apply_transition(from_state, arc, context)
             await self._execute_state_transforms_async(context, arc.target_state)
+            self._record_transition(from_state, arc, context)
             await self._call_hook_async('on_state_exit', from_state)
             await self._call_hook_async('on_state_enter', arc.target_state)
 

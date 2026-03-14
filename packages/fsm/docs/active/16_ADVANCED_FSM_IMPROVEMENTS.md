@@ -141,7 +141,7 @@ class FSMDebugger:
     def step(self) -> StepResult:
         """Execute single step and return detailed result."""
 
-    def continue_to_breakpoint(self) -> StateInstance:
+    def continue_to_breakpoint(self) -> StepResult | None:
         """Continue execution until a breakpoint is hit."""
 
     def inspect(self, path="") -> Any:
