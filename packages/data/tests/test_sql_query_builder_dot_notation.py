@@ -329,9 +329,10 @@ class TestSortExprDotNotation:
         assert b._build_sort_expr("metadata.version") == "json_extract(metadata, '$.version')"
 
     def test_duckdb_nested_sort(self) -> None:
+        """DuckDB sort uses json_extract (typed) not json_extract_string."""
         b = _builder("duckdb")
         expr = b._build_sort_expr("config.timeout")
-        assert expr == "json_extract_string(data, '$.config.timeout')"
+        assert expr == "json_extract(data, '$.config.timeout')"
 
 
 # ---------------------------------------------------------------------------
@@ -375,3 +376,87 @@ class TestSearchQueryIntegration:
 
         assert "WHERE json_extract(metadata, '$.tenant_id') = ?" in sql
         assert params == ["T-1"]
+
+
+# ---------------------------------------------------------------------------
+# Field name validation (SQL injection prevention)
+# ---------------------------------------------------------------------------
+
+class TestFieldNameValidation:
+    """Field name segments must be valid identifiers."""
+
+    @pytest.mark.parametrize("dialect", DIALECTS)
+    def test_single_quote_in_field_name_raises(self, dialect: str) -> None:
+        b = _builder(dialect)
+        with pytest.raises(ValueError, match="Invalid field name segment"):
+            b._build_json_field_expr("name'")
+
+    @pytest.mark.parametrize("dialect", DIALECTS)
+    def test_semicolon_in_field_name_raises(self, dialect: str) -> None:
+        b = _builder(dialect)
+        with pytest.raises(ValueError, match="Invalid field name segment"):
+            b._build_json_field_expr("name; DROP TABLE records")
+
+    @pytest.mark.parametrize("dialect", DIALECTS)
+    def test_space_in_field_name_raises(self, dialect: str) -> None:
+        b = _builder(dialect)
+        with pytest.raises(ValueError, match="Invalid field name segment"):
+            b._build_json_field_expr("bad field")
+
+    @pytest.mark.parametrize("dialect", DIALECTS)
+    def test_hyphen_in_field_name_raises(self, dialect: str) -> None:
+        b = _builder(dialect)
+        with pytest.raises(ValueError, match="Invalid field name segment"):
+            b._build_json_field_expr("kebab-case")
+
+    @pytest.mark.parametrize("dialect", DIALECTS)
+    def test_nested_field_with_bad_segment_raises(self, dialect: str) -> None:
+        b = _builder(dialect)
+        with pytest.raises(ValueError, match="Invalid field name segment"):
+            b._build_json_field_expr("good.bad'segment")
+
+    def test_valid_field_names_accepted(self) -> None:
+        b = _builder("postgres")
+        # These should all work without raising
+        b._build_json_field_expr("name")
+        b._build_json_field_expr("config_v2")
+        b._build_json_field_expr("_private")
+        b._build_json_field_expr("nested.path.here")
+        b._build_json_field_expr("CamelCase")
+        b._build_json_field_expr("UPPER_SNAKE")
+
+    def test_field_starting_with_digit_raises(self) -> None:
+        b = _builder("postgres")
+        with pytest.raises(ValueError, match="Invalid field name segment"):
+            b._build_json_field_expr("3invalid")
+
+
+# ---------------------------------------------------------------------------
+# DuckDB as_text parameter
+# ---------------------------------------------------------------------------
+
+class TestDuckDBAsTextParameter:
+    """DuckDB branch must respect the as_text parameter."""
+
+    def test_as_text_true_uses_json_extract_string(self) -> None:
+        """Default as_text=True uses json_extract_string for text results."""
+        b = _builder("duckdb")
+        expr = b._build_json_field_expr("score")
+        assert expr == "json_extract_string(data, '$.score')"
+
+    def test_as_text_false_uses_json_extract(self) -> None:
+        """as_text=False uses json_extract for typed results (numeric ordering)."""
+        b = _builder("duckdb")
+        expr = b._build_json_field_expr("score", as_text=False)
+        assert expr == "json_extract(data, '$.score')"
+
+    def test_sort_expr_uses_typed_extraction(self) -> None:
+        """Sort expressions use as_text=False, so DuckDB should use json_extract."""
+        b = _builder("duckdb")
+        expr = b._build_sort_expr("config.timeout")
+        assert expr == "json_extract(data, '$.config.timeout')"
+
+    def test_metadata_sort_uses_typed_extraction(self) -> None:
+        b = _builder("duckdb")
+        expr = b._build_sort_expr("metadata.version")
+        assert expr == "json_extract(metadata, '$.version')"

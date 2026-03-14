@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import datetime
 from typing import Any, TYPE_CHECKING
 
-from ..query import Operator, Query, SortOrder
+from ..query import Filter, Operator, Query, SortOrder
 from ..records import Record
+
+# Field name segments must be valid identifiers to prevent SQL injection.
+_FIELD_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 if TYPE_CHECKING:
     from ..query_logic import ComplexQuery
@@ -282,12 +286,15 @@ class SQLQueryBuilder:
 
     def build_complex_search_query(self, query: ComplexQuery) -> tuple[str, list[Any]]:
         """Build a SELECT query from a ComplexQuery object with boolean logic.
-        
+
         Args:
             query: The ComplexQuery object
-            
+
         Returns:
             Tuple of (SQL query, parameters)
+
+        Raises:
+            ValueError: If any filter field contains invalid characters.
         """
         sql_parts = [f"SELECT * FROM {self.qualified_table}"]
         params = []
@@ -397,12 +404,15 @@ class SQLQueryBuilder:
 
     def build_search_query(self, query: Query) -> tuple[str, list[Any]]:
         """Build a SELECT query from a Query object.
-        
+
         Args:
             query: The Query object
-            
+
         Returns:
             Tuple of (SQL query, parameters)
+
+        Raises:
+            ValueError: If any filter field contains invalid characters.
         """
         sql_parts = [f"SELECT * FROM {self.qualified_table}"]
         params = []
@@ -656,15 +666,26 @@ class SQLQueryBuilder:
             A SQL expression that extracts the field value.
 
         Raises:
-            ValueError: If *column* is not an allowed column name.
+            ValueError: If *column* is not an allowed column name, or if any
+                field name segment contains characters outside
+                ``[A-Za-z_][A-Za-z0-9_]*``.
         """
         _allowed_columns = {"data", "metadata"}
         if column not in _allowed_columns:
             raise ValueError(
                 f"column must be one of {_allowed_columns!r}, got {column!r}"
             )
+
+        # Validate field path segments to prevent SQL injection
+        parts = field.split(".")
+        for part in parts:
+            if not _FIELD_NAME_RE.match(part):
+                raise ValueError(
+                    f"Invalid field name segment {part!r} in {field!r}. "
+                    f"Field segments must match [A-Za-z_][A-Za-z0-9_]*."
+                )
+
         if self.dialect == "postgres":
-            parts = field.split(".")
             # Build chained extraction operators
             chain = column
             for part in parts[:-1]:
@@ -673,13 +694,15 @@ class SQLQueryBuilder:
             leaf_op = "->>" if as_text else "->"
             return f"{chain}{leaf_op}'{parts[-1]}'"
         elif self.dialect == "sqlite":
+            # json_extract returns typed values in SQLite — as_text has no effect
             return f"json_extract({column}, '$.{field}')"
         elif self.dialect == "duckdb":
-            return f"json_extract_string({column}, '$.{field}')"
+            func = "json_extract_string" if as_text else "json_extract"
+            return f"{func}({column}, '$.{field}')"
         else:
             return field
 
-    def _apply_type_cast(self, base_expr: str, op: Any, value: Any) -> str:
+    def _apply_type_cast(self, base_expr: str, op: Operator, value: Any) -> str:
         """Wrap a SQL expression with a type cast appropriate for the operator and value.
 
         Args:
@@ -729,7 +752,7 @@ class SQLQueryBuilder:
         return base_expr
 
     def _build_operator_clause(
-        self, field_expr: str, op: Any, value: Any, param_start: int,
+        self, field_expr: str, op: Operator, value: Any, param_start: int,
     ) -> tuple[str, list[Any]]:
         """Build the comparison clause for a given operator.
 
@@ -794,7 +817,7 @@ class SQLQueryBuilder:
         else:
             raise ValueError(f"Unsupported operator: {op}")
 
-    def _build_filter_clause(self, filter_spec: Any, param_start: int) -> tuple[str, list[Any]]:
+    def _build_filter_clause(self, filter_spec: Filter, param_start: int) -> tuple[str, list[Any]]:
         """Build a WHERE clause for a single filter.
 
         Supports dot-notation for nested JSON field access.  A field name
@@ -815,6 +838,9 @@ class SQLQueryBuilder:
 
         Returns:
             Tuple of (SQL clause, parameters).
+
+        Raises:
+            ValueError: If a field name segment contains invalid characters.
         """
         field = filter_spec.field
         op = filter_spec.operator

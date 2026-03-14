@@ -412,6 +412,18 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
         results = []
         search_results = await self._db.search(query)
         for record in search_results:
+            # Read metadata from the correct location, with fallback for
+            # records stored before the metadata-column migration.
+            stored_metadata = record.metadata or {}
+            if not stored_metadata:
+                legacy = record.get_value('metadata')
+                if legacy and isinstance(legacy, dict):
+                    stored_metadata = legacy
+                    logger.warning(
+                        "Record %s has metadata in legacy data-column location; "
+                        "re-save to migrate to metadata column",
+                        record.get_value('execution_id'),
+                    )
             results.append({
                 'id': record['execution_id'],
                 'fsm_name': record['fsm_name'],
@@ -421,7 +433,7 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
                 'end_time': record.get_value('end_time'),
                 'total_steps': record['total_steps'],
                 'failed_steps': record['failed_steps'],
-                'metadata': record.metadata or {}
+                'metadata': stored_metadata,
             })
         
         return results
