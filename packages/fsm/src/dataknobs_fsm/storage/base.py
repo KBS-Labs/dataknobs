@@ -216,7 +216,7 @@ class IHistoryStorage(ABC):
         """
         pass
 
-    async def close(self) -> None:
+    async def close(self) -> None:  # noqa: B027 — intentionally non-abstract; most backends are no-op
         """Close the storage backend and release resources.
 
         Implementations that own their database connections should close
