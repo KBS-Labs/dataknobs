@@ -441,7 +441,7 @@ Each result dict contains:
 | `fsm_name` | `str` | FSM name |
 | `data_mode` | `str` | Data handling mode |
 | `status` | `str` | Execution status |
-| `start_time` | `float` | Start timestamp |
+| `start_time` | `float \| None` | Start timestamp |
 | `end_time` | `float \| None` | End timestamp (None if in progress) |
 | `total_steps` | `int` | Total steps executed |
 | `failed_steps` | `int` | Number of failed steps |

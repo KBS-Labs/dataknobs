@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.execution.history import ExecutionHistory
@@ -194,8 +198,45 @@ class TestMetadataFiltering:
         )
 
         assert len(results) == 3
+        # sort_by('start_time', 'desc') → match_4, match_3, match_2, match_1, match_0
+        # offset=2 skips match_4 and match_3
+        assert results[0]["id"] == "match_2"
+        assert results[1]["id"] == "match_1"
+        assert results[2]["id"] == "match_0"
         for r in results:
             assert r["metadata"]["group"] == "A"
+
+
+class TestFileBackendMetadataFiltering:
+    """Tests for metadata filtering on the FILE backend."""
+
+    @pytest.mark.asyncio
+    async def test_metadata_filter_works_on_file_backend(
+        self, tmp_path: Path
+    ) -> None:
+        """FILE backend supports metadata filtering via dot-notation."""
+        from dataknobs_fsm.storage import FileStorage
+
+        config = StorageConfig(
+            backend=StorageBackend.FILE,
+            connection_params={"path": str(tmp_path / "histories")},
+        )
+        storage = FileStorage(config)
+        await storage.initialize()
+
+        await storage.save_history(
+            _make_history("exec_1"),
+            metadata={"tenant": "A"},
+        )
+        await storage.save_history(
+            _make_history("exec_2"),
+            metadata={"tenant": "B"},
+        )
+
+        results = await storage.query_histories({"metadata.tenant": "A"})
+        assert len(results) == 1
+        assert results[0]["id"] == "exec_1"
+        assert results[0]["metadata"]["tenant"] == "A"
 
 
 class TestUnknownFilterWarning:
@@ -247,7 +288,7 @@ class TestUnsupportedBackendMetadataFilter:
 
     @pytest.mark.asyncio
     async def test_metadata_filter_raises_on_unsupported_backend(self) -> None:
-        """Metadata filters raise NotImplementedError on backends like sqlite."""
+        """config.backend not in _DOT_NOTATION_BACKENDS raises NotImplementedError."""
         from dataknobs_data.backends.memory import AsyncMemoryDatabase
 
         config = StorageConfig(backend=StorageBackend.SQLITE)

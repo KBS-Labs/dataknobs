@@ -546,16 +546,20 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
             if await self.delete_history(history_id):
                 deleted += 1
         
-        # Only close database connections we created ourselves.
-        # Injected databases are externally owned — closing them would break
-        # sibling components sharing the same connection pool.
+        return deleted
+
+    async def close(self) -> None:
+        """Close owned database connections.
+
+        Only closes connections that this instance created via the
+        factory.  Injected databases are externally owned — closing
+        them would break sibling components sharing the same pool.
+        """
         if self._owns_steps_db and self._steps_db is not self._db:
             if hasattr(self._steps_db, 'close'):
                 await self._steps_db.close()
         if self._owns_db and hasattr(self._db, 'close'):
             await self._db.close()
-
-        return deleted
 
 
 # Register all backends with the same implementation

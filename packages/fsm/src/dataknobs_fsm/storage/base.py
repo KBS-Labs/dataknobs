@@ -216,6 +216,17 @@ class IHistoryStorage(ABC):
         """
         pass
 
+    async def close(self) -> None:
+        """Close the storage backend and release resources.
+
+        Implementations that own their database connections should close
+        them here.  Injected (externally owned) connections must NOT be
+        closed — the originator is responsible for their lifecycle.
+
+        The default implementation is a no-op so that subclasses only
+        need to override when they manage connections.
+        """
+
 
 class BaseHistoryStorage(IHistoryStorage):
     """Base class for history storage implementations."""
