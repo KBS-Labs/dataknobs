@@ -7,6 +7,7 @@ the common AsyncDatabase interface.
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from typing import Any, Dict, List, TYPE_CHECKING
@@ -21,6 +22,8 @@ if TYPE_CHECKING:
 from dataknobs_fsm.core.data_modes import DataHandlingMode
 from dataknobs_fsm.execution.history import ExecutionHistory, ExecutionStep, ExecutionStatus
 from dataknobs_fsm.storage.base import BaseHistoryStorage, StorageBackend, StorageConfig, StorageFactory
+
+logger = logging.getLogger(__name__)
 
 
 class UnifiedDatabaseStorage(BaseHistoryStorage):
@@ -394,7 +397,18 @@ class UnifiedDatabaseStorage(BaseHistoryStorage):
                     query = query.filter('failed_steps', '>', 0)
                 else:
                     query = query.filter('failed_steps', '=', 0)
-        
+            elif key.startswith('metadata.'):
+                # Dot-notation filter — delegates to Record.get_value()
+                # which supports nested path traversal into JSON fields.
+                # Works with any backend whose search() uses
+                # Record.get_value() for filter evaluation (e.g. memory).
+                query = query.filter(key, '=', value)
+            else:
+                logger.warning(
+                    "Unknown filter key %r in query_histories(), ignoring",
+                    key,
+                )
+
         # Apply pagination
         query = query.sort_by('start_time', 'desc').limit(limit).offset(offset)
         
