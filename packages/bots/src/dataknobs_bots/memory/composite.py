@@ -81,8 +81,8 @@ class CompositeMemory(Memory):
     async def get_context(self, current_message: str) -> list[dict[str, Any]]:
         """Collect context from all strategies, primary first.
 
-        Results from the primary strategy appear first. Secondary results
-        are deduplicated by ``(role, content)`` — if a message with the same
+        Results from the primary strategy appear first. All results are
+        deduplicated by ``(role, content)`` — if a message with the same
         role and content already appeared, it is not repeated.
         """
         results: list[dict[str, Any]] = []
@@ -93,8 +93,9 @@ class CompositeMemory(Memory):
             primary_results = await self.primary.get_context(current_message)
             for msg in primary_results:
                 key = (msg.get("role", ""), msg.get("content", ""))
-                results.append(msg)
-                seen.add(key)
+                if key not in seen:
+                    results.append(msg)
+                    seen.add(key)
         except Exception:
             logger.warning(
                 "Primary memory strategy (%s) failed on get_context",
@@ -145,7 +146,7 @@ class CompositeMemory(Memory):
         return await self.primary.pop_messages(count)
 
     async def close(self) -> None:
-        """Close all strategies that support it."""
+        """Close all strategies. Log and continue on individual failures."""
         for i, strategy in enumerate(self._strategies):
             try:
                 await strategy.close()
@@ -158,10 +159,23 @@ class CompositeMemory(Memory):
                 )
 
     def providers(self) -> dict[str, Any]:
-        """Aggregate providers from all sub-strategies."""
+        """Aggregate providers from all sub-strategies.
+
+        If multiple strategies expose the same role, the last one wins
+        and a warning is logged.
+        """
         result: dict[str, Any] = {}
-        for strategy in self._strategies:
-            result.update(strategy.providers())
+        for i, strategy in enumerate(self._strategies):
+            for role, provider in strategy.providers().items():
+                if role in result:
+                    logger.warning(
+                        "Provider role %r already registered by an earlier "
+                        "strategy; strategy %d (%s) overwrites it",
+                        role,
+                        i,
+                        type(strategy).__name__,
+                    )
+                result[role] = provider
         return result
 
     def set_provider(self, role: str, provider: Any) -> bool:

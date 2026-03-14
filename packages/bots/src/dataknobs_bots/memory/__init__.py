@@ -102,6 +102,23 @@ async def create_memory_from_config(
             },
         }
         memory = await create_memory_from_config(config)
+
+        # Composite memory (multiple strategies)
+        config = {
+            "type": "composite",
+            "strategies": [
+                {"type": "buffer", "max_messages": 50},
+                {
+                    "type": "vector",
+                    "backend": "memory",
+                    "dimension": 768,
+                    "embedding_provider": "ollama",
+                    "embedding_model": "nomic-embed-text",
+                },
+            ],
+            "primary": 0,
+        }
+        memory = await create_memory_from_config(config)
         ```
     """
     memory_type = config.get("type", "buffer").lower()

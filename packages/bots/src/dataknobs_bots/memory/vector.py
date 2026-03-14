@@ -129,14 +129,14 @@ class VectorMemory(Memory):
         if not isinstance(embedding, np.ndarray):
             embedding = np.array(embedding, dtype=np.float32)
 
-        # Prepare metadata: base fields, then defaults, then caller (caller wins)
-        msg_metadata = {
+        # Merge order: defaults < base fields (system-controlled) < caller metadata
+        msg_metadata = dict(self._default_metadata)
+        msg_metadata.update({
             "content": content,
             "role": role,
             "timestamp": datetime.now().isoformat(),
             "id": str(uuid4()),
-        }
-        msg_metadata.update(self._default_metadata)
+        })
         if metadata:
             msg_metadata.update(metadata)
 

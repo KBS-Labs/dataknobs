@@ -107,6 +107,23 @@ class TestVectorMemoryScoping:
         assert "id" in md
 
     @pytest.mark.asyncio
+    async def test_default_metadata_cannot_overwrite_base_fields(self):
+        """default_metadata with reserved keys does not clobber system fields."""
+        mem = await _make_vector_memory(
+            default_metadata={"content": "WRONG", "role": "WRONG", "tenant": "t1"},
+        )
+        await mem.add_message("hello", "user")
+
+        context = await mem.get_context("hello")
+        assert len(context) >= 1
+        md = context[0]["metadata"]
+        # Base fields must win over defaults
+        assert md["content"] == "hello"
+        assert md["role"] == "user"
+        # Non-colliding default still present
+        assert md["tenant"] == "t1"
+
+    @pytest.mark.asyncio
     async def test_from_config_passes_defaults(self):
         """from_config() with default_metadata and default_filter constructs correctly."""
         config = {

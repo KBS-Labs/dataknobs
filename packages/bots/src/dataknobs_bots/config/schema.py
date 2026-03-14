@@ -362,6 +362,22 @@ class DynaBotConfigSchema:
                         "description": "Maximum messages to retain",
                         "minimum": 1,
                     },
+                    "strategies": {
+                        "type": "array",
+                        "description": (
+                            "List of sub-strategy configurations "
+                            "(required for composite type)"
+                        ),
+                        "items": {"type": "object"},
+                    },
+                    "primary": {
+                        "type": "integer",
+                        "description": (
+                            "Index of the primary strategy in the "
+                            "strategies list (default: 0, composite type only)"
+                        ),
+                        "minimum": 0,
+                    },
                 },
             },
         )
