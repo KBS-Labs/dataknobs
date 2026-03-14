@@ -289,16 +289,21 @@ class SchemaExtractor:
         self,
         provider: "AsyncLLMProvider",
         extraction_prompt: str | None = None,
+        owns_provider: bool = True,
     ):
         """Initialize SchemaExtractor.
 
         Args:
             provider: LLM provider for extraction
             extraction_prompt: Custom prompt template (uses default if None)
+            owns_provider: If True, ``close()`` will close the provider.
+                Set to False when the provider is externally managed
+                (e.g. injected by ``inject_providers``).
         """
         self._provider = provider
         self._extraction_prompt = extraction_prompt or DEFAULT_EXTRACTION_PROMPT
         self._json_extractor = JSONExtractor()
+        self._owns_provider = owns_provider
 
     @property
     def provider(self) -> "AsyncLLMProvider":
@@ -812,11 +817,11 @@ class SchemaExtractor:
         return min(1.0, confidence)
 
     async def close(self) -> None:
-        """Close the extractor and release resources.
+        """Close owned resources.
 
-        Closes the underlying LLM provider, releasing HTTP connections
-        and other resources. Should be called when the extractor is no
-        longer needed.
+        Only closes the LLM provider if this extractor owns it (i.e.,
+        created via ``from_config``). Externally-injected providers are
+        left open for the caller to manage.
 
         Example:
             ```python
@@ -827,5 +832,5 @@ class SchemaExtractor:
                 await extractor.close()
             ```
         """
-        if self._provider and hasattr(self._provider, "close"):
+        if self._owns_provider and self._provider and hasattr(self._provider, "close"):
             await self._provider.close()

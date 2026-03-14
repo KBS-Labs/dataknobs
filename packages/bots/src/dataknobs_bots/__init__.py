@@ -29,7 +29,7 @@ from .config import (
     default_catalog,
 )
 from .knowledge import RAGKnowledgeBase, create_knowledge_base_from_config
-from .memory import BufferMemory, Memory, SummaryMemory, VectorMemory, create_memory_from_config
+from .memory import BufferMemory, CompositeMemory, Memory, SummaryMemory, VectorMemory, create_memory_from_config
 from .middleware import CostTrackingMiddleware, LoggingMiddleware, Middleware
 from .reasoning import (
     ReActReasoning,
@@ -62,6 +62,7 @@ __all__ = [
     "BotRegistry",
     "BufferMemory",
     "CaptureReplay",
+    "CompositeMemory",
     "CheckKnowledgeSourceTool",
     "ConfigDraftManager",
     "ConfigTemplate",

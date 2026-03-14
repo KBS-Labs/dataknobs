@@ -56,7 +56,7 @@ class KnowledgeBase(ABC):
         texts = [r.get("text", "") for r in results]
         body = "\n\n".join(texts)
         if wrap_in_tags:
-            return f"<knowledge_context>\n{body}\n</knowledge_context>"
+            return f"<knowledge_base>\n{body}\n</knowledge_base>"
         return body
 
     def providers(self) -> dict[str, Any]:

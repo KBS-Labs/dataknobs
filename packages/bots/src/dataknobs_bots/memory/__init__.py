@@ -1,9 +1,9 @@
 """Memory implementations for DynaBot."""
 
+import logging
 from typing import Any
 
 from .artifact_bank import ArtifactBank
-from .catalog import ArtifactBankCatalog
 from .artifact_io import (
     append_to_book,
     list_book,
@@ -22,8 +22,12 @@ from .bank import (
 )
 from .base import Memory
 from .buffer import BufferMemory
+from .catalog import ArtifactBankCatalog
+from .composite import CompositeMemory
 from .summary import SummaryMemory
 from .vector import VectorMemory
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "ArtifactBank",
@@ -32,11 +36,12 @@ __all__ = [
     "AsyncMemoryBank",
     "BankRecord",
     "BufferMemory",
+    "CompositeMemory",
     "EmptyBankProxy",
     "Memory",
     "MemoryBank",
-    "SyncBankProtocol",
     "SummaryMemory",
+    "SyncBankProtocol",
     "VectorMemory",
     "append_to_book",
     "create_memory_from_config",
@@ -77,9 +82,9 @@ async def create_memory_from_config(
         config = {
             "type": "vector",
             "backend": "faiss",
-            "dimension": 1536,
-            "embedding_provider": "openai",
-            "embedding_model": "text-embedding-3-small"
+            "dimension": 768,
+            "embedding_provider": "ollama",
+            "embedding_model": "nomic-embed-text"
         }
         memory = await create_memory_from_config(config)
 
@@ -98,6 +103,23 @@ async def create_memory_from_config(
                 "provider": "ollama",
                 "model": "gemma3:1b",
             },
+        }
+        memory = await create_memory_from_config(config)
+
+        # Composite memory (multiple strategies)
+        config = {
+            "type": "composite",
+            "strategies": [
+                {"type": "buffer", "max_messages": 50},
+                {
+                    "type": "vector",
+                    "backend": "memory",
+                    "dimension": 768,
+                    "embedding_provider": "ollama",
+                    "embedding_model": "nomic-embed-text",
+                },
+            ],
+            "primary": 0,
         }
         memory = await create_memory_from_config(config)
         ```
@@ -122,10 +144,41 @@ async def create_memory_from_config(
             owns_llm_provider=has_dedicated_llm,
         )
 
+    elif memory_type == "composite":
+        strategy_configs = config.get("strategies", [])
+        strategies: list[Memory] = []
+        try:
+            for strategy_config in strategy_configs:
+                strategy = await create_memory_from_config(
+                    strategy_config, llm_provider
+                )
+                strategies.append(strategy)
+            if not strategies:
+                raise ValueError(
+                    "Composite memory requires at least one strategy "
+                    "in 'strategies' list"
+                )
+            return CompositeMemory(
+                strategies=strategies,
+                primary_index=config.get("primary", 0),
+            )
+        except Exception:
+            # Clean up any already-initialized strategies
+            for s in strategies:
+                try:
+                    await s.close()
+                except Exception:
+                    logger.warning(
+                        "Failed to close strategy during cleanup: %s",
+                        type(s).__name__,
+                        exc_info=True,
+                    )
+            raise
+
     else:
         raise ValueError(
             f"Unknown memory type: {memory_type}. "
-            f"Available types: buffer, summary, vector"
+            f"Available types: buffer, composite, summary, vector"
         )
 
 

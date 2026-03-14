@@ -21,7 +21,9 @@ For convenience, here are direct links to key classes in the complete reference:
 ### Memory
 - [Memory](../../../api/reference/bots.md#dataknobs_bots.Memory) - Base memory class
 - [BufferMemory](../../../api/reference/bots.md#dataknobs_bots.BufferMemory) - Sliding window memory
-- [VectorMemory](../../../api/reference/bots.md#dataknobs_bots.VectorMemory) - Semantic search memory
+- [CompositeMemory](../../../api/reference/bots.md#dataknobs_bots.CompositeMemory) - Combines multiple strategies
+- [SummaryMemory](../../../api/reference/bots.md#dataknobs_bots.SummaryMemory) - LLM-based compression memory
+- [VectorMemory](../../../api/reference/bots.md#dataknobs_bots.VectorMemory) - Semantic search memory (supports tenant scoping)
 
 ### Knowledge Base
 - [RAGKnowledgeBase](../../../api/reference/bots.md#dataknobs_bots.RAGKnowledgeBase) - RAG implementation
