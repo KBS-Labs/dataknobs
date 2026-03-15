@@ -196,31 +196,12 @@ class TestSqliteEmbeddingCache:
 
 
 class TestCachingEmbedProviderEmbed:
-    """Verify cache hit/miss behavior for embed().
-
-    EchoProvider.call_count only tracks complete() calls, not embed().
-    We verify caching behavior through cache.count() and by wrapping
-    the inner embed to count calls directly.
-    """
-
-    @staticmethod
-    def _wrap_embed_counter(inner: EchoProvider) -> list[int]:
-        """Wrap inner.embed to count invocations. Returns a mutable counter."""
-        counter = [0]
-        original = inner.embed
-
-        async def counting_embed(texts, **kwargs):  # type: ignore[no-untyped-def]
-            counter[0] += 1
-            return await original(texts, **kwargs)
-
-        inner.embed = counting_embed  # type: ignore[assignment]
-        return counter
+    """Verify cache hit/miss behavior for embed()."""
 
     @pytest.mark.asyncio
     async def test_cache_miss_delegates_to_inner(self):
         """First embed() calls inner provider and stores result."""
         inner = _create_echo_provider()
-        embed_count = self._wrap_embed_counter(inner)
         cache = MemoryEmbeddingCache()
         provider = CachingEmbedProvider(inner, cache)
         await provider.initialize()
@@ -229,30 +210,28 @@ class TestCachingEmbedProviderEmbed:
 
         assert isinstance(result, list)
         assert len(result) > 0
-        assert embed_count[0] == 1
+        assert inner.embed_call_count == 1
         assert await cache.count() == 1
 
     @pytest.mark.asyncio
     async def test_cache_hit_returns_cached(self):
         """Second embed() returns cached vector without calling inner."""
         inner = _create_echo_provider()
-        embed_count = self._wrap_embed_counter(inner)
         cache = MemoryEmbeddingCache()
         provider = CachingEmbedProvider(inner, cache)
         await provider.initialize()
 
         vec1 = await provider.embed("hello")
-        assert embed_count[0] == 1
+        assert inner.embed_call_count == 1
 
         vec2 = await provider.embed("hello")
-        assert embed_count[0] == 1  # No additional call — cache hit
+        assert inner.embed_call_count == 1  # No additional call — cache hit
         assert vec1 == vec2
 
     @pytest.mark.asyncio
     async def test_cache_miss_batch(self):
         """Batch embed() delegates all texts on full miss."""
         inner = _create_echo_provider()
-        embed_count = self._wrap_embed_counter(inner)
         cache = MemoryEmbeddingCache()
         provider = CachingEmbedProvider(inner, cache)
         await provider.initialize()
@@ -260,25 +239,24 @@ class TestCachingEmbedProviderEmbed:
         results = await provider.embed(["hello", "world"])
         assert isinstance(results, list)
         assert len(results) == 2
-        assert embed_count[0] == 1  # Single batch call to inner
+        assert inner.embed_call_count == 1  # Single batch call to inner
         assert await cache.count() == 2
 
     @pytest.mark.asyncio
     async def test_partial_cache_hit_batch(self):
         """Batch with mix of cached + uncached texts."""
         inner = _create_echo_provider()
-        embed_count = self._wrap_embed_counter(inner)
         cache = MemoryEmbeddingCache()
         provider = CachingEmbedProvider(inner, cache)
         await provider.initialize()
 
         # Cache "hello" first
         await provider.embed("hello")
-        assert embed_count[0] == 1
+        assert inner.embed_call_count == 1
 
         # Batch with one hit ("hello"), one miss ("world")
         results = await provider.embed(["hello", "world"])
-        assert embed_count[0] == 2  # One additional call for "world" only
+        assert inner.embed_call_count == 2  # One additional call for "world" only
         assert len(results) == 2
         assert await cache.count() == 2
 
@@ -286,19 +264,30 @@ class TestCachingEmbedProviderEmbed:
     async def test_different_model_different_key(self):
         """Same text with different model = cache miss."""
         inner = _create_echo_provider()
-        embed_count = self._wrap_embed_counter(inner)
         cache = MemoryEmbeddingCache()
         provider = CachingEmbedProvider(inner, cache)
         await provider.initialize()
 
         await provider.embed("hello")
-        assert embed_count[0] == 1
+        assert inner.embed_call_count == 1
 
         # Change the model on inner config
         inner.config.model = "different-model"
         await provider.embed("hello")
-        assert embed_count[0] == 2  # Different model → cache miss
+        assert inner.embed_call_count == 2  # Different model → cache miss
         assert await cache.count() == 2
+
+    @pytest.mark.asyncio
+    async def test_embed_before_initialize_raises(self):
+        """embed() raises ResourceError if called before initialize()."""
+        from dataknobs_common.exceptions import ResourceError
+
+        inner = _create_echo_provider()
+        cache = MemoryEmbeddingCache()
+        provider = CachingEmbedProvider(inner, cache)
+        # Do NOT call initialize()
+        with pytest.raises(ResourceError, match="not initialized"):
+            await provider.embed("hello")
 
     @pytest.mark.asyncio
     async def test_single_text_returns_flat_list(self):

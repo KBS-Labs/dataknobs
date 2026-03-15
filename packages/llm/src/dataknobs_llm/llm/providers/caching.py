@@ -10,7 +10,6 @@ Cache backends:
       Requires ``aiosqlite`` (install via ``pip install 'dataknobs-llm[sqlite-cache]'``).
 """
 
-import asyncio
 import hashlib
 import logging
 import struct
@@ -288,37 +287,35 @@ class CachingEmbedProvider(AsyncLLMProvider):
     """
 
     def __init__(self, inner: AsyncLLMProvider, cache: EmbeddingCache) -> None:
-        # Skip LLMProvider.__init__ — config is delegated to inner.
-        # Initialize attributes that the base class hierarchy references
-        # so that inherited methods (render_and_complete, close, etc.)
-        # don't hit AttributeError.
+        super().__init__(inner.config)
         self._inner = inner
         self._cache = cache
-        self._is_initialized = False
-        self._is_closing = False
-        self._in_flight: set[asyncio.Task[Any]] = set()
-        self._client = None
-        self.prompt_builder = None
 
     # -- Config / capability forwarding ------------------------------------
 
     @property
     def config(self) -> LLMConfig:  # type: ignore[override]
-        """Forward config from the inner provider."""
+        """Forward config from the inner provider.
+
+        The getter always returns the inner provider's config. The setter
+        is a no-op that absorbs the ``self.config = ...`` assignment from
+        ``LLMProvider.__init__()``.
+        """
         return self._inner.config
 
     @config.setter
     def config(self, value: LLMConfig) -> None:
-        """Allow config assignment (required by LLMProvider.__init__)."""
-        # No-op — config is always delegated to inner.
+        # No-op: absorbs assignment from super().__init__().
+        # Config is always read from inner provider via the getter.
+        pass
 
     async def validate_model(self) -> bool:
         """Delegate model validation to inner provider."""
         return await self._inner.validate_model()
 
     def _detect_capabilities(self) -> List[ModelCapability]:
-        """Delegate capability detection to inner provider."""
-        return self._inner._detect_capabilities()
+        """Required by ABC. Unused — ``get_capabilities()`` delegates to inner."""
+        return self._inner.get_capabilities()
 
     def get_capabilities(self) -> List[ModelCapability]:
         """Delegate capabilities to inner provider."""
@@ -398,6 +395,7 @@ class CachingEmbedProvider(AsyncLLMProvider):
         always receives a ``list[str]`` and always returns
         ``list[list[float]]``.
         """
+        self._check_ready()
         model = self.config.model
         single = isinstance(texts, str)
         text_list = [texts] if single else list(texts)
