@@ -493,8 +493,7 @@ class TestSummaryMemoryProviderVisibility:
         )
 
         await memory.close()
-        # Provider should still be usable — not closed
-        assert memory.llm_provider is provider
+        assert provider.close_count == 0, "Provider should NOT be closed when not owned"
 
     @pytest.mark.asyncio
     async def test_close_closes_when_owned(self):
@@ -506,8 +505,7 @@ class TestSummaryMemoryProviderVisibility:
         )
 
         await memory.close()
-        # No error means close was called successfully
-        assert memory.llm_provider is provider
+        assert provider.close_count == 1, "Provider should be closed exactly once when owned"
 
     def test_set_provider_replaces_provider(self):
         """set_provider() updates the LLM provider for the summary role."""
