@@ -3,6 +3,7 @@
 import pytest
 import numpy as np
 
+from dataknobs_bots.bot.base import PROVIDER_ROLE_MAIN, PROVIDER_ROLE_SUMMARY_LLM
 from dataknobs_bots.memory import (
     BufferMemory,
     SummaryMemory,
@@ -460,8 +461,8 @@ class TestSummaryMemoryProviderVisibility:
         )
 
         result = memory.providers()
-        assert "summary_llm" in result
-        assert result["summary_llm"] is provider
+        assert PROVIDER_ROLE_SUMMARY_LLM in result
+        assert result[PROVIDER_ROLE_SUMMARY_LLM] is provider
 
     def test_providers_returns_provider_when_not_owned(self):
         """Provider visible when _owns_llm_provider=False (shared main LLM)."""
@@ -471,8 +472,8 @@ class TestSummaryMemoryProviderVisibility:
         )
 
         result = memory.providers()
-        assert "summary_llm" in result
-        assert result["summary_llm"] is provider
+        assert PROVIDER_ROLE_SUMMARY_LLM in result
+        assert result[PROVIDER_ROLE_SUMMARY_LLM] is provider
 
     def test_providers_returns_empty_when_no_provider(self):
         """Empty dict when llm_provider is None."""
@@ -513,20 +514,20 @@ class TestSummaryMemoryProviderVisibility:
         provider2 = self._create_echo_provider()
         memory = SummaryMemory(llm_provider=provider1)
 
-        result = memory.set_provider("summary_llm", provider2)
+        result = memory.set_provider(PROVIDER_ROLE_SUMMARY_LLM, provider2)
         assert result is True
         assert memory.llm_provider is provider2
 
         # providers() should reflect the new provider
         providers = memory.providers()
-        assert providers["summary_llm"] is provider2
+        assert providers[PROVIDER_ROLE_SUMMARY_LLM] is provider2
 
     def test_set_provider_ignores_wrong_role(self):
         """set_provider() returns False for non-matching role."""
         provider = self._create_echo_provider()
         memory = SummaryMemory(llm_provider=provider)
 
-        result = memory.set_provider("main", self._create_echo_provider())
+        result = memory.set_provider(PROVIDER_ROLE_MAIN, self._create_echo_provider())
         assert result is False
         assert memory.llm_provider is provider
 
