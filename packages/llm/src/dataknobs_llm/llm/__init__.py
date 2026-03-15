@@ -23,8 +23,10 @@ from .providers import (
     OllamaProvider,
     HuggingFaceProvider,
     EchoProvider,
+    CachingEmbedProvider,
     LLMProviderFactory,
     create_llm_provider,
+    create_caching_provider,
 )
 from .utils import (
     TemplateStrategy,
@@ -57,8 +59,10 @@ __all__ = [
     'OllamaProvider',
     'HuggingFaceProvider',
     'EchoProvider',
+    'CachingEmbedProvider',
     'LLMProviderFactory',
     'create_llm_provider',
+    'create_caching_provider',
     # Utils
     'TemplateStrategy',
     'MessageTemplate',
