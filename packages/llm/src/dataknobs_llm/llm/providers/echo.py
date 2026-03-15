@@ -114,6 +114,7 @@ class EchoProvider(AsyncLLMProvider):
             tuple[re.Pattern[str], Union[str, LLMResponse, ErrorResponse]]
         ] = []
         self._call_history: List[Dict[str, Any]] = []
+        self._embed_history: List[Dict[str, Any]] = []
         self._cycle_responses: bool = llm_config.options.get('cycle_responses', False)
         self._close_count: int = 0
 
@@ -242,6 +243,16 @@ class EchoProvider(AsyncLLMProvider):
     def calls(self) -> List[Dict[str, Any]]:
         """Get all recorded calls."""
         return self._call_history.copy()
+
+    @property
+    def embed_call_count(self) -> int:
+        """Get number of embed() calls made."""
+        return len(self._embed_history)
+
+    @property
+    def embed_calls(self) -> List[Dict[str, Any]]:
+        """Get all recorded embed calls."""
+        return self._embed_history.copy()
 
     def get_call(self, index: int) -> Dict[str, Any]:
         """Get a specific call by index.
@@ -613,6 +624,8 @@ class EchoProvider(AsyncLLMProvider):
         """
         if not self._is_initialized:
             await self.initialize()
+
+        self._embed_history.append({"texts": texts, "kwargs": kwargs})
 
         if isinstance(texts, str):
             return self._generate_embedding(texts)

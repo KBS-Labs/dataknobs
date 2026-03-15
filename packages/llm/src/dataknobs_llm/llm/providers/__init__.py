@@ -17,6 +17,12 @@ from .openai import OpenAIAdapter, OpenAIProvider
 from .anthropic import AnthropicProvider
 from .ollama import OllamaProvider
 from .huggingface import HuggingFaceProvider
+from .caching import (
+    CachingEmbedProvider,
+    EmbeddingCache,
+    MemoryEmbeddingCache,
+    create_caching_provider,
+)
 from .echo import EchoProvider
 
 if TYPE_CHECKING:
@@ -202,6 +208,10 @@ __all__ = [
     'OllamaProvider',
     'HuggingFaceProvider',
     'EchoProvider',
+    'CachingEmbedProvider',
+    'EmbeddingCache',
+    'MemoryEmbeddingCache',
+    'create_caching_provider',
     # Factory
     'LLMProviderFactory',
     'create_llm_provider',

@@ -580,10 +580,7 @@ class CapturingProvider(AsyncLLMProvider):
     async def validate_model(self) -> bool:
         """Delegate model validation to the wrapped provider."""
         if hasattr(self._delegate, "validate_model"):
-            result = self._delegate.validate_model()
-            if hasattr(result, "__await__"):
-                return await result
-            return result  # type: ignore[return-value]
+            return await self._delegate.validate_model()
         return True
 
     def _detect_capabilities(self) -> List[ModelCapability]:
