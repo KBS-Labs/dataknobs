@@ -807,7 +807,7 @@ class LLMProvider(ABC):
         pass
 
     @abstractmethod
-    def validate_model(self) -> bool:
+    async def validate_model(self) -> bool:
         """Validate that the model is available."""
         pass
 

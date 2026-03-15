@@ -312,12 +312,9 @@ class CachingEmbedProvider(AsyncLLMProvider):
         """Allow config assignment (required by LLMProvider.__init__)."""
         # No-op — config is always delegated to inner.
 
-    async def validate_model(self) -> bool:  # type: ignore[override]
+    async def validate_model(self) -> bool:
         """Delegate model validation to inner provider."""
-        result = self._inner.validate_model()
-        if hasattr(result, "__await__"):
-            return await result  # type: ignore[misc]
-        return result  # type: ignore[return-value]
+        return await self._inner.validate_model()
 
     def _detect_capabilities(self) -> List[ModelCapability]:
         """Delegate capability detection to inner provider."""
