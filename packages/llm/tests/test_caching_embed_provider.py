@@ -414,16 +414,12 @@ class TestCachingEmbedProviderForwarding:
 
     @pytest.mark.asyncio
     async def test_validate_model_forwarding(self):
-        """validate_model() delegates to inner."""
+        """validate_model() delegates to inner (handles sync/async)."""
         inner = _create_echo_provider()
         cache = MemoryEmbeddingCache()
         provider = CachingEmbedProvider(inner, cache)
 
-        # EchoProvider.validate_model is async, so we get a coroutine back
-        # from the wrapper's delegation. Verify it returns correctly.
-        result = provider.validate_model()
-        if hasattr(result, "__await__"):
-            result = await result
+        result = await provider.validate_model()
         assert result is True
 
 

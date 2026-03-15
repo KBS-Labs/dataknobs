@@ -7,8 +7,10 @@ persistently, passing all other methods through to the inner provider.
 Cache backends:
     - ``MemoryEmbeddingCache``: In-memory dict — for testing.
     - ``SqliteEmbeddingCache``: SQLite with WAL mode — for persistent caching.
+      Requires ``aiosqlite`` (install via ``pip install 'dataknobs-llm[sqlite-cache]'``).
 """
 
+import asyncio
 import hashlib
 import logging
 import struct
@@ -148,6 +150,10 @@ class SqliteEmbeddingCache(EmbeddingCache):
     Vectors are stored as compact float32 binary blobs for efficiency
     (768 floats = 3 KB vs ~6 KB for JSON text).
 
+    Requires ``aiosqlite``. Install via::
+
+        pip install 'dataknobs-llm[sqlite-cache]'
+
     Args:
         db_path: Path to the SQLite database file.
     """
@@ -158,7 +164,13 @@ class SqliteEmbeddingCache(EmbeddingCache):
 
     async def initialize(self) -> None:
         """Open the database and create the embeddings table if needed."""
-        import aiosqlite
+        try:
+            import aiosqlite
+        except ImportError:
+            raise ImportError(
+                "SqliteEmbeddingCache requires aiosqlite. "
+                "Install it with: pip install 'dataknobs-llm[sqlite-cache]'"
+            ) from None
 
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = await aiosqlite.connect(str(self._db_path))
@@ -205,24 +217,30 @@ class SqliteEmbeddingCache(EmbeddingCache):
     async def get_batch(
         self, model: str, texts: list[str]
     ) -> list[list[float] | None]:
-        results: list[list[float] | None] = []
-        for text in texts:
-            results.append(await self.get(model, text))
-        return results
+        keys = [_cache_key(model, t) for t in texts]
+        placeholders = ",".join("?" * len(keys))
+        cursor = await self._conn.execute(
+            f"SELECT cache_key, vector FROM embeddings "
+            f"WHERE cache_key IN ({placeholders})",
+            keys,
+        )
+        rows = {row[0]: _blob_to_vector(row[1]) for row in await cursor.fetchall()}
+        return [rows.get(k) for k in keys]
 
     async def put_batch(
         self, model: str, texts: list[str], vectors: list[list[float]]
     ) -> None:
-        for text, vector in zip(texts, vectors):
-            key = _cache_key(model, text)
-            blob = _vector_to_blob(vector)
-            await self._conn.execute(
-                """
-                INSERT OR REPLACE INTO embeddings (cache_key, model, vector)
-                VALUES (?, ?, ?)
-                """,
-                (key, model, blob),
-            )
+        rows = [
+            (_cache_key(model, t), model, _vector_to_blob(v))
+            for t, v in zip(texts, vectors)
+        ]
+        await self._conn.executemany(
+            """
+            INSERT OR REPLACE INTO embeddings (cache_key, model, vector)
+            VALUES (?, ?, ?)
+            """,
+            rows,
+        )
         await self._conn.commit()
 
     async def clear(self) -> None:
@@ -270,12 +288,17 @@ class CachingEmbedProvider(AsyncLLMProvider):
     """
 
     def __init__(self, inner: AsyncLLMProvider, cache: EmbeddingCache) -> None:
-        # Skip LLMProvider.__init__ — we delegate config to inner.
-        # Initialize only the state AsyncLLMProvider needs.
+        # Skip LLMProvider.__init__ — config is delegated to inner.
+        # Initialize attributes that the base class hierarchy references
+        # so that inherited methods (render_and_complete, close, etc.)
+        # don't hit AttributeError.
         self._inner = inner
         self._cache = cache
         self._is_initialized = False
         self._is_closing = False
+        self._in_flight: set[asyncio.Task[Any]] = set()
+        self._client = None
+        self.prompt_builder = None
 
     # -- Config / capability forwarding ------------------------------------
 
@@ -289,9 +312,12 @@ class CachingEmbedProvider(AsyncLLMProvider):
         """Allow config assignment (required by LLMProvider.__init__)."""
         # No-op — config is always delegated to inner.
 
-    def validate_model(self) -> bool:  # type: ignore[override]
+    async def validate_model(self) -> bool:  # type: ignore[override]
         """Delegate model validation to inner provider."""
-        return self._inner.validate_model()  # type: ignore[return-value]
+        result = self._inner.validate_model()
+        if hasattr(result, "__await__"):
+            return await result  # type: ignore[misc]
+        return result  # type: ignore[return-value]
 
     def _detect_capabilities(self) -> List[ModelCapability]:
         """Delegate capability detection to inner provider."""
@@ -371,7 +397,9 @@ class CachingEmbedProvider(AsyncLLMProvider):
         """Return cached embeddings, delegating to inner on cache miss.
 
         Handles both single-text and batch forms. For batches, only the
-        uncached texts are sent to the inner provider.
+        uncached texts are sent to the inner provider. The inner provider
+        always receives a ``list[str]`` and always returns
+        ``list[list[float]]``.
         """
         model = self.config.model
         single = isinstance(texts, str)
@@ -393,12 +421,9 @@ class CachingEmbedProvider(AsyncLLMProvider):
             miss_texts = [t for _, t in misses]
             miss_result = await self._inner.embed(miss_texts, **kwargs)
 
-            # Normalize: inner returns list[float] for single text,
-            # list[list[float]] for batch
-            if miss_result and isinstance(miss_result[0], float):
-                miss_vectors: list[list[float]] = [miss_result]  # type: ignore[list-item]
-            else:
-                miss_vectors = miss_result  # type: ignore[assignment]
+            # miss_texts is always list[str], so inner returns
+            # list[list[float]]. Cast for type safety.
+            miss_vectors: list[list[float]] = miss_result  # type: ignore[assignment]
 
             for (idx, _text), vector in zip(misses, miss_vectors):
                 results[idx] = vector
@@ -406,16 +431,16 @@ class CachingEmbedProvider(AsyncLLMProvider):
             # Store all misses in cache
             await self._cache.put_batch(
                 model,
-                [t for _, t in misses],
+                miss_texts,
                 miss_vectors,
             )
 
-            logger.debug(
-                "Embedding cache: %d hits, %d misses (model=%s)",
-                len(text_list) - len(misses),
-                len(misses),
-                model,
-            )
+        logger.debug(
+            "Embedding cache: %d hits, %d misses (model=%s)",
+            len(text_list) - len(misses),
+            len(misses),
+            model,
+        )
 
         return results[0] if single else results
 
@@ -438,6 +463,8 @@ async def create_caching_provider(
         cache_path: Path for the SQLite cache file. Required when
             *cache_backend* is ``"sqlite"``. Ignored for ``"memory"``.
         cache_backend: ``"sqlite"`` (default) or ``"memory"``.
+            The ``"sqlite"`` backend requires ``aiosqlite``
+            (install via ``pip install 'dataknobs-llm[sqlite-cache]'``).
 
     Returns:
         An initialized ``CachingEmbedProvider``.

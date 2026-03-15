@@ -32,8 +32,11 @@ embeddings = [
     "transformers>=4.30.0",
     "torch>=2.0.0",
 ]
+sqlite-cache = [
+    "aiosqlite>=0.19.0",
+]
 all = [
-    "dataknobs-llm[openai,anthropic,ollama,huggingface,embeddings]",
+    "dataknobs-llm[openai,anthropic,ollama,huggingface,embeddings,sqlite-cache]",
 ]
 
 [tool.uv.sources]
