@@ -3,6 +3,7 @@
 import pytest
 import numpy as np
 
+from dataknobs_bots.bot.base import PROVIDER_ROLE_MAIN, PROVIDER_ROLE_SUMMARY_LLM
 from dataknobs_bots.memory import (
     BufferMemory,
     SummaryMemory,
@@ -442,6 +443,93 @@ class TestSummaryMemory:
 
         context = await memory.get_context("test")
         assert any("custom summary result" in m["content"] for m in context)
+
+
+class TestSummaryMemoryProviderVisibility:
+    """Tests for SummaryMemory.providers(), set_provider(), and close()."""
+
+    @staticmethod
+    def _create_echo_provider() -> EchoProvider:
+        factory = LLMProviderFactory(is_async=True)
+        return factory.create({"provider": "echo", "model": "test"})
+
+    def test_providers_returns_provider_when_owned(self):
+        """Provider visible when _owns_llm_provider=True."""
+        provider = self._create_echo_provider()
+        memory = SummaryMemory(
+            llm_provider=provider, owns_llm_provider=True
+        )
+
+        result = memory.providers()
+        assert PROVIDER_ROLE_SUMMARY_LLM in result
+        assert result[PROVIDER_ROLE_SUMMARY_LLM] is provider
+
+    def test_providers_returns_provider_when_not_owned(self):
+        """Provider visible when _owns_llm_provider=False (shared main LLM)."""
+        provider = self._create_echo_provider()
+        memory = SummaryMemory(
+            llm_provider=provider, owns_llm_provider=False
+        )
+
+        result = memory.providers()
+        assert PROVIDER_ROLE_SUMMARY_LLM in result
+        assert result[PROVIDER_ROLE_SUMMARY_LLM] is provider
+
+    def test_providers_returns_empty_when_no_provider(self):
+        """Empty dict when llm_provider is None."""
+        provider = self._create_echo_provider()
+        memory = SummaryMemory(llm_provider=provider)
+        memory.llm_provider = None  # type: ignore[assignment]
+
+        result = memory.providers()
+        assert result == {}
+
+    @pytest.mark.asyncio
+    async def test_close_skips_when_not_owned(self):
+        """close() does NOT close provider when _owns_llm_provider=False."""
+        provider = self._create_echo_provider()
+        await provider.initialize()
+        memory = SummaryMemory(
+            llm_provider=provider, owns_llm_provider=False
+        )
+
+        await memory.close()
+        assert provider.close_count == 0, "Provider should NOT be closed when not owned"
+
+    @pytest.mark.asyncio
+    async def test_close_closes_when_owned(self):
+        """close() closes provider when _owns_llm_provider=True."""
+        provider = self._create_echo_provider()
+        await provider.initialize()
+        memory = SummaryMemory(
+            llm_provider=provider, owns_llm_provider=True
+        )
+
+        await memory.close()
+        assert provider.close_count == 1, "Provider should be closed exactly once when owned"
+
+    def test_set_provider_replaces_provider(self):
+        """set_provider() updates the LLM provider for the summary role."""
+        provider1 = self._create_echo_provider()
+        provider2 = self._create_echo_provider()
+        memory = SummaryMemory(llm_provider=provider1)
+
+        result = memory.set_provider(PROVIDER_ROLE_SUMMARY_LLM, provider2)
+        assert result is True
+        assert memory.llm_provider is provider2
+
+        # providers() should reflect the new provider
+        providers = memory.providers()
+        assert providers[PROVIDER_ROLE_SUMMARY_LLM] is provider2
+
+    def test_set_provider_ignores_wrong_role(self):
+        """set_provider() returns False for non-matching role."""
+        provider = self._create_echo_provider()
+        memory = SummaryMemory(llm_provider=provider)
+
+        result = memory.set_provider(PROVIDER_ROLE_MAIN, self._create_echo_provider())
+        assert result is False
+        assert memory.llm_provider is provider
 
 
 class TestSummaryMemoryPopMessages:

@@ -298,3 +298,51 @@ class TestFromConfigRegistersProviders:
             assert list(providers.keys()) == [PROVIDER_ROLE_MAIN]
         finally:
             await bot.close()
+
+    @pytest.mark.asyncio
+    async def test_all_providers_includes_summary_llm_shared(self):
+        """Bot with shared main LLM has 'summary_llm' in all_providers.
+
+        When SummaryMemory reuses the bot's main LLM (the default path),
+        providers() must still report it so the registry is complete for
+        observability, capture/replay, and provider injection.
+        """
+        config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "memory": {
+                "type": "summary",
+                "recent_window": 5,
+            },
+        }
+        bot = await DynaBot.from_config(config)
+        try:
+            providers = bot.all_providers
+            assert PROVIDER_ROLE_MAIN in providers
+            assert PROVIDER_ROLE_SUMMARY_LLM in providers
+            # Both roles point to the same provider instance (shared main LLM)
+            assert providers[PROVIDER_ROLE_SUMMARY_LLM] is providers[PROVIDER_ROLE_MAIN]
+        finally:
+            await bot.close()
+
+    @pytest.mark.asyncio
+    async def test_all_providers_includes_summary_llm_dedicated(self):
+        """Bot with dedicated summary LLM has separate 'summary_llm' entry."""
+        config = {
+            "llm": {"provider": "echo", "model": "main-model"},
+            "conversation_storage": {"backend": "memory"},
+            "memory": {
+                "type": "summary",
+                "recent_window": 5,
+                "llm": {"provider": "echo", "model": "summary-model"},
+            },
+        }
+        bot = await DynaBot.from_config(config)
+        try:
+            providers = bot.all_providers
+            assert PROVIDER_ROLE_MAIN in providers
+            assert PROVIDER_ROLE_SUMMARY_LLM in providers
+            # Different provider instances
+            assert providers[PROVIDER_ROLE_SUMMARY_LLM] is not providers[PROVIDER_ROLE_MAIN]
+        finally:
+            await bot.close()

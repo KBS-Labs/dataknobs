@@ -115,15 +115,16 @@ class SummaryMemory(Memory):
         return context
 
     def providers(self) -> dict[str, Any]:
-        """Return the summary LLM provider if this instance owns it.
+        """Return the summary LLM provider for catalog registration.
 
-        When the bot's main LLM is reused (``owns_llm_provider=False``),
-        it is not reported here — the bot already knows about its own
-        main provider.
+        Always reports the provider for discovery and observability.
+        The ``_owns_llm_provider`` flag controls lifecycle (``close()``),
+        not visibility — consistent with VectorMemory, RAGKnowledgeBase,
+        and WizardReasoning.
         """
         from dataknobs_bots.bot.base import PROVIDER_ROLE_SUMMARY_LLM
 
-        if self._owns_llm_provider and self.llm_provider is not None:
+        if self.llm_provider is not None:
             return {PROVIDER_ROLE_SUMMARY_LLM: self.llm_provider}
         return {}
 
