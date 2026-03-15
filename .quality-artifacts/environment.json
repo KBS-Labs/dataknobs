@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-03-14T23:19:30Z",
+  "timestamp": "2026-03-15T18:51:16Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.10.9 (Homebrew 2026-03-06)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/embedding-provider-factory",
-  "git_commit": "d496206376729ad25452b89e250022f883a3d98a",
+  "git_branch": "sbk/provider-visibility",
+  "git_commit": "b7d579c314dd1c8404ef44ed865c7e0d6cb8b123",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
