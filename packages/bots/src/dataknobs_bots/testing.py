@@ -40,6 +40,8 @@ from dataknobs_llm import EchoProvider
 from dataknobs_llm.llm.base import AsyncLLMProvider, LLMResponse
 from dataknobs_llm.testing import llm_response_from_dict
 
+from .reasoning.base import ReasoningManagerProtocol, ReasoningStrategy
+
 logger = logging.getLogger(__name__)
 
 
@@ -279,3 +281,46 @@ class CaptureReplay:
             main_provider=self.main_provider(),
             extraction_provider=self.extraction_provider() if self._extraction_responses else None,
         )
+
+
+class ErrorRaisingStrategy(ReasoningStrategy):
+    """Test strategy that raises a configurable exception on every hook.
+
+    Useful for testing error handling paths in DynaBot without needing
+    a real reasoning strategy or LLM provider.
+
+    Args:
+        error: The exception to raise. Defaults to ``ValueError("test error")``.
+
+    Example:
+        ```python
+        from dataknobs_bots.testing import ErrorRaisingStrategy
+
+        strategy = ErrorRaisingStrategy(RuntimeError("boom"))
+        bot = DynaBot(llm=provider, ..., reasoning_strategy=strategy)
+        # bot.chat() / bot.greet() will raise RuntimeError("boom")
+        ```
+    """
+
+    def __init__(self, error: Exception | None = None) -> None:
+        super().__init__()
+        self._error = error or ValueError("test error")
+
+    async def generate(
+        self,
+        manager: ReasoningManagerProtocol,
+        llm: Any,
+        tools: list[Any] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        raise self._error
+
+    async def greet(
+        self,
+        manager: ReasoningManagerProtocol,
+        llm: Any,
+        *,
+        initial_context: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> Any | None:
+        raise self._error

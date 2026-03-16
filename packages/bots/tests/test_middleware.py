@@ -101,6 +101,13 @@ class TestCostTrackingMiddleware:
         assert stats["on_error_calls"] == 0
         assert stats["total_input_tokens"] > 0
         assert stats["total_output_tokens"] > 0
+        # by_provider and by_model are populated (previously missing for post_stream)
+        assert "unknown" in stats["by_provider"]
+        provider_stats = stats["by_provider"]["unknown"]
+        assert provider_stats["requests"] == 1
+        assert "by_model" in provider_stats
+        assert "unknown" in provider_stats["by_model"]
+        assert provider_stats["by_model"]["unknown"]["requests"] == 1
 
     @pytest.mark.asyncio
     async def test_on_error_tracks_call_count(self, bot_context: BotContext):
@@ -142,6 +149,43 @@ class TestCostTrackingMiddleware:
         assert stats["post_stream_calls"] == 1
         assert stats["on_error_calls"] == 1
         assert stats["total_requests"] == 2  # after_message + post_stream
+
+    @pytest.mark.asyncio
+    async def test_post_stream_by_model_matches_after_message(
+        self, bot_context: BotContext
+    ):
+        """post_stream must track by_model the same way after_message does.
+
+        Bug: post_stream previously only tracked by_provider without the
+        by_model sub-dict, causing KeyError when accessing model-level stats
+        and making streaming requests invisible in per-model reports.
+        """
+        middleware = CostTrackingMiddleware()
+
+        # Simulate a streaming response with known provider/model via context
+        bot_context.session_metadata["provider"] = "openai"
+        bot_context.session_metadata["model"] = "gpt-4o"
+
+        await middleware.post_stream(
+            "What is Python?",
+            "Python is a programming language.",
+            bot_context,
+        )
+
+        stats = middleware.get_client_stats("test-client")
+        assert stats is not None
+
+        # by_provider structure must include by_model
+        assert "openai" in stats["by_provider"]
+        provider_stats = stats["by_provider"]["openai"]
+        assert "by_model" in provider_stats
+        assert "gpt-4o" in provider_stats["by_model"]
+
+        model_stats = provider_stats["by_model"]["gpt-4o"]
+        assert model_stats["requests"] == 1
+        assert model_stats["input_tokens"] > 0
+        assert model_stats["output_tokens"] > 0
+        assert model_stats["cost_usd"] > 0
 
     @pytest.mark.asyncio
     async def test_on_error(self, bot_context: BotContext):

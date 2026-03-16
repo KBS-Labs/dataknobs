@@ -36,7 +36,7 @@ User Message
 └─────────────────────┘  └─────────────────────┘
     │                        │
     ▼                        ▼
-Response                Error Response
+Response                Error re-raised
 ```
 
 **Streaming Flow (`stream_chat()`)**:
@@ -59,8 +59,38 @@ User Message
 └─────────────────────┘  └─────────────────────┘
     │                        │
     ▼                        ▼
-Complete               Error Response
+Complete               Error re-raised
 ```
+
+**Hook failure handling (`on_hook_error`)**:
+
+If any middleware hook itself raises (e.g., a logging sink is down during
+`after_message`), the exception is caught, logged, and all middleware are
+notified via `on_hook_error(hook_name, error, context)`.  This is separate
+from `on_error`, which fires for request-level failures.
+
+```
+┌─────────────────────┐
+│  after_message()    │ ──► raises Exception
+└─────────────────────┘
+    │
+    ▼
+┌─────────────────────┐
+│  on_hook_error()    │  ← All middleware notified
+└─────────────────────┘     (hook_name="after_message")
+```
+
+### Error Semantics
+
+| Hook | Fires when | Request succeeded? |
+|------|-----------|-------------------|
+| `on_error` | Request preparation or generation fails | No |
+| `on_hook_error` | A middleware hook itself raises | Yes (response already delivered) |
+
+This distinction lets middleware differentiate "the request failed" from
+"observability/post-processing broke."  Error-tracking middleware can count
+request failures via `on_error` and infrastructure failures via
+`on_hook_error` independently.
 
 ## Built-in Middleware
 
@@ -220,8 +250,14 @@ class MyMiddleware(Middleware):
     async def on_error(
         self, error: Exception, message: str, context: BotContext
     ) -> None:
-        """Called when an error occurs."""
+        """Called when a request-level error occurs."""
         print(f"Error: {error} for message: {message[:50]}...")
+
+    async def on_hook_error(
+        self, hook_name: str, error: Exception, context: BotContext
+    ) -> None:
+        """Called when a middleware hook itself raises."""
+        print(f"Hook {hook_name} failed: {error}")
 ```
 
 ### Example: Rate Limiting Middleware
@@ -268,6 +304,11 @@ class RateLimitMiddleware(Middleware):
 
     async def on_error(
         self, error: Exception, message: str, context: BotContext
+    ) -> None:
+        pass
+
+    async def on_hook_error(
+        self, hook_name: str, error: Exception, context: BotContext
     ) -> None:
         pass
 ```
@@ -332,7 +373,7 @@ bot = await DynaBot.from_config(config)
 
 1. **Order Matters**: Middleware executes in order. Put logging first to capture all requests.
 
-2. **Error Handling**: Always implement `on_error` to handle failures gracefully.
+2. **Error Handling**: Implement `on_error` for request failures and `on_hook_error` for middleware infrastructure failures.
 
 3. **Performance**: Keep middleware lightweight. Offload heavy processing to background tasks.
 
