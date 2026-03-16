@@ -162,7 +162,14 @@ class SqliteEmbeddingCache(EmbeddingCache):
         self._conn: Any = None  # aiosqlite.Connection
 
     async def initialize(self) -> None:
-        """Open the database and create the embeddings table if needed."""
+        """Open the database and create the embeddings table if needed.
+
+        Idempotent — safe to call multiple times. Subsequent calls are
+        no-ops if the connection is already open.
+        """
+        if self._conn is not None:
+            return
+
         try:
             import aiosqlite
         except ImportError:
@@ -188,8 +195,17 @@ class SqliteEmbeddingCache(EmbeddingCache):
 
     async def close(self) -> None:
         if self._conn is not None:
-            await self._conn.close()
+            conn = self._conn
             self._conn = None
+            await conn.close()
+            # aiosqlite.Connection extends threading.Thread. close()
+            # signals the thread to stop but doesn't join it, leaving
+            # a non-daemon thread that blocks process exit.
+            # Note: Connection.__getattr__ proxies to sqlite3.Connection,
+            # so we must call Thread methods via the class directly.
+            import threading
+            if isinstance(conn, threading.Thread):
+                threading.Thread.join(conn, timeout=2.0)
 
     async def get(self, model: str, text: str) -> list[float] | None:
         key = _cache_key(model, text)
@@ -324,8 +340,15 @@ class CachingEmbedProvider(AsyncLLMProvider):
     # -- Lifecycle ---------------------------------------------------------
 
     async def initialize(self) -> None:
-        """Initialize both the inner provider and the cache."""
-        await self._inner.initialize()
+        """Initialize the inner provider (if not already) and the cache.
+
+        Skips inner initialization when the inner provider is already
+        initialized — e.g. when wrapping a provider that was created and
+        initialized by ``DynaBot.from_config()``. Re-initializing would
+        open duplicate connections (aiohttp sessions for Ollama, etc.).
+        """
+        if not self._inner.is_initialized:
+            await self._inner.initialize()
         await self._cache.initialize()
         self._is_initialized = True
 

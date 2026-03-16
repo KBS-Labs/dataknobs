@@ -129,6 +129,25 @@ class TestSqliteEmbeddingCache:
             await cache.close()
 
     @pytest.mark.asyncio
+    async def test_close_joins_background_thread(self, tmp_path: Path):
+        """close() must join the aiosqlite background thread.
+
+        Without joining, the non-daemon thread keeps the process alive
+        after asyncio.run() completes, causing harness scenarios to hang.
+        """
+        import threading
+
+        cache = SqliteEmbeddingCache(tmp_path / "thread.db")
+        await cache.initialize()
+        threads_during = threading.active_count()
+
+        await cache.close()
+        threads_after = threading.active_count()
+
+        # The aiosqlite thread should be stopped after close
+        assert threads_after < threads_during
+
+    @pytest.mark.asyncio
     async def test_persistence_across_instances(self, tmp_path: Path):
         """Data survives cache close + reopen."""
         db_path = tmp_path / "persist.db"
@@ -431,6 +450,27 @@ class TestCachingEmbedProviderLifecycle:
         await provider.initialize()
         assert provider.is_initialized
         assert inner.is_initialized
+
+    @pytest.mark.asyncio
+    async def test_initialize_skips_already_initialized_inner(self):
+        """initialize() must not re-initialize an already-initialized inner.
+
+        When wrapping a provider that was already initialized (e.g. by
+        DynaBot.from_config()), calling initialize() again would open
+        duplicate connections (aiohttp sessions for Ollama, etc.).
+        """
+        inner = _create_echo_provider()
+        await inner.initialize()
+        assert inner.init_count == 1
+
+        cache = MemoryEmbeddingCache()
+        provider = CachingEmbedProvider(inner, cache)
+        await provider.initialize()
+
+        # Provider is ready
+        assert provider.is_initialized
+        # Inner was NOT re-initialized (init_count stays at 1)
+        assert inner.init_count == 1
 
     @pytest.mark.asyncio
     async def test_close_closes_both(self):
