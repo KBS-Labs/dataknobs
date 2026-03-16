@@ -24,6 +24,7 @@ from dataknobs_llm.tools import ToolRegistry
 
 from ..knowledge.base import KnowledgeBase
 from ..memory.base import Memory
+from ..middleware.base import Middleware
 from .context import BotContext
 
 if TYPE_CHECKING:
@@ -138,7 +139,7 @@ class DynaBot:
         knowledge_base: KnowledgeBase | None = None,
         kb_auto_context: bool = True,
         reasoning_strategy: Any | None = None,
-        middleware: list[Any] | None = None,
+        middleware: list[Middleware] | None = None,
         system_prompt_name: str | None = None,
         system_prompt_content: str | None = None,
         system_prompt_rag_configs: list[dict[str, Any]] | None = None,
@@ -158,7 +159,7 @@ class DynaBot:
                 When False, the KB is still available for tool-based access
                 but not automatically queried on every message.
             reasoning_strategy: Optional reasoning strategy
-            middleware: Optional middleware list
+            middleware: Optional list of Middleware instances
             system_prompt_name: Name of system prompt template (mutually exclusive with content)
             system_prompt_content: Inline system prompt content (mutually exclusive with name)
             system_prompt_rag_configs: RAG configurations for inline system prompts
@@ -173,7 +174,7 @@ class DynaBot:
         self.knowledge_base = knowledge_base
         self._kb_auto_context = kb_auto_context
         self.reasoning_strategy = reasoning_strategy
-        self.middleware = middleware or []
+        self.middleware: list[Middleware] = middleware or []
         self.system_prompt_name = system_prompt_name
         self.system_prompt_content = system_prompt_content
         self.system_prompt_rag_configs = system_prompt_rag_configs
@@ -722,9 +723,7 @@ class DynaBot:
             The ConversationManager ready for response generation.
         """
         # Apply middleware (before)
-        for mw in self.middleware:
-            if hasattr(mw, "before_message"):
-                await mw.before_message(message, context)
+        await self._call_before_message_middleware(message, context)
 
         # Build message with context from memory and knowledge
         full_message = await self._build_message_with_context(message, rag_query=rag_query)
@@ -803,14 +802,91 @@ class DynaBot:
         """
         return response.content if hasattr(response, "content") else str(response)
 
+    async def _call_before_message_middleware(
+        self, message: str, context: BotContext
+    ) -> None:
+        """Dispatch before_message to all middleware.
+
+        Every middleware gets called even if an earlier one raises.
+        If any raise, the first error is re-raised after all have
+        been called (so the outer try block can route it to on_error).
+
+        Args:
+            message: User message (empty string for greet)
+            context: Bot execution context
+        """
+        first_error: Exception | None = None
+        for mw in self.middleware:
+            try:
+                await mw.before_message(message, context)
+            except Exception as exc:
+                logger.exception(
+                    "Middleware %s.before_message raised",
+                    type(mw).__name__,
+                )
+                if first_error is None:
+                    first_error = exc
+        if first_error is not None:
+            raise first_error
+
+    async def _call_after_message_middleware(
+        self,
+        response_content: str,
+        context: BotContext,
+        **kwargs: Any,
+    ) -> None:
+        """Dispatch after_message to all middleware.
+
+        Observational hook — one failing middleware must not prevent
+        others from being notified. Errors are logged and swallowed.
+
+        Args:
+            response_content: Bot response text
+            context: Bot execution context
+            **kwargs: Additional data (tokens_used, model, provider)
+        """
+        for mw in self.middleware:
+            try:
+                await mw.after_message(response_content, context, **kwargs)
+            except Exception:
+                logger.exception(
+                    "Middleware %s.after_message raised",
+                    type(mw).__name__,
+                )
+
+    async def _call_post_stream_middleware(
+        self, message: str, response: str, context: BotContext
+    ) -> None:
+        """Dispatch post_stream to all middleware.
+
+        Observational hook — one failing middleware must not prevent
+        others from being notified. Errors are logged and swallowed.
+
+        Args:
+            message: Original user message
+            response: Complete accumulated response
+            context: Bot execution context
+        """
+        for mw in self.middleware:
+            try:
+                await mw.post_stream(message, response, context)
+            except Exception:
+                logger.exception(
+                    "Middleware %s.post_stream raised",
+                    type(mw).__name__,
+                )
+
     async def _call_on_error_middleware(
         self, error: Exception, message: str, context: BotContext
     ) -> None:
-        """Dispatch on_error to all middleware that supports it.
+        """Dispatch on_error to all middleware.
+
+        Error notification hook — one failing middleware must not prevent
+        others from being notified. Errors are logged and swallowed.
 
         Called by chat(), greet(), and stream_chat() when an exception
         occurs during message processing. The caller re-raises the
-        exception after this method returns.
+        original exception after this method returns.
 
         Args:
             error: The exception that occurred
@@ -819,8 +895,13 @@ class DynaBot:
             context: Bot execution context
         """
         for mw in self.middleware:
-            if hasattr(mw, "on_error"):
+            try:
                 await mw.on_error(error, message, context)
+            except Exception:
+                logger.exception(
+                    "Middleware %s.on_error raised during error dispatch",
+                    type(mw).__name__,
+                )
 
     def _middleware_kwargs(self, response: Any) -> dict[str, Any]:
         """Build kwargs for middleware after_message/post_stream hooks.
@@ -895,8 +976,8 @@ class DynaBot:
             )
             ```
         """
-        manager = await self._prepare_chat(message, context, rag_query=rag_query)
         try:
+            manager = await self._prepare_chat(message, context, rag_query=rag_query)
             response = await self._generate_response(
                 manager, temperature, max_tokens, llm_config_overrides
             )
@@ -908,9 +989,9 @@ class DynaBot:
 
             # Apply middleware (after)
             mw_kwargs = self._middleware_kwargs(response)
-            for mw in self.middleware:
-                if hasattr(mw, "after_message"):
-                    await mw.after_message(response_content, context, **mw_kwargs)
+            await self._call_after_message_middleware(
+                response_content, context, **mw_kwargs
+            )
 
             return response_content
         except Exception as e:
@@ -943,6 +1024,13 @@ class DynaBot:
         Returns:
             Greeting string, or None if the bot does not support greetings
 
+        Note:
+            If an error occurs, middleware ``on_error`` hooks receive
+            ``message=""`` since there is no user message for a greeting.
+            Middleware can distinguish this from a real empty-string user
+            message by checking the error context or using the
+            ``before_message`` call (which also receives ``""``).
+
         Example:
             ```python
             context = BotContext(conversation_id="conv-123", client_id="harness")
@@ -954,15 +1042,13 @@ class DynaBot:
         if not self.reasoning_strategy:
             return None
 
-        # Apply middleware (before) with empty message for context
-        for mw in self.middleware:
-            if hasattr(mw, "before_message"):
-                await mw.before_message("", context)
-
-        # Get or create conversation manager
-        manager = await self._get_or_create_conversation(context)
-
         try:
+            # Apply middleware (before) with empty message for context
+            await self._call_before_message_middleware("", context)
+
+            # Get or create conversation manager
+            manager = await self._get_or_create_conversation(context)
+
             # Delegate to reasoning strategy
             response = await self.reasoning_strategy.greet(
                 manager=manager,
@@ -982,9 +1068,9 @@ class DynaBot:
 
             # Apply middleware (after)
             mw_kwargs = self._middleware_kwargs(response)
-            for mw in self.middleware:
-                if hasattr(mw, "after_message"):
-                    await mw.after_message(response_content, context, **mw_kwargs)
+            await self._call_after_message_middleware(
+                response_content, context, **mw_kwargs
+            )
 
             return response_content
         except Exception as e:
@@ -1055,12 +1141,11 @@ class DynaBot:
             When a reasoning_strategy is configured, the strategy produces the
             complete response and it is emitted as a single stream chunk.
         """
-        manager = await self._prepare_chat(message, context, rag_query=rag_query)
-
         full_response_chunks: list[str] = []
         streaming_error: Exception | None = None
 
         try:
+            manager = await self._prepare_chat(message, context, rag_query=rag_query)
             if self.reasoning_strategy:
                 # Delegate to the strategy's stream_generate().
                 # Strategies with true streaming (SimpleReasoning) yield
@@ -1108,9 +1193,9 @@ class DynaBot:
                 await self.memory.add_message(complete_response, role="assistant")
 
             # Apply post_stream middleware hook (provides both message and response)
-            for mw in self.middleware:
-                if hasattr(mw, "post_stream"):
-                    await mw.post_stream(message, complete_response, context)
+            await self._call_post_stream_middleware(
+                message, complete_response, context
+            )
 
     async def get_conversation(self, conversation_id: str) -> Any:
         """Retrieve conversation history.
@@ -1587,7 +1672,7 @@ class DynaBot:
             return None
 
     @staticmethod
-    def _create_middleware(config: dict[str, Any]) -> Any | None:
+    def _create_middleware(config: dict[str, Any]) -> Middleware | None:
         """Create middleware from configuration.
 
         Args:
