@@ -112,72 +112,43 @@ class CostTrackingMiddleware(Middleware):
             "after_message_calls": 0,
             "post_stream_calls": 0,
             "on_error_calls": 0,
+            "on_hook_error_calls": 0,
             "by_provider": {},
         }
 
-    async def before_message(self, message: str, context: BotContext) -> None:
-        """Track message before processing (mainly for logging).
+    def _record_usage(
+        self,
+        client_id: str,
+        hook_counter: str,
+        provider: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+    ) -> float:
+        """Record token usage and cost for a request.
+
+        Shared by ``after_message`` and ``post_stream`` to ensure
+        consistent stats tracking (totals, by-provider, by-model).
 
         Args:
-            message: User's input message
-            context: Bot context
+            client_id: Client identifier
+            hook_counter: Stats key to increment (e.g. "after_message_calls")
+            provider: LLM provider name
+            model: Model identifier
+            input_tokens: Number of input tokens
+            output_tokens: Number of output tokens
+
+        Returns:
+            Calculated cost in USD.
         """
-        # Estimate input tokens (rough approximation: ~4 chars per token)
-        estimated_tokens = len(message) // 4
-        self._logger.debug(f"Estimated input tokens: {estimated_tokens}")
-
-    async def after_message(
-        self, response: str, context: BotContext, **kwargs: Any
-    ) -> None:
-        """Track costs after bot response.
-
-        Args:
-            response: Bot's generated response
-            context: Bot context
-            **kwargs: Should contain 'tokens_used', 'provider', 'model' if available
-        """
-        if not self.track_tokens:
-            return
-
-        client_id = context.client_id
-
-        # Extract provider and model info
-        provider = kwargs.get("provider", "unknown")
-        model = kwargs.get("model", "unknown")
-
-        # Get token counts
-        tokens_used = kwargs.get("tokens_used", {})
-        if isinstance(tokens_used, int):
-            # If single number, assume it's total and estimate split
-            input_tokens = len(context.session_metadata.get("last_message", "")) // 4
-            output_tokens = tokens_used - input_tokens
-        else:
-            input_tokens = int(
-                tokens_used.get(
-                    "input",
-                    tokens_used.get(
-                        "prompt_tokens",
-                        len(context.session_metadata.get("last_message", "")) // 4,
-                    ),
-                )
-            )
-            output_tokens = int(
-                tokens_used.get(
-                    "output",
-                    tokens_used.get("completion_tokens", len(response) // 4),
-                )
-            )
-
-        # Calculate cost
         cost = self._calculate_cost(provider, model, input_tokens, output_tokens)
 
-        # Update stats
         if client_id not in self._usage_stats:
             self._usage_stats[client_id] = self._new_client_stats(client_id)
 
         stats = self._usage_stats[client_id]
         stats["total_requests"] += 1
-        stats["after_message_calls"] += 1
+        stats[hook_counter] += 1
         stats["total_input_tokens"] += input_tokens
         stats["total_output_tokens"] += output_tokens
         stats["total_cost_usd"] += cost
@@ -213,10 +184,70 @@ class CostTrackingMiddleware(Middleware):
         model_stats["output_tokens"] += output_tokens
         model_stats["cost_usd"] += cost
 
+        return cost
+
+    async def before_message(self, message: str, context: BotContext) -> None:
+        """Track message before processing (mainly for logging).
+
+        Args:
+            message: User's input message
+            context: Bot context
+        """
+        # Estimate input tokens (rough approximation: ~4 chars per token)
+        estimated_tokens = len(message) // 4
+        self._logger.debug("Estimated input tokens: %d", estimated_tokens)
+
+    async def after_message(
+        self, response: str, context: BotContext, **kwargs: Any
+    ) -> None:
+        """Track costs after bot response.
+
+        Args:
+            response: Bot's generated response
+            context: Bot context
+            **kwargs: Should contain 'tokens_used', 'provider', 'model' if available
+        """
+        if not self.track_tokens:
+            return
+
+        client_id = context.client_id
+        provider = kwargs.get("provider", "unknown")
+        model = kwargs.get("model", "unknown")
+
+        # Get token counts
+        tokens_used = kwargs.get("tokens_used", {})
+        if isinstance(tokens_used, int):
+            # If single number, assume it's total and estimate split
+            input_tokens = len(context.session_metadata.get("last_message", "")) // 4
+            output_tokens = tokens_used - input_tokens
+        else:
+            input_tokens = int(
+                tokens_used.get(
+                    "input",
+                    tokens_used.get(
+                        "prompt_tokens",
+                        len(context.session_metadata.get("last_message", "")) // 4,
+                    ),
+                )
+            )
+            output_tokens = int(
+                tokens_used.get(
+                    "output",
+                    tokens_used.get("completion_tokens", len(response) // 4),
+                )
+            )
+
+        cost = self._record_usage(
+            client_id, "after_message_calls",
+            provider, model, input_tokens, output_tokens,
+        )
+
+        total = self._usage_stats[client_id]["total_cost_usd"]
         self._logger.info(
-            f"Client {client_id}: {provider}/{model} - "
-            f"{input_tokens} in + {output_tokens} out tokens, "
-            f"cost: ${cost:.6f}, total: ${stats['total_cost_usd']:.6f}"
+            "Client %s: %s/%s - %d in + %d out tokens, "
+            "cost: $%.6f, total: $%.6f",
+            client_id, provider, model,
+            input_tokens, output_tokens, cost, total,
         )
 
     async def post_stream(
@@ -245,39 +276,18 @@ class CostTrackingMiddleware(Middleware):
         provider = context.session_metadata.get("provider", "unknown")
         model = context.session_metadata.get("model", "unknown")
 
-        # Calculate cost
-        cost = self._calculate_cost(provider, model, input_tokens, output_tokens)
+        cost = self._record_usage(
+            client_id, "post_stream_calls",
+            provider, model, input_tokens, output_tokens,
+        )
 
-        # Update stats
-        if client_id not in self._usage_stats:
-            self._usage_stats[client_id] = self._new_client_stats(client_id)
-
-        stats = self._usage_stats[client_id]
-        stats["total_requests"] += 1
-        stats["post_stream_calls"] += 1
-        stats["total_input_tokens"] += input_tokens
-        stats["total_output_tokens"] += output_tokens
-        stats["total_cost_usd"] += cost
-
-        # Track by provider
-        if provider not in stats["by_provider"]:
-            stats["by_provider"][provider] = {
-                "requests": 0,
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "cost_usd": 0.0,
-            }
-
-        provider_stats = stats["by_provider"][provider]
-        provider_stats["requests"] += 1
-        provider_stats["input_tokens"] += input_tokens
-        provider_stats["output_tokens"] += output_tokens
-        provider_stats["cost_usd"] += cost
-
+        total = self._usage_stats[client_id]["total_cost_usd"]
         self._logger.info(
-            f"Stream complete - Client {client_id}: {provider}/{model} - "
-            f"~{input_tokens} in + ~{output_tokens} out tokens (estimated), "
-            f"cost: ${cost:.6f}, total: ${stats['total_cost_usd']:.6f}"
+            "Stream complete - Client %s: %s/%s - "
+            "~%d in + ~%d out tokens (estimated), "
+            "cost: $%.6f, total: $%.6f",
+            client_id, provider, model,
+            input_tokens, output_tokens, cost, total,
         )
 
     async def on_error(
@@ -296,7 +306,27 @@ class CostTrackingMiddleware(Middleware):
         self._usage_stats[client_id]["on_error_calls"] += 1
 
         self._logger.warning(
-            f"Error during request for client {client_id}: {error}"
+            "Error during request for client %s: %s", client_id, error,
+        )
+
+    async def on_hook_error(
+        self, hook_name: str, error: Exception, context: BotContext
+    ) -> None:
+        """Track middleware hook failures.
+
+        Args:
+            hook_name: Name of the hook that failed
+            error: The exception raised by the middleware hook
+            context: Bot context
+        """
+        client_id = context.client_id
+        if client_id not in self._usage_stats:
+            self._usage_stats[client_id] = self._new_client_stats(client_id)
+        self._usage_stats[client_id]["on_hook_error_calls"] += 1
+
+        self._logger.warning(
+            "Middleware hook %s failed for client %s: %s",
+            hook_name, client_id, error,
         )
 
     def _calculate_cost(

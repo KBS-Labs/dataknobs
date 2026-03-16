@@ -838,7 +838,8 @@ class DynaBot:
         """Dispatch after_message to all middleware.
 
         Observational hook — one failing middleware must not prevent
-        others from being notified. Errors are logged and swallowed.
+        others from being notified. Errors are logged, then reported
+        to all middleware via ``on_hook_error``.
 
         Args:
             response_content: Bot response text
@@ -848,10 +849,13 @@ class DynaBot:
         for mw in self.middleware:
             try:
                 await mw.after_message(response_content, context, **kwargs)
-            except Exception:
+            except Exception as exc:
                 logger.exception(
                     "Middleware %s.after_message raised",
                     type(mw).__name__,
+                )
+                await self._call_on_hook_error_middleware(
+                    "after_message", exc, context
                 )
 
     async def _call_post_stream_middleware(
@@ -860,7 +864,8 @@ class DynaBot:
         """Dispatch post_stream to all middleware.
 
         Observational hook — one failing middleware must not prevent
-        others from being notified. Errors are logged and swallowed.
+        others from being notified. Errors are logged, then reported
+        to all middleware via ``on_hook_error``.
 
         Args:
             message: Original user message
@@ -870,10 +875,13 @@ class DynaBot:
         for mw in self.middleware:
             try:
                 await mw.post_stream(message, response, context)
-            except Exception:
+            except Exception as exc:
                 logger.exception(
                     "Middleware %s.post_stream raised",
                     type(mw).__name__,
+                )
+                await self._call_on_hook_error_middleware(
+                    "post_stream", exc, context
                 )
 
     async def _call_on_error_middleware(
@@ -882,7 +890,8 @@ class DynaBot:
         """Dispatch on_error to all middleware.
 
         Error notification hook — one failing middleware must not prevent
-        others from being notified. Errors are logged and swallowed.
+        others from being notified. Errors are logged, then reported
+        to all middleware via ``on_hook_error``.
 
         Called by chat(), greet(), and stream_chat() when an exception
         occurs during message processing. The caller re-raises the
@@ -897,10 +906,43 @@ class DynaBot:
         for mw in self.middleware:
             try:
                 await mw.on_error(error, message, context)
-            except Exception:
+            except Exception as exc:
                 logger.exception(
                     "Middleware %s.on_error raised during error dispatch",
                     type(mw).__name__,
+                )
+                await self._call_on_hook_error_middleware(
+                    "on_error", exc, context
+                )
+
+    async def _call_on_hook_error_middleware(
+        self, hook_name: str, error: Exception, context: BotContext
+    ) -> None:
+        """Dispatch on_hook_error to all middleware.
+
+        Called when a middleware hook itself fails. Unlike ``on_error``,
+        this does NOT mean the request failed — it means a middleware
+        could not complete its own post-processing.
+
+        All middleware receive the notification, including the middleware
+        whose hook failed — it sees its own failure reported back via
+        ``on_hook_error``.  Each call is independent: if ``on_hook_error``
+        itself raises, the failure is logged but not re-dispatched
+        (no infinite recursion).
+
+        Args:
+            hook_name: Name of the hook that failed (e.g. "after_message")
+            error: The exception raised by the middleware hook
+            context: Bot execution context
+        """
+        for mw in self.middleware:
+            try:
+                await mw.on_hook_error(hook_name, error, context)
+            except Exception:
+                logger.exception(
+                    "Middleware %s.on_hook_error raised (hook: %s)",
+                    type(mw).__name__,
+                    hook_name,
                 )
 
     def _middleware_kwargs(self, response: Any) -> dict[str, Any]:
@@ -914,7 +956,7 @@ class DynaBot:
             kwargs["tokens_used"] = response.usage
         if hasattr(response, "model") and response.model:
             kwargs["model"] = response.model
-        if hasattr(self, "llm") and self.llm is not None:
+        if self.llm is not None:
             provider_name = getattr(self.llm, "provider_name", None)
             if provider_name:
                 kwargs["provider"] = provider_name
@@ -1025,11 +1067,12 @@ class DynaBot:
             Greeting string, or None if the bot does not support greetings
 
         Note:
-            If an error occurs, middleware ``on_error`` hooks receive
-            ``message=""`` since there is no user message for a greeting.
-            Middleware can distinguish this from a real empty-string user
-            message by checking the error context or using the
-            ``before_message`` call (which also receives ``""``).
+            Middleware lifecycle for greet: ``before_message("")`` is
+            called before greeting generation; ``after_message(...)`` is
+            called on success.  If an error occurs, ``on_error`` hooks
+            receive ``message=""`` since there is no user message.  If a
+            middleware hook itself fails, ``on_hook_error`` is called on
+            all middleware.
 
         Example:
             ```python

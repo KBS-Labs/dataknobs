@@ -25,17 +25,19 @@ from dataknobs_llm.prompts.builders import AsyncPromptBuilder
 
 
 class ErrorTrackingMiddleware(Middleware):
-    """Test middleware that records on_error calls."""
+    """Test middleware that records all hook calls."""
 
     def __init__(self) -> None:
         self.errors: list[tuple[Exception, str, BotContext]] = []
+        self.hook_errors: list[tuple[str, Exception, BotContext]] = []
+        self.before_message_calls: int = 0
         self.after_message_calls: int = 0
         self.post_stream_calls: int = 0
 
     async def before_message(
-        self, message: str, context: BotContext, **kwargs: Any
+        self, message: str, context: BotContext
     ) -> None:
-        pass
+        self.before_message_calls += 1
 
     async def after_message(
         self, response: str, context: BotContext, **kwargs: Any
@@ -52,6 +54,11 @@ class ErrorTrackingMiddleware(Middleware):
     ) -> None:
         self.errors.append((error, message, context))
 
+    async def on_hook_error(
+        self, hook_name: str, error: Exception, context: BotContext
+    ) -> None:
+        self.hook_errors.append((hook_name, error, context))
+
 
 class HookErrorMiddleware(Middleware):
     """Test middleware that raises in a configurable hook.
@@ -65,7 +72,7 @@ class HookErrorMiddleware(Middleware):
         self._fail_on = fail_on
 
     async def before_message(
-        self, message: str, context: BotContext, **kwargs: Any
+        self, message: str, context: BotContext
     ) -> None:
         if self._fail_on == "before_message":
             raise RuntimeError("before_message failed")
@@ -87,6 +94,11 @@ class HookErrorMiddleware(Middleware):
     ) -> None:
         if self._fail_on == "on_error":
             raise RuntimeError("on_error failed")
+
+    async def on_hook_error(
+        self, hook_name: str, error: Exception, context: BotContext
+    ) -> None:
+        pass
 
 
 
@@ -255,6 +267,27 @@ class TestStreamChatOnError:
         assert message == "hello"
         assert context is bot_context
 
+    async def test_stream_chat_on_error_with_reasoning_strategy(
+        self,
+        bot_context: BotContext,
+        middleware: ErrorTrackingMiddleware,
+    ) -> None:
+        """stream_chat() calls on_error when reasoning strategy stream_generate raises."""
+        provider = _make_provider()
+        strategy_error = ValueError("stream strategy error")
+        strategy = ErrorRaisingStrategy(strategy_error)
+        bot = _make_bot(provider, middleware, reasoning_strategy=strategy)
+
+        with pytest.raises(ValueError, match="stream strategy error"):
+            async for _chunk in bot.stream_chat("hello", bot_context):
+                pass  # pragma: no cover
+
+        assert len(middleware.errors) == 1
+        error, message, context = middleware.errors[0]
+        assert error is strategy_error
+        assert message == "hello"
+        assert context is bot_context
+
 
 @pytest.mark.asyncio
 class TestPreparationPhaseOnError:
@@ -338,6 +371,11 @@ class TestMiddlewareIsolation:
             await bot.chat("hello", bot_context)
 
         assert len(tracker.errors) == 1
+        # on_hook_error notifies about the on_error failure
+        assert len(tracker.hook_errors) == 1
+        hook_name, error, _ = tracker.hook_errors[0]
+        assert hook_name == "on_error"
+        assert isinstance(error, RuntimeError)
 
     async def test_after_message_continues_after_middleware_failure(
         self,
@@ -354,6 +392,11 @@ class TestMiddlewareIsolation:
         assert result  # Response still returned despite middleware failure
         assert tracker.after_message_calls == 1
         assert len(tracker.errors) == 0  # No on_error — this isn't a request error
+        # on_hook_error IS called — middleware sees the hook failure
+        assert len(tracker.hook_errors) == 1
+        hook_name, error, _ = tracker.hook_errors[0]
+        assert hook_name == "after_message"
+        assert isinstance(error, RuntimeError)
 
     async def test_post_stream_continues_after_middleware_failure(
         self,
@@ -371,7 +414,12 @@ class TestMiddlewareIsolation:
 
         assert "".join(chunks)  # Response still streamed
         assert tracker.post_stream_calls == 1
-        assert len(tracker.errors) == 0
+        assert len(tracker.errors) == 0  # No on_error — this isn't a request error
+        # on_hook_error IS called — middleware sees the hook failure
+        assert len(tracker.hook_errors) == 1
+        hook_name, error, _ = tracker.hook_errors[0]
+        assert hook_name == "post_stream"
+        assert isinstance(error, RuntimeError)
 
     async def test_before_message_continues_after_middleware_failure(
         self,
@@ -379,10 +427,9 @@ class TestMiddlewareIsolation:
     ) -> None:
         """If one middleware's before_message raises, others still get called.
 
-        Two ErrorTrackingMiddleware instances sandwich a failing middleware.
-        Both trackers should have their before_message called (verified via
-        on_error — if before_message was skipped, the tracker wouldn't be
-        in a valid state, but the error would still propagate).
+        Three middleware in order: tracker_before, failing_mw, tracker_after.
+        Both trackers must have their before_message called even though
+        failing_mw raises in between.
         """
         tracker_before = ErrorTrackingMiddleware()
         failing_mw = HookErrorMiddleware("before_message")
@@ -393,7 +440,9 @@ class TestMiddlewareIsolation:
         with pytest.raises(RuntimeError, match="before_message failed"):
             await bot.chat("hello", bot_context)
 
-        # Both trackers get on_error — proving the error propagated
-        # and all middleware were notified
+        # Both trackers had before_message called despite failing_mw raising
+        assert tracker_before.before_message_calls == 1
+        assert tracker_after.before_message_calls == 1
+        # Both trackers also get on_error notification
         assert len(tracker_before.errors) == 1
         assert len(tracker_after.errors) == 1

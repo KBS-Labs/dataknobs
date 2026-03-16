@@ -888,6 +888,11 @@ Remember to always verify customer identity before sharing sensitive information
             ) -> None:
                 pass
 
+            async def on_hook_error(
+                self, hook_name: str, error: Exception, context: BotContext
+            ) -> None:
+                pass
+
         # Create bot with test middleware
         config = {
             "llm": {"provider": "echo", "model": "test"},
@@ -958,6 +963,11 @@ Remember to always verify customer identity before sharing sensitive information
             ) -> None:
                 pass
 
+            async def on_hook_error(
+                self, hook_name: str, error: Exception, context: BotContext
+            ) -> None:
+                pass
+
         config = {
             "llm": {"provider": "echo", "model": "test"},
             "conversation_storage": {"backend": "memory"},
@@ -1011,6 +1021,11 @@ Remember to always verify customer identity before sharing sensitive information
 
             async def on_error(
                 self, error: Exception, message: str, context: BotContext
+            ) -> None:
+                pass
+
+            async def on_hook_error(
+                self, hook_name: str, error: Exception, context: BotContext
             ) -> None:
                 pass
 

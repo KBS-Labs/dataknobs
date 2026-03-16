@@ -36,8 +36,6 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from collections.abc import AsyncIterator
-
 from dataknobs_llm import EchoProvider
 from dataknobs_llm.llm.base import AsyncLLMProvider, LLMResponse
 from dataknobs_llm.testing import llm_response_from_dict
@@ -316,16 +314,6 @@ class ErrorRaisingStrategy(ReasoningStrategy):
         **kwargs: Any,
     ) -> Any:
         raise self._error
-
-    async def stream_generate(
-        self,
-        manager: ReasoningManagerProtocol,
-        llm: Any,
-        tools: list[Any] | None = None,
-        **kwargs: Any,
-    ) -> AsyncIterator[LLMResponse]:
-        raise self._error
-        yield  # Make it an async generator  # pragma: no cover
 
     async def greet(
         self,

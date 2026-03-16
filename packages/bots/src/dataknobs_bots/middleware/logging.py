@@ -79,10 +79,10 @@ class LoggingMiddleware(Middleware):
         if self.json_format:
             self._logger.info(json.dumps(log_data))
         else:
-            self._logger.info(f"User message: {log_data}")
+            self._logger.info("User message: %s", log_data)
 
         # Log content at DEBUG level (first 200 chars)
-        self._logger.debug(f"Message content: {message[:200]}...")
+        self._logger.debug("Message content: %.200s...", message)
 
     async def after_message(
         self, response: str, context: BotContext, **kwargs: Any
@@ -120,10 +120,10 @@ class LoggingMiddleware(Middleware):
         if self.json_format:
             self._logger.info(json.dumps(log_data))
         else:
-            self._logger.info(f"Bot response: {log_data}")
+            self._logger.info("Bot response: %s", log_data)
 
         # Log content at DEBUG level (first 200 chars)
-        self._logger.debug(f"Response content: {response[:200]}...")
+        self._logger.debug("Response content: %.200s...", response)
 
     async def post_stream(
         self, message: str, response: str, context: BotContext
@@ -152,11 +152,11 @@ class LoggingMiddleware(Middleware):
         if self.json_format:
             self._logger.info(json.dumps(log_data))
         else:
-            self._logger.info(f"Stream complete: {log_data}")
+            self._logger.info("Stream complete: %s", log_data)
 
         # Log content at DEBUG level (first 200 chars each)
-        self._logger.debug(f"Streamed message: {message[:200]}...")
-        self._logger.debug(f"Streamed response: {response[:200]}...")
+        self._logger.debug("Streamed message: %.200s...", message)
+        self._logger.debug("Streamed response: %.200s...", response)
 
     async def on_error(
         self, error: Exception, message: str, context: BotContext
@@ -181,4 +181,34 @@ class LoggingMiddleware(Middleware):
         if self.json_format:
             self._logger.error(json.dumps(log_data), exc_info=error)
         else:
-            self._logger.error(f"Error processing message: {log_data}", exc_info=error)
+            self._logger.error(
+                "Error processing message: %s", log_data, exc_info=error
+            )
+
+    async def on_hook_error(
+        self, hook_name: str, error: Exception, context: BotContext
+    ) -> None:
+        """Called when a middleware hook itself raises.
+
+        Args:
+            hook_name: Name of the hook that failed
+            error: The exception raised by the middleware hook
+            context: Bot context
+        """
+        log_data = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event": "hook_error",
+            "hook_name": hook_name,
+            "client_id": context.client_id,
+            "user_id": context.user_id,
+            "conversation_id": context.conversation_id,
+            "error_type": type(error).__name__,
+            "error_message": str(error),
+        }
+
+        if self.json_format:
+            self._logger.warning(json.dumps(log_data), exc_info=error)
+        else:
+            self._logger.warning(
+                "Middleware hook %s failed: %s", hook_name, log_data, exc_info=error
+            )
