@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-03-15T21:02:52Z",
+  "timestamp": "2026-03-16T03:33:06Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.10.9 (Homebrew 2026-03-06)",
   "os": "Darwin",
   "os_version": "24.6.0",
-  "git_branch": "sbk/caching-embed-provider",
-  "git_commit": "bd35f2b31bb86a4cf3e321213324fa3a6ac08224",
+  "git_branch": "sbk/misc-fixes-3",
+  "git_commit": "e7abb301e69f479bef7b063e8715e063bff69fa8",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
