@@ -71,11 +71,21 @@ class EmbeddingCache(ABC):
 
     @abstractmethod
     async def initialize(self) -> None:
-        """Prepare the cache backend (create tables, open files, etc.)."""
+        """Prepare the cache backend (create tables, open files, etc.).
+
+        Implementations MUST be idempotent — calling ``initialize()``
+        on an already-initialized cache is a no-op. This is required
+        because ``CachingEmbedProvider.initialize()`` calls
+        ``cache.initialize()`` unconditionally.
+        """
 
     @abstractmethod
     async def close(self) -> None:
-        """Release cache resources."""
+        """Release cache resources.
+
+        Implementations MUST be idempotent — calling ``close()`` on an
+        already-closed or never-initialized cache is a no-op.
+        """
 
     @abstractmethod
     async def clear(self) -> None:
@@ -162,7 +172,14 @@ class SqliteEmbeddingCache(EmbeddingCache):
         self._conn: Any = None  # aiosqlite.Connection
 
     async def initialize(self) -> None:
-        """Open the database and create the embeddings table if needed."""
+        """Open the database and create the embeddings table if needed.
+
+        Idempotent — safe to call multiple times. Subsequent calls are
+        no-ops if the connection is already open.
+        """
+        if self._conn is not None:
+            return
+
         try:
             import aiosqlite
         except ImportError:
@@ -188,10 +205,23 @@ class SqliteEmbeddingCache(EmbeddingCache):
 
     async def close(self) -> None:
         if self._conn is not None:
-            await self._conn.close()
+            conn = self._conn
             self._conn = None
+            await conn.close()
+            # aiosqlite.Connection.close() already stops its worker thread
+            # and waits for the close operation to complete. No explicit
+            # thread join is needed.
+
+    def _check_open(self) -> None:
+        """Raise if the cache has been closed or not yet initialized."""
+        if self._conn is None:
+            raise RuntimeError(
+                "SqliteEmbeddingCache is not open. "
+                "Call initialize() before use, or the cache has been closed."
+            )
 
     async def get(self, model: str, text: str) -> list[float] | None:
+        self._check_open()
         key = _cache_key(model, text)
         cursor = await self._conn.execute(
             "SELECT vector FROM embeddings WHERE cache_key = ?", (key,)
@@ -202,6 +232,7 @@ class SqliteEmbeddingCache(EmbeddingCache):
         return _blob_to_vector(row[0])
 
     async def put(self, model: str, text: str, vector: list[float]) -> None:
+        self._check_open()
         key = _cache_key(model, text)
         blob = _vector_to_blob(vector)
         await self._conn.execute(
@@ -216,6 +247,7 @@ class SqliteEmbeddingCache(EmbeddingCache):
     async def get_batch(
         self, model: str, texts: list[str]
     ) -> list[list[float] | None]:
+        self._check_open()
         keys = [_cache_key(model, t) for t in texts]
         placeholders = ",".join("?" * len(keys))
         cursor = await self._conn.execute(
@@ -229,6 +261,7 @@ class SqliteEmbeddingCache(EmbeddingCache):
     async def put_batch(
         self, model: str, texts: list[str], vectors: list[list[float]]
     ) -> None:
+        self._check_open()
         rows = [
             (_cache_key(model, t), model, _vector_to_blob(v))
             for t, v in zip(texts, vectors)
@@ -243,10 +276,12 @@ class SqliteEmbeddingCache(EmbeddingCache):
         await self._conn.commit()
 
     async def clear(self) -> None:
+        self._check_open()
         await self._conn.execute("DELETE FROM embeddings")
         await self._conn.commit()
 
     async def count(self) -> int:
+        self._check_open()
         cursor = await self._conn.execute("SELECT COUNT(*) FROM embeddings")
         row = await cursor.fetchone()
         return row[0]
@@ -265,31 +300,45 @@ class CachingEmbedProvider(AsyncLLMProvider):
     and runs. ``complete()``, ``stream_complete()``, and ``function_call()``
     pass through to the inner provider unchanged.
 
+    **Lifecycle ownership:** When wrapping a pre-initialized provider (e.g.
+    one created and initialized by ``DynaBot.from_config()``), the caching
+    provider does NOT take ownership of the inner provider's lifecycle.
+    ``initialize()`` skips re-initializing the inner, and ``close()`` skips
+    closing it — the original owner is responsible for the inner's lifecycle.
+
     Args:
         inner: The real provider to delegate to.
         cache: The cache backend for storing embeddings.
 
-    Example::
+    Examples::
 
-        from dataknobs_llm import EchoProvider
-        from dataknobs_llm.llm.providers.caching import (
-            CachingEmbedProvider,
-            MemoryEmbeddingCache,
-        )
-
+        # Basic usage — cache hit/miss:
         inner = EchoProvider({"provider": "echo", "model": "test"})
         cache = MemoryEmbeddingCache()
         provider = CachingEmbedProvider(inner, cache)
         await provider.initialize()
+        vec1 = await provider.embed("hello")   # cache miss -> inner
+        vec2 = await provider.embed("hello")   # cache hit -> no inner call
 
-        vec1 = await provider.embed("hello")   # cache miss → inner
-        vec2 = await provider.embed("hello")   # cache hit → no inner call
+        # Fresh provider — CachingEmbedProvider owns the inner lifecycle:
+        provider = CachingEmbedProvider(inner, cache)
+        await provider.initialize()   # initializes both inner and cache
+        await provider.close()        # closes both inner and cache
+
+        # Pre-initialized provider — caller owns the inner lifecycle:
+        inner = OllamaProvider(config)
+        await inner.initialize()      # caller initializes
+        provider = CachingEmbedProvider(inner, MemoryEmbeddingCache())
+        await provider.initialize()   # skips inner, initializes cache only
+        await provider.close()        # skips inner, closes cache only
+        await inner.close()           # caller closes inner
     """
 
     def __init__(self, inner: AsyncLLMProvider, cache: EmbeddingCache) -> None:
         super().__init__(inner.config)
         self._inner = inner
         self._cache = cache
+        self._owns_inner = False
 
     # -- Config / capability forwarding ------------------------------------
 
@@ -324,26 +373,45 @@ class CachingEmbedProvider(AsyncLLMProvider):
     # -- Lifecycle ---------------------------------------------------------
 
     async def initialize(self) -> None:
-        """Initialize both the inner provider and the cache."""
-        await self._inner.initialize()
+        """Initialize the inner provider (if not already) and the cache.
+
+        Skips inner initialization when the inner provider is already
+        initialized — e.g. when wrapping a provider that was created and
+        initialized by ``DynaBot.from_config()``. Re-initializing would
+        open duplicate connections (aiohttp sessions for Ollama, etc.).
+
+        When the inner IS initialized here, ``_owns_inner`` is set to
+        ``True`` so that ``close()`` knows to close it. When the inner
+        was already initialized (pre-owned), ``close()`` leaves it alone.
+        """
+        if not self._inner.is_initialized:
+            await self._inner.initialize()
+            self._owns_inner = True
         await self._cache.initialize()
         self._is_initialized = True
 
     async def close(self) -> None:
-        """Close both the inner provider and the cache."""
+        """Close the cache, and the inner provider only if we own it.
+
+        When the inner provider was already initialized before wrapping
+        (pre-owned), the original owner is responsible for closing it.
+        Only providers that were initialized by this wrapper are closed.
+        """
         if self._is_closing:
             return
         self._is_closing = True
-        try:
-            await self._inner.close()
-        except Exception:
-            logger.exception("Error closing inner provider")
+        if self._owns_inner:
+            try:
+                await self._inner.close()
+            except Exception:
+                logger.exception("Error closing inner provider")
         try:
             await self._cache.close()
         except Exception:
             logger.exception("Error closing embedding cache")
         self._is_initialized = False
         self._is_closing = False
+        self._owns_inner = False
 
     # -- Passthrough methods -----------------------------------------------
 

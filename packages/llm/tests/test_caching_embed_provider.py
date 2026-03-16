@@ -129,6 +129,62 @@ class TestSqliteEmbeddingCache:
             await cache.close()
 
     @pytest.mark.asyncio
+    async def test_initialize_idempotent(self, tmp_path: Path):
+        """Calling initialize() twice is a no-op — no duplicate connections."""
+        cache = SqliteEmbeddingCache(tmp_path / "idempotent.db")
+        await cache.initialize()
+
+        # Store data before second init
+        await cache.put("m", "text", [1.0, 2.0])
+
+        # Second initialize should be a no-op
+        await cache.initialize()
+
+        # Data is still accessible (same connection, not reset)
+        result = await cache.get("m", "text")
+        assert result is not None
+        assert len(result) == 2
+        assert await cache.count() == 1
+
+        await cache.close()
+
+    @pytest.mark.asyncio
+    async def test_close_stops_background_thread(self, tmp_path: Path):
+        """close() ensures the aiosqlite background thread is stopped.
+
+        aiosqlite.Connection.close() internally stops its worker thread.
+        This test verifies no thread lingers after our close() returns.
+        """
+        import threading
+
+        threads_baseline = threading.active_count()
+
+        cache = SqliteEmbeddingCache(tmp_path / "thread.db")
+        await cache.initialize()
+
+        await cache.close()
+        threads_after = threading.active_count()
+
+        # Thread count should return to baseline (no lingering worker)
+        assert threads_after <= threads_baseline
+
+    @pytest.mark.asyncio
+    async def test_operations_after_close_raise(self, tmp_path: Path):
+        """Operations on a closed cache raise RuntimeError."""
+        cache = SqliteEmbeddingCache(tmp_path / "closed.db")
+        await cache.initialize()
+        await cache.close()
+
+        with pytest.raises(RuntimeError, match="not open"):
+            await cache.get("m", "text")
+        with pytest.raises(RuntimeError, match="not open"):
+            await cache.put("m", "text", [1.0])
+        with pytest.raises(RuntimeError, match="not open"):
+            await cache.clear()
+        with pytest.raises(RuntimeError, match="not open"):
+            await cache.count()
+
+    @pytest.mark.asyncio
     async def test_persistence_across_instances(self, tmp_path: Path):
         """Data survives cache close + reopen."""
         db_path = tmp_path / "persist.db"
@@ -433,16 +489,64 @@ class TestCachingEmbedProviderLifecycle:
         assert inner.is_initialized
 
     @pytest.mark.asyncio
-    async def test_close_closes_both(self):
-        """close() closes inner provider and cache."""
+    async def test_initialize_skips_already_initialized_inner(self):
+        """initialize() must not re-initialize an already-initialized inner.
+
+        When wrapping a provider that was already initialized (e.g. by
+        DynaBot.from_config()), calling initialize() again would open
+        duplicate connections (aiohttp sessions for Ollama, etc.).
+        """
+        inner = _create_echo_provider()
+        await inner.initialize()
+        assert inner.init_count == 1
+
+        cache = MemoryEmbeddingCache()
+        provider = CachingEmbedProvider(inner, cache)
+        await provider.initialize()
+
+        # Provider is ready
+        assert provider.is_initialized
+        # Inner was NOT re-initialized (init_count stays at 1)
+        assert inner.init_count == 1
+
+    @pytest.mark.asyncio
+    async def test_close_closes_owned_inner(self):
+        """close() closes the inner provider when we initialized it."""
         inner = _create_echo_provider()
         cache = MemoryEmbeddingCache()
         provider = CachingEmbedProvider(inner, cache)
         await provider.initialize()
 
+        assert inner.init_count == 1  # We initialized it
         await provider.close()
         assert not provider.is_initialized
         assert inner.close_count == 1
+
+    @pytest.mark.asyncio
+    async def test_close_skips_pre_owned_inner(self):
+        """close() must NOT close a pre-initialized (pre-owned) inner.
+
+        When wrapping a provider that was already initialized by its
+        original owner (e.g. DynaBot), closing the caching provider
+        must leave the inner provider open — the owner will close it.
+        """
+        inner = _create_echo_provider()
+        await inner.initialize()
+        assert inner.init_count == 1
+
+        cache = MemoryEmbeddingCache()
+        provider = CachingEmbedProvider(inner, cache)
+        await provider.initialize()
+
+        # Inner was NOT re-initialized
+        assert inner.init_count == 1
+
+        await provider.close()
+        assert not provider.is_initialized
+        # Inner was NOT closed — the original owner is responsible
+        assert inner.close_count == 0
+        # Inner is still usable
+        assert inner.is_initialized
 
 
 # ---------------------------------------------------------------------------
