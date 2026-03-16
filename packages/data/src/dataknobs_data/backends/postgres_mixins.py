@@ -5,6 +5,7 @@ reducing code duplication and ensuring consistent behavior.
 """
 
 import logging
+import re
 from typing import Any
 
 from ..records import Record
@@ -12,18 +13,39 @@ from .vector_config_mixin import VectorConfigMixin
 
 logger = logging.getLogger(__name__)
 
+# Valid PostgreSQL identifier pattern (unquoted identifiers)
+_VALID_DB_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+def validate_database_name(name: str) -> None:
+    """Validate a database name to prevent SQL injection.
+
+    Args:
+        name: Database name to validate.
+
+    Raises:
+        ValueError: If the name contains invalid characters.
+    """
+    if not _VALID_DB_NAME_RE.match(name):
+        raise ValueError(
+            f"Invalid database name {name!r}: must start with a letter or "
+            "underscore and contain only alphanumeric characters and underscores"
+        )
+
 
 class PostgresBaseConfig(VectorConfigMixin):
     """Shared configuration logic for PostgreSQL backends."""
 
-    def _parse_postgres_config(self, config: dict[str, Any]) -> tuple[str, str, dict]:
-        """Extract table, schema, and connection configuration.
-        
+    def _parse_postgres_config(
+        self, config: dict[str, Any],
+    ) -> tuple[str, str, dict, bool]:
+        """Extract table, schema, connection configuration, and ensure_database flag.
+
         Args:
             config: Configuration dictionary
-            
+
         Returns:
-            Tuple of (table_name, schema_name, connection_config)
+            Tuple of (table_name, schema_name, connection_config, ensure_database)
         """
         config = config.copy() if config else {}
 
@@ -38,18 +60,47 @@ class PostgresBaseConfig(VectorConfigMixin):
         config.pop("vector_enabled", None)
         config.pop("vector_metric", None)
 
-        return table_name, schema_name, config
+        # Extract and validate ensure_database as a proper boolean.
+        # String "false" from YAML/env must be coerced — raw truthy check
+        # would treat it as True (security.md §8 anti-pattern).
+        raw_ensure = config.pop("ensure_database", True)
+        if isinstance(raw_ensure, str):
+            ensure_database = raw_ensure.lower() in ("true", "1", "yes")
+        else:
+            ensure_database = bool(raw_ensure)
 
-    def _init_postgres_attributes(self, table_name: str, schema_name: str) -> None:
+        # Normalize connection_string into individual keys so that all
+        # downstream code (both sync and async) can read host/port/database
+        # etc. from the dict without needing their own URL parsing.
+        connection_string = config.get("connection_string")
+        if connection_string:
+            from urllib.parse import urlparse
+            parsed = urlparse(connection_string)
+            config.setdefault("host", parsed.hostname or "localhost")
+            config.setdefault("port", parsed.port or 5432)
+            config.setdefault(
+                "database",
+                parsed.path[1:] if parsed.path and len(parsed.path) > 1 else "postgres",
+            )
+            config.setdefault("user", parsed.username or "postgres")
+            config.setdefault("password", parsed.password or "")
+
+        return table_name, schema_name, config, ensure_database
+
+    def _init_postgres_attributes(
+        self, table_name: str, schema_name: str, ensure_database: bool = True,
+    ) -> None:
         """Initialize common PostgreSQL attributes.
-        
+
         Args:
             table_name: Name of the database table
             schema_name: Name of the database schema
+            ensure_database: Auto-create database if missing (default: True)
         """
         self.table_name = table_name
         self.schema_name = schema_name
         self._connected = False
+        self._ensure_database_enabled = ensure_database
 
         # Initialize vector state using the mixin
         self._init_vector_state()
