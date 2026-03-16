@@ -216,7 +216,7 @@ class EchoProvider(AsyncLLMProvider):
         return self
 
     def reset(self) -> "EchoProvider":
-        """Reset all state (responses, history, and close count).
+        """Reset all state (responses, history, init count, and close count).
 
         Returns:
             Self for chaining

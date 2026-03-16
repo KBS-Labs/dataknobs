@@ -129,11 +129,11 @@ class TestSqliteEmbeddingCache:
             await cache.close()
 
     @pytest.mark.asyncio
-    async def test_close_joins_background_thread(self, tmp_path: Path):
-        """close() must join the aiosqlite background thread.
+    async def test_close_stops_background_thread(self, tmp_path: Path):
+        """close() ensures the aiosqlite background thread is stopped.
 
-        Without joining, the non-daemon thread keeps the process alive
-        after asyncio.run() completes, causing harness scenarios to hang.
+        aiosqlite.Connection.close() internally stops its worker thread.
+        This test verifies no thread lingers after our close() returns.
         """
         import threading
 
@@ -146,6 +146,22 @@ class TestSqliteEmbeddingCache:
 
         # The aiosqlite thread should be stopped after close
         assert threads_after < threads_during
+
+    @pytest.mark.asyncio
+    async def test_operations_after_close_raise(self, tmp_path: Path):
+        """Operations on a closed cache raise RuntimeError."""
+        cache = SqliteEmbeddingCache(tmp_path / "closed.db")
+        await cache.initialize()
+        await cache.close()
+
+        with pytest.raises(RuntimeError, match="not open"):
+            await cache.get("m", "text")
+        with pytest.raises(RuntimeError, match="not open"):
+            await cache.put("m", "text", [1.0])
+        with pytest.raises(RuntimeError, match="not open"):
+            await cache.clear()
+        with pytest.raises(RuntimeError, match="not open"):
+            await cache.count()
 
     @pytest.mark.asyncio
     async def test_persistence_across_instances(self, tmp_path: Path):
@@ -473,16 +489,43 @@ class TestCachingEmbedProviderLifecycle:
         assert inner.init_count == 1
 
     @pytest.mark.asyncio
-    async def test_close_closes_both(self):
-        """close() closes inner provider and cache."""
+    async def test_close_closes_owned_inner(self):
+        """close() closes the inner provider when we initialized it."""
         inner = _create_echo_provider()
         cache = MemoryEmbeddingCache()
         provider = CachingEmbedProvider(inner, cache)
         await provider.initialize()
 
+        assert inner.init_count == 1  # We initialized it
         await provider.close()
         assert not provider.is_initialized
         assert inner.close_count == 1
+
+    @pytest.mark.asyncio
+    async def test_close_skips_pre_owned_inner(self):
+        """close() must NOT close a pre-initialized (pre-owned) inner.
+
+        When wrapping a provider that was already initialized by its
+        original owner (e.g. DynaBot), closing the caching provider
+        must leave the inner provider open — the owner will close it.
+        """
+        inner = _create_echo_provider()
+        await inner.initialize()
+        assert inner.init_count == 1
+
+        cache = MemoryEmbeddingCache()
+        provider = CachingEmbedProvider(inner, cache)
+        await provider.initialize()
+
+        # Inner was NOT re-initialized
+        assert inner.init_count == 1
+
+        await provider.close()
+        assert not provider.is_initialized
+        # Inner was NOT closed — the original owner is responsible
+        assert inner.close_count == 0
+        # Inner is still usable
+        assert inner.is_initialized
 
 
 # ---------------------------------------------------------------------------
