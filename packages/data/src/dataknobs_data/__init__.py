@@ -120,7 +120,7 @@ from .records import Record
 from .dedup import DedupChecker, DedupConfig, DedupResult, SimilarItem
 from .streaming import StreamConfig, StreamProcessor, StreamResult
 
-__version__ = "0.4.10"
+__version__ = "0.4.11"
 
 __all__ = [
     # Core classes
