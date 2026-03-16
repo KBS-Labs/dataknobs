@@ -5,6 +5,55 @@ All notable changes to Dataknobs packages will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Release - 2026-03-16
+
+### dataknobs-llm [0.5.2]
+
+#### Added
+- added embedding provider factory support for config-driven embedding
+provider creation
+- added caching embedding provider with pluggable backends (memory, SQLite)
+- added provider visibility — summary memory can expose its LLM provider for
+  registration
+
+#### Fixed
+- fixed SQL dot-notation queries in storage backends
+- fixed error handling consistency across chat implementations
+
+### dataknobs-bots [0.6.5]
+
+#### Added
+- added pluggable conversation storage via config (`storage_class` key)
+- added public wizard advance API for non-conversational wizard progression
+- added provider registry on DynaBot for enumerating and managing all
+  LLM/embedding providers
+- added composite memory strategy combining multiple memory backends
+- added embedding provider factory support in memory and knowledge base config
+
+#### Fixed
+- fixed error handling consistency across chat and stream_chat
+
+### dataknobs-fsm [0.1.12]
+
+#### Added
+- added storage injection — FSM storage backends can be provided externally 
+  instead of created internally
+- added metadata filtering in query_histories() with dot-notation support
+
+#### Fixed
+- refactored AdvancedFSM for shared sync/async execution core, eliminating
+  code duplication
+
+### dataknobs-data [0.4.11]
+
+#### Added
+- added Postgres database auto-create — databases are created automatically if
+  they don't exist
+
+#### Fixed
+- fixed SQL dot-notation queries for nested field access in filters
+
+
 ## Release - 2026-03-10
 
 ### dataknobs-bots [0.6.4]
