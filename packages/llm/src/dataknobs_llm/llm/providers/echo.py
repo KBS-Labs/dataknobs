@@ -438,7 +438,12 @@ class EchoProvider(AsyncLLMProvider):
         return max(1, len(text) // 4)
 
     async def initialize(self) -> None:
-        """Initialize echo provider. Tracks call count via ``init_count``."""
+        """Initialize echo provider. Tracks call count via ``init_count``.
+
+        Note: ``complete()``, ``stream_complete()``, ``embed()``, and
+        ``function_call()`` auto-call this method if the provider is not
+        yet initialized, which also increments ``init_count``.
+        """
         self._init_count += 1
         self._is_initialized = True
 

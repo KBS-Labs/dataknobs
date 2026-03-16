@@ -81,7 +81,11 @@ class EmbeddingCache(ABC):
 
     @abstractmethod
     async def close(self) -> None:
-        """Release cache resources."""
+        """Release cache resources.
+
+        Implementations MUST be idempotent — calling ``close()`` on an
+        already-closed or never-initialized cache is a no-op.
+        """
 
     @abstractmethod
     async def clear(self) -> None:
@@ -308,9 +312,15 @@ class CachingEmbedProvider(AsyncLLMProvider):
 
     Examples::
 
-        # Fresh provider — CachingEmbedProvider owns the inner lifecycle:
+        # Basic usage — cache hit/miss:
         inner = EchoProvider({"provider": "echo", "model": "test"})
         cache = MemoryEmbeddingCache()
+        provider = CachingEmbedProvider(inner, cache)
+        await provider.initialize()
+        vec1 = await provider.embed("hello")   # cache miss -> inner
+        vec2 = await provider.embed("hello")   # cache hit -> no inner call
+
+        # Fresh provider — CachingEmbedProvider owns the inner lifecycle:
         provider = CachingEmbedProvider(inner, cache)
         await provider.initialize()   # initializes both inner and cache
         await provider.close()        # closes both inner and cache
@@ -401,6 +411,7 @@ class CachingEmbedProvider(AsyncLLMProvider):
             logger.exception("Error closing embedding cache")
         self._is_initialized = False
         self._is_closing = False
+        self._owns_inner = False
 
     # -- Passthrough methods -----------------------------------------------
 

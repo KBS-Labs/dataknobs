@@ -129,6 +129,26 @@ class TestSqliteEmbeddingCache:
             await cache.close()
 
     @pytest.mark.asyncio
+    async def test_initialize_idempotent(self, tmp_path: Path):
+        """Calling initialize() twice is a no-op — no duplicate connections."""
+        cache = SqliteEmbeddingCache(tmp_path / "idempotent.db")
+        await cache.initialize()
+
+        # Store data before second init
+        await cache.put("m", "text", [1.0, 2.0])
+
+        # Second initialize should be a no-op
+        await cache.initialize()
+
+        # Data is still accessible (same connection, not reset)
+        result = await cache.get("m", "text")
+        assert result is not None
+        assert len(result) == 2
+        assert await cache.count() == 1
+
+        await cache.close()
+
+    @pytest.mark.asyncio
     async def test_close_stops_background_thread(self, tmp_path: Path):
         """close() ensures the aiosqlite background thread is stopped.
 
@@ -137,15 +157,16 @@ class TestSqliteEmbeddingCache:
         """
         import threading
 
+        threads_baseline = threading.active_count()
+
         cache = SqliteEmbeddingCache(tmp_path / "thread.db")
         await cache.initialize()
-        threads_during = threading.active_count()
 
         await cache.close()
         threads_after = threading.active_count()
 
-        # The aiosqlite thread should be stopped after close
-        assert threads_after < threads_during
+        # Thread count should return to baseline (no lingering worker)
+        assert threads_after <= threads_baseline
 
     @pytest.mark.asyncio
     async def test_operations_after_close_raise(self, tmp_path: Path):
