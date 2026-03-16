@@ -116,6 +116,7 @@ class EchoProvider(AsyncLLMProvider):
         self._call_history: List[Dict[str, Any]] = []
         self._embed_history: List[Dict[str, Any]] = []
         self._cycle_responses: bool = llm_config.options.get('cycle_responses', False)
+        self._init_count: int = 0
         self._close_count: int = 0
 
     # =========================================================================
@@ -215,19 +216,25 @@ class EchoProvider(AsyncLLMProvider):
         return self
 
     def reset(self) -> "EchoProvider":
-        """Reset all state (responses, history, and close count).
+        """Reset all state (responses, history, init count, and close count).
 
         Returns:
             Self for chaining
         """
         self.clear_responses()
         self.clear_history()
+        self._init_count = 0
         self._close_count = 0
         return self
 
     # =========================================================================
     # Call History API
     # =========================================================================
+
+    @property
+    def init_count(self) -> int:
+        """Get number of initialize() calls made."""
+        return self._init_count
 
     @property
     def close_count(self) -> int:
@@ -431,7 +438,13 @@ class EchoProvider(AsyncLLMProvider):
         return max(1, len(text) // 4)
 
     async def initialize(self) -> None:
-        """Initialize echo provider (no-op)."""
+        """Initialize echo provider. Tracks call count via ``init_count``.
+
+        Note: ``complete()``, ``stream_complete()``, ``embed()``, and
+        ``function_call()`` auto-call this method if the provider is not
+        yet initialized, which also increments ``init_count``.
+        """
+        self._init_count += 1
         self._is_initialized = True
 
     async def close(self) -> None:
