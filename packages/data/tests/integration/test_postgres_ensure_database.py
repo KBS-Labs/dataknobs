@@ -3,7 +3,6 @@
 Requires a running PostgreSQL instance and TEST_POSTGRES=true.
 """
 
-import asyncio
 import os
 import uuid
 
@@ -20,23 +19,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _pg_params() -> dict[str, str | int]:
-    """Connection params from env, matching the conftest pattern."""
-    if os.path.exists("/.dockerenv") or os.environ.get("DOCKER_CONTAINER"):
-        default_host = "postgres"
-    else:
-        default_host = "localhost"
-    return {
-        "host": os.environ.get("POSTGRES_HOST", default_host),
-        "port": int(os.environ.get("POSTGRES_PORT", 5432)),
-        "user": os.environ.get("POSTGRES_USER", "postgres"),
-        "password": os.environ.get("POSTGRES_PASSWORD", "postgres"),
-    }
-
-
-def _drop_database(name: str) -> None:
+def _drop_database(params: dict, name: str) -> None:
     """Drop a database, terminating active connections first."""
-    params = _pg_params()
     conn = psycopg2.connect(
         host=params["host"],
         port=params["port"],
@@ -58,9 +42,8 @@ def _drop_database(name: str) -> None:
         conn.close()
 
 
-def _database_exists(name: str) -> bool:
+def _database_exists(params: dict, name: str) -> bool:
     """Check whether a database exists."""
-    params = _pg_params()
     conn = psycopg2.connect(
         host=params["host"],
         port=params["port"],
@@ -78,128 +61,126 @@ def _database_exists(name: str) -> bool:
         conn.close()
 
 
+def _pre_create_database(params: dict, name: str) -> None:
+    """Create a database for testing the 'already exists' path."""
+    conn = psycopg2.connect(
+        host=params["host"],
+        port=params["port"],
+        user=params["user"],
+        password=params["password"],
+        database="postgres",
+    )
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(f'CREATE DATABASE "{name}"')
+    finally:
+        cursor.close()
+        conn.close()
+
+
 @pytest.fixture
-def unique_db_name():
+def unique_db_name(postgres_connection_params):
     """Generate a unique test database name and clean up after test."""
     name = f"dk_test_{uuid.uuid4().hex[:8]}"
     yield name
-    _drop_database(name)
+    _drop_database(postgres_connection_params, name)
 
 
 class TestAsyncEnsureDatabase:
     """Async backend auto-create database tests."""
 
-    def test_creates_database_if_missing(self, unique_db_name: str) -> None:
-        assert not _database_exists(unique_db_name)
+    @pytest.mark.asyncio
+    async def test_creates_database_if_missing(
+        self, unique_db_name: str, postgres_connection_params: dict,
+    ) -> None:
+        assert not _database_exists(postgres_connection_params, unique_db_name)
 
-        params = _pg_params()
         db = AsyncPostgresDatabase(config={
-            "host": params["host"],
-            "port": params["port"],
-            "user": params["user"],
-            "password": params["password"],
+            **postgres_connection_params,
             "database": unique_db_name,
             "table": "test_records",
         })
 
-        asyncio.get_event_loop().run_until_complete(db.connect())
+        await db.connect()
         try:
-            assert _database_exists(unique_db_name)
+            assert _database_exists(postgres_connection_params, unique_db_name)
 
             # Verify we can actually use the database
             record = Record({"key": "value"})
-            record_id = asyncio.get_event_loop().run_until_complete(db.create(record))
+            record_id = await db.create(record)
             assert record_id is not None
         finally:
-            asyncio.get_event_loop().run_until_complete(db.close())
+            await db.close()
 
-    def test_skips_existing_database(self, unique_db_name: str) -> None:
+    @pytest.mark.asyncio
+    async def test_skips_existing_database(
+        self, unique_db_name: str, postgres_connection_params: dict,
+    ) -> None:
         """No error when database already exists."""
-        # Pre-create the database
-        params = _pg_params()
-        conn = psycopg2.connect(
-            host=params["host"],
-            port=params["port"],
-            user=params["user"],
-            password=params["password"],
-            database="postgres",
-        )
-        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-        cursor = conn.cursor()
-        cursor.execute(f'CREATE DATABASE "{unique_db_name}"')
-        cursor.close()
-        conn.close()
-
-        assert _database_exists(unique_db_name)
+        _pre_create_database(postgres_connection_params, unique_db_name)
+        assert _database_exists(postgres_connection_params, unique_db_name)
 
         db = AsyncPostgresDatabase(config={
-            "host": params["host"],
-            "port": params["port"],
-            "user": params["user"],
-            "password": params["password"],
+            **postgres_connection_params,
             "database": unique_db_name,
             "table": "test_records",
         })
 
-        # Should succeed without error
-        asyncio.get_event_loop().run_until_complete(db.connect())
-        asyncio.get_event_loop().run_until_complete(db.close())
+        await db.connect()
+        await db.close()
 
-    def test_disabled_fails_on_missing_database(self) -> None:
+    @pytest.mark.asyncio
+    async def test_disabled_fails_on_missing_database(
+        self, postgres_connection_params: dict,
+    ) -> None:
         """With ensure_database=False, missing database raises."""
         missing_name = f"dk_noexist_{uuid.uuid4().hex[:8]}"
-        assert not _database_exists(missing_name)
+        assert not _database_exists(postgres_connection_params, missing_name)
 
-        params = _pg_params()
         db = AsyncPostgresDatabase(config={
-            "host": params["host"],
-            "port": params["port"],
-            "user": params["user"],
-            "password": params["password"],
+            **postgres_connection_params,
             "database": missing_name,
             "table": "test_records",
             "ensure_database": False,
         })
 
         with pytest.raises(Exception):
-            asyncio.get_event_loop().run_until_complete(db.connect())
+            await db.connect()
 
-    def test_system_database_not_created(self) -> None:
+    @pytest.mark.asyncio
+    async def test_system_database_not_created(
+        self, postgres_connection_params: dict,
+    ) -> None:
         """System databases (postgres, template0, template1) are skipped."""
-        params = _pg_params()
         db = AsyncPostgresDatabase(config={
-            "host": params["host"],
-            "port": params["port"],
-            "user": params["user"],
-            "password": params["password"],
+            **postgres_connection_params,
             "database": "postgres",
             "table": "test_system_skip",
         })
 
         # connect() should succeed — _ensure_database skips 'postgres'
-        asyncio.get_event_loop().run_until_complete(db.connect())
-        asyncio.get_event_loop().run_until_complete(db.close())
+        await db.connect()
+        await db.close()
 
 
 class TestSyncEnsureDatabase:
     """Sync backend auto-create database tests."""
 
-    def test_creates_database_if_missing(self, unique_db_name: str) -> None:
-        assert not _database_exists(unique_db_name)
+    def test_creates_database_if_missing(
+        self, unique_db_name: str, postgres_connection_params: dict,
+    ) -> None:
+        assert not _database_exists(postgres_connection_params, unique_db_name)
 
-        params = _pg_params()
         db = SyncPostgresDatabase(config={
-            "host": params["host"],
-            "port": params["port"],
-            "user": params["user"],
-            "password": params["password"],
+            **postgres_connection_params,
             "database": unique_db_name,
             "table": "test_records",
         })
 
         db.connect()
         try:
-            assert _database_exists(unique_db_name)
+            assert _database_exists(postgres_connection_params, unique_db_name)
 
             record = Record({"key": "value"})
             record_id = db.create(record)
@@ -207,27 +188,14 @@ class TestSyncEnsureDatabase:
         finally:
             db.close()
 
-    def test_skips_existing_database(self, unique_db_name: str) -> None:
+    def test_skips_existing_database(
+        self, unique_db_name: str, postgres_connection_params: dict,
+    ) -> None:
         """No error when database already exists."""
-        params = _pg_params()
-        conn = psycopg2.connect(
-            host=params["host"],
-            port=params["port"],
-            user=params["user"],
-            password=params["password"],
-            database="postgres",
-        )
-        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-        cursor = conn.cursor()
-        cursor.execute(f'CREATE DATABASE "{unique_db_name}"')
-        cursor.close()
-        conn.close()
+        _pre_create_database(postgres_connection_params, unique_db_name)
 
         db = SyncPostgresDatabase(config={
-            "host": params["host"],
-            "port": params["port"],
-            "user": params["user"],
-            "password": params["password"],
+            **postgres_connection_params,
             "database": unique_db_name,
             "table": "test_records",
         })
@@ -235,17 +203,15 @@ class TestSyncEnsureDatabase:
         db.connect()
         db.close()
 
-    def test_disabled_fails_on_missing_database(self) -> None:
+    def test_disabled_fails_on_missing_database(
+        self, postgres_connection_params: dict,
+    ) -> None:
         """With ensure_database=False, missing database raises."""
         missing_name = f"dk_noexist_{uuid.uuid4().hex[:8]}"
-        assert not _database_exists(missing_name)
+        assert not _database_exists(postgres_connection_params, missing_name)
 
-        params = _pg_params()
         db = SyncPostgresDatabase(config={
-            "host": params["host"],
-            "port": params["port"],
-            "user": params["user"],
-            "password": params["password"],
+            **postgres_connection_params,
             "database": missing_name,
             "table": "test_records",
             "ensure_database": False,
@@ -254,14 +220,12 @@ class TestSyncEnsureDatabase:
         with pytest.raises(Exception):
             db.connect()
 
-    def test_system_database_not_created(self) -> None:
+    def test_system_database_not_created(
+        self, postgres_connection_params: dict,
+    ) -> None:
         """System databases (postgres, template0, template1) are skipped."""
-        params = _pg_params()
         db = SyncPostgresDatabase(config={
-            "host": params["host"],
-            "port": params["port"],
-            "user": params["user"],
-            "password": params["password"],
+            **postgres_connection_params,
             "database": "postgres",
             "table": "test_system_skip",
         })

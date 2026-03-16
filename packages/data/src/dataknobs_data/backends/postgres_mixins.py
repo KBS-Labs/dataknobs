@@ -39,14 +39,16 @@ def validate_database_name(name: str) -> None:
 class PostgresBaseConfig(VectorConfigMixin):
     """Shared configuration logic for PostgreSQL backends."""
 
-    def _parse_postgres_config(self, config: dict[str, Any]) -> tuple[str, str, dict]:
-        """Extract table, schema, and connection configuration.
-        
+    def _parse_postgres_config(
+        self, config: dict[str, Any],
+    ) -> tuple[str, str, dict, bool]:
+        """Extract table, schema, connection configuration, and ensure_database flag.
+
         Args:
             config: Configuration dictionary
-            
+
         Returns:
-            Tuple of (table_name, schema_name, connection_config)
+            Tuple of (table_name, schema_name, connection_config, ensure_database)
         """
         config = config.copy() if config else {}
 
@@ -61,18 +63,25 @@ class PostgresBaseConfig(VectorConfigMixin):
         config.pop("vector_enabled", None)
         config.pop("vector_metric", None)
 
-        return table_name, schema_name, config
+        # Extract ensure_database before returning connection config
+        ensure_database: bool = config.pop("ensure_database", True)
 
-    def _init_postgres_attributes(self, table_name: str, schema_name: str) -> None:
+        return table_name, schema_name, config, ensure_database
+
+    def _init_postgres_attributes(
+        self, table_name: str, schema_name: str, ensure_database: bool = True,
+    ) -> None:
         """Initialize common PostgreSQL attributes.
-        
+
         Args:
             table_name: Name of the database table
             schema_name: Name of the database schema
+            ensure_database: Auto-create database if missing (default: True)
         """
         self.table_name = table_name
         self.schema_name = schema_name
         self._connected = False
+        self._ensure_database_enabled = ensure_database
 
         # Initialize vector state using the mixin
         self._init_vector_state()

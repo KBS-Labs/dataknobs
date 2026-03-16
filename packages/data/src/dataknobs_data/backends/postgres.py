@@ -72,12 +72,13 @@ class SyncPostgresDatabase(
                 - table: Table name (default: "records")
                 - schema: Schema name (default: "public")
                 - enable_vector: Enable vector support (default: False)
+                - ensure_database: Auto-create database if missing (default: True)
         """
         super().__init__(config)
 
         # Parse configuration using mixin
-        table_name, schema_name, conn_config = self._parse_postgres_config(config or {})
-        self._init_postgres_attributes(table_name, schema_name)
+        table_name, schema_name, conn_config, ensure_database = self._parse_postgres_config(config or {})
+        self._init_postgres_attributes(table_name, schema_name, ensure_database)
 
         # Store connection config for later use
         self._conn_config = conn_config
@@ -98,7 +99,7 @@ class SyncPostgresDatabase(
         self.query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres", param_style="pyformat")
 
         # Ensure database exists before connecting
-        if self._conn_config.get("ensure_database", True):
+        if self._ensure_database_enabled:
             self._ensure_database()
 
         # Create connection using existing utilities
@@ -144,17 +145,13 @@ class SyncPostgresDatabase(
 
         validate_database_name(target_db)
 
-        host = self._conn_config.get("host", "localhost")
-        port = self._conn_config.get("port", 5432)
-        user = self._conn_config.get("user", "postgres")
-        password = self._conn_config.get("password")
-
         conn = psycopg2.connect(
-            host=host,
-            port=port,
-            user=user,
-            password=password,
+            host=self._conn_config.get("host", "localhost"),
+            port=self._conn_config.get("port", 5432),
+            user=self._conn_config.get("user", "postgres"),
+            password=self._conn_config.get("password"),
             database="postgres",
+            connect_timeout=10,
         )
         conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
 
@@ -799,14 +796,33 @@ class AsyncPostgresDatabase(
     """Native async PostgreSQL database backend with vector support and event loop-aware connection pooling."""
 
     def __init__(self, config: dict[str, Any] | None = None):
-        """Initialize async PostgreSQL database."""
+        """Initialize async PostgreSQL database.
+
+        Args:
+            config: Configuration with the following optional keys:
+                - host: PostgreSQL host (default: localhost)
+                - port: PostgreSQL port (default: 5432)
+                - database: Database name (default: postgres)
+                - user: Username (default: postgres)
+                - password: Password (default: empty)
+                - table: Table name (default: "records")
+                - schema: Schema name (default: "public")
+                - enable_vector: Enable vector support (default: False)
+                - ensure_database: Auto-create database if missing (default: True)
+                - connection_string: PostgreSQL connection string (alternative to individual params)
+                - min_pool_size: Minimum pool connections (default: 2)
+                - max_pool_size: Maximum pool connections (default: 5)
+                - command_timeout: Command timeout in seconds (default: None)
+                - ssl: SSL configuration (default: None)
+        """
         super().__init__(config)
 
         # Parse configuration using mixin
-        table_name, schema_name, conn_config = self._parse_postgres_config(config or {})
-        self._init_postgres_attributes(table_name, schema_name)
+        table_name, schema_name, conn_config, ensure_database = self._parse_postgres_config(config or {})
+        self._init_postgres_attributes(table_name, schema_name, ensure_database)
 
-        # Extract pool configuration
+        # Extract pool configuration (ensure_database already extracted by mixin)
+        conn_config["ensure_database"] = ensure_database
         self._pool_config = PostgresPoolConfig.from_dict(conn_config)
         self._pool: asyncpg.Pool | None = None
 
@@ -821,7 +837,7 @@ class AsyncPostgresDatabase(
             return
 
         # Ensure database exists before attempting pool creation
-        if self._pool_config.ensure_database:
+        if self._ensure_database_enabled:
             await self._ensure_database()
 
         # Get or create pool for current event loop
@@ -849,8 +865,7 @@ class AsyncPostgresDatabase(
         """Create the target database if it doesn't exist.
 
         Connects to the ``postgres`` maintenance database to check for and
-        optionally create the target database.  Only runs when
-        ``ensure_database`` is ``True`` in the pool config.
+        optionally create the target database.
         """
         from .postgres_mixins import _SYSTEM_DATABASES, validate_database_name
 
@@ -858,6 +873,10 @@ class AsyncPostgresDatabase(
         if target_db in _SYSTEM_DATABASES:
             return
 
+        # validate_database_name restricts to [a-zA-Z_][a-zA-Z0-9_]* which
+        # is safe for double-quoted identifiers in CREATE DATABASE.  asyncpg
+        # has no public sql.Identifier equivalent, so validation is the
+        # primary defence against injection here.
         validate_database_name(target_db)
 
         conn = await asyncpg.connect(
@@ -867,6 +886,7 @@ class AsyncPostgresDatabase(
             password=self._pool_config.password,
             database="postgres",
             ssl=self._pool_config.ssl,
+            timeout=10,
         )
         try:
             exists = await conn.fetchval(
@@ -876,6 +896,8 @@ class AsyncPostgresDatabase(
                 # CREATE DATABASE cannot run inside a transaction block
                 await conn.execute(f'CREATE DATABASE "{target_db}"')
                 logger.info("Created PostgreSQL database %r", target_db)
+        except asyncpg.exceptions.DuplicateDatabaseError:
+            pass  # Race condition: another process created it
         finally:
             await conn.close()
 
