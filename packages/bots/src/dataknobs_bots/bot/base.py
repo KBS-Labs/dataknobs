@@ -803,6 +803,25 @@ class DynaBot:
         """
         return response.content if hasattr(response, "content") else str(response)
 
+    async def _call_on_error_middleware(
+        self, error: Exception, message: str, context: BotContext
+    ) -> None:
+        """Dispatch on_error to all middleware that supports it.
+
+        Called by chat(), greet(), and stream_chat() when an exception
+        occurs during message processing. The caller re-raises the
+        exception after this method returns.
+
+        Args:
+            error: The exception that occurred
+            message: User message that triggered the error (empty string
+                for greet, which has no user message)
+            context: Bot execution context
+        """
+        for mw in self.middleware:
+            if hasattr(mw, "on_error"):
+                await mw.on_error(error, message, context)
+
     def _middleware_kwargs(self, response: Any) -> dict[str, Any]:
         """Build kwargs for middleware after_message/post_stream hooks.
 
@@ -877,22 +896,26 @@ class DynaBot:
             ```
         """
         manager = await self._prepare_chat(message, context, rag_query=rag_query)
-        response = await self._generate_response(
-            manager, temperature, max_tokens, llm_config_overrides
-        )
-        response_content = self._extract_response_content(response)
+        try:
+            response = await self._generate_response(
+                manager, temperature, max_tokens, llm_config_overrides
+            )
+            response_content = self._extract_response_content(response)
 
-        # Update memory
-        if self.memory:
-            await self.memory.add_message(response_content, role="assistant")
+            # Update memory
+            if self.memory:
+                await self.memory.add_message(response_content, role="assistant")
 
-        # Apply middleware (after)
-        mw_kwargs = self._middleware_kwargs(response)
-        for mw in self.middleware:
-            if hasattr(mw, "after_message"):
-                await mw.after_message(response_content, context, **mw_kwargs)
+            # Apply middleware (after)
+            mw_kwargs = self._middleware_kwargs(response)
+            for mw in self.middleware:
+                if hasattr(mw, "after_message"):
+                    await mw.after_message(response_content, context, **mw_kwargs)
 
-        return response_content
+            return response_content
+        except Exception as e:
+            await self._call_on_error_middleware(e, message, context)
+            raise
 
     async def greet(
         self,
@@ -939,30 +962,34 @@ class DynaBot:
         # Get or create conversation manager
         manager = await self._get_or_create_conversation(context)
 
-        # Delegate to reasoning strategy
-        response = await self.reasoning_strategy.greet(
-            manager=manager,
-            llm=self.llm,
-            initial_context=initial_context,
-        )
+        try:
+            # Delegate to reasoning strategy
+            response = await self.reasoning_strategy.greet(
+                manager=manager,
+                llm=self.llm,
+                initial_context=initial_context,
+            )
 
-        if response is None:
-            return None
+            if response is None:
+                return None
 
-        # Extract response content
-        response_content = self._extract_response_content(response)
+            # Extract response content
+            response_content = self._extract_response_content(response)
 
-        # Update memory with assistant greeting (no user message)
-        if self.memory:
-            await self.memory.add_message(response_content, role="assistant")
+            # Update memory with assistant greeting (no user message)
+            if self.memory:
+                await self.memory.add_message(response_content, role="assistant")
 
-        # Apply middleware (after)
-        mw_kwargs = self._middleware_kwargs(response)
-        for mw in self.middleware:
-            if hasattr(mw, "after_message"):
-                await mw.after_message(response_content, context, **mw_kwargs)
+            # Apply middleware (after)
+            mw_kwargs = self._middleware_kwargs(response)
+            for mw in self.middleware:
+                if hasattr(mw, "after_message"):
+                    await mw.after_message(response_content, context, **mw_kwargs)
 
-        return response_content
+            return response_content
+        except Exception as e:
+            await self._call_on_error_middleware(e, "", context)
+            raise
 
     async def stream_chat(
         self,
@@ -1069,11 +1096,7 @@ class DynaBot:
                     yield chunk
         except Exception as e:
             streaming_error = e
-            # Call on_error middleware
-            for mw in self.middleware:
-                if hasattr(mw, "on_error"):
-                    await mw.on_error(e, message, context)
-            # Re-raise to inform the caller
+            await self._call_on_error_middleware(e, message, context)
             raise
 
         # Only update memory and run post_stream middleware on success
