@@ -97,6 +97,10 @@ class SyncPostgresDatabase(
         # Initialize query builder with pyformat style for psycopg2
         self.query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres", param_style="pyformat")
 
+        # Ensure database exists before connecting
+        if self._conn_config.get("ensure_database", True):
+            self._ensure_database()
+
         # Create connection using existing utilities
         if not any(key in self._conn_config for key in ["host", "database", "user"]):
             # Use dotenv connector for environment-based config
@@ -121,6 +125,56 @@ class SyncPostgresDatabase(
 
         self._connected = True
         self.log_operation("connect", f"Connected to table: {self.schema_name}.{self.table_name}")
+
+    def _ensure_database(self) -> None:
+        """Create the target database if it doesn't exist.
+
+        Connects to the ``postgres`` maintenance database to check for and
+        optionally create the target database.  Uses psycopg2 directly.
+        """
+        import psycopg2
+        import psycopg2.sql
+        from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+
+        from .postgres_mixins import _SYSTEM_DATABASES, validate_database_name
+
+        target_db = self._conn_config.get("database", "postgres")
+        if target_db in _SYSTEM_DATABASES:
+            return
+
+        validate_database_name(target_db)
+
+        host = self._conn_config.get("host", "localhost")
+        port = self._conn_config.get("port", 5432)
+        user = self._conn_config.get("user", "postgres")
+        password = self._conn_config.get("password")
+
+        conn = psycopg2.connect(
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            database="postgres",
+        )
+        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                "SELECT 1 FROM pg_database WHERE datname = %s", (target_db,)
+            )
+            if not cursor.fetchone():
+                cursor.execute(
+                    psycopg2.sql.SQL("CREATE DATABASE {}").format(
+                        psycopg2.sql.Identifier(target_db)
+                    )
+                )
+                logger.info("Created PostgreSQL database %r", target_db)
+        except psycopg2.errors.DuplicateDatabase:
+            pass  # Race condition: another process created it
+        finally:
+            cursor.close()
+            conn.close()
 
     def close(self) -> None:
         """Close the database connection."""
@@ -766,6 +820,10 @@ class AsyncPostgresDatabase(
         if self._connected:
             return
 
+        # Ensure database exists before attempting pool creation
+        if self._pool_config.ensure_database:
+            await self._ensure_database()
+
         # Get or create pool for current event loop
         from ..pooling import BasePoolConfig
         self._pool = await _pool_manager.get_pool(
@@ -786,6 +844,40 @@ class AsyncPostgresDatabase(
 
         self._connected = True
         self.log_operation("connect", f"Connected to table: {self.schema_name}.{self.table_name}")
+
+    async def _ensure_database(self) -> None:
+        """Create the target database if it doesn't exist.
+
+        Connects to the ``postgres`` maintenance database to check for and
+        optionally create the target database.  Only runs when
+        ``ensure_database`` is ``True`` in the pool config.
+        """
+        from .postgres_mixins import _SYSTEM_DATABASES, validate_database_name
+
+        target_db = self._pool_config.database
+        if target_db in _SYSTEM_DATABASES:
+            return
+
+        validate_database_name(target_db)
+
+        conn = await asyncpg.connect(
+            host=self._pool_config.host,
+            port=self._pool_config.port,
+            user=self._pool_config.user,
+            password=self._pool_config.password,
+            database="postgres",
+            ssl=self._pool_config.ssl,
+        )
+        try:
+            exists = await conn.fetchval(
+                "SELECT 1 FROM pg_database WHERE datname = $1", target_db
+            )
+            if not exists:
+                # CREATE DATABASE cannot run inside a transaction block
+                await conn.execute(f'CREATE DATABASE "{target_db}"')
+                logger.info("Created PostgreSQL database %r", target_db)
+        finally:
+            await conn.close()
 
     async def close(self) -> None:
         """Close the database connection and properly close the pool."""

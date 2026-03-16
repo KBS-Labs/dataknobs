@@ -5,12 +5,35 @@ reducing code duplication and ensuring consistent behavior.
 """
 
 import logging
+import re
 from typing import Any
 
 from ..records import Record
 from .vector_config_mixin import VectorConfigMixin
 
 logger = logging.getLogger(__name__)
+
+# Database names that must never be auto-created
+_SYSTEM_DATABASES = frozenset({"postgres", "template0", "template1"})
+
+# Valid PostgreSQL identifier pattern (unquoted identifiers)
+_VALID_DB_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
+def validate_database_name(name: str) -> None:
+    """Validate a database name to prevent SQL injection.
+
+    Args:
+        name: Database name to validate.
+
+    Raises:
+        ValueError: If the name contains invalid characters.
+    """
+    if not _VALID_DB_NAME_RE.match(name):
+        raise ValueError(
+            f"Invalid database name {name!r}: must start with a letter or "
+            "underscore and contain only alphanumeric characters and underscores"
+        )
 
 
 class PostgresBaseConfig(VectorConfigMixin):

@@ -20,6 +20,7 @@ class PostgresPoolConfig(BasePoolConfig):
     max_size: int = 5
     command_timeout: float | None = None
     ssl: Any | None = None
+    ensure_database: bool = True
 
     def to_connection_string(self) -> str:
         """Convert to PostgreSQL connection string."""
@@ -73,7 +74,8 @@ class PostgresPoolConfig(BasePoolConfig):
             min_size=config.get("min_pool_size", 2),
             max_size=config.get("max_pool_size", 5),
             command_timeout=config.get("command_timeout"),
-            ssl=config.get("ssl")
+            ssl=config.get("ssl"),
+            ensure_database=config.get("ensure_database", True),
         )
 
 
