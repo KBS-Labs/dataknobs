@@ -98,19 +98,20 @@ class SyncPostgresDatabase(
         # Initialize query builder with pyformat style for psycopg2
         self.query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres", param_style="pyformat")
 
-        # Attempt connection; if the database doesn't exist and
-        # ensure_database is enabled, create it and retry.
+        # Open connection and ensure table; if the database doesn't exist
+        # and ensure_database is enabled, create it and retry.
+        # Note: PostgresDB connects lazily — the actual psycopg2 connection
+        # happens on first query (in _ensure_table), not in _open_connection.
         try:
             self._open_connection()
+            self._ensure_table()
         except Exception as e:
             if self._ensure_database_enabled and self._is_invalid_catalog_error(e):
                 self._create_database()
                 self._open_connection()
+                self._ensure_table()
             else:
                 raise
-
-        # Create table if it doesn't exist
-        self._ensure_table()
 
         # Detect and enable vector support if requested
         if self.vector_enabled:
