@@ -13,9 +13,6 @@ from .vector_config_mixin import VectorConfigMixin
 
 logger = logging.getLogger(__name__)
 
-# Database names that must never be auto-created
-_SYSTEM_DATABASES = frozenset({"postgres", "template0", "template1"})
-
 # Valid PostgreSQL identifier pattern (unquoted identifiers)
 _VALID_DB_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
@@ -63,8 +60,30 @@ class PostgresBaseConfig(VectorConfigMixin):
         config.pop("vector_enabled", None)
         config.pop("vector_metric", None)
 
-        # Extract ensure_database before returning connection config
-        ensure_database: bool = config.pop("ensure_database", True)
+        # Extract and validate ensure_database as a proper boolean.
+        # String "false" from YAML/env must be coerced — raw truthy check
+        # would treat it as True (security.md §8 anti-pattern).
+        raw_ensure = config.pop("ensure_database", True)
+        if isinstance(raw_ensure, str):
+            ensure_database = raw_ensure.lower() in ("true", "1", "yes")
+        else:
+            ensure_database = bool(raw_ensure)
+
+        # Normalize connection_string into individual keys so that all
+        # downstream code (both sync and async) can read host/port/database
+        # etc. from the dict without needing their own URL parsing.
+        connection_string = config.get("connection_string")
+        if connection_string:
+            from urllib.parse import urlparse
+            parsed = urlparse(connection_string)
+            config.setdefault("host", parsed.hostname or "localhost")
+            config.setdefault("port", parsed.port or 5432)
+            config.setdefault(
+                "database",
+                parsed.path[1:] if parsed.path and len(parsed.path) > 1 else "postgres",
+            )
+            config.setdefault("user", parsed.username or "postgres")
+            config.setdefault("password", parsed.password or "")
 
         return table_name, schema_name, config, ensure_database
 

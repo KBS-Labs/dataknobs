@@ -6,6 +6,7 @@ Requires a running PostgreSQL instance and TEST_POSTGRES=true.
 import os
 import uuid
 
+import asyncpg
 import psycopg2
 import pytest
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
@@ -20,7 +21,10 @@ pytestmark = pytest.mark.skipif(
 
 
 def _drop_database(params: dict, name: str) -> None:
-    """Drop a database, terminating active connections first."""
+    """Drop a database, terminating active connections first.
+
+    Names are UUID-derived (dk_test_{hex}), safe for unparameterized SQL.
+    """
     conn = psycopg2.connect(
         host=params["host"],
         port=params["port"],
@@ -62,7 +66,10 @@ def _database_exists(params: dict, name: str) -> bool:
 
 
 def _pre_create_database(params: dict, name: str) -> None:
-    """Create a database for testing the 'already exists' path."""
+    """Create a database for testing the 'already exists' path.
+
+    Names are UUID-derived (dk_test_{hex}), safe for unparameterized SQL.
+    """
     conn = psycopg2.connect(
         host=params["host"],
         port=params["port"],
@@ -80,7 +87,7 @@ def _pre_create_database(params: dict, name: str) -> None:
 
 
 @pytest.fixture
-def unique_db_name(postgres_connection_params):
+def unique_db_name(ensure_postgres_ready, postgres_connection_params):
     """Generate a unique test database name and clean up after test."""
     name = f"dk_test_{uuid.uuid4().hex[:8]}"
     yield name
@@ -106,7 +113,6 @@ class TestAsyncEnsureDatabase:
         try:
             assert _database_exists(postgres_connection_params, unique_db_name)
 
-            # Verify we can actually use the database
             record = Record({"key": "value"})
             record_id = await db.create(record)
             assert record_id is not None
@@ -134,7 +140,7 @@ class TestAsyncEnsureDatabase:
     async def test_disabled_fails_on_missing_database(
         self, postgres_connection_params: dict,
     ) -> None:
-        """With ensure_database=False, missing database raises."""
+        """With ensure_database=False, missing database raises InvalidCatalogNameError."""
         missing_name = f"dk_noexist_{uuid.uuid4().hex[:8]}"
         assert not _database_exists(postgres_connection_params, missing_name)
 
@@ -145,23 +151,44 @@ class TestAsyncEnsureDatabase:
             "ensure_database": False,
         })
 
-        with pytest.raises(Exception):
+        with pytest.raises(asyncpg.InvalidCatalogNameError):
             await db.connect()
 
     @pytest.mark.asyncio
-    async def test_system_database_not_created(
+    async def test_existing_database_no_maintenance_connection(
         self, postgres_connection_params: dict,
     ) -> None:
-        """System databases (postgres, template0, template1) are skipped."""
+        """Connecting to an existing DB should not need the maintenance DB."""
         db = AsyncPostgresDatabase(config={
             **postgres_connection_params,
-            "database": "postgres",
-            "table": "test_system_skip",
+            "table": "test_no_maintenance",
         })
 
-        # connect() should succeed — _ensure_database skips 'postgres'
+        # Should succeed — the database already exists, so no maintenance
+        # DB connection is attempted (catch-and-create only fires on error).
         await db.connect()
         await db.close()
+
+    @pytest.mark.asyncio
+    async def test_creates_database_with_connection_string(
+        self, unique_db_name: str, postgres_connection_params: dict,
+    ) -> None:
+        """Async backend auto-creates DB when using connection_string config."""
+        params = postgres_connection_params
+        conn_str = (
+            f"postgresql://{params['user']}:{params['password']}"
+            f"@{params['host']}:{params['port']}/{unique_db_name}"
+        )
+        db = AsyncPostgresDatabase(config={
+            "connection_string": conn_str,
+            "table": "test_records",
+        })
+
+        await db.connect()
+        try:
+            assert _database_exists(params, unique_db_name)
+        finally:
+            await db.close()
 
 
 class TestSyncEnsureDatabase:
@@ -206,7 +233,7 @@ class TestSyncEnsureDatabase:
     def test_disabled_fails_on_missing_database(
         self, postgres_connection_params: dict,
     ) -> None:
-        """With ensure_database=False, missing database raises."""
+        """With ensure_database=False, missing database raises OperationalError."""
         missing_name = f"dk_noexist_{uuid.uuid4().hex[:8]}"
         assert not _database_exists(postgres_connection_params, missing_name)
 
@@ -217,18 +244,37 @@ class TestSyncEnsureDatabase:
             "ensure_database": False,
         })
 
-        with pytest.raises(Exception):
+        with pytest.raises(psycopg2.OperationalError):
             db.connect()
 
-    def test_system_database_not_created(
+    def test_existing_database_no_maintenance_connection(
         self, postgres_connection_params: dict,
     ) -> None:
-        """System databases (postgres, template0, template1) are skipped."""
+        """Connecting to an existing DB should not need the maintenance DB."""
         db = SyncPostgresDatabase(config={
             **postgres_connection_params,
-            "database": "postgres",
-            "table": "test_system_skip",
+            "table": "test_no_maintenance",
         })
 
         db.connect()
         db.close()
+
+    def test_creates_database_with_connection_string(
+        self, unique_db_name: str, postgres_connection_params: dict,
+    ) -> None:
+        """Sync backend auto-creates DB when using connection_string config."""
+        params = postgres_connection_params
+        conn_str = (
+            f"postgresql://{params['user']}:{params['password']}"
+            f"@{params['host']}:{params['port']}/{unique_db_name}"
+        )
+        db = SyncPostgresDatabase(config={
+            "connection_string": conn_str,
+            "table": "test_records",
+        })
+
+        db.connect()
+        try:
+            assert _database_exists(params, unique_db_name)
+        finally:
+            db.close()

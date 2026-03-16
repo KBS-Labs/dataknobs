@@ -98,11 +98,29 @@ class SyncPostgresDatabase(
         # Initialize query builder with pyformat style for psycopg2
         self.query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres", param_style="pyformat")
 
-        # Ensure database exists before connecting
-        if self._ensure_database_enabled:
-            self._ensure_database()
+        # Attempt connection; if the database doesn't exist and
+        # ensure_database is enabled, create it and retry.
+        try:
+            self._open_connection()
+        except Exception as e:
+            if self._ensure_database_enabled and self._is_invalid_catalog_error(e):
+                self._create_database()
+                self._open_connection()
+            else:
+                raise
 
-        # Create connection using existing utilities
+        # Create table if it doesn't exist
+        self._ensure_table()
+
+        # Detect and enable vector support if requested
+        if self.vector_enabled:
+            self._detect_vector_support()
+
+        self._connected = True
+        self.log_operation("connect", f"Connected to table: {self.schema_name}.{self.table_name}")
+
+    def _open_connection(self) -> None:
+        """Open the PostgresDB connection using stored config."""
         if not any(key in self._conn_config for key in ["host", "database", "user"]):
             # Use dotenv connector for environment-based config
             connector = DotenvPostgresConnector()
@@ -117,32 +135,38 @@ class SyncPostgresDatabase(
                 port=self._conn_config.get("port", 5432),
             )
 
-        # Create table if it doesn't exist
-        self._ensure_table()
+    @staticmethod
+    def _is_invalid_catalog_error(exc: Exception) -> bool:
+        """Check if an exception indicates the database does not exist.
 
-        # Detect and enable vector support if requested
-        if self.vector_enabled:
-            self._detect_vector_support()
+        psycopg2 raises ``OperationalError`` for connection-level failures
+        but does not set ``pgcode`` on these (it's ``None``).  We fall back
+        to checking the error message for the PostgreSQL FATAL text.
+        """
+        import psycopg2
+        if not isinstance(exc, psycopg2.OperationalError):
+            return False
+        pgcode = getattr(exc, "pgcode", None)
+        if pgcode == "3D000":
+            return True
+        # Connection-level errors have pgcode=None; match on message
+        if pgcode is None and "does not exist" in str(exc):
+            return True
+        return False
 
-        self._connected = True
-        self.log_operation("connect", f"Connected to table: {self.schema_name}.{self.table_name}")
+    def _create_database(self) -> None:
+        """Create the target database via the ``postgres`` maintenance database.
 
-    def _ensure_database(self) -> None:
-        """Create the target database if it doesn't exist.
-
-        Connects to the ``postgres`` maintenance database to check for and
-        optionally create the target database.  Uses psycopg2 directly.
+        Called only when the initial connection fails because the target
+        database does not exist.
         """
         import psycopg2
         import psycopg2.sql
         from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
-        from .postgres_mixins import _SYSTEM_DATABASES, validate_database_name
+        from .postgres_mixins import validate_database_name
 
         target_db = self._conn_config.get("database", "postgres")
-        if target_db in _SYSTEM_DATABASES:
-            return
-
         validate_database_name(target_db)
 
         conn = psycopg2.connect(
@@ -158,15 +182,11 @@ class SyncPostgresDatabase(
         cursor = conn.cursor()
         try:
             cursor.execute(
-                "SELECT 1 FROM pg_database WHERE datname = %s", (target_db,)
-            )
-            if not cursor.fetchone():
-                cursor.execute(
-                    psycopg2.sql.SQL("CREATE DATABASE {}").format(
-                        psycopg2.sql.Identifier(target_db)
-                    )
+                psycopg2.sql.SQL("CREATE DATABASE {}").format(
+                    psycopg2.sql.Identifier(target_db)
                 )
-                logger.info("Created PostgreSQL database %r", target_db)
+            )
+            logger.info("Created PostgreSQL database %r", target_db)
         except psycopg2.errors.DuplicateDatabase:
             pass  # Race condition: another process created it
         finally:
@@ -821,8 +841,7 @@ class AsyncPostgresDatabase(
         table_name, schema_name, conn_config, ensure_database = self._parse_postgres_config(config or {})
         self._init_postgres_attributes(table_name, schema_name, ensure_database)
 
-        # Extract pool configuration (ensure_database already extracted by mixin)
-        conn_config["ensure_database"] = ensure_database
+        # Extract pool configuration
         self._pool_config = PostgresPoolConfig.from_dict(conn_config)
         self._pool: asyncpg.Pool | None = None
 
@@ -836,17 +855,25 @@ class AsyncPostgresDatabase(
         if self._connected:
             return
 
-        # Ensure database exists before attempting pool creation
-        if self._ensure_database_enabled:
-            await self._ensure_database()
-
-        # Get or create pool for current event loop
+        # Attempt pool creation; if the database doesn't exist and
+        # ensure_database is enabled, create it and retry.
         from ..pooling import BasePoolConfig
-        self._pool = await _pool_manager.get_pool(
-            self._pool_config,
-            cast("Callable[[BasePoolConfig], Awaitable[Any]]", create_asyncpg_pool),
-            validate_asyncpg_pool
-        )
+        try:
+            self._pool = await _pool_manager.get_pool(
+                self._pool_config,
+                cast("Callable[[BasePoolConfig], Awaitable[Any]]", create_asyncpg_pool),
+                validate_asyncpg_pool
+            )
+        except asyncpg.InvalidCatalogNameError:
+            if self._ensure_database_enabled:
+                await self._create_database()
+                self._pool = await _pool_manager.get_pool(
+                    self._pool_config,
+                    cast("Callable[[BasePoolConfig], Awaitable[Any]]", create_asyncpg_pool),
+                    validate_asyncpg_pool
+                )
+            else:
+                raise
 
         # Initialize query builder
         self.query_builder = SQLQueryBuilder(self.table_name, self.schema_name, dialect="postgres")
@@ -861,18 +888,15 @@ class AsyncPostgresDatabase(
         self._connected = True
         self.log_operation("connect", f"Connected to table: {self.schema_name}.{self.table_name}")
 
-    async def _ensure_database(self) -> None:
-        """Create the target database if it doesn't exist.
+    async def _create_database(self) -> None:
+        """Create the target database via the ``postgres`` maintenance database.
 
-        Connects to the ``postgres`` maintenance database to check for and
-        optionally create the target database.
+        Called only when pool creation fails with ``InvalidCatalogNameError``,
+        indicating the target database does not exist.
         """
-        from .postgres_mixins import _SYSTEM_DATABASES, validate_database_name
+        from .postgres_mixins import validate_database_name
 
         target_db = self._pool_config.database
-        if target_db in _SYSTEM_DATABASES:
-            return
-
         # validate_database_name restricts to [a-zA-Z_][a-zA-Z0-9_]* which
         # is safe for double-quoted identifiers in CREATE DATABASE.  asyncpg
         # has no public sql.Identifier equivalent, so validation is the
@@ -889,13 +913,8 @@ class AsyncPostgresDatabase(
             timeout=10,
         )
         try:
-            exists = await conn.fetchval(
-                "SELECT 1 FROM pg_database WHERE datname = $1", target_db
-            )
-            if not exists:
-                # CREATE DATABASE cannot run inside a transaction block
-                await conn.execute(f'CREATE DATABASE "{target_db}"')
-                logger.info("Created PostgreSQL database %r", target_db)
+            await conn.execute(f'CREATE DATABASE "{target_db}"')
+            logger.info("Created PostgreSQL database %r", target_db)
         except asyncpg.exceptions.DuplicateDatabaseError:
             pass  # Race condition: another process created it
         finally:
