@@ -2331,6 +2331,7 @@ class WizardReasoning(ReasoningStrategy):
                 stage_entry_time=fsm_state.get("stage_entry_time", time.time()),
                 tasks=tasks,
                 subflow_stack=subflow_stack,
+                skip_extraction=fsm_state.get("skip_extraction", False),
             )
             # Restore FSM state (and subflow FSM if applicable)
             self._restore_fsm_state(state)
@@ -2799,6 +2800,9 @@ class WizardReasoning(ReasoningStrategy):
         if skip_default and isinstance(skip_default, dict):
             state.data.update(skip_default)
         state.clarification_attempts = 0
+        # Clear skip_extraction — if the user skips a stage they were
+        # auto-advanced to, the stale flag must not carry over to suppress
+        # extraction at the next stage.
         state.skip_extraction = False
 
         await self._execute_fsm_step(

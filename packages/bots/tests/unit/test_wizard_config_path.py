@@ -1,4 +1,4 @@
-"""Tests for wizard config path resolution (Item 20).
+"""Tests for wizard config path resolution (config_base_path support).
 
 Verifies that relative ``wizard_config`` paths in inline bot configs are
 resolved against ``config_base_path`` when provided.
@@ -7,6 +7,7 @@ resolved against ``config_base_path`` when provided.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -14,7 +15,7 @@ import yaml
 from dataknobs_bots.reasoning.wizard import WizardReasoning
 
 
-def _minimal_wizard_yaml() -> dict:
+def _minimal_wizard_yaml() -> dict[str, Any]:
     """Return a minimal valid wizard config dict."""
     return {
         "name": "test-wizard",

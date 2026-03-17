@@ -797,24 +797,30 @@ class TestSkipExtractionLifecycle:
         condition evaluation.  When skip_extraction is True the user_message
         was directed at the previous stage and could spuriously trigger a
         message-conditional transition on the landing stage.
+
+        Exercises the full generate() path with skip_extraction pre-set to
+        simulate the post-auto-advance state.
         """
+        from dataknobs_data.backends.memory import AsyncMemoryDatabase
+        from dataknobs_llm.conversations import (
+            ConversationManager,
+            DataknobsConversationStorage,
+        )
+        from dataknobs_llm.llm import LLMConfig
+        from dataknobs_llm.llm.providers.echo import EchoProvider
+        from dataknobs_llm.prompts import AsyncPromptBuilder, ConfigPromptLibrary
+
+        # review has a _message-conditional transition to done.
+        # If the stale message leaks via _execute_fsm_step, the condition
+        # fires and the stage transitions spuriously.
         config = {
             "name": "test-wizard",
             "stages": [
                 {
-                    "name": "gather",
-                    "is_start": True,
-                    "prompt": "Enter name",
-                    "schema": {
-                        "type": "object",
-                        "properties": {"name": {"type": "string"}},
-                        "required": ["name"],
-                    },
-                    "transitions": [{"target": "review"}],
-                },
-                {
                     "name": "review",
+                    "is_start": True,
                     "prompt": "Looks good?",
+                    "response_template": "Please review your data.",
                     "transitions": [
                         {
                             "target": "done",
@@ -822,37 +828,55 @@ class TestSkipExtractionLifecycle:
                         },
                     ],
                 },
-                {"name": "done", "is_end": True},
+                {"name": "done", "is_end": True, "prompt": "Done"},
             ],
         }
         loader = WizardConfigLoader()
         fsm = loader.load_from_dict(config)
         reasoning = WizardReasoning(wizard_fsm=fsm)
 
-        state = WizardState(
-            current_stage="review",
-            data={"name": "Alice"},
-            history=["gather", "review"],
-            skip_extraction=True,
+        llm_config = LLMConfig(
+            provider="echo", model="echo-test", options={"echo_prefix": ""}
         )
-        fsm.restore({"current_stage": "review", "data": state.data})
-
-        # Simulate generate()'s _execute_fsm_step call with the prior
-        # stage's message.  If user_message leaks as _message, the
-        # condition "data.get('_message') == 'magic'" would fire and
-        # transition to "done" — which is wrong.
-        _skip_extraction = state.skip_extraction
-        if _skip_extraction:
-            state.skip_extraction = False
-
-        from_stage, _ = await reasoning._execute_fsm_step(
-            state,
-            user_message=None if _skip_extraction else "magic",
+        provider = EchoProvider(llm_config)
+        library = ConfigPromptLibrary({
+            "system": {"assistant": {"template": "You are a helper."}},
+        })
+        builder = AsyncPromptBuilder(library=library)
+        storage = DataknobsConversationStorage(AsyncMemoryDatabase())
+        manager = await ConversationManager.create(
+            llm=provider,
+            prompt_builder=builder,
+            storage=storage,
+            system_prompt_name="assistant",
         )
 
-        # Should NOT have transitioned — the "magic" message was from the
-        # prior stage and should not have been injected
-        assert state.current_stage == "review"
+        # Initialize wizard via greet (lands on review)
+        provider.set_responses(["Please review your data."])
+        await reasoning.greet(manager, llm=None)
+
+        # Simulate post-auto-advance state: set skip_extraction=True
+        # in the persisted wizard state.  This is the precondition that
+        # generate() must handle correctly.
+        wizard_meta = manager.metadata.get("wizard", {})
+        fsm_state = wizard_meta["fsm_state"]
+        fsm_state["skip_extraction"] = True
+        manager.metadata["wizard"] = wizard_meta
+
+        # User sends "magic" — the word that matches review's _message
+        # condition.  If the fix works, _message is NOT injected during
+        # _execute_fsm_step, so the condition doesn't fire.
+        await manager.add_message("user", "magic")
+        provider.set_responses(["Review response"])
+        response = await reasoning.generate(manager, llm=None)
+        assert response is not None
+
+        # Key assertion: should still be at review, NOT done.
+        wizard_meta = manager.metadata.get("wizard", {})
+        fsm_state = wizard_meta.get("fsm_state", {})
+        assert fsm_state["current_stage"] == "review"
+
+        await provider.close()
 
 
 class TestAutoAdvanceTransitionRecording:
