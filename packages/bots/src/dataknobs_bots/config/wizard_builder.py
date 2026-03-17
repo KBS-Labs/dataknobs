@@ -125,7 +125,7 @@ class StageConfig:
     can_skip: bool = False
     skip_default: Any = None
     can_go_back: bool = True
-    auto_advance: bool = False
+    auto_advance: bool | None = None
     confirm_on_new_data: bool = False
     # Display
     label: str | None = None
@@ -168,8 +168,8 @@ class StageConfig:
             d["skip_default"] = self.skip_default
         if not self.can_go_back:
             d["can_go_back"] = False
-        if self.auto_advance:
-            d["auto_advance"] = True
+        if self.auto_advance is not None:
+            d["auto_advance"] = self.auto_advance
         if self.confirm_on_new_data:
             d["confirm_on_new_data"] = True
         if self.label is not None:
@@ -1047,7 +1047,7 @@ def _stage_from_dict(d: dict[str, Any]) -> StageConfig:
         can_skip=d.get("can_skip", False),
         skip_default=d.get("skip_default"),
         can_go_back=d.get("can_go_back", True),
-        auto_advance=d.get("auto_advance", False),
+        auto_advance=d.get("auto_advance"),
         label=d.get("label"),
         suggestions=tuple(d.get("suggestions", [])),
         help_text=d.get("help_text"),

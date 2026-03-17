@@ -210,6 +210,11 @@ class WizardState:
         stage_entry_time: Timestamp when current stage was entered
         tasks: List of trackable tasks with completion status
         subflow_stack: Stack of subflow contexts for nested flows
+        skip_extraction: One-shot flag set by auto-advance; suppresses
+            extraction on the landing stage's first generate() call.
+            Persisted (not transient) because it must survive state
+            serialization between the auto-advance turn and the user's
+            next reply.
     """
 
     current_stage: str
@@ -222,6 +227,7 @@ class WizardState:
     stage_entry_time: float = field(default_factory=time.time)
     tasks: WizardTaskList = field(default_factory=WizardTaskList)
     subflow_stack: list[SubflowContext] = field(default_factory=list)
+    skip_extraction: bool = False
 
     def __post_init__(self) -> None:
         """Seed history with current_stage when constructed with empty history.
@@ -309,6 +315,7 @@ class WizardState:
             "stage_entry_time": self.stage_entry_time,
             "tasks": self.tasks.to_dict(),
             "subflow_stack": [s.to_dict() for s in self.subflow_stack],
+            "skip_extraction": self.skip_extraction,
         }
 
     @classmethod
@@ -342,6 +349,7 @@ class WizardState:
                 SubflowContext.from_dict(s)
                 for s in data.get("subflow_stack", [])
             ],
+            skip_extraction=data.get("skip_extraction", False),
         )
 
 
@@ -1529,6 +1537,11 @@ class WizardReasoning(ReasoningStrategy):
                     response, auto_advance_messages
                 )
 
+            # Clear skip_extraction — the user's first message after greet()
+            # IS directed at the landing stage (unlike generate() auto-advance
+            # where the user's message was directed at the previous stage).
+            wizard_state.skip_extraction = False
+
         # Persist wizard state
         await self._save_wizard_state(manager, wizard_state)
 
@@ -1686,6 +1699,19 @@ class WizardReasoning(ReasoningStrategy):
         stage = active_fsm.current_metadata
         is_conversation = stage.get("mode") == "conversation"
 
+        # ── Skip extraction on auto-advance landing stage ──
+        # When auto-advance lands on a new stage, the user hasn't responded
+        # to it yet.  Their message was directed at the previous stage.
+        # Consume the flag (one-shot) so extraction runs normally next turn.
+        _skip_extraction = wizard_state.skip_extraction
+        if _skip_extraction:
+            wizard_state.skip_extraction = False
+            logger.debug(
+                "Skipping extraction at stage '%s' — landed via auto-advance, "
+                "waiting for user's first response to this stage",
+                stage.get("name"),
+            )
+
         # ── Collection-mode done signal (before extraction) ──
         # When a collection-mode stage receives a done keyword, skip
         # extraction entirely.  The keyword (e.g. "done") is not a data
@@ -1693,7 +1719,8 @@ class WizardReasoning(ReasoningStrategy):
         # a clarification loop that never reaches _handle_collection_mode.
         _collection_done_signal = False
         if (
-            stage.get("collection_mode") == "collection"
+            not _skip_extraction
+            and stage.get("collection_mode") == "collection"
             and not is_conversation
         ):
             col_config = stage.get("collection_config", {})
@@ -1711,7 +1738,8 @@ class WizardReasoning(ReasoningStrategy):
         # extraction and generate a contextual help response.
         _collection_help = False
         if (
-            stage.get("collection_mode") == "collection"
+            not _skip_extraction
+            and stage.get("collection_mode") == "collection"
             and not is_conversation
             and not _collection_done_signal
         ):
@@ -1725,7 +1753,11 @@ class WizardReasoning(ReasoningStrategy):
                     stage.get("name"),
                 )
 
-        if is_conversation:
+        if _skip_extraction:
+            # Auto-advance landing stage — skip extraction and fall through
+            # to transition evaluation / response generation below.
+            pass
+        elif is_conversation:
             # Conversation mode: skip extraction, run intent detection
             stage_name = stage.get("name", "unknown")
             logger.debug(
@@ -2695,6 +2727,7 @@ class WizardReasoning(ReasoningStrategy):
             {"current_stage": state.current_stage, "data": state.data}
         )
         state.clarification_attempts = 0
+        state.skip_extraction = False
 
         transition = create_transition_record(
             from_stage=from_stage,
@@ -3337,6 +3370,7 @@ class WizardReasoning(ReasoningStrategy):
         state.history = [state.current_stage]
         state.completed = False
         state.clarification_attempts = 0
+        state.skip_extraction = False
         state.transitions = previous_transitions
         state.stage_entry_time = time.time()
 
@@ -5041,13 +5075,18 @@ class WizardReasoning(ReasoningStrategy):
         """Check if a stage can be auto-advanced.
 
         A stage can be auto-advanced if:
-        1. Global auto_advance_filled_stages is enabled, OR the stage has
-           auto_advance: true in its config
+        1. Auto-advance is enabled for this stage (see precedence below)
         2. The stage has a schema with required fields (or all properties
            if no required list)
         3. All required fields have non-empty values in wizard_state.data
         4. The stage is not an end stage
         5. At least one transition condition is satisfied
+
+        Auto-advance precedence (stage-level wins over global):
+        - ``auto_advance: false`` — disabled regardless of global setting
+        - ``auto_advance: true``  — enabled regardless of global setting
+        - absent (``None``)       — defers to global
+          ``auto_advance_filled_stages``
 
         Args:
             wizard_state: Current wizard state
@@ -5056,9 +5095,14 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             True if stage can be auto-advanced
         """
-        # Check if auto-advance is enabled for this stage
-        stage_auto_advance = stage.get("auto_advance", False)
-        if not (stage_auto_advance or self._auto_advance_filled_stages):
+        # Check if auto-advance is enabled for this stage.
+        # Stage-level setting takes precedence over global when explicitly set.
+        stage_auto_advance = stage.get("auto_advance")
+        if stage_auto_advance is False:
+            # Explicitly disabled at stage level — respect regardless of global
+            return False
+        if not stage_auto_advance and not self._auto_advance_filled_stages:
+            # Not explicitly enabled at stage level, and global is off
             return False
 
         # Don't auto-advance end stages
@@ -5199,6 +5243,12 @@ class WizardReasoning(ReasoningStrategy):
                 wizard_state.completed = False
 
             stage = active_fsm.current_metadata
+
+        # If we advanced through any stages, mark the landing stage so the
+        # next generate() call skips extraction — the user hasn't had a
+        # chance to respond to this stage's prompt yet.
+        if count > 0:
+            wizard_state.skip_extraction = True
 
         return messages
 
