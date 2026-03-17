@@ -741,6 +741,119 @@ class TestSkipExtractionLifecycle:
 
         await provider.close()
 
+    @pytest.mark.asyncio
+    async def test_navigate_skip_clears_skip_extraction(self) -> None:
+        """Skip navigation clears skip_extraction flag.
+
+        Bug: if a user says "skip" right after being auto-advanced to an
+        optional stage, the stale skip_extraction=True flag survives to the
+        next stage, suppressing extraction on the user's first real message.
+        """
+        config = {
+            "name": "test-wizard",
+            "stages": [
+                {
+                    "name": "start",
+                    "is_start": True,
+                    "prompt": "Start",
+                    "can_skip": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                    },
+                    "transitions": [{"target": "next"}],
+                },
+                {
+                    "name": "next",
+                    "prompt": "Next",
+                    "transitions": [{"target": "done"}],
+                },
+                {"name": "done", "is_end": True},
+            ],
+        }
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict(config)
+        reasoning = WizardReasoning(wizard_fsm=fsm)
+
+        state = WizardState(
+            current_stage="start",
+            data={},
+            history=["start"],
+            skip_extraction=True,
+        )
+        fsm.restore({"current_stage": "start", "data": state.data})
+
+        success, _msgs = await reasoning._navigate_skip(state)
+        assert success is True
+        assert state.current_stage == "next"
+        assert state.skip_extraction is False
+
+    @pytest.mark.asyncio
+    async def test_skip_extraction_does_not_inject_stale_message(self) -> None:
+        """When skip_extraction is active, the prior stage's message must not
+        be injected as _message for FSM condition evaluation.
+
+        Bug: _execute_fsm_step injects user_message as data["_message"] for
+        condition evaluation.  When skip_extraction is True the user_message
+        was directed at the previous stage and could spuriously trigger a
+        message-conditional transition on the landing stage.
+        """
+        config = {
+            "name": "test-wizard",
+            "stages": [
+                {
+                    "name": "gather",
+                    "is_start": True,
+                    "prompt": "Enter name",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                        "required": ["name"],
+                    },
+                    "transitions": [{"target": "review"}],
+                },
+                {
+                    "name": "review",
+                    "prompt": "Looks good?",
+                    "transitions": [
+                        {
+                            "target": "done",
+                            "condition": "data.get('_message', '') == 'magic'",
+                        },
+                    ],
+                },
+                {"name": "done", "is_end": True},
+            ],
+        }
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict(config)
+        reasoning = WizardReasoning(wizard_fsm=fsm)
+
+        state = WizardState(
+            current_stage="review",
+            data={"name": "Alice"},
+            history=["gather", "review"],
+            skip_extraction=True,
+        )
+        fsm.restore({"current_stage": "review", "data": state.data})
+
+        # Simulate generate()'s _execute_fsm_step call with the prior
+        # stage's message.  If user_message leaks as _message, the
+        # condition "data.get('_message') == 'magic'" would fire and
+        # transition to "done" — which is wrong.
+        _skip_extraction = state.skip_extraction
+        if _skip_extraction:
+            state.skip_extraction = False
+
+        from_stage, _ = await reasoning._execute_fsm_step(
+            state,
+            user_message=None if _skip_extraction else "magic",
+        )
+
+        # Should NOT have transitioned — the "magic" message was from the
+        # prior stage and should not have been injected
+        assert state.current_stage == "review"
+
 
 class TestAutoAdvanceTransitionRecording:
     """Tests for auto-advance transition recording."""

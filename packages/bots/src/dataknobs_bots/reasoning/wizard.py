@@ -2045,9 +2045,13 @@ class WizardReasoning(ReasoningStrategy):
             list(wizard_state.data.keys()),
         )
 
-        # Execute FSM step (shared method: inject keys, step, record, update)
+        # Execute FSM step (shared method: inject keys, step, record, update).
+        # When _skip_extraction is active, the user_message was directed at
+        # the previous stage — don't inject it as _message for FSM condition
+        # evaluation on the landing stage.
         from_stage, _step_result = await self._execute_fsm_step(
-            wizard_state, user_message=user_message,
+            wizard_state,
+            user_message=None if _skip_extraction else user_message,
         )
 
         # Auto-save artifact to catalog on stage transition.  Collection
@@ -2795,6 +2799,7 @@ class WizardReasoning(ReasoningStrategy):
         if skip_default and isinstance(skip_default, dict):
             state.data.update(skip_default)
         state.clarification_attempts = 0
+        state.skip_extraction = False
 
         await self._execute_fsm_step(
             state, user_message=user_message, trigger="navigation_skip",

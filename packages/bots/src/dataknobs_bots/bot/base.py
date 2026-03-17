@@ -489,6 +489,16 @@ class DynaBot:
                     **reasoning_config,
                     "config_base_path": config["config_base_path"],
                 }
+            elif (
+                "config_base_path" in config
+                and reasoning_config.get("config_base_path") != config["config_base_path"]
+            ):
+                logger.debug(
+                    "Reasoning config has its own config_base_path=%r; "
+                    "ignoring bot-level config_base_path=%r",
+                    reasoning_config["config_base_path"],
+                    config["config_base_path"],
+                )
             reasoning_strategy = create_reasoning_from_config(reasoning_config)
 
         # Create middleware

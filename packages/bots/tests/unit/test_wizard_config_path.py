@@ -155,10 +155,16 @@ class TestWizardConfigPathResolution:
 class TestBotConfigBasePathPropagation:
     """Tests for config_base_path propagation from bot config to reasoning."""
 
-    def test_bot_config_base_path_propagated_to_reasoning(
+    @pytest.mark.asyncio
+    async def test_bot_config_base_path_propagated_to_reasoning(
         self, tmp_path: Path
     ) -> None:
-        """config_base_path at bot level should propagate to reasoning config."""
+        """config_base_path at bot level should propagate to reasoning config.
+
+        Exercises the full DynaBot.from_config() path to verify that
+        _build_from_config propagates config_base_path into the reasoning
+        config dict before calling create_reasoning_from_config.
+        """
         from dataknobs_bots.bot.base import DynaBot
 
         wizard_dir = tmp_path / "wizards"
@@ -166,10 +172,9 @@ class TestBotConfigBasePathPropagation:
         wizard_file = wizard_dir / "flow.yaml"
         wizard_file.write_text(yaml.dump(_minimal_wizard_yaml()))
 
-        # Build a reasoning config from bot config
-        # We test the propagation logic by checking that from_config
-        # receives the config_base_path
         bot_config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
             "reasoning": {
                 "strategy": "wizard",
                 "wizard_config": "wizards/flow.yaml",
@@ -177,19 +182,79 @@ class TestBotConfigBasePathPropagation:
             "config_base_path": str(tmp_path),
         }
 
-        # Extract reasoning config with propagation (the logic we're adding)
-        reasoning_config = bot_config["reasoning"]
-        if (
-            "config_base_path" in bot_config
-            and "config_base_path" not in reasoning_config
-        ):
-            reasoning_config = {
-                **reasoning_config,
-                "config_base_path": bot_config["config_base_path"],
-            }
+        bot = await DynaBot.from_config(bot_config)
+        try:
+            assert bot is not None
+            assert bot.reasoning_strategy is not None
+        finally:
+            await bot.close()
 
-        reasoning = WizardReasoning.from_config(reasoning_config)
-        assert reasoning is not None
+    @pytest.mark.asyncio
+    async def test_reasoning_level_base_path_takes_precedence(
+        self, tmp_path: Path
+    ) -> None:
+        """Reasoning-level config_base_path wins over bot-level."""
+        from dataknobs_bots.bot.base import DynaBot
+
+        wizard_dir = tmp_path / "wizards"
+        wizard_dir.mkdir()
+        wizard_file = wizard_dir / "flow.yaml"
+        wizard_file.write_text(yaml.dump(_minimal_wizard_yaml()))
+
+        bot_config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "reasoning": {
+                "strategy": "wizard",
+                "wizard_config": "wizards/flow.yaml",
+                "config_base_path": str(tmp_path),  # reasoning-level
+            },
+            "config_base_path": "/nonexistent/should/be/ignored",
+        }
+
+        bot = await DynaBot.from_config(bot_config)
+        try:
+            assert bot is not None
+            assert bot.reasoning_strategy is not None
+        finally:
+            await bot.close()
+
+    @pytest.mark.asyncio
+    async def test_conflicting_base_paths_logs_debug(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """When both levels specify different config_base_path, log a debug message."""
+        import logging
+
+        from dataknobs_bots.bot.base import DynaBot
+
+        wizard_dir = tmp_path / "wizards"
+        wizard_dir.mkdir()
+        wizard_file = wizard_dir / "flow.yaml"
+        wizard_file.write_text(yaml.dump(_minimal_wizard_yaml()))
+
+        bot_config = {
+            "llm": {"provider": "echo", "model": "test"},
+            "conversation_storage": {"backend": "memory"},
+            "reasoning": {
+                "strategy": "wizard",
+                "wizard_config": "wizards/flow.yaml",
+                "config_base_path": str(tmp_path),
+            },
+            "config_base_path": "/different/path",
+        }
+
+        with caplog.at_level(logging.DEBUG, logger="dataknobs_bots.bot.base"):
+            bot = await DynaBot.from_config(bot_config)
+            try:
+                assert bot is not None
+            finally:
+                await bot.close()
+
+        assert any(
+            "config_base_path" in record.message and "ignoring" in record.message.lower()
+            for record in caplog.records
+        )
 
 
 class TestDynaBotConfigBuilderBasePath:
