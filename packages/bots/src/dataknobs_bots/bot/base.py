@@ -479,7 +479,17 @@ class DynaBot:
         if "reasoning" in config:
             from ..reasoning import create_reasoning_from_config
 
-            reasoning_strategy = create_reasoning_from_config(config["reasoning"])
+            reasoning_config = config["reasoning"]
+            # Propagate config_base_path to reasoning if set at bot level
+            if (
+                "config_base_path" in config
+                and "config_base_path" not in reasoning_config
+            ):
+                reasoning_config = {
+                    **reasoning_config,
+                    "config_base_path": config["config_base_path"],
+                }
+            reasoning_strategy = create_reasoning_from_config(reasoning_config)
 
         # Create middleware
         middleware = []
