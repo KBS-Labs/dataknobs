@@ -211,7 +211,10 @@ class WizardState:
         tasks: List of trackable tasks with completion status
         subflow_stack: Stack of subflow contexts for nested flows
         skip_extraction: One-shot flag set by auto-advance; suppresses
-            extraction on the landing stage's first generate() call
+            extraction on the landing stage's first generate() call.
+            Persisted (not transient) because it must survive state
+            serialization between the auto-advance turn and the user's
+            next reply.
     """
 
     current_stage: str
@@ -1506,10 +1509,6 @@ class WizardReasoning(ReasoningStrategy):
         # Auto-advance through message stages if the start stage has
         # auto_advance: true. The start stage response is already captured,
         # so skip_first_render=True avoids re-rendering it.
-        # NOTE: _run_auto_advance_loop sets wizard_state.skip_extraction=True
-        # on the landing stage. This is consumed by the user's first
-        # generate() call, preventing extraction of a message that was
-        # never directed at the landing stage.
         if self._can_auto_advance(wizard_state, stage):
             auto_advance_messages = [response.content]
             loop_messages = await self._run_auto_advance_loop(
@@ -1537,6 +1536,11 @@ class WizardReasoning(ReasoningStrategy):
                 self._prepend_messages_to_response(
                     response, auto_advance_messages
                 )
+
+            # Clear skip_extraction — the user's first message after greet()
+            # IS directed at the landing stage (unlike generate() auto-advance
+            # where the user's message was directed at the previous stage).
+            wizard_state.skip_extraction = False
 
         # Persist wizard state
         await self._save_wizard_state(manager, wizard_state)
