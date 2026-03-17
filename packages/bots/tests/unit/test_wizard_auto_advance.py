@@ -204,6 +204,73 @@ class TestCanAutoAdvance:
         stage = fsm.current_metadata
         assert reasoning._can_auto_advance(state, stage) is False
 
+    def test_stage_auto_advance_false_overrides_global_true(self) -> None:
+        """Stage auto_advance: false must prevent auto-advance when global is true."""
+        config = {
+            "name": "test-wizard",
+            "settings": {"auto_advance_filled_stages": True},
+            "stages": [
+                {
+                    "name": "review",
+                    "is_start": True,
+                    "auto_advance": False,  # Explicitly opt out
+                    "prompt": "Review",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"confirmed": {"type": "boolean"}},
+                        "required": ["confirmed"],
+                    },
+                    "transitions": [
+                        {"target": "done", "condition": "data.get('confirmed')"},
+                    ],
+                },
+                {"name": "done", "is_end": True},
+            ],
+        }
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict(config)
+
+        reasoning = WizardReasoning(wizard_fsm=fsm, auto_advance_filled_stages=True)
+
+        state = WizardState(current_stage="review", data={"confirmed": True})
+        stage = fsm.current_metadata
+        # Stage-level auto_advance: false must win over global true
+        assert stage.get("auto_advance") is False
+        assert reasoning._can_auto_advance(state, stage) is False
+
+    def test_global_true_advances_when_stage_not_set(self) -> None:
+        """Global auto_advance_filled_stages: true works for stages without explicit setting."""
+        config = {
+            "name": "test-wizard",
+            "settings": {"auto_advance_filled_stages": True},
+            "stages": [
+                {
+                    "name": "gather",
+                    "is_start": True,
+                    "prompt": "Gather",
+                    # No auto_advance key — should defer to global
+                    "schema": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                        "required": ["name"],
+                    },
+                    "transitions": [{"target": "done"}],
+                },
+                {"name": "done", "is_end": True},
+            ],
+        }
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict(config)
+
+        reasoning = WizardReasoning(wizard_fsm=fsm, auto_advance_filled_stages=True)
+
+        state = WizardState(current_stage="gather", data={"name": "Alice"})
+        stage = fsm.current_metadata
+        # Stage has no explicit auto_advance — loader should leave it as None
+        # so the global setting applies
+        assert stage.get("auto_advance") is None
+        assert reasoning._can_auto_advance(state, stage) is True
+
     def test_stage_level_auto_advance_override(self) -> None:
         """Per-stage auto_advance setting overrides global setting."""
         config = {
@@ -404,6 +471,123 @@ stages:
 
         assert fsm.settings["auto_advance_filled_stages"] is True
         assert fsm.settings["custom_setting"] == "value"
+
+
+class TestSkipExtraction:
+    """Tests for skip_extraction flag on WizardState (item 19).
+
+    When auto-advance lands on a new stage, the next generate() call
+    should skip extraction because the user hasn't responded to the
+    landing stage yet — their message was directed at the previous stage.
+    """
+
+    def test_skip_extraction_persisted_in_state(self) -> None:
+        """skip_extraction flag is included in to_dict/from_dict round-trip."""
+        state = WizardState(current_stage="review", skip_extraction=True)
+        serialized = state.to_dict()
+        assert serialized["skip_extraction"] is True
+
+        restored = WizardState.from_dict(serialized)
+        assert restored.skip_extraction is True
+
+    def test_skip_extraction_defaults_false(self) -> None:
+        """skip_extraction defaults to False."""
+        state = WizardState(current_stage="start")
+        assert state.skip_extraction is False
+
+    @pytest.mark.asyncio
+    async def test_auto_advance_sets_skip_extraction(self) -> None:
+        """Auto-advance loop sets skip_extraction on the landing stage."""
+        config = {
+            "name": "test-wizard",
+            "settings": {"auto_advance_filled_stages": True},
+            "stages": [
+                {
+                    "name": "gather",
+                    "is_start": True,
+                    "prompt": "Gather info",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                        "required": ["name"],
+                    },
+                    "transitions": [{"target": "review"}],
+                },
+                {
+                    "name": "review",
+                    "prompt": "Review: {{ name }}",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"confirmed": {"type": "boolean"}},
+                        "required": ["confirmed"],
+                    },
+                    "transitions": [
+                        {"target": "done", "condition": "data.get('confirmed')"},
+                    ],
+                },
+                {"name": "done", "is_end": True},
+            ],
+        }
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict(config)
+
+        reasoning = WizardReasoning(
+            wizard_fsm=fsm, auto_advance_filled_stages=True
+        )
+
+        state = WizardState(
+            current_stage="gather",
+            data={"name": "Alice"},
+        )
+
+        # Auto-advance should fire on gather (all fields filled),
+        # land on review, and set skip_extraction
+        stage = fsm.current_metadata
+        messages = await reasoning._run_auto_advance_loop(
+            state, fsm, stage
+        )
+
+        assert state.current_stage == "review"
+        assert state.skip_extraction is True
+
+    @pytest.mark.asyncio
+    async def test_no_skip_extraction_when_no_advance(self) -> None:
+        """skip_extraction stays False when auto-advance doesn't fire."""
+        config = {
+            "name": "test-wizard",
+            "settings": {"auto_advance_filled_stages": True},
+            "stages": [
+                {
+                    "name": "gather",
+                    "is_start": True,
+                    "prompt": "Gather info",
+                    "schema": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                        "required": ["name"],
+                    },
+                    "transitions": [{"target": "done"}],
+                },
+                {"name": "done", "is_end": True},
+            ],
+        }
+        loader = WizardConfigLoader()
+        fsm = loader.load_from_dict(config)
+
+        reasoning = WizardReasoning(
+            wizard_fsm=fsm, auto_advance_filled_stages=True
+        )
+
+        # Missing required field — auto-advance won't fire
+        state = WizardState(current_stage="gather", data={})
+
+        stage = fsm.current_metadata
+        messages = await reasoning._run_auto_advance_loop(
+            state, fsm, stage
+        )
+
+        assert state.current_stage == "gather"
+        assert state.skip_extraction is False
 
 
 class TestAutoAdvanceTransitionRecording:

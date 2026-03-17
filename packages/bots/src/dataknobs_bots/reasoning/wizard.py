@@ -222,6 +222,7 @@ class WizardState:
     stage_entry_time: float = field(default_factory=time.time)
     tasks: WizardTaskList = field(default_factory=WizardTaskList)
     subflow_stack: list[SubflowContext] = field(default_factory=list)
+    skip_extraction: bool = False
 
     def __post_init__(self) -> None:
         """Seed history with current_stage when constructed with empty history.
@@ -309,6 +310,7 @@ class WizardState:
             "stage_entry_time": self.stage_entry_time,
             "tasks": self.tasks.to_dict(),
             "subflow_stack": [s.to_dict() for s in self.subflow_stack],
+            "skip_extraction": self.skip_extraction,
         }
 
     @classmethod
@@ -342,6 +344,7 @@ class WizardState:
                 SubflowContext.from_dict(s)
                 for s in data.get("subflow_stack", [])
             ],
+            skip_extraction=data.get("skip_extraction", False),
         )
 
 
@@ -1686,6 +1689,19 @@ class WizardReasoning(ReasoningStrategy):
         stage = active_fsm.current_metadata
         is_conversation = stage.get("mode") == "conversation"
 
+        # ── Skip extraction on auto-advance landing stage ──
+        # When auto-advance lands on a new stage, the user hasn't responded
+        # to it yet.  Their message was directed at the previous stage.
+        # Consume the flag (one-shot) so extraction runs normally next turn.
+        _skip_extraction = wizard_state.skip_extraction
+        if _skip_extraction:
+            wizard_state.skip_extraction = False
+            logger.debug(
+                "Skipping extraction at stage '%s' — landed via auto-advance, "
+                "waiting for user's first response to this stage",
+                stage.get("name"),
+            )
+
         # ── Collection-mode done signal (before extraction) ──
         # When a collection-mode stage receives a done keyword, skip
         # extraction entirely.  The keyword (e.g. "done") is not a data
@@ -1725,7 +1741,11 @@ class WizardReasoning(ReasoningStrategy):
                     stage.get("name"),
                 )
 
-        if is_conversation:
+        if _skip_extraction:
+            # Auto-advance landing stage — skip extraction and fall through
+            # to transition evaluation / response generation below.
+            pass
+        elif is_conversation:
             # Conversation mode: skip extraction, run intent detection
             stage_name = stage.get("name", "unknown")
             logger.debug(
@@ -2695,6 +2715,7 @@ class WizardReasoning(ReasoningStrategy):
             {"current_stage": state.current_stage, "data": state.data}
         )
         state.clarification_attempts = 0
+        state.skip_extraction = False
 
         transition = create_transition_record(
             from_stage=from_stage,
@@ -5056,9 +5077,14 @@ class WizardReasoning(ReasoningStrategy):
         Returns:
             True if stage can be auto-advanced
         """
-        # Check if auto-advance is enabled for this stage
-        stage_auto_advance = stage.get("auto_advance", False)
-        if not (stage_auto_advance or self._auto_advance_filled_stages):
+        # Check if auto-advance is enabled for this stage.
+        # Stage-level setting takes precedence over global when explicitly set.
+        stage_auto_advance = stage.get("auto_advance")
+        if stage_auto_advance is False:
+            # Explicitly disabled at stage level — respect regardless of global
+            return False
+        if not stage_auto_advance and not self._auto_advance_filled_stages:
+            # Not explicitly enabled at stage level, and global is off
             return False
 
         # Don't auto-advance end stages
@@ -5199,6 +5225,12 @@ class WizardReasoning(ReasoningStrategy):
                 wizard_state.completed = False
 
             stage = active_fsm.current_metadata
+
+        # If we advanced through any stages, mark the landing stage so the
+        # next generate() call skips extraction — the user hasn't had a
+        # chance to respond to this stage's prompt yet.
+        if count > 0:
+            wizard_state.skip_extraction = True
 
         return messages
 
