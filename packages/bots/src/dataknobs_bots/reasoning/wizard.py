@@ -13,6 +13,7 @@ import copy
 import logging
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from dataknobs_common.serialization import sanitize_for_json
@@ -28,8 +29,6 @@ from .observability import (
 from .wizard_hooks import WizardHooks
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from dataknobs_data import SyncDatabase
 
     from .wizard_fsm import WizardFSM
@@ -1267,6 +1266,9 @@ class WizardReasoning(ReasoningStrategy):
                 - wizard_config: Path to wizard YAML config file, or an
                   inline dict (compatible with
                   ``WizardConfigLoader.load_from_dict()``)
+                - config_base_path: Optional base directory for resolving
+                  relative ``wizard_config`` paths. When set, relative
+                  paths are resolved against this directory instead of CWD.
                 - extraction_config: Optional extraction configuration
                 - strict_validation: Whether to enforce validation
                 - hooks: Optional hooks configuration dict
@@ -1313,14 +1315,25 @@ class WizardReasoning(ReasoningStrategy):
         if not wizard_config_value:
             raise ValueError("wizard_config is required")
 
+        # Resolve relative wizard_config paths against config_base_path
+        config_base_path_str = config.get("config_base_path")
+        config_base_path = Path(config_base_path_str) if config_base_path_str else None
+
         # Load wizard FSM — supports both file paths and inline dicts
         loader = WizardConfigLoader()
         custom_fns = config.get("custom_functions", {})
 
         if isinstance(wizard_config_value, dict):
-            wizard_fsm = loader.load_from_dict(wizard_config_value, custom_fns)
+            wizard_fsm = loader.load_from_dict(
+                wizard_config_value,
+                custom_fns,
+                config_base_path=config_base_path,
+            )
         else:
-            wizard_fsm = loader.load(wizard_config_value, custom_fns)
+            config_path = Path(wizard_config_value)
+            if not config_path.is_absolute() and config_base_path:
+                config_path = config_base_path / config_path
+            wizard_fsm = loader.load(str(config_path), custom_fns)
 
         # Create extractor if extraction_config specified
         extractor = None
@@ -2032,9 +2045,13 @@ class WizardReasoning(ReasoningStrategy):
             list(wizard_state.data.keys()),
         )
 
-        # Execute FSM step (shared method: inject keys, step, record, update)
+        # Execute FSM step (shared method: inject keys, step, record, update).
+        # When _skip_extraction is active, the user_message was directed at
+        # the previous stage — don't inject it as _message for FSM condition
+        # evaluation on the landing stage.
         from_stage, _step_result = await self._execute_fsm_step(
-            wizard_state, user_message=user_message,
+            wizard_state,
+            user_message=None if _skip_extraction else user_message,
         )
 
         # Auto-save artifact to catalog on stage transition.  Collection
@@ -2314,6 +2331,7 @@ class WizardReasoning(ReasoningStrategy):
                 stage_entry_time=fsm_state.get("stage_entry_time", time.time()),
                 tasks=tasks,
                 subflow_stack=subflow_stack,
+                skip_extraction=fsm_state.get("skip_extraction", False),
             )
             # Restore FSM state (and subflow FSM if applicable)
             self._restore_fsm_state(state)
@@ -2782,6 +2800,10 @@ class WizardReasoning(ReasoningStrategy):
         if skip_default and isinstance(skip_default, dict):
             state.data.update(skip_default)
         state.clarification_attempts = 0
+        # Clear skip_extraction — if the user skips a stage they were
+        # auto-advanced to, the stale flag must not carry over to suppress
+        # extraction at the next stage.
+        state.skip_extraction = False
 
         await self._execute_fsm_step(
             state, user_message=user_message, trigger="navigation_skip",

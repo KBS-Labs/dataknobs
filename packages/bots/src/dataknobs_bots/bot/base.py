@@ -256,6 +256,10 @@ class DynaBot:
                 - middleware: Optional middleware configurations
                 - prompts: Optional prompts library (dict of name -> content)
                 - system_prompt: Optional system prompt configuration (see below)
+                - config_base_path: Optional base directory for resolving
+                  relative config file paths (e.g. wizard_config). When set,
+                  relative paths in nested configs are resolved against this
+                  directory instead of the current working directory.
 
         Returns:
             Configured DynaBot instance
@@ -479,7 +483,22 @@ class DynaBot:
         if "reasoning" in config:
             from ..reasoning import create_reasoning_from_config
 
-            reasoning_strategy = create_reasoning_from_config(config["reasoning"])
+            reasoning_config = config["reasoning"]
+            # Propagate config_base_path to reasoning if set at bot level
+            if "config_base_path" in config:
+                if "config_base_path" not in reasoning_config:
+                    reasoning_config = {
+                        **reasoning_config,
+                        "config_base_path": config["config_base_path"],
+                    }
+                elif reasoning_config["config_base_path"] != config["config_base_path"]:
+                    logger.debug(
+                        "Reasoning config has its own config_base_path=%r; "
+                        "ignoring bot-level config_base_path=%r",
+                        reasoning_config["config_base_path"],
+                        config["config_base_path"],
+                    )
+            reasoning_strategy = create_reasoning_from_config(reasoning_config)
 
         # Create middleware
         middleware = []

@@ -25,6 +25,7 @@ from __future__ import annotations
 import copy
 import logging
 from collections.abc import Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from typing_extensions import Self
@@ -200,6 +201,22 @@ class DynaBotConfigBuilder:
         memory_config: dict[str, Any] = {"type": memory_type}
         memory_config.update(kwargs)
         self._config["memory"] = memory_config
+        return self
+
+    def set_config_base_path(self, path: str | Path) -> Self:
+        """Set base path for resolving relative config file paths.
+
+        When set, relative paths in nested configs (e.g. ``wizard_config``)
+        are resolved against this directory instead of the current working
+        directory.
+
+        Args:
+            path: Base directory path (string or Path object).
+
+        Returns:
+            self for method chaining.
+        """
+        self._config["config_base_path"] = str(path)
         return self
 
     def set_reasoning(self, strategy: str, **kwargs: Any) -> Self:
