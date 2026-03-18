@@ -460,15 +460,11 @@ class TestReactStageResponse:
         """
         manager, provider = conversation_manager_pair
 
-        # Enable store_trace at wizard level
-        react_wizard_config["settings"] = {
-            **react_wizard_config.get("settings", {}),
-            "store_trace": True,
-        }
-
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
-        reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
+        reasoning = WizardReasoning(
+            wizard_fsm=wizard_fsm, default_store_trace=True
+        )
         state = WizardState(current_stage="review", data={})
 
         await manager.add_message(role="user", content="Preview the config")
@@ -581,14 +577,11 @@ class TestReactStageResponse:
         """
         manager, provider = conversation_manager_pair
 
-        react_wizard_config["settings"] = {
-            **react_wizard_config.get("settings", {}),
-            "verbose": True,
-        }
-
         loader = WizardConfigLoader()
         wizard_fsm = loader.load_from_dict(react_wizard_config)
-        reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
+        reasoning = WizardReasoning(
+            wizard_fsm=wizard_fsm, default_verbose=True
+        )
         state = WizardState(current_stage="review", data={})
 
         await manager.add_message(role="user", content="Preview the config")
@@ -658,6 +651,46 @@ class TestReactStageResponse:
         ]
         assert len(react_debug_msgs) > 0, (
             "stage-level verbose=True should produce DEBUG-level logs"
+        )
+
+    @pytest.mark.asyncio
+    async def test_react_stage_verbose_no_debug_by_default(
+        self,
+        react_wizard_config: dict[str, Any],
+        preview_tool: PreviewConfigTool,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Wizard ReAct stage does NOT log at DEBUG level by default."""
+        manager, provider = conversation_manager_pair
+
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(react_wizard_config)
+        reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
+        state = WizardState(current_stage="review", data={})
+
+        await manager.add_message(role="user", content="Preview the config")
+
+        provider.set_responses([
+            tool_call_response("preview_config", {"format": "yaml"}),
+            text_response("Done."),
+        ])
+
+        stage = {"name": "review", "max_iterations": 3}
+        tools = [preview_tool]
+
+        react_logger = "dataknobs_bots.reasoning.react"
+        with caplog.at_level(logging.DEBUG, logger=react_logger):
+            await reasoning._react_stage_response(
+                manager, "Test prompt", stage, state, tools
+            )
+
+        react_debug_msgs = [
+            r for r in caplog.records
+            if r.name == react_logger and r.levelno == logging.DEBUG
+        ]
+        assert len(react_debug_msgs) == 0, (
+            "verbose=False (default) should not produce DEBUG-level logs"
         )
 
 

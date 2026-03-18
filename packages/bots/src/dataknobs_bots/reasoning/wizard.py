@@ -524,6 +524,8 @@ class WizardReasoning(ReasoningStrategy):
         section_to_stage_mapping: dict[str, str] | None = None,
         default_tool_reasoning: str = "single",
         default_max_iterations: int = 3,
+        default_store_trace: bool = False,
+        default_verbose: bool = False,
         artifact_registry: Any | None = None,
         review_executor: Any | None = None,
         context_builder: Any | None = None,
@@ -551,6 +553,10 @@ class WizardReasoning(ReasoningStrategy):
             default_tool_reasoning: Default reasoning mode for stages with tools.
                 "single" for single LLM call, "react" for ReAct-style loop.
             default_max_iterations: Default max iterations for ReAct-style reasoning.
+            default_store_trace: Default store_trace for ReAct stages. Stores
+                reasoning trace in conversation metadata (default: False).
+            default_verbose: Default verbose for ReAct stages. Enables
+                debug-level logging for reasoning steps (default: False).
             artifact_registry: Optional ArtifactRegistry for artifact management.
             review_executor: Optional ReviewExecutor for running reviews.
             context_builder: Optional ContextBuilder for building conversation context.
@@ -582,6 +588,8 @@ class WizardReasoning(ReasoningStrategy):
         self._section_to_stage_mapping = section_to_stage_mapping or {}
         self._default_tool_reasoning = default_tool_reasoning
         self._default_max_iterations = default_max_iterations
+        self._default_store_trace = default_store_trace
+        self._default_verbose = default_verbose
         self._artifact_registry = artifact_registry
         self._review_executor = review_executor
         self._context_builder = context_builder
@@ -1365,6 +1373,8 @@ class WizardReasoning(ReasoningStrategy):
         extraction_scope = wizard_fsm.settings.get("extraction_scope", "wizard_session")
         conflict_strategy = wizard_fsm.settings.get("conflict_strategy", "latest_wins")
         log_conflicts = wizard_fsm.settings.get("log_conflicts", True)
+        store_trace = wizard_fsm.settings.get("store_trace", False)
+        verbose = wizard_fsm.settings.get("verbose", False)
 
         # Create artifact registry if artifact definitions configured
         artifact_registry = None
@@ -1452,6 +1462,8 @@ class WizardReasoning(ReasoningStrategy):
             extraction_scope=extraction_scope,
             conflict_strategy=conflict_strategy,
             log_conflicts=log_conflicts,
+            default_store_trace=store_trace,
+            default_verbose=verbose,
             initial_data=config.get("initial_data"),
             consistent_navigation_lifecycle=config.get(
                 "consistent_navigation_lifecycle", True
@@ -4619,7 +4631,8 @@ class WizardReasoning(ReasoningStrategy):
         """Generate response using ReAct loop for tool-using stage.
 
         Delegates to ``ReActReasoning`` which provides duplicate tool call
-        detection, ToolsNotSupportedError handling, and trace storage.
+        detection, ToolsNotSupportedError handling, and optional trace
+        storage (when ``store_trace`` is enabled via stage or wizard settings).
 
         Args:
             manager: ConversationManager instance
@@ -4658,15 +4671,9 @@ class WizardReasoning(ReasoningStrategy):
             fresh_context = self._build_stage_context(stage, state)
             return f"{manager.system_prompt}\n\n{fresh_context}"
 
-        # Inherit store_trace and verbose from stage or wizard-level setting
-        store_trace = stage.get(
-            "store_trace",
-            self._fsm.settings.get("store_trace", False),
-        )
-        verbose = stage.get(
-            "verbose",
-            self._fsm.settings.get("verbose", False),
-        )
+        # Inherit store_trace and verbose from stage or wizard-level default
+        store_trace = stage.get("store_trace", self._default_store_trace)
+        verbose = stage.get("verbose", self._default_verbose)
 
         react = ReActReasoning(
             max_iterations=max_iterations,

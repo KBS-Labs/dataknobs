@@ -1329,8 +1329,8 @@ reasoning:
 
 **Configuration Options:**
 - `max_iterations` (int): Maximum reasoning loops (default: 5)
-- `verbose` (bool): Print reasoning steps to console (default: false)
-- `store_trace` (bool): Store trace in memory for debugging (default: false)
+- `verbose` (bool): Enable debug-level logging for reasoning steps (default: false)
+- `store_trace` (bool): Store reasoning trace in conversation metadata for debugging (default: false)
 - `early_stopping` (bool): Stop when final answer is reached (default: true)
 - `greeting_template` (string, optional): Jinja2 template for bot-initiated
   greetings. See [Bot Greetings](#bot-greetings).
