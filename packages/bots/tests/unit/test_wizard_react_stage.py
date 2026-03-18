@@ -4,6 +4,7 @@ This module tests the ReAct-style tool iteration within wizard stages,
 enabling the LLM to make multiple tool calls within a single wizard turn.
 """
 
+import logging
 from typing import Any
 
 import pytest
@@ -444,6 +445,220 @@ class TestReactStageResponse:
         # Duplicate detection breaks after 1st execution; tool only called once
         assert preview_tool.call_count == 1
         assert response.content == "Done after duplicate detection"
+
+    @pytest.mark.asyncio
+    async def test_react_stage_stores_reasoning_trace(
+        self,
+        react_wizard_config: dict[str, Any],
+        preview_tool: PreviewConfigTool,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+    ) -> None:
+        """Wizard ReAct stage stores reasoning trace when store_trace enabled.
+
+        This ensures the harness tool_called check can see tool calls made
+        within wizard ReAct stages, not just top-level ReAct reasoning.
+        """
+        manager, provider = conversation_manager_pair
+
+        # Enable store_trace at wizard level
+        react_wizard_config["settings"] = {
+            **react_wizard_config.get("settings", {}),
+            "store_trace": True,
+        }
+
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(react_wizard_config)
+        reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
+        state = WizardState(current_stage="review", data={})
+
+        await manager.add_message(role="user", content="Preview the config")
+
+        provider.set_responses([
+            tool_call_response("preview_config", {"format": "yaml"}),
+            text_response("Here is the preview."),
+        ])
+
+        stage = {"name": "review", "max_iterations": 3}
+        tools = [preview_tool]
+
+        await reasoning._react_stage_response(
+            manager, "Test prompt", stage, state, tools
+        )
+
+        # Verify reasoning trace is stored in conversation metadata
+        trace = manager.metadata.get("reasoning_trace")
+        assert trace is not None, "reasoning_trace not stored in metadata"
+        assert len(trace) >= 1, "trace should have at least one iteration"
+
+        # Verify the tool call is recorded in the trace
+        tool_names = [
+            tc["name"]
+            for step in trace
+            for tc in step.get("tool_calls", [])
+        ]
+        assert "preview_config" in tool_names
+
+    @pytest.mark.asyncio
+    async def test_react_stage_no_trace_by_default(
+        self,
+        react_wizard_config: dict[str, Any],
+        preview_tool: PreviewConfigTool,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+    ) -> None:
+        """Wizard ReAct stage does NOT store trace when store_trace is off."""
+        manager, provider = conversation_manager_pair
+
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(react_wizard_config)
+        reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
+        state = WizardState(current_stage="review", data={})
+
+        await manager.add_message(role="user", content="Preview the config")
+
+        provider.set_responses([
+            tool_call_response("preview_config", {"format": "yaml"}),
+            text_response("Here is the preview."),
+        ])
+
+        stage = {"name": "review", "max_iterations": 3}
+        tools = [preview_tool]
+
+        await reasoning._react_stage_response(
+            manager, "Test prompt", stage, state, tools
+        )
+
+        # No trace stored by default
+        trace = manager.metadata.get("reasoning_trace")
+        assert trace is None
+
+    @pytest.mark.asyncio
+    async def test_react_stage_store_trace_per_stage_override(
+        self,
+        react_wizard_config: dict[str, Any],
+        preview_tool: PreviewConfigTool,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+    ) -> None:
+        """Per-stage store_trace overrides wizard-level setting."""
+        manager, provider = conversation_manager_pair
+
+        # Wizard-level store_trace is OFF (default)
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(react_wizard_config)
+        reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
+        state = WizardState(current_stage="review", data={})
+
+        await manager.add_message(role="user", content="Preview the config")
+
+        provider.set_responses([
+            tool_call_response("preview_config", {"format": "yaml"}),
+            text_response("Here is the preview."),
+        ])
+
+        # Stage-level override enables trace
+        stage = {"name": "review", "max_iterations": 3, "store_trace": True}
+        tools = [preview_tool]
+
+        await reasoning._react_stage_response(
+            manager, "Test prompt", stage, state, tools
+        )
+
+        trace = manager.metadata.get("reasoning_trace")
+        assert trace is not None, "stage-level store_trace should override wizard default"
+
+    @pytest.mark.asyncio
+    async def test_react_stage_verbose_from_wizard_settings(
+        self,
+        react_wizard_config: dict[str, Any],
+        preview_tool: PreviewConfigTool,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Wizard-level verbose setting is forwarded to ReAct stage.
+
+        When verbose=True, ReAct logs at DEBUG level instead of INFO.
+        We verify that DEBUG-level messages from the ReAct logger appear,
+        confirming the setting was forwarded.
+        """
+        manager, provider = conversation_manager_pair
+
+        react_wizard_config["settings"] = {
+            **react_wizard_config.get("settings", {}),
+            "verbose": True,
+        }
+
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(react_wizard_config)
+        reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
+        state = WizardState(current_stage="review", data={})
+
+        await manager.add_message(role="user", content="Preview the config")
+
+        provider.set_responses([
+            tool_call_response("preview_config", {"format": "yaml"}),
+            text_response("Done."),
+        ])
+
+        stage = {"name": "review", "max_iterations": 3}
+        tools = [preview_tool]
+
+        react_logger = "dataknobs_bots.reasoning.react"
+        with caplog.at_level(logging.DEBUG, logger=react_logger):
+            response = await reasoning._react_stage_response(
+                manager, "Test prompt", stage, state, tools
+            )
+
+        assert response is not None
+        # verbose=True causes ReAct to log at DEBUG level
+        react_debug_msgs = [
+            r for r in caplog.records
+            if r.name == react_logger and r.levelno == logging.DEBUG
+        ]
+        assert len(react_debug_msgs) > 0, (
+            "verbose=True should produce DEBUG-level logs from ReAct"
+        )
+
+    @pytest.mark.asyncio
+    async def test_react_stage_verbose_per_stage_override(
+        self,
+        react_wizard_config: dict[str, Any],
+        preview_tool: PreviewConfigTool,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Per-stage verbose overrides wizard-level setting."""
+        manager, provider = conversation_manager_pair
+
+        # Wizard-level verbose is OFF (default)
+        loader = WizardConfigLoader()
+        wizard_fsm = loader.load_from_dict(react_wizard_config)
+        reasoning = WizardReasoning(wizard_fsm=wizard_fsm)
+        state = WizardState(current_stage="review", data={})
+
+        await manager.add_message(role="user", content="Preview the config")
+
+        provider.set_responses([
+            tool_call_response("preview_config", {"format": "yaml"}),
+            text_response("Done."),
+        ])
+
+        # Stage-level override enables verbose
+        stage = {"name": "review", "max_iterations": 3, "verbose": True}
+        tools = [preview_tool]
+
+        react_logger = "dataknobs_bots.reasoning.react"
+        with caplog.at_level(logging.DEBUG, logger=react_logger):
+            response = await reasoning._react_stage_response(
+                manager, "Test prompt", stage, state, tools
+            )
+
+        assert response is not None
+        react_debug_msgs = [
+            r for r in caplog.records
+            if r.name == react_logger and r.levelno == logging.DEBUG
+        ]
+        assert len(react_debug_msgs) > 0, (
+            "stage-level verbose=True should produce DEBUG-level logs"
+        )
 
 
 # -----------------------------------------------------------------------------

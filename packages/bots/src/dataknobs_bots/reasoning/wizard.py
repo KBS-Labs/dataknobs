@@ -4658,8 +4658,20 @@ class WizardReasoning(ReasoningStrategy):
             fresh_context = self._build_stage_context(stage, state)
             return f"{manager.system_prompt}\n\n{fresh_context}"
 
+        # Inherit store_trace and verbose from stage or wizard-level setting
+        store_trace = stage.get(
+            "store_trace",
+            self._fsm.settings.get("store_trace", False),
+        )
+        verbose = stage.get(
+            "verbose",
+            self._fsm.settings.get("verbose", False),
+        )
+
         react = ReActReasoning(
             max_iterations=max_iterations,
+            verbose=verbose,
+            store_trace=store_trace,
             artifact_registry=self._artifact_registry,
             review_executor=self._review_executor,
             context_builder=self._context_builder,

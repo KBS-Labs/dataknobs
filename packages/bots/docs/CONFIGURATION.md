@@ -2291,6 +2291,8 @@ LLM responds: "Here's your config preview: ... Validation passed!"
 |---------|-------|-------------|
 | `tool_reasoning` | wizard settings | Default reasoning mode: "single" (one LLM call) or "react" (loop) |
 | `max_tool_iterations` | wizard settings | Default max iterations for react mode |
+| `store_trace` | wizard settings / stage | Store reasoning trace in conversation metadata (for capture/replay and debugging). Per-stage value overrides wizard-level. Default: `false` |
+| `verbose` | wizard settings / stage | Enable debug-level logging for ReAct iterations. Per-stage value overrides wizard-level. Default: `false` |
 | `reasoning` | stage | Per-stage override: "single" or "react" |
 | `max_iterations` | stage | Per-stage max iterations override |
 

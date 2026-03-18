@@ -121,7 +121,9 @@ builder.set_settings(
 )
 ```
 
-Settings are passed through to the wizard runtime. Common keys include `tool_reasoning`, `max_tool_iterations`, `auto_advance_filled_stages`, `extraction_scope`, `conflict_strategy`, `timeout_seconds`, and `ephemeral_keys`.
+Settings are passed through to the wizard runtime. Common keys include `tool_reasoning`, `max_tool_iterations`, `auto_advance_filled_stages`, `extraction_scope`, `conflict_strategy`, `timeout_seconds`, `ephemeral_keys`, `store_trace`, and `verbose`.
+
+The `store_trace` and `verbose` settings propagate to ReAct stages. Both support per-stage overrides (set directly on the stage dict) that take precedence over the wizard-level default.
 
 Use `ephemeral_keys` to declare data keys that should not be persisted to storage
 (e.g., per-step display data, intermediate computation results):
