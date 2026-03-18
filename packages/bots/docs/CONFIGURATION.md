@@ -1329,8 +1329,8 @@ reasoning:
 
 **Configuration Options:**
 - `max_iterations` (int): Maximum reasoning loops (default: 5)
-- `verbose` (bool): Print reasoning steps to console (default: false)
-- `store_trace` (bool): Store trace in memory for debugging (default: false)
+- `verbose` (bool): Enable debug-level logging for reasoning steps (default: false)
+- `store_trace` (bool): Store reasoning trace in conversation metadata for debugging (default: false)
 - `early_stopping` (bool): Stop when final answer is reached (default: true)
 - `greeting_template` (string, optional): Jinja2 template for bot-initiated
   greetings. See [Bot Greetings](#bot-greetings).
@@ -2291,6 +2291,8 @@ LLM responds: "Here's your config preview: ... Validation passed!"
 |---------|-------|-------------|
 | `tool_reasoning` | wizard settings | Default reasoning mode: "single" (one LLM call) or "react" (loop) |
 | `max_tool_iterations` | wizard settings | Default max iterations for react mode |
+| `store_trace` | wizard settings / stage | Store reasoning trace in conversation metadata (for capture/replay and debugging). Per-stage value overrides wizard-level. Default: `false` |
+| `verbose` | wizard settings / stage | Enable debug-level logging for ReAct iterations. Per-stage value overrides wizard-level. Default: `false` |
 | `reasoning` | stage | Per-stage override: "single" or "react" |
 | `max_iterations` | stage | Per-stage max iterations override |
 
