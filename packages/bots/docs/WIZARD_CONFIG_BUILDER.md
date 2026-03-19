@@ -115,13 +115,14 @@ builder.set_settings(
     tool_reasoning="react",
     max_tool_iterations=3,
     auto_advance_filled_stages=True,
-    extraction_scope="global",
-    conflict_strategy="latest",
+    extraction_scope="current_message",
+    conflict_strategy="latest_wins",
+    extraction_grounding=True,
     timeout_seconds=300,
 )
 ```
 
-Settings are passed through to the wizard runtime. Common keys include `tool_reasoning`, `max_tool_iterations`, `auto_advance_filled_stages`, `extraction_scope`, `conflict_strategy`, `timeout_seconds`, `ephemeral_keys`, `store_trace`, and `verbose`.
+Settings are passed through to the wizard runtime. Common keys include `tool_reasoning`, `max_tool_iterations`, `auto_advance_filled_stages`, `extraction_scope`, `conflict_strategy`, `extraction_grounding`, `grounding_overlap_threshold`, `merge_filter`, `timeout_seconds`, `ephemeral_keys`, `store_trace`, and `verbose`.
 
 The `store_trace` and `verbose` settings propagate to ReAct stages. Both support per-stage overrides (set directly on the stage dict) that take precedence over the wizard-level default.
 
@@ -133,6 +134,16 @@ builder.set_settings(
     ephemeral_keys=["_dedup_result", "_review_summary", "_batch_passed_count"],
 )
 ```
+
+#### Extraction Grounding Settings
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `extraction_grounding` | `bool` | `True` | Enable schema-driven grounding checks. When enabled, extracted values must be grounded in the user's message before they can overwrite existing data. |
+| `grounding_overlap_threshold` | `float` | `0.5` | Minimum word-overlap ratio for string grounding (0.0--1.0). |
+| `merge_filter` | `str \| None` | `None` | Dotted import path to a custom `MergeFilter` class. Replaces the built-in grounding check entirely. |
+
+See [Extraction Grounding](CONTEXT_AWARE_WIZARDS.md#extraction-grounding) for full documentation.
 
 ### Stage Methods
 
