@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-03-19T17:47:34Z",
+  "timestamp": "2026-03-19T18:25:39Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.10.10 (Homebrew 2026-03-13)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/wizard-extraction-grounding",
-  "git_commit": "165c200e1061a7a124c7cff2dea36e05342ec14f",
+  "git_commit": "5cada3645f099ff5b5dab581aa7c4fcc41c0a773",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
