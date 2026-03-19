@@ -1866,14 +1866,16 @@ class WizardReasoning(ReasoningStrategy):
                 # template before allowing a transition.
                 new_data_keys: set[str] = set()
                 for k, v in extraction.data.items():
-                    if v is not None:
-                        if (
-                            k not in wizard_state.data
-                            or wizard_state.data[k] != v
-                        ):
-                            new_data_keys.add(k)
-                            wizard_state.data[k] = v
-                    elif k not in wizard_state.data:
+                    if v is None:
+                        # Null extraction = field not extracted.
+                        # Some models return null instead of omitting
+                        # the key; treat both identically.
+                        continue
+                    if (
+                        k not in wizard_state.data
+                        or wizard_state.data[k] != v
+                    ):
+                        new_data_keys.add(k)
                         wizard_state.data[k] = v
 
                 # Apply schema defaults for properties the user didn't
@@ -5405,7 +5407,18 @@ class WizardReasoning(ReasoningStrategy):
         """Safely evaluate a transition condition.
 
         Uses a restricted execution environment to evaluate condition
-        expressions like "data.get('subject')" or "data.get('count', 0) > 5".
+        expressions like ``data.get('subject')``, ``has('count')``,
+        or ``data.get('count', 0) > 5``.
+
+        Available globals in condition expressions:
+
+        - ``data`` — the wizard state data dict
+        - ``has(key)`` — shorthand for ``data.get(key) is not None``;
+          preferred for boolean/numeric/list fields where falsy values
+          are legitimate
+        - ``bank`` — memory bank accessor
+        - ``artifact`` — current artifact
+        - ``true``/``false``/``null``/``none`` — YAML/JSON literal aliases
 
         Args:
             condition: Condition expression string
@@ -5424,6 +5437,7 @@ class WizardReasoning(ReasoningStrategy):
             # Note: 'data' must be in globals for the function to access it
             global_vars: dict[str, Any] = {
                 "data": data,
+                "has": lambda key: data.get(key) is not None,
                 "bank": self._make_bank_accessor(),
                 "artifact": self._artifact,
                 # Common aliases for YAML/JSON boolean literals
