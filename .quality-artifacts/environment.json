@@ -1,11 +1,11 @@
 {
-  "timestamp": "2026-03-19T13:31:11Z",
+  "timestamp": "2026-03-19T14:07:43Z",
   "python_version": "Python 3.10.18",
   "uv_version": "uv 0.10.10 (Homebrew 2026-03-13)",
   "os": "Darwin",
   "os_version": "24.6.0",
   "git_branch": "sbk/fix-wizard-partial-data-accumulation",
-  "git_commit": "4f9a41c919c0907b7ceea4415022964e97ad604d",
+  "git_commit": "91194035b61ddc7c7c3caf1097c25fa48d586f88",
   "docker_container": "false",
   "docker_compose_services": "postgres, elasticsearch, localstack"
 }
