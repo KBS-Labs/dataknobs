@@ -200,23 +200,27 @@ DOCS_CHANGED="true"
 TESTED_PACKAGES_JSON="[]"
 if [ "$RUN_MODE" = "pr" ] && [ -z "$PACKAGES" ]; then
     print_status "Detecting changed packages..."
-    CHANGED_INFO=$(uv run python "$SCRIPT_DIR/changed-packages.py" --base-ref "$BASE_REF" 2>/dev/null || echo '{"packages": [], "docs_changed": true, "mode": "all"}')
+    CHANGED_INFO=$(uv run python "$SCRIPT_DIR/changed-packages.py" --base-ref "$BASE_REF" 2>/dev/null) || {
+        print_warning "Change detection failed — testing all packages"
+        CHANGED_INFO=""
+    }
 
-    CHANGED_PACKAGES=$(echo "$CHANGED_INFO" | python3 -c "import sys, json; d=json.load(sys.stdin); print(' '.join(d['packages']))" 2>/dev/null || echo "")
-    DOCS_CHANGED=$(echo "$CHANGED_INFO" | python3 -c "import sys, json; d=json.load(sys.stdin); print(str(d['docs_changed']).lower())" 2>/dev/null || echo "true")
-    CHANGE_MODE=$(echo "$CHANGED_INFO" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('mode', 'all'))" 2>/dev/null || echo "all")
+    if [ -n "$CHANGED_INFO" ]; then
+        CHANGED_PACKAGES=$(echo "$CHANGED_INFO" | python3 -c "import sys, json; d=json.load(sys.stdin); print(' '.join(d['packages']))" 2>/dev/null || echo "")
+        DOCS_CHANGED=$(echo "$CHANGED_INFO" | python3 -c "import sys, json; d=json.load(sys.stdin); print(str(d['docs_changed']).lower())" 2>/dev/null || echo "true")
+        CHANGE_MODE=$(echo "$CHANGED_INFO" | python3 -c "import sys, json; d=json.load(sys.stdin); print(d.get('mode', 'all'))" 2>/dev/null || echo "all")
 
-    if [ -n "$CHANGED_PACKAGES" ]; then
-        PACKAGES="$CHANGED_PACKAGES"
-        # Build JSON array of tested packages
-        TESTED_PACKAGES_JSON=$(echo "$CHANGED_INFO" | python3 -c "import sys, json; d=json.load(sys.stdin); print(json.dumps(d['packages']))" 2>/dev/null || echo "[]")
-        print_success "Changed packages: $PACKAGES"
-        if [ "$CHANGE_MODE" = "all" ]; then
-            print_status "Global files changed — testing all packages"
+        if [ -n "$CHANGED_PACKAGES" ]; then
+            PACKAGES="$CHANGED_PACKAGES"
+            TESTED_PACKAGES_JSON=$(echo "$CHANGED_INFO" | python3 -c "import sys, json; d=json.load(sys.stdin); print(json.dumps(d['packages']))" 2>/dev/null || echo "[]")
+            print_success "Changed packages: $PACKAGES"
+            if [ "$CHANGE_MODE" = "all" ]; then
+                print_status "Global files changed — testing all packages"
+            fi
+        else
+            print_success "No package changes detected — skipping tests"
+            SKIP_TESTS="yes"
         fi
-    else
-        print_success "No package changes detected — skipping tests"
-        SKIP_TESTS="yes"
     fi
 
     if [ "$DOCS_CHANGED" = "true" ]; then
@@ -438,8 +442,7 @@ EOF
 fi
 
 # Initialize status tracking
-STYLE_STATUS=0
-LINT_STATUS=0
+VALIDATION_STATUS=0
 DOCS_STATUS=0
 DOCS_VERSIONS_STATUS=0
 TEST_STATUS=0
@@ -514,36 +517,51 @@ if [ "$PR_MODE" = "yes" ]; then
     fi
 fi
 
-# Run style checks (using ruff for linting and style)
+# Run code validation (syntax, ruff, imports, mypy, print statements)
 if [ "$SKIP_STYLE" != "yes" ]; then
-    print_status "Running style checks with ruff..."
-    if [ "$PR_MODE" = "yes" ]; then
-        # PR mode: save output to artifacts (use config to respect suppressions)
-        if uv run ruff check $PACKAGE_PATTERN --output-format=json --config "$PROJECT_ROOT/pyproject.toml" > "$ARTIFACTS_DIR/style-check.json" 2>&1; then
-            print_success "Style checks passed"
+    print_status "Running code validation (syntax, ruff, imports, mypy, print statements)..."
+
+    # Build package args for validate.sh
+    VALIDATE_ARGS=""
+    if [ -n "$PACKAGES" ]; then
+        VALIDATE_ARGS="$PACKAGES"
+    fi
+
+    # Skip if no packages to validate in PR mode (e.g., only docs changed)
+    if [ -n "$VALIDATE_ARGS" ] || [ "$RUN_MODE" != "pr" ]; then
+        if [ "$PR_MODE" = "yes" ]; then
+            # Also generate ruff JSON artifact for diagnostics
+            uv run ruff check $PACKAGE_PATTERN --output-format=json --config "$PROJECT_ROOT/pyproject.toml" > "$ARTIFACTS_DIR/style-check.json" 2>&1 || true
+
+            if "$SCRIPT_DIR/validate.sh" $VALIDATE_ARGS > "$ARTIFACTS_DIR/validation.log" 2>&1; then
+                print_success "Code validation passed"
+            else
+                VALIDATION_STATUS=$?
+                print_error "Code validation failed - see $ARTIFACTS_DIR/validation.log"
+                cat "$ARTIFACTS_DIR/validation.log"
+            fi
         else
-            STYLE_STATUS=$?
-            print_warning "Style check found issues"
+            # Dev mode: show output directly
+            if "$SCRIPT_DIR/validate.sh" $VALIDATE_ARGS; then
+                print_success "Code validation passed"
+            else
+                VALIDATION_STATUS=$?
+                print_error "Code validation failed"
+            fi
         fi
     else
-        # Dev mode: show output directly (use config to respect suppressions)
-        if uv run ruff check $PACKAGE_PATTERN --config "$PROJECT_ROOT/pyproject.toml"; then
-            print_success "Style checks passed"
-        else
-            STYLE_STATUS=$?
-            print_warning "Style check found issues"
-        fi
+        print_status "Skipping code validation (no package changes)"
     fi
 else
-    print_status "Skipping style checks"
+    print_status "Skipping code validation"
 fi
 
 # Run tests using the test.sh script
 if [ "$SKIP_TESTS" != "yes" ]; then
     print_status "Running tests..."
     
-    # Build test command
-    TEST_CMD="$SCRIPT_DIR/test.sh"
+    # Build test command (skip service management — already handled above)
+    TEST_CMD="$SCRIPT_DIR/test.sh -n"
     
     if [ "$PR_MODE" = "yes" ]; then
         # PR/All/Full mode: Run unit and integration tests separately with artifacts
@@ -990,7 +1008,7 @@ if [ "$PR_MODE" = "yes" ]; then
     OVERALL_STATUS="PASS"
 
     # Check for failures
-    if [ $DOCS_STATUS -ne 0 ] || [ $DOCS_VERSIONS_STATUS -ne 0 ] || [ $TEST_STATUS -ne 0 ]; then
+    if [ $VALIDATION_STATUS -ne 0 ] || [ $DOCS_STATUS -ne 0 ] || [ $DOCS_VERSIONS_STATUS -ne 0 ] || [ $TEST_STATUS -ne 0 ]; then
         OVERALL_STATUS="FAIL"
     fi
     
@@ -1014,11 +1032,11 @@ if [ "$PR_MODE" = "yes" ]; then
       "exit_code": $DOCS_VERSIONS_STATUS,
       "tool": "docs-update-versions.sh"
     },
-    "style": {
-      "status": $([ $STYLE_STATUS -eq 0 ] && echo '"pass"' || echo '"warning"'),
-      "exit_code": $STYLE_STATUS,
+    "validation": {
+      "status": $([ $VALIDATION_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
+      "exit_code": $VALIDATION_STATUS,
       "skipped": $([ "$SKIP_STYLE" = "yes" ] && echo "true" || echo "false"),
-      "tool": "ruff"
+      "tool": "validate.sh"
     },
     "unit_tests": {
       "status": $([ $UNIT_TEST_STATUS -eq 0 ] && echo '"pass"' || echo '"fail"'),
@@ -1037,7 +1055,11 @@ EOF
     # Generate signature of artifacts
     print_status "Generating artifact signature..."
     cd "$ARTIFACTS_DIR"
-    find . -type f -name "*.json" -o -name "*.xml" | sort | xargs sha256sum > signature.sha256
+    if command -v sha256sum >/dev/null 2>&1; then
+        find . -type f \( -name "*.json" -o -name "*.xml" \) | sort | xargs sha256sum > signature.sha256
+    else
+        find . -type f \( -name "*.json" -o -name "*.xml" \) | sort | xargs shasum -a 256 > signature.sha256
+    fi
     cd "$PROJECT_ROOT"
     print_success "Artifact signature generated"
 fi
@@ -1066,11 +1088,11 @@ if [ "$PR_MODE" = "yes" ]; then
 fi
 
 if [ "$SKIP_STYLE" = "yes" ]; then
-    echo -e "  Style Check (ruff): ${CYAN}⊘ SKIPPED${NC}"
-elif [ $STYLE_STATUS -eq 0 ]; then
-    echo -e "  Style Check (ruff): ${GREEN}✓ PASSED${NC}"
+    echo -e "  Code Validation:    ${CYAN}⊘ SKIPPED${NC}"
+elif [ $VALIDATION_STATUS -eq 0 ]; then
+    echo -e "  Code Validation:    ${GREEN}✓ PASSED${NC}"
 else
-    echo -e "  Style Check (ruff): ${YELLOW}⚠ WARNINGS${NC}"
+    echo -e "  Code Validation:    ${RED}✗ FAILED${NC}"
 fi
 
 if [ "$PR_MODE" = "yes" ]; then
@@ -1149,19 +1171,7 @@ else
 
         if [ $UNIT_TEST_STATUS -ne 0 ] || [ $INTEGRATION_TEST_STATUS -ne 0 ]; then
             echo -e "  ${CYAN}Test Failures:${NC}"
-            
-            # Find test output files with failures
-            if [ $UNIT_TEST_STATUS -ne 0 ] && [ -f "$ARTIFACTS_DIR/unit-test-output.txt" ]; then
-                echo "    View unit test failures:"
-                echo "      grep -E '(FAILED|ERROR|AssertionError)' $ARTIFACTS_DIR/unit-test-output.txt"
-            fi
-            
-            if [ $INTEGRATION_TEST_STATUS -ne 0 ] && [ -f "$ARTIFACTS_DIR/integration-test-output.txt" ]; then
-                echo "    View integration test failures:"
-                echo "      grep -E '(FAILED|ERROR|AssertionError)' $ARTIFACTS_DIR/integration-test-output.txt"
-            fi
-            
-            # Check for individual package test outputs
+
             for output_file in "$ARTIFACTS_DIR"/*-test-output-*.txt; do
                 if [ -f "$output_file" ]; then
                     if grep -q "FAILED" "$output_file" 2>/dev/null; then
@@ -1173,20 +1183,12 @@ else
             done
         fi
         
-        if [ $LINT_STATUS -ne 0 ] && [ -f "$ARTIFACTS_DIR/lint-report.json" ]; then
-            echo -e "  ${CYAN}Linting Issues:${NC}"
-            echo "    View linting report:"
-            echo "      jq -r '.[] | \"\\(.path):\\(.line):\\(.column): \\(.message)\"' $ARTIFACTS_DIR/lint-report.json | head -10"
-            echo "    Or with python:"
-            echo "      python -m json.tool $ARTIFACTS_DIR/lint-report.json | grep -A2 '\"message\"' | head -20"
-        fi
-        
-        if [ $STYLE_STATUS -ne 0 ] && [ -f "$ARTIFACTS_DIR/style-check.json" ]; then
-            echo -e "  ${CYAN}Style Issues:${NC}"
-            echo "    View style violations:"
-            echo "      jq -r '.[] | \"\\(.filename):\\(.location.row): \\(.message) [\\(.code)]\"' $ARTIFACTS_DIR/style-check.json | head -10"
-            echo "    Or with python:"
-            echo "      python -m json.tool $ARTIFACTS_DIR/style-check.json | grep -A2 '\"message\"' | head -20"
+        if [ $VALIDATION_STATUS -ne 0 ] && [ -f "$ARTIFACTS_DIR/validation.log" ]; then
+            echo -e "  ${CYAN}Code Validation Failures:${NC}"
+            echo "    View full validation output:"
+            echo "      cat $ARTIFACTS_DIR/validation.log"
+            echo "    To auto-fix what's possible:"
+            echo "      bin/validate.sh -f"
         fi
         
         echo ""
@@ -1201,16 +1203,9 @@ else
             echo "    $0 $PACKAGES -- -vvs    # Verbose output with stdout"
         fi
         
-        if [ $LINT_STATUS -ne 0 ]; then
-            echo -e "  ${CYAN}To see linting details:${NC}"
-            echo "    uv run pylint $PACKAGE_PATTERN --rcfile=.pylintrc"
-        fi
-        
-        if [ $STYLE_STATUS -ne 0 ]; then
-            echo -e "  ${CYAN}To see style issues:${NC}"
-            echo "    uv run ruff check $PACKAGE_PATTERN"
-            echo -e "  ${CYAN}To auto-fix style issues:${NC}"
-            echo "    uv run ruff check --fix $PACKAGE_PATTERN"
+        if [ $VALIDATION_STATUS -ne 0 ]; then
+            echo -e "  ${CYAN}To auto-fix validation issues:${NC}"
+            echo "    bin/validate.sh -f"
         fi
     fi
     

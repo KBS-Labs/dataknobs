@@ -43,6 +43,52 @@ if [ -f /.dockerenv ] || [ -n "${DOCKER_CONTAINER:-}" ]; then
     IN_DOCKER=true
 fi
 
+# Build pytest coverage args for a package
+# Args: $1=package name (or path fallback), $2="append" to add --cov-append
+build_cov_args() {
+    if [ "$COVERAGE" != "yes" ]; then
+        echo ""
+        return
+    fi
+
+    local pkg="$1"
+    local append="${2:-}"
+    local args=""
+
+    # Determine --cov target
+    if [ -z "$pkg" ]; then
+        # No package identified — skip coverage
+        echo ""
+        return
+    elif [ "$pkg" = "legacy" ]; then
+        args="--cov=packages/$pkg/src/dataknobs"
+    else
+        args="--cov=packages/$pkg/src/dataknobs_${pkg}"
+    fi
+
+    if [ "$append" = "append" ]; then
+        args="$args --cov-append"
+    fi
+
+    # Add coverage report types
+    IFS=',' read -ra REPORT_TYPES <<< "$COV_REPORT"
+    for report_type in "${REPORT_TYPES[@]}"; do
+        case $report_type in
+            term|term-missing)
+                args="$args --cov-report=$report_type"
+                ;;
+            html)
+                args="$args --cov-report=html:htmlcov"
+                ;;
+            xml)
+                args="$args --cov-report=xml:coverage.xml"
+                ;;
+        esac
+    done
+
+    echo "$args"
+}
+
 # Build extra pytest args for parallel execution and verbosity
 build_extra_args() {
     local parts=()
@@ -378,40 +424,14 @@ run_path_tests() {
         fi
     fi
     
-    # Build coverage args if enabled
-    local cov_args=""
-    if [ "$COVERAGE" = "yes" ]; then
-        # Try to extract package name for coverage
-        local package=$(extract_package_from_path "$path")
-        if [ -n "$package" ]; then
-            # Special case: legacy package is named "dataknobs" not "dataknobs_legacy"
-            if [ "$package" = "legacy" ]; then
-                cov_args="--cov=packages/$package/src/dataknobs"
-            else
-                cov_args="--cov=packages/$package/src/dataknobs_${package}"
-            fi
-        else
-            # Fall back to covering the test path itself
-            cov_args="--cov=$path"
-        fi
-        
-        # Add coverage report types
-        IFS=',' read -ra REPORT_TYPES <<< "$COV_REPORT"
-        for report_type in "${REPORT_TYPES[@]}"; do
-            case $report_type in
-                term|term-missing)
-                    cov_args="$cov_args --cov-report=$report_type"
-                    ;;
-                html)
-                    cov_args="$cov_args --cov-report=html:htmlcov"
-                    ;;
-                xml)
-                    cov_args="$cov_args --cov-report=xml:coverage.xml"
-                    ;;
-            esac
-        done
+    # Build coverage args
+    local pkg_for_cov=$(extract_package_from_path "$path")
+    local cov_args=$(build_cov_args "$pkg_for_cov")
+    # Fall back to covering the test path itself if no package identified
+    if [ "$COVERAGE" = "yes" ] && [ -z "$cov_args" ]; then
+        cov_args="--cov=$path"
     fi
-    
+
     # Run tests
     local extra_args=$(build_extra_args)
     local cmd="pytest $path $cov_args $extra_args $PYTEST_ARGS --color=yes"
@@ -465,32 +485,8 @@ run_unit_tests() {
         exclude_args="--ignore=packages/$package/tests/integration"
     fi
 
-    # Build coverage args if enabled
-    local cov_args=""
-    if [ "$COVERAGE" = "yes" ]; then
-        # Special case: legacy package is named "dataknobs" not "dataknobs_legacy"
-        if [ "$package" = "legacy" ]; then
-            cov_args="--cov=packages/$package/src/dataknobs"
-        else
-            cov_args="--cov=packages/$package/src/dataknobs_${package}"
-        fi
-        # Add coverage report types
-        IFS=',' read -ra REPORT_TYPES <<< "$COV_REPORT"
-        for report_type in "${REPORT_TYPES[@]}"; do
-            case $report_type in
-                term|term-missing)
-                    cov_args="$cov_args --cov-report=$report_type"
-                    ;;
-                html)
-                    cov_args="$cov_args --cov-report=html:htmlcov"
-                    ;;
-                xml)
-                    cov_args="$cov_args --cov-report=xml:coverage.xml"
-                    ;;
-            esac
-        done
-    fi
-    
+    local cov_args=$(build_cov_args "$package")
+
     # Run tests
     local extra_args=$(build_extra_args)
     local cmd="pytest $test_path $exclude_args $cov_args $extra_args $PYTEST_ARGS --color=yes"
@@ -538,32 +534,8 @@ run_integration_tests() {
     # Set environment variables for tests
     set_integration_env_vars
 
-    # Build coverage args if enabled
-    local cov_args=""
-    if [ "$COVERAGE" = "yes" ]; then
-        # Special case: legacy package is named "dataknobs" not "dataknobs_legacy"
-        if [ "$package" = "legacy" ]; then
-            cov_args="--cov=packages/$package/src/dataknobs --cov-append"
-        else
-            cov_args="--cov=packages/$package/src/dataknobs_${package} --cov-append"
-        fi
-        # Add coverage report types
-        IFS=',' read -ra REPORT_TYPES <<< "$COV_REPORT"
-        for report_type in "${REPORT_TYPES[@]}"; do
-            case $report_type in
-                term|term-missing)
-                    cov_args="$cov_args --cov-report=$report_type"
-                    ;;
-                html)
-                    cov_args="$cov_args --cov-report=html:htmlcov"
-                    ;;
-                xml)
-                    cov_args="$cov_args --cov-report=xml:coverage.xml"
-                    ;;
-            esac
-        done
-    fi
-    
+    local cov_args=$(build_cov_args "$package" "append")
+
     # Run tests
     local extra_args=$(build_extra_args)
     local cmd="pytest $test_path $cov_args $extra_args $PYTEST_ARGS --color=yes"
@@ -609,32 +581,8 @@ run_combined_tests() {
         set_integration_env_vars
     fi
 
-    # Build coverage args if enabled
-    local cov_args=""
-    if [ "$COVERAGE" = "yes" ]; then
-        # Special case: legacy package is named "dataknobs" not "dataknobs_legacy"
-        if [ "$package" = "legacy" ]; then
-            cov_args="--cov=packages/$package/src/dataknobs"
-        else
-            cov_args="--cov=packages/$package/src/dataknobs_${package}"
-        fi
-        # Add coverage report types
-        IFS=',' read -ra REPORT_TYPES <<< "$COV_REPORT"
-        for report_type in "${REPORT_TYPES[@]}"; do
-            case $report_type in
-                term|term-missing)
-                    cov_args="$cov_args --cov-report=$report_type"
-                    ;;
-                html)
-                    cov_args="$cov_args --cov-report=html:htmlcov"
-                    ;;
-                xml)
-                    cov_args="$cov_args --cov-report=xml:coverage.xml"
-                    ;;
-            esac
-        done
-    fi
-    
+    local cov_args=$(build_cov_args "$package")
+
     # Run all tests together for combined coverage
     local extra_args=$(build_extra_args)
     local cmd="pytest $test_path $cov_args $extra_args $PYTEST_ARGS --color=yes"
