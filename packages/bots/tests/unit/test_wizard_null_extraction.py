@@ -97,6 +97,40 @@ WIZARD_WITH_DEFAULTS_CONFIG: dict[str, Any] = {
 }
 
 
+WIZARD_WITH_BOOLEAN_CONFIG: dict[str, Any] = {
+    "name": "null-boolean-test",
+    "version": "1.0",
+    "stages": [
+        {
+            "name": "gather",
+            "is_start": True,
+            "prompt": "Tell me your intent and whether KB is enabled.",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "intent": {"type": "string"},
+                    "kb_enabled": {"type": "boolean"},
+                },
+                "required": ["intent", "kb_enabled"],
+            },
+            "transitions": [
+                {
+                    "target": "done",
+                    "condition": (
+                        "data.get('intent') and has('kb_enabled')"
+                    ),
+                },
+            ],
+        },
+        {
+            "name": "done",
+            "is_end": True,
+            "prompt": "All done!",
+        },
+    ],
+}
+
+
 def _build_wizard(
     config: dict[str, Any],
     extractor: ConfigurableExtractor,
@@ -270,6 +304,36 @@ class TestNullExtractionHandling:
         assert state_data.get("intent") == "create"
         assert "domain_name" not in state_data
         assert state_data.get("llm_provider") == "ollama"
+
+    @pytest.mark.asyncio
+    async def test_null_boolean_field_not_coerced_to_false(
+        self,
+        conversation_manager_pair: tuple[ConversationManager, EchoProvider],
+    ) -> None:
+        """Null for a boolean-typed field must not be coerced to False.
+
+        _normalize_extracted_data coerces string→bool for boolean fields.
+        A null value must be dropped (not stored), not coerced to False.
+        """
+        manager, conv_provider = conversation_manager_pair
+
+        extractor = ConfigurableExtractor([
+            SimpleExtractionResult(
+                data={"intent": "create", "kb_enabled": None},
+                confidence=0.5,
+            ),
+        ])
+        reasoning = _build_wizard(WIZARD_WITH_BOOLEAN_CONFIG, extractor)
+
+        await manager.add_message(role="user", content="I want to create a bot")
+        conv_provider.set_responses(["Should KB be enabled?"])
+        await reasoning.generate(manager, llm=None)
+
+        state_data = _get_wizard_state_data(manager)
+        assert state_data.get("intent") == "create"
+        assert "kb_enabled" not in state_data, (
+            "Null boolean extraction must not be coerced to False"
+        )
 
 
 # ---------------------------------------------------------------------------

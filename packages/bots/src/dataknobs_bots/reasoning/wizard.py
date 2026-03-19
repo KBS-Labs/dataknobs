@@ -1898,7 +1898,7 @@ class WizardReasoning(ReasoningStrategy):
                         schema.get("required", []) if schema else []
                     )
                     can_satisfy = all(
-                        wizard_state.data.get(f) is not None
+                        self._field_is_present(wizard_state.data.get(f))
                         for f in required_fields
                     )
 
@@ -5403,6 +5403,16 @@ class WizardReasoning(ReasoningStrategy):
         prefix = "\n\n".join(messages) + "\n\n"
         response.content = prefix + response.content
 
+    @staticmethod
+    def _field_is_present(value: Any) -> bool:
+        """A field has been provided if its value is not None.
+
+        Centralises the "field presence" semantic used by both the
+        ``has()`` condition helper and the ``can_satisfy`` confidence
+        gate so they cannot diverge.
+        """
+        return value is not None
+
     def _evaluate_condition(self, condition: str, data: dict[str, Any]) -> bool:
         """Safely evaluate a transition condition.
 
@@ -5415,7 +5425,9 @@ class WizardReasoning(ReasoningStrategy):
         - ``data`` — the wizard state data dict
         - ``has(key)`` — shorthand for ``data.get(key) is not None``;
           preferred for boolean/numeric/list fields where falsy values
-          are legitimate
+          are legitimate.  Note: empty strings are considered present;
+          for text fields where non-empty content is required, use
+          ``data.get('key')`` (truthiness rejects empty strings)
         - ``bank`` — memory bank accessor
         - ``artifact`` — current artifact
         - ``true``/``false``/``null``/``none`` — YAML/JSON literal aliases
@@ -5433,11 +5445,12 @@ class WizardReasoning(ReasoningStrategy):
             if not code.startswith("return"):
                 code = f"return {code}"
 
-            # Create a function to evaluate the condition
-            # Note: 'data' must be in globals for the function to access it
+            # Create a function to evaluate the condition.
+            # Use a shallow copy so exec cannot mutate live wizard state.
+            data_snapshot = dict(data)
             global_vars: dict[str, Any] = {
-                "data": data,
-                "has": lambda key: data.get(key) is not None,
+                "data": data_snapshot,
+                "has": lambda key: self._field_is_present(data_snapshot.get(key)),
                 "bank": self._make_bank_accessor(),
                 "artifact": self._artifact,
                 # Common aliases for YAML/JSON boolean literals
