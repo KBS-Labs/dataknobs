@@ -169,12 +169,13 @@ Extract data matching this JSON Schema:
 ## Instructions
 1. Parse the user's message and extract relevant information
 2. Return ONLY a valid JSON object matching the schema
-3. If information is missing, omit the field (don't use null unless appropriate)
+3. If the user did NOT mention a field at all, omit it
 4. If you cannot extract the required information, return an empty object {{}}
 5. Do not include explanations - only return the JSON object
-6. For boolean fields, map "yes"/"no" to true/false
-7. For array fields with enum constraints, "all" means include every enum value; "none" means an empty array
-8. For array fields, always return a JSON array (e.g. ["value"]), never a bare string
+6. For boolean fields: "yes"/"enable"/"add" → true; "no"/"disable"/"skip"/"none" → false
+7. Negations count as explicit values: "no knowledge base" → kb_enabled: false
+8. For array fields with enum constraints, "all" means include every enum value; "none" means an empty array
+9. For array fields, always return a JSON array (e.g. ["value"]), never a bare string
 
 ## User Message
 {text}
@@ -200,7 +201,12 @@ Extract data matching this JSON Schema:
    - Implied but not explicitly stated information
    - Default values used when information is missing
    - Interpretations that could have multiple meanings
-3. Return a JSON object with two keys:
+3. If the user did NOT mention a field at all, omit it from "data"
+4. For boolean fields: "yes"/"enable"/"add" → true; "no"/"disable"/"skip"/"none" → false
+5. Negations count as explicit values: "no knowledge base" → kb_enabled: false
+6. For array fields with enum constraints, "all" means include every enum value; "none" means an empty array
+7. For array fields, always return a JSON array (e.g. ["value"]), never a bare string
+8. Return a JSON object with two keys:
    - "data": The extracted data matching the schema
    - "assumptions": Array of assumption objects with:
      - "content": Description of the assumption
@@ -501,11 +507,14 @@ class SchemaExtractor:
             )
             raw_response = response.content
         except Exception as e:
-            logger.warning("LLM extraction failed: %s", e)
+            logger.warning(
+                "LLM extraction failed: %s: %s",
+                type(e).__name__, e or repr(e),
+            )
             result = ExtractionResult(
                 data={},
                 confidence=0.0,
-                errors=[f"LLM extraction failed: {e}"],
+                errors=[f"LLM extraction failed: {type(e).__name__}: {e or repr(e)}"],
                 raw_response="",
             )
 

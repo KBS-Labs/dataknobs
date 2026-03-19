@@ -34,6 +34,8 @@ PYTEST_ARGS=""
 COV_REPORT="term-missing"
 SKIP_INTEGRATION="false"  # If true, sets TEST_*=false
 ONLY_INTEGRATION="false"  # If true, only runs integration tests
+PARALLEL="no"  # If yes, use pytest-xdist for parallel test execution
+VERBOSITY=""   # Empty = default, "quiet" = -q, "verbose" = -v
 
 # Check if we're running in a Docker container
 IN_DOCKER=false
@@ -41,11 +43,29 @@ if [ -f /.dockerenv ] || [ -n "${DOCKER_CONTAINER:-}" ]; then
     IN_DOCKER=true
 fi
 
+# Build extra pytest args for parallel execution and verbosity
+build_extra_args() {
+    local parts=()
+    if [ "$PARALLEL" = "yes" ]; then
+        # PYTEST_WORKERS controls xdist worker count (default: 4)
+        # Using a fixed count rather than "auto" to avoid oversubscription
+        # when multiple packages run concurrently
+        local workers="${PYTEST_WORKERS:-4}"
+        parts+=("-n" "$workers" "--dist" "loadscope")
+    fi
+    case "$VERBOSITY" in
+        quiet)   parts+=("-q") ;;
+        verbose) parts+=("-v") ;;
+    esac
+    echo "${parts[*]}"
+}
+
 # Consolidated function to execute pytest with proper error handling
 execute_pytest() {
-    local cmd="$1"
+    # Collapse multiple spaces in command string for clean display
+    local cmd=$(echo "$1" | tr -s ' ')
     local context="${2:-tests}"  # Optional context for warning message
-    
+
     echo -e "${CYAN}Command: $cmd${NC}"
     
     local test_result
@@ -223,6 +243,22 @@ while [[ $# -gt 0 ]]; do
             COV_REPORT="${1#--cov-report=}"
             shift
             ;;
+        -j|--parallel)
+            PARALLEL="yes"
+            shift
+            ;;
+        --no-parallel)
+            PARALLEL="no"
+            shift
+            ;;
+        --quiet|-q)
+            VERBOSITY="quiet"
+            shift
+            ;;
+        --verbose|-v)
+            VERBOSITY="verbose"
+            shift
+            ;;
         # Help
         -h|--help)
             show_usage
@@ -377,7 +413,8 @@ run_path_tests() {
     fi
     
     # Run tests
-    local cmd="pytest $path $cov_args $PYTEST_ARGS --color=yes"
+    local extra_args=$(build_extra_args)
+    local cmd="pytest $path $cov_args $extra_args $PYTEST_ARGS --color=yes"
     execute_pytest "$cmd" "tests in $path"
 }
 
@@ -455,7 +492,8 @@ run_unit_tests() {
     fi
     
     # Run tests
-    local cmd="pytest $test_path $exclude_args $cov_args $PYTEST_ARGS --color=yes"
+    local extra_args=$(build_extra_args)
+    local cmd="pytest $test_path $exclude_args $cov_args $extra_args $PYTEST_ARGS --color=yes"
     execute_pytest "$cmd" "unit tests for $package"
 }
 
@@ -527,7 +565,8 @@ run_integration_tests() {
     fi
     
     # Run tests
-    local cmd="pytest $test_path $cov_args $PYTEST_ARGS --color=yes"
+    local extra_args=$(build_extra_args)
+    local cmd="pytest $test_path $cov_args $extra_args $PYTEST_ARGS --color=yes"
     execute_pytest "$cmd" "integration tests for $package"
 }
 
@@ -597,7 +636,8 @@ run_combined_tests() {
     fi
     
     # Run all tests together for combined coverage
-    local cmd="pytest $test_path $cov_args $PYTEST_ARGS --color=yes"
+    local extra_args=$(build_extra_args)
+    local cmd="pytest $test_path $cov_args $extra_args $PYTEST_ARGS --color=yes"
     execute_pytest "$cmd" "tests for $package"
 }
 

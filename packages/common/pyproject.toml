@@ -31,13 +31,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = [
-    "--cov=dataknobs_common",
-    "--cov-report=term-missing",
-    "--cov-report=html",
-    "--cov-report=xml",
-    "-v",
-]
+addopts = []
 asyncio_mode = "auto"
 
 [tool.coverage.run]

@@ -1,12 +1,15 @@
 {
-  "timestamp": "2026-03-18T20:36:03Z",
+  "timestamp": "2026-03-19T02:26:31Z",
   "overall_status": "PASS",
+  "run_mode": "pr",
   "environment": "host",
-  "packages": "all",
+  "packages": "bots common config data fsm llm structures utils xization",
+  "tested_packages": ["bots", "common", "config", "data", "fsm", "llm", "structures", "utils", "xization"],
   "checks": {
     "documentation": {
       "status": "pass",
       "exit_code": 0,
+      "skipped": true,
       "tool": "mkdocs"
     },
     "documentation_versions": {

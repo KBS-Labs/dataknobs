@@ -429,6 +429,134 @@ class TestWizardReasoning:
         message = wizard_reasoning._get_last_user_message(conversation_manager)
         assert message == ""
 
+    @pytest.mark.asyncio
+    async def test_get_last_user_message_prefers_raw_content(
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
+    ) -> None:
+        """raw_content metadata is returned instead of augmented content.
+
+        When DynaBot augments user messages with KB/memory context, the
+        raw message is stored in node metadata.  _get_last_user_message()
+        must prefer it so extraction sees clean input.
+        """
+        augmented = (
+            "<knowledge_base>\n[1] Some KB result\n</knowledge_base>\n\n"
+            "<question>\nCreate a grammar tutor\n</question>"
+        )
+        raw = "Create a grammar tutor"
+        await conversation_manager.add_message(
+            role="user", content=augmented, metadata={"raw_content": raw}
+        )
+
+        message = wizard_reasoning._get_last_user_message(conversation_manager)
+        assert message == raw
+
+    @pytest.mark.asyncio
+    async def test_get_last_user_message_falls_back_without_raw_content(
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
+    ) -> None:
+        """Falls back to augmented content when no raw_content metadata."""
+        await conversation_manager.add_message(
+            role="user", content="plain message"
+        )
+
+        message = wizard_reasoning._get_last_user_message(conversation_manager)
+        assert message == "plain message"
+
+    @pytest.mark.asyncio
+    async def test_build_wizard_context_prefers_raw_content(
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
+    ) -> None:
+        """_build_wizard_context uses raw_content from prior messages.
+
+        With wizard_session extraction scope, all prior user messages
+        contribute to the extraction context.  When messages carry
+        raw_content metadata, the context should use the raw versions.
+        """
+        state = WizardState(current_stage="configure")
+
+        # First user message — augmented with KB context
+        augmented_1 = (
+            "<knowledge_base>\nKB results\n</knowledge_base>\n\n"
+            "<question>\nI want a math tutor\n</question>"
+        )
+        await conversation_manager.add_message(
+            role="user",
+            content=augmented_1,
+            metadata={"raw_content": "I want a math tutor"},
+        )
+        await conversation_manager.add_message(
+            role="assistant", content="Great choice!"
+        )
+
+        # Second user message — also augmented
+        augmented_2 = (
+            "<knowledge_base>\nMore KB results\n</knowledge_base>\n\n"
+            "<question>\nEnable hints please\n</question>"
+        )
+        await conversation_manager.add_message(
+            role="user",
+            content=augmented_2,
+            metadata={"raw_content": "Enable hints please"},
+        )
+
+        context = wizard_reasoning._build_wizard_context(
+            conversation_manager, state
+        )
+
+        # Should use raw messages, not augmented ones
+        assert "I want a math tutor" in context
+        assert "<knowledge_base>" not in context
+        # Last message excluded (it's the "current" one)
+        assert "Enable hints please" not in context
+
+    @pytest.mark.asyncio
+    async def test_build_wizard_context_mixed_raw_and_plain(
+        self,
+        wizard_reasoning: WizardReasoning,
+        conversation_manager: ConversationManager,
+    ) -> None:
+        """_build_wizard_context handles mix of augmented and plain messages."""
+        state = WizardState(current_stage="configure")
+
+        # First message — plain (no KB)
+        await conversation_manager.add_message(
+            role="user", content="Hello"
+        )
+        await conversation_manager.add_message(
+            role="assistant", content="Hi!"
+        )
+
+        # Second message — augmented
+        await conversation_manager.add_message(
+            role="user",
+            content="<knowledge_base>KB</knowledge_base>\n\n<question>Math</question>",
+            metadata={"raw_content": "Math"},
+        )
+        await conversation_manager.add_message(
+            role="assistant", content="OK"
+        )
+
+        # Third message — current (excluded)
+        await conversation_manager.add_message(
+            role="user", content="Done"
+        )
+
+        context = wizard_reasoning._build_wizard_context(
+            conversation_manager, state
+        )
+
+        assert "Hello" in context
+        assert "Math" in context
+        assert "<knowledge_base>" not in context
+        assert "Done" not in context
+
 
 class TestWizardReasoningFromConfig:
     """Tests for creating WizardReasoning from config."""
