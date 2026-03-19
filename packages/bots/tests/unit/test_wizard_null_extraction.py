@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from dataknobs_bots.reasoning.wizard import WizardReasoning, WizardState
+from dataknobs_bots.reasoning.wizard import WizardReasoning
 from dataknobs_bots.reasoning.wizard_loader import WizardConfigLoader
 from dataknobs_llm.conversations import ConversationManager
 from dataknobs_llm.llm.providers.echo import EchoProvider
@@ -153,13 +153,6 @@ def _get_wizard_state_data(manager: ConversationManager) -> dict[str, Any]:
     wizard_meta = manager.metadata.get("wizard", {})
     fsm_state = wizard_meta.get("fsm_state", {})
     return fsm_state.get("data", {})
-
-
-def _get_wizard_stage(manager: ConversationManager) -> str:
-    """Extract current wizard stage from manager metadata."""
-    wizard_meta = manager.metadata.get("wizard", {})
-    fsm_state = wizard_meta.get("fsm_state", {})
-    return fsm_state.get("current_stage", "")
 
 
 # ---------------------------------------------------------------------------

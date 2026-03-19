@@ -5407,9 +5407,13 @@ class WizardReasoning(ReasoningStrategy):
     def _field_is_present(value: Any) -> bool:
         """A field has been provided if its value is not None.
 
-        Centralises the "field presence" semantic used by both the
+        Centralises the "field presence" semantic used by the
         ``has()`` condition helper and the ``can_satisfy`` confidence
-        gate so they cannot diverge.
+        gate.
+
+        Note: ``_can_auto_advance`` uses stricter logic — it
+        additionally rejects empty strings because auto-advance
+        requires fields to be *filled*, not merely *present*.
         """
         return value is not None
 
@@ -5446,7 +5450,9 @@ class WizardReasoning(ReasoningStrategy):
                 code = f"return {code}"
 
             # Create a function to evaluate the condition.
-            # Use a shallow copy so exec cannot mutate live wizard state.
+            # Shallow copy so exec cannot add/remove/replace top-level
+            # keys in live wizard state.  Nested mutable values are
+            # still shared.
             data_snapshot = dict(data)
             global_vars: dict[str, Any] = {
                 "data": data_snapshot,
